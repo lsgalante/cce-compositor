@@ -29,16 +29,26 @@ pub mod river_window_management {
 }
 
 pub mod river_xkb_bindings {
-    river_protocol!("protocol/river-xkb-bindings-v1.xml",
-        [crate::protocol::river_window_management::generated]);
+    river_protocol!(
+        "protocol/river-xkb-bindings-v1.xml",
+        [crate::protocol::river_window_management::generated]
+    );
 }
 
 pub mod river_layer_shell {
-    river_protocol!("protocol/river-layer-shell-v1.xml",
-        [crate::protocol::river_window_management::generated]);
+    river_protocol!(
+        "protocol/river-layer-shell-v1.xml",
+        [crate::protocol::river_window_management::generated]
+    );
 }
 
 pub mod river_input_management {
-    river_protocol!("protocol/river-input-management-v1.xml",
-        [crate::protocol::river_window_management::generated]);
+    river_protocol!(
+        "protocol/river-input-management-v1.xml",
+        [crate::protocol::river_window_management::generated]
+    );
+}
+
+pub mod wlr_output_management {
+    river_protocol!("protocol/wlr-output-management-unstable-v1.xml", []);
 }

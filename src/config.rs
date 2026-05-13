@@ -18,7 +18,9 @@ pub struct Config {
     #[serde(default)]
     pub repeat: RepeatConfig,
     #[serde(default)]
-    pub startup: StartupConfig,
+    pub startup: Vec<StartupEntryConfig>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
     #[serde(default)]
     pub keybind: Vec<KeybindConfig>,
     #[serde(default)]
@@ -74,7 +76,7 @@ fn default_border_color() -> String {
 #[derive(Debug, Deserialize, Default)]
 pub struct OutputConfig {
     #[serde(default)]
-    pub scale: i64,
+    pub scale: f64,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -85,14 +87,11 @@ pub struct RepeatConfig {
     pub delay: i64,
 }
 
-#[derive(Debug, Deserialize, Default)]
-pub struct StartupConfig {
+#[derive(Debug, Deserialize)]
+pub struct StartupEntryConfig {
+    pub exec: String,
     #[serde(default)]
-    pub apps: Vec<String>,
-    #[serde(default)]
-    pub cold_start_only: Vec<String>,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
+    pub once: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,7 +125,7 @@ pub struct TagLayoutConfig {
 }
 
 /// Parse the TOML config file and apply it to the WindowManager state.
-/// `cold_start` controls whether cold_start_only apps are spawned.
+/// `cold_start` controls whether `once = true` startup entries are spawned.
 pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
@@ -145,6 +144,7 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) {
     };
 
     // [layout] section
+    eprintln!("[config] applying layout section...");
     state.layout.gap = config.layout.gap as i32;
     state.layout.offset = config.layout.offset as i32;
     state.layout.bar_height = config.layout.bar_height as i32;
@@ -157,6 +157,7 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) {
     }
 
     // [[keybind]] array
+    eprintln!("[config] processing {} keybinds...", config.keybind.len());
     for kb in &config.keybind {
         let mods = parse_modifiers(&kb.mods);
         let keysym = parse_keysym(&kb.key);
@@ -211,45 +212,52 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) {
         }
     }
 
-    // [startup] section — spawn apps
-    for app in &config.startup.apps {
-        // Extract program name for skip-if-running check
-        let name = extract_program_name(app);
-        if process_running(&name) {
+    // [[startup]] array — queue apps for spawning inside the render callback.
+    // Spawning between blocking_dispatch calls corrupts the Wayland connection
+    // because the fork inherits the socket fd, so we defer to render time.
+    state.pending_startup_apps.clear();
+    eprintln!(
+        "[config] processing {} startup entries (cold_start={})...",
+        config.startup.len(),
+        cold_start
+    );
+    for (i, entry) in config.startup.iter().enumerate() {
+        let name = extract_program_name(&entry.exec);
+        if entry.once && !cold_start {
+            eprintln!(
+                "[config] startup[{}]: exec=\"{}\" once=true → skipped (not cold start)",
+                i, entry.exec
+            );
             continue;
         }
-        // If waybar, kill existing before launching
-        // NOTE: pkill + sleep is too slow for nested mode where River's
-        // 3-second unresponsive timer is ticking. Just launch waybar
-        // directly — if an existing waybar is running, the new one will
-        // replace it (or the old one can be killed manually).
-        // if name == "waybar" {
-        //     let _ = std::process::Command::new("pkill")
-        //         .arg("waybar")
-        //         .output();
-        //     std::thread::sleep(std::time::Duration::from_millis(100));
-        // }
-        spawn_command_bg(app);
-    }
-
-    // Cold-start-only apps
-    if cold_start {
-        for app in &config.startup.cold_start_only {
-            spawn_command_bg(app);
+        let running = process_running(&name);
+        if running {
+            eprintln!("[config] startup[{}]: exec=\"{}\" once={} → skipped (already running, pgrep -x {})", i, entry.exec, entry.once, name);
+        } else {
+            eprintln!(
+                "[config] startup[{}]: exec=\"{}\" once={} → queued for spawn",
+                i, entry.exec, entry.once
+            );
+            state.pending_startup_apps.push(entry.exec.clone());
         }
     }
 
-    // [startup.env] — set environment variables
-    for (key, value) in &config.startup.env {
+    // [env] — set environment variables
+    for (key, value) in &config.env {
         std::env::set_var(key, value);
         state.env_vars.insert(key.clone(), value.clone());
     }
 
-    // [output] scale — handled at startup
-    if config.output.scale > 0 && cold_start {
-        // Scale is applied via wlr-randr; we just store the value
-        // The actual wlr-randr call would happen in the Wayland integration layer
-    }
+    // [output] scale — applied via wlr-output-management protocol.
+    // After storing the scale, set pending_scale_apply so that the next
+    // output_manager done event triggers the configuration. This handles
+    // both initial startup and VT-switch-back (where wlroots resets scale to 1).
+    state.output_scale = if config.output.scale > 0.0 {
+        state.pending_scale_apply = true;
+        config.output.scale
+    } else {
+        0.0
+    };
 
     // Signal config-done
     state.config_done = true;
@@ -258,10 +266,7 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) {
 /// Extract the program name (first word, basename) from a command string
 fn extract_program_name(cmd: &str) -> String {
     let cmd = cmd.trim_start();
-    let first_word: String = cmd
-        .chars()
-        .take_while(|c| !c.is_whitespace())
-        .collect();
+    let first_word: String = cmd.chars().take_while(|c| !c.is_whitespace()).collect();
     if let Some(slash) = first_word.rfind('/') {
         first_word[slash + 1..].to_string()
     } else {
@@ -281,26 +286,37 @@ pub fn parse_keysym(key_str: &str) -> u32 {
     xkbcommon::xkb::keysym_from_name(name, xkbcommon::xkb::KEYSYM_CASE_INSENSITIVE).into()
 }
 
-/// Spawn a command in the background (double-fork style)
+/// Spawn a command in the background.
+///
+/// Closes all inherited FDs > 2 in the child via pre_exec so that
+/// spawned Wayland clients (fuzzel, foot, etc.) never accidentally
+/// read from clearwm's Wayland socket fd. Also redirects stdout/stderr
+/// to /dev/null so child output doesn't pollute clearwm's log, and
+/// calls setsid() to detach from clearwm's process group.
 pub fn spawn_command_bg(cmd: &str) {
     use std::os::unix::process::CommandExt;
     let cmd = cmd.to_string();
-    // Double-fork: first fork setsid, second fork execs
-    // Safety: pre_exec is unsafe because it runs between fork and exec.
-    // We only call setsid() which is async-signal-safe.
     let _ = unsafe {
         std::process::Command::new("sh")
             .arg("-c")
             .arg(&cmd)
+            .env_remove("WAYLAND_DEBUG")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .pre_exec(|| {
+                // Close all inherited FDs > 2 to prevent the child from
+                // accidentally reading clearwm's Wayland socket or status
+                // socket FDs. close() and setsid() are async-signal-safe.
+                let max_fd = libc::sysconf(libc::_SC_OPEN_MAX) as libc::c_int;
+                for fd in 3..max_fd {
+                    libc::close(fd);
+                }
                 libc::setsid();
                 Ok(())
             })
             .spawn()
     };
 }
-
-/// Check if a process with the given name is already running
 pub fn process_running(name: &str) -> bool {
     match std::process::Command::new("pgrep")
         .arg("-x")
@@ -335,5 +351,32 @@ mod tests {
         assert_eq!(lc.bar_height, 24);
         assert_eq!(lc.border_width, 6);
         assert_eq!(lc.border_color, "#3e3e3e");
+    }
+}
+
+#[cfg(test)]
+mod startup_format_tests {
+    use super::*;
+
+    #[test]
+    fn test_startup_entry_format() {
+        let toml_str = r#"
+[env]
+XDG_CURRENT_DESKTOP = "river"
+
+[[startup]]
+exec = "waybar"
+
+[[startup]]
+exec = "fuzzel"
+once = true
+"#;
+        let config: Config = toml::from_str(toml_str).expect("TOML parse failed");
+        assert_eq!(config.startup.len(), 2);
+        assert_eq!(config.startup[0].exec, "waybar");
+        assert!(!config.startup[0].once);
+        assert_eq!(config.startup[1].exec, "fuzzel");
+        assert!(config.startup[1].once);
+        assert_eq!(config.env.get("XDG_CURRENT_DESKTOP").unwrap(), "river");
     }
 }

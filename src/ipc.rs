@@ -28,16 +28,43 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
             }
         }
         "close" => {
-            // Will be handled by the WM layer - mark that close was requested
-            // for the focused window
+            // Close the focused window
             if let Some(seat) = state.seats.first() {
-                if seat.focused_window_id.is_some() {
-                    // The actual river_window_v1_close() call happens in wm.rs
+                if let Some(focused_id) = seat.focused_window_id {
+                    if let Some(window) = state.get_window_mut(focused_id) {
+                        window.closed = true;
+                    }
                 }
             }
+            state.needs_render = true;
         }
         "focus-next" => {
-            // Will be handled by the WM layer
+            // Focus the next visible window (wrapping) and move it to the
+            // front of the cascade stack (end of windows vector).
+            if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
+                let focused_id = seat.focused_window_id;
+                let active_tags = state.active_tags;
+                let visible_ids: Vec<u64> = state
+                    .windows
+                    .iter()
+                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed)
+                    .map(|w| w.id)
+                    .collect();
+                if visible_ids.len() > 1 {
+                    if let Some(fid) = focused_id {
+                        if let Some(idx) = visible_ids.iter().position(|id| *id == fid) {
+                            let next_idx = (idx + 1) % visible_ids.len();
+                            let next_id = visible_ids[next_idx];
+                            seat.focused_window_id = Some(next_id);
+                            // Move newly focused window to front of cascade stack
+                            state.move_window_to_end(next_id);
+                        }
+                    }
+                }
+            }
+            state.needs_render = true;
+            state.needs_focus = true;
+            state.needs_status_update = true;
         }
         "exit" => {
             // Signal exit request
@@ -53,6 +80,18 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
             if let Some(tag) = tag {
                 if tag >= 1 && tag <= NUM_TAGS as i32 {
                     state.active_tags = 1 << (tag - 1);
+
+                    // Reassign focus to a visible window on the new tag
+                    if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
+                        let visible_ids: Vec<u64> = state
+                            .windows
+                            .iter()
+                            .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed)
+                            .map(|w| w.id)
+                            .collect();
+                        seat.focused_window_id = visible_ids.last().copied();
+                    }
+                    state.needs_focus = true;
                 }
             }
         }
@@ -61,6 +100,30 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
             if let Some(tag) = tag {
                 if tag >= 1 && tag <= NUM_TAGS as i32 {
                     state.active_tags ^= 1 << (tag - 1);
+
+                    // If the focused window is no longer visible, reassign focus
+                    let focused_id = state
+                        .seats
+                        .iter()
+                        .find(|s| !s.removed)
+                        .and_then(|s| s.focused_window_id);
+                    let focused_still_visible = focused_id.map_or(false, |fid| {
+                        state
+                            .get_window(fid)
+                            .map_or(false, |w| (w.tags & state.active_tags) != 0 && !w.closed)
+                    });
+                    if !focused_still_visible {
+                        let visible_ids: Vec<u64> = state
+                            .windows
+                            .iter()
+                            .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed)
+                            .map(|w| w.id)
+                            .collect();
+                        if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
+                            seat.focused_window_id = visible_ids.last().copied();
+                        }
+                        state.needs_focus = true;
+                    }
                 }
             }
         }
@@ -236,7 +299,11 @@ fn handle_bind_command(rest: &str, state: &mut WindowManager) {
     };
 
     let action = parse_action(action_str);
-    let command = if action == Action::Spawn { command } else { None };
+    let command = if action == Action::Spawn {
+        command
+    } else {
+        None
+    };
 
     state.pending_bindings.push(PendingXkbBinding {
         mods,
@@ -287,8 +354,35 @@ fn handle_set_tag_command(rest: &str, state: &mut WindowManager) {
     let tag_str = rest.trim();
     if let Ok(tag) = tag_str.parse::<i32>() {
         if tag >= 1 && tag <= NUM_TAGS as i32 {
-            if let Some(window) = state.focused_window_mut() {
-                window.tags = 1 << (tag - 1);
+            // Read focused_id before any mutable borrow
+            let focused_id = state
+                .seats
+                .iter()
+                .find(|s| !s.removed)
+                .and_then(|s| s.focused_window_id);
+            if let Some(focused_id) = focused_id {
+                // Set the window's tag
+                let active_tags = state.active_tags;
+                let window_left_active_tag = state
+                    .get_window_mut(focused_id)
+                    .map_or(false, |window| {
+                        window.tags = 1 << (tag - 1);
+                        (window.tags & active_tags) == 0
+                    });
+
+                // If the window is no longer on an active tag, shift focus
+                if window_left_active_tag {
+                    let visible_ids: Vec<u64> = state
+                        .windows
+                        .iter()
+                        .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed)
+                        .map(|w| w.id)
+                        .collect();
+                    if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
+                        seat.focused_window_id = visible_ids.last().copied();
+                    }
+                    state.needs_focus = true;
+                }
             }
         }
     }

@@ -4,15 +4,80 @@
 // the same work as the C version's wm_handle_render_start():
 //   1. Tile visible windows (propose dimensions + set position)
 //   2. Set border colors (cascade depth gradient or normal gray)
-//   3. Update desktop background via swaybg
 
 use crate::borders::compute_border_colors;
 use crate::protocol::river_window_management::client::river_node_v1::RiverNodeV1;
 use crate::protocol::river_window_management::client::river_window_v1::Edges;
 use crate::tiling;
-use crate::types::{TilingMode, WindowManager};
+use crate::types::{TilingMode, Window, WindowManager, NUM_TAGS};
 use crate::wayland::AppState;
 use wayland_client::QueueHandle;
+
+/// Determine the tiling mode for a window based on mode_rules, tag_layouts,
+/// and global_layout (in priority order).
+///
+/// Returns the resolved TilingMode, or None if the window's mode is locked
+/// (i.e., the user manually set it and it should not be overridden).
+pub fn get_mode_for_window(wm: &WindowManager, win: &Window) -> Option<TilingMode> {
+    // If the user manually locked the mode (via set-mode, fullscreen toggle, etc.),
+    // don't override it.
+    if win.mode_locked {
+        return None;
+    }
+
+    // 1. Check mode_rules for a match on app_id/title
+    for rule in &wm.mode_rules {
+        let match_app = rule.app_id_pattern == "*"
+            || win
+                .app_id
+                .as_deref()
+                .map_or(false, |aid| aid.contains(&rule.app_id_pattern));
+        let match_title = rule.title_pattern.as_deref() == Some("*")
+            || rule.title_pattern.is_none()
+            || win.title.as_deref().map_or(false, |t| {
+                t.contains(rule.title_pattern.as_deref().unwrap_or(""))
+            });
+
+        if match_app && match_title {
+            return Some(rule.mode);
+        }
+    }
+
+    // 2. Check tag_layouts for the window's active tags
+    for tag_bit in 0..NUM_TAGS {
+        let tag_mask = 1u32 << tag_bit;
+        if (win.tags & tag_mask) != 0 && wm.has_tag_layout[tag_bit] {
+            return Some(wm.tag_layouts[tag_bit]);
+        }
+    }
+
+    // 3. Fall back to global_layout
+    Some(wm.global_layout)
+}
+
+/// Assign tiling modes to all windows that aren't mode_locked.
+/// Should be called during ManageStart before compute_tiling.
+pub fn assign_window_modes(wm: &mut WindowManager) {
+    // Collect assignments first (borrow checker: can't borrow wm mutably while iterating mode_rules)
+    let assignments: Vec<(u64, TilingMode)> = wm
+        .windows
+        .iter()
+        .filter(|w| !w.closed && !w.mode_locked)
+        .filter_map(|win| get_mode_for_window(wm, win).map(|mode| (win.id, mode)))
+        .collect();
+
+    for (wid, mode) in assignments {
+        if let Some(win) = wm.get_window_mut(wid) {
+            if win.tiling_mode != mode {
+                eprintln!(
+                    "[mode] window {} (app_id={:?}): {:?} -> {:?}",
+                    wid, win.app_id, win.tiling_mode, mode
+                );
+                win.tiling_mode = mode;
+            }
+        }
+    }
+}
 
 /// A tiling result for a single window
 struct TileResult {
@@ -23,24 +88,36 @@ struct TileResult {
     h: i32,
 }
 
-/// Perform a full render cycle: tile windows and set borders.
-///
-/// This is called from the `render_start` handler only when `needs_render` is true.
-/// After this, the caller always calls `render_finish()`.
-pub fn render_windows(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
+/// Perform window management during a manage sequence.
+/// This calls set_position and propose_dimensions on visible windows.
+/// These modify window management state and can ONLY be called during
+/// a manage sequence (between ManageStart and ManageFinish).
+pub fn manage_windows(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
     let screen_dims = get_screen_dimensions(&state.wm);
     let (screen_w, screen_h) = screen_dims;
 
-    // Ensure each window that needs positioning has a river_node_v1
+    eprintln!(
+        "[manage] windows={} outputs={} screen={}x{}",
+        state.wm.windows.len(),
+        state.wm.outputs.len(),
+        screen_w,
+        screen_h
+    );
+
+    // Ensure each window has a river_node_v1 proxy for positioning
     ensure_window_nodes(state, qhandle);
 
-    // Compute tiling (read-only pass over windows)
+    // Compute tiling
     let tile_results = compute_tiling(&state.wm, screen_w, screen_h);
 
-    // Apply tiling results (mutations)
+    // Apply: set_position + propose_dimensions + update internal state
     apply_tiling(state, &tile_results);
+}
 
-    // Set border colors
+/// Set border colors on all visible windows.
+/// This modifies rendering state and is called during RenderStart.
+/// Border colors are applied with the next render_finish.
+pub fn render_borders(state: &mut AppState) {
     set_borders(state);
 }
 
@@ -106,6 +183,8 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
     // Count windows per tiling mode
     let mut n_cascade = 0i32;
     let mut n_grid = 0i32;
+    let mut n_vsplit = 0i32;
+    let mut n_hsplit = 0i32;
     for win in &wm.windows {
         if (win.tags & wm.active_tags) == 0 || win.closed {
             continue;
@@ -113,6 +192,8 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
         match win.tiling_mode {
             TilingMode::Cascade => n_cascade += 1,
             TilingMode::Grid => n_grid += 1,
+            TilingMode::Vsplit => n_vsplit += 1,
+            TilingMode::Hsplit => n_hsplit += 1,
             _ => {}
         }
     }
@@ -122,9 +203,7 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
         .windows
         .iter()
         .find(|w| {
-            (w.tags & wm.active_tags) != 0
-                && !w.closed
-                && w.tiling_mode == TilingMode::Fullscreen
+            (w.tags & wm.active_tags) != 0 && !w.closed && w.tiling_mode == TilingMode::Fullscreen
         })
         .map(|w| w.id);
 
@@ -132,6 +211,8 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
     let mut results = Vec::new();
     let mut idx_cascade = 0i32;
     let mut idx_grid = 0i32;
+    let mut idx_vsplit = 0i32;
+    let mut idx_hsplit = 0i32;
 
     for win in &wm.windows {
         if (win.tags & wm.active_tags) == 0 || win.closed {
@@ -169,12 +250,48 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
                 idx_grid += 1;
                 (x, y, w, h)
             }
-            TilingMode::Vsplit | TilingMode::Hsplit => {
-                // TODO: implement vsplit/hsplit
-                continue;
+            TilingMode::Vsplit => {
+                let (x, y, w, h) = tiling::tile_vsplit(
+                    screen_w, screen_h, gap, bw, bar_height, n_vsplit, idx_vsplit,
+                );
+                idx_vsplit += 1;
+                (x, y, w, h)
+            }
+            TilingMode::Hsplit => {
+                let (x, y, w, h) = tiling::tile_hsplit(
+                    screen_w, screen_h, gap, bw, bar_height, n_hsplit, idx_hsplit,
+                );
+                idx_hsplit += 1;
+                (x, y, w, h)
             }
             TilingMode::Floating => {
-                continue;
+                // Floating windows: don't tile them, but still propose
+                // dimensions so they don't end up at w=0 h=0 (which
+                // triggers River's unresponsive-client detection).
+                // Use the window's existing dimensions, or a reasonable
+                // default if unset.
+                let fw = if win.width > 0 {
+                    win.width
+                } else {
+                    screen_w * 2 / 3
+                };
+                let fh = if win.height > 0 {
+                    win.height
+                } else {
+                    screen_h * 2 / 3
+                };
+                let fx = if win.x != 0 || win.y != 0 {
+                    win.x
+                } else {
+                    gap + bw + offset * idx_cascade
+                };
+                let fy = if win.x != 0 || win.y != 0 {
+                    win.y
+                } else {
+                    gap + bw + bar_height + offset * idx_cascade
+                };
+                idx_cascade += 1;
+                (fx, fy, fw, fh)
             }
         };
 
@@ -214,7 +331,7 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
 
 /// Set border colors on all visible windows.
 fn set_borders(state: &mut AppState) {
-    let (border_colors, bg_color) = compute_border_colors(&state.wm);
+    let border_colors = compute_border_colors(&state.wm);
 
     for bc in &border_colors {
         let wid = match state.wm.windows.get(bc.window_idx) {
@@ -226,41 +343,6 @@ fn set_borders(state: &mut AppState) {
             let edges = Edges::from_bits_truncate(bc.edges);
             wp.river_window
                 .set_borders(edges, bc.width, bc.r, bc.g, bc.b, bc.a);
-        }
-    }
-
-    // Update desktop background if cascade color changed
-    if let Some(ref color) = bg_color {
-        if *color != state.wm.last_bg_color {
-            state.wm.last_bg_color = color.clone();
-            spawn_swaybg(color);
-        }
-    }
-}
-
-/// Spawn swaybg with the given color (fire-and-forget).
-fn spawn_swaybg(color: &str) {
-    let cmd = format!("pkill -f swaybg 2>/dev/null; swaybg -c '{}'", color);
-    unsafe {
-        match nix::unistd::fork() {
-            Ok(nix::unistd::ForkResult::Child) => {
-                nix::unistd::close(nix::libc::STDIN_FILENO).ok();
-                nix::unistd::close(nix::libc::STDOUT_FILENO).ok();
-                nix::unistd::close(nix::libc::STDERR_FILENO).ok();
-                nix::unistd::execvp(
-                    &std::ffi::CString::new("/bin/sh").unwrap(),
-                    &[
-                        std::ffi::CString::new("sh").unwrap(),
-                        std::ffi::CString::new("-c").unwrap(),
-                        std::ffi::CString::new(cmd).unwrap(),
-                    ],
-                )
-                .ok();
-                // If exec fails, exit child
-                libc::_exit(127);
-            }
-            Ok(nix::unistd::ForkResult::Parent { .. }) => {}
-            Err(_) => {}
         }
     }
 }

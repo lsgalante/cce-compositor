@@ -15,15 +15,6 @@ pub fn interp_channel(fp_channel: u32, factor: f64, depth: i32) -> u32 {
     (val as u32) << 24
 }
 
-/// Write "#RRGGBB" for a given depth into a String.
-pub fn cascade_hex_color(br: u32, bg: u32, bb: u32, depth: i32) -> String {
-    let depth_factor = 0.80_f64;
-    let r = interp_channel(br, depth_factor, depth) >> 24;
-    let g = interp_channel(bg, depth_factor, depth) >> 24;
-    let b = interp_channel(bb, depth_factor, depth) >> 24;
-    format!("#{:02x}{:02x}{:02x}", r, g, b)
-}
-
 /// Normal border color in fixed-point format: dark gray (#3E3E3E)
 pub const BORDER_COLOR_NORMAL_R: u32 = 0x3E000000;
 pub const BORDER_COLOR_NORMAL_G: u32 = 0x3E000000;
@@ -49,8 +40,7 @@ pub struct WindowBorders {
 }
 
 /// Compute border colors for all visible windows.
-/// Returns a list of WindowBorders and the background color string for swaybg.
-pub fn compute_border_colors(state: &WindowManager) -> (Vec<WindowBorders>, Option<String>) {
+pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
     let mut results = Vec::new();
     let all_edges = 0b1111u32; // all edges
 
@@ -62,10 +52,7 @@ pub fn compute_border_colors(state: &WindowManager) -> (Vec<WindowBorders>, Opti
         }
     }
 
-    let mut max_cascade_depth = 0i32;
-    let mut bg_color: Option<String> = None;
-
-    // Second pass: assign border colors
+    // Assign border colors
     for (idx, win) in state.windows.iter().enumerate() {
         if (win.tags & state.active_tags) == 0 {
             continue;
@@ -93,12 +80,11 @@ pub fn compute_border_colors(state: &WindowManager) -> (Vec<WindowBorders>, Opti
                 window_idx: idx,
                 edges: all_edges,
                 width: state.layout.border_width,
-                r, g, b, a: CASCADE_ALPHA,
+                r,
+                g,
+                b,
+                a: CASCADE_ALPHA,
             });
-
-            if depth > max_cascade_depth {
-                max_cascade_depth = depth;
-            }
         } else {
             results.push(WindowBorders {
                 window_idx: idx,
@@ -112,17 +98,7 @@ pub fn compute_border_colors(state: &WindowManager) -> (Vec<WindowBorders>, Opti
         }
     }
 
-    // Set desktop background to the darkest cascade color
-    if n_cascade > 0 {
-        bg_color = Some(cascade_hex_color(
-            state.layout.border_r,
-            state.layout.border_g,
-            state.layout.border_b,
-            max_cascade_depth,
-        ));
-    }
-
-    (results, bg_color)
+    results
 }
 
 #[cfg(test)]
@@ -141,11 +117,5 @@ mod tests {
         let result = interp_channel(0x90000000, 0.80, 1);
         let val = result >> 24;
         assert_eq!(val, ((0x90 as f64 * 0.80) as u8) as u32);
-    }
-
-    #[test]
-    fn test_cascade_hex_color() {
-        let color = cascade_hex_color(0x5C000000, 0x90000000, 0x60000000, 0);
-        assert_eq!(color, "#5c9060");
     }
 }

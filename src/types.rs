@@ -115,6 +115,7 @@ pub struct PendingPointerBinding {
 /// to execute when the binding is triggered.
 #[derive(Debug, Clone)]
 pub struct BindingUserData {
+    pub seat_id: u64,
     pub action: Action,
     pub command: Option<String>,
 }
@@ -193,7 +194,7 @@ impl Default for Window {
             title: None,
             identifier: None,
             parent_id: None,
-            decoration_hint: 3, // no_preference
+            decoration_hint: 3,   // no_preference
             presentation_hint: 0, // vsync
             tiling_mode: TilingMode::Floating,
             mode_locked: false,
@@ -210,6 +211,8 @@ pub struct Seat {
     pub focused_window_id: Option<u64>,
     pub hovered_window_id: Option<u64>,
     pub interacted_window_id: Option<u64>,
+    pub pending_action: Action,
+    pub pending_command: Option<String>,
 }
 
 impl Default for Seat {
@@ -221,6 +224,8 @@ impl Default for Seat {
             focused_window_id: None,
             hovered_window_id: None,
             interacted_window_id: None,
+            pending_action: Action::None,
+            pending_command: None,
         }
     }
 }
@@ -240,13 +245,21 @@ pub struct WindowManager {
     pub config_done: bool,
     pub in_manage_sequence: bool,
     pub needs_render: bool,
+    pub needs_focus: bool,
+    pub needs_status_update: bool,
     pub exit_requested: bool,
     pub global_layout: TilingMode,
     pub tag_layouts: [TilingMode; NUM_TAGS],
     pub has_tag_layout: [bool; NUM_TAGS],
     pub input_devices: Vec<InputDevice>,
-    pub last_bg_color: String,
     pub env_vars: HashMap<String, String>,
+    pub pending_startup_apps: Vec<String>,
+    pub startup_spawned: bool,
+    pub output_scale: f64,
+    /// When true, apply configured output_scale via wlr-output-management
+    /// on the next output_manager done event. Set by config load and
+    /// by VT-switch-back (where wlroots resets scale to 1).
+    pub pending_scale_apply: bool,
 }
 
 impl Default for WindowManager {
@@ -263,14 +276,19 @@ impl Default for WindowManager {
             focused_tags: 0,
             config_done: false,
             in_manage_sequence: false,
-            needs_render: true, // render on first frame
+            needs_render: true,        // render on first frame
+            needs_focus: true,         // focus on first frame
+            needs_status_update: true, // update status files on first cycle
             exit_requested: false,
             global_layout: TilingMode::Cascade,
             tag_layouts: [TilingMode::Cascade; NUM_TAGS],
             has_tag_layout: [false; NUM_TAGS],
             input_devices: Vec::new(),
-            last_bg_color: String::new(),
             env_vars: HashMap::new(),
+            pending_startup_apps: Vec::new(),
+            startup_spawned: false,
+            output_scale: 0.0,
+            pending_scale_apply: false,
         }
     }
 }
@@ -309,6 +327,24 @@ impl WindowManager {
             (seat.focused_window_id?, seat.id)
         };
         self.get_window_mut(wid)
+    }
+
+    /// Move a window to the end of the windows vector.
+    /// This makes it the last cascade window (front of visual stack,
+    /// rightmost/bottommost position, brightest border).
+    /// Returns true if the window was moved, false if not found or already last.
+    pub fn move_window_to_end(&mut self, id: u64) -> bool {
+        let idx = match self.windows.iter().position(|w| w.id == id) {
+            Some(i) => i,
+            None => return false,
+        };
+        // Already last?
+        if idx == self.windows.len() - 1 {
+            return false;
+        }
+        let win = self.windows.remove(idx);
+        self.windows.push(win);
+        true
     }
 }
 
@@ -364,11 +400,16 @@ pub fn parse_action(s: &str) -> Action {
         Action::Restart
     } else if s == "fullscreen" {
         Action::Fullscreen
-    } else if s.starts_with("spawn") && (s.len() == 5 || s.as_bytes()[5] == b' ' || s.as_bytes()[5] == b'-') {
+    } else if s.starts_with("spawn")
+        && (s.len() == 5 || s.as_bytes()[5] == b' ' || s.as_bytes()[5] == b'-')
+    {
         Action::Spawn
     } else if s.starts_with("view") {
         let rest = &s[4..];
-        let tag_str = rest.strip_prefix('-').or_else(|| rest.strip_prefix(' ')).unwrap_or(rest);
+        let tag_str = rest
+            .strip_prefix('-')
+            .or_else(|| rest.strip_prefix(' '))
+            .unwrap_or(rest);
         if let Ok(tag) = tag_str.parse::<i32>() {
             if tag >= 1 && tag <= NUM_TAGS as i32 {
                 return match tag {
@@ -383,7 +424,10 @@ pub fn parse_action(s: &str) -> Action {
         Action::None
     } else if s.starts_with("toggle") {
         let rest = &s[6..];
-        let tag_str = rest.strip_prefix('-').or_else(|| rest.strip_prefix(' ')).unwrap_or(rest);
+        let tag_str = rest
+            .strip_prefix('-')
+            .or_else(|| rest.strip_prefix(' '))
+            .unwrap_or(rest);
         if let Ok(tag) = tag_str.parse::<i32>() {
             if tag >= 1 && tag <= NUM_TAGS as i32 {
                 return match tag {
@@ -398,7 +442,10 @@ pub fn parse_action(s: &str) -> Action {
         Action::None
     } else if s.starts_with("set-tag") {
         let rest = &s[7..];
-        let tag_str = rest.strip_prefix('-').or_else(|| rest.strip_prefix(' ')).unwrap_or(rest);
+        let tag_str = rest
+            .strip_prefix('-')
+            .or_else(|| rest.strip_prefix(' '))
+            .unwrap_or(rest);
         if let Ok(tag) = tag_str.parse::<i32>() {
             if tag >= 1 && tag <= NUM_TAGS as i32 {
                 return match tag {
