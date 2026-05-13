@@ -463,15 +463,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     let apps: Vec<String> = state.wm.pending_startup_apps.drain(..).collect();
                     for cmd in &apps {
                         eprintln!("[init] spawning startup app: {}", cmd);
-                        match std::process::Command::new("sh")
-                            .arg("-c")
-                            .arg(cmd)
-                            .env_remove("WAYLAND_DEBUG")
-                            .spawn()
-                        {
-                            Ok(_) => eprintln!("[init] spawned ok: {}", cmd),
-                            Err(e) => eprintln!("[init] failed to spawn '{}': {e}", cmd),
-                        }
+                        crate::config::spawn_command_bg(cmd);
                     }
                     state.wm.startup_spawned = true;
                 }
