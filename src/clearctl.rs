@@ -12,7 +12,7 @@ fn usage(name: &str) {
     eprintln!("usage: {} <command> [args...]", name);
     eprintln!();
     eprintln!("commands:");
-    eprintln!("  layout <gap|offset|bar_height|border_width|border_color> <value>");
+    eprintln!("  layout <gap|gap_top|gap_left|gap_right|gap_bottom|offset|bar_height|border_width|fullscreen_border_width|border_color> <value>");
     eprintln!("  view <1-4>");
     eprintln!("  toggle <1-4>");
     eprintln!("  close");

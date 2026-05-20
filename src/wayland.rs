@@ -9,6 +9,11 @@ use crate::protocol::river_input_management::client::{
     river_input_device_v1::{self, RiverInputDeviceV1},
     river_input_manager_v1::{self, RiverInputManagerV1},
 };
+use crate::protocol::river_libinput_config::client::{
+    river_libinput_config_v1::{self, RiverLibinputConfigV1},
+    river_libinput_device_v1::{self, RiverLibinputDeviceV1},
+    river_libinput_result_v1::{self, RiverLibinputResultV1},
+};
 use crate::protocol::river_layer_shell::client::{
     river_layer_shell_output_v1::{self, RiverLayerShellOutputV1},
     river_layer_shell_v1::{self, RiverLayerShellV1},
@@ -41,6 +46,7 @@ const IFACE_WINDOW_MANAGER: &str = "river_window_manager_v1";
 const IFACE_XKB_BINDINGS: &str = "river_xkb_bindings_v1";
 const IFACE_LAYER_SHELL: &str = "river_layer_shell_v1";
 const IFACE_INPUT_MANAGER: &str = "river_input_manager_v1";
+const IFACE_LIBINPUT_CONFIG: &str = "river_libinput_config_v1";
 const IFACE_WLR_OUTPUT_MANAGER: &str = "zwlr_output_manager_v1";
 
 /// Wayland proxy objects stored alongside each Window, so we can
@@ -111,6 +117,22 @@ pub struct AppState {
 
     // --- Status socket sender for waybar ---
     pub status_sender: Option<crate::status_server::StatusSender>,
+
+    // --- Libinput config protocol state ---
+    pub libinput_config: Option<RiverLibinputConfigV1>,
+    /// Tracked libinput devices with their tap state
+    pub libinput_devices: Vec<LibinputDeviceInfo>,
+}
+
+/// Info tracked for each libinput device discovered via river_libinput_config_v1
+pub struct LibinputDeviceInfo {
+    pub device: RiverLibinputDeviceV1,
+    /// Device name (from the river_input_device_v1 name event)
+    pub name: String,
+    /// Number of fingers supported for tap (0 = unsupported)
+    pub tap_finger_count: i32,
+    /// Whether we've received enough events to apply tap config
+    pub tap_info_received: bool,
 }
 
 /// Tracked info for a wlr-output-management head.
@@ -145,6 +167,8 @@ impl AppState {
             output_heads: Vec::new(),
             output_config: None,
             status_sender: None,
+            libinput_config: None,
+            libinput_devices: Vec::new(),
         }
     }
 
@@ -245,6 +269,11 @@ impl Dispatch<wl_registry::WlRegistry, RegistryData> for AppState {
                     let im: RiverInputManagerV1 =
                         registry.bind::<RiverInputManagerV1, _, _>(name, 1, qhandle, ());
                     state.input_manager = Some(im);
+                } else if interface == IFACE_LIBINPUT_CONFIG {
+                    eprintln!("registry: binding {}", IFACE_LIBINPUT_CONFIG);
+                    let lc: RiverLibinputConfigV1 =
+                        registry.bind::<RiverLibinputConfigV1, _, _>(name, 1, qhandle, ());
+                    state.libinput_config = Some(lc);
                 } else if interface == IFACE_WLR_OUTPUT_MANAGER {
                     eprintln!("registry: binding {}", IFACE_WLR_OUTPUT_MANAGER);
                     let om: ZwlrOutputManagerV1 =
@@ -288,6 +317,21 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     state.exit_requested = true;
                 } else {
                     eprintln!("river sent finished unexpectedly, restarting");
+                    // Write to death log before fork+exit loses all traces
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/tmp/clearwm-death.log")
+                    {
+                        use std::io::Write;
+                        let _ = writeln!(
+                            f,
+                            "river sent Finished event — protocol error likely, in_manage={}, render_count={}",
+                            state.wm.in_manage_sequence,
+                            state.render_count
+                        );
+                        let _ = f.sync_all();
+                    }
                     crate::restart::wm_restart();
                 }
             }
@@ -298,11 +342,115 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 state.wm.focused_tags = 0;
                 state.wm.needs_render = true;
 
-                // Remove closed windows
+                // Remove closed windows and their proxy objects.
+                // Collect IDs first, then clean up proxies, then remove from windows vector.
+                // This matches tinyrwm's remove_windows() pattern.
+                let closed_ids: Vec<(u64, Option<String>)> = state
+                    .wm
+                    .windows
+                    .iter()
+                    .filter(|w| w.closed)
+                    .map(|w| (w.id, w.app_id.clone()))
+                    .collect();
+                // Destroy proxy objects for closed windows.
+                // Also clean up seat state (focused_window_id, hovered_window_id,
+                // interacted_window_id) that references closed windows, matching
+                // tinyrwm's remove_windows() pattern which cleans up seat ops
+                // referencing closed window proxies.
+                for (closed_id, closed_app_id) in &closed_ids {
+                    state.window_proxies.retain(|(id, wp)| {
+                        if id == closed_id {
+                            wp.river_window.destroy();
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                    state.window_nodes.retain(|(id, node)| {
+                        if id == closed_id {
+                            node.destroy();
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                    // Clear seat references to this closed window.
+                    // If the focused window closed, reassign focus to another
+                    // visible window (matching tinyrwm's focus_top pattern).
+                    let active_tags = state.wm.active_tags;
+                    for seat in &mut state.wm.seats {
+                        if seat.focused_window_id == Some(*closed_id) {
+                            // Pick the last visible window (cascade front)
+                            let visible_ids: Vec<u64> = state
+                                .wm
+                                .windows
+                                .iter()
+                                .filter(|w| {
+                                    !w.closed && (w.tags & active_tags) != 0 && w.id != *closed_id
+                                })
+                                .map(|w| w.id)
+                                .collect();
+                            seat.focused_window_id = visible_ids.last().copied();
+                            if seat.focused_window_id.is_some() {
+                                state.wm.needs_focus = true;
+                                state.wm.needs_status_update = true;
+                            }
+                            eprintln!(
+                                "[manage] focused window {} (app_id={:?}) closed, reassigned to {:?}",
+                                closed_id, closed_app_id, seat.focused_window_id
+                            );
+                        }
+                        if seat.hovered_window_id == Some(*closed_id) {
+                            seat.hovered_window_id = None;
+                        }
+                        if seat.interacted_window_id == Some(*closed_id) {
+                            seat.interacted_window_id = None;
+                        }
+                    }
+                }
                 state.wm.windows.retain(|w| !w.closed);
-                // Remove removed outputs
+
+                // Remove removed outputs — destroy protocol proxies first
+                // (matching tinyrwm's remove_outputs pattern).
+                let removed_output_ids: Vec<u64> = state
+                    .wm
+                    .outputs
+                    .iter()
+                    .filter(|o| o.removed)
+                    .map(|o| o.id)
+                    .collect();
+                for removed_id in &removed_output_ids {
+                    state.output_proxies.retain(|(id, op)| {
+                        if id == removed_id {
+                            op.river_output.destroy();
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
                 state.wm.outputs.retain(|o| !o.removed);
-                // Remove removed seats
+
+                // Remove removed seats — destroy protocol proxies first
+                // (matching tinyrwm's remove_seats pattern which destroys
+                // seat proxy and all binding proxies).
+                let removed_seat_ids: Vec<u64> = state
+                    .wm
+                    .seats
+                    .iter()
+                    .filter(|s| s.removed)
+                    .map(|s| s.id)
+                    .collect();
+                for removed_id in &removed_seat_ids {
+                    state.seat_proxies.retain(|(id, sp)| {
+                        if id == removed_id {
+                            sp.river_seat.destroy();
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
                 state.wm.seats.retain(|s| !s.removed);
 
                 // Set default layer shell on first output
@@ -329,6 +477,116 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     }
                 }
 
+                // Check xprop results for XWayland parent detection.
+                // River doesn't send the Parent event for XWayland windows,
+                // so we detect WM_TRANSIENT_FOR / _NET_WM_WINDOW_TYPE_DIALOG|UTILITY
+                // via an async xprop check spawned in the UnreliablePid handler.
+                // This must run before assign_window_modes so has_parent is set
+                // before mode assignment decides Floating vs tiled.
+                {
+                    let mut xprop_parent_changed = false;
+                    let max_attempts: u8 = 10;
+                    for window in &mut state.wm.windows {
+                        if !window.needs_xprop_check || window.has_parent || window.closed {
+                            continue;
+                        }
+                        window.xprop_check_attempts += 1;
+                        let path = format!("/tmp/clearwm-xprop-{}", window.id);
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            let _ = std::fs::remove_file(&path);
+                            // Each line: title|window_type_line
+                            // Match by title against our window's title.
+                            let my_title = window.title.as_deref().unwrap_or("");
+                            for line in content.lines() {
+                                let parts: Vec<&str> = line.splitn(2, '|').collect();
+                                if parts.len() < 2 {
+                                    continue;
+                                }
+                                let x11_title = parts[0];
+                                let wtype = parts[1];
+                                if x11_title != my_title {
+                                    continue;
+                                }
+                                let is_dialog =
+                                    wtype.contains("DIALOG") || wtype.contains("UTILITY");
+                                // Only use the window type hint, not WM_TRANSIENT_FOR alone.
+                                // Transient-for is unreliable: some apps (e.g. Houdini)
+                                // set WM_TRANSIENT_FOR on their main window (transient to the
+                                // splash screen). The window type hint is the reliable signal
+                                // that a window is actually a dialog/utility child.
+                                if is_dialog {
+                                    window.has_parent = true;
+                                    xprop_parent_changed = true;
+                                    eprintln!(
+                                        "[xprop] id={} (app_id={:?}) detected XWayland dialog/utility window",
+                                        window.id, window.app_id
+                                    );
+                                }
+                            }
+                            window.needs_xprop_check = false;
+                        } else if window.xprop_check_attempts >= max_attempts {
+                            // Give up — xprop file never appeared (native Wayland window?)
+                            window.needs_xprop_check = false;
+                            eprintln!(
+                                "[xprop] id={} (app_id={:?}) giving up after {} attempts",
+                                window.id, window.app_id, max_attempts
+                            );
+                        }
+                    }
+                    // If any window gained has_parent, trigger a re-manage so
+                    // assign_window_modes picks it up on the next cycle.
+                    if xprop_parent_changed {
+                        if let Some(ref wm) = state.window_manager {
+                            wm.manage_dirty();
+                        }
+                    }
+                }
+
+                // Apply persisted state from ~/.cache/clearwm_state on first ManageStart.
+                // This restores window tag assignments, active_tags, tag_layouts, and
+                // locked tiling modes from the previous session. Must run before
+                // assign_window_modes so restored tags/modes take effect.
+                //
+                // We retry across multiple ManageStart cycles because window metadata
+                // (identifier, app_id, title) arrives as separate events AFTER the
+                // Window creation event. On the first ManageStart, these fields may
+                // still be None, so matching would fail. We keep needs_state_restore
+                // true until we've had at least one window with metadata (or after
+                // 5 cycles, giving up gracefully).
+                if state.wm.needs_state_restore {
+                    if let Some(pstate) = crate::state::read_state() {
+                        // Check if any window has metadata yet
+                        let has_metadata = state.wm.windows.iter().any(|w| {
+                            w.identifier.is_some() || w.app_id.is_some()
+                        });
+                        if has_metadata {
+                            crate::state::apply_state(&mut state.wm, &pstate);
+                            state.wm.needs_state_restore = false;
+                            eprintln!("[state] restored state on ManageStart (windows have metadata)");
+                        } else {
+                            // Increment a counter; give up after 5 cycles
+                            state.wm.state_restore_attempts += 1;
+                            if state.wm.state_restore_attempts >= 5 {
+                                // No windows with metadata yet — probably a fresh start
+                                // with no existing windows. Apply global state only
+                                // (active_tags, tag_layouts) and stop retrying.
+                                state.wm.active_tags = pstate.active_tags;
+                                for (idx, mode, has) in &pstate.tag_layouts {
+                                    if *idx < crate::types::NUM_TAGS {
+                                        state.wm.tag_layouts[*idx] = *mode;
+                                        state.wm.has_tag_layout[*idx] = *has;
+                                    }
+                                }
+                                state.wm.needs_state_restore = false;
+                                eprintln!("[state] no windows with metadata after 5 cycles, applied global state only");
+                            }
+                        }
+                    } else {
+                        // No state file — fresh start
+                        state.wm.needs_state_restore = false;
+                    }
+                }
+
                 // Assign tiling modes to windows based on mode_rules / tag_layouts / global_layout.
                 // Must happen before manage_windows so tiling computation uses the correct modes.
                 crate::wm::assign_window_modes(&mut state.wm);
@@ -337,6 +595,47 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 // These modify window management state and can ONLY be called
                 // during a manage sequence (per River protocol spec).
                 crate::wm::manage_windows(state, qhandle);
+
+                // Auto-focus: new windows on the current tags get keyboard focus.
+                // This runs after manage_windows so the new window is tiled and
+                // has a valid position/proxy, but before focus application so
+                // needs_focus will trigger the actual focus_window() call.
+                {
+                    let active_tags = state.wm.active_tags;
+                    // Find the last new window on active tags (cascade-front).
+                    // Multiple new windows can appear in one manage cycle (e.g.
+                    // spawning several apps at once); focusing the last one is
+                    // consistent with FocusNext and WindowInteraction which also
+                    // pick visible_ids.last().
+                    let new_focused_id = state
+                        .wm
+                        .windows
+                        .iter()
+                        .filter(|w| w.is_new && !w.closed && (w.tags & active_tags) != 0)
+                        .map(|w| w.id)
+                        .last();
+                    if let Some(new_id) = new_focused_id {
+                        for seat in &mut state.wm.seats {
+                            if seat.removed {
+                                continue;
+                            }
+                            seat.focused_window_id = Some(new_id);
+                        }
+                        // Move to cascade-front position (last in windows vec)
+                        state.wm.move_window_to_end(new_id);
+                        state.wm.needs_focus = true;
+                        state.wm.needs_status_update = true;
+                        let app_id = state.wm.get_window(new_id).and_then(|w| w.app_id.clone());
+                        eprintln!(
+                            "[focus] auto-focusing new window id={} (app_id={:?})",
+                            new_id, app_id
+                        );
+                    }
+                    // Clear is_new on all windows (only matters once)
+                    for window in &mut state.wm.windows {
+                        window.is_new = false;
+                    }
+                }
 
                 // Focus management: focus the focused window on each seat.
                 // focus_window() modifies window management state.
@@ -352,7 +651,14 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                                 state.seat_proxies.iter().find(|(id, _)| *id == seat.id)
                             {
                                 if let Some(wp) = state.get_window_proxy(focused_id) {
-                                    eprintln!("[focus] calling focus_window for id={}", focused_id);
+                                    let app_id = state
+                                        .wm
+                                        .get_window(focused_id)
+                                        .and_then(|w| w.app_id.clone());
+                                    eprintln!(
+                                        "[focus] calling focus_window for id={} (app_id={:?})",
+                                        focused_id, app_id
+                                    );
                                     sp.river_seat.focus_window(&wp.river_window);
                                 }
                             }
@@ -394,6 +700,11 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 }
 
                 wm_proxy.manage_finish();
+                // Flush immediately so River can start the configure/render cycle
+                // without waiting for our blocking_dispatch to complete.
+                if let Err(e) = conn.flush() {
+                    eprintln!("[manage] FATAL: flush after manage_finish failed: {:?}", e);
+                }
                 state.wm.in_manage_sequence = false;
                 eprintln!("[manage] ManageStart done in {:?}", ms_start.elapsed());
                 // NOTE: Do NOT call update_status_files() here — it calls
@@ -441,9 +752,13 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                                 .find(|(id, _)| *id == focused_id)
                                 .map(|(_, n)| n)
                             {
+                                let app_id = state
+                                    .wm
+                                    .get_window(focused_id)
+                                    .and_then(|w| w.app_id.clone());
                                 eprintln!(
-                                    "[render] place_top for focused window id={}",
-                                    focused_id
+                                    "[render] place_top for focused window id={} (app_id={:?})",
+                                    focused_id, app_id
                                 );
                                 node.place_top();
                             }
@@ -454,8 +769,16 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 }
 
                 wm_proxy.render_finish();
-                eprintln!("[render] render_finish #{} queued", state.render_count);
-
+                // Flush immediately so River receives render_finish without waiting
+                // for blocking_dispatch to complete. River has a 3-second unresponsive
+                // timeout, and if we don't flush promptly, River will kill us.
+                if let Err(e) = conn.flush() {
+                    eprintln!(
+                        "[render] FATAL: flush after render_finish #{} failed: {:?}",
+                        state.render_count, e
+                    );
+                }
+                eprintln!("[render] render_finish #{} flushed", state.render_count);
                 // Spawn startup apps inside the callback, like tinyrwm does.
                 // Spawning between blocking_dispatch calls corrupts the Wayland
                 // connection state because the fork inherits the socket fd.
@@ -475,6 +798,10 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 if state.wm.needs_status_update {
                     crate::status::write_status_files(&state.wm);
 
+                    // Persist state to ~/.cache/clearwm_state for restart recovery.
+                    // Safe: just file I/O, no fork, no blocking.
+                    crate::state::write_state(&state.wm);
+
                     // Push the same data through the status socket so waybar
                     // gets updates in real-time without needing signal-based pkill.
                     if let Some(ref sender) = state.status_sender {
@@ -483,6 +810,11 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     }
 
                     state.wm.needs_status_update = false;
+                }
+
+                // Re-apply tap-to-click config if it was changed via IPC
+                if !state.wm.tap_config_applied && !state.libinput_devices.is_empty() {
+                    crate::wayland::apply_tap_config(state, qhandle);
                 }
             }
 
@@ -506,7 +838,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 state
                     .window_proxies
                     .push((id, WindowProxy { river_window }));
-                eprintln!("wm_handle_window: new window id={}", id);
+                eprintln!("[window] new window id={} (app_id pending)", id);
             }
 
             // Output event: field is `id` (the new RiverOutputV1 proxy)
@@ -593,7 +925,7 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
             river_window_v1::Event::Closed => {
                 if let Some(window) = state.wm.get_window_mut(wid) {
                     window.closed = true;
-                    eprintln!("window id={} closed", wid);
+                    eprintln!("window id={} (app_id={:?}) closed", wid, window.app_id);
                 }
             }
 
@@ -605,10 +937,21 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
             }
 
             river_window_v1::Event::AppId { app_id } => {
+                let mut re_eval = false;
                 if let Some(window) = state.wm.get_window_mut(wid) {
                     if window.app_id != app_id {
+                        eprintln!(
+                            "[window] id={} app_id: {:?} -> {:?}",
+                            wid, window.app_id, app_id
+                        );
                         window.app_id = app_id;
-                        state.wm.needs_render = true;
+                        re_eval = !window.mode_locked;
+                    }
+                }
+                if re_eval {
+                    state.wm.needs_render = true;
+                    if let Some(ref wm) = state.window_manager {
+                        wm.manage_dirty();
                     }
                 }
             }
@@ -639,6 +982,146 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
                 if let Some(window) = state.wm.get_window_mut(wid) {
                     window.identifier = Some(identifier);
                 }
+            }
+
+            river_window_v1::Event::UnreliablePid { unreliable_pid } => {
+                if let Some(window) = state.wm.get_window_mut(wid) {
+                    window.pid = unreliable_pid as u32;
+                    // Spawn an async xprop check for XWayland parent detection.
+                    // River doesn't forward WM_TRANSIENT_FOR for XWayland windows,
+                    // so we check via xdotool + xprop as a fallback.
+                    // The script writes results to /tmp/clearwm-xprop-{wid} which
+                    // is read on the next ManageStart cycle.
+                    if !window.has_parent && window.pid > 0 {
+                        let pid = window.pid;
+                        let id = window.id;
+                        let cmd = format!(
+                            "for xid in $(xdotool search --pid {pid} 2>/dev/null); do \
+                             t=$(xdotool getwindowname $xid 2>/dev/null); \
+                             wt=$(xprop -id $xid _NET_WM_WINDOW_TYPE 2>/dev/null); \
+                             printf '%s|%s\\n' \"$t\" \"$wt\"; \
+                             done > /tmp/clearwm-xprop-{id}",
+                            pid = pid,
+                            id = id
+                        );
+                        crate::config::spawn_command_bg(&cmd);
+                        window.needs_xprop_check = true;
+                        eprintln!(
+                            "[window] id={} (app_id={:?}) spawned xprop check for pid={}",
+                            wid, window.app_id, pid
+                        );
+                    }
+                }
+            }
+
+            river_window_v1::Event::DimensionsHint {
+                min_width,
+                min_height,
+                max_width,
+                max_height,
+            } => {
+                if let Some(window) = state.wm.get_window_mut(wid) {
+                    window.hint_min_width = min_width;
+                    window.hint_min_height = min_height;
+                    window.hint_max_width = max_width;
+                    window.hint_max_height = max_height;
+                    eprintln!(
+                        "[window] id={} (app_id={:?}) dimensions_hint: min={}x{} max={}x{}",
+                        wid, window.app_id, min_width, min_height, max_width, max_height
+                    );
+                }
+            }
+
+            river_window_v1::Event::Parent { parent } => {
+                if let Some(window) = state.wm.get_window_mut(wid) {
+                    let had_parent = window.has_parent;
+                    match &parent {
+                        Some(parent_proxy) => {
+                            window.has_parent = true;
+                            // Look up our internal ID for the parent proxy
+                            let parent_id = state
+                                .window_proxies
+                                .iter()
+                                .find(|(_, wp)| {
+                                    wp.river_window.id().protocol_id()
+                                        == parent_proxy.id().protocol_id()
+                                })
+                                .map(|(id, _)| *id);
+                            window.parent_id = parent_id;
+                            eprintln!(
+                                "[window] id={} (app_id={:?}) has parent (internal_id={:?})",
+                                wid, window.app_id, parent_id
+                            );
+                        }
+                        None => {
+                            window.has_parent = false;
+                            window.parent_id = None;
+                        }
+                    }
+                    // Parent status changed: re-assign mode (child windows float)
+                    if window.has_parent != had_parent && !window.mode_locked {
+                        if let Some(ref wm) = state.window_manager {
+                            wm.manage_dirty();
+                        }
+                    }
+                }
+            }
+
+            river_window_v1::Event::FullscreenRequested { .. } => {
+                if let Some(window) = state.wm.get_window_mut(wid) {
+                    window.fullscreen_requested = true;
+                    eprintln!(
+                        "[window] id={} (app_id={:?}) requested fullscreen",
+                        wid, window.app_id
+                    );
+                }
+            }
+
+            river_window_v1::Event::ExitFullscreenRequested { .. } => {
+                if let Some(window) = state.wm.get_window_mut(wid) {
+                    window.fullscreen_requested = false;
+                    eprintln!(
+                        "[window] id={} (app_id={:?}) requested exit fullscreen",
+                        wid, window.app_id
+                    );
+                }
+            }
+
+            river_window_v1::Event::MaximizeRequested { .. } => {
+                if let Some(window) = state.wm.get_window_mut(wid) {
+                    window.maximize_requested = true;
+                    eprintln!(
+                        "[window] id={} (app_id={:?}) requested maximize",
+                        wid, window.app_id
+                    );
+                }
+            }
+
+            river_window_v1::Event::UnmaximizeRequested { .. } => {
+                if let Some(window) = state.wm.get_window_mut(wid) {
+                    window.maximize_requested = false;
+                    eprintln!(
+                        "[window] id={} (app_id={:?}) requested unmaximize",
+                        wid, window.app_id
+                    );
+                }
+            }
+
+            river_window_v1::Event::MinimizeRequested { .. } => {
+                if let Some(window) = state.wm.get_window_mut(wid) {
+                    window.minimize_requested = true;
+                    eprintln!(
+                        "[window] id={} (app_id={:?}) requested minimize",
+                        wid, window.app_id
+                    );
+                }
+            }
+
+            river_window_v1::Event::ShowWindowMenuRequested { x, y } => {
+                eprintln!(
+                    "[window] id={} show_window_menu_requested at ({}, {}) — ignored",
+                    wid, x, y
+                );
             }
 
             river_window_v1::Event::PointerMoveRequested { .. } => {
@@ -681,12 +1164,14 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
                 window: river_window,
             } => {
                 if let Some(wid) = state.window_id_for_proxy(&river_window) {
+                    let target_app_id = state.wm.get_window(wid).and_then(|w| w.app_id.clone());
                     if let Some(seat) = state.wm.seats.iter_mut().find(|s| s.id == sid) {
                         eprintln!(
-                            "[focus] WindowInteraction: seat={} focused_window_id={} -> {}",
+                            "[focus] WindowInteraction: seat={} focused_window_id={} -> {} (app_id={:?})",
                             sid,
                             seat.focused_window_id.unwrap_or(0),
-                            wid
+                            wid,
+                            target_app_id
                         );
                         seat.focused_window_id = Some(wid);
                         // Move clicked window to front of cascade stack
@@ -991,8 +1476,7 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
                         .pre_exec(|| {
-                            let max_fd =
-                                libc::sysconf(libc::_SC_OPEN_MAX) as libc::c_int;
+                            let max_fd = libc::sysconf(libc::_SC_OPEN_MAX) as libc::c_int;
                             for fd in 3..max_fd {
                                 libc::close(fd);
                             }
@@ -1004,16 +1488,25 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
             }
         }
         Action::Close => {
-            // Mark the focused window for closing. The actual close() call
-            // happens during the ManageStart sequence, since close()
-            // modifies window management state and can only be called during
-            // a manage sequence.
+            // Ask the compositor to close the focused window by calling
+            // close() on its River protocol proxy. This matches tinyrwm's
+            // approach: close() sends a request to River, which asks the
+            // client to close. When the client actually closes, River sends
+            // Event::Closed, which sets window.closed = true. Then on the
+            // next ManageStart, remove_windows() drops it from the vector.
+            //
+            // close() modifies window management state and can only be called
+            // during a manage sequence — which it is, since execute_action
+            // runs inside ManageStart.
             if let Some(seat) = state.wm.seats.first() {
                 if let Some(focused_id) = seat.focused_window_id {
-                    if let Some(window) = state.wm.get_window_mut(focused_id) {
-                        window.closed = true;
+                    // Send the close request to the compositor
+                    if let Some(wp) = state.get_window_proxy(focused_id) {
+                        wp.river_window.close();
                     }
-                    // Shift focus to the next visible window (excluding the one we just closed)
+                    // Shift focus to the next visible window (excluding the one we just closed).
+                    // The window isn't closed=true yet (that happens when River sends Event::Closed),
+                    // so we exclude it by ID instead.
                     let visible_ids: Vec<u64> = state
                         .wm
                         .windows
@@ -1106,10 +1599,21 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                             title,
                             identifier: None,
                             parent_id: None,
+                            has_parent: false,
+                            pid: 0,
+                            hint_min_width: 0,
+                            hint_min_height: 0,
+                            hint_max_width: 0,
+                            hint_max_height: 0,
                             decoration_hint: 3,
                             presentation_hint: 0,
+                            fullscreen_requested: false,
+                            maximize_requested: false,
+                            minimize_requested: false,
                             tiling_mode: TilingMode::Fullscreen,
                             mode_locked,
+                            needs_xprop_check: false,
+                            xprop_check_attempts: 0,
                         };
                         crate::wm::get_mode_for_window(&state.wm, &temp_win)
                             .unwrap_or(state.wm.global_layout)
@@ -1137,24 +1641,85 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                 TilingMode::Grid,
                 TilingMode::Vsplit,
                 TilingMode::Hsplit,
+                TilingMode::Fullscreen,
             ];
-            let current = state.wm.global_layout;
+            // Cycle the layout for the currently active tag(s) only.
+            // Determine the "current" mode from the first active tag's layout
+            // (or global_layout if no tag_layout is set for it), then advance.
+            let active_tags = state.wm.active_tags;
+            let first_tag_bit = (0..crate::types::NUM_TAGS).find(|b| (active_tags & (1u32 << b)) != 0);
+            let current = if let Some(bit) = first_tag_bit {
+                if state.wm.has_tag_layout[bit] {
+                    state.wm.tag_layouts[bit]
+                } else {
+                    state.wm.global_layout
+                }
+            } else {
+                state.wm.global_layout
+            };
             let next = cycle
                 .iter()
                 .position(|m| *m == current)
                 .map(|i| cycle[(i + 1) % cycle.len()])
                 .unwrap_or(TilingMode::Cascade);
-            state.wm.global_layout = next;
-            eprintln!("layout-next: global layout is now {}", next.as_str());
+
+            // Set the layout for every currently active tag.
+            for tag_bit in 0..crate::types::NUM_TAGS {
+                if (active_tags & (1u32 << tag_bit)) != 0 {
+                    state.wm.tag_layouts[tag_bit] = next;
+                    state.wm.has_tag_layout[tag_bit] = true;
+                }
+            }
+            eprintln!(
+                "layout-next: tag layout set to {} for active_tags=0b{:b}",
+                next.as_str(),
+                active_tags
+            );
 
             // Unlock windows that got their mode from the layout (not from mode_rules
             // or manual set-mode) so assign_window_modes will reassign them.
             // Windows with mode_locked=true were explicitly set by the user and stay.
             // Windows matched by mode_rules will get reassigned to the same rule mode.
-            // Only windows that fell through to global_layout will change.
+            // Only windows that fell through to tag_layouts/global_layout will change.
 
             state.wm.needs_render = true;
             state.wm.needs_status_update = true;
+        }
+        Action::ModeNext => {
+            let cycle = [
+                TilingMode::Cascade,
+                TilingMode::Grid,
+                TilingMode::Vsplit,
+                TilingMode::Hsplit,
+                TilingMode::Fullscreen,
+                TilingMode::Floating,
+            ];
+            let focused_id = state
+                .wm
+                .seats
+                .iter()
+                .find(|s| !s.removed)
+                .and_then(|s| s.focused_window_id);
+            if let Some(fid) = focused_id {
+                if let Some(win) = state.wm.get_window_mut(fid) {
+                    let next = cycle
+                        .iter()
+                        .position(|m| *m == win.tiling_mode)
+                        .map(|i| cycle[(i + 1) % cycle.len()])
+                        .unwrap_or(TilingMode::Cascade);
+                    eprintln!(
+                        "mode-next: window {} ({:?}) {} -> {}",
+                        fid,
+                        win.app_id,
+                        win.tiling_mode.as_str(),
+                        next.as_str()
+                    );
+                    win.tiling_mode = next;
+                    win.mode_locked = true;
+                    state.wm.needs_render = true;
+                    state.wm.needs_status_update = true;
+                }
+            }
         }
         Action::Reload => {
             // TODO: implement reload (re-run config)
@@ -1247,10 +1812,8 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
             if let Some(focused_id) = focused_id {
                 // Set the window's tag
                 let active_tags = state.wm.active_tags;
-                let window_left_active_tag = state
-                    .wm
-                    .get_window_mut(focused_id)
-                    .map_or(false, |window| {
+                let window_left_active_tag =
+                    state.wm.get_window_mut(focused_id).map_or(false, |window| {
                         window.tags = 1 << (tag - 1);
                         (window.tags & active_tags) == 0
                     });
@@ -1759,4 +2322,150 @@ pub fn wayland_init() -> Result<(Connection, EventQueue<AppState>, AppState), St
     eprintln!("clearwm: Wayland connection established");
 
     Ok((conn, event_queue, state))
+}
+
+// --- RiverLibinputConfigV1 events ---
+
+impl Dispatch<RiverLibinputConfigV1, ()> for AppState {
+    event_created_child!(AppState, RiverLibinputConfigV1, [
+        river_libinput_config_v1::EVT_LIBINPUT_DEVICE_OPCODE => (RiverLibinputDeviceV1, ()),
+    ]);
+
+    fn event(
+        state: &mut Self,
+        _proxy: &RiverLibinputConfigV1,
+        event: river_libinput_config_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            river_libinput_config_v1::Event::LibinputDevice { id: device } => {
+                eprintln!("[libinput] device discovered");
+                state.libinput_devices.push(LibinputDeviceInfo {
+                    device,
+                    name: String::new(),
+                    tap_finger_count: -1, // not yet received
+                    tap_info_received: false,
+                });
+            }
+            river_libinput_config_v1::Event::Finished => {}
+            _ => {}
+        }
+    }
+}
+
+// --- RiverLibinputDeviceV1 events ---
+
+impl Dispatch<RiverLibinputDeviceV1, ()> for AppState {
+    fn event(
+        state: &mut Self,
+        _proxy: &RiverLibinputDeviceV1,
+        event: river_libinput_device_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            river_libinput_device_v1::Event::TapSupport { finger_count } => {
+                if let Some(dev) = state.libinput_devices.last_mut() {
+                    dev.tap_finger_count = finger_count;
+                    eprintln!("[libinput] tap support: {} fingers", finger_count);
+                }
+                // Don't apply tap config here — devices arrive one at a time.
+                // If we apply after the first device (which may not support tap),
+                // tap_config_applied gets set too early and we miss the touchpad.
+                // Instead, apply in RenderStart after all devices have been discovered.
+            }
+            river_libinput_device_v1::Event::TapDefault { state: tap_state } => {
+                let _ = tap_state;
+                eprintln!("[libinput] tap default received");
+            }
+            river_libinput_device_v1::Event::TapCurrent { state: tap_state } => {
+                let _ = tap_state;
+                eprintln!("[libinput] tap current received");
+            }
+            river_libinput_device_v1::Event::Removed => {
+                eprintln!("[libinput] device removed");
+            }
+            _ => {}
+        }
+    }
+}
+
+// --- RiverLibinputResultV1 events ---
+
+impl Dispatch<RiverLibinputResultV1, ()> for AppState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &RiverLibinputResultV1,
+        event: river_libinput_result_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            river_libinput_result_v1::Event::Success => {
+                eprintln!("[libinput] config applied successfully");
+            }
+            river_libinput_result_v1::Event::Unsupported => {
+                eprintln!("[libinput] config unsupported by device");
+            }
+            river_libinput_result_v1::Event::Invalid => {
+                eprintln!("[libinput] config invalid");
+            }
+        }
+    }
+}
+
+/// Apply tap-to-click configuration to all libinput devices that support it.
+/// Called after device events arrive and after config changes.
+pub fn apply_tap_config(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
+    if state.wm.tap_config_applied {
+        return;
+    }
+
+    // Wait until ALL discovered devices have received their tap_support event.
+    // Devices arrive one at a time; if we mark tap_config_applied after only
+    // the first device (which may not support tap), we'll miss the touchpad.
+    let all_info_received = state.libinput_devices.iter().all(|d| d.tap_finger_count >= 0);
+    if !all_info_received {
+        return;
+    }
+
+    let tap_to_click = state.wm.tap_to_click;
+
+    for dev_info in &mut state.libinput_devices {
+        if dev_info.tap_info_received {
+            continue; // Already applied to this device
+        }
+        if dev_info.tap_finger_count == 0 {
+            // Device doesn't support tap-to-click
+            dev_info.tap_info_received = true;
+            continue;
+        }
+
+        // Device supports tap — apply config
+        let tap_state = if tap_to_click {
+            river_libinput_device_v1::TapState::Enabled
+        } else {
+            river_libinput_device_v1::TapState::Disabled
+        };
+
+        eprintln!(
+            "[libinput] setting tap={} on device ({})",
+            if tap_to_click { "enabled" } else { "disabled" },
+            if dev_info.name.is_empty() { "unnamed" } else { &dev_info.name }
+        );
+
+        dev_info.device.set_tap(tap_state, qhandle, ());
+        dev_info.tap_info_received = true;
+    }
+
+    // Only mark as fully applied once all devices have been configured
+    let all_done = state.libinput_devices.iter().all(|d| d.tap_info_received);
+    if all_done && !state.libinput_devices.is_empty() {
+        state.wm.tap_config_applied = true;
+        eprintln!("[libinput] tap config applied to all devices");
+    }
 }

@@ -3,29 +3,35 @@
 use crate::types::{TilingMode, WindowManager};
 
 /// Interpolate a single 8-bit channel toward black by (factor ^ depth).
-/// fp_channel is in fixed-point format (0xRR000000).
-/// Returns the value in 32-bit fixed-point (channel in high byte).
+/// Returns a 32-bit value with the byte replicated across all 4 bytes,
+/// which is the format River expects (it divides by maxInt(u32) to get a float).
 pub fn interp_channel(fp_channel: u32, factor: f64, depth: i32) -> u32 {
-    let base = (fp_channel >> 24) as u8;
+    let base = (fp_channel & 0xFF) as u8;
     let mut f = 1.0_f64;
     for _ in 0..depth {
         f *= factor;
     }
     let val = (base as f64 * f) as u8;
-    (val as u32) << 24
+    // Replicate byte across all 4 bytes: 0xVV -> 0xVVVVVVVV
+    val as u32 * 0x01010101
 }
 
-/// Normal border color in fixed-point format: dark gray (#3E3E3E)
-pub const BORDER_COLOR_NORMAL_R: u32 = 0x3E000000;
-pub const BORDER_COLOR_NORMAL_G: u32 = 0x3E000000;
-pub const BORDER_COLOR_NORMAL_B: u32 = 0x3E000000;
-pub const BORDER_COLOR_NORMAL_A: u32 = 0x000000FF;
+/// Blend between two byte-replicated 32-bit channel values.
+/// factor=0.0 → pure bg, factor=1.0 → pure fg.
+fn blend_channel(bg_channel: u32, fg_channel: u32, factor: f64) -> u32 {
+    let bg = (bg_channel & 0xFF) as u8 as f64;
+    let fg = (fg_channel & 0xFF) as u8 as f64;
+    let val = (bg + (fg - bg) * factor) as u8;
+    val as u32 * 0x01010101
+}
 
-/// Cascade alpha: full alpha in low byte
-pub const CASCADE_ALPHA: u32 = 0x000000FF;
+/// Alpha for borders: fully opaque, byte-replicated
+pub const ALPHA: u32 = 0xFFFFFFFF;
 
-/// Cascade depth darkening factor
-pub const CASCADE_DEPTH_FACTOR: f64 = 0.80;
+/// Unfocused depth factor: each step away from the focused window reduces
+/// the blend factor by this multiplier, making the border color approach
+/// the background color.
+pub const UNFOCUSED_DEPTH_FACTOR: f64 = 0.70;
 
 /// Result of border color computation for a single window
 #[derive(Debug, Clone)]
@@ -40,62 +46,77 @@ pub struct WindowBorders {
 }
 
 /// Compute border colors for all visible windows.
+/// The focused window gets the configured border_color.
+/// Unfocused windows get a color interpolated between the desktop
+/// background_color and border_color based on stack depth.
 pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
     let mut results = Vec::new();
-    let all_edges = 0b1111u32; // all edges
+    let all_edges = 0b1111u32;
 
-    // Count cascade windows
-    let mut n_cascade = 0usize;
-    for win in &state.windows {
-        if (win.tags & state.active_tags) != 0 && win.tiling_mode == TilingMode::Cascade {
-            n_cascade += 1;
-        }
-    }
+    // Find the focused window ID from the first non-removed seat
+    let focused_id = state
+        .seats
+        .iter()
+        .find(|s| !s.removed)
+        .and_then(|s| s.focused_window_id);
 
-    // Assign border colors
+    // Collect visible window indices (ordered from bottom to top of stack)
+    let visible: Vec<usize> = state
+        .windows
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| (w.tags & state.active_tags) != 0 && !w.closed)
+        .map(|(i, _)| i)
+        .collect();
+    let n_visible = visible.len();
+
     for (idx, win) in state.windows.iter().enumerate() {
         if (win.tags & state.active_tags) == 0 {
             continue;
         }
 
-        if win.tiling_mode == TilingMode::Cascade && n_cascade > 0 {
-            // Compute cascade depth: count how many cascade windows come before this one
-            let mut cascade_idx = 0usize;
-            for (i, w) in state.windows.iter().enumerate() {
-                if i >= idx {
-                    break;
-                }
-                if (w.tags & state.active_tags) != 0 && w.tiling_mode == TilingMode::Cascade {
-                    cascade_idx += 1;
-                }
-            }
-            // depth: 0 for front (focused/last), n_cascade-1 for back
-            let depth = (n_cascade - 1 - cascade_idx) as i32;
+        let is_focused = focused_id.map_or(false, |fid| win.id == fid);
 
-            let r = interp_channel(state.layout.border_r, CASCADE_DEPTH_FACTOR, depth);
-            let g = interp_channel(state.layout.border_g, CASCADE_DEPTH_FACTOR, depth);
-            let b = interp_channel(state.layout.border_b, CASCADE_DEPTH_FACTOR, depth);
-
-            results.push(WindowBorders {
-                window_idx: idx,
-                edges: all_edges,
-                width: state.layout.border_width,
-                r,
-                g,
-                b,
-                a: CASCADE_ALPHA,
-            });
+        let (r, g, b, a) = if is_focused {
+            // Focused window: pure border color
+            (
+                state.layout.border_r,
+                state.layout.border_g,
+                state.layout.border_b,
+                state.layout.border_a,
+            )
         } else {
-            results.push(WindowBorders {
-                window_idx: idx,
-                edges: all_edges,
-                width: state.layout.border_width,
-                r: BORDER_COLOR_NORMAL_R,
-                g: BORDER_COLOR_NORMAL_G,
-                b: BORDER_COLOR_NORMAL_B,
-                a: BORDER_COLOR_NORMAL_A,
-            });
-        }
+            // Unfocused window: blend background → border based on depth
+            let pos = visible.iter().position(|&i| i == idx).unwrap_or(0);
+            let depth = (n_visible - 1 - pos) as i32;
+            let mut factor = 1.0_f64;
+            for _ in 0..depth {
+                factor *= UNFOCUSED_DEPTH_FACTOR;
+            }
+            let r = blend_channel(state.layout.background_r, state.layout.border_r, factor);
+            let g = blend_channel(state.layout.background_g, state.layout.border_g, factor);
+            let b = blend_channel(state.layout.background_b, state.layout.border_b, factor);
+            (r, g, b, ALPHA)
+        };
+
+        let width = match win.tiling_mode {
+            TilingMode::Cascade => state.layout.cascade_border_width,
+            TilingMode::Fullscreen => state.layout.fullscreen_border_width,
+            TilingMode::Grid => state.layout.grid_border_width,
+            TilingMode::Vsplit => state.layout.vsplit_border_width,
+            TilingMode::Hsplit => state.layout.hsplit_border_width,
+            TilingMode::Floating => state.layout.floating_border_width,
+        };
+
+        results.push(WindowBorders {
+            window_idx: idx,
+            edges: all_edges,
+            width,
+            r,
+            g,
+            b,
+            a,
+        });
     }
 
     results
@@ -108,14 +129,14 @@ mod tests {
     #[test]
     fn test_interp_channel_depth0() {
         // Depth 0 should return the base color unchanged
-        let result = interp_channel(0x5C000000, 0.80, 0);
-        assert_eq!(result >> 24, 0x5C);
+        let result = interp_channel(0x5C5C5C5C, 0.80, 0);
+        assert_eq!(result, 0x5C5C5C5C);
     }
 
     #[test]
     fn test_interp_channel_depth1() {
-        let result = interp_channel(0x90000000, 0.80, 1);
-        let val = result >> 24;
-        assert_eq!(val, ((0x90 as f64 * 0.80) as u8) as u32);
+        let result = interp_channel(0x90909090, 0.80, 1);
+        let expected = ((0x90 as f64 * 0.80) as u8) as u32 * 0x01010101;
+        assert_eq!(result, expected);
     }
 }

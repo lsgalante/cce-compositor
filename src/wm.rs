@@ -25,6 +25,11 @@ pub fn get_mode_for_window(wm: &WindowManager, win: &Window) -> Option<TilingMod
         return None;
     }
 
+    // 0. Windows with a parent (dialogs, file pickers, etc.) always float.
+    if win.has_parent {
+        return Some(TilingMode::Floating);
+    }
+
     // 1. Check mode_rules for a match on app_id/title
     for rule in &wm.mode_rules {
         let match_app = rule.app_id_pattern == "*"
@@ -176,8 +181,11 @@ fn ensure_window_nodes(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
 /// Compute tiling for all visible windows (read-only, returns results).
 fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileResult> {
     let gap = wm.layout.gap;
-    let bw = wm.layout.border_width;
-    let offset = wm.layout.offset;
+    let gap_top = wm.layout.gap_top;
+    let gap_left = wm.layout.gap_left;
+    let gap_right = wm.layout.gap_right;
+    let gap_bottom = wm.layout.gap_bottom;
+    let cascade_offset = wm.layout.cascade_offset;
     let bar_height = wm.layout.bar_height;
 
     // Count windows per tiling mode
@@ -198,14 +206,24 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
         }
     }
 
-    // Check for fullscreen window
+    // Check for fullscreen window — prefer the focused window so FocusNext
+    // cycles visible windows when fullscreen is used as a layout mode.
     let fullscreen_id = wm
-        .windows
+        .seats
         .iter()
-        .find(|w| {
-            (w.tags & wm.active_tags) != 0 && !w.closed && w.tiling_mode == TilingMode::Fullscreen
+        .find(|s| !s.removed)
+        .and_then(|s| s.focused_window_id)
+        .filter(|&fid| {
+            wm.get_window(fid).map_or(false, |w| {
+                (w.tags & wm.active_tags) != 0 && !w.closed && w.tiling_mode == TilingMode::Fullscreen
+            })
         })
-        .map(|w| w.id);
+        .or_else(|| {
+            // Fallback: first fullscreen window if no focused window qualifies
+            wm.windows.iter().find(|w| {
+                (w.tags & wm.active_tags) != 0 && !w.closed && w.tiling_mode == TilingMode::Fullscreen
+            }).map(|w| w.id)
+        });
 
     // Compute tiling
     let mut results = Vec::new();
@@ -225,7 +243,16 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
         let (x, y, w, h) = match mode {
             TilingMode::Fullscreen => {
                 if fullscreen_id == Some(wid) {
-                    (0, 0, screen_w, screen_h)
+                    tiling::tile_fullscreen(
+                        screen_w,
+                        screen_h,
+                        gap_top,
+                        gap_left,
+                        gap_right,
+                        gap_bottom,
+                        wm.layout.fullscreen_border_width,
+                        bar_height,
+                    )
                 } else {
                     continue;
                 }
@@ -235,8 +262,12 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
                     screen_w,
                     screen_h,
                     gap,
-                    bw,
-                    offset,
+                    gap_top,
+                    gap_left,
+                    gap_right,
+                    gap_bottom,
+                    wm.layout.cascade_border_width,
+                    cascade_offset,
                     bar_height,
                     n_cascade,
                     idx_cascade,
@@ -246,20 +277,20 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
             }
             TilingMode::Grid => {
                 let (x, y, w, h) =
-                    tiling::tile_grid(screen_w, screen_h, gap, bw, bar_height, n_grid, idx_grid);
+                    tiling::tile_grid(screen_w, screen_h, gap, gap_top, gap_left, gap_right, gap_bottom, wm.layout.grid_border_width, bar_height, n_grid, idx_grid);
                 idx_grid += 1;
                 (x, y, w, h)
             }
             TilingMode::Vsplit => {
                 let (x, y, w, h) = tiling::tile_vsplit(
-                    screen_w, screen_h, gap, bw, bar_height, n_vsplit, idx_vsplit,
+                    screen_w, screen_h, gap, gap_top, gap_left, gap_right, gap_bottom, wm.layout.vsplit_border_width, bar_height, n_vsplit, idx_vsplit,
                 );
                 idx_vsplit += 1;
                 (x, y, w, h)
             }
             TilingMode::Hsplit => {
                 let (x, y, w, h) = tiling::tile_hsplit(
-                    screen_w, screen_h, gap, bw, bar_height, n_hsplit, idx_hsplit,
+                    screen_w, screen_h, gap, gap_top, gap_left, gap_right, gap_bottom, wm.layout.hsplit_border_width, bar_height, n_hsplit, idx_hsplit,
                 );
                 idx_hsplit += 1;
                 (x, y, w, h)
@@ -270,6 +301,7 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
                 // triggers River's unresponsive-client detection).
                 // Use the window's existing dimensions, or a reasonable
                 // default if unset.
+                let fbw = wm.layout.floating_border_width;
                 let fw = if win.width > 0 {
                     win.width
                 } else {
@@ -283,12 +315,12 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
                 let fx = if win.x != 0 || win.y != 0 {
                     win.x
                 } else {
-                    gap + bw + offset * idx_cascade
+                    gap_left + fbw + cascade_offset * idx_cascade
                 };
                 let fy = if win.x != 0 || win.y != 0 {
                     win.y
                 } else {
-                    gap + bw + bar_height + offset * idx_cascade
+                    gap_left + fbw + bar_height + gap_top + cascade_offset * idx_cascade
                 };
                 idx_cascade += 1;
                 (fx, fy, fw, fh)
@@ -317,6 +349,13 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
         // Propose dimensions via river_window_v1
         if let Some(wp) = state.get_window_proxy(tr.wid) {
             wp.river_window.propose_dimensions(tr.w, tr.h);
+            // Tell the client to use server-side decoration.
+            // Per the River protocol, use_csd is the default when neither
+            // use_csd nor use_ssd is called. Calling use_ssd here ensures
+            // windows don't draw their own CSD titlebars/borders.
+            // use_ssd has no effect if the client only supports CSD
+            // (decoration_hint == only_supports_csd).
+            wp.river_window.use_ssd();
         }
 
         // Update internal state

@@ -40,6 +40,7 @@ pub enum Action {
     Exit,
     Fullscreen,
     LayoutNext,
+    ModeNext,
     Reload,
     Restart,
     View1,
@@ -59,27 +60,55 @@ pub enum Action {
 /// Layout parameters
 #[derive(Debug, Clone)]
 pub struct Layout {
-    pub gap: i32,
-    pub offset: i32,
+    pub gap: i32,           // inter-window spacing
+    pub gap_top: i32,       // screen edge inset, top (above bar)
+    pub gap_left: i32,      // screen edge inset, left
+    pub gap_right: i32,     // screen edge inset, right
+    pub gap_bottom: i32,    // screen edge inset, bottom
+    pub cascade_offset: i32,
     pub bar_height: i32,
     pub border_width: i32,
+    pub fullscreen_border_width: i32,
+    pub cascade_border_width: i32,
+    pub grid_border_width: i32,
+    pub vsplit_border_width: i32,
+    pub hsplit_border_width: i32,
+    pub floating_border_width: i32,
     pub border_r: u32,
     pub border_g: u32,
     pub border_b: u32,
     pub border_a: u32,
+    pub background_r: u32,
+    pub background_g: u32,
+    pub background_b: u32,
+    pub background_a: u32,
 }
 
 impl Default for Layout {
     fn default() -> Self {
         Layout {
             gap: 48,
-            offset: 20,
+            gap_top: 48,
+            gap_left: 48,
+            gap_right: 48,
+            gap_bottom: 48,
+            cascade_offset: 20,
             bar_height: 24,
             border_width: 6,
-            border_r: 0x3E000000u32,
-            border_g: 0x3E000000u32,
-            border_b: 0x3E000000u32,
-            border_a: 0x000000FFu32,
+            fullscreen_border_width: 0,
+            cascade_border_width: 6,
+            grid_border_width: 6,
+            vsplit_border_width: 6,
+            hsplit_border_width: 6,
+            floating_border_width: 6,
+            border_r: 0x3E3E3E3Eu32,
+            border_g: 0x3E3E3E3Eu32,
+            border_b: 0x3E3E3E3Eu32,
+            border_a: 0xFFFFFFFFu32,
+            background_r: 0x0A0A0A0Au32,
+            background_g: 0x1A1A1A1Au32,
+            background_b: 0x0E0E0E0Eu32,
+            background_a: 0xFFFFFFFFu32,
         }
     }
 }
@@ -173,10 +202,25 @@ pub struct Window {
     pub title: Option<String>,
     pub identifier: Option<String>,
     pub parent_id: Option<u64>,
+    pub has_parent: bool,
+    pub pid: u32,
+    pub hint_min_width: i32,
+    pub hint_min_height: i32,
+    pub hint_max_width: i32,
+    pub hint_max_height: i32,
     pub decoration_hint: u32,
     pub presentation_hint: u32,
+    pub fullscreen_requested: bool,
+    pub maximize_requested: bool,
+    pub minimize_requested: bool,
     pub tiling_mode: TilingMode,
     pub mode_locked: bool,
+    /// Whether we've queued an xprop check for XWayland parent detection.
+    /// River doesn't forward WM_TRANSIENT_FOR for XWayland windows, so we
+    /// check via xprop as a fallback.
+    pub needs_xprop_check: bool,
+    /// How many ManageStart cycles we've waited for the xprop result file.
+    pub xprop_check_attempts: u8,
 }
 
 impl Default for Window {
@@ -194,10 +238,21 @@ impl Default for Window {
             title: None,
             identifier: None,
             parent_id: None,
+            has_parent: false,
+            pid: 0,
+            hint_min_width: 0,
+            hint_min_height: 0,
+            hint_max_width: 0,
+            hint_max_height: 0,
             decoration_hint: 3,   // no_preference
             presentation_hint: 0, // vsync
+            fullscreen_requested: false,
+            maximize_requested: false,
+            minimize_requested: false,
             tiling_mode: TilingMode::Floating,
             mode_locked: false,
+            needs_xprop_check: false,
+            xprop_check_attempts: 0,
         }
     }
 }
@@ -260,6 +315,17 @@ pub struct WindowManager {
     /// on the next output_manager done event. Set by config load and
     /// by VT-switch-back (where wlroots resets scale to 1).
     pub pending_scale_apply: bool,
+    /// When true, apply persisted state from ~/.cache/clearwm_state on the
+    /// next ManageStart cycle (after windows have been re-advertised).
+    /// Set to true on startup/restart, consumed after application.
+    pub needs_state_restore: bool,
+    /// Counter for how many ManageStart cycles we've waited for window metadata
+    /// before applying persisted state. Reset to 0 after state is applied.
+    pub state_restore_attempts: u8,
+    /// Whether tap-to-click is enabled on touchpad devices
+    pub tap_to_click: bool,
+    /// Whether tap-to-click config has been applied to libinput devices yet
+    pub tap_config_applied: bool,
 }
 
 impl Default for WindowManager {
@@ -289,6 +355,10 @@ impl Default for WindowManager {
             startup_spawned: false,
             output_scale: 0.0,
             pending_scale_apply: false,
+            needs_state_restore: true,
+            state_restore_attempts: 0,
+            tap_to_click: false,
+            tap_config_applied: false,
         }
     }
 }
@@ -349,7 +419,9 @@ impl WindowManager {
 }
 
 /// Parse a hex color string like "#RRGGBB" or "#RRGGBBAA" into
-/// fixed-point 32-bit channel values (0xRR000000 format)
+/// byte-replicated 32-bit channel values for River's color format.
+/// River divides each u32 by maxInt(u32) to get a float, so each byte
+/// must be replicated: 0xVV -> 0xVVVVVVVV.
 pub fn parse_hex_color(s: &str) -> Option<(u32, u32, u32, u32)> {
     let s = s.strip_prefix('#')?;
     if s.len() != 6 && s.len() != 8 {
@@ -363,8 +435,8 @@ pub fn parse_hex_color(s: &str) -> Option<(u32, u32, u32, u32)> {
     } else {
         0xFFu32
     };
-    // Convert to high-byte-first fixed-point: 0xRR000000
-    Some((r << 24, g << 24, b << 24, a << 24))
+    // Byte-replicate: 0xVV -> 0xVVVVVVVV
+    Some((r * 0x01010101, g * 0x01010101, b * 0x01010101, a * 0x01010101))
 }
 
 /// Parse a tiling mode string
@@ -394,6 +466,8 @@ pub fn parse_action(s: &str) -> Action {
         Action::Resize
     } else if s == "layout-next" {
         Action::LayoutNext
+    } else if s == "mode-next" {
+        Action::ModeNext
     } else if s == "reload" {
         Action::Reload
     } else if s == "restart" {
@@ -498,19 +572,19 @@ mod tests {
     #[test]
     fn test_parse_hex_color_rgb() {
         let (r, g, b, a) = parse_hex_color("#3e3e3e").unwrap();
-        assert_eq!(r, 0x3E000000);
-        assert_eq!(g, 0x3E000000);
-        assert_eq!(b, 0x3E000000);
-        assert_eq!(a, 0xFF000000);
+        assert_eq!(r, 0x3E3E3E3E);
+        assert_eq!(g, 0x3E3E3E3E);
+        assert_eq!(b, 0x3E3E3E3E);
+        assert_eq!(a, 0xFFFFFFFF);
     }
 
     #[test]
     fn test_parse_hex_color_rgba() {
         let (r, g, b, a) = parse_hex_color("#5c9060ff").unwrap();
-        assert_eq!(r, 0x5C000000);
-        assert_eq!(g, 0x90000000);
-        assert_eq!(b, 0x60000000);
-        assert_eq!(a, 0xFF000000);
+        assert_eq!(r, 0x5C5C5C5C);
+        assert_eq!(g, 0x90909090);
+        assert_eq!(b, 0x60606060);
+        assert_eq!(a, 0xFFFFFFFF);
     }
 
     #[test]
@@ -574,5 +648,9 @@ mod tests {
         assert_eq!(wm.global_layout, TilingMode::Cascade);
         assert!(!wm.config_done);
         assert_eq!(wm.layout.gap, 48);
+        assert_eq!(wm.layout.gap_top, 48);
+        assert_eq!(wm.layout.gap_left, 48);
+        assert_eq!(wm.layout.gap_right, 48);
+        assert_eq!(wm.layout.gap_bottom, 48);
     }
 }

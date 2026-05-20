@@ -49,6 +49,13 @@ pub mod river_input_management {
     );
 }
 
+pub mod river_libinput_config {
+    river_protocol!(
+        "protocol/river-libinput-config-v1.xml",
+        [crate::protocol::river_input_management::generated]
+    );
+}
+
 pub mod wlr_output_management {
     river_protocol!("protocol/wlr-output-management-unstable-v1.xml", []);
 }

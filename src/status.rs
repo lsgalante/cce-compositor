@@ -50,13 +50,14 @@ pub fn write_status_files(state: &WindowManager) {
             };
             let _ = writeln!(
                 f,
-                "window app_id={} title={} mode={} decoration={} presentation={} tags={} x={} y={} w={} h={}",
+                "window app_id={} title={} mode={} decoration={} presentation={} tags={} x={} y={} w={} h={} has_parent={}",
                 win.app_id.as_deref().unwrap_or("(null)"),
                 win.title.as_deref().unwrap_or("(null)"),
                 mode_str,
                 decoration_str,
                 presentation_str,
                 win.tags, win.x, win.y, win.width, win.height,
+                win.has_parent,
             );
         }
 

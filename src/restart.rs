@@ -11,8 +11,28 @@ use crate::types::WindowManager;
 ///
 /// The CLEARWM_RESTARTING environment variable signals that this is a restart
 /// (not a cold start), so the new process skips cold_start_only apps.
+///
+/// ## Why setsid() is required
+///
+/// clearwm is typically a session leader (PID == SID, started by River's
+/// `-c` launch script). When a session leader exits, the kernel sends SIGHUP
+/// to all processes in that session — including the forked child. Without
+/// `setsid()`, the child dies from SIGHUP before it can exec, and clearwm
+/// never comes back.
 pub fn wm_restart() {
     use std::time::Instant;
+
+    // Write to death log before fork — this is the last chance to capture
+    // why we're restarting, since fork+process::exit(0) silently kills the parent.
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/clearwm-death.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "wm_restart() called — about to fork+exit");
+        let _ = f.sync_all(); // ensure it hits disk before process::exit(0)
+    }
 
     static mut LAST_RESTART: Option<Instant> = None;
 
@@ -38,14 +58,40 @@ pub fn wm_restart() {
     // Signal that this is a restart, not a cold start
     std::env::set_var("CLEARWM_RESTARTING", "1");
 
+    // Persist state to ~/.cache/clearwm_state for the new instance to restore.
+    // Note: we can't pass &WindowManager here since wm_restart() has no access
+    // to it. The state file is kept fresh by RenderStart's needs_status_update
+    // path, so it should be reasonably up-to-date already.
+
+    // Save the current log before River's launch script truncates it on restart.
+    // This preserves the crash/reason for the restart.
+    let _ = std::fs::copy("/tmp/clearwm.log", "/tmp/clearwm-prev.log");
+
     // Remove the IPC socket
     let _ = std::fs::remove_file("/tmp/clearwm.sock");
 
-    // Get the current executable path
-    let Ok(exe_path) = std::env::current_exe() else {
-        std::process::exit(1);
+    // Get the current executable path.
+    // CString is required because execl() needs a null-terminated C string;
+    // Rust's String::as_ptr() is NOT guaranteed to be null-terminated.
+    //
+    // We prefer the symlink path (~/.local/bin/clearwm) over current_exe()
+    // because current_exe() resolves through /proc/self/exe to the real path,
+    // which may be on a sync filesystem (Dropbox) that temporarily moves files.
+    // The symlink is on the root filesystem and always available.
+    let home = std::env::var("HOME").unwrap_or_default();
+    let exe_path = if !home.is_empty() {
+        let symlink = format!("{}/.local/bin/clearwm", home);
+        if std::path::Path::new(&symlink).exists() {
+            std::path::PathBuf::from(symlink)
+        } else {
+            std::env::current_exe().unwrap_or_else(|_| std::process::exit(1))
+        }
+    } else {
+        std::env::current_exe().unwrap_or_else(|_| std::process::exit(1))
     };
-    let path_str = exe_path.to_string_lossy().to_string();
+    eprintln!("wm_restart: exe_path={}", exe_path.display());
+    let path_cstr = std::ffi::CString::new(exe_path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| std::process::exit(1));
 
     // Fork: child waits for parent to die, then execs fresh clearwm.
     // Parent exits so River tears down the old Wayland connection.
@@ -54,30 +100,87 @@ pub fn wm_restart() {
         // fork failed, just exit
         std::process::exit(1);
     } else if pid == 0 {
-        // Child: wait for parent to exit so River cleans up the old
-        // Wayland connection before we try to connect fresh.
+        // ── Child process ──
+
+        // Create a new session IMMEDIATELY. Without this, the child stays
+        // in the parent's session. When the parent (session leader) calls
+        // process::exit(0), the kernel sends SIGHUP to every process in that
+        // session — killing the child before it can exec.
+        unsafe {
+            libc::setsid();
+            libc::signal(libc::SIGHUP, libc::SIG_IGN);
+        }
+
+        // Wait for parent to exit so River cleans up the old Wayland
+        // connection before we try to connect fresh.
+        let parent_pid = unsafe { libc::getppid() };
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        // Close inherited Wayland FDs so we don't confuse River
+        // If parent is somehow still alive, wait a bit more
+        if unsafe { libc::kill(parent_pid, 0) == 0 } {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+
+        // Close inherited Wayland FDs so the new clearwm instance doesn't
+        // confuse River with stale connections.
         // (close everything except stdin/stdout/stderr)
         let max_fd = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) } as i32;
         for fd in 3..max_fd {
-            unsafe { libc::close(fd); }
+            unsafe {
+                libc::close(fd);
+            }
         }
 
-        let ret = unsafe {
-            libc::execl(
-                path_str.as_ptr() as *const i8,
-                path_str.as_ptr() as *const i8,
-                std::ptr::null::<i8>(),
-            )
-        };
-        if ret < 0 {
-            // If execl fails, just exit silently
-            std::process::exit(1);
+        // Exec the same binary — replaces this process with a fresh clearwm.
+        // Retry up to 3 times with a short delay — the binary may be temporarily
+        // unavailable if cargo build is replacing it mid-write (atomic rename).
+        for attempt in 0..3 {
+            let ret = unsafe {
+                libc::execl(
+                    path_cstr.as_ptr(),
+                    path_cstr.as_ptr(),
+                    std::ptr::null::<i8>(),
+                )
+            };
+            let errno = unsafe { *libc::__errno_location() };
+            if attempt < 2 {
+                eprintln!(
+                    "wm_restart: execl attempt {} failed (errno={} {}), retrying in 500ms...",
+                    attempt + 1,
+                    errno,
+                    std::io::Error::from_raw_os_error(errno)
+                );
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let _ = ret; // suppress unused
+            } else {
+                // Final attempt failed — log and exit
+                eprintln!(
+                    "wm_restart: execl failed after 3 attempts! errno={} ({})",
+                    errno,
+                    std::io::Error::from_raw_os_error(errno)
+                );
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/clearwm-death.log")
+                {
+                    use std::io::Write;
+                    let _ = writeln!(
+                        f,
+                        "child: execl failed after 3 attempts! errno={} ({}) path={}",
+                        errno,
+                        std::io::Error::from_raw_os_error(errno),
+                        exe_path.display()
+                    );
+                }
+                let _ = ret; // suppress unused
+                std::process::exit(1);
+            }
         }
     } else {
-        // Parent: exit immediately so River sees the connection drop
+        // ── Parent process ──
+        // Exit immediately so River sees the Wayland connection drop
+        // and tears down the old WM binding.
         std::process::exit(0);
     }
 }

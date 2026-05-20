@@ -158,6 +158,9 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
         "repeat" => {
             handle_repeat_command(rest, state);
         }
+        "input" => {
+            handle_input_command(rest, state);
+        }
         _ => {
             // Unknown command, ignore
         }
@@ -194,9 +197,29 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 state.layout.gap = value;
             }
         }
-        "offset" => {
+        "gap_top" => {
             if let Ok(value) = value_str.parse::<i32>() {
-                state.layout.offset = value;
+                state.layout.gap_top = value;
+            }
+        }
+        "gap_left" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.gap_left = value;
+            }
+        }
+        "gap_right" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.gap_right = value;
+            }
+        }
+        "gap_bottom" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.gap_bottom = value;
+            }
+        }
+        "cascade_offset" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.cascade_offset = value;
             }
         }
         "bar_height" => {
@@ -209,12 +232,50 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 state.layout.border_width = value;
             }
         }
+        "fullscreen_border_width" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.fullscreen_border_width = value;
+            }
+        }
+        "cascade_border_width" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.cascade_border_width = value;
+            }
+        }
+        "grid_border_width" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.grid_border_width = value;
+            }
+        }
+        "vsplit_border_width" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.vsplit_border_width = value;
+            }
+        }
+        "hsplit_border_width" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.hsplit_border_width = value;
+            }
+        }
+        "floating_border_width" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.floating_border_width = value;
+            }
+        }
         "border_color" => {
             if let Some((r, g, b, a)) = parse_hex_color(value_str) {
                 state.layout.border_r = r;
                 state.layout.border_g = g;
                 state.layout.border_b = b;
                 state.layout.border_a = a;
+            }
+        }
+        "background_color" => {
+            if let Some((r, g, b, a)) = parse_hex_color(value_str) {
+                state.layout.background_r = r;
+                state.layout.background_g = g;
+                state.layout.background_b = b;
+                state.layout.background_a = a;
             }
         }
         _ => {}
@@ -363,9 +424,8 @@ fn handle_set_tag_command(rest: &str, state: &mut WindowManager) {
             if let Some(focused_id) = focused_id {
                 // Set the window's tag
                 let active_tags = state.active_tags;
-                let window_left_active_tag = state
-                    .get_window_mut(focused_id)
-                    .map_or(false, |window| {
+                let window_left_active_tag =
+                    state.get_window_mut(focused_id).map_or(false, |window| {
                         window.tags = 1 << (tag - 1);
                         (window.tags & active_tags) == 0
                     });
@@ -394,6 +454,33 @@ fn handle_repeat_command(_rest: &str, _state: &mut WindowManager) {
     // Wayland protocol; this is a placeholder for the pure-logic layer.
     // The WM integration layer will read the rate/delay and call
     // river_input_device_v1_set_repeat_info()
+}
+
+fn handle_input_command(rest: &str, state: &mut WindowManager) {
+    let tokens: Vec<&str> = rest.splitn(2, ' ').collect();
+    let param = tokens[0];
+    let value_str = if tokens.len() > 1 { tokens[1] } else { "" };
+
+    match param {
+        "tap-to-click" | "tap_to_click" => {
+            match value_str {
+                "true" | "1" | "enabled" => {
+                    state.tap_to_click = true;
+                    state.tap_config_applied = false; // re-apply
+                }
+                "false" | "0" | "disabled" => {
+                    state.tap_to_click = false;
+                    state.tap_config_applied = false; // re-apply
+                }
+                "toggle" => {
+                    state.tap_to_click = !state.tap_to_click;
+                    state.tap_config_applied = false; // re-apply
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -444,12 +531,30 @@ mod tests {
     }
 
     #[test]
+    fn test_ipc_layout_gap_sides() {
+        let mut state = WindowManager::default();
+        assert_eq!(state.layout.gap_top, 48);
+        assert_eq!(state.layout.gap_left, 48);
+        assert_eq!(state.layout.gap_right, 48);
+        assert_eq!(state.layout.gap_bottom, 48);
+
+        handle_ipc_command("layout gap_top 10", &mut state);
+        handle_ipc_command("layout gap_left 20", &mut state);
+        handle_ipc_command("layout gap_right 30", &mut state);
+        handle_ipc_command("layout gap_bottom 40", &mut state);
+        assert_eq!(state.layout.gap_top, 10);
+        assert_eq!(state.layout.gap_left, 20);
+        assert_eq!(state.layout.gap_right, 30);
+        assert_eq!(state.layout.gap_bottom, 40);
+    }
+
+    #[test]
     fn test_ipc_layout_border_color() {
         let mut state = WindowManager::default();
         handle_ipc_command("layout border_color #5c9060", &mut state);
-        assert_eq!(state.layout.border_r, 0x5C000000);
-        assert_eq!(state.layout.border_g, 0x90000000);
-        assert_eq!(state.layout.border_b, 0x60000000);
+        assert_eq!(state.layout.border_r, 0x5C5C5C5C);
+        assert_eq!(state.layout.border_g, 0x90909090);
+        assert_eq!(state.layout.border_b, 0x60606060);
     }
 
     #[test]
@@ -532,10 +637,10 @@ mod tests {
     }
 
     #[test]
-    fn test_ipc_layout_offset() {
+    fn test_ipc_layout_cascade_offset() {
         let mut state = WindowManager::default();
-        handle_ipc_command("layout offset 32", &mut state);
-        assert_eq!(state.layout.offset, 32);
+        handle_ipc_command("layout cascade_offset 32", &mut state);
+        assert_eq!(state.layout.cascade_offset, 32);
     }
 
     #[test]
