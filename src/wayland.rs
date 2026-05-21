@@ -1850,11 +1850,18 @@ fn enforce_single_instance(wm: &mut WindowManager) {
             if window.closed {
                 continue;
             }
+            let has_app_id = window.app_id.as_deref().map_or(false, |s| !s.is_empty());
             let match_app = rule.app_id_pattern == "*"
                 || window
                     .app_id
                     .as_deref()
-                    .map_or(false, |aid| aid.contains(&rule.app_id_pattern));
+                    .map_or(false, |aid| aid.contains(&rule.app_id_pattern))
+                || (!has_app_id && window.title.as_deref().map_or(false, |t| {
+                    let normalize = |s: &str| -> String {
+                        s.to_lowercase().replace(|c: char| c == '-' || c == '_', " ")
+                    };
+                    normalize(t).contains(&normalize(&rule.app_id_pattern))
+                }));
             let match_title = rule.title_pattern.as_deref() == Some("*")
                 || rule.title_pattern.is_none()
                 || window.title.as_deref().map_or(false, |t| {

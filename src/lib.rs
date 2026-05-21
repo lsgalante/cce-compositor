@@ -3,6 +3,7 @@
 pub mod borders;
 pub mod config;
 pub mod ipc;
+pub mod ipc_server;
 pub mod protocol;
 pub mod restart;
 pub mod state;

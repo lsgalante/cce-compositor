@@ -32,11 +32,21 @@ pub fn get_mode_for_window(wm: &WindowManager, win: &Window) -> Option<TilingMod
 
     // 1. Check mode_rules for a match on app_id/title
     for rule in &wm.mode_rules {
+        let has_app_id = win.app_id.as_deref().map_or(false, |s| !s.is_empty());
         let match_app = rule.app_id_pattern == "*"
             || win
                 .app_id
                 .as_deref()
-                .map_or(false, |aid| aid.contains(&rule.app_id_pattern));
+                .map_or(false, |aid| aid.contains(&rule.app_id_pattern))
+            // Fallback: if the window has no app_id (None or empty), try
+            // matching the app_id_pattern against the window title. This
+            // handles apps that never set a Wayland app_id (e.g. clear-colors).
+            || (!has_app_id && win.title.as_deref().map_or(false, |t| {
+                let normalize = |s: &str| -> String {
+                    s.to_lowercase().replace(|c: char| c == '-' || c == '_', " ")
+                };
+                normalize(t).contains(&normalize(&rule.app_id_pattern))
+            }));
         let match_title = rule.title_pattern.as_deref() == Some("*")
             || rule.title_pattern.is_none()
             || win.title.as_deref().map_or(false, |t| {

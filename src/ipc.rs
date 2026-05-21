@@ -280,6 +280,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
         }
         _ => {}
     }
+    state.needs_render = true;
 }
 
 /// Handle "mode <mode> <app_id_pattern> [--single] [--tag N] [title_pattern]" command

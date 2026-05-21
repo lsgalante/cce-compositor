@@ -77,6 +77,14 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
 
         let is_focused = focused_id.map_or(false, |fid| win.id == fid);
 
+        eprintln!(
+            "[borders] win={} app_id={:?} is_focused={} border_r=#{:08x} border_g=#{:08x} border_b=#{:08x}",
+            win.id, win.app_id, is_focused,
+            state.layout.border_r,
+            state.layout.border_g,
+            state.layout.border_b,
+        );
+
         let (r, g, b, a) = if is_focused {
             // Focused window: pure border color
             (
@@ -107,6 +115,11 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             TilingMode::Hsplit => state.layout.hsplit_border_width,
             TilingMode::Floating => state.layout.floating_border_width,
         };
+
+        eprintln!(
+            "[borders]   -> r=#{:08x} g=#{:08x} b=#{:08x} a=#{:08x} width={}",
+            r, g, b, a, width,
+        );
 
         results.push(WindowBorders {
             window_idx: idx,

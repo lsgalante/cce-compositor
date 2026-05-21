@@ -1,6 +1,8 @@
 // clearwm — Wayland window manager for river
 
 use clearwm::config::parse_config;
+use clearwm::ipc;
+use clearwm::ipc_server;
 use clearwm::restart;
 use clearwm::status_server;
 use clearwm::wayland::wayland_init;
@@ -85,6 +87,9 @@ fn main() {
         }
     };
 
+    // Start the IPC server thread (for clearctl and clear-system-interface)
+    let ipc_rx = ipc_server::spawn_ipc_server().rx;
+
     // Store the status sender in the app state so RenderStart can push updates
     state.status_sender = Some(status_sender);
 
@@ -157,6 +162,30 @@ fn main() {
                     break;
                 }
                 eprintln!("[main] flush ok, looping");
+
+                // Process pending IPC commands from the socket
+                let mut ipc_commands = false;
+                loop {
+                    match ipc_rx.try_recv() {
+                        Ok(cmd) => {
+                            eprintln!("[main] IPC command: {}", cmd);
+                            ipc::handle_ipc_command(&cmd, &mut state.wm);
+                            ipc_commands = true;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            eprintln!("[main] IPC server disconnected");
+                            break;
+                        }
+                    }
+                }
+                // Force a render sequence so the new rendering state (border
+                // colors, widths, etc.) is sent to River and displayed.
+                if ipc_commands {
+                    if let Some(ref wm) = state.window_manager {
+                        wm.manage_dirty();
+                    }
+                }
             }
             Err(e) => {
                 log_death(&format!(
