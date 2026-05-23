@@ -14,7 +14,7 @@ path = "src/clearctl.rs"
 [dependencies]
 wayland-client = "0.31"
 wayland-backend = "0.3"
-wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
 wayland-scanner = "0.31"
 xkbcommon = "0.7"
 toml = "0.8"

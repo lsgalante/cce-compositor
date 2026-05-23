@@ -115,7 +115,9 @@ fn main() {
     if let Ok(home) = env::var("HOME") {
         let config_path = format!("{}/.config/clearwm/config.toml", home);
         if fs::metadata(&config_path).is_ok() {
-            parse_config(&config_path, cold_start, &mut state.wm);
+            if let Err(e) = parse_config(&config_path, cold_start, &mut state.wm) {
+                eprintln!("[init] failed to load config: {}", e);
+            }
         }
     }
     eprintln!(

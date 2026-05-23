@@ -108,22 +108,25 @@ struct TileResult {
 /// These modify window management state and can ONLY be called during
 /// a manage sequence (between ManageStart and ManageFinish).
 pub fn manage_windows(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
-    let screen_dims = get_screen_dimensions(&state.wm);
-    let (screen_w, screen_h) = screen_dims;
+    let (screen_w, screen_h, phys_w, phys_h, phys_x, phys_y) = get_screen_geometry(&state.wm);
 
     eprintln!(
-        "[manage] windows={} outputs={} screen={}x{}",
+        "[manage] windows={} outputs={} screen={}x{} (phys={}x{} at {},{})",
         state.wm.windows.len(),
         state.wm.outputs.len(),
         screen_w,
-        screen_h
+        screen_h,
+        phys_w,
+        phys_h,
+        phys_x,
+        phys_y
     );
 
     // Ensure each window has a river_node_v1 proxy for positioning
     ensure_window_nodes(state, qhandle);
 
     // Compute tiling
-    let tile_results = compute_tiling(&state.wm, screen_w, screen_h);
+    let tile_results = compute_tiling(&state.wm, screen_w, screen_h, phys_w, phys_h, phys_x, phys_y);
 
     // Apply: set_position + propose_dimensions + update internal state
     apply_tiling(state, &tile_results);
@@ -136,32 +139,37 @@ pub fn render_borders(state: &mut AppState) {
     set_borders(state);
 }
 
-/// Get screen dimensions from the first output, with fallbacks.
-fn get_screen_dimensions(wm: &WindowManager) -> (i32, i32) {
+/// Get screen geometry (usable_w, usable_h, phys_w, phys_h, phys_x, phys_y) from the first output, with fallbacks.
+fn get_screen_geometry(wm: &WindowManager) -> (i32, i32, i32, i32, i32, i32) {
     let output = match wm.outputs.first() {
         Some(o) if !o.removed => o,
-        _ => return (800, 600),
+        _ => return (800, 600, 800, 600, 0, 0),
     };
 
-    let mut w = output.usable_width;
-    let mut h = output.usable_height;
+    let mut uw = output.usable_width;
+    let mut uh = output.usable_height;
 
-    // Fall back to raw output dimensions if usable area not yet set
-    if w <= 0 && output.width > 0 {
-        w = output.width;
+    // Fall back to physical output dimensions if usable area not yet set
+    if uw <= 0 && output.width > 0 {
+        uw = output.width;
     }
-    if h <= 0 && output.height > 0 {
-        h = output.height;
-    }
-
-    if w <= 0 {
-        w = 800;
-    }
-    if h <= 0 {
-        h = 600;
+    if uh <= 0 && output.height > 0 {
+        uh = output.height;
     }
 
-    (w, h)
+    if uw <= 0 {
+        uw = 800;
+    }
+    if uh <= 0 {
+        uh = 600;
+    }
+
+    let pw = if output.width > 0 { output.width } else { uw };
+    let ph = if output.height > 0 { output.height } else { uh };
+    let px = output.x;
+    let py = output.y;
+
+    (uw, uh, pw, ph, px, py)
 }
 
 /// Ensure each window has a river_node_v1 proxy for positioning.
@@ -189,7 +197,15 @@ fn ensure_window_nodes(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
 }
 
 /// Compute tiling for all visible windows (read-only, returns results).
-fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileResult> {
+fn compute_tiling(
+    wm: &WindowManager,
+    screen_w: i32,
+    screen_h: i32,
+    phys_w: i32,
+    phys_h: i32,
+    phys_x: i32,
+    phys_y: i32,
+) -> Vec<TileResult> {
     let gap = wm.layout.gap;
     let gap_top = wm.layout.gap_top;
     let gap_left = wm.layout.gap_left;
@@ -253,16 +269,17 @@ fn compute_tiling(wm: &WindowManager, screen_w: i32, screen_h: i32) -> Vec<TileR
         let (x, y, w, h) = match mode {
             TilingMode::Fullscreen => {
                 if fullscreen_id == Some(wid) {
-                    tiling::tile_fullscreen(
-                        screen_w,
-                        screen_h,
+                    let (tx, ty, tw, th) = tiling::tile_fullscreen(
+                        phys_w,
+                        phys_h,
                         gap_top,
                         gap_left,
                         gap_right,
                         gap_bottom,
                         wm.layout.fullscreen_border_width,
                         bar_height,
-                    )
+                    );
+                    (tx + phys_x, ty + phys_y, tw, th)
                 } else {
                     continue;
                 }

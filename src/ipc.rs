@@ -161,6 +161,18 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
         "input" => {
             handle_input_command(rest, state);
         }
+        "notify" => {
+            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+            if parts.len() == 2 {
+                if state.notifications_enable {
+                    crate::config::show_notification(parts[0], parts[1]);
+                }
+            } else if parts.len() == 1 && !parts[0].is_empty() {
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", parts[0]);
+                }
+            }
+        }
         _ => {
             // Unknown command, ignore
         }
@@ -195,71 +207,113 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
         "gap" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Gap set to {}px", value));
+                }
             }
         }
         "gap_top" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_top = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Top gap set to {}px", value));
+                }
             }
         }
         "gap_left" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_left = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Left gap set to {}px", value));
+                }
             }
         }
         "gap_right" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_right = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Right gap set to {}px", value));
+                }
             }
         }
         "gap_bottom" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_bottom = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Bottom gap set to {}px", value));
+                }
             }
         }
         "cascade_offset" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.cascade_offset = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Cascade offset set to {}px", value));
+                }
             }
         }
         "bar_height" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.bar_height = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Bar height set to {}px", value));
+                }
             }
         }
         "border_width" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.border_width = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Border width set to {}px", value));
+                }
             }
         }
         "fullscreen_border_width" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.fullscreen_border_width = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Fullscreen border width set to {}px", value));
+                }
             }
         }
         "cascade_border_width" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.cascade_border_width = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Cascade border width set to {}px", value));
+                }
             }
         }
         "grid_border_width" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.grid_border_width = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Grid border width set to {}px", value));
+                }
             }
         }
         "vsplit_border_width" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.vsplit_border_width = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Vsplit border width set to {}px", value));
+                }
             }
         }
         "hsplit_border_width" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.hsplit_border_width = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Hsplit border width set to {}px", value));
+                }
             }
         }
         "floating_border_width" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.floating_border_width = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Floating border width set to {}px", value));
+                }
             }
         }
         "border_color" => {
@@ -268,6 +322,9 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 state.layout.border_g = g;
                 state.layout.border_b = b;
                 state.layout.border_a = a;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Border color set to {}", value_str));
+                }
             }
         }
         "background_color" => {
@@ -276,6 +333,9 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 state.layout.background_g = g;
                 state.layout.background_b = b;
                 state.layout.background_a = a;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Background color set to {}", value_str));
+                }
             }
         }
         _ => {}
@@ -332,9 +392,14 @@ fn handle_set_mode_command(rest: &str, state: &mut WindowManager) {
         return;
     }
     let mode = parse_tiling_mode(mode_str);
+    let notifications_enable = state.notifications_enable;
     if let Some(window) = state.focused_window_mut() {
         window.tiling_mode = mode;
         window.mode_locked = true;
+        if notifications_enable {
+            let win_title = window.title.as_deref().unwrap_or("Window");
+            crate::config::show_notification("clearwm", &format!("Tiling mode set to {} for: {}", mode.as_str(), win_title));
+        }
     }
 }
 
@@ -407,6 +472,9 @@ fn handle_tag_layout_command(rest: &str, state: &mut WindowManager) {
             let mode = parse_tiling_mode(parts[1]);
             state.tag_layouts[tag as usize - 1] = mode;
             state.has_tag_layout[tag as usize - 1] = true;
+            if state.notifications_enable {
+                crate::config::show_notification("clearwm", &format!("Tag {} layout set to {}", tag, mode.as_str()));
+            }
         }
     }
 }
@@ -464,6 +532,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
 
     match param {
         "tap-to-click" | "tap_to_click" => {
+            let old_val = state.tap_to_click;
             match value_str {
                 "true" | "1" | "enabled" => {
                     state.tap_to_click = true;
@@ -478,6 +547,15 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                     state.tap_config_applied = false; // re-apply
                 }
                 _ => {}
+            }
+            if state.tap_to_click != old_val && state.notifications_enable {
+                crate::config::show_notification(
+                    "clearwm",
+                    &format!(
+                        "Tap-to-click {}",
+                        if state.tap_to_click { "enabled" } else { "disabled" }
+                    ),
+                );
             }
         }
         _ => {}

@@ -215,7 +215,18 @@ pub fn wm_reload(state: &mut WindowManager) {
     if !home.is_empty() {
         let config_path = format!("{}/.config/clearwm/config.toml", home);
         if std::path::Path::new(&config_path).exists() {
-            parse_config(&config_path, false, state);
+            match parse_config(&config_path, false, state) {
+                Ok(_) => {
+                    if state.notifications_enable {
+                        crate::config::show_notification("clearwm", "Configuration reloaded successfully");
+                    }
+                }
+                Err(e) => {
+                    if state.notifications_enable {
+                        crate::config::show_notification("clearwm", &format!("Config reload failed:\n{}", e));
+                    }
+                }
+            }
         }
     }
 }

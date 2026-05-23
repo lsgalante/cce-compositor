@@ -168,6 +168,7 @@ pub struct Output {
     pub usable_y: i32,
     pub usable_width: i32,
     pub usable_height: i32,
+    pub wl_output_name: Option<u32>,
 }
 
 impl Default for Output {
@@ -183,6 +184,7 @@ impl Default for Output {
             usable_y: 0,
             usable_width: 0,
             usable_height: 0,
+            wl_output_name: None,
         }
     }
 }
@@ -326,6 +328,8 @@ pub struct WindowManager {
     pub tap_to_click: bool,
     /// Whether tap-to-click config has been applied to libinput devices yet
     pub tap_config_applied: bool,
+    /// Whether system notifications are enabled
+    pub notifications_enable: bool,
 }
 
 impl Default for WindowManager {
@@ -359,6 +363,7 @@ impl Default for WindowManager {
             state_restore_attempts: 0,
             tap_to_click: false,
             tap_config_applied: false,
+            notifications_enable: true,
         }
     }
 }

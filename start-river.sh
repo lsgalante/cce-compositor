@@ -11,6 +11,9 @@ done
 
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export WAYLAND_DISPLAY=wayland-1
+export XCURSOR_THEME="crosshair-theme"
+export XCURSOR_SIZE=24
+export XCURSOR_PATH="/home/lsgalante/.local/share/icons:/home/lsgalante/.icons:/usr/share/icons"
 
 # Create the River init executable (clearwm launch script)
 # This must exist before River starts, and /tmp is cleared on reboot.

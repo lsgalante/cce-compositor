@@ -149,27 +149,18 @@ pub fn tile_hsplit(
 /// Tile a window in fullscreen mode — fills the screen minus gaps, bar, and borders.
 ///
 /// Only the focused window is visible; other fullscreen windows are skipped.
-///   width  = screen_w - gap_left - gap_right - bw * 2
-///   height = screen_h - bar_height - gap_top - gap_bottom - bw * 2
-///   x = gap_left + bw
-///   y = bar_height + gap_top + bw
+/// A fullscreen window occupies the entire screen (0, 0, screen_w, screen_h).
 pub fn tile_fullscreen(
     screen_w: i32,
     screen_h: i32,
-    gap_top: i32,
-    gap_left: i32,
-    gap_right: i32,
-    gap_bottom: i32,
-    bw: i32,
-    bar_height: i32,
+    _gap_top: i32,
+    _gap_left: i32,
+    _gap_right: i32,
+    _gap_bottom: i32,
+    _bw: i32,
+    _bar_height: i32,
 ) -> (i32, i32, i32, i32) {
-    let width = screen_w - gap_left - gap_right - bw * 2;
-    let height = screen_h - bar_height - gap_top - gap_bottom - bw * 2;
-    let width = if width < 1 { 1 } else { width };
-    let height = if height < 1 { 1 } else { height };
-    let x = gap_left + bw;
-    let y = bar_height + gap_top + bw;
-    (x, y, width, height)
+    (0, 0, screen_w, screen_h)
 }
 
 /// Interpolate a byte-replicated 32-bit channel (0xVVVVVVVV) by factor^depth.
@@ -466,33 +457,27 @@ mod tests {
     #[test]
     fn test_tile_fullscreen_basic() {
         let (x, y, w, h) = tile_fullscreen(1920, 1080, 18, 18, 18, 18, 6, 28);
-        // x = gap_left + bw = 18 + 6 = 24
-        assert_eq!(x, 24);
-        // y = bar_height + gap_top + bw = 28 + 18 + 6 = 52
-        assert_eq!(y, 52);
-        // w = 1920 - 18 - 18 - 6*2 = 1920 - 48 = 1872
-        assert_eq!(w, 1872);
-        // h = 1080 - 28 - 18 - 18 - 6*2 = 1080 - 76 = 1004
-        assert_eq!(h, 1004);
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+        assert_eq!(w, 1920);
+        assert_eq!(h, 1080);
     }
 
     #[test]
     fn test_tile_fullscreen_asymmetric_gaps() {
         let (x, y, w, h) = tile_fullscreen(1920, 1080, 10, 20, 30, 40, 6, 28);
-        // x = gap_left + bw = 20 + 6 = 26
-        assert_eq!(x, 26);
-        // y = bar_height + gap_top + bw = 28 + 10 + 6 = 44
-        assert_eq!(y, 44);
-        // w = 1920 - 20 - 30 - 6*2 = 1920 - 62 = 1858
-        assert_eq!(w, 1858);
-        // h = 1080 - 28 - 10 - 40 - 6*2 = 1080 - 90 = 990
-        assert_eq!(h, 990);
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+        assert_eq!(w, 1920);
+        assert_eq!(h, 1080);
     }
 
     #[test]
     fn test_tile_fullscreen_minimum_size() {
-        let (_, _, w, h) = tile_fullscreen(50, 50, 18, 18, 18, 18, 6, 28);
-        assert!(w >= 1);
-        assert!(h >= 1);
+        let (x, y, w, h) = tile_fullscreen(50, 50, 18, 18, 18, 18, 6, 28);
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+        assert_eq!(w, 50);
+        assert_eq!(h, 50);
     }
 }

@@ -40,9 +40,15 @@ use crate::protocol::wlr_output_management::client::{
 };
 
 use crate::types::{Action, BindingUserData, Output, Seat, TilingMode, Window, WindowManager};
+use wayland_client::protocol::{wl_pointer, wl_seat, wl_output};
+use wayland_protocols::wp::cursor_shape::v1::client::{
+    wp_cursor_shape_device_v1::{self, WpCursorShapeDeviceV1, Shape},
+    wp_cursor_shape_manager_v1::{self, WpCursorShapeManagerV1},
+};
 
 // Interface name constants (from river protocol XML)
 const IFACE_WINDOW_MANAGER: &str = "river_window_manager_v1";
+const IFACE_CURSOR_SHAPE_MANAGER: &str = "wp_cursor_shape_manager_v1";
 const IFACE_XKB_BINDINGS: &str = "river_xkb_bindings_v1";
 const IFACE_LAYER_SHELL: &str = "river_layer_shell_v1";
 const IFACE_INPUT_MANAGER: &str = "river_input_manager_v1";
@@ -59,6 +65,9 @@ pub struct WindowProxy {
 pub struct SeatProxy {
     pub river_seat: RiverSeatV1,
     pub xkb_bindings_seat: Option<RiverXkbBindingsSeatV1>,
+    pub wl_seat: Option<wl_seat::WlSeat>,
+    pub wl_pointer: Option<wl_pointer::WlPointer>,
+    pub cursor_shape_device: Option<WpCursorShapeDeviceV1>,
 }
 
 /// Wayland proxy objects stored alongside each Output.
@@ -67,15 +76,28 @@ pub struct OutputProxy {
     pub layer_shell_output: Option<RiverLayerShellOutputV1>,
 }
 
+/// Tracked wl_output proxy and its physical properties.
+pub struct WlOutputInfo {
+    pub name: u32,
+    pub wl_output: wl_output::WlOutput,
+    pub width: i32,
+    pub height: i32,
+    pub x: i32,
+    pub y: i32,
+}
+
 /// The full app state combining logic state + protocol proxy storage.
 pub struct AppState {
     pub wm: WindowManager,
+    pub wl_outputs: Vec<WlOutputInfo>,
 
     // Protocol objects (None until bound via registry)
+    pub registry: Option<wl_registry::WlRegistry>,
     pub window_manager: Option<RiverWindowManagerV1>,
     pub xkb_bindings: Option<RiverXkbBindingsV1>,
     pub layer_shell: Option<RiverLayerShellV1>,
     pub input_manager: Option<RiverInputManagerV1>,
+    pub cursor_shape_manager: Option<WpCursorShapeManagerV1>,
 
     // Whether we got all required globals
     pub has_window_manager: bool,
@@ -147,10 +169,13 @@ impl AppState {
     pub fn new() -> Self {
         AppState {
             wm: WindowManager::new(),
+            wl_outputs: Vec::new(),
+            registry: None,
             window_manager: None,
             xkb_bindings: None,
             layer_shell: None,
             input_manager: None,
+            cursor_shape_manager: None,
             has_window_manager: false,
             has_xkb_bindings: false,
             window_proxies: Vec::new(),
@@ -279,6 +304,23 @@ impl Dispatch<wl_registry::WlRegistry, RegistryData> for AppState {
                     let om: ZwlrOutputManagerV1 =
                         registry.bind::<ZwlrOutputManagerV1, _, _>(name, 4, qhandle, ());
                     state.output_manager = Some(om);
+                } else if interface == IFACE_CURSOR_SHAPE_MANAGER {
+                    eprintln!("registry: binding {}", IFACE_CURSOR_SHAPE_MANAGER);
+                    let csm: WpCursorShapeManagerV1 =
+                        registry.bind::<WpCursorShapeManagerV1, _, _>(name, 1, qhandle, ());
+                    state.cursor_shape_manager = Some(csm);
+                } else if interface == "wl_output" {
+                    eprintln!("registry: binding wl_output name={}", name);
+                    let wl_out: wl_output::WlOutput =
+                        registry.bind::<wl_output::WlOutput, _, _>(name, 4, qhandle, ());
+                    state.wl_outputs.push(WlOutputInfo {
+                        name,
+                        wl_output: wl_out,
+                        width: 0,
+                        height: 0,
+                        x: 0,
+                        y: 0,
+                    });
                 }
             }
             wl_registry::Event::GlobalRemove { name: _ } => {}
@@ -892,6 +934,9 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     SeatProxy {
                         river_seat,
                         xkb_bindings_seat: None,
+                        wl_seat: None,
+                        wl_pointer: None,
+                        cursor_shape_device: None,
                     },
                 ));
                 eprintln!("wm_handle_seat: new seat id={}", id);
@@ -1146,7 +1191,7 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
         event: river_seat_v1::Event,
         _data: &(),
         _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
+        qhandle: &QueueHandle<Self>,
     ) {
         let sid = match state.seat_id_for_proxy(proxy) {
             Some(id) => id,
@@ -1199,6 +1244,17 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
                 }
             }
 
+            river_seat_v1::Event::WlSeat { name } => {
+                if let Some(ref registry) = state.registry {
+                    if let Some((_, seat_proxy)) = state.seat_proxies.iter_mut().find(|(_, sp)| sp.river_seat == *proxy) {
+                        if seat_proxy.wl_seat.is_none() {
+                            let wl_seat = registry.bind::<wl_seat::WlSeat, _, _>(name, 2, qhandle, ());
+                            seat_proxy.wl_seat = Some(wl_seat);
+                        }
+                    }
+                }
+            }
+
             river_seat_v1::Event::OpDelta { .. } => {}
             river_seat_v1::Event::OpRelease => {}
 
@@ -1211,15 +1267,115 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
 
 impl Dispatch<RiverOutputV1, ()> for AppState {
     fn event(
-        _state: &mut Self,
-        _proxy: &RiverOutputV1,
+        state: &mut Self,
+        proxy: &RiverOutputV1,
         event: river_output_v1::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
+        let oid = state
+            .output_proxies
+            .iter()
+            .find(|(_, op)| op.river_output.id() == proxy.id())
+            .map(|(id, _)| *id);
+
         match event {
-            river_output_v1::Event::WlOutput { .. } => {}
+            river_output_v1::Event::WlOutput { name } => {
+                if let Some(oid) = oid {
+                    if let Some(output) = state.wm.outputs.iter_mut().find(|o| o.id == oid) {
+                        output.wl_output_name = Some(name);
+                        // Also try to copy dimensions from WlOutputInfo if already populated
+                        if let Some(info) = state.wl_outputs.iter().find(|info| info.name == name) {
+                            if info.width > 0 && info.height > 0 {
+                                output.width = info.width;
+                                output.height = info.height;
+                                output.x = info.x;
+                                output.y = info.y;
+                                state.wm.needs_render = true;
+                                eprintln!(
+                                    "river_output linked to wl_output name={} dimensions (copied): {}x{} at ({},{})",
+                                    name, info.width, info.height, info.x, info.y
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// --- wl_output::WlOutput events ---
+
+impl Dispatch<wl_output::WlOutput, ()> for AppState {
+    fn event(
+        state: &mut Self,
+        proxy: &wl_output::WlOutput,
+        event: wl_output::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // Find registry name
+        let name = state
+            .wl_outputs
+            .iter()
+            .find(|info| info.wl_output.id() == proxy.id())
+            .map(|info| info.name);
+
+        let Some(name) = name else { return };
+
+        match event {
+            wl_output::Event::Geometry {
+                x,
+                y,
+                ..
+            } => {
+                if let Some(info) = state.wl_outputs.iter_mut().find(|info| info.name == name) {
+                    info.x = x;
+                    info.y = y;
+                }
+                // Also update matched Output in WindowManager
+                if let Some(output) = state.wm.outputs.iter_mut().find(|o| o.wl_output_name == Some(name)) {
+                    if output.x != x || output.y != y {
+                        output.x = x;
+                        output.y = y;
+                        state.wm.needs_render = true;
+                    }
+                }
+            }
+            wl_output::Event::Mode {
+                flags,
+                width,
+                height,
+                ..
+            } => {
+                let is_current = match flags {
+                    wayland_client::WEnum::Value(mode) => mode.contains(wl_output::Mode::Current),
+                    _ => false,
+                };
+
+                if is_current {
+                    if let Some(info) = state.wl_outputs.iter_mut().find(|info| info.name == name) {
+                        info.width = width;
+                        info.height = height;
+                    }
+                    // Also update matched Output in WindowManager
+                    if let Some(output) = state.wm.outputs.iter_mut().find(|o| o.wl_output_name == Some(name)) {
+                        if output.width != width || output.height != height {
+                            output.width = width;
+                            output.height = height;
+                            state.wm.needs_render = true;
+                            eprintln!(
+                                "wl_output name={} updated current mode dimensions: {}x{}",
+                                name, width, height
+                            );
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1676,6 +1832,10 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                 active_tags
             );
 
+            if state.wm.notifications_enable {
+                crate::config::show_notification("clearwm", &format!("Layout set to {} for active tags", next.as_str()));
+            }
+
             // Unlock windows that got their mode from the layout (not from mode_rules
             // or manual set-mode) so assign_window_modes will reassign them.
             // Windows with mode_locked=true were explicitly set by the user and stay.
@@ -1701,6 +1861,7 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                 .find(|s| !s.removed)
                 .and_then(|s| s.focused_window_id);
             if let Some(fid) = focused_id {
+                let notifications_enable = state.wm.notifications_enable;
                 if let Some(win) = state.wm.get_window_mut(fid) {
                     let next = cycle
                         .iter()
@@ -1716,14 +1877,17 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                     );
                     win.tiling_mode = next;
                     win.mode_locked = true;
+                    if notifications_enable {
+                        let win_title = win.title.as_deref().unwrap_or("Window");
+                        crate::config::show_notification("clearwm", &format!("Tiling mode set to {} for: {}", next.as_str(), win_title));
+                    }
                     state.wm.needs_render = true;
                     state.wm.needs_status_update = true;
                 }
             }
         }
         Action::Reload => {
-            // TODO: implement reload (re-run config)
-            eprintln!("reload: not yet implemented");
+            crate::restart::wm_reload(&mut state.wm);
         }
         Action::Restart => {
             crate::restart::wm_restart();
@@ -2021,7 +2185,7 @@ impl Dispatch<ZwlrOutputHeadV1, ()> for AppState {
         event: zwlr_output_head_v1::Event,
         _data: &(),
         _conn: &Connection,
-        qhandle: &QueueHandle<Self>,
+        _qhandle: &QueueHandle<Self>,
     ) {
         // Find or create the head entry by proxy ID
         let pid = proxy.id().protocol_id();
@@ -2291,10 +2455,11 @@ pub fn wayland_init() -> Result<(Connection, EventQueue<AppState>, AppState), St
     let mut event_queue = conn.new_event_queue::<AppState>();
     let qh = event_queue.handle();
 
-    let _registry = conn.display().get_registry(&qh, RegistryData);
+    let registry = conn.display().get_registry(&qh, RegistryData);
 
     // Do initial roundtrip to receive global events and bind protocols
     let mut state = AppState::new();
+    state.registry = Some(registry);
     eprintln!("[init] first roundtrip starting...");
     let rt1 = std::time::Instant::now();
     event_queue
@@ -2371,7 +2536,7 @@ impl Dispatch<RiverLibinputDeviceV1, ()> for AppState {
         event: river_libinput_device_v1::Event,
         _data: &(),
         _conn: &Connection,
-        qhandle: &QueueHandle<Self>,
+        _qhandle: &QueueHandle<Self>,
     ) {
         match event {
             river_libinput_device_v1::Event::TapSupport { finger_count } => {
@@ -2474,5 +2639,90 @@ pub fn apply_tap_config(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
     if all_done && !state.libinput_devices.is_empty() {
         state.wm.tap_config_applied = true;
         eprintln!("[libinput] tap config applied to all devices");
+    }
+}
+
+// --- wl_seat events ---
+
+impl Dispatch<wl_seat::WlSeat, ()> for AppState {
+    fn event(
+        state: &mut Self,
+        proxy: &wl_seat::WlSeat,
+        event: wl_seat::Event,
+        _data: &(),
+        _conn: &Connection,
+        qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_seat::Event::Capabilities { capabilities } => {
+                let has_pointer = match capabilities {
+                    wayland_client::WEnum::Value(caps) => caps.contains(wl_seat::Capability::Pointer),
+                    _ => false,
+                };
+                if let Some((_, seat_proxy)) = state.seat_proxies.iter_mut().find(|(_, sp)| {
+                    sp.wl_seat.as_ref() == Some(proxy)
+                }) {
+                    if has_pointer && seat_proxy.wl_pointer.is_none() {
+                        let wl_pointer = proxy.get_pointer(qhandle, ());
+                        
+                        if let Some(ref csm) = state.cursor_shape_manager {
+                            let device = csm.get_pointer(&wl_pointer, qhandle, ());
+                            device.set_shape(0, Shape::Crosshair);
+                            seat_proxy.cursor_shape_device = Some(device);
+                        }
+                        
+                        seat_proxy.wl_pointer = Some(wl_pointer);
+                    } else if !has_pointer && seat_proxy.wl_pointer.is_some() {
+                        seat_proxy.cursor_shape_device = None;
+                        if let Some(pointer) = seat_proxy.wl_pointer.take() {
+                            pointer.release();
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// --- wl_pointer events ---
+
+impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_pointer::WlPointer,
+        _event: wl_pointer::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// --- wp_cursor_shape_manager_v1 events ---
+
+impl Dispatch<WpCursorShapeManagerV1, ()> for AppState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpCursorShapeManagerV1,
+        _event: wp_cursor_shape_manager_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// --- wp_cursor_shape_device_v1 events ---
+
+impl Dispatch<WpCursorShapeDeviceV1, ()> for AppState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpCursorShapeDeviceV1,
+        _event: wp_cursor_shape_device_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
     }
 }

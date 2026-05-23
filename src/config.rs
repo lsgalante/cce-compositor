@@ -31,6 +31,8 @@ pub struct Config {
     pub mode_rule: Vec<ModeRuleConfig>,
     #[serde(default)]
     pub tag_layout: Vec<TagLayoutConfig>,
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,6 +164,22 @@ pub struct InputConfig {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct NotificationsConfig {
+    #[serde(default = "default_true")]
+    pub enable: bool,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self { enable: true }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
 pub struct StartupEntryConfig {
     pub exec: String,
     #[serde(default)]
@@ -200,20 +218,22 @@ pub struct TagLayoutConfig {
 
 /// Parse the TOML config file and apply it to the WindowManager state.
 /// `cold_start` controls whether `once = true` startup entries are spawned.
-pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) {
+pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> Result<(), String> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("parse_config: cannot open {}: {}", path, e);
-            return;
+            let err_msg = format!("cannot open {}: {}", path, e);
+            eprintln!("parse_config: {}", err_msg);
+            return Err(err_msg);
         }
     };
 
     let config: Config = match toml::from_str(&content) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("parse_config: TOML parse error: {}", e);
-            return;
+            let err_msg = format!("TOML parse error: {}", e);
+            eprintln!("parse_config: {}", err_msg);
+            return Err(err_msg);
         }
     };
 
@@ -357,8 +377,12 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) {
     // (in the RiverLibinputDeviceV1 TapSupport event handler).
     state.tap_to_click = config.input.tap_to_click;
 
+    // [notifications]
+    state.notifications_enable = config.notifications.enable;
+
     // Signal config-done
     state.config_done = true;
+    Ok(())
 }
 
 /// Expand $VAR and ${VAR} references in a string using the current environment.
@@ -470,6 +494,14 @@ pub fn process_running(name: &str) -> bool {
     }
 }
 
+/// Show a system desktop notification via notify-send.
+pub fn show_notification(title: &str, body: &str) {
+    let title_escaped = title.replace('\'', "'\\''");
+    let body_escaped = body.replace('\'', "'\\''");
+    let cmd = format!("notify-send -a clearwm '{}' '{}'", title_escaped, body_escaped);
+    spawn_command_bg(&cmd);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,6 +581,20 @@ mod tests {
         let expanded = expand_env_vars("$HOME/.local/bin:$PATH");
         assert!(expanded.starts_with(&format!("{}/.local/bin:", home)));
         assert!(expanded.contains(&orig_path));
+    }
+
+    #[test]
+    fn test_notifications_config_parse() {
+        let toml_str = r#"
+[notifications]
+enable = false
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.notifications.enable);
+
+        let toml_str_empty = "";
+        let config_empty: Config = toml::from_str(toml_str_empty).unwrap();
+        assert!(config_empty.notifications.enable);
     }
 }
 

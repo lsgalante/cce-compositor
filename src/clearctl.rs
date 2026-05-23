@@ -24,6 +24,7 @@ fn usage(name: &str) {
     eprintln!("  repeat <rate> <delay>");
     eprintln!("  config-done");
     eprintln!("  spawn <command>");
+    eprintln!("  notify <title> [body]");
     eprintln!("  bind <mods> <keysym> <action> [args...]");
     eprintln!("  pbind <mods> <button> <action>");
     eprintln!("  retile");
