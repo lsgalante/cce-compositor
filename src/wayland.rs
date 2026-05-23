@@ -19,6 +19,7 @@ use crate::protocol::river_layer_shell::client::{
     river_layer_shell_v1::{self, RiverLayerShellV1},
 };
 use crate::protocol::river_window_management::client::{
+    river_decoration_v1::{self, RiverDecorationV1},
     river_node_v1::{self, RiverNodeV1},
     river_output_v1::{self, RiverOutputV1},
     river_pointer_binding_v1::{self, RiverPointerBindingV1},
@@ -40,7 +41,9 @@ use crate::protocol::wlr_output_management::client::{
 };
 
 use crate::types::{Action, BindingUserData, Output, Seat, TilingMode, Window, WindowManager};
-use wayland_client::protocol::{wl_pointer, wl_seat, wl_output};
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_output, wl_pointer, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_protocols::wp::cursor_shape::v1::client::{
     wp_cursor_shape_device_v1::{self, WpCursorShapeDeviceV1, Shape},
     wp_cursor_shape_manager_v1::{self, WpCursorShapeManagerV1},
@@ -59,6 +62,7 @@ const IFACE_WLR_OUTPUT_MANAGER: &str = "zwlr_output_manager_v1";
 /// call protocol methods (set_position, propose_dimensions, etc.) on it.
 pub struct WindowProxy {
     pub river_window: RiverWindowV1,
+    pub decoration: Option<crate::decorations::WindowDecoration>,
 }
 
 /// Wayland proxy objects stored alongside each Seat.
@@ -98,6 +102,8 @@ pub struct AppState {
     pub layer_shell: Option<RiverLayerShellV1>,
     pub input_manager: Option<RiverInputManagerV1>,
     pub cursor_shape_manager: Option<WpCursorShapeManagerV1>,
+    pub compositor: Option<wl_compositor::WlCompositor>,
+    pub shm: Option<wl_shm::WlShm>,
 
     // Whether we got all required globals
     pub has_window_manager: bool,
@@ -176,6 +182,8 @@ impl AppState {
             layer_shell: None,
             input_manager: None,
             cursor_shape_manager: None,
+            compositor: None,
+            shm: None,
             has_window_manager: false,
             has_xkb_bindings: false,
             window_proxies: Vec::new(),
@@ -309,6 +317,16 @@ impl Dispatch<wl_registry::WlRegistry, RegistryData> for AppState {
                     let csm: WpCursorShapeManagerV1 =
                         registry.bind::<WpCursorShapeManagerV1, _, _>(name, 1, qhandle, ());
                     state.cursor_shape_manager = Some(csm);
+                } else if interface == "wl_compositor" {
+                    eprintln!("registry: binding wl_compositor name={}", name);
+                    let comp: wl_compositor::WlCompositor =
+                        registry.bind::<wl_compositor::WlCompositor, _, _>(name, 4, qhandle, ());
+                    state.compositor = Some(comp);
+                } else if interface == "wl_shm" {
+                    eprintln!("registry: binding wl_shm name={}", name);
+                    let shm: wl_shm::WlShm =
+                        registry.bind::<wl_shm::WlShm, _, _>(name, 1, qhandle, ());
+                    state.shm = Some(shm);
                 } else if interface == "wl_output" {
                     eprintln!("registry: binding wl_output name={}", name);
                     let wl_out: wl_output::WlOutput =
@@ -402,6 +420,10 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 for (closed_id, closed_app_id) in &closed_ids {
                     state.window_proxies.retain(|(id, wp)| {
                         if id == closed_id {
+                            if let Some(dec) = wp.decoration.as_ref() {
+                                dec.decoration.destroy();
+                                dec.surface.destroy();
+                            }
                             wp.river_window.destroy();
                             false
                         } else {
@@ -783,6 +805,9 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     // and must happen during ManageStart.
                     crate::wm::render_borders(state);
 
+                    // Update and render window title decorations on borders
+                    crate::decorations::update_decorations(state, qhandle);
+
                     // Raise the focused window to the top of the visual stack.
                     // place_top() modifies rendering state and must be called
                     // during a render sequence.
@@ -890,7 +915,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 state.wm.windows.push(window);
                 state
                     .window_proxies
-                    .push((id, WindowProxy { river_window }));
+                    .push((id, WindowProxy { river_window, decoration: None }));
                 eprintln!("[window] new window id={} (app_id pending)", id);
             }
 
@@ -2735,6 +2760,80 @@ impl Dispatch<WpCursorShapeDeviceV1, ()> for AppState {
         _state: &mut Self,
         _proxy: &WpCursorShapeDeviceV1,
         _event: wp_cursor_shape_device_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// --- core Wayland and River decoration events dispatch ---
+
+impl Dispatch<wl_compositor::WlCompositor, ()> for AppState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_compositor::WlCompositor,
+        _event: wl_compositor::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_shm::WlShm, ()> for AppState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_shm::WlShm,
+        _event: wl_shm::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_shm_pool::WlShmPool, ()> for AppState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_shm_pool::WlShmPool,
+        _event: wl_shm_pool::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_surface::WlSurface, ()> for AppState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_surface::WlSurface,
+        _event: wl_surface::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_buffer::WlBuffer, ()> for AppState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_buffer::WlBuffer,
+        _event: wl_buffer::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<RiverDecorationV1, ()> for AppState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &RiverDecorationV1,
+        _event: river_decoration_v1::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
