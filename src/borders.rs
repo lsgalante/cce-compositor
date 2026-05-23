@@ -107,7 +107,7 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             (r, g, b, ALPHA)
         };
 
-        let width = match win.tiling_mode {
+        let mut width = match win.tiling_mode {
             TilingMode::Cascade => state.layout.cascade_border_width,
             TilingMode::Fullscreen => state.layout.fullscreen_border_width,
             TilingMode::Grid => state.layout.grid_border_width,
@@ -115,6 +115,10 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             TilingMode::Hsplit => state.layout.hsplit_border_width,
             TilingMode::Floating => state.layout.floating_border_width,
         };
+
+        if win.app_id.as_deref() == Some("clear-status-interface") {
+            width = 0;
+        }
 
         eprintln!(
             "[borders]   -> r=#{:08x} g=#{:08x} b=#{:08x} a=#{:08x} width={}",

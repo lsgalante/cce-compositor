@@ -19,6 +19,10 @@ use wayland_client::QueueHandle;
 /// Returns the resolved TilingMode, or None if the window's mode is locked
 /// (i.e., the user manually set it and it should not be overridden).
 pub fn get_mode_for_window(wm: &WindowManager, win: &Window) -> Option<TilingMode> {
+    if win.app_id.as_deref() == Some("clear-status-interface") {
+        return Some(TilingMode::Fullscreen);
+    }
+
     // If the user manually locked the mode (via set-mode, fullscreen toggle, etc.),
     // don't override it.
     if win.mode_locked {
@@ -73,6 +77,13 @@ pub fn get_mode_for_window(wm: &WindowManager, win: &Window) -> Option<TilingMod
 /// Assign tiling modes to all windows that aren't mode_locked.
 /// Should be called during ManageStart before compute_tiling.
 pub fn assign_window_modes(wm: &mut WindowManager) {
+    // Enforce that clear-status-interface is assigned all tags so that it is always visible
+    for win in &mut wm.windows {
+        if win.app_id.as_deref() == Some("clear-status-interface") {
+            win.tags = u32::MAX;
+        }
+    }
+
     // Collect assignments first (borrow checker: can't borrow wm mutably while iterating mode_rules)
     let assignments: Vec<(u64, TilingMode)> = wm
         .windows
@@ -146,15 +157,28 @@ fn get_screen_geometry(wm: &WindowManager) -> (i32, i32, i32, i32, i32, i32) {
         _ => return (800, 600, 800, 600, 0, 0),
     };
 
+    let scale = if wm.output_scale > 0.0 { wm.output_scale } else { 1.0 };
+
     let mut uw = output.usable_width;
     let mut uh = output.usable_height;
 
-    // Fall back to physical output dimensions if usable area not yet set
-    if uw <= 0 && output.width > 0 {
-        uw = output.width;
+    let log_width = if output.width > 0 {
+        (output.width as f64 / scale).round() as i32
+    } else {
+        0
+    };
+    let log_height = if output.height > 0 {
+        (output.height as f64 / scale).round() as i32
+    } else {
+        0
+    };
+
+    // Fall back to logical output dimensions if usable area not yet set
+    if uw <= 0 && log_width > 0 {
+        uw = log_width;
     }
-    if uh <= 0 && output.height > 0 {
-        uh = output.height;
+    if uh <= 0 && log_height > 0 {
+        uh = log_height;
     }
 
     if uw <= 0 {
@@ -164,8 +188,8 @@ fn get_screen_geometry(wm: &WindowManager) -> (i32, i32, i32, i32, i32, i32) {
         uh = 600;
     }
 
-    let pw = if output.width > 0 { output.width } else { uw };
-    let ph = if output.height > 0 { output.height } else { uh };
+    let pw = if log_width > 0 { log_width } else { uw };
+    let ph = if log_height > 0 { log_height } else { uh };
     let px = output.x;
     let py = output.y;
 
@@ -241,13 +265,13 @@ fn compute_tiling(
         .and_then(|s| s.focused_window_id)
         .filter(|&fid| {
             wm.get_window(fid).map_or(false, |w| {
-                (w.tags & wm.active_tags) != 0 && !w.closed && w.tiling_mode == TilingMode::Fullscreen
+                (w.tags & wm.active_tags) != 0 && !w.closed && w.tiling_mode == TilingMode::Fullscreen && w.app_id.as_deref() != Some("clear-status-interface")
             })
         })
         .or_else(|| {
             // Fallback: first fullscreen window if no focused window qualifies
             wm.windows.iter().find(|w| {
-                (w.tags & wm.active_tags) != 0 && !w.closed && w.tiling_mode == TilingMode::Fullscreen
+                (w.tags & wm.active_tags) != 0 && !w.closed && w.tiling_mode == TilingMode::Fullscreen && w.app_id.as_deref() != Some("clear-status-interface")
             }).map(|w| w.id)
         });
 
@@ -268,7 +292,12 @@ fn compute_tiling(
 
         let (x, y, w, h) = match mode {
             TilingMode::Fullscreen => {
-                if fullscreen_id == Some(wid) {
+                if fullscreen_id == Some(wid) || win.app_id.as_deref() == Some("clear-status-interface") {
+                    let border_w = if win.app_id.as_deref() == Some("clear-status-interface") {
+                        0
+                    } else {
+                        wm.layout.fullscreen_border_width
+                    };
                     let (tx, ty, tw, th) = tiling::tile_fullscreen(
                         phys_w,
                         phys_h,
@@ -276,7 +305,7 @@ fn compute_tiling(
                         gap_left,
                         gap_right,
                         gap_bottom,
-                        wm.layout.fullscreen_border_width,
+                        border_w,
                         bar_height,
                     );
                     (tx + phys_x, ty + phys_y, tw, th)

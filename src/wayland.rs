@@ -428,7 +428,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                                 .windows
                                 .iter()
                                 .filter(|w| {
-                                    !w.closed && (w.tags & active_tags) != 0 && w.id != *closed_id
+                                    !w.closed && (w.tags & active_tags) != 0 && w.id != *closed_id && w.app_id.as_deref() != Some("clear-status-interface")
                                 })
                                 .map(|w| w.id)
                                 .collect();
@@ -653,7 +653,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                         .wm
                         .windows
                         .iter()
-                        .filter(|w| w.is_new && !w.closed && (w.tags & active_tags) != 0)
+                        .filter(|w| w.is_new && !w.closed && (w.tags & active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface"))
                         .map(|w| w.id)
                         .last();
                     if let Some(new_id) = new_focused_id {
@@ -798,11 +798,22 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                                     .wm
                                     .get_window(focused_id)
                                     .and_then(|w| w.app_id.clone());
-                                eprintln!(
-                                    "[render] place_top for focused window id={} (app_id={:?})",
-                                    focused_id, app_id
-                                );
-                                node.place_top();
+                                if app_id.as_deref() != Some("clear-status-interface") {
+                                    eprintln!(
+                                        "[render] place_top for focused window id={} (app_id={:?})",
+                                        focused_id, app_id
+                                    );
+                                    node.place_top();
+                                }
+                            }
+                        }
+                    }
+
+                    // Enforce that clear-status-interface is placed at the bottom
+                    for &(wid, ref node) in &state.window_nodes {
+                        if let Some(win) = state.wm.get_window(wid) {
+                            if win.app_id.as_deref() == Some("clear-status-interface") {
+                                node.place_bottom();
                             }
                         }
                     }
@@ -1210,6 +1221,10 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
             } => {
                 if let Some(wid) = state.window_id_for_proxy(&river_window) {
                     let target_app_id = state.wm.get_window(wid).and_then(|w| w.app_id.clone());
+                    if target_app_id.as_deref() == Some("clear-status-interface") {
+                        // Do not focus status bar!
+                        return;
+                    }
                     if let Some(seat) = state.wm.seats.iter_mut().find(|s| s.id == sid) {
                         eprintln!(
                             "[focus] WindowInteraction: seat={} focused_window_id={} -> {} (app_id={:?})",
@@ -1668,7 +1683,7 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                         .windows
                         .iter()
                         .filter(|w| {
-                            (w.tags & state.wm.active_tags) != 0 && !w.closed && w.id != focused_id
+                            (w.tags & state.wm.active_tags) != 0 && !w.closed && w.id != focused_id && w.app_id.as_deref() != Some("clear-status-interface")
                         })
                         .map(|w| w.id)
                         .collect();
@@ -1691,7 +1706,7 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                     .wm
                     .windows
                     .iter()
-                    .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed)
+                    .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
                     .map(|w| w.id)
                     .collect();
                 if let Some(fid) = focused_id {
@@ -1907,7 +1922,7 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                 .wm
                 .windows
                 .iter()
-                .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed)
+                .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
                 .map(|w| w.id)
                 .collect();
             if let Some(seat) = state.wm.seats.iter_mut().find(|s| !s.removed) {
@@ -1946,7 +1961,7 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                     .wm
                     .windows
                     .iter()
-                    .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed)
+                    .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
                     .map(|w| w.id)
                     .collect();
                 if let Some(seat) = state.wm.seats.iter_mut().find(|s| !s.removed) {
@@ -1988,7 +2003,7 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                         .wm
                         .windows
                         .iter()
-                        .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed)
+                        .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
                         .map(|w| w.id)
                         .collect();
                     if let Some(seat) = state.wm.seats.iter_mut().find(|s| !s.removed) {

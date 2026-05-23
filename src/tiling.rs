@@ -35,7 +35,7 @@ pub fn tile_cascade(
     idx: i32,
 ) -> (i32, i32, i32, i32) {
     let width = screen_w - gap_left - gap_right - bw * 2 - cascade_offset * (n_cascade - 1);
-    let height = screen_h - gap_top - gap_bottom - bw * 2 - cascade_offset * (n_cascade - 1);
+    let height = screen_h - bar_height - gap_top - gap_bottom - bw * 2 - cascade_offset * (n_cascade - 1);
     let width = if width < 1 { 1 } else { width };
     let height = if height < 1 { 1 } else { height };
     let x = gap_left + bw + idx * cascade_offset;
@@ -72,7 +72,7 @@ pub fn tile_grid(
     let col = idx % cols;
     let rows = (n_grid + cols - 1) / cols;
     let width = (screen_w - gap_left - gap_right - (cols - 1) * gap) / cols - 2 * bw;
-    let height = (screen_h - gap_top - gap_bottom - (rows - 1) * gap) / rows - 2 * bw;
+    let height = (screen_h - bar_height - gap_top - gap_bottom - (rows - 1) * gap) / rows - 2 * bw;
     let width = if width < 1 { 1 } else { width };
     let height = if height < 1 { 1 } else { height };
     let x = gap_left + bw + col * (width + 2 * bw + gap);
@@ -205,8 +205,8 @@ mod tests {
         assert_eq!(y, 64); // bar_height + gap_top + bw
                            // w = 1920 - 18 - 18 - 18*2 - 32*0 = 1920 - 72 = 1848
         assert_eq!(w, 1848);
-        // h = 1080 - 18 - 18 - 18*2 - 32*0 = 1080 - 72 = 1008
-        assert_eq!(h, 1008);
+        // h = 1080 - 28 (bar) - 18 - 18 - 18*2 - 32*0 = 1080 - 100 = 980
+        assert_eq!(h, 980);
     }
 
     #[test]
@@ -233,8 +233,8 @@ mod tests {
         assert_eq!(y, 28 + 10 + 6);   // bar_height + gap_top + bw = 44
                                        // w = 1920 - 20 - 30 - 6*2 = 1920 - 62 = 1858
         assert_eq!(w, 1858);
-        // h = 1080 - 10 - 40 - 6*2 = 1080 - 62 = 1018
-        assert_eq!(h, 1018);
+        // h = 1080 - 28 (bar) - 10 - 40 - 6*2 = 1080 - 90 = 990
+        assert_eq!(h, 990);
     }
 
     #[test]
@@ -252,8 +252,8 @@ mod tests {
 
         // Width = (1920 - 18 - 18 - 1*18) / 2 - 2*18 = (1920-54)/2 - 36 = 933 - 36 = 897
         assert_eq!(w0, 897);
-        // rows=1, Height = (1080 - 18 - 18 - 0*18) / 1 - 2*18 = 1044 - 36 = 1008
-        assert_eq!(h0, 1008);
+        // rows=1, Height = (1080 - 28 (bar) - 18 - 18 - 0*18) / 1 - 2*18 = 1016 - 36 = 980
+        assert_eq!(h0, 980);
     }
 
     #[test]
@@ -288,8 +288,8 @@ mod tests {
         assert_eq!(x0, 26);
         // y0 = bar_height + gap_top + bw = 28 + 10 + 6 = 44
         assert_eq!(y0, 44);
-        // rows=1, Height = (1080 - 10 - 40 - 0*12) / 1 - 2*6 = 1030 - 12 = 1018
-        assert_eq!(h0, 1018);
+        // rows=1, Height = (1080 - 28 (bar) - 10 - 40 - 0*12) / 1 - 2*6 = 1002 - 12 = 990
+        assert_eq!(h0, 990);
 
         // x1 = gap_left + bw + 1*(917 + 2*6 + 12) = 26 + 941 = 967
         assert_eq!(x1, 967);

@@ -47,7 +47,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
                 let visible_ids: Vec<u64> = state
                     .windows
                     .iter()
-                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed)
+                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
                     .map(|w| w.id)
                     .collect();
                 if visible_ids.len() > 1 {
@@ -86,7 +86,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
                         let visible_ids: Vec<u64> = state
                             .windows
                             .iter()
-                            .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed)
+                            .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
                             .map(|w| w.id)
                             .collect();
                         seat.focused_window_id = visible_ids.last().copied();
@@ -116,7 +116,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
                         let visible_ids: Vec<u64> = state
                             .windows
                             .iter()
-                            .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed)
+                            .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
                             .map(|w| w.id)
                             .collect();
                         if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
@@ -504,7 +504,7 @@ fn handle_set_tag_command(rest: &str, state: &mut WindowManager) {
                     let visible_ids: Vec<u64> = state
                         .windows
                         .iter()
-                        .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed)
+                        .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
                         .map(|w| w.id)
                         .collect();
                     if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
