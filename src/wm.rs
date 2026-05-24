@@ -281,6 +281,7 @@ fn compute_tiling(
     let mut idx_grid = 0i32;
     let mut idx_vsplit = 0i32;
     let mut idx_hsplit = 0i32;
+    let mut idx_floating = 0i32;
 
     for win in &wm.windows {
         if (win.tags & wm.active_tags) == 0 || win.closed {
@@ -375,14 +376,14 @@ fn compute_tiling(
                 let fx = if win.x != 0 || win.y != 0 {
                     win.x
                 } else {
-                    gap_left + fbw + cascade_offset * idx_cascade
+                    gap_left + fbw + cascade_offset * idx_floating
                 };
                 let fy = if win.x != 0 || win.y != 0 {
                     win.y
                 } else {
-                    gap_left + fbw + bar_height + gap_top + cascade_offset * idx_cascade
+                    gap_left + fbw + bar_height + gap_top + cascade_offset * idx_floating
                 };
-                idx_cascade += 1;
+                idx_floating += 1;
                 (fx, fy, fw, fh)
             }
         };

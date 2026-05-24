@@ -675,7 +675,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                         .wm
                         .windows
                         .iter()
-                        .filter(|w| w.is_new && !w.closed && (w.tags & active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface"))
+                        .filter(|w| w.is_new && !w.closed && (w.tags & active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface") && w.app_id.as_deref() != Some("clear-notifier"))
                         .map(|w| w.id)
                         .last();
                     if let Some(new_id) = new_focused_id {

@@ -68,7 +68,6 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
         .filter(|(_, w)| (w.tags & state.active_tags) != 0 && !w.closed)
         .map(|(i, _)| i)
         .collect();
-    let n_visible = visible.len();
 
     for (idx, win) in state.windows.iter().enumerate() {
         if (win.tags & state.active_tags) == 0 {
@@ -95,8 +94,14 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             )
         } else {
             // Unfocused window: blend background → border based on depth
-            let pos = visible.iter().position(|&i| i == idx).unwrap_or(0);
-            let depth = (n_visible - 1 - pos) as i32;
+            let visible_mode: Vec<usize> = visible
+                .iter()
+                .cloned()
+                .filter(|&i| state.windows[i].tiling_mode == win.tiling_mode)
+                .collect();
+            let n_visible_mode = visible_mode.len();
+            let pos = visible_mode.iter().position(|&i| i == idx).unwrap_or(0);
+            let depth = (n_visible_mode - 1 - pos) as i32;
             let mut factor = 1.0_f64;
             for _ in 0..depth {
                 factor *= UNFOCUSED_DEPTH_FACTOR;

@@ -205,12 +205,20 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             let title = w.title.clone().unwrap_or_else(|| {
                 w.app_id.clone().unwrap_or_else(|| "Window".to_string())
             });
-            let layout_idx = state.wm.windows
+            let mode_idx = state.wm.windows
                 .iter()
-                .filter(|win| !win.closed && win.app_id.as_deref() != Some("clear-status-interface"))
+                .filter(|win| !win.closed && win.app_id.as_deref() != Some("clear-status-interface") && (win.tags & active_tags) != 0 && win.tiling_mode == w.tiling_mode)
                 .position(|win| win.id == w.id)
                 .unwrap_or(0);
-            let title_with_idx = format!("[{}] {}", layout_idx, title);
+            let indicator = match w.tiling_mode {
+                crate::types::TilingMode::Floating => "F",
+                crate::types::TilingMode::Cascade => "C",
+                crate::types::TilingMode::Grid => "G",
+                crate::types::TilingMode::Vsplit => "V",
+                crate::types::TilingMode::Hsplit => "H",
+                crate::types::TilingMode::Fullscreen => "S",
+            };
+            let title_with_idx = format!("[{}{}] {}", indicator, mode_idx, title);
 
             // Find matching computed border color for this window
             let bc = border_colors.iter().find(|b| b.window_idx == idx);
