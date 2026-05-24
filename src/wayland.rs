@@ -1927,7 +1927,7 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
             }
         }
         Action::Reload => {
-            crate::restart::wm_reload(&mut state.wm);
+            crate::restart::wm_restart();
         }
         Action::Restart => {
             crate::restart::wm_restart();

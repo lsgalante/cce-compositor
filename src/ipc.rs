@@ -73,7 +73,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
             crate::restart::wm_restart();
         }
         "reload" => {
-            crate::restart::wm_reload(state);
+            crate::restart::wm_restart();
         }
         "view" | _ if tok.starts_with("view") => {
             let tag = parse_tag_from_command(tok, "view", rest);

@@ -360,11 +360,15 @@ fn compute_tiling(
                 let fbw = wm.layout.floating_border_width;
                 let fw = if win.width > 0 {
                     win.width
+                } else if win.hint_min_width > 0 {
+                    win.hint_min_width
                 } else {
                     screen_w * 2 / 3
                 };
                 let fh = if win.height > 0 {
                     win.height
+                } else if win.hint_min_height > 0 {
+                    win.hint_min_height
                 } else {
                     screen_h * 2 / 3
                 };
