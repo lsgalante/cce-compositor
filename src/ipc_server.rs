@@ -8,20 +8,20 @@ pub struct IpcReceiver {
     pub rx: mpsc::Receiver<String>,
 }
 
-pub fn spawn_ipc_server() -> IpcReceiver {
+pub fn spawn_ipc_server(pipe_write: libc::c_int) -> IpcReceiver {
     let (tx, rx) = mpsc::channel::<String>();
 
     std::thread::Builder::new()
         .name("clearwm-ipc".into())
         .spawn(move || {
-            ipc_server_main(tx);
+            ipc_server_main(tx, pipe_write);
         })
         .expect("failed to spawn IPC server thread");
 
     IpcReceiver { rx }
 }
 
-fn ipc_server_main(tx: mpsc::Sender<String>) {
+fn ipc_server_main(tx: mpsc::Sender<String>, pipe_write: libc::c_int) {
     let _ = std::fs::remove_file(IPC_SOCKET_PATH);
 
     let listener = match UnixListener::bind(IPC_SOCKET_PATH) {
@@ -69,10 +69,17 @@ fn ipc_server_main(tx: mpsc::Sender<String>) {
                 }
                 Ok(n) => {
                     let s = String::from_utf8_lossy(&buf[..n]);
+                    let mut sent = false;
                     for line in s.lines() {
                         let cmd = line.trim().to_string();
                         if !cmd.is_empty() {
                             let _ = tx.send(cmd);
+                            sent = true;
+                        }
+                    }
+                    if sent {
+                        unsafe {
+                            libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
                         }
                     }
                 }

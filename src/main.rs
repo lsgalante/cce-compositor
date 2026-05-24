@@ -87,8 +87,16 @@ fn main() {
         }
     };
 
+    // Create a pipe to wake up the main loop when IPC commands arrive
+    let mut pipe_fds = [0; 2];
+    unsafe {
+        libc::pipe(pipe_fds.as_mut_ptr());
+    }
+    let pipe_read = pipe_fds[0];
+    let pipe_write = pipe_fds[1];
+
     // Start the IPC server thread (for clearctl and clear-system-interface)
-    let ipc_rx = ipc_server::spawn_ipc_server().rx;
+    let ipc_rx = ipc_server::spawn_ipc_server(pipe_write).rx;
 
     // Store the status sender in the app state so RenderStart can push updates
     state.status_sender = Some(status_sender);
@@ -136,7 +144,7 @@ fn main() {
     // Flush any queued requests from config loading (bindings, etc.)
     eprintln!("[init] flushed, entering main loop");
 
-    // Main loop — tinyrwm pattern: just blocking_dispatch in a loop.
+    // Main loop — using poll to block on both Wayland socket and IPC wake-up pipe.
     // All work (including spawning) happens inside Dispatch callbacks.
     let mut loop_count: u64 = 0;
     loop {
@@ -144,64 +152,91 @@ fn main() {
         if loop_count % 10000 == 0 {
             eprintln!("[main] loop iteration {}", loop_count);
         }
-        match event_queue.blocking_dispatch(&mut state) {
-            Ok(n) => {
-                eprintln!(
-                    "[main] blocking_dispatch returned Ok({}), about to flush",
-                    n
-                );
-                // Explicitly flush after every dispatch cycle.
-                // blocking_dispatch only flushes when dispatched==0 (before blocking read),
-                // so if events were dispatched, pending requests like manage_finish
-                // and render_finish stay in the buffer until the next cycle.
-                // Flushing here ensures River receives our responses promptly.
-                if let Err(e) = event_queue.flush() {
-                    log_death(&format!("flush error after dispatch: {:?}", e));
-                    let _ = std::fs::copy("/tmp/clearwm.log", "/tmp/clearwm-prev.log");
-                    if !state.wm.exit_requested {
-                        restart::wm_restart();
-                    }
-                    break;
-                }
-                eprintln!("[main] flush ok, looping");
 
-                // Process pending IPC commands from the socket
-                let mut ipc_commands = false;
-                loop {
-                    match ipc_rx.try_recv() {
-                        Ok(cmd) => {
-                            eprintln!("[main] IPC command: {}", cmd);
-                            ipc::handle_ipc_command(&cmd, &mut state.wm);
-                            ipc_commands = true;
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            eprintln!("[main] IPC server disconnected");
-                            break;
-                        }
-                    }
+        // 1. Dispatch any already pending events in the queue
+        let _ = event_queue.dispatch_pending(&mut state);
+
+        // 2. Flush outgoing requests to the compositor
+        if let Err(e) = event_queue.flush() {
+            log_death(&format!("flush error: {:?}", e));
+            let _ = std::fs::copy("/tmp/clearwm.log", "/tmp/clearwm-prev.log");
+            if !state.wm.exit_requested {
+                restart::wm_restart();
+            }
+            break;
+        }
+
+        // 3. Prepare to read Wayland events
+        let read_guard = match event_queue.prepare_read() {
+            Some(g) => g,
+            None => {
+                // If None, events are already in the queue, dispatch them immediately
+                let _ = event_queue.dispatch_pending(&mut state);
+                continue;
+            }
+        };
+
+        // 4. Poll both the Wayland display FD and the IPC wake-up pipe
+        use std::os::fd::{AsFd, AsRawFd};
+        let wl_fd = event_queue.as_fd().as_raw_fd();
+        let mut poll_fds = [
+            nix::poll::PollFd::new(unsafe { std::os::fd::BorrowedFd::borrow_raw(wl_fd) }, nix::poll::PollFlags::POLLIN),
+            nix::poll::PollFd::new(unsafe { std::os::fd::BorrowedFd::borrow_raw(pipe_read) }, nix::poll::PollFlags::POLLIN),
+        ];
+
+        match nix::poll::poll(&mut poll_fds, nix::poll::PollTimeout::NONE) {
+            Ok(_) => {
+                // If Wayland FD is readable, read the events
+                if poll_fds[0].revents().unwrap_or(nix::poll::PollFlags::empty()).contains(nix::poll::PollFlags::POLLIN) {
+                    let _ = read_guard.read();
+                } else {
+                    // Otherwise drop the read guard to release the lock
+                    std::mem::drop(read_guard);
                 }
-                // Force a render sequence so the new rendering state (border
-                // colors, widths, etc.) is sent to River and displayed.
-                if ipc_commands {
-                    if let Some(ref wm) = state.window_manager {
-                        wm.manage_dirty();
+
+                // If IPC pipe is readable, drain it
+                if poll_fds[1].revents().unwrap_or(nix::poll::PollFlags::empty()).contains(nix::poll::PollFlags::POLLIN) {
+                    let mut buf = [0u8; 128];
+                    unsafe {
+                        libc::read(pipe_read, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
                     }
                 }
             }
             Err(e) => {
-                log_death(&format!(
-                    "wayland dispatch error: {:?}\n  exit_requested={} wm.exit_requested={}",
-                    e, state.exit_requested, state.wm.exit_requested
-                ));
-                // Save log before restart overwrites it
-                let _ = std::fs::copy("/tmp/clearwm.log", "/tmp/clearwm-prev.log");
-                if !state.wm.exit_requested {
-                    restart::wm_restart();
+                std::mem::drop(read_guard);
+                if e != nix::errno::Errno::EINTR {
+                    log_death(&format!("poll error: {:?}", e));
+                    break;
                 }
-                break;
             }
         }
+
+        // 5. Dispatch read events
+        let _ = event_queue.dispatch_pending(&mut state);
+
+        // 6. Process pending IPC commands from the socket channel
+        let mut ipc_commands = false;
+        loop {
+            match ipc_rx.try_recv() {
+                Ok(cmd) => {
+                    eprintln!("[main] IPC command: {}", cmd);
+                    ipc::handle_ipc_command(&cmd, &mut state.wm);
+                    ipc_commands = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    eprintln!("[main] IPC server disconnected");
+                    break;
+                }
+            }
+        }
+        // Force a render sequence if we processed IPC commands
+        if ipc_commands {
+            if let Some(ref wm) = state.window_manager {
+                wm.manage_dirty();
+            }
+        }
+
         if state.exit_requested || state.wm.exit_requested {
             log_death(&format!(
                 "main loop exit: exit_requested={} wm.exit_requested={}",
