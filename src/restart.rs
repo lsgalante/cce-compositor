@@ -217,6 +217,10 @@ pub fn wm_reload(state: &mut WindowManager) {
         if std::path::Path::new(&config_path).exists() {
             match parse_config(&config_path, false, state) {
                 Ok(_) => {
+                    for cmd in &state.reload_commands {
+                        eprintln!("[reload] executing reload command: {}", cmd);
+                        spawn_command_bg(cmd);
+                    }
                     if state.notifications_enable {
                         crate::config::show_notification("clearwm", "Configuration reloaded successfully");
                     }

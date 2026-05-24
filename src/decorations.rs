@@ -189,6 +189,18 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         _ => return,
     };
 
+    // Clean up decorations for windows that should not be decorated
+    for (wid, wp) in &mut state.window_proxies {
+        if let Some(w) = state.wm.windows.iter().find(|win| win.id == *wid) {
+            if w.closed || w.app_id.as_deref() == Some("clear-status-interface") || w.tiling_mode == crate::types::TilingMode::Popup {
+                if let Some(dec) = wp.decoration.take() {
+                    dec.decoration.destroy();
+                    dec.surface.destroy();
+                }
+            }
+        }
+    }
+
     // Calculate dynamic border colors
     let border_colors = crate::borders::compute_border_colors(&state.wm);
     let text_color = 0xFFE0E0E0u32;
@@ -199,7 +211,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         .windows
         .iter()
         .enumerate()
-        .filter(|(_, w)| !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+        .filter(|(_, w)| !w.closed && w.app_id.as_deref() != Some("clear-status-interface") && w.tiling_mode != crate::types::TilingMode::Popup)
         .filter(|(_, w)| (w.tags & active_tags) != 0)
         .map(|(idx, w)| {
             let title = w.title.clone().unwrap_or_else(|| {
@@ -217,6 +229,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 crate::types::TilingMode::Vsplit => "V",
                 crate::types::TilingMode::Hsplit => "H",
                 crate::types::TilingMode::Fullscreen => "S",
+                crate::types::TilingMode::Popup => "P",
             };
             let title_with_idx = format!("[{}{}] {}", indicator, mode_idx, title);
 
@@ -246,6 +259,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 crate::types::TilingMode::Vsplit => state.wm.layout.vsplit_border_width,
                 crate::types::TilingMode::Hsplit => state.wm.layout.hsplit_border_width,
                 crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
+                crate::types::TilingMode::Popup => 0,
             };
             (w.id, w.width, border_w, title_with_idx, bg_color)
         })

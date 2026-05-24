@@ -33,6 +33,13 @@ pub struct Config {
     pub tag_layout: Vec<TagLayoutConfig>,
     #[serde(default)]
     pub notifications: NotificationsConfig,
+    #[serde(default)]
+    pub reload: Vec<ReloadEntryConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReloadEntryConfig {
+    pub exec: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -380,6 +387,12 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
     // [notifications]
     state.notifications_enable = config.notifications.enable;
 
+    // [[reload]] array
+    state.reload_commands.clear();
+    for entry in &config.reload {
+        state.reload_commands.push(entry.exec.clone());
+    }
+
     // Signal config-done
     state.config_done = true;
     Ok(())
@@ -596,6 +609,12 @@ enable = false
         let config_empty: Config = toml::from_str(toml_str_empty).unwrap();
         assert!(config_empty.notifications.enable);
     }
+
+    #[test]
+    fn test_parse_keysym_favorites() {
+        let sym = parse_keysym("XF86Favorites");
+        assert!(sym != 0, "XF86Favorites keysym must be resolved successfully");
+    }
 }
 
 #[cfg(test)]
@@ -622,5 +641,34 @@ once = true
         assert_eq!(config.startup[1].exec, "fuzzel");
         assert!(config.startup[1].once);
         assert_eq!(config.env.get("XDG_CURRENT_DESKTOP").unwrap(), "river");
+    }
+
+    #[test]
+    fn test_reload_entry_format() {
+        let toml_str = r#"
+[[reload]]
+exec = "pkill clear-input-manager"
+
+[[reload]]
+exec = "echo reloaded"
+"#;
+        let config: Config = toml::from_str(toml_str).expect("TOML parse failed");
+        assert_eq!(config.reload.len(), 2);
+        assert_eq!(config.reload[0].exec, "pkill clear-input-manager");
+        assert_eq!(config.reload[1].exec, "echo reloaded");
+
+        // Also test integration via parse_config (we can write to a temporary file in /tmp or mock it,
+        // but wait! we can write to a temporary file inside the workspace)
+        let temp_path = "/home/lsgalante/Dropbox/Clear/clear-window-manager/scratch_config_test.toml";
+        std::fs::write(temp_path, toml_str).unwrap();
+
+        let mut wm = WindowManager::default();
+        let parse_res = parse_config(temp_path, false, &mut wm);
+        let _ = std::fs::remove_file(temp_path);
+
+        parse_res.unwrap();
+        assert_eq!(wm.reload_commands.len(), 2);
+        assert_eq!(wm.reload_commands[0], "pkill clear-input-manager");
+        assert_eq!(wm.reload_commands[1], "echo reloaded");
     }
 }

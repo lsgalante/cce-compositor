@@ -13,6 +13,7 @@ pub enum TilingMode {
     Vsplit,
     Hsplit,
     Fullscreen,
+    Popup,
 }
 
 impl TilingMode {
@@ -24,6 +25,7 @@ impl TilingMode {
             TilingMode::Vsplit => "Vsplit",
             TilingMode::Hsplit => "Hsplit",
             TilingMode::Fullscreen => "Fullscreen",
+            TilingMode::Popup => "Popup",
         }
     }
 }
@@ -330,6 +332,8 @@ pub struct WindowManager {
     pub tap_config_applied: bool,
     /// Whether system notifications are enabled
     pub notifications_enable: bool,
+    /// Reload commands to execute on configuration reload
+    pub reload_commands: Vec<String>,
 }
 
 impl Default for WindowManager {
@@ -364,6 +368,7 @@ impl Default for WindowManager {
             tap_to_click: false,
             tap_config_applied: false,
             notifications_enable: true,
+            reload_commands: Vec::new(),
         }
     }
 }
@@ -453,6 +458,7 @@ pub fn parse_tiling_mode(s: &str) -> TilingMode {
         "hsplit" => TilingMode::Hsplit,
         "fullscreen" => TilingMode::Fullscreen,
         "floating" => TilingMode::Floating,
+        "popup" => TilingMode::Popup,
         _ => TilingMode::Floating,
     }
 }
@@ -607,6 +613,7 @@ mod tests {
         assert_eq!(parse_tiling_mode("hsplit"), TilingMode::Hsplit);
         assert_eq!(parse_tiling_mode("fullscreen"), TilingMode::Fullscreen);
         assert_eq!(parse_tiling_mode("floating"), TilingMode::Floating);
+        assert_eq!(parse_tiling_mode("popup"), TilingMode::Popup);
         assert_eq!(parse_tiling_mode("unknown"), TilingMode::Floating);
     }
 

@@ -90,5 +90,6 @@ fn tiling_mode_str(mode: TilingMode) -> &'static str {
         TilingMode::Vsplit => "Vsplit",
         TilingMode::Hsplit => "Hsplit",
         TilingMode::Fullscreen => "Fullscreen",
+        TilingMode::Popup => "Popup",
     }
 }

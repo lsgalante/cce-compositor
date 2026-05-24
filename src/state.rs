@@ -228,6 +228,7 @@ fn parse_tiling_mode_str(s: &str) -> TilingMode {
         "Hsplit" => TilingMode::Hsplit,
         "Fullscreen" => TilingMode::Fullscreen,
         "Floating" => TilingMode::Floating,
+        "Popup" => TilingMode::Popup,
         _ => TilingMode::Cascade,
     }
 }

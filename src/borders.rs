@@ -84,7 +84,10 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             state.layout.border_b,
         );
 
-        let (r, g, b, a) = if is_focused {
+        let (r, g, b, a) = if win.tiling_mode == TilingMode::Popup {
+            // Popup windows have a transparent border
+            (0, 0, 0, 0)
+        } else if is_focused {
             // Focused window: pure border color
             (
                 state.layout.border_r,
@@ -119,6 +122,7 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             TilingMode::Vsplit => state.layout.vsplit_border_width,
             TilingMode::Hsplit => state.layout.hsplit_border_width,
             TilingMode::Floating => state.layout.floating_border_width,
+            TilingMode::Popup => state.layout.border_width,
         };
 
         if win.app_id.as_deref() == Some("clear-status-interface") {

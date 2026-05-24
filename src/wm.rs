@@ -361,14 +361,14 @@ fn compute_tiling(
                 let fbw = wm.layout.floating_border_width;
                 let fw = if win.width > 0 {
                     win.width
-                } else if win.hint_min_width > 0 {
+                } else if win.hint_min_width > 32 {
                     win.hint_min_width
                 } else {
                     screen_w * 2 / 3
                 };
                 let fh = if win.height > 0 {
                     win.height
-                } else if win.hint_min_height > 0 {
+                } else if win.hint_min_height > 32 {
                     win.hint_min_height
                 } else {
                     screen_h * 2 / 3
@@ -384,6 +384,25 @@ fn compute_tiling(
                     gap_left + fbw + bar_height + gap_top + cascade_offset * idx_floating
                 };
                 idx_floating += 1;
+                (fx, fy, fw, fh)
+            }
+            TilingMode::Popup => {
+                let fw = if win.width > 0 {
+                    win.width
+                } else if win.hint_min_width > 32 {
+                    win.hint_min_width
+                } else {
+                    360
+                };
+                let fh = if win.height > 0 {
+                    win.height
+                } else if win.hint_min_height > 32 {
+                    win.hint_min_height
+                } else {
+                    100
+                };
+                let fx = screen_w - fw - gap_right;
+                let fy = bar_height + gap_top;
                 (fx, fy, fw, fh)
             }
         };

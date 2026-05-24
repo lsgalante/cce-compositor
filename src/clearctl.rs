@@ -8,36 +8,48 @@ use std::process;
 
 const SOCKET_PATH: &str = "/tmp/clearwm.sock";
 
-fn usage(name: &str) {
-    eprintln!("usage: {} <command> [args...]", name);
-    eprintln!();
-    eprintln!("commands:");
-    eprintln!("  layout <gap|gap_top|gap_left|gap_right|gap_bottom|offset|bar_height|border_width|fullscreen_border_width|border_color> <value>");
-    eprintln!("  view <1-4>");
-    eprintln!("  toggle <1-4>");
-    eprintln!("  close");
-    eprintln!("  focus-next");
-    eprintln!("  windows");
-    eprintln!("  exit");
-    eprintln!("  restart");
-    eprintln!("  reload");
-    eprintln!("  repeat <rate> <delay>");
-    eprintln!("  config-done");
-    eprintln!("  spawn <command>");
-    eprintln!("  notify <title> [body]");
-    eprintln!("  bind <mods> <keysym> <action> [args...]");
-    eprintln!("  pbind <mods> <button> <action>");
-    eprintln!("  retile");
-    eprintln!("  set-tag <1-4>");
-    eprintln!("  mode <cascade|grid|vsplit|hsplit|fullscreen|floating> <app_id> [title]");
-    eprintln!("  tag-layout <1-4> <cascade|grid|vsplit|hsplit|fullscreen|floating>");
+fn usage(name: &str, to_stderr: bool) {
+    let print = |s: &str| {
+        if to_stderr {
+            eprintln!("{}", s);
+        } else {
+            println!("{}", s);
+        }
+    };
+    print(&format!("usage: {} <command> [args...]", name));
+    print("");
+    print("commands:");
+    print("  layout <gap|gap_top|gap_left|gap_right|gap_bottom|offset|bar_height|border_width|fullscreen_border_width|border_color> <value>");
+    print("  view <1-4>");
+    print("  toggle <1-4>");
+    print("  close");
+    print("  focus-next");
+    print("  windows");
+    print("  exit");
+    print("  restart");
+    print("  reload");
+    print("  repeat <rate> <delay>");
+    print("  config-done");
+    print("  spawn <command>");
+    print("  notify <title> [body]");
+    print("  bind <mods> <keysym> <action> [args...]");
+    print("  pbind <mods> <button> <action>");
+    print("  retile");
+    print("  set-tag <1-4>");
+    print("  mode <cascade|grid|vsplit|hsplit|fullscreen|floating|popup> <app_id> [title]");
+    print("  tag-layout <1-4> <cascade|grid|vsplit|hsplit|fullscreen|floating|popup>");
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        usage(&args[0]);
+        usage(&args[0], true);
         process::exit(1);
+    }
+
+    if args[1] == "--help" || args[1] == "-h" || args[1] == "help" {
+        usage(&args[0], false);
+        return;
     }
 
     // Special case: "windows" reads the status file directly
