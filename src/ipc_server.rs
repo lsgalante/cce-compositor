@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
 
@@ -78,6 +78,8 @@ fn ipc_server_main(tx: mpsc::Sender<String>, pipe_write: libc::c_int) {
                         }
                     }
                     if sent {
+                        let _ = stream.write_all(b"ok\n");
+                        dead.push(i);
                         unsafe {
                             libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
                         }

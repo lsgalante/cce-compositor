@@ -91,7 +91,9 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
                             .collect();
                         seat.focused_window_id = visible_ids.last().copied();
                     }
+                    state.needs_render = true;
                     state.needs_focus = true;
+                    state.needs_status_update = true;
                 }
             }
         }
@@ -124,6 +126,8 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
                         }
                         state.needs_focus = true;
                     }
+                    state.needs_render = true;
+                    state.needs_status_update = true;
                 }
             }
         }
@@ -400,6 +404,8 @@ fn handle_set_mode_command(rest: &str, state: &mut WindowManager) {
             let win_title = window.title.as_deref().unwrap_or("Window");
             crate::config::show_notification("clearwm", &format!("Tiling mode set to {} for: {}", mode.as_str(), win_title));
         }
+        state.needs_render = true;
+        state.needs_status_update = true;
     }
 }
 
@@ -475,6 +481,8 @@ fn handle_tag_layout_command(rest: &str, state: &mut WindowManager) {
             if state.notifications_enable {
                 crate::config::show_notification("clearwm", &format!("Tag {} layout set to {}", tag, mode.as_str()));
             }
+            state.needs_render = true;
+            state.needs_status_update = true;
         }
     }
 }
@@ -512,6 +520,8 @@ fn handle_set_tag_command(rest: &str, state: &mut WindowManager) {
                     }
                     state.needs_focus = true;
                 }
+                state.needs_render = true;
+                state.needs_status_update = true;
             }
         }
     }

@@ -2596,6 +2596,7 @@ impl Dispatch<RiverLibinputConfigV1, ()> for AppState {
                     tap_finger_count: -1, // not yet received
                     tap_info_received: false,
                 });
+                state.wm.tap_config_applied = false;
             }
             river_libinput_config_v1::Event::Finished => {}
             _ => {}
@@ -2608,22 +2609,20 @@ impl Dispatch<RiverLibinputConfigV1, ()> for AppState {
 impl Dispatch<RiverLibinputDeviceV1, ()> for AppState {
     fn event(
         state: &mut Self,
-        _proxy: &RiverLibinputDeviceV1,
+        proxy: &RiverLibinputDeviceV1,
         event: river_libinput_device_v1::Event,
         _data: &(),
         _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
+        qhandle: &QueueHandle<Self>,
     ) {
         match event {
             river_libinput_device_v1::Event::TapSupport { finger_count } => {
-                if let Some(dev) = state.libinput_devices.last_mut() {
+                if let Some(dev) = state.libinput_devices.iter_mut().find(|d| d.device.id().protocol_id() == proxy.id().protocol_id()) {
                     dev.tap_finger_count = finger_count;
                     eprintln!("[libinput] tap support: {} fingers", finger_count);
                 }
-                // Don't apply tap config here — devices arrive one at a time.
-                // If we apply after the first device (which may not support tap),
-                // tap_config_applied gets set too early and we miss the touchpad.
-                // Instead, apply in RenderStart after all devices have been discovered.
+                // Apply tap config directly when info is received, in case we are waking up
+                crate::wayland::apply_tap_config(state, qhandle);
             }
             river_libinput_device_v1::Event::TapDefault { state: tap_state } => {
                 let _ = tap_state;
@@ -2635,6 +2634,8 @@ impl Dispatch<RiverLibinputDeviceV1, ()> for AppState {
             }
             river_libinput_device_v1::Event::Removed => {
                 eprintln!("[libinput] device removed");
+                state.libinput_devices.retain(|d| d.device.id().protocol_id() != proxy.id().protocol_id());
+                state.wm.tap_config_applied = false;
             }
             _ => {}
         }
