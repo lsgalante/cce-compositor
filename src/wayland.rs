@@ -159,10 +159,17 @@ pub struct LibinputDeviceInfo {
     pub device: RiverLibinputDeviceV1,
     /// Device name (from the river_input_device_v1 name event)
     pub name: String,
+    pub input_device: Option<RiverInputDeviceV1>,
+    pub name_received: bool,
     /// Number of fingers supported for tap (0 = unsupported)
     pub tap_finger_count: i32,
     /// Whether we've received enough events to apply tap config
     pub tap_info_received: bool,
+    pub accel_profiles_support: Option<u32>,
+    pub natural_scroll_supported: Option<bool>,
+    pub dwt_supported: Option<bool>,
+    pub dwtp_supported: Option<bool>,
+    pub config_applied: bool,
 }
 
 /// Tracked info for a wlr-output-management head.
@@ -678,7 +685,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                         .wm
                         .windows
                         .iter()
-                        .filter(|w| w.is_new && !w.closed && (w.tags & active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface") && w.app_id.as_deref() != Some("clear-notifier"))
+                        .filter(|w| w.is_new && !w.closed && (w.tags & active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface") && w.app_id.as_deref() != Some("clear-notification-daemon"))
                         .map(|w| w.id)
                         .last();
                     if let Some(new_id) = new_focused_id {
@@ -912,9 +919,9 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     state.wm.needs_status_update = false;
                 }
 
-                // Re-apply tap-to-click config if it was changed via IPC
+                // Re-apply input config if it was changed via IPC
                 if !state.wm.tap_config_applied && !state.libinput_devices.is_empty() {
-                    crate::wayland::apply_tap_config(state, qhandle);
+                    crate::wayland::apply_input_config(state, qhandle);
                 }
             }
 
@@ -1543,11 +1550,11 @@ impl Dispatch<RiverInputManagerV1, ()> for AppState {
 impl Dispatch<RiverInputDeviceV1, ()> for AppState {
     fn event(
         state: &mut Self,
-        _proxy: &RiverInputDeviceV1,
+        proxy: &RiverInputDeviceV1,
         event: river_input_device_v1::Event,
         _data: &(),
         _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
+        qhandle: &QueueHandle<Self>,
     ) {
         match event {
             river_input_device_v1::Event::Type { _type: dev_type } => {
@@ -1561,6 +1568,18 @@ impl Dispatch<RiverInputDeviceV1, ()> for AppState {
             }
             river_input_device_v1::Event::Name { name } => {
                 eprintln!("input_device name: {}", name);
+                if let Some(dev) = state.libinput_devices.iter_mut().find(|d| {
+                    if let Some(ref id) = d.input_device {
+                        id.id().protocol_id() == proxy.id().protocol_id()
+                    } else {
+                        false
+                    }
+                }) {
+                    dev.name = name.clone();
+                    dev.name_received = true;
+                    eprintln!("[libinput] associated name \"{}\" with device", name);
+                }
+                crate::wayland::apply_input_config(state, qhandle);
             }
             river_input_device_v1::Event::Removed => {}
             _ => {}
@@ -2593,8 +2612,15 @@ impl Dispatch<RiverLibinputConfigV1, ()> for AppState {
                 state.libinput_devices.push(LibinputDeviceInfo {
                     device,
                     name: String::new(),
+                    input_device: None,
+                    name_received: false,
                     tap_finger_count: -1, // not yet received
                     tap_info_received: false,
+                    accel_profiles_support: None,
+                    natural_scroll_supported: None,
+                    dwt_supported: None,
+                    dwtp_supported: None,
+                    config_applied: false,
                 });
                 state.wm.tap_config_applied = false;
             }
@@ -2616,21 +2642,45 @@ impl Dispatch<RiverLibinputDeviceV1, ()> for AppState {
         qhandle: &QueueHandle<Self>,
     ) {
         match event {
+            river_libinput_device_v1::Event::InputDevice { device } => {
+                if let Some(dev) = state.libinput_devices.iter_mut().find(|d| d.device.id().protocol_id() == proxy.id().protocol_id()) {
+                    dev.input_device = Some(device);
+                }
+            }
             river_libinput_device_v1::Event::TapSupport { finger_count } => {
                 if let Some(dev) = state.libinput_devices.iter_mut().find(|d| d.device.id().protocol_id() == proxy.id().protocol_id()) {
                     dev.tap_finger_count = finger_count;
                     eprintln!("[libinput] tap support: {} fingers", finger_count);
                 }
-                // Apply tap config directly when info is received, in case we are waking up
-                crate::wayland::apply_tap_config(state, qhandle);
+                crate::wayland::apply_input_config(state, qhandle);
             }
-            river_libinput_device_v1::Event::TapDefault { state: tap_state } => {
-                let _ = tap_state;
-                eprintln!("[libinput] tap default received");
+            river_libinput_device_v1::Event::AccelProfilesSupport { profiles } => {
+                if let Some(dev) = state.libinput_devices.iter_mut().find(|d| d.device.id().protocol_id() == proxy.id().protocol_id()) {
+                    dev.accel_profiles_support = Some(profiles.into());
+                    eprintln!("[libinput] accel profiles support: {:?}", profiles);
+                }
+                crate::wayland::apply_input_config(state, qhandle);
             }
-            river_libinput_device_v1::Event::TapCurrent { state: tap_state } => {
-                let _ = tap_state;
-                eprintln!("[libinput] tap current received");
+            river_libinput_device_v1::Event::NaturalScrollSupport { supported } => {
+                if let Some(dev) = state.libinput_devices.iter_mut().find(|d| d.device.id().protocol_id() == proxy.id().protocol_id()) {
+                    dev.natural_scroll_supported = Some(supported != 0);
+                    eprintln!("[libinput] natural scroll support: {}", supported != 0);
+                }
+                crate::wayland::apply_input_config(state, qhandle);
+            }
+            river_libinput_device_v1::Event::DwtSupport { supported } => {
+                if let Some(dev) = state.libinput_devices.iter_mut().find(|d| d.device.id().protocol_id() == proxy.id().protocol_id()) {
+                    dev.dwt_supported = Some(supported != 0);
+                    eprintln!("[libinput] dwt support: {}", supported != 0);
+                }
+                crate::wayland::apply_input_config(state, qhandle);
+            }
+            river_libinput_device_v1::Event::DwtpSupport { supported } => {
+                if let Some(dev) = state.libinput_devices.iter_mut().find(|d| d.device.id().protocol_id() == proxy.id().protocol_id()) {
+                    dev.dwtp_supported = Some(supported != 0);
+                    eprintln!("[libinput] dwtp support: {}", supported != 0);
+                }
+                crate::wayland::apply_input_config(state, qhandle);
             }
             river_libinput_device_v1::Event::Removed => {
                 eprintln!("[libinput] device removed");
@@ -2667,55 +2717,137 @@ impl Dispatch<RiverLibinputResultV1, ()> for AppState {
     }
 }
 
-/// Apply tap-to-click configuration to all libinput devices that support it.
-/// Called after device events arrive and after config changes.
-pub fn apply_tap_config(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
+/// Apply input configuration to all libinput devices that support it.
+pub fn apply_input_config(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
     if state.wm.tap_config_applied {
         return;
     }
 
-    // Wait until ALL discovered devices have received their tap_support event.
-    // Devices arrive one at a time; if we mark tap_config_applied after only
-    // the first device (which may not support tap), we'll miss the touchpad.
-    let all_info_received = state.libinput_devices.iter().all(|d| d.tap_finger_count >= 0);
+    // Wait until ALL discovered devices have received their name and support events.
+    let all_info_received = state.libinput_devices.iter().all(|d| {
+        d.name_received &&
+        d.tap_finger_count >= 0 &&
+        d.accel_profiles_support.is_some() &&
+        d.natural_scroll_supported.is_some() &&
+        d.dwt_supported.is_some() &&
+        d.dwtp_supported.is_some()
+    });
     if !all_info_received {
         return;
     }
 
-    let tap_to_click = state.wm.tap_to_click;
+    // Reset config_applied for all devices to force setting them
+    for dev_info in &mut state.libinput_devices {
+        dev_info.config_applied = false;
+    }
 
     for dev_info in &mut state.libinput_devices {
-        if dev_info.tap_info_received {
-            continue; // Already applied to this device
-        }
-        if dev_info.tap_finger_count == 0 {
-            // Device doesn't support tap-to-click
-            dev_info.tap_info_received = true;
+        if dev_info.config_applied {
             continue;
         }
 
-        // Device supports tap — apply config
-        let tap_state = if tap_to_click {
-            river_libinput_device_v1::TapState::Enabled
+        let is_trackpoint = dev_info.name.to_lowercase().contains("trackpoint");
+
+        // 1. Tap to click
+        if dev_info.tap_finger_count > 0 {
+            let tap_state = if state.wm.tap_to_click {
+                river_libinput_device_v1::TapState::Enabled
+            } else {
+                river_libinput_device_v1::TapState::Disabled
+            };
+            eprintln!(
+                "[libinput] setting tap={} on device ({})",
+                if state.wm.tap_to_click { "enabled" } else { "disabled" },
+                &dev_info.name
+            );
+            dev_info.device.set_tap(tap_state, qhandle, ());
+        }
+
+        // 2. Accel speed
+        let speed = if is_trackpoint {
+            state.wm.trackpoint_accel_speed.or(state.wm.accel_speed)
         } else {
-            river_libinput_device_v1::TapState::Disabled
+            state.wm.accel_speed
         };
+        if let Some(s) = speed {
+            let s = s.clamp(-1.0, 1.0);
+            let speed_bytes = s.to_ne_bytes().to_vec();
+            eprintln!("[libinput] setting accel_speed={} on device ({})", s, &dev_info.name);
+            dev_info.device.set_accel_speed(speed_bytes, qhandle, ());
+        }
 
-        eprintln!(
-            "[libinput] setting tap={} on device ({})",
-            if tap_to_click { "enabled" } else { "disabled" },
-            if dev_info.name.is_empty() { "unnamed" } else { &dev_info.name }
-        );
+        // 3. Accel profile
+        let profile_str = if is_trackpoint {
+            state.wm.trackpoint_accel_profile.as_ref().or(state.wm.accel_profile.as_ref())
+        } else {
+            state.wm.accel_profile.as_ref()
+        };
+        if let Some(profile_name) = profile_str {
+            let profile = match profile_name.as_str() {
+                "flat" => Some(river_libinput_device_v1::AccelProfile::Flat),
+                "adaptive" => Some(river_libinput_device_v1::AccelProfile::Adaptive),
+                "none" => Some(river_libinput_device_v1::AccelProfile::None),
+                "custom" => Some(river_libinput_device_v1::AccelProfile::Custom),
+                _ => None,
+            };
+            if let Some(p) = profile {
+                eprintln!("[libinput] setting accel_profile={:?} on device ({})", p, &dev_info.name);
+                dev_info.device.set_accel_profile(p, qhandle, ());
+            }
+        }
 
-        dev_info.device.set_tap(tap_state, qhandle, ());
-        dev_info.tap_info_received = true;
+        // 4. Natural scroll
+        if let Some(supported) = dev_info.natural_scroll_supported {
+            if supported {
+                if let Some(natural) = state.wm.natural_scroll {
+                    let ns_state = if natural {
+                        river_libinput_device_v1::NaturalScrollState::Enabled
+                    } else {
+                        river_libinput_device_v1::NaturalScrollState::Disabled
+                    };
+                    eprintln!("[libinput] setting natural_scroll={} on device ({})", natural, &dev_info.name);
+                    dev_info.device.set_natural_scroll(ns_state, qhandle, ());
+                }
+            }
+        }
+
+        // 5. Disable while typing (dwt)
+        if let Some(supported) = dev_info.dwt_supported {
+            if supported {
+                if let Some(dwt) = state.wm.dwt {
+                    let dwt_state = if dwt {
+                        river_libinput_device_v1::DwtState::Enabled
+                    } else {
+                        river_libinput_device_v1::DwtState::Disabled
+                    };
+                    eprintln!("[libinput] setting dwt={} on device ({})", dwt, &dev_info.name);
+                    dev_info.device.set_dwt(dwt_state, qhandle, ());
+                }
+            }
+        }
+
+        // 6. Disable while trackpointing (dwtp)
+        if let Some(supported) = dev_info.dwtp_supported {
+            if supported {
+                if let Some(dwtp) = state.wm.dwtp {
+                    let dwtp_state = if dwtp {
+                        river_libinput_device_v1::DwtpState::Enabled
+                    } else {
+                        river_libinput_device_v1::DwtpState::Disabled
+                    };
+                    eprintln!("[libinput] setting dwtp={} on device ({})", dwtp, &dev_info.name);
+                    dev_info.device.set_dwtp(dwtp_state, qhandle, ());
+                }
+            }
+        }
+
+        dev_info.config_applied = true;
     }
 
-    // Only mark as fully applied once all devices have been configured
-    let all_done = state.libinput_devices.iter().all(|d| d.tap_info_received);
+    let all_done = state.libinput_devices.iter().all(|d| d.config_applied);
     if all_done && !state.libinput_devices.is_empty() {
         state.wm.tap_config_applied = true;
-        eprintln!("[libinput] tap config applied to all devices");
+        eprintln!("[libinput] all input configurations applied to all devices");
     }
 }
 

@@ -328,6 +328,13 @@ pub struct WindowManager {
     pub state_restore_attempts: u8,
     /// Whether tap-to-click is enabled on touchpad devices
     pub tap_to_click: bool,
+    pub accel_speed: Option<f64>,
+    pub accel_profile: Option<String>,
+    pub natural_scroll: Option<bool>,
+    pub dwt: Option<bool>,
+    pub dwtp: Option<bool>,
+    pub trackpoint_accel_speed: Option<f64>,
+    pub trackpoint_accel_profile: Option<String>,
     /// Whether tap-to-click config has been applied to libinput devices yet
     pub tap_config_applied: bool,
     /// Whether system notifications are enabled
@@ -366,6 +373,13 @@ impl Default for WindowManager {
             needs_state_restore: true,
             state_restore_attempts: 0,
             tap_to_click: false,
+            accel_speed: None,
+            accel_profile: None,
+            natural_scroll: None,
+            dwt: None,
+            dwtp: None,
+            trackpoint_accel_speed: None,
+            trackpoint_accel_profile: None,
             tap_config_applied: false,
             notifications_enable: true,
             reload_commands: Vec::new(),

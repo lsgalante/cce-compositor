@@ -202,6 +202,7 @@ pub fn wm_reload(state: &mut WindowManager) {
 
     // Mark status for update after reload
     state.needs_status_update = true;
+    state.tap_config_applied = false;
 
     // Clear mode rules
     state.mode_rules.clear();

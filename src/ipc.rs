@@ -568,6 +568,125 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 );
             }
         }
+        "accel-speed" | "accel_speed" => {
+            if let Ok(val) = value_str.parse::<f64>() {
+                state.accel_speed = Some(val);
+                state.tap_config_applied = false;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Acceleration speed set to {}", val));
+                }
+            }
+        }
+        "accel-profile" | "accel_profile" => {
+            let val = value_str.trim().to_string();
+            if !val.is_empty() {
+                state.accel_profile = Some(val.clone());
+                state.tap_config_applied = false;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Acceleration profile set to {}", val));
+                }
+            }
+        }
+        "natural-scroll" | "natural_scroll" => {
+            let old_val = state.natural_scroll;
+            match value_str {
+                "true" | "1" | "enabled" => {
+                    state.natural_scroll = Some(true);
+                }
+                "false" | "0" | "disabled" => {
+                    state.natural_scroll = Some(false);
+                }
+                "toggle" => {
+                    state.natural_scroll = Some(!state.natural_scroll.unwrap_or(false));
+                }
+                _ => {}
+            }
+            if state.natural_scroll != old_val {
+                state.tap_config_applied = false;
+                if state.notifications_enable {
+                    crate::config::show_notification(
+                        "clearwm",
+                        &format!(
+                            "Natural scroll {}",
+                            if state.natural_scroll.unwrap_or(false) { "enabled" } else { "disabled" }
+                        ),
+                    );
+                }
+            }
+        }
+        "dwt" => {
+            let old_val = state.dwt;
+            match value_str {
+                "true" | "1" | "enabled" => {
+                    state.dwt = Some(true);
+                }
+                "false" | "0" | "disabled" => {
+                    state.dwt = Some(false);
+                }
+                "toggle" => {
+                    state.dwt = Some(!state.dwt.unwrap_or(false));
+                }
+                _ => {}
+            }
+            if state.dwt != old_val {
+                state.tap_config_applied = false;
+                if state.notifications_enable {
+                    crate::config::show_notification(
+                        "clearwm",
+                        &format!(
+                            "Disable-while-typing {}",
+                            if state.dwt.unwrap_or(false) { "enabled" } else { "disabled" }
+                        ),
+                    );
+                }
+            }
+        }
+        "dwtp" => {
+            let old_val = state.dwtp;
+            match value_str {
+                "true" | "1" | "enabled" => {
+                    state.dwtp = Some(true);
+                }
+                "false" | "0" | "disabled" => {
+                    state.dwtp = Some(false);
+                }
+                "toggle" => {
+                    state.dwtp = Some(!state.dwtp.unwrap_or(false));
+                }
+                _ => {}
+            }
+            if state.dwtp != old_val {
+                state.tap_config_applied = false;
+                if state.notifications_enable {
+                    crate::config::show_notification(
+                        "clearwm",
+                        &format!(
+                            "Disable-while-trackpointing {}",
+                            if state.dwtp.unwrap_or(false) { "enabled" } else { "disabled" }
+                        ),
+                    );
+                }
+            }
+        }
+        "trackpoint-accel-speed" | "trackpoint_accel_speed" => {
+            if let Ok(val) = value_str.parse::<f64>() {
+                state.trackpoint_accel_speed = Some(val);
+                state.tap_config_applied = false;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Trackpoint acceleration speed set to {}", val));
+                }
+            }
+        }
+        "trackpoint-accel-profile" | "trackpoint_accel_profile" => {
+            let val = value_str.trim().to_string();
+            if !val.is_empty() {
+                state.trackpoint_accel_profile = Some(val.clone());
+                state.tap_config_applied = false;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Trackpoint acceleration profile set to {}", val));
+                }
+            }
+        }
         _ => {}
     }
 }

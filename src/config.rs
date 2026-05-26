@@ -168,6 +168,13 @@ pub struct RepeatConfig {
 pub struct InputConfig {
     #[serde(default)]
     pub tap_to_click: bool,
+    pub accel_speed: Option<f64>,
+    pub accel_profile: Option<String>,
+    pub natural_scroll: Option<bool>,
+    pub dwt: Option<bool>,
+    pub dwtp: Option<bool>,
+    pub trackpoint_accel_speed: Option<f64>,
+    pub trackpoint_accel_profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,6 +390,14 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
     // The tap config will be applied when libinput devices are discovered
     // (in the RiverLibinputDeviceV1 TapSupport event handler).
     state.tap_to_click = config.input.tap_to_click;
+    state.accel_speed = config.input.accel_speed;
+    state.accel_profile = config.input.accel_profile.clone();
+    state.natural_scroll = config.input.natural_scroll;
+    state.dwt = config.input.dwt;
+    state.dwtp = config.input.dwtp;
+    state.trackpoint_accel_speed = config.input.trackpoint_accel_speed;
+    state.trackpoint_accel_profile = config.input.trackpoint_accel_profile.clone();
+    state.tap_config_applied = false;
 
     // [notifications]
     state.notifications_enable = config.notifications.enable;
@@ -647,14 +662,14 @@ once = true
     fn test_reload_entry_format() {
         let toml_str = r#"
 [[reload]]
-exec = "pkill clear-input-manager"
+exec = "pkill clear-input-daemon"
 
 [[reload]]
 exec = "echo reloaded"
 "#;
         let config: Config = toml::from_str(toml_str).expect("TOML parse failed");
         assert_eq!(config.reload.len(), 2);
-        assert_eq!(config.reload[0].exec, "pkill clear-input-manager");
+        assert_eq!(config.reload[0].exec, "pkill clear-input-daemon");
         assert_eq!(config.reload[1].exec, "echo reloaded");
 
         // Also test integration via parse_config (we can write to a temporary file in /tmp or mock it,
@@ -668,7 +683,7 @@ exec = "echo reloaded"
 
         parse_res.unwrap();
         assert_eq!(wm.reload_commands.len(), 2);
-        assert_eq!(wm.reload_commands[0], "pkill clear-input-manager");
+        assert_eq!(wm.reload_commands[0], "pkill clear-input-daemon");
         assert_eq!(wm.reload_commands[1], "echo reloaded");
     }
 }
