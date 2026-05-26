@@ -320,7 +320,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 }
             }
         }
-        "border_color" => {
+        "border_color" | "high_color" => {
             if let Some((r, g, b, a)) = parse_hex_color(value_str) {
                 state.layout.border_r = r;
                 state.layout.border_g = g;
@@ -331,7 +331,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 }
             }
         }
-        "background_color" => {
+        "background_color" | "low_color" => {
             if let Some((r, g, b, a)) = parse_hex_color(value_str) {
                 state.layout.background_r = r;
                 state.layout.background_g = g;

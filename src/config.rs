@@ -74,9 +74,9 @@ pub struct LayoutConfig {
     pub hsplit_border_width: i64,
     #[serde(default = "default_floating_border_width")]
     pub floating_border_width: i64,
-    #[serde(default = "default_border_color")]
+    #[serde(default = "default_border_color", alias = "high_color")]
     pub border_color: String,
-    #[serde(default = "default_background_color")]
+    #[serde(default = "default_background_color", alias = "low_color")]
     pub background_color: String,
 }
 
@@ -228,6 +228,7 @@ pub struct StartupEntryConfig {
     pub exec: String,
     #[serde(default)]
     pub once: bool,
+    pub restart: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -386,15 +387,38 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
     );
     for (i, entry) in config.startup.iter().enumerate() {
         let name = extract_program_name(&entry.exec);
-        if entry.once && !cold_start {
+        let should_restart = entry.restart.unwrap_or(false);
+
+        if entry.once && !cold_start && !should_restart {
             eprintln!(
                 "[config] startup[{}]: exec=\"{}\" once=true → skipped (not cold start)",
                 i, entry.exec
             );
             continue;
         }
+
         let running = process_running(&name);
-        if running {
+        if should_restart && running {
+            eprintln!(
+                "[config] startup[{}]: exec=\"{}\" restart=true → killing existing process {}",
+                i, entry.exec, name
+            );
+            let mut pkill_cmd = std::process::Command::new("pkill");
+            if name.len() > 15 {
+                pkill_cmd.arg("-f").arg(&name);
+            } else {
+                pkill_cmd.arg("-x").arg(&name);
+            }
+            match pkill_cmd.status() {
+                Ok(status) => {
+                    eprintln!("[config] pkill status: {}", status);
+                }
+                Err(e) => {
+                    eprintln!("[config] failed to execute pkill: {:?}", e);
+                }
+            }
+            state.pending_startup_apps.push(entry.exec.clone());
+        } else if running {
             eprintln!("[config] startup[{}]: exec=\"{}\" once={} → skipped (already running, pgrep -x {})", i, entry.exec, entry.once, name);
         } else {
             eprintln!(
@@ -560,11 +584,13 @@ pub fn spawn_command_bg(cmd: &str) {
     };
 }
 pub fn process_running(name: &str) -> bool {
-    match std::process::Command::new("pgrep")
-        .arg("-x")
-        .arg(name)
-        .output()
-    {
+    let mut cmd = std::process::Command::new("pgrep");
+    if name.len() > 15 {
+        cmd.arg("-f").arg(name);
+    } else {
+        cmd.arg("-x").arg(name);
+    }
+    match cmd.output() {
         Ok(output) => output.status.success(),
         Err(_) => false,
     }
@@ -696,13 +722,21 @@ exec = "waybar"
 [[startup]]
 exec = "fuzzel"
 once = true
+
+[[startup]]
+exec = "clear-system-interface"
+once = true
+restart = true
 "#;
         let config: Config = toml::from_str(toml_str).expect("TOML parse failed");
-        assert_eq!(config.startup.len(), 2);
+        assert_eq!(config.startup.len(), 3);
         assert_eq!(config.startup[0].exec, "waybar");
         assert!(!config.startup[0].once);
         assert_eq!(config.startup[1].exec, "fuzzel");
         assert!(config.startup[1].once);
+        assert_eq!(config.startup[2].exec, "clear-system-interface");
+        assert!(config.startup[2].once);
+        assert_eq!(config.startup[2].restart, Some(true));
         assert_eq!(config.env.get("XDG_CURRENT_DESKTOP").unwrap(), "river");
     }
 
