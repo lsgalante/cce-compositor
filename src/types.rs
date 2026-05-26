@@ -341,6 +341,8 @@ pub struct WindowManager {
     pub notifications_enable: bool,
     /// Reload commands to execute on configuration reload
     pub reload_commands: Vec<String>,
+    pub input_controller: Option<tokio::sync::mpsc::UnboundedSender<(crate::config::InertialConfig, bool)>>,
+    pub trackpad_disabled: bool,
 }
 
 impl Default for WindowManager {
@@ -383,6 +385,8 @@ impl Default for WindowManager {
             tap_config_applied: false,
             notifications_enable: true,
             reload_commands: Vec::new(),
+            input_controller: None,
+            trackpad_disabled: false,
         }
     }
 }

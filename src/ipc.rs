@@ -668,6 +668,21 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 }
             }
         }
+        "trackpad-disabled" | "trackpad_disabled" => {
+            let old_val = state.trackpad_disabled;
+            match value_str {
+                "true" | "1" | "enabled" => {
+                    state.trackpad_disabled = true;
+                }
+                "false" | "0" | "disabled" => {
+                    state.trackpad_disabled = false;
+                }
+                _ => {}
+            }
+            if state.trackpad_disabled != old_val {
+                state.tap_config_applied = false;
+            }
+        }
         "trackpoint-accel-speed" | "trackpoint_accel_speed" => {
             if let Ok(val) = value_str.parse::<f64>() {
                 state.trackpoint_accel_speed = Some(val);

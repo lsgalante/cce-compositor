@@ -152,6 +152,7 @@ pub struct AppState {
     pub libinput_devices: Vec<LibinputDeviceInfo>,
     /// The surface the pointer is currently hovering over
     pub pointer_hovered_surface: Option<wl_surface::WlSurface>,
+    pub input_device_names: std::collections::HashMap<u32, String>,
 }
 
 /// Info tracked for each libinput device discovered via river_libinput_config_v1
@@ -212,6 +213,7 @@ impl AppState {
             libinput_config: None,
             libinput_devices: Vec::new(),
             pointer_hovered_surface: None,
+            input_device_names: std::collections::HashMap::new(),
         }
     }
 
@@ -1568,6 +1570,7 @@ impl Dispatch<RiverInputDeviceV1, ()> for AppState {
             }
             river_input_device_v1::Event::Name { name } => {
                 eprintln!("input_device name: {}", name);
+                state.input_device_names.insert(proxy.id().protocol_id(), name.clone());
                 if let Some(dev) = state.libinput_devices.iter_mut().find(|d| {
                     if let Some(ref id) = d.input_device {
                         id.id().protocol_id() == proxy.id().protocol_id()
@@ -2644,8 +2647,15 @@ impl Dispatch<RiverLibinputDeviceV1, ()> for AppState {
         match event {
             river_libinput_device_v1::Event::InputDevice { device } => {
                 if let Some(dev) = state.libinput_devices.iter_mut().find(|d| d.device.id().protocol_id() == proxy.id().protocol_id()) {
-                    dev.input_device = Some(device);
+                    dev.input_device = Some(device.clone());
+                    let dev_id = device.id().protocol_id();
+                    if let Some(name) = state.input_device_names.get(&dev_id) {
+                        dev.name = name.clone();
+                        dev.name_received = true;
+                        eprintln!("[libinput] associated name \"{}\" with device on InputDevice event", name);
+                    }
                 }
+                crate::wayland::apply_input_config(state, qhandle);
             }
             river_libinput_device_v1::Event::TapSupport { finger_count } => {
                 if let Some(dev) = state.libinput_devices.iter_mut().find(|d| d.device.id().protocol_id() == proxy.id().protocol_id()) {
@@ -2840,6 +2850,18 @@ pub fn apply_input_config(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 }
             }
         }
+        // 7. Send events (enable/disable trackpad)
+        let is_touchpad = dev_info.name.to_lowercase().contains("touchpad");
+        let send_events_mode = if state.wm.trackpad_disabled && is_touchpad {
+            river_libinput_device_v1::SendEventsModes::Disabled
+        } else {
+            river_libinput_device_v1::SendEventsModes::Enabled
+        };
+        eprintln!(
+            "[libinput] setting send_events={:?} on device ({})",
+            send_events_mode, &dev_info.name
+        );
+        dev_info.device.set_send_events(send_events_mode, qhandle, ());
 
         dev_info.config_applied = true;
     }

@@ -6,10 +6,12 @@ pub const IPC_SOCKET_PATH: &str = "/tmp/clearwm.sock";
 
 pub struct IpcReceiver {
     pub rx: mpsc::Receiver<String>,
+    pub tx: mpsc::Sender<String>,
 }
 
 pub fn spawn_ipc_server(pipe_write: libc::c_int) -> IpcReceiver {
     let (tx, rx) = mpsc::channel::<String>();
+    let tx_clone = tx.clone();
 
     std::thread::Builder::new()
         .name("clearwm-ipc".into())
@@ -18,7 +20,7 @@ pub fn spawn_ipc_server(pipe_write: libc::c_int) -> IpcReceiver {
         })
         .expect("failed to spawn IPC server thread");
 
-    IpcReceiver { rx }
+    IpcReceiver { rx, tx: tx_clone }
 }
 
 fn ipc_server_main(tx: mpsc::Sender<String>, pipe_write: libc::c_int) {

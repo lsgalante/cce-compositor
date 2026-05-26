@@ -96,7 +96,25 @@ fn main() {
     let pipe_write = pipe_fds[1];
 
     // Start the IPC server thread (for clearctl and clear-system-interface)
-    let ipc_rx = ipc_server::spawn_ipc_server(pipe_write).rx;
+    let ipc_server = ipc_server::spawn_ipc_server(pipe_write);
+    let ipc_rx = ipc_server.rx;
+    let ipc_tx = ipc_server.tx;
+
+    // Setup channel for configuration updates:
+    let (config_tx, config_rx) = tokio::sync::mpsc::unbounded_channel::<(clearwm::config::InertialConfig, bool)>();
+    state.wm.input_controller = Some(config_tx);
+
+    // Spawn the input subsystem background thread:
+    let pipe_write_clone = pipe_write;
+    let ipc_tx_clone = ipc_tx.clone();
+    std::thread::Builder::new()
+        .name("clearwm-input-subsystem".into())
+        .spawn(move || {
+            if let Err(e) = clearwm::input::run_input_daemon(config_rx, ipc_tx_clone, pipe_write_clone) {
+                eprintln!("[input-subsystem] Fatal error: {:?}", e);
+            }
+        })
+        .expect("failed to spawn input subsystem thread");
 
     // Store the status sender in the app state so RenderStart can push updates
     state.status_sender = Some(status_sender);

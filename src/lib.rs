@@ -15,3 +15,5 @@ pub mod types;
 #[allow(unreachable_patterns)] // wayland event match arms use _ => {} for forward-compat
 pub mod wayland;
 pub mod wm;
+pub mod input;
+

@@ -35,6 +35,8 @@ pub struct Config {
     pub notifications: NotificationsConfig,
     #[serde(default)]
     pub reload: Vec<ReloadEntryConfig>,
+    #[serde(default)]
+    pub inertial: Option<InertialConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,6 +178,34 @@ pub struct InputConfig {
     pub trackpoint_accel_speed: Option<f64>,
     pub trackpoint_accel_profile: Option<String>,
 }
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct InertialConfig {
+    #[serde(default = "default_true")]
+    pub inertial_scroll: bool,
+    #[serde(default = "default_scroll_friction")]
+    pub scroll_friction: u16,
+    #[serde(default = "default_false")]
+    pub inertial_pointer: bool,
+    #[serde(default = "default_pointer_friction")]
+    pub pointer_friction: u16,
+    #[serde(default = "default_false")]
+    pub inertial_trackpad: bool,
+    #[serde(default = "default_trackpad_friction")]
+    pub trackpad_friction: u16,
+    #[serde(default = "default_speed")]
+    pub pointer_speed: f64,
+    #[serde(default = "default_speed")]
+    pub scroll_speed: f64,
+    #[serde(default = "default_speed")]
+    pub trackpad_speed: f64,
+}
+
+fn default_scroll_friction() -> u16 { 90 }
+fn default_pointer_friction() -> u16 { 95 }
+fn default_trackpad_friction() -> u16 { 95 }
+fn default_speed() -> f64 { 1.0 }
+fn default_false() -> bool { false }
 
 #[derive(Debug, Deserialize)]
 pub struct NotificationsConfig {
@@ -398,6 +428,24 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
     state.trackpoint_accel_speed = config.input.trackpoint_accel_speed;
     state.trackpoint_accel_profile = config.input.trackpoint_accel_profile.clone();
     state.tap_config_applied = false;
+
+    // Send InertialConfig and tap_to_click state to input subsystem daemon
+    let inertial_cfg = config.inertial.clone().unwrap_or_else(|| {
+        InertialConfig {
+            inertial_scroll: true,
+            scroll_friction: 90,
+            inertial_pointer: false,
+            pointer_friction: 95,
+            inertial_trackpad: false,
+            trackpad_friction: 95,
+            pointer_speed: 1.0,
+            scroll_speed: 1.0,
+            trackpad_speed: 1.0,
+        }
+    });
+    if let Some(ref controller) = state.input_controller {
+        let _ = controller.send((inertial_cfg, config.input.tap_to_click));
+    }
 
     // [notifications]
     state.notifications_enable = config.notifications.enable;
