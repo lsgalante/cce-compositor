@@ -75,6 +75,8 @@ struct SlotState {
     active: bool,
     x: f32,
     y: f32,
+    raw_x: Option<i32>,
+    raw_y: Option<i32>,
 }
 
 fn eviocgabs(abs: u32) -> libc::c_ulong {
@@ -188,8 +190,6 @@ fn write_scroll(file: &mut std::fs::File, dwx: i32, dwy: i32) -> std::io::Result
 }
 
 struct TouchTracker {
-    last_x: Option<i32>,
-    last_y: Option<i32>,
     dx: i32,
     dy: i32,
     finger_down: bool,
@@ -231,13 +231,11 @@ async fn read_device_loop(
     let range_x = (max_x - min_x).max(1) as f32;
     let range_y = (max_y - min_y).max(1) as f32;
 
-    let mut slots = [SlotState::default(); 5];
+    let mut slots = [SlotState::default(); 16];
     let mut current_slot = 0usize;
     let mut buf = [0u8; 24];
 
     let mut touch = TouchTracker {
-        last_x: None,
-        last_y: None,
         dx: 0,
         dy: 0,
         finger_down: false,
@@ -261,30 +259,40 @@ async fn read_device_loop(
         } else if event.type_ == EV_ABS {
             if event.code == ABS_X || event.code == ABS_MT_POSITION_X {
                 let val = event.value;
-                if let Some(lx) = touch.last_x {
-                    touch.dx += val - lx;
+                let slot_idx = if event.code == ABS_X { 0 } else { current_slot };
+                let is_primary = slots.iter().position(|s| s.active) == Some(slot_idx);
+                let slot = &mut slots[slot_idx];
+                if is_primary {
+                    if let Some(lx) = slot.raw_x {
+                        touch.dx += val - lx;
+                    }
                 }
-                touch.last_x = Some(val);
-                slots[current_slot].x = (val - min_x) as f32 / range_x;
+                slot.raw_x = Some(val);
+                slot.x = (val - min_x) as f32 / range_x;
             } else if event.code == ABS_Y || event.code == ABS_MT_POSITION_Y {
                 let val = event.value;
-                if let Some(ly) = touch.last_y {
-                    touch.dy += val - ly;
+                let slot_idx = if event.code == ABS_Y { 0 } else { current_slot };
+                let is_primary = slots.iter().position(|s| s.active) == Some(slot_idx);
+                let slot = &mut slots[slot_idx];
+                if is_primary {
+                    if let Some(ly) = slot.raw_y {
+                        touch.dy += val - ly;
+                    }
                 }
-                touch.last_y = Some(val);
-                slots[current_slot].y = (val - min_y) as f32 / range_y;
+                slot.raw_y = Some(val);
+                slot.y = (val - min_y) as f32 / range_y;
             } else if event.code == ABS_MT_TRACKING_ID {
                 if event.value >= 0 {
-                    touch.finger_down = true;
                     slots[current_slot].active = true;
+                    touch.finger_down = true;
                 } else {
-                    touch.finger_down = false;
-                    touch.last_x = None;
-                    touch.last_y = None;
                     slots[current_slot].active = false;
+                    slots[current_slot].raw_x = None;
+                    slots[current_slot].raw_y = None;
+                    touch.finger_down = slots.iter().any(|s| s.active);
                 }
             } else if event.code == ABS_MT_SLOT {
-                current_slot = (event.value as usize).min(4);
+                current_slot = (event.value as usize).min(15);
             }
         } else if event.type_ == EV_KEY {
             if event.code == BTN_TOUCH {
@@ -293,10 +301,10 @@ async fn read_device_loop(
                     slots[0].active = true;
                 } else {
                     touch.finger_down = false;
-                    touch.last_x = None;
-                    touch.last_y = None;
                     for s in &mut slots {
                         s.active = false;
+                        s.raw_x = None;
+                        s.raw_y = None;
                     }
                 }
             }
@@ -322,8 +330,10 @@ async fn read_device_loop(
                     let _ = tx.send(CoordinatorMsg::PhysicalTrackpadLift { timestamp: now });
                     touch.dx = 0;
                     touch.dy = 0;
-                    touch.last_x = None;
-                    touch.last_y = None;
+                    for s in &mut slots {
+                        s.raw_x = None;
+                        s.raw_y = None;
+                    }
                 }
             }
         }
@@ -363,6 +373,9 @@ struct PhysicsState {
 
     tap_to_click: bool,
     trackpad_disabled_by_scroll: bool,
+    three_finger_start_x: Option<f32>,
+    three_finger_start_y: Option<f32>,
+    three_finger_gesture_triggered: bool,
 }
 
 fn trigger_tap_to_click_ipc(tap: bool, ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
@@ -375,6 +388,38 @@ fn trigger_tap_to_click_ipc(tap: bool, ipc_tx: &std::sync::mpsc::Sender<String>,
 
 fn trigger_trackpad_disabled_ipc(disabled: bool, ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
     let cmd = format!("input trackpad-disabled {}", disabled);
+    let _ = ipc_tx.send(cmd);
+    unsafe {
+        libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
+    }
+}
+
+fn trigger_expose_ipc(ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
+    let cmd = "expose".to_string();
+    let _ = ipc_tx.send(cmd);
+    unsafe {
+        libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
+    }
+}
+
+fn trigger_expose_exit_ipc(ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
+    let cmd = "expose-exit".to_string();
+    let _ = ipc_tx.send(cmd);
+    unsafe {
+        libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
+    }
+}
+
+fn trigger_view_next_ipc(ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
+    let cmd = "view-next".to_string();
+    let _ = ipc_tx.send(cmd);
+    unsafe {
+        libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
+    }
+}
+
+fn trigger_view_prev_ipc(ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
+    let cmd = "view-prev".to_string();
     let _ = ipc_tx.send(cmd);
     unsafe {
         libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
@@ -503,6 +548,9 @@ pub fn run_input_daemon(
             accum_scroll_y: 0.0,
             tap_to_click,
             trackpad_disabled_by_scroll: false,
+            three_finger_start_x: None,
+            three_finger_start_y: None,
+            three_finger_gesture_triggered: false,
         };
 
         let mut tick_interval = tokio::time::interval(Duration::from_millis(16)); // ~60fps
@@ -610,6 +658,44 @@ pub fn run_input_daemon(
                                 state.trackpad_disabled_by_scroll = false;
                                 trigger_trackpad_disabled_ipc(false, &ipc_tx, pipe_write);
                             }
+
+                            // Detect 3-finger gestures (swipe up, down, left, right)
+                            if fingers.len() == 3 {
+                                let avg_x = (fingers[0].x + fingers[1].x + fingers[2].x) / 3.0;
+                                let avg_y = (fingers[0].y + fingers[1].y + fingers[2].y) / 3.0;
+                                if let (Some(start_x), Some(start_y)) = (state.three_finger_start_x, state.three_finger_start_y) {
+                                    let dy_up = start_y - avg_y; // Y decreases as fingers move up
+                                    let dy_down = avg_y - start_y; // Y increases as fingers move down
+                                    let dx_right = avg_x - start_x; // X increases as fingers move right
+                                    let dx_left = start_x - avg_x; // X decreases as fingers move left
+
+                                    if dy_up > 0.15 && !state.three_finger_gesture_triggered {
+                                        state.three_finger_gesture_triggered = true;
+                                        println!("[input-subsystem] 3-finger swipe up gesture detected. Triggering Expose mode.");
+                                        trigger_expose_ipc(&ipc_tx, pipe_write);
+                                    } else if dy_down > 0.15 && !state.three_finger_gesture_triggered {
+                                        state.three_finger_gesture_triggered = true;
+                                        println!("[input-subsystem] 3-finger swipe down gesture detected. Triggering Expose exit.");
+                                        trigger_expose_exit_ipc(&ipc_tx, pipe_write);
+                                    } else if dx_right > 0.15 && !state.three_finger_gesture_triggered {
+                                        state.three_finger_gesture_triggered = true;
+                                        println!("[input-subsystem] 3-finger swipe right gesture detected. Switching to previous tag.");
+                                        trigger_view_prev_ipc(&ipc_tx, pipe_write);
+                                    } else if dx_left > 0.15 && !state.three_finger_gesture_triggered {
+                                        state.three_finger_gesture_triggered = true;
+                                        println!("[input-subsystem] 3-finger swipe left gesture detected. Switching to next tag.");
+                                        trigger_view_next_ipc(&ipc_tx, pipe_write);
+                                    }
+                                } else {
+                                    state.three_finger_start_x = Some(avg_x);
+                                    state.three_finger_start_y = Some(avg_y);
+                                }
+                            } else {
+                                state.three_finger_start_x = None;
+                                state.three_finger_start_y = None;
+                                state.three_finger_gesture_triggered = false;
+                            }
+
                             if let Ok(serialized) = serde_json::to_string(&fingers) {
                                 let _ = broadcast_tx.send(serialized);
                             }

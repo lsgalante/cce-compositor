@@ -21,10 +21,14 @@ pub fn write_status_files(state: &WindowManager) {
     }
 
     // /tmp/clearwm-layout: focused window's tiling mode
-    let mode_str = state
-        .focused_window()
-        .map(|w| tiling_mode_str(w.tiling_mode))
-        .unwrap_or("none");
+    let mode_str = if state.expose_active {
+        "Expose"
+    } else {
+        state
+            .focused_window()
+            .map(|w| tiling_mode_str(w.tiling_mode))
+            .unwrap_or("none")
+    };
 
     if let Ok(mut f) = fs::File::create("/tmp/clearwm-layout") {
         let _ = writeln!(f, "{}", mode_str);

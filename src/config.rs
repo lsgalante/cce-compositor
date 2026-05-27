@@ -78,6 +78,8 @@ pub struct LayoutConfig {
     pub border_color: String,
     #[serde(default = "default_background_color", alias = "low_color")]
     pub background_color: String,
+    #[serde(default = "default_border_font_size")]
+    pub border_font_size: i64,
 }
 
 impl Default for LayoutConfig {
@@ -99,6 +101,7 @@ impl Default for LayoutConfig {
             floating_border_width: default_floating_border_width(),
             border_color: default_border_color(),
             background_color: default_background_color(),
+            border_font_size: default_border_font_size(),
         }
     }
 }
@@ -150,6 +153,9 @@ fn default_border_color() -> String {
 }
 fn default_background_color() -> String {
     "#0a1a0e".to_string()
+}
+fn default_border_font_size() -> i64 {
+    11
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -298,6 +304,7 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
     state.layout.vsplit_border_width = config.layout.vsplit_border_width as i32;
     state.layout.hsplit_border_width = config.layout.hsplit_border_width as i32;
     state.layout.floating_border_width = config.layout.floating_border_width as i32;
+    state.layout.border_font_size = config.layout.border_font_size as i32;
     if let Some((r, g, b, a)) = parse_hex_color(&config.layout.border_color) {
         state.layout.border_r = r;
         state.layout.border_g = g;
@@ -632,6 +639,7 @@ mod tests {
         assert_eq!(lc.border_width, 6);
         assert_eq!(lc.fullscreen_border_width, 0);
         assert_eq!(lc.border_color, "#3e3e3e");
+        assert_eq!(lc.border_font_size, 11);
     }
 
     #[test]

@@ -24,6 +24,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  toggle <1-4>");
     print("  close");
     print("  focus-next");
+    print("  expose");
     print("  windows");
     print("  exit");
     print("  restart");

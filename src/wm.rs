@@ -238,6 +238,95 @@ fn compute_tiling(
     let cascade_offset = wm.layout.cascade_offset;
     let bar_height = wm.layout.bar_height;
 
+    if wm.expose_active {
+        let mut results = Vec::new();
+        // Collect all active non-status-bar, non-popup windows on current tags
+        let expose_windows: Vec<&crate::types::Window> = wm.windows.iter()
+            .filter(|w| !w.closed && (w.tags & wm.active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface") && w.tiling_mode != TilingMode::Popup)
+            .collect();
+
+        let n_expose = expose_windows.len() as i32;
+        if n_expose > 0 {
+            let cols = (n_expose as f64).sqrt().ceil() as i32;
+            let rows = (n_expose + cols - 1) / cols;
+            let bw = wm.layout.grid_border_width;
+
+            for (idx, win) in expose_windows.iter().enumerate() {
+                let idx = idx as i32;
+                let row = idx / cols;
+                let col = idx % cols;
+
+                let width = (screen_w - gap_left - gap_right - (cols - 1) * gap) / cols - 2 * bw;
+                let height = (screen_h - bar_height - gap_top - gap_bottom - (rows - 1) * gap) / rows - 2 * bw;
+                let width = if width < 1 { 1 } else { width };
+                let height = if height < 1 { 1 } else { height };
+
+                let x = gap_left + bw + col * (width + 2 * bw + gap);
+                let y = bar_height + gap_top + bw + row * (height + 2 * bw + gap);
+
+                results.push(TileResult {
+                    wid: win.id,
+                    x,
+                    y,
+                    w: width,
+                    h: height,
+                });
+            }
+        }
+
+        // Still layout clear-status-interface as fullscreen/bar if present
+        if let Some(win) = wm.windows.iter().find(|w| !w.closed && w.app_id.as_deref() == Some("clear-status-interface")) {
+            let (tx, ty, tw, th) = tiling::tile_fullscreen(
+                phys_w,
+                phys_h,
+                gap_top,
+                gap_left,
+                gap_right,
+                gap_bottom,
+                0,
+                bar_height,
+            );
+            results.push(TileResult {
+                wid: win.id,
+                x: tx + phys_x,
+                y: ty + phys_y,
+                w: tw,
+                h: th,
+            });
+        }
+
+        // Layout any active popup windows normally
+        for win in &wm.windows {
+            if !win.closed && (win.tags & wm.active_tags) != 0 && win.tiling_mode == TilingMode::Popup {
+                let fw = if win.width > 0 {
+                    win.width
+                } else if win.hint_min_width > 32 {
+                    win.hint_min_width
+                } else {
+                    360
+                };
+                let fh = if win.height > 0 {
+                    win.height
+                } else if win.hint_min_height > 32 {
+                    win.hint_min_height
+                } else {
+                    100
+                };
+                let fx = screen_w - fw - gap_right;
+                let fy = bar_height + gap_top;
+                results.push(TileResult {
+                    wid: win.id,
+                    x: fx,
+                    y: fy,
+                    w: fw,
+                    h: fh,
+                });
+            }
+        }
+
+        return results;
+    }
+
     // Count windows per tiling mode
     let mut n_cascade = 0i32;
     let mut n_grid = 0i32;

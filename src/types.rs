@@ -57,6 +57,7 @@ pub enum Action {
     SetTag2,
     SetTag3,
     SetTag4,
+    Expose,
 }
 
 /// Layout parameters
@@ -84,6 +85,7 @@ pub struct Layout {
     pub background_g: u32,
     pub background_b: u32,
     pub background_a: u32,
+    pub border_font_size: i32,
 }
 
 impl Default for Layout {
@@ -111,6 +113,7 @@ impl Default for Layout {
             background_g: 0x1A1A1A1Au32,
             background_b: 0x0E0E0E0Eu32,
             background_a: 0xFFFFFFFFu32,
+            border_font_size: 11,
         }
     }
 }
@@ -343,6 +346,7 @@ pub struct WindowManager {
     pub reload_commands: Vec<String>,
     pub input_controller: Option<tokio::sync::mpsc::UnboundedSender<(crate::config::InertialConfig, bool)>>,
     pub trackpad_disabled: bool,
+    pub expose_active: bool,
 }
 
 impl Default for WindowManager {
@@ -387,6 +391,7 @@ impl Default for WindowManager {
             reload_commands: Vec::new(),
             input_controller: None,
             trackpad_disabled: false,
+            expose_active: false,
         }
     }
 }
@@ -561,6 +566,8 @@ pub fn parse_action(s: &str) -> Action {
             }
         }
         Action::None
+    } else if s == "expose" {
+        Action::Expose
     } else {
         Action::None
     }
@@ -651,6 +658,7 @@ mod tests {
         assert_eq!(parse_action("view-4"), Action::View4);
         assert_eq!(parse_action("toggle-2"), Action::Toggle2);
         assert_eq!(parse_action("set-tag-3"), Action::SetTag3);
+        assert_eq!(parse_action("expose"), Action::Expose);
         assert_eq!(parse_action("unknown"), Action::None);
     }
 

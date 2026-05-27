@@ -153,6 +153,8 @@ pub struct AppState {
     /// The surface the pointer is currently hovering over
     pub pointer_hovered_surface: Option<wl_surface::WlSurface>,
     pub input_device_names: std::collections::HashMap<u32, String>,
+    pub border_font: Option<fontdue::Font>,
+    pub border_font_path: Option<String>,
 }
 
 /// Info tracked for each libinput device discovered via river_libinput_config_v1
@@ -214,6 +216,8 @@ impl AppState {
             libinput_devices: Vec::new(),
             pointer_hovered_surface: None,
             input_device_names: std::collections::HashMap::new(),
+            border_font: None,
+            border_font_path: None,
         }
     }
 
@@ -1292,6 +1296,12 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
                         seat.focused_window_id = Some(wid);
                         // Move clicked window to front of cascade stack
                         state.wm.move_window_to_end(wid);
+
+                        // Disable expose if it was active
+                        if state.wm.expose_active {
+                            state.wm.expose_active = false;
+                        }
+
                         state.wm.needs_render = true;
                         state.wm.needs_focus = true;
                         state.wm.needs_status_update = true;
@@ -1989,6 +1999,11 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
         }
         Action::Restart => {
             crate::restart::wm_restart();
+        }
+        Action::Expose => {
+            state.wm.expose_active = !state.wm.expose_active;
+            state.wm.needs_render = true;
+            state.wm.needs_status_update = true;
         }
         Action::View1 | Action::View2 | Action::View3 | Action::View4 => {
             let tag = match action {

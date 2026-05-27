@@ -9,6 +9,27 @@ use wayland_client::QueueHandle;
 use crate::protocol::river_window_management::client::river_decoration_v1::RiverDecorationV1;
 use crate::wayland::AppState;
 
+fn resolve_window_border_font_path() -> Option<String> {
+    use std::io::Read;
+    let mut child = std::process::Command::new("fc-match")
+        .args(&["-f", "%{file}", "window-borders"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let mut stdout = child.stdout.take()?;
+    let mut output_str = String::new();
+    let _ = stdout.read_to_string(&mut output_str);
+    let _ = child.wait();
+
+    let path = output_str.trim().to_string();
+    if !path.is_empty() && std::path::Path::new(&path).exists() {
+        return Some(path);
+    }
+    None
+}
+
 /// Struct tracking the Wayland decoration resources for a window.
 pub struct WindowDecoration {
     pub surface: wl_surface::WlSurface,
@@ -181,6 +202,20 @@ fn create_memfd(size: usize) -> Option<RawFd> {
 
 /// Main entry point to create or update decoration surfaces during rendering.
 pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
+    // Check if we need to load or reload the font
+    let current_path = resolve_window_border_font_path();
+    if current_path != state.border_font_path {
+        state.border_font_path = current_path.clone();
+        state.border_font = current_path
+            .and_then(|path| std::fs::read(&path).ok())
+            .and_then(|data| fontdue::Font::from_bytes(data, fontdue::FontSettings::default()).ok());
+        if state.border_font.is_some() {
+            eprintln!("[decorations] loaded border font: {:?}", state.border_font_path);
+        } else {
+            eprintln!("[decorations] failed to load border font, falling back to built-in bitmap font");
+        }
+    }
+
     let active_tags = state.wm.active_tags;
 
     // We can only create decoration surfaces if the compositor and shm globals are bound
@@ -217,19 +252,31 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             let title = w.title.clone().unwrap_or_else(|| {
                 w.app_id.clone().unwrap_or_else(|| "Window".to_string())
             });
-            let mode_idx = state.wm.windows
-                .iter()
-                .filter(|win| !win.closed && win.app_id.as_deref() != Some("clear-status-interface") && (win.tags & active_tags) != 0 && win.tiling_mode == w.tiling_mode)
-                .position(|win| win.id == w.id)
-                .unwrap_or(0);
-            let indicator = match w.tiling_mode {
-                crate::types::TilingMode::Floating => "F",
-                crate::types::TilingMode::Cascade => "C",
-                crate::types::TilingMode::Grid => "G",
-                crate::types::TilingMode::Vsplit => "V",
-                crate::types::TilingMode::Hsplit => "H",
-                crate::types::TilingMode::Fullscreen => "S",
-                crate::types::TilingMode::Popup => "P",
+            let mode_idx = if state.wm.expose_active && w.tiling_mode != crate::types::TilingMode::Popup {
+                state.wm.windows
+                    .iter()
+                    .filter(|win| !win.closed && win.app_id.as_deref() != Some("clear-status-interface") && win.tiling_mode != crate::types::TilingMode::Popup && (win.tags & active_tags) != 0)
+                    .position(|win| win.id == w.id)
+                    .unwrap_or(0)
+            } else {
+                state.wm.windows
+                    .iter()
+                    .filter(|win| !win.closed && win.app_id.as_deref() != Some("clear-status-interface") && (win.tags & active_tags) != 0 && win.tiling_mode == w.tiling_mode)
+                    .position(|win| win.id == w.id)
+                    .unwrap_or(0)
+            };
+            let indicator = if state.wm.expose_active && w.tiling_mode != crate::types::TilingMode::Popup {
+                "EX"
+            } else {
+                match w.tiling_mode {
+                    crate::types::TilingMode::Floating => "F",
+                    crate::types::TilingMode::Cascade => "C",
+                    crate::types::TilingMode::Grid => "G",
+                    crate::types::TilingMode::Vsplit => "V",
+                    crate::types::TilingMode::Hsplit => "H",
+                    crate::types::TilingMode::Fullscreen => "S",
+                    crate::types::TilingMode::Popup => "P",
+                }
             };
             let title_with_idx = format!("[{}{}] {}", indicator, mode_idx, title);
 
@@ -252,14 +299,18 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             let bg_color = ((border_a as u32) << 24) | ((border_r as u32) << 16) | ((border_g as u32) << 8) | (border_b as u32);
 
             // Border width is mode-specific
-            let border_w = match w.tiling_mode {
-                crate::types::TilingMode::Cascade => state.wm.layout.cascade_border_width,
-                crate::types::TilingMode::Fullscreen => state.wm.layout.fullscreen_border_width,
-                crate::types::TilingMode::Grid => state.wm.layout.grid_border_width,
-                crate::types::TilingMode::Vsplit => state.wm.layout.vsplit_border_width,
-                crate::types::TilingMode::Hsplit => state.wm.layout.hsplit_border_width,
-                crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
-                crate::types::TilingMode::Popup => 0,
+            let border_w = if state.wm.expose_active && w.tiling_mode != crate::types::TilingMode::Popup {
+                state.wm.layout.grid_border_width
+            } else {
+                match w.tiling_mode {
+                    crate::types::TilingMode::Cascade => state.wm.layout.cascade_border_width,
+                    crate::types::TilingMode::Fullscreen => state.wm.layout.fullscreen_border_width,
+                    crate::types::TilingMode::Grid => state.wm.layout.grid_border_width,
+                    crate::types::TilingMode::Vsplit => state.wm.layout.vsplit_border_width,
+                    crate::types::TilingMode::Hsplit => state.wm.layout.hsplit_border_width,
+                    crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
+                    crate::types::TilingMode::Popup => 0,
+                }
             };
             (w.id, w.width, border_w, title_with_idx, bg_color)
         })
@@ -378,20 +429,90 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             }
 
             // Draw window title text
-            // Determine font scale (1x if height < 32, 2x if height >= 32)
-            let scale = if dec_height >= 32 { 2 } else { 1 };
-            let font_h = 8 * scale;
-            
-            // Vertically center the text inside the titlebar
-            let text_y = (dec_height - font_h) / 2;
-            let mut text_x = 8; // Margin from left
+            if let Some(ref font) = state.border_font {
+                let font_size = if state.wm.layout.border_font_size > 0 {
+                    state.wm.layout.border_font_size as f32
+                } else {
+                    if dec_height >= 32 {
+                        22.0
+                    } else if dec_height >= 24 {
+                        16.0
+                    } else if dec_height >= 16 {
+                        11.0
+                    } else {
+                        (dec_height as f32 - 4.0).max(8.0)
+                    }
+                };
 
-            for c in title.chars() {
-                if text_x + 8 * scale > dec_width {
-                    break; // Out of bounds
+                let line_metrics = font.horizontal_line_metrics(font_size).unwrap_or(fontdue::LineMetrics {
+                    ascent: font_size * 0.8,
+                    descent: -font_size * 0.2,
+                    line_gap: 0.0,
+                    new_line_size: font_size,
+                });
+                let baseline_y = (dec_height as f32 + line_metrics.ascent + line_metrics.descent) / 2.0;
+
+                let mut text_x = 8.0f32; // Margin from left
+                for c in title.chars() {
+                    let (metrics, bitmap) = font.rasterize(c, font_size);
+                    if text_x + metrics.xmin as f32 + metrics.width as f32 > dec_width as f32 {
+                        break;
+                    }
+
+                    let x_start = (text_x + metrics.xmin as f32).round() as i32;
+                    let y_start = (baseline_y - metrics.ymin as f32 - metrics.height as f32).round() as i32;
+
+                    for row in 0..metrics.height {
+                        for col in 0..metrics.width {
+                            let px = x_start + col as i32;
+                            let py = y_start + row as i32;
+
+                            if px >= 0 && px < dec_width && py >= 0 && py < dec_height {
+                                let alpha_coverage = bitmap[row * metrics.width + col] as u32;
+                                if alpha_coverage > 0 {
+                                    let index = (py * dec_width + px) as usize;
+                                    let dest_pixel = buffer_slice[index];
+
+                                    let src_r = (text_color >> 16) & 0xFF;
+                                    let src_g = (text_color >> 8) & 0xFF;
+                                    let src_b = text_color & 0xFF;
+                                    let src_a = (text_color >> 24) & 0xFF;
+
+                                    let dest_r = (dest_pixel >> 16) & 0xFF;
+                                    let dest_g = (dest_pixel >> 8) & 0xFF;
+                                    let dest_b = dest_pixel & 0xFF;
+                                    let dest_a = (dest_pixel >> 24) & 0xFF;
+
+                                    let alpha = (alpha_coverage * src_a) / 255;
+
+                                    let out_r = ((src_r * alpha) + (dest_r * (255 - alpha))) / 255;
+                                    let out_g = ((src_g * alpha) + (dest_g * (255 - alpha))) / 255;
+                                    let out_b = ((src_b * alpha) + (dest_b * (255 - alpha))) / 255;
+                                    let out_a = dest_a + ((255 - dest_a) * alpha) / 255;
+
+                                    buffer_slice[index] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
+                                }
+                            }
+                        }
+                    }
+                    text_x += metrics.advance_width;
                 }
-                draw_char(buffer_slice, dec_width, dec_height, c, text_x, text_y, scale, text_color);
-                text_x += 8 * scale;
+            } else {
+                // Determine font scale (1x if height < 32, 2x if height >= 32)
+                let scale = if dec_height >= 32 { 2 } else { 1 };
+                let font_h = 8 * scale;
+                
+                // Vertically center the text inside the titlebar
+                let text_y = (dec_height - font_h) / 2;
+                let mut text_x = 8; // Margin from left
+
+                for c in title.chars() {
+                    if text_x + 8 * scale > dec_width {
+                        break; // Out of bounds
+                    }
+                    draw_char(buffer_slice, dec_width, dec_height, c, text_x, text_y, scale, text_color);
+                    text_x += 8 * scale;
+                }
             }
 
             // Commit surface rendering

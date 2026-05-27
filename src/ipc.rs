@@ -75,6 +75,70 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
         "reload" => {
             crate::restart::wm_restart();
         }
+        "expose" => {
+            state.expose_active = !state.expose_active;
+            state.needs_render = true;
+            state.needs_status_update = true;
+        }
+        "expose-exit" => {
+            if state.expose_active {
+                state.expose_active = false;
+                let mut windows_to_focus = Vec::new();
+                for seat in &state.seats {
+                    if seat.removed {
+                        continue;
+                    }
+                    if let Some(wid) = seat.hovered_window_id {
+                        windows_to_focus.push((seat.id, wid));
+                    }
+                }
+                for (seat_id, wid) in windows_to_focus {
+                    if let Some(seat) = state.seats.iter_mut().find(|s| s.id == seat_id) {
+                        seat.focused_window_id = Some(wid);
+                    }
+                    state.move_window_to_end(wid);
+                    state.needs_focus = true;
+                }
+                state.needs_render = true;
+                state.needs_status_update = true;
+            }
+        }
+        "view-next" => {
+            let current_tag_idx = (0..NUM_TAGS).find(|&i| (state.active_tags & (1 << i)) != 0).unwrap_or(0);
+            let next_tag_idx = (current_tag_idx + 1) % NUM_TAGS;
+            state.active_tags = 1 << next_tag_idx;
+
+            if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
+                let visible_ids: Vec<u64> = state
+                    .windows
+                    .iter()
+                    .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+                    .map(|w| w.id)
+                    .collect();
+                seat.focused_window_id = visible_ids.last().copied();
+            }
+            state.needs_render = true;
+            state.needs_focus = true;
+            state.needs_status_update = true;
+        }
+        "view-prev" => {
+            let current_tag_idx = (0..NUM_TAGS).find(|&i| (state.active_tags & (1 << i)) != 0).unwrap_or(0);
+            let prev_tag_idx = (current_tag_idx + NUM_TAGS - 1) % NUM_TAGS;
+            state.active_tags = 1 << prev_tag_idx;
+
+            if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
+                let visible_ids: Vec<u64> = state
+                    .windows
+                    .iter()
+                    .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+                    .map(|w| w.id)
+                    .collect();
+                seat.focused_window_id = visible_ids.last().copied();
+            }
+            state.needs_render = true;
+            state.needs_focus = true;
+            state.needs_status_update = true;
+        }
         "view" | _ if tok.starts_with("view") => {
             let tag = parse_tag_from_command(tok, "view", rest);
             if let Some(tag) = tag {
@@ -269,6 +333,14 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 state.layout.border_width = value;
                 if state.notifications_enable {
                     crate::config::show_notification("clearwm", &format!("Border width set to {}px", value));
+                }
+            }
+        }
+        "border_font_size" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.border_font_size = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Border font size set to {}px", value));
                 }
             }
         }
@@ -878,5 +950,72 @@ mod tests {
         let mut state = WindowManager::default();
         handle_ipc_command("layout border_width 18", &mut state);
         assert_eq!(state.layout.border_width, 18);
+    }
+
+    #[test]
+    fn test_ipc_expose() {
+        let mut state = WindowManager::default();
+        assert!(!state.expose_active);
+        handle_ipc_command("expose", &mut state);
+        assert!(state.expose_active);
+        handle_ipc_command("expose", &mut state);
+        assert!(!state.expose_active);
+    }
+
+    #[test]
+    fn test_ipc_expose_exit() {
+        let mut state = WindowManager::default();
+        state.seats.push(crate::types::Seat {
+            id: 1,
+            hovered_window_id: Some(42),
+            focused_window_id: Some(10),
+            ..Default::default()
+        });
+
+        // 1. When expose is not active, "expose-exit" should do nothing.
+        assert!(!state.expose_active);
+        handle_ipc_command("expose-exit", &mut state);
+        assert!(!state.expose_active);
+        assert_eq!(state.seats[0].focused_window_id, Some(10));
+
+        // 2. When expose is active, "expose-exit" should deactivate it and focus the hovered window.
+        state.expose_active = true;
+        handle_ipc_command("expose-exit", &mut state);
+        assert!(!state.expose_active);
+        assert_eq!(state.seats[0].focused_window_id, Some(42));
+        assert!(state.needs_focus);
+        assert!(state.needs_render);
+    }
+
+    #[test]
+    fn test_ipc_view_next_prev() {
+        let mut state = WindowManager::default();
+        state.active_tags = 1; // Tag 1 (1 << 0)
+
+        // view-next should go: Tag 1 -> Tag 2 -> Tag 3 -> Tag 4 -> Tag 1
+        handle_ipc_command("view-next", &mut state);
+        assert_eq!(state.active_tags, 2); // Tag 2
+
+        handle_ipc_command("view-next", &mut state);
+        assert_eq!(state.active_tags, 4); // Tag 3
+
+        handle_ipc_command("view-next", &mut state);
+        assert_eq!(state.active_tags, 8); // Tag 4
+
+        handle_ipc_command("view-next", &mut state);
+        assert_eq!(state.active_tags, 1); // Tag 1 (wrap around)
+
+        // view-prev should go: Tag 1 -> Tag 4 -> Tag 3 -> Tag 2 -> Tag 1
+        handle_ipc_command("view-prev", &mut state);
+        assert_eq!(state.active_tags, 8); // Tag 4 (wrap around)
+
+        handle_ipc_command("view-prev", &mut state);
+        assert_eq!(state.active_tags, 4); // Tag 3
+
+        handle_ipc_command("view-prev", &mut state);
+        assert_eq!(state.active_tags, 2); // Tag 2
+
+        handle_ipc_command("view-prev", &mut state);
+        assert_eq!(state.active_tags, 1); // Tag 1
     }
 }
