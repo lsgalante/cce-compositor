@@ -1,0 +1,650 @@
+// SPDX-FileCopyrightText: © 2021 The River Developers
+// SPDX-License-Identifier: GPL-3.0-only
+
+#define _POSIX_C_SOURCE 199309L
+#include <assert.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#include <wlr/util/log.h>
+
+#define BUFFER_SIZE 1024
+
+void river_wlroots_log_callback(enum wlr_log_importance importance, const char *ptr, size_t len);
+
+static void callback(enum wlr_log_importance importance, const char *fmt, va_list args) {
+	char buffer[BUFFER_SIZE];
+
+	// Need to make a copy of the args in case our buffer isn't big
+	// enough and we need to use them again.
+	va_list args_copy;
+	va_copy(args_copy, args);
+
+	const int length = vsnprintf(buffer, BUFFER_SIZE, fmt, args);
+	// Need to add one for the terminating 0 byte
+	if (length + 1 <= BUFFER_SIZE) {
+		// The formatted string fit within our buffer, pass it on to river
+		river_wlroots_log_callback(importance, buffer, length);
+	} else {
+		// The formatted string did not fit in our buffer, we need
+		// to allocate enough memory to hold it.
+		char *allocated_buffer = malloc(length + 1);
+		if (allocated_buffer != NULL) {
+			const int length2 = vsnprintf(allocated_buffer, length + 1, fmt, args_copy);
+			assert(length2 == length);
+			river_wlroots_log_callback(importance, allocated_buffer, length);
+			free(allocated_buffer);
+		}
+	}
+
+	va_end(args_copy);
+}
+
+void river_init_wlroots_log(enum wlr_log_importance importance) {
+	wlr_log_init(importance, callback);
+}
+
+#include <time.h>
+#include <wlr/types/wlr_scene.h>
+#include <wlr/types/wlr_output.h>
+#include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_input_device.h>
+#include <wlr/types/wlr_keyboard.h>
+#include <wlr/interfaces/wlr_keyboard.h>
+#include <wlr/types/wlr_cursor.h>
+#include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_pointer.h>
+#include <wlr/types/wlr_tablet_v2.h>
+#include <wlr/backend.h>
+#include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_input_method_v2.h>
+#include <wlr/types/wlr_data_device.h>
+
+struct wlr_surface *river_scene_node_get_surface(struct wlr_scene_node *node) {
+	if (node->type == WLR_SCENE_NODE_BUFFER) {
+		struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_from_node(node);
+		struct wlr_scene_surface *scene_surface = wlr_scene_surface_try_from_buffer(scene_buffer);
+		if (scene_surface) {
+			return scene_surface->surface;
+		}
+	}
+	return NULL;
+}
+
+enum wlr_scene_node_type river_scene_node_get_type(struct wlr_scene_node *node) {
+	return node->type;
+}
+
+struct wlr_scene_tree *river_scene_node_get_parent(struct wlr_scene_node *node) {
+	return node->parent;
+}
+
+int river_scene_node_get_x(struct wlr_scene_node *node) {
+	return node->x;
+}
+
+int river_scene_node_get_y(struct wlr_scene_node *node) {
+	return node->y;
+}
+
+void *river_scene_node_get_data(struct wlr_scene_node *node) {
+	return node->data;
+}
+
+void river_scene_node_set_data(struct wlr_scene_node *node, void *data) {
+	node->data = data;
+}
+
+struct wl_signal *river_scene_node_get_destroy_signal(struct wlr_scene_node *node) {
+	return &node->events.destroy;
+}
+
+static void save_surface_tree_iter(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
+	struct wlr_scene_tree *saved_tree = user_data;
+	struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_create(saved_tree, buffer->buffer);
+	if (!scene_buffer) {
+		return;
+	}
+	wlr_scene_node_set_position(&scene_buffer->node, sx, sy);
+	wlr_scene_buffer_set_dest_size(scene_buffer, buffer->dst_width, buffer->dst_height);
+	wlr_scene_buffer_set_source_box(scene_buffer, &buffer->src_box);
+	wlr_scene_buffer_set_transform(scene_buffer, buffer->transform);
+}
+
+void river_scene_tree_save_buffers(struct wlr_scene_tree *tree, struct wlr_scene_tree *saved_tree) {
+	wlr_scene_node_for_each_buffer(&tree->node, save_surface_tree_iter, saved_tree);
+}
+
+void river_scene_tree_clear_children(struct wlr_scene_tree *tree) {
+	struct wlr_scene_node *child, *tmp;
+	wl_list_for_each_safe(child, tmp, &tree->children, link) {
+		wlr_scene_node_destroy(child);
+	}
+}
+
+struct wlr_scene_node *river_scene_node_from_children_link(struct wl_list *link) {
+	return wl_container_of(link, (struct wlr_scene_node *)NULL, link);
+}
+
+struct wl_signal *river_wlr_output_get_destroy_signal(struct wlr_output *output) {
+	return &output->events.destroy;
+}
+
+struct wl_signal *river_wlr_output_get_request_state_signal(struct wlr_output *output) {
+	return &output->events.request_state;
+}
+
+struct wl_signal *river_wlr_output_get_frame_signal(struct wlr_output *output) {
+	return &output->events.frame;
+}
+
+struct wl_signal *river_wlr_output_get_present_signal(struct wlr_output *output) {
+	return &output->events.present;
+}
+
+void *river_wlr_output_get_data(struct wlr_output *output) {
+	return output->data;
+}
+
+void river_wlr_output_set_data(struct wlr_output *output, void *data) {
+	output->data = data;
+}
+
+const char *river_wlr_output_get_name(struct wlr_output *output) {
+	return output->name;
+}
+
+enum wlr_output_adaptive_sync_status river_wlr_output_get_adaptive_sync_status(struct wlr_output *output) {
+	return output->adaptive_sync_status;
+}
+
+bool river_wlr_output_get_enabled(struct wlr_output *output) {
+	return output->enabled;
+}
+
+struct wlr_output_mode *river_wlr_output_get_current_mode(struct wlr_output *output) {
+	return output->current_mode;
+}
+
+int32_t river_wlr_output_get_width(struct wlr_output *output) {
+	return output->width;
+}
+
+int32_t river_wlr_output_get_height(struct wlr_output *output) {
+	return output->height;
+}
+
+int32_t river_wlr_output_get_refresh(struct wlr_output *output) {
+	return output->refresh;
+}
+
+struct wl_global *river_wlr_output_get_global(struct wlr_output *output) {
+	return output->global;
+}
+
+void *river_wlr_surface_get_data(struct wlr_surface *surface) {
+	return surface->data;
+}
+
+void river_wlr_surface_set_data(struct wlr_surface *surface, void *data) {
+	surface->data = data;
+}
+
+struct wl_signal *river_wlr_surface_get_commit_signal(struct wlr_surface *surface) {
+	return &surface->events.commit;
+}
+
+enum wlr_input_device_type river_wlr_input_device_get_type(struct wlr_input_device *dev) {
+	return dev->type;
+}
+
+const char *river_wlr_input_device_get_name(struct wlr_input_device *dev) {
+	return dev->name;
+}
+
+struct wl_signal *river_wlr_input_device_get_destroy_signal(struct wlr_input_device *dev) {
+	return &dev->events.destroy;
+}
+
+void *river_wlr_input_device_get_data(struct wlr_input_device *dev) {
+	return dev->data;
+}
+
+void river_wlr_input_device_set_data(struct wlr_input_device *dev, void *data) {
+	dev->data = data;
+}
+
+struct wl_signal *river_wlr_keyboard_get_key_signal(struct wlr_keyboard *kbd) {
+	return &kbd->events.key;
+}
+
+struct wl_signal *river_wlr_keyboard_get_modifiers_signal(struct wlr_keyboard *kbd) {
+	return &kbd->events.modifiers;
+}
+
+struct wl_signal *river_wlr_keyboard_get_keymap_signal(struct wlr_keyboard *kbd) {
+	return &kbd->events.keymap;
+}
+
+struct xkb_keymap *river_wlr_keyboard_get_keymap(struct wlr_keyboard *kbd) {
+	return kbd->keymap;
+}
+
+struct wlr_keyboard_modifiers *river_wlr_keyboard_get_modifiers(struct wlr_keyboard *kbd) {
+	return &kbd->modifiers;
+}
+
+void *river_wlr_keyboard_get_data(struct wlr_keyboard *kbd) {
+	return kbd->data;
+}
+
+void river_wlr_keyboard_set_data(struct wlr_keyboard *kbd, void *data) {
+	kbd->data = data;
+}
+
+double river_wlr_cursor_get_x(struct wlr_cursor *cursor) {
+	return cursor->x;
+}
+
+double river_wlr_cursor_get_y(struct wlr_cursor *cursor) {
+	return cursor->y;
+}
+
+struct wl_signal *river_wlr_cursor_get_motion_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.motion;
+}
+
+struct wl_signal *river_wlr_cursor_get_motion_absolute_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.motion_absolute;
+}
+
+struct wl_signal *river_wlr_cursor_get_button_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.button;
+}
+
+struct wl_signal *river_wlr_cursor_get_axis_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.axis;
+}
+
+struct wl_signal *river_wlr_cursor_get_frame_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.frame;
+}
+
+struct wl_signal *river_wlr_cursor_get_swipe_begin_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.swipe_begin;
+}
+
+struct wl_signal *river_wlr_cursor_get_swipe_update_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.swipe_update;
+}
+
+struct wl_signal *river_wlr_cursor_get_swipe_end_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.swipe_end;
+}
+
+struct wl_signal *river_wlr_cursor_get_pinch_begin_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.pinch_begin;
+}
+
+struct wl_signal *river_wlr_cursor_get_pinch_update_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.pinch_update;
+}
+
+struct wl_signal *river_wlr_cursor_get_pinch_end_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.pinch_end;
+}
+
+struct wl_signal *river_wlr_cursor_get_hold_begin_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.hold_begin;
+}
+
+struct wl_signal *river_wlr_cursor_get_hold_end_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.hold_end;
+}
+
+struct wl_signal *river_wlr_cursor_get_touch_down_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.touch_down;
+}
+
+struct wl_signal *river_wlr_cursor_get_touch_motion_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.touch_motion;
+}
+
+struct wl_signal *river_wlr_cursor_get_touch_up_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.touch_up;
+}
+
+struct wl_signal *river_wlr_cursor_get_touch_cancel_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.touch_cancel;
+}
+
+struct wl_signal *river_wlr_cursor_get_touch_frame_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.touch_frame;
+}
+
+struct wl_signal *river_wlr_cursor_get_tablet_tool_axis_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.tablet_tool_axis;
+}
+
+struct wl_signal *river_wlr_cursor_get_tablet_tool_proximity_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.tablet_tool_proximity;
+}
+
+struct wl_signal *river_wlr_cursor_get_tablet_tool_tip_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.tablet_tool_tip;
+}
+
+struct wl_signal *river_wlr_cursor_get_tablet_tool_button_signal(struct wlr_cursor *cursor) {
+	return &cursor->events.tablet_tool_button;
+}
+
+const char *river_wlr_seat_get_name(struct wlr_seat *seat) {
+	return seat->name;
+}
+
+void *river_wlr_seat_get_data(struct wlr_seat *seat) {
+	return seat->data;
+}
+
+void river_wlr_seat_set_data(struct wlr_seat *seat, void *data) {
+	seat->data = data;
+}
+
+struct wl_signal *river_wlr_seat_get_request_set_cursor_signal(struct wlr_seat *seat) {
+	return &seat->events.request_set_cursor;
+}
+
+struct wl_signal *river_wlr_seat_get_request_set_selection_signal(struct wlr_seat *seat) {
+	return &seat->events.request_set_selection;
+}
+
+struct wl_signal *river_wlr_seat_get_request_start_drag_signal(struct wlr_seat *seat) {
+	return &seat->events.request_start_drag;
+}
+
+struct wl_signal *river_wlr_seat_get_start_drag_signal(struct wlr_seat *seat) {
+	return &seat->events.start_drag;
+}
+
+struct wl_signal *river_wlr_seat_get_request_set_primary_selection_signal(struct wlr_seat *seat) {
+	return &seat->events.request_set_primary_selection;
+}
+
+struct wlr_seat_client *river_wlr_seat_get_pointer_focused_client(struct wlr_seat *seat) {
+	return seat->pointer_state.focused_client;
+}
+
+struct wl_client *river_wlr_seat_client_get_client(struct wlr_seat_client *client) {
+	return client->client;
+}
+
+struct wlr_keyboard *river_wlr_seat_get_keyboard(struct wlr_seat *seat) {
+	return seat->keyboard_state.keyboard;
+}
+
+struct wl_global *river_wlr_seat_get_global(struct wlr_seat *seat) {
+	return seat->global;
+}
+
+struct wl_signal *river_wlr_backend_get_new_input_signal(struct wlr_backend *backend) {
+	return &backend->events.new_input;
+}
+
+const struct wlr_surface_role *river_wlr_surface_get_role(struct wlr_surface *surface) {
+	return surface->role;
+}
+
+struct wl_resource *river_wlr_surface_get_role_resource(struct wlr_surface *surface) {
+	return surface->role_resource;
+}
+
+void river_wlr_surface_set_role_object(struct wlr_surface *surface, struct wl_resource *role_resource) {
+	surface->role_resource = role_resource;
+}
+
+struct wlr_surface *river_wlr_xdg_surface_get_surface(struct wlr_xdg_surface *xdg_surface) {
+	return xdg_surface->surface;
+}
+
+struct wl_signal *river_wlr_xdg_surface_get_ack_configure_signal(struct wlr_xdg_surface *xdg_surface) {
+	return &xdg_surface->events.ack_configure;
+}
+
+struct wl_signal *river_wlr_xdg_surface_get_new_popup_signal(struct wlr_xdg_surface *xdg_surface) {
+	return &xdg_surface->events.new_popup;
+}
+
+void river_wlr_xdg_surface_get_geometry(struct wlr_xdg_surface *xdg_surface, struct wlr_box *box) {
+	*box = xdg_surface->geometry;
+}
+
+bool river_wlr_xdg_surface_get_initial_commit(struct wlr_xdg_surface *xdg_surface) {
+	return xdg_surface->initial_commit;
+}
+
+bool river_wlr_xdg_surface_get_initialized(struct wlr_xdg_surface *xdg_surface) {
+	return xdg_surface->initialized;
+}
+
+struct wlr_xdg_surface *river_wlr_xdg_toplevel_get_base(struct wlr_xdg_toplevel *toplevel) {
+	return toplevel->base;
+}
+
+struct wl_signal *river_wlr_xdg_toplevel_get_destroy_signal(struct wlr_xdg_toplevel *toplevel) {
+	return &toplevel->events.destroy;
+}
+
+struct wl_signal *river_wlr_xdg_toplevel_get_request_show_window_menu_signal(struct wlr_xdg_toplevel *toplevel) {
+	return &toplevel->events.request_show_window_menu;
+}
+
+struct wl_signal *river_wlr_xdg_toplevel_get_request_fullscreen_signal(struct wlr_xdg_toplevel *toplevel) {
+	return &toplevel->events.request_fullscreen;
+}
+
+struct wl_signal *river_wlr_xdg_toplevel_get_request_maximize_signal(struct wlr_xdg_toplevel *toplevel) {
+	return &toplevel->events.request_maximize;
+}
+
+struct wl_signal *river_wlr_xdg_toplevel_get_request_minimize_signal(struct wlr_xdg_toplevel *toplevel) {
+	return &toplevel->events.request_minimize;
+}
+
+struct wl_signal *river_wlr_xdg_toplevel_get_request_move_signal(struct wlr_xdg_toplevel *toplevel) {
+	return &toplevel->events.request_move;
+}
+
+struct wl_signal *river_wlr_xdg_toplevel_get_request_resize_signal(struct wlr_xdg_toplevel *toplevel) {
+	return &toplevel->events.request_resize;
+}
+
+struct wl_signal *river_wlr_xdg_toplevel_get_set_parent_signal(struct wlr_xdg_toplevel *toplevel) {
+	return &toplevel->events.set_parent;
+}
+
+struct wl_signal *river_wlr_xdg_toplevel_get_set_title_signal(struct wlr_xdg_toplevel *toplevel) {
+	return &toplevel->events.set_title;
+}
+
+struct wl_signal *river_wlr_xdg_toplevel_get_set_app_id_signal(struct wlr_xdg_toplevel *toplevel) {
+	return &toplevel->events.set_app_id;
+}
+
+const char *river_wlr_xdg_toplevel_get_title(struct wlr_xdg_toplevel *toplevel) {
+	return toplevel->title;
+}
+
+const char *river_wlr_xdg_toplevel_get_app_id(struct wlr_xdg_toplevel *toplevel) {
+	return toplevel->app_id;
+}
+
+struct wlr_xdg_toplevel *river_wlr_xdg_toplevel_get_parent(struct wlr_xdg_toplevel *toplevel) {
+	return toplevel->parent;
+}
+
+bool river_wlr_xdg_toplevel_get_requested_fullscreen(struct wlr_xdg_toplevel *toplevel) {
+	return toplevel->requested.fullscreen;
+}
+
+struct wlr_output *river_wlr_xdg_toplevel_get_requested_fullscreen_output(struct wlr_xdg_toplevel *toplevel) {
+	return toplevel->requested.fullscreen_output;
+}
+
+bool river_wlr_xdg_toplevel_get_requested_maximized(struct wlr_xdg_toplevel *toplevel) {
+	return toplevel->requested.maximized;
+}
+
+void river_wlr_xdg_toplevel_get_requested_min_max_size(struct wlr_xdg_toplevel *toplevel, int *min_w, int *min_h, int *max_w, int *max_h) {
+	*min_w = toplevel->current.min_width;
+	*min_h = toplevel->current.min_height;
+	*max_w = toplevel->current.max_width;
+	*max_h = toplevel->current.max_height;
+}
+
+struct wlr_xdg_surface *river_wlr_xdg_popup_get_base(struct wlr_xdg_popup *popup) {
+	return popup->base;
+}
+
+struct wl_signal *river_wlr_xdg_popup_get_destroy_signal(struct wlr_xdg_popup *popup) {
+	return &popup->events.destroy;
+}
+
+struct wl_signal *river_wlr_xdg_popup_get_reposition_signal(struct wlr_xdg_popup *popup) {
+	return &popup->events.reposition;
+}
+
+void river_wlr_xdg_popup_get_anchor_rect(struct wlr_xdg_popup *popup, struct wlr_box *box) {
+	*box = popup->scheduled.rules.anchor_rect;
+}
+
+void *river_wlr_xdg_surface_get_data(struct wlr_xdg_surface *xdg_surface) {
+	return xdg_surface->data;
+}
+
+void river_wlr_xdg_surface_set_data(struct wlr_xdg_surface *xdg_surface, void *data) {
+	xdg_surface->data = data;
+}
+
+struct wl_list *river_wlr_xdg_surface_get_popups(struct wlr_xdg_surface *xdg_surface) {
+	return &xdg_surface->popups;
+}
+
+struct wlr_scene_tree *river_wlr_scene_tree_get_parent(struct wlr_scene_tree *tree) {
+	return tree->node.parent;
+}
+
+struct wl_list *river_scene_tree_get_children(struct wlr_scene_tree *tree) {
+	return &tree->children;
+}
+
+struct wl_signal *river_wlr_surface_get_map_signal(struct wlr_surface *surface) {
+	return &surface->events.map;
+}
+
+struct wl_signal *river_wlr_surface_get_unmap_signal(struct wlr_surface *surface) {
+	return &surface->events.unmap;
+}
+
+struct wl_resource *river_wlr_surface_get_resource(struct wlr_surface *surface) {
+	return surface->resource;
+}
+
+bool river_wlr_surface_is_mapped(struct wlr_surface *surface) {
+	return surface->mapped;
+}
+
+struct wl_signal *river_wlr_tablet_v2_tablet_tool_get_set_cursor_signal(struct wlr_tablet_v2_tablet_tool *tool) {
+	return &tool->events.set_cursor;
+}
+
+struct wlr_surface *river_wlr_tablet_v2_tablet_tool_get_focused_surface(struct wlr_tablet_v2_tablet_tool *tool) {
+	return tool->focused_surface;
+}
+
+uint32_t river_wlr_tablet_v2_tablet_tool_get_proximity_serial(struct wlr_tablet_v2_tablet_tool *tool) {
+	return tool->proximity_serial;
+}
+
+bool river_wlr_tablet_v2_tablet_tool_get_is_down(struct wlr_tablet_v2_tablet_tool *tool) {
+	return tool->is_down;
+}
+
+size_t river_wlr_tablet_v2_tablet_tool_get_num_buttons(struct wlr_tablet_v2_tablet_tool *tool) {
+	return tool->num_buttons;
+}
+
+struct wlr_tablet_tool *river_wlr_tablet_v2_tablet_tool_get_wlr_tool(struct wlr_tablet_v2_tablet_tool *tool) {
+	return tool->wlr_tool;
+}
+
+void river_wlr_seat_touch_cancel_all(struct wlr_seat *wlr_seat) {
+	struct wlr_touch_point *point, *tmp;
+	wl_list_for_each_safe(point, tmp, &wlr_seat->touch_state.touch_points, link) {
+		wlr_seat_touch_notify_cancel(wlr_seat, point->client);
+	}
+}
+
+struct wlr_surface *river_wlr_seat_get_keyboard_focused_surface(struct wlr_seat *seat) {
+	return seat->keyboard_state.focused_surface;
+}
+
+int river_wlr_surface_get_width(struct wlr_surface *surface) {
+	return surface->current.width;
+}
+
+int river_wlr_surface_get_height(struct wlr_surface *surface) {
+	return surface->current.height;
+}
+
+struct wlr_keyboard *river_wlr_input_method_keyboard_grab_v2_get_keyboard(struct wlr_input_method_keyboard_grab_v2 *grab) {
+	return grab->keyboard;
+}
+
+struct wl_signal *river_wlr_input_method_keyboard_grab_v2_get_destroy_signal(struct wlr_input_method_keyboard_grab_v2 *grab) {
+	return &grab->events.destroy;
+}
+
+struct wlr_drag_icon *river_wlr_drag_get_icon(struct wlr_drag *drag) {
+	return drag->icon;
+}
+
+struct wlr_seat *river_wlr_drag_get_seat(struct wlr_drag *drag) {
+	return drag->seat;
+}
+
+enum wlr_drag_grab_type river_wlr_drag_get_grab_type(struct wlr_drag *drag) {
+	return drag->grab_type;
+}
+
+int32_t river_wlr_drag_get_touch_id(struct wlr_drag *drag) {
+	return drag->touch_id;
+}
+
+struct wlr_data_source *river_wlr_drag_get_source(struct wlr_drag *drag) {
+	return drag->source;
+}
+
+struct wl_signal *river_wlr_drag_get_destroy_signal(struct wlr_drag *drag) {
+	return &drag->events.destroy;
+}
+
+struct wlr_seat_client *river_wlr_drag_get_seat_client(struct wlr_drag *drag) {
+	return drag->seat_client;
+}
+
+void river_wlr_keyboard_init(struct wlr_keyboard *keyboard,
+		void (*led_update)(struct wlr_keyboard *keyboard, uint32_t leds),
+		const char *name) {
+	static struct wlr_keyboard_impl impl;
+	static bool impl_initialized = false;
+	if (!impl_initialized) {
+		impl.name = name;
+		impl.led_update = led_update;
+		impl_initialized = true;
+	}
+	wlr_keyboard_init(keyboard, &impl, name);
+}
+
+
+
