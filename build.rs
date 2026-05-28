@@ -41,9 +41,9 @@ fn main() {
 
     // Generate upstream protocol headers (header-only)
     let upstream_protocols = vec![
-        ("wlr-layer-shell-unstable-v1.xml", "../clear-river/protocol/upstream/wlr-layer-shell-unstable-v1.xml"),
-        ("wlr-output-power-management-unstable-v1.xml", "../clear-river/protocol/upstream/wlr-output-power-management-unstable-v1.xml"),
-        ("virtual-keyboard-unstable-v1.xml", "../clear-river/protocol/upstream/virtual-keyboard-unstable-v1.xml"),
+        ("wlr-layer-shell-unstable-v1.xml", "protocol/upstream/wlr-layer-shell-unstable-v1.xml"),
+        ("wlr-output-power-management-unstable-v1.xml", "protocol/upstream/wlr-output-power-management-unstable-v1.xml"),
+        ("virtual-keyboard-unstable-v1.xml", "protocol/upstream/virtual-keyboard-unstable-v1.xml"),
     ];
 
     for (name, path) in upstream_protocols {
@@ -63,12 +63,12 @@ fn main() {
 
     // Generate custom river protocol headers and private-code C files
     let custom_protocols = vec![
-        ("river-window-management-v1.xml", "../clear-river/protocol/river-window-management-v1.xml"),
-        ("river-xkb-bindings-v1.xml", "../clear-river/protocol/river-xkb-bindings-v1.xml"),
-        ("river-layer-shell-v1.xml", "../clear-river/protocol/river-layer-shell-v1.xml"),
-        ("river-input-management-v1.xml", "../clear-river/protocol/river-input-management-v1.xml"),
-        ("river-libinput-config-v1.xml", "../clear-river/protocol/river-libinput-config-v1.xml"),
-        ("river-xkb-config-v1.xml", "../clear-river/protocol/river-xkb-config-v1.xml"),
+        ("river-window-management-v1.xml", "protocol/river-window-management-v1.xml"),
+        ("river-xkb-bindings-v1.xml", "protocol/river-xkb-bindings-v1.xml"),
+        ("river-layer-shell-v1.xml", "protocol/river-layer-shell-v1.xml"),
+        ("river-input-management-v1.xml", "protocol/river-input-management-v1.xml"),
+        ("river-libinput-config-v1.xml", "protocol/river-libinput-config-v1.xml"),
+        ("river-xkb-config-v1.xml", "protocol/river-xkb-config-v1.xml"),
     ];
 
     let mut generated_c_files = Vec::new();
