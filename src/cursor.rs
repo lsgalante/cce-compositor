@@ -343,6 +343,7 @@ impl Cursor {
             (*self.constraint).update_state();
         }
         self.update_hovered();
+        self.passthrough(crate::util::msec_timestamp());
     }
 
     pub unsafe fn update_drag_icons(&mut self) {
@@ -434,6 +435,39 @@ impl Cursor {
             log::debug!("entering cursor mode ignore");
         }
     }
+
+    pub unsafe fn passthrough(&mut self, time_msec: u32) {
+        let lx = self.x();
+        let ly = self.y();
+        let server = (*self.seat).server;
+
+        if let Some(result) = (*server).scene.at(lx, ly) {
+            let lock_state = (*server).lock_manager.state;
+            if lock_state != crate::lock_manager::LockState::Unlocked {
+                if !matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
+                    self.clear_focus();
+                    return;
+                }
+            } else {
+                if matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
+                    self.clear_focus();
+                    return;
+                }
+            }
+
+            if !result.surface.is_null() {
+                ffi::wlr_seat_pointer_notify_enter((*self.seat).wlr_seat, result.surface, result.sx, result.sy);
+                ffi::wlr_seat_pointer_notify_motion((*self.seat).wlr_seat, time_msec, result.sx, result.sy);
+                return;
+            }
+        }
+
+        self.clear_focus();
+    }
+
+    pub unsafe fn clear_focus(&mut self) {
+        ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+    }
 }
 
 unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -459,20 +493,7 @@ unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut s
         return;
     }
 
-    let focused_client = ffi::river_wlr_seat_get_pointer_focused_client(seat.wlr_seat);
-    if !focused_client.is_null() {
-        let lx = cursor.x();
-        let ly = cursor.y();
-        let server = seat.server;
-        if let Some(result) = (*server).scene.at(lx, ly) {
-            ffi::wlr_seat_pointer_notify_motion(
-                seat.wlr_seat,
-                (*event).time_msec,
-                result.sx,
-                result.sy,
-            );
-        }
-    }
+    cursor.passthrough((*event).time_msec);
 }
 
 unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -491,20 +512,7 @@ unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, dat
         return;
     }
 
-    let focused_client = ffi::river_wlr_seat_get_pointer_focused_client(seat.wlr_seat);
-    if !focused_client.is_null() {
-        let lx = cursor.x();
-        let ly = cursor.y();
-        let server = seat.server;
-        if let Some(result) = (*server).scene.at(lx, ly) {
-            ffi::wlr_seat_pointer_notify_motion(
-                seat.wlr_seat,
-                (*event).time_msec,
-                result.sx,
-                result.sy,
-            );
-        }
-    }
+    cursor.passthrough((*event).time_msec);
 }
 
 unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -540,6 +548,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         let server = seat.server;
         if let Some(result) = (*server).scene.at(lx, ly) {
             match result.data {
+                SceneNodeDataVal::Window(window) => {
+                    seat.focus(Focus::Window(window));
+                }
                 SceneNodeDataVal::LayerSurface(_) => {
                     seat.focus(Focus::LayerSurface(result.surface));
                 }

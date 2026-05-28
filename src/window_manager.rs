@@ -224,9 +224,9 @@ impl WindowManager {
         if session_locked != self.sent.session_locked {
             if !self.object.is_null() {
                 if session_locked {
-                    ffi::wl_resource_post_event(self.object, 4); // river_window_manager_v1.session_locked
+                    ffi::wl_resource_post_event(self.object, ffi::RIVER_WINDOW_MANAGER_V1_SESSION_LOCKED);
                 } else {
-                    ffi::wl_resource_post_event(self.object, 5); // river_window_manager_v1.session_unlocked
+                    ffi::wl_resource_post_event(self.object, ffi::RIVER_WINDOW_MANAGER_V1_SESSION_UNLOCKED);
                 }
             }
             self.sent.session_locked = session_locked;
@@ -239,7 +239,7 @@ impl WindowManager {
         while curr != outputs {
             let next = (*curr).next;
             let output = crate::container_of!(curr, crate::output::Output, link);
-            (*output).layer_shell.manage_start(output);
+            (*output).manage_start();
             curr = next;
         }
 
@@ -261,7 +261,7 @@ impl WindowManager {
         }
 
         if !self.object.is_null() {
-            ffi::wl_resource_post_event(self.object, 2); // river_window_manager_v1.manage_start
+            ffi::wl_resource_post_event(self.object, ffi::RIVER_WINDOW_MANAGER_V1_MANAGE_START);
             self.start_timeout_timer(3000);
         } else {
             self.manage_finish();
@@ -358,7 +358,7 @@ impl WindowManager {
         }
 
         if !self.object.is_null() {
-            ffi::wl_resource_post_event(self.object, 3); // river_window_manager_v1.render_start
+            ffi::wl_resource_post_event(self.object, ffi::RIVER_WINDOW_MANAGER_V1_RENDER_START);
             self.start_timeout_timer(3000);
         } else {
             self.render_finish();
@@ -543,7 +543,7 @@ unsafe extern "C" fn wm_stop(client: *mut ffi::wl_client, resource: *mut ffi::wl
     let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
     if !wm.is_null() {
         (*wm).object = std::ptr::null_mut();
-        ffi::wl_resource_post_event(resource, 1); // river_window_manager_v1.finished (opcode 1)
+        ffi::wl_resource_post_event(resource, ffi::RIVER_WINDOW_MANAGER_V1_FINISHED);
         ffi::wl_resource_set_implementation(
             resource,
             &INERT_WM_INTERFACE as *const _ as *const _,
@@ -664,7 +664,7 @@ unsafe extern "C" fn bind(
     }
 
     if !(*wm).object.is_null() {
-        ffi::wl_resource_post_event(resource, 0); // river_window_manager_v1.unavailable
+        ffi::wl_resource_post_event(resource, ffi::RIVER_WINDOW_MANAGER_V1_UNAVAILABLE);
         ffi::wl_resource_set_implementation(
             resource,
             &INERT_WM_INTERFACE as *const _ as *const _,
@@ -689,6 +689,9 @@ unsafe extern "C" fn handle_destroy_wm_resource(resource: *mut ffi::wl_resource)
     if wm.is_null() {
         return;
     }
+    if (*wm).object != resource {
+        return;
+    }
     log::debug!("active river_window_manager_v1 destroyed");
     (*wm).object = std::ptr::null_mut();
 
@@ -711,6 +714,16 @@ unsafe extern "C" fn handle_destroy_wm_resource(resource: *mut ffi::wl_resource)
         let next = (*curr).next;
         let seat = crate::container_of!(curr, crate::seat::Seat, link);
         (*seat).make_inert();
+        
+        let bindings_head = &mut (*seat).xkb_bindings as *mut ffi::wl_list as *mut WlList;
+        let mut curr_b = (*bindings_head).next;
+        while curr_b != bindings_head {
+            let next_b = (*curr_b).next;
+            let binding = crate::container_of!(curr_b, crate::xkb_bindings::XkbBinding, link);
+            (*binding).wm_scheduled.state_change = crate::xkb_bindings::XkbBindingStateChange::None;
+            curr_b = next_b;
+        }
+        
         curr = next;
     }
 

@@ -152,6 +152,8 @@ fn main() {
         .blocklist_item("FP_SUBNORMAL")
         .blocklist_item("FP_NORMAL")
         .blocklist_item("wl_listener")
+        .blocklist_item("wlr_addon")
+        .blocklist_item("wlr_input_device")
         .generate()
         .expect("Unable to generate bindings");
 

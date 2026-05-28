@@ -78,6 +78,7 @@ pub struct Seat {
     pub link_sent: ffi::wl_list,
     pub object: *mut ffi::wl_resource,
     pub destroying: bool,
+    pub focus_requested: bool,
 }
 
 impl Seat {
@@ -115,6 +116,7 @@ impl Seat {
             link_sent: std::mem::zeroed(),
             object: std::ptr::null_mut(),
             destroying: false,
+            focus_requested: false,
         }));
 
         ffi::wl_list_init(&mut (*seat).link);
@@ -502,6 +504,7 @@ impl Seat {
             return;
         }
 
+        self.focus_requested = false;
         self.layer_shell.manage_start();
 
         let wm_v1 = (*self.server).wm.object;
@@ -524,7 +527,7 @@ impl Seat {
                     Some(handle_destroy_resource),
                 );
                 
-                ffi::wl_resource_post_event(wm_v1, 8, seat_v1); // river_window_manager_v1.seat
+                ffi::wl_resource_post_event(wm_v1, ffi::RIVER_WINDOW_MANAGER_V1_SEAT, seat_v1); // river_window_manager_v1.seat
 
                 crate::server::wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
                 let sent_seats = &mut (*self.server).wm.sent.seats as *mut ffi::wl_list as *mut crate::server::WlList;
@@ -620,6 +623,33 @@ impl Seat {
 
     pub unsafe fn manage_finish(&mut self) {
         self.xkb_bindings_seat.manage_finish();
+
+        if (*self.server).lock_manager.state != crate::lock_manager::LockState::Unlocked {
+            return;
+        }
+
+        match self.layer_shell.sent_focus {
+            crate::layer_shell::LayerShellSeatFocus::Exclusive(key) => {
+                let server = self.server;
+                if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
+                    let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
+                    self.focus(Focus::LayerSurface(wlr_surf));
+                }
+            }
+            crate::layer_shell::LayerShellSeatFocus::NonExclusive(key) => {
+                if !self.focus_requested {
+                    let server = self.server;
+                    if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
+                        let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
+                        self.focus(Focus::LayerSurface(wlr_surf));
+                    }
+                } else {
+                    self.layer_shell.scheduled_focus = crate::layer_shell::LayerShellSeatFocus::None;
+                    (*self.server).wm.dirty_windowing();
+                }
+            }
+            crate::layer_shell::LayerShellSeatFocus::None => {}
+        }
     }
 
     pub unsafe fn make_inert(&mut self) {
@@ -873,6 +903,7 @@ unsafe extern "C" fn seat_focus_window(
     if !(*(*seat).server).wm.ensure_windowing() {
         return;
     }
+    (*seat).focus_requested = true;
     if window_resource.is_null() {
         (*seat).focus(Focus::None);
         return;
@@ -895,6 +926,7 @@ unsafe extern "C" fn seat_focus_shell_surface(
     if !(*(*seat).server).wm.ensure_windowing() {
         return;
     }
+    (*seat).focus_requested = true;
     if shell_surface_resource.is_null() {
         (*seat).focus(Focus::None);
         return;
@@ -912,6 +944,7 @@ unsafe extern "C" fn seat_clear_focus(
     let seat = ffi::wl_resource_get_user_data(resource) as *mut Seat;
     if !seat.is_null() {
         if (*(*seat).server).wm.ensure_windowing() {
+            (*seat).focus_requested = true;
             (*seat).focus(Focus::None);
         }
     }
@@ -1031,6 +1064,9 @@ static SEAT_INTERFACE: ffi::river_seat_v1_interface = ffi::river_seat_v1_interfa
 unsafe extern "C" fn handle_destroy_resource(resource: *mut ffi::wl_resource) {
     let seat = ffi::wl_resource_get_user_data(resource) as *mut Seat;
     if !seat.is_null() {
+        if (*seat).object != resource {
+            return;
+        }
         (*seat).object = std::ptr::null_mut();
     }
 }

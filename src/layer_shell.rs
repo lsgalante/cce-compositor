@@ -32,7 +32,8 @@ pub struct LayerShell {
 }
 
 impl LayerShell {
-    pub unsafe fn init(&mut self, wl_display: *mut ffi::wl_display) -> Result<(), ()> {
+    pub unsafe fn init(&mut self, server: *mut Server, wl_display: *mut ffi::wl_display) -> Result<(), ()> {
+        self.server = server;
         self.global = ffi::wl_global_create(
             wl_display,
             &ffi::river_layer_shell_v1_interface,
@@ -713,7 +714,7 @@ impl LayerShellOutput {
             if !self.object.is_null() {
                 ffi::wl_resource_post_event(
                     self.object,
-                    1, // send_non_exclusive_area
+                    ffi::RIVER_LAYER_SHELL_OUTPUT_V1_NON_EXCLUSIVE_AREA,
                     self.scheduled.non_exclusive_area.x,
                     self.scheduled.non_exclusive_area.y,
                     self.scheduled.non_exclusive_area.width,
@@ -829,13 +830,13 @@ impl LayerShellSeat {
             if !self.object.is_null() {
                 match self.scheduled_focus {
                     LayerShellSeatFocus::Exclusive(_) => {
-                        ffi::wl_resource_post_event(self.object, 1); // sendFocusExclusive
+                        ffi::wl_resource_post_event(self.object, ffi::RIVER_LAYER_SHELL_SEAT_V1_FOCUS_EXCLUSIVE);
                     }
                     LayerShellSeatFocus::NonExclusive(_) => {
-                        ffi::wl_resource_post_event(self.object, 2); // sendFocusNonExclusive
+                        ffi::wl_resource_post_event(self.object, ffi::RIVER_LAYER_SHELL_SEAT_V1_FOCUS_NON_EXCLUSIVE);
                     }
                     LayerShellSeatFocus::None => {
-                        ffi::wl_resource_post_event(self.object, 0); // sendFocusNone
+                        ffi::wl_resource_post_event(self.object, ffi::RIVER_LAYER_SHELL_SEAT_V1_FOCUS_NONE);
                     }
                 }
             }

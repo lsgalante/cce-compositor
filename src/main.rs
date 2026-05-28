@@ -245,6 +245,7 @@ fn main() {
                         .collect();
                     let env_ptrs: Vec<&CStr> = env.iter().map(|s| s.as_c_str()).collect();
 
+                    eprintln!("[execve] target cmd: {}, env WAYLAND_DISPLAY: {:?}", cmd, std::env::var("WAYLAND_DISPLAY"));
                     let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
                     std::process::exit(1);
                 }

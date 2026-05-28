@@ -284,16 +284,18 @@ impl OutputManager {
                     continue;
                 }
 
-                let mut state = std::mem::zeroed();
-                ffi::wlr_output_state_init(&mut state);
-                output.sent.apply_modeset(&mut state);
-
                 states_vec.push(ffi::wlr_backend_output_state {
                     output: wlr_output,
-                    base: state,
+                    base: std::mem::zeroed(),
                 });
 
                 link = (*link).next;
+            }
+
+            for state in &mut states_vec {
+                ffi::wlr_output_state_init(&mut state.base);
+                let output = &mut *(ffi::river_wlr_output_get_data(state.output) as *mut Output);
+                output.sent.apply_modeset(&mut state.base);
             }
 
             let mut swapchain_manager = std::mem::zeroed();
@@ -338,7 +340,7 @@ impl OutputManager {
             self.first_modeset = false;
             ffi::wlr_output_swapchain_manager_apply(&mut swapchain_manager);
 
-            for mut state in states_vec {
+            for state in &mut states_vec {
                 ffi::wlr_output_state_finish(&mut state.base);
             }
             ffi::wlr_output_swapchain_manager_finish(&mut swapchain_manager);

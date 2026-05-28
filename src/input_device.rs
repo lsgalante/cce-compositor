@@ -83,7 +83,11 @@ impl InputDevice {
                 curr = next;
             }
 
-            let handle = ffi::wlr_libinput_get_device_handle(wlr_device);
+            let handle = if ffi::wlr_input_device_is_libinput(wlr_device) {
+                ffi::wlr_libinput_get_device_handle(wlr_device)
+            } else {
+                std::ptr::null_mut()
+            };
             if !handle.is_null() {
                 (*device).libinput = Some(crate::libinput_device::LibinputDevice::init(device, handle));
             }
@@ -215,7 +219,7 @@ impl InputDevice {
         wl_list_insert(list_head, &mut (*obj).link as *mut ffi::wl_list as *mut WlList);
 
         // Send input_device event to the manager resource
-        ffi::wl_resource_post_event(im_v1_resource, 0, resource); // opcode 0 is input_device in river_input_manager_v1
+        ffi::wl_resource_post_event(im_v1_resource, 1, resource); // opcode 1 is input_device in river_input_manager_v1
 
         // Send type and name to client
         ffi::wl_resource_post_event(resource, 1, proto_type); // type event

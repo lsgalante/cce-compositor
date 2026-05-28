@@ -74,6 +74,7 @@
 #include <wlr/types/wlr_linux_drm_syncobj_v1.h>
 #include <wlr/types/wlr_scene.h>
 
+#include <wlr/util/addon.h>
 #include <wlr/xwayland.h>
 
 // Wlroots utils
@@ -81,7 +82,6 @@
 #include <wlr/util/edges.h>
 #include <wlr/util/box.h>
 #include <wlr/util/region.h>
-#include <wlr/util/addon.h>
 
 // System helper libraries
 #include <xkbcommon/xkbcommon.h>

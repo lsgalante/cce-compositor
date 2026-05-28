@@ -367,6 +367,11 @@ impl XkbBinding {
     
     pub unsafe fn pressed(&mut self) {
         assert!(!self.sent_pressed);
+        if (*(*self.seat).server).wm.object.is_null() {
+            log::warn!("Pressed keybind while window manager is disconnected");
+            self.wm_scheduled.state_change = XkbBindingStateChange::None;
+            return;
+        }
         assert!(matches!(self.wm_scheduled.state_change, XkbBindingStateChange::None));
         self.wm_scheduled.state_change = XkbBindingStateChange::Pressed;
         (*(*self.seat).server).wm.dirty_windowing();
@@ -450,6 +455,23 @@ impl XkbBinding {
 unsafe extern "C" fn handle_binding_resource_destroy(resource: *mut ffi::wl_resource) {
     let binding = ffi::wl_resource_get_user_data(resource) as *mut XkbBinding;
     if !binding.is_null() {
+        let seat = (*binding).seat;
+        if !seat.is_null() {
+            let seat_groups_head = &mut (*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
+            let mut curr_g = (*seat_groups_head).next;
+            while curr_g != seat_groups_head {
+                let next_g = (*curr_g).next;
+                let g = crate::container_of!(curr_g, crate::keyboard_group::KeyboardGroup, link);
+                for press in (*g).pressed.values_mut() {
+                    if let crate::keyboard_group::KeyConsumer::Binding(b) = press.consumer {
+                        if b == binding {
+                            press.consumer = crate::keyboard_group::KeyConsumer::Binding(std::ptr::null_mut());
+                        }
+                    }
+                }
+                curr_g = next_g;
+            }
+        }
         crate::server::wl_list_remove(&mut (*binding).link as *mut ffi::wl_list as *mut crate::server::WlList);
         let _ = Box::from_raw(binding);
     }

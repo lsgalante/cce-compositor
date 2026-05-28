@@ -158,19 +158,167 @@ pub struct Output {
     pub present: ffi::wl_listener,
 }
 
+unsafe extern "C" fn handle_destroy_resource(resource: *mut ffi::wl_resource) {
+    let output = ffi::wl_resource_get_user_data(resource) as *mut Output;
+    if !output.is_null() {
+        if (*output).object != resource {
+            return;
+        }
+        (*output).object = std::ptr::null_mut();
+        (*output).sent_wl_output = false;
+    }
+}
+
+unsafe extern "C" fn output_destroy(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+    ffi::wl_resource_destroy(resource);
+}
+
+unsafe extern "C" fn output_set_presentation_mode(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+    mode: u32,
+) {
+    let output = ffi::wl_resource_get_user_data(resource) as *mut Output;
+    if output.is_null() {
+        return;
+    }
+    if !(*(*output).server).wm.ensure_rendering() {
+        return;
+    }
+    match mode {
+        ffi::river_output_v1_presentation_mode_RIVER_OUTPUT_V1_PRESENTATION_MODE_VSYNC => {
+            (*output).rendering_requested.tearing = false;
+        }
+        ffi::river_output_v1_presentation_mode_RIVER_OUTPUT_V1_PRESENTATION_MODE_ASYNC => {
+            (*output).rendering_requested.tearing = true;
+        }
+        _ => {
+            ffi::wl_resource_post_error(
+                resource,
+                ffi::river_output_v1_error_RIVER_OUTPUT_V1_ERROR_INVALID_PRESENTATION_MODE,
+                b"invalid presentation mode enum value\0".as_ptr() as *const _,
+            );
+        }
+    }
+}
+
+static OUTPUT_INTERFACE: ffi::river_output_v1_interface = ffi::river_output_v1_interface {
+    destroy: Some(output_destroy),
+    set_presentation_mode: Some(output_set_presentation_mode),
+};
+
+static INERT_OUTPUT_INTERFACE: ffi::river_output_v1_interface = ffi::river_output_v1_interface {
+    destroy: Some(output_destroy),
+    set_presentation_mode: None,
+};
+
 impl Output {
     pub unsafe fn make_inert(&mut self) {
         if !self.object.is_null() {
             ffi::wl_resource_post_event(self.object, 0); // river_output.removed
             ffi::wl_resource_set_implementation(
                 self.object,
-                std::ptr::null(),
+                &INERT_OUTPUT_INTERFACE as *const _ as *const _,
                 std::ptr::null_mut(),
                 None,
             );
             self.layer_shell.make_inert();
             self.object = std::ptr::null_mut();
             self.sent_wl_output = false;
+        }
+    }
+
+    pub unsafe fn manage_start(&mut self) {
+        match self.scheduled.state {
+            OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
+                assert!(!self.scheduled.mode_none());
+                let wlr_output = self.wlr_output;
+
+                let self_ptr = self as *mut Output;
+                let layer_shell_ptr = &mut self.layer_shell as *mut LayerShellOutput;
+                (*layer_shell_ptr).manage_start(self_ptr);
+
+                let wm_v1 = (*self.server).wm.object;
+                if !wm_v1.is_null() {
+                    let new = self.object.is_null();
+                    let output_v1 = if new {
+                        let client = ffi::wl_resource_get_client(wm_v1);
+                        let res = ffi::wl_resource_create(
+                            client,
+                            &ffi::river_output_v1_interface,
+                            ffi::wl_resource_get_version(wm_v1),
+                            0,
+                        );
+                        if res.is_null() {
+                            log::error!("out of memory");
+                            return;
+                        }
+                        self.object = res;
+                        ffi::wl_resource_set_implementation(
+                            res,
+                            &OUTPUT_INTERFACE as *const _ as *const _,
+                            self as *mut Output as *mut _,
+                            Some(handle_destroy_resource),
+                        );
+                        ffi::wl_resource_post_event(wm_v1, ffi::RIVER_WINDOW_MANAGER_V1_OUTPUT, res); // river_window_manager_v1.output
+                        res
+                    } else {
+                        self.object
+                    };
+
+                    if !self.sent_wl_output {
+                        let global = ffi::river_wlr_output_get_global(wlr_output);
+                        if !global.is_null() {
+                            let client = ffi::wl_resource_get_client(output_v1);
+                            let wl_output_name = ffi::wl_global_get_name(global, client);
+                            river_output_send_wl_output(output_v1, wl_output_name);
+                            self.sent_wl_output = true;
+                        }
+                    }
+
+                    let (scheduled_width, scheduled_height) = self.scheduled.dimensions();
+                    let (sent_width, sent_height) = self.sent.dimensions();
+
+                    if new || scheduled_width != sent_width || scheduled_height != sent_height {
+                        river_output_send_dimensions(output_v1, scheduled_width, scheduled_height);
+                    }
+                    if new || self.scheduled.x != self.sent.x || self.scheduled.y != self.sent.y {
+                        river_output_send_position(output_v1, self.scheduled.x, self.scheduled.y);
+                    }
+                }
+
+                self.sent = self.scheduled;
+
+                wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut WlList);
+                let sent_outputs = &mut (*self.server).wm.sent.outputs as *mut ffi::wl_list as *mut WlList;
+                wl_list_insert((*sent_outputs).prev, &mut self.link_sent as *mut ffi::wl_list as *mut WlList);
+            }
+            OutputStateValue::DisabledHard | OutputStateValue::Destroying => {
+                self.make_inert();
+
+                self.sent = self.scheduled;
+
+                if self.scheduled.state == OutputStateValue::Destroying {
+                    assert!(self.wlr_output.is_null());
+                    
+                    // remove output from windows fullscreen hint
+                    for &window in (*self.server).wm.windows.iter() {
+                        if let crate::window::FullscreenRequest::Fullscreen(out) = (*window).wm_scheduled.fullscreen_requested {
+                            if out == self as *mut Output {
+                                (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());
+                            }
+                        }
+                        if (*window).wm_requested.fullscreen == self as *mut Output {
+                            (*window).wm_requested.fullscreen = std::ptr::null_mut();
+                        }
+                    }
+
+                    wl_list_remove(&mut self.link as *mut ffi::wl_list as *mut WlList);
+                    wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut WlList);
+
+                    let _ = Box::from_raw(self as *mut Output);
+                }
+            }
         }
     }
 
@@ -259,10 +407,8 @@ impl Output {
         } else {
             (*raw).scheduled.mode = OutputMode::Custom { width: 1280, height: 720, refresh: 0 };
         }
-        // Trigger windowing manager update
-        // We will implement the actual server.wm.dirty_windowing() call in Phase 4, but for now we can stub it
-        // by log output or call a direct FFI / loop callback if needed.
-        log::debug!("Output created, dirty windowing");
+        
+        (*server).wm.dirty_windowing();
         Ok(())
     }
 
@@ -327,27 +473,28 @@ impl Output {
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let output_ptr = crate::container_of!(listener, Output, destroy);
-    let mut output = Box::from_raw(output_ptr);
+    let output = crate::container_of!(listener, Output, destroy);
 
     log::debug!("Output destroyed");
 
     // Remove listeners
-    wl_listener_remove(&mut output.destroy);
-    wl_listener_remove(&mut output.request_state);
-    wl_listener_remove(&mut output.frame);
-    wl_listener_remove(&mut output.present);
+    wl_listener_remove(&mut (*output).destroy);
+    wl_listener_remove(&mut (*output).request_state);
+    wl_listener_remove(&mut (*output).frame);
+    wl_listener_remove(&mut (*output).present);
 
-    // Remove from outputs list
-    let link_custom = &mut output.link as *mut ffi::wl_list as *mut WlList;
-    wl_list_remove(link_custom);
-
-    let link_sent_custom = &mut output.link_sent as *mut ffi::wl_list as *mut WlList;
-    wl_list_remove(link_sent_custom);
-
-    if !output.wlr_output.is_null() {
-        ffi::river_wlr_output_set_data(output.wlr_output, std::ptr::null_mut());
+    if !(*output).wlr_output.is_null() {
+        ffi::river_wlr_output_set_data((*output).wlr_output, std::ptr::null_mut());
     }
+
+    (*output).wlr_output = std::ptr::null_mut();
+    (*output).scene_output = std::ptr::null_mut();
+    (*output).scheduled.mode = OutputMode::None;
+    (*output).sent.mode = OutputMode::None;
+    (*output).current.mode = OutputMode::None;
+    (*output).scheduled.state = OutputStateValue::Destroying;
+
+    (*(*output).server).wm.dirty_windowing();
 }
 
 unsafe extern "C" fn handle_request_state(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -367,6 +514,8 @@ unsafe extern "C" fn handle_request_state(listener: *mut ffi::wl_listener, data:
             };
         }
     }
+
+    (*output.server).wm.dirty_windowing();
 }
 
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

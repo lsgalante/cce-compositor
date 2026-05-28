@@ -347,6 +347,8 @@ impl Window {
         ffi::wl_list_init(&mut window.decorations_above);
 
         let raw = Box::into_raw(window);
+        let key = (*(*raw).server).wm.windows.put(raw);
+        (*raw).ref_key = key;
         (*raw).node.init(crate::wm_node::WmNodeTag::Window);
 
         ffi::wlr_scene_node_set_enabled(tree as *mut ffi::wlr_scene_node, false);
@@ -580,6 +582,8 @@ impl Window {
 
         (*window).node.deinit();
 
+        (*(*window).server).wm.windows.remove((*window).ref_key);
+
         let _ = Box::from_raw(window);
     }
 
@@ -699,7 +703,7 @@ impl Window {
                     );
                     
                     // Send window to manager
-                    ffi::wl_resource_post_event(wm_v1, 0, res); // river_window_manager_v1.window
+                    ffi::wl_resource_post_event(wm_v1, ffi::RIVER_WINDOW_MANAGER_V1_WINDOW, res); // river_window_manager_v1.window
 
                     wl_list_remove(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
                     let rendering_list = &mut (*self.server).wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
@@ -744,12 +748,12 @@ impl Window {
                 if new_resource {
                     let version = ffi::wl_resource_get_version(window_v1);
                     if version >= 2 {
-                        ffi::wl_resource_post_event(window_v1, 14, self.unreliable_pid()); // sendUnreliablePid
+                        ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_UNRELIABLE_PID, self.unreliable_pid()); // sendUnreliablePid
                     }
                     if version >= 4 {
                         if !self.foreign_toplevel_handle.is_null() {
                             let identifier = (*self.foreign_toplevel_handle).identifier;
-                            ffi::wl_resource_post_event(window_v1, 16, identifier);
+                            ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_IDENTIFIER, identifier);
                         }
                     }
                 }
@@ -757,7 +761,7 @@ impl Window {
                 if new_resource || self.wm_scheduled.dimensions_hint != self.wm_sent.dimensions_hint {
                     ffi::wl_resource_post_event(
                         window_v1,
-                        2, // sendDimensionsHint
+                        ffi::RIVER_WINDOW_V1_DIMENSIONS_HINT, // sendDimensionsHint
                         self.wm_scheduled.dimensions_hint.min_width as i32,
                         self.wm_scheduled.dimensions_hint.min_height as i32,
                         self.wm_scheduled.dimensions_hint.max_width as i32,
@@ -767,23 +771,35 @@ impl Window {
                 }
 
                 if new_resource || self.wm_scheduled.decoration_hint != self.wm_sent.decoration_hint {
-                    ffi::wl_resource_post_event(window_v1, 1, self.wm_scheduled.decoration_hint); // sendDecorationHint
+                    ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_DECORATION_HINT, self.wm_scheduled.decoration_hint); // sendDecorationHint
                     self.wm_sent.decoration_hint = self.wm_scheduled.decoration_hint;
                 }
 
                 if let Some(ref offset) = self.wm_scheduled.show_window_menu_requested {
-                    ffi::wl_resource_post_event(window_v1, 3, offset.x, offset.y); // sendShowWindowMenuRequested
+                    ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_SHOW_WINDOW_MENU_REQUESTED, offset.x, offset.y); // sendShowWindowMenuRequested
                     self.wm_scheduled.show_window_menu_requested = None;
                 }
 
                 match self.wm_scheduled.fullscreen_requested {
                     FullscreenRequest::NoRequest => {}
                     FullscreenRequest::Fullscreen(output) => {
-                        let out_resource = if output.is_null() { std::ptr::null_mut() } else { (*output).object };
-                        ffi::wl_resource_post_event(window_v1, 4, out_resource); // sendFullscreenRequested
+                        let mut out_resource = if output.is_null() { std::ptr::null_mut() } else { (*output).object };
+                        if !window_v1.is_null() && !out_resource.is_null() {
+                            let client_win = ffi::wl_resource_get_client(window_v1);
+                            let client_out = ffi::wl_resource_get_client(out_resource);
+                            if client_win != client_out {
+                                log::error!(
+                                    "Fullscreen output client mismatch: win_client={:?}, out_client={:?}. Fallback to null_mut",
+                                    client_win,
+                                    client_out
+                                );
+                                out_resource = std::ptr::null_mut();
+                            }
+                        }
+                        ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_FULLSCREEN_REQUESTED, out_resource); // sendFullscreenRequested
                     }
                     FullscreenRequest::Exit => {
-                        ffi::wl_resource_post_event(window_v1, 5); // sendExitFullscreenRequested
+                        ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_EXIT_FULLSCREEN_REQUESTED); // sendExitFullscreenRequested
                     }
                 }
                 self.wm_scheduled.fullscreen_requested = FullscreenRequest::NoRequest;
@@ -791,16 +807,16 @@ impl Window {
                 match self.wm_scheduled.maximize_requested {
                     MaximizeRequest::NoRequest => {}
                     MaximizeRequest::Maximize => {
-                        ffi::wl_resource_post_event(window_v1, 6); // sendMaximizeRequested
+                        ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_MAXIMIZE_REQUESTED); // sendMaximizeRequested
                     }
                     MaximizeRequest::Unmaximize => {
-                        ffi::wl_resource_post_event(window_v1, 7); // sendUnmaximizeRequested
+                        ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_UNMAXIMIZE_REQUESTED); // sendUnmaximizeRequested
                     }
                 }
                 self.wm_scheduled.maximize_requested = MaximizeRequest::NoRequest;
 
                 if self.wm_scheduled.minimize_requested {
-                    ffi::wl_resource_post_event(window_v1, 8); // sendMinimizeRequested
+                    ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_MINIMIZE_REQUESTED); // sendMinimizeRequested
                 }
                 self.wm_scheduled.minimize_requested = false;
 
@@ -809,36 +825,36 @@ impl Window {
                     let parent_ref = Some((*parent).ref_key);
                     if self.wm_sent.parent.is_none() || self.wm_sent.parent != parent_ref {
                         let parent_obj = (*parent).object;
-                        ffi::wl_resource_post_event(window_v1, 11, parent_obj); // sendParent
+                        ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_PARENT, parent_obj); // sendParent
                         self.wm_sent.parent = parent_ref;
                     }
                 } else if self.wm_sent.parent.is_some() {
-                    ffi::wl_resource_post_event(window_v1, 11, std::ptr::null_mut::<ffi::wl_resource>()); // sendParent
+                    ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_PARENT, std::ptr::null_mut::<ffi::wl_resource>()); // sendParent
                     self.wm_sent.parent = None;
                 }
 
                 if new_resource || self.wm_scheduled.dirty_app_id {
                     let app_id = self.get_app_id();
-                    ffi::wl_resource_post_event(window_v1, 13, app_id); // sendAppId
+                    ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_APP_ID, app_id); // sendAppId
                     self.wm_scheduled.dirty_app_id = false;
                 }
 
                 if new_resource || self.wm_scheduled.dirty_title {
                     let title = self.get_title();
-                    ffi::wl_resource_post_event(window_v1, 12, title); // sendTitle
+                    ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_TITLE, title); // sendTitle
                     self.wm_scheduled.dirty_title = false;
                 }
 
                 if let Some(seat) = self.wm_scheduled.pointer_move_requested.as_mut() {
                     if !seat.object.is_null() {
-                        ffi::wl_resource_post_event(window_v1, 9, seat.object); // sendPointerMoveRequested
+                        ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_POINTER_MOVE_REQUESTED, seat.object); // sendPointerMoveRequested
                     }
                 }
                 self.wm_scheduled.pointer_move_requested = std::ptr::null_mut();
 
                 if let Some(ref data) = self.wm_scheduled.pointer_resize_requested {
                     if !(*data.seat).object.is_null() {
-                        ffi::wl_resource_post_event(window_v1, 10, (*data.seat).object, data.edges); // sendPointerResizeRequested
+                        ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_POINTER_RESIZE_REQUESTED, (*data.seat).object, data.edges); // sendPointerResizeRequested
                     }
                 }
                 self.wm_scheduled.pointer_resize_requested = None;
@@ -848,7 +864,7 @@ impl Window {
 
     pub unsafe fn make_inert(&mut self) {
         if !self.object.is_null() {
-            ffi::wl_resource_post_event(self.object, 15); // sendClosed
+            ffi::wl_resource_post_event(self.object, ffi::RIVER_WINDOW_V1_CLOSED); // sendClosed
             ffi::wl_resource_set_implementation(
                 self.object,
                 &INERT_WINDOW_INTERFACE as *const _ as *const _,
@@ -1022,7 +1038,7 @@ impl Window {
            (scheduled.resend_dimensions ||
             scheduled.width != sent.width || scheduled.height != sent.height) {
             if !self.object.is_null() {
-                ffi::wl_resource_post_event(self.object, 0, scheduled.width as i32, scheduled.height as i32); // sendDimensions
+                ffi::wl_resource_post_event(self.object, ffi::RIVER_WINDOW_V1_DIMENSIONS, scheduled.width as i32, scheduled.height as i32); // sendDimensions
                 scheduled.resend_dimensions = false;
             }
         }
@@ -1032,7 +1048,7 @@ impl Window {
             if !self.object.is_null() {
                 let version = ffi::wl_resource_get_version(self.object);
                 if version >= 4 {
-                    ffi::wl_resource_post_event(self.object, 17, presentation_hint); // sendPresentationHint
+                    ffi::wl_resource_post_event(self.object, ffi::RIVER_WINDOW_V1_PRESENTATION_HINT, presentation_hint); // sendPresentationHint
                 }
             }
             sent.presentation_hint = presentation_hint;
@@ -1794,6 +1810,9 @@ static INERT_WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_windo
 unsafe extern "C" fn handle_destroy_resource(resource: *mut ffi::wl_resource) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
     if !window.is_null() {
+        if (*window).object != resource {
+            return;
+        }
         (*window).object = std::ptr::null_mut();
         (*window).node.make_inert();
         

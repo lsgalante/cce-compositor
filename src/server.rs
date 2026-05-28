@@ -176,10 +176,20 @@ pub struct WlrXwayland {
 
 // Wayland list manipulation utilities
 pub unsafe fn wl_list_insert(list: *mut WlList, elm: *mut WlList) {
+    log::info!("wl_list_insert: list={:?}, elm={:?}", list, elm);
+    if list.is_null() {
+        log::error!("wl_list_insert: list is null!");
+        return;
+    }
+    if elm.is_null() {
+        log::error!("wl_list_insert: elm is null!");
+        return;
+    }
     (*elm).prev = list;
     (*elm).next = (*list).next;
     (*(*list).next).prev = elm;
     (*list).next = elm;
+    log::info!("wl_list_insert: done");
 }
 
 pub unsafe fn wl_list_remove(elm: *mut WlList) {
@@ -190,7 +200,13 @@ pub unsafe fn wl_list_remove(elm: *mut WlList) {
 }
 
 pub unsafe fn wl_signal_add(signal: *mut ffi::wl_signal, listener: *mut ffi::wl_listener) {
+    log::info!("wl_signal_add: signal={:?}, listener={:?}", signal, listener);
+    if signal.is_null() {
+        log::error!("wl_signal_add: signal is null!");
+        return;
+    }
     let sig_list = &mut (*signal).listener_list as *mut ffi::wl_list as *mut WlList;
+    log::info!("wl_signal_add: sig_list={:?}, prev={:?}, next={:?}", sig_list, (*sig_list).prev, (*sig_list).next);
     let listener_custom = listener as *mut WlListener;
     wl_list_insert((*sig_list).prev, &mut (*listener_custom).link);
 }
@@ -594,7 +610,7 @@ impl Server {
             let server_ptr = self as *mut Server;
             self.wm.init_with_server(server_ptr).map_err(|_| "Failed to init wm")?;
             self.xkb_bindings.init(server_ptr, self.wl_server).map_err(|_| "Failed to init xkb_bindings")?;
-            self.layer_shell.init(self.wl_server).map_err(|_| "Failed to init layer_shell")?;
+            self.layer_shell.init(server_ptr, self.wl_server).map_err(|_| "Failed to init layer_shell")?;
             self.scene.init(self.linux_dmabuf, self.color_manager).map_err(|_| "Failed to init scene")?;
             self.om.init(server_ptr).map_err(|_| "Failed to init om")?;
             self.input_manager.init(server_ptr).map_err(|_| "Failed to init input_manager")?;

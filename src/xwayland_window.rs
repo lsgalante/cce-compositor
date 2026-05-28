@@ -313,7 +313,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
 unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, set_override_redirect);
     let xsurface = (*xwindow).xsurface;
-    log::debug!("xwayland surface set override redirect");
+    log::info!("xwayland surface set override redirect: val={}", (*xsurface).override_redirect);
     assert!((*xsurface).override_redirect);
 
     let surface = (*xsurface).surface;
