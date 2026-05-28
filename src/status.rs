@@ -9,10 +9,11 @@ pub const NUM_TAGS: u32 = 4;
 /// Write status files only (no pkill signaling). Safe to call inside
 /// Dispatch callbacks — no fork, no blocking, just file I/O.
 pub fn write_status_files(state: &WindowManager) {
+    use crate::paths;
     use std::io::Write;
 
     // /tmp/clearwm-tags: active_tags focused_tags num_tags
-    if let Ok(mut f) = fs::File::create("/tmp/clearwm-tags") {
+    if let Ok(mut f) = fs::File::create(paths::get_tags_path()) {
         let _ = writeln!(
             f,
             "{} {} {}",
@@ -30,12 +31,12 @@ pub fn write_status_files(state: &WindowManager) {
             .unwrap_or("none")
     };
 
-    if let Ok(mut f) = fs::File::create("/tmp/clearwm-layout") {
+    if let Ok(mut f) = fs::File::create(paths::get_layout_path()) {
         let _ = writeln!(f, "{}", mode_str);
     }
 
     // /tmp/clearwm-windows: one line per window
-    if let Ok(mut f) = fs::File::create("/tmp/clearwm-windows") {
+    if let Ok(mut f) = fs::File::create(paths::get_windows_path()) {
         let focused_title = state.focused_window().map(|w| w.title.clone());
 
         for win in &state.windows {
@@ -67,7 +68,7 @@ pub fn write_status_files(state: &WindowManager) {
 
         // /tmp/clearwm-title
         if let Some(title) = focused_title {
-            if let Ok(mut tf) = fs::File::create("/tmp/clearwm-title") {
+            if let Ok(mut tf) = fs::File::create(paths::get_title_path()) {
                 let _ = writeln!(tf, "{}", title.as_deref().unwrap_or("(null)"));
             }
         }

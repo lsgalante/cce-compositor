@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
 
-pub const IPC_SOCKET_PATH: &str = "/tmp/clearwm.sock";
+use crate::paths;
 
 pub struct IpcReceiver {
     pub rx: mpsc::Receiver<String>,
@@ -24,12 +24,13 @@ pub fn spawn_ipc_server(pipe_write: libc::c_int) -> IpcReceiver {
 }
 
 fn ipc_server_main(tx: mpsc::Sender<String>, pipe_write: libc::c_int) {
-    let _ = std::fs::remove_file(IPC_SOCKET_PATH);
+    let socket_path = paths::get_socket_path();
+    let _ = std::fs::remove_file(&socket_path);
 
-    let listener = match UnixListener::bind(IPC_SOCKET_PATH) {
+    let listener = match UnixListener::bind(&socket_path) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("[ipc] failed to bind {}: {}", IPC_SOCKET_PATH, e);
+            eprintln!("[ipc] failed to bind {}: {}", socket_path, e);
             return;
         }
     };
@@ -39,7 +40,7 @@ fn ipc_server_main(tx: mpsc::Sender<String>, pipe_write: libc::c_int) {
         return;
     }
 
-    eprintln!("[ipc] listening on {}", IPC_SOCKET_PATH);
+    eprintln!("[ipc] listening on {}", socket_path);
 
     let mut streams: Vec<UnixStream> = Vec::new();
 

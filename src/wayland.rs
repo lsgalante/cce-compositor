@@ -397,7 +397,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     if let Ok(mut f) = std::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
-                        .open("/tmp/clearwm-death.log")
+                        .open(crate::paths::get_death_log_path())
                     {
                         use std::io::Write;
                         let _ = writeln!(
@@ -571,7 +571,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                             continue;
                         }
                         window.xprop_check_attempts += 1;
-                        let path = format!("/tmp/clearwm-xprop-{}", window.id);
+                        let path = crate::paths::get_xprop_path(window.id);
                         if let Ok(content) = std::fs::read_to_string(&path) {
                             let _ = std::fs::remove_file(&path);
                             // Each line: title|window_type_line
@@ -1111,14 +1111,15 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
                     if !window.has_parent && window.pid > 0 {
                         let pid = window.pid;
                         let id = window.id;
+                        let path = crate::paths::get_xprop_path(id);
                         let cmd = format!(
                             "for xid in $(xdotool search --pid {pid} 2>/dev/null); do \
                              t=$(xdotool getwindowname $xid 2>/dev/null); \
                              wt=$(xprop -id $xid _NET_WM_WINDOW_TYPE 2>/dev/null); \
                              printf '%s|%s\\n' \"$t\" \"$wt\"; \
-                             done > /tmp/clearwm-xprop-{id}",
+                             done > {path}",
                             pid = pid,
-                            id = id
+                            path = path
                         );
                         crate::config::spawn_command_bg(&cmd);
                         window.needs_xprop_check = true;

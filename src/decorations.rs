@@ -12,7 +12,7 @@ use crate::wayland::AppState;
 fn resolve_window_border_font_path() -> Option<String> {
     use std::io::Read;
     let mut child = std::process::Command::new("fc-match")
-        .args(&["-f", "%{file}", "window-borders"])
+        .args(&["-f", "%{file}", "window\\-borders"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -325,10 +325,14 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
 
         let wp = &mut state.window_proxies[wp_idx].1;
 
+        let scale = (state.wm.output_scale.round() as i32).max(1);
+
         // Determine titlebar dimensions:
         // Height equals border_width (or 16 if border_width is too small to display font)
-        let dec_height = std::cmp::max(border_width, 16);
-        let dec_width = win_width + 2 * border_width;
+        let logical_height = std::cmp::max(border_width, 16);
+        let logical_width = win_width + 2 * border_width;
+        let dec_height = logical_height * scale;
+        let dec_width = logical_width * scale;
 
         let needs_new_buffer = match &wp.decoration {
             Some(dec) => dec.width != dec_width || dec.height != dec_height,
@@ -405,6 +409,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                     dec.height = dec_height;
                     dec.mapped_data = mapped_data;
                     dec.mapped_size = size;
+                    dec.surface.set_buffer_scale(scale);
                 } else {
                     eprintln!("[decorations] failed to mmap decoration buffer");
                     unsafe { libc::close(fd); }
@@ -431,16 +436,16 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             // Draw window title text
             if let Some(ref font) = state.border_font {
                 let font_size = if state.wm.layout.border_font_size > 0 {
-                    state.wm.layout.border_font_size as f32
+                    state.wm.layout.border_font_size as f32 * scale as f32
                 } else {
-                    if dec_height >= 32 {
-                        22.0
-                    } else if dec_height >= 24 {
-                        16.0
-                    } else if dec_height >= 16 {
-                        11.0
+                    if logical_height >= 32 {
+                        22.0 * scale as f32
+                    } else if logical_height >= 24 {
+                        16.0 * scale as f32
+                    } else if logical_height >= 16 {
+                        11.0 * scale as f32
                     } else {
-                        (dec_height as f32 - 4.0).max(8.0)
+                        (logical_height as f32 - 4.0).max(8.0) * scale as f32
                     }
                 };
 
@@ -452,7 +457,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 });
                 let baseline_y = (dec_height as f32 + line_metrics.ascent + line_metrics.descent) / 2.0;
 
-                let mut text_x = 8.0f32; // Margin from left
+                let mut text_x = 8.0f32 * scale as f32; // Margin from left
                 for c in title.chars() {
                     let (metrics, bitmap) = font.rasterize(c, font_size);
                     if text_x + metrics.xmin as f32 + metrics.width as f32 > dec_width as f32 {
@@ -499,19 +504,19 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 }
             } else {
                 // Determine font scale (1x if height < 32, 2x if height >= 32)
-                let scale = if dec_height >= 32 { 2 } else { 1 };
-                let font_h = 8 * scale;
+                let drawing_scale = if logical_height >= 32 { 2 } else { 1 };
+                let font_h = 8 * drawing_scale * scale;
                 
                 // Vertically center the text inside the titlebar
                 let text_y = (dec_height - font_h) / 2;
-                let mut text_x = 8; // Margin from left
+                let mut text_x = 8 * scale; // Margin from left
 
                 for c in title.chars() {
-                    if text_x + 8 * scale > dec_width {
+                    if text_x + 8 * drawing_scale * scale > dec_width {
                         break; // Out of bounds
                     }
-                    draw_char(buffer_slice, dec_width, dec_height, c, text_x, text_y, scale, text_color);
-                    text_x += 8 * scale;
+                    draw_char(buffer_slice, dec_width, dec_height, c, text_x, text_y, drawing_scale * scale, text_color);
+                    text_x += 8 * drawing_scale * scale;
                 }
             }
 

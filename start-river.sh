@@ -18,23 +18,23 @@ export XCURSOR_PATH="/home/lsgalante/.local/share/icons:/home/lsgalante/.icons:/
 # Create the River init executable (clearwm launch script)
 # This must exist before River starts, and /tmp is cleared on reboot.
 if [ "$LOGGING" = true ]; then
-    cat > /tmp/clearwm-rs-launch.sh << 'LAUNCH_EOF'
+    cat > /tmp/clearwm-rs-launch-river.sh << 'LAUNCH_EOF'
 #!/bin/sh
-exec /home/lsgalante/.local/bin/clearwm 2>/tmp/clearwm.log
+exec /home/lsgalante/.local/bin/clearwm 2>/tmp/clearwm-${WAYLAND_DISPLAY}.log
 LAUNCH_EOF
 else
-    cat > /tmp/clearwm-rs-launch.sh << 'LAUNCH_EOF'
+    cat > /tmp/clearwm-rs-launch-river.sh << 'LAUNCH_EOF'
 #!/bin/sh
 exec /home/lsgalante/.local/bin/clearwm
 LAUNCH_EOF
 fi
-chmod +x /tmp/clearwm-rs-launch.sh
+chmod +x /tmp/clearwm-rs-launch-river.sh
 
 echo "Starting river with clearwm..."
 if [ "$LOGGING" = true ]; then
-    echo "Logs: /tmp/river-clearwm.log + /tmp/clearwm.log"
+    echo "Logs: /tmp/river-clearwm.log + /tmp/clearwm-${WAYLAND_DISPLAY}.log"
 else
     echo "Logging disabled. Use --logging to enable."
 fi
 
-exec river -c /tmp/clearwm-rs-launch.sh 2>/tmp/river-clearwm.log
+exec river -c /tmp/clearwm-rs-launch-river.sh 2>/tmp/river-clearwm.log

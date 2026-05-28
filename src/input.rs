@@ -450,9 +450,9 @@ pub fn run_input_daemon(
 
         // Broadcast coordinate socket setup
         let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(32);
-        let socket_path = "/tmp/clear-input-coords.sock";
-        let _ = fs::remove_file(socket_path);
-        let listener = tokio::net::UnixListener::bind(socket_path)?;
+        let socket_path = crate::paths::get_input_coords_socket_path();
+        let _ = fs::remove_file(&socket_path);
+        let listener = tokio::net::UnixListener::bind(&socket_path)?;
         let b_tx = broadcast_tx.clone();
         tokio::spawn(async move {
             loop {

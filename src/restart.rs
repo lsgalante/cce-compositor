@@ -22,12 +22,14 @@ use crate::types::WindowManager;
 pub fn wm_restart() {
     use std::time::Instant;
 
+    use crate::paths;
+
     // Write to death log before fork — this is the last chance to capture
     // why we're restarting, since fork+process::exit(0) silently kills the parent.
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/clearwm-death.log")
+        .open(paths::get_death_log_path())
     {
         use std::io::Write;
         let _ = writeln!(f, "wm_restart() called — about to fork+exit");
@@ -65,10 +67,10 @@ pub fn wm_restart() {
 
     // Save the current log before River's launch script truncates it on restart.
     // This preserves the crash/reason for the restart.
-    let _ = std::fs::copy("/tmp/clearwm.log", "/tmp/clearwm-prev.log");
+    let _ = std::fs::copy(paths::get_log_path(), paths::get_prev_log_path());
 
     // Remove the IPC socket
-    let _ = std::fs::remove_file("/tmp/clearwm.sock");
+    let _ = std::fs::remove_file(paths::get_socket_path());
 
     // Get the current executable path.
     // CString is required because execl() needs a null-terminated C string;
@@ -162,7 +164,7 @@ pub fn wm_restart() {
                 if let Ok(mut f) = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
-                    .open("/tmp/clearwm-death.log")
+                    .open(paths::get_death_log_path())
                 {
                     use std::io::Write;
                     let _ = writeln!(

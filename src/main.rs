@@ -9,7 +9,7 @@ use clearwm::wayland::wayland_init;
 use std::env;
 use std::fs;
 
-const SOCKET_PATH: &str = "/tmp/clearwm.sock";
+use clearwm::paths;
 
 /// Write a crash/exit trace to /tmp/clearwm-death.log so we can diagnose
 /// why clearwm dies even when the normal log gets overwritten on restart.
@@ -18,7 +18,7 @@ fn log_death(msg: &str) {
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/clearwm-death.log")
+        .open(paths::get_death_log_path())
     {
         let _ = writeln!(f, "{}", msg);
     }
@@ -34,7 +34,7 @@ fn main() {
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("/tmp/clearwm-death.log")
+            .open(paths::get_death_log_path())
         {
             let _ = writeln!(f, "{}", msg);
         }
@@ -177,7 +177,7 @@ fn main() {
         // 2. Flush outgoing requests to the compositor
         if let Err(e) = event_queue.flush() {
             log_death(&format!("flush error: {:?}", e));
-            let _ = std::fs::copy("/tmp/clearwm.log", "/tmp/clearwm-prev.log");
+            let _ = std::fs::copy(paths::get_log_path(), paths::get_prev_log_path());
             if !state.wm.exit_requested {
                 restart::wm_restart();
             }
@@ -263,10 +263,10 @@ fn main() {
             break;
         }
     }
-    let _ = fs::remove_file(SOCKET_PATH);
+    let _ = fs::remove_file(paths::get_socket_path());
     if !state.wm.exit_requested {
         // Save log before restart overwrites it
-        let _ = std::fs::copy("/tmp/clearwm.log", "/tmp/clearwm-prev.log");
+        let _ = std::fs::copy(paths::get_log_path(), paths::get_prev_log_path());
         restart::wm_restart();
     }
     log_death("main loop exited cleanly");
@@ -292,7 +292,7 @@ extern "C" fn dump_backtrace(_sig: nix::libc::c_int) {
         .create(true)
         .write(true)
         .truncate(true)
-        .open("/tmp/clearwm-bt.txt")
+        .open(paths::get_bt_path())
     {
         let _ = writeln!(f, "SIGUSR2 backtrace:\n{:?}", bt);
         let _ = f.sync_all();

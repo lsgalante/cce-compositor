@@ -13,7 +13,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
 
 /// The socket path for the status server.
-pub const STATUS_SOCKET_PATH: &str = "/tmp/clearwm-status.sock";
+use crate::paths;
 
 /// A status update sent from the main loop to the server thread.
 #[derive(Debug, Clone)]
@@ -25,6 +25,7 @@ pub struct StatusUpdate {
     /// Plain text for title module subscribers
     pub title_text: String,
 }
+
 
 /// Subscription types that waybar scripts can request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,13 +82,14 @@ pub fn spawn_status_server() -> StatusSender {
 }
 
 fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
+    let socket_path = paths::get_status_socket_path();
     // Remove stale socket
-    let _ = std::fs::remove_file(STATUS_SOCKET_PATH);
+    let _ = std::fs::remove_file(&socket_path);
 
-    let listener = match UnixListener::bind(STATUS_SOCKET_PATH) {
+    let listener = match UnixListener::bind(&socket_path) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("[status] failed to bind {}: {}", STATUS_SOCKET_PATH, e);
+            eprintln!("[status] failed to bind {}: {}", socket_path, e);
             return;
         }
     };
@@ -98,7 +100,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
         return;
     }
 
-    eprintln!("[status] listening on {}", STATUS_SOCKET_PATH);
+    eprintln!("[status] listening on {}", socket_path);
 
     let mut clients: Vec<Client> = Vec::new();
     let mut latest: Option<StatusUpdate> = None;
@@ -152,7 +154,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     eprintln!("[status] channel disconnected, exiting");
-                    let _ = std::fs::remove_file(STATUS_SOCKET_PATH);
+                    let _ = std::fs::remove_file(&socket_path);
                     return;
                 }
             }

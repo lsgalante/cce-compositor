@@ -6,7 +6,19 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::process;
 
-const SOCKET_PATH: &str = "/tmp/clearwm.sock";
+fn get_socket_path() -> String {
+    match env::var("WAYLAND_DISPLAY") {
+        Ok(display) => format!("/tmp/clearwm-{}.sock", display),
+        Err(_) => "/tmp/clearwm.sock".to_string(),
+    }
+}
+
+fn get_windows_path() -> String {
+    match env::var("WAYLAND_DISPLAY") {
+        Ok(display) => format!("/tmp/clearwm-windows-{}", display),
+        Err(_) => "/tmp/clearwm-windows".to_string(),
+    }
+}
 
 fn usage(name: &str, to_stderr: bool) {
     let print = |s: &str| {
@@ -55,7 +67,7 @@ fn main() {
 
     // Special case: "windows" reads the status file directly
     if args[1] == "windows" {
-        match fs::read_to_string("/tmp/clearwm-windows") {
+        match fs::read_to_string(get_windows_path()) {
             Ok(content) => print!("{}", content),
             Err(_) => eprintln!("No windows info (clearwm may not be running)"),
         }
@@ -63,7 +75,7 @@ fn main() {
     }
 
     // Connect to IPC socket
-    let stream = match UnixStream::connect(SOCKET_PATH) {
+    let stream = match UnixStream::connect(get_socket_path()) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("connect: {}", e);

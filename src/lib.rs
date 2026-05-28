@@ -16,4 +16,6 @@ pub mod types;
 pub mod wayland;
 pub mod wm;
 pub mod input;
+pub mod paths;
+
 
