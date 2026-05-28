@@ -86,7 +86,4 @@ unsafe extern "C" fn handle_destroy(
     let drag_icon_ptr = crate::container_of!(listener, DragIcon, destroy);
     let mut drag_icon = Box::from_raw(drag_icon_ptr);
     wl_listener_remove(&mut drag_icon.destroy);
-
-    // Destroy the scene node hierarchy.
-    ffi::wlr_scene_node_destroy(drag_icon.scene_drag_icon as *mut ffi::wlr_scene_node);
 }
