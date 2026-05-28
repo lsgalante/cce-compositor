@@ -257,6 +257,12 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
         ffi::river_wlr_input_device_get_type(device.wlr_device)
     );
 
+    // Detach from seat if attached
+    if !device.seat.is_null() {
+        (*device.seat).detach_device(device);
+        (*device.seat).update_capabilities();
+    }
+
     // Free objects and set inert
     let objects_head = &mut device.objects as *mut ffi::wl_list as *mut WlList;
     let mut curr = (*objects_head).next;
@@ -297,12 +303,6 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
 
     // Remove from InputManager::devices
     wl_list_remove(&mut device.link as *mut ffi::wl_list as *mut WlList);
-
-    // Detach from seat if attached
-    if !device.seat.is_null() {
-        (*device.seat).detach_device(device);
-        (*device.seat).update_capabilities();
-    }
 
     // Free wrapper memory
     let _boxed = Box::from_raw(device_ptr);
