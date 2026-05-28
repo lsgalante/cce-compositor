@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, wl_signal_add, wl_listener_remove, WlList, wl_list_insert, wl_list_remove};
+use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
 
 pub struct LibinputConfig {
     pub server: *mut Server,
     pub global: *mut ffi::wl_global,
     pub objects: ffi::wl_list,
+    pub devices: ffi::wl_list,
 }
 
 pub struct LibinputConfigObject {
@@ -26,6 +27,7 @@ impl LibinputConfig {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.server = server;
         ffi::wl_list_init(&mut self.objects);
+        ffi::wl_list_init(&mut self.devices);
 
         self.global = ffi::wl_global_create(
             (*server).wl_server,
@@ -86,6 +88,15 @@ unsafe extern "C" fn bind_libinput_config(
 
     let list_head = &mut (*config).objects as *mut ffi::wl_list as *mut WlList;
     wl_list_insert((*list_head).prev, &mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+
+    let devices_head = &mut (*config).devices as *mut ffi::wl_list as *mut WlList;
+    let mut curr = (*devices_head).next;
+    while curr != devices_head {
+        let next = (*curr).next;
+        let dev = crate::container_of!(curr, crate::libinput_device::LibinputDevice, link);
+        (*dev).create_object(resource);
+        curr = next;
+    }
 }
 
 unsafe extern "C" fn handle_object_destroy(resource: *mut ffi::wl_resource) {
@@ -143,52 +154,15 @@ unsafe extern "C" fn libinput_config_create_accel_config(
     client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     id: u32,
-    _profile: u32,
+    profile: u32,
 ) {
-    let accel_res = ffi::wl_resource_create(
+    if let Err(e) = crate::libinput_accel_config::LibinputAccelConfig::create(
         client,
-        &ffi::river_libinput_accel_config_v1_interface,
-        ffi::wl_resource_get_version(resource),
+        ffi::wl_resource_get_version(resource) as u32,
         id,
-    );
-    if accel_res.is_null() {
-        ffi::wl_client_post_no_memory(client);
-        return;
-    }
-
-    static LIBINPUT_ACCEL_CONFIG_INTERFACE: ffi::river_libinput_accel_config_v1_interface = ffi::river_libinput_accel_config_v1_interface {
-        destroy: Some(libinput_accel_config_destroy),
-        set_points: Some(libinput_accel_config_set_points),
-    };
-
-    ffi::wl_resource_set_implementation(
-        accel_res,
-        &LIBINPUT_ACCEL_CONFIG_INTERFACE as *const _ as *const _,
-        std::ptr::null_mut(),
-        None,
-    );
-}
-
-unsafe extern "C" fn libinput_accel_config_destroy(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
-    ffi::wl_resource_destroy(resource);
-}
-
-unsafe extern "C" fn libinput_accel_config_set_points(
-    client: *mut ffi::wl_client,
-    resource: *mut ffi::wl_resource,
-    result_id: u32,
-    _accel_type: u32,
-    _step: *mut ffi::wl_array,
-    _points: *mut ffi::wl_array,
-) {
-    let result_res = ffi::wl_resource_create(
-        client,
-        &ffi::river_libinput_result_v1_interface,
-        ffi::wl_resource_get_version(resource),
-        result_id,
-    );
-    if !result_res.is_null() {
-        ffi::wl_resource_post_event(result_res, 1); // unsupported event
-        ffi::wl_resource_destroy(result_res);
+        profile,
+    ) {
+        log::error!("Failed to create LibinputAccelConfig: {}", e);
+        ffi::wl_resource_post_no_memory(resource);
     }
 }

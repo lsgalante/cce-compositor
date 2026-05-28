@@ -15,6 +15,8 @@ mod output;
 mod output_manager;
 mod input_manager;
 mod libinput_config;
+pub mod libinput_device;
+pub mod libinput_accel_config;
 mod xkb_config;
 mod idle_inhibit_manager;
 mod lock_manager;

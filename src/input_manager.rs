@@ -1,14 +1,17 @@
-// SPDX-FileCopyrightText: © 2020 The River Developers
+// SPDX-FileCopyrightText: © 2026 The River Developers
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, wl_signal_add, WlListener, wl_listener_remove};
+use crate::server::{Server, wl_signal_add, WlListener, wl_listener_remove, WlList, wl_list_insert, wl_list_remove};
 use crate::seat::Seat;
 
 pub struct InputManager {
     pub server: *mut Server,
     pub default_seat: *mut Seat,
     pub seats: ffi::wl_list,
+    pub devices: ffi::wl_list, // list of InputDevice
+    pub objects: ffi::wl_list, // list of InputManagerObject
+    pub global: *mut ffi::wl_global,
     
     pub idle_notifier: *mut ffi::wlr_idle_notifier_v1,
     pub relative_pointer_manager: *mut ffi::wlr_relative_pointer_manager_v1,
@@ -25,6 +28,12 @@ pub struct InputManager {
     pub new_input_method: ffi::wl_listener,
 }
 
+pub struct InputManagerObject {
+    pub manager: *mut InputManager,
+    pub resource: *mut ffi::wl_resource,
+    pub link: ffi::wl_list,
+}
+
 impl Default for InputManager {
     fn default() -> Self {
         unsafe { std::mem::zeroed() }
@@ -37,6 +46,8 @@ impl InputManager {
         let wl_server = (*server).wl_server;
 
         ffi::wl_list_init(&mut self.seats);
+        ffi::wl_list_init(&mut self.devices);
+        ffi::wl_list_init(&mut self.objects);
 
         self.idle_notifier = ffi::wlr_idle_notifier_v1_create(wl_server);
         self.relative_pointer_manager = ffi::wlr_relative_pointer_manager_v1_create(wl_server);
@@ -50,6 +61,17 @@ impl InputManager {
 
         // Create default seat
         self.default_seat = Seat::create(server, "default")?;
+
+        self.global = ffi::wl_global_create(
+            wl_server,
+            &ffi::river_input_manager_v1_interface,
+            2,
+            self as *mut InputManager as *mut _,
+            Some(bind_input_manager),
+        );
+        if self.global.is_null() {
+            return Err("Failed to create river_input_manager_v1 global");
+        }
 
         let new_input_ptr = &mut self.new_input_listener as *mut ffi::wl_listener as *mut WlListener;
         (*new_input_ptr).notify = Some(handle_new_input);
@@ -71,6 +93,20 @@ impl InputManager {
     }
 
     pub unsafe fn deinit(&mut self) {
+        if !self.global.is_null() {
+            ffi::wl_global_destroy(self.global);
+            self.global = std::ptr::null_mut();
+        }
+
+        let objects_head = &mut self.objects as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*objects_head).next;
+        while curr != objects_head {
+            let next = (*curr).next;
+            let obj = crate::container_of!(curr, InputManagerObject, link);
+            ffi::wl_resource_destroy((*obj).resource);
+            curr = next;
+        }
+
         if !self.default_seat.is_null() {
             Seat::destroy(self.default_seat);
             self.default_seat = std::ptr::null_mut();
@@ -78,6 +114,179 @@ impl InputManager {
         wl_listener_remove(&mut self.new_input_listener);
         wl_listener_remove(&mut self.new_text_input);
         wl_listener_remove(&mut self.new_input_method);
+    }
+}
+
+unsafe extern "C" fn bind_input_manager(
+    client: *mut ffi::wl_client,
+    data: *mut std::ffi::c_void,
+    version: u32,
+    id: u32,
+) {
+    let im = data as *mut InputManager;
+    let resource = ffi::wl_resource_create(client, &ffi::river_input_manager_v1_interface, version as i32, id);
+    if resource.is_null() {
+        ffi::wl_client_post_no_memory(client);
+        return;
+    }
+
+    let obj = Box::into_raw(Box::new(InputManagerObject {
+        manager: im,
+        resource,
+        link: std::mem::zeroed(),
+    }));
+
+    ffi::wl_resource_set_implementation(
+        resource,
+        &INPUT_MANAGER_INTERFACE as *const _ as *const _,
+        obj as *mut _,
+        Some(handle_manager_object_destroy),
+    );
+
+    let list_head = &mut (*im).objects as *mut ffi::wl_list as *mut WlList;
+    wl_list_insert((*list_head).prev, &mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+
+    // Send existing devices to the client
+    let devices_head = &mut (*im).devices as *mut ffi::wl_list as *mut WlList;
+    let mut curr = (*devices_head).next;
+    while curr != devices_head {
+        let next = (*curr).next;
+        let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
+        if !(*device).virtual_device {
+            (*device).create_object(resource);
+        }
+        curr = next;
+    }
+}
+
+unsafe extern "C" fn handle_manager_object_destroy(resource: *mut ffi::wl_resource) {
+    let obj = ffi::wl_resource_get_user_data(resource) as *mut InputManagerObject;
+    if !obj.is_null() {
+        wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+        let _ = Box::from_raw(obj);
+    }
+}
+
+static INPUT_MANAGER_INTERFACE: ffi::river_input_manager_v1_interface = ffi::river_input_manager_v1_interface {
+    stop: Some(input_manager_stop),
+    destroy: Some(input_manager_destroy),
+    create_seat: Some(input_manager_create_seat),
+    destroy_seat: Some(input_manager_destroy_seat),
+};
+
+static INPUT_MANAGER_INERT_INTERFACE: ffi::river_input_manager_v1_interface = ffi::river_input_manager_v1_interface {
+    stop: None,
+    destroy: Some(input_manager_inert_destroy),
+    create_seat: None,
+    destroy_seat: None,
+};
+
+unsafe extern "C" fn input_manager_stop(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+) {
+    let obj = ffi::wl_resource_get_user_data(resource) as *mut InputManagerObject;
+    if obj.is_null() {
+        return;
+    }
+
+    wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+    ffi::wl_list_init(&mut (*obj).link);
+
+    ffi::wl_resource_post_event(resource, 0); // finished event
+
+    ffi::wl_resource_set_implementation(
+        resource,
+        &INPUT_MANAGER_INERT_INTERFACE as *const _ as *const _,
+        obj as *mut _,
+        Some(handle_manager_object_destroy),
+    );
+}
+
+unsafe extern "C" fn input_manager_destroy(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+) {
+    ffi::wl_resource_post_error(
+        resource,
+        ffi::river_input_manager_v1_error_RIVER_INPUT_MANAGER_V1_ERROR_INVALID_DESTROY,
+        b"destroy before finished event sent\0".as_ptr() as *const _,
+    );
+}
+
+unsafe extern "C" fn input_manager_inert_destroy(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+) {
+    ffi::wl_resource_destroy(resource);
+}
+
+unsafe extern "C" fn input_manager_create_seat(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+    name: *const std::os::raw::c_char,
+) {
+    let obj = ffi::wl_resource_get_user_data(resource) as *mut InputManagerObject;
+    if obj.is_null() || name.is_null() {
+        return;
+    }
+    let im = (*obj).manager;
+    let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
+
+    // Check if seat already exists
+    let seats_head = &mut (*im).seats as *mut ffi::wl_list as *mut WlList;
+    let mut curr = (*seats_head).next;
+    let mut exists = false;
+    while curr != seats_head {
+        let next = (*curr).next;
+        let seat = crate::container_of!(curr, Seat, link);
+        let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
+        if seat_name == name_str {
+            exists = true;
+            break;
+        }
+        curr = next;
+    }
+
+    if !exists {
+        let server = (*im).server;
+        if let Err(e) = Seat::create(server, &name_str) {
+            log::error!("failed to create seat '{}': {}", name_str, e);
+            ffi::wl_resource_post_no_memory(resource);
+        }
+    }
+}
+
+unsafe extern "C" fn input_manager_destroy_seat(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+    name: *const std::os::raw::c_char,
+) {
+    let obj = ffi::wl_resource_get_user_data(resource) as *mut InputManagerObject;
+    if obj.is_null() || name.is_null() {
+        return;
+    }
+    let im = (*obj).manager;
+    let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
+
+    if name_str == "default" {
+        return;
+    }
+
+    let seats_head = &mut (*im).seats as *mut ffi::wl_list as *mut WlList;
+    let mut curr = (*seats_head).next;
+    // Skip default seat (which is the first seat in the list)
+    curr = (*curr).next;
+    while curr != seats_head {
+        let next = (*curr).next;
+        let seat = crate::container_of!(curr, Seat, link);
+        let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
+        if seat_name == name_str {
+            (*seat).destroying = true;
+            (*(*im).server).wm.dirty_windowing();
+            break;
+        }
+        curr = next;
     }
 }
 
@@ -95,6 +304,9 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
     } else if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TABLET {
         let _ = crate::tablet::Tablet::create(im.default_seat, wlr_device, false);
     }
+
+    // Attach device to the default seat
+    (*im.default_seat).attach_device(device);
 }
 
 unsafe extern "C" fn handle_new_text_input(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

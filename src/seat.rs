@@ -225,7 +225,7 @@ impl Seat {
         let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device);
         match dev_type {
             ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD => {
-                let keyboard = ffi::river_wlr_input_device_get_data((*device).wlr_device) as *mut crate::keyboard::Keyboard;
+                let keyboard = (*device).destroy_data as *mut crate::keyboard::Keyboard;
                 if !keyboard.is_null() {
                     (*keyboard).set_group();
                     if !(*keyboard).group.is_null() {

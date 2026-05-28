@@ -97,6 +97,7 @@
 #include "river-libinput-config-v1-protocol.h"
 #include "river-xkb-config-v1-protocol.h"
 #include "virtual-keyboard-unstable-v1-protocol.h"
+#include <wlr/backend/libinput.h>
 
 // Custom FFI helpers defined in wlroots_log_wrapper.c
 struct wlr_surface *river_scene_node_get_surface(struct wlr_scene_node *node);
