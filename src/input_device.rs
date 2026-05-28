@@ -23,6 +23,7 @@ pub struct InputDevice {
     pub objects: ffi::wl_list, // list of InputDeviceObject
     pub link: ffi::wl_list,    // link inside InputManager::devices
     pub libinput: Option<Box<crate::libinput_device::LibinputDevice>>,
+    pub xkb_keyboard: Option<Box<crate::xkb_keyboard::XkbKeyboard>>,
 }
 
 pub struct InputDeviceObject {
@@ -54,6 +55,7 @@ impl InputDevice {
             objects: std::mem::zeroed(),
             link: std::mem::zeroed(),
             libinput: None,
+            xkb_keyboard: None,
         }));
 
         ffi::wl_list_init(&mut (*device).objects);
@@ -84,6 +86,11 @@ impl InputDevice {
             let handle = ffi::wlr_libinput_get_device_handle(wlr_device);
             if !handle.is_null() {
                 (*device).libinput = Some(crate::libinput_device::LibinputDevice::init(device, handle));
+            }
+
+            let dev_type = ffi::river_wlr_input_device_get_type(wlr_device);
+            if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD {
+                (*device).xkb_keyboard = Some(crate::xkb_keyboard::XkbKeyboard::init(device));
             }
         }
 
@@ -270,6 +277,10 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
 
     if let Some(mut libinput) = device.libinput.take() {
         libinput.deinit();
+    }
+
+    if let Some(mut xkb_kbd) = device.xkb_keyboard.take() {
+        xkb_kbd.deinit();
     }
 
     // Call custom destroy callback if set (e.g. to clean up Tablet/Keyboard wrappers)

@@ -10,6 +10,7 @@ pub struct XkbConfig {
     pub context: *mut ffi::xkb_context,
     pub default_keymap: *mut ffi::xkb_keymap,
     pub objects: ffi::wl_list,
+    pub keyboards: ffi::wl_list,
 }
 
 pub struct XkbConfigObject {
@@ -28,6 +29,7 @@ impl XkbConfig {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.server = server;
         ffi::wl_list_init(&mut self.objects);
+        ffi::wl_list_init(&mut self.keyboards);
 
         let context = ffi::xkb_context_new(ffi::xkb_context_flags_XKB_CONTEXT_NO_FLAGS);
         if context.is_null() {
@@ -119,6 +121,15 @@ unsafe extern "C" fn bind_xkb_config(
 
     let list_head = &mut (*config).objects as *mut ffi::wl_list as *mut WlList;
     wl_list_insert((*list_head).prev, &mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+
+    let keyboards_head = &mut (*config).keyboards as *mut ffi::wl_list as *mut WlList;
+    let mut curr = (*keyboards_head).next;
+    while curr != keyboards_head {
+        let next = (*curr).next;
+        let xkb_kbd = crate::container_of!(curr, crate::xkb_keyboard::XkbKeyboard, link);
+        (*xkb_kbd).create_object(resource);
+        curr = next;
+    }
 }
 
 unsafe extern "C" fn handle_object_destroy(resource: *mut ffi::wl_resource) {

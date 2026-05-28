@@ -243,24 +243,35 @@ impl KeyboardGroup {
             return;
         }
         let layout_index = self.wlr_keyboard.modifiers.group;
-        let _layout_name = ffi::xkb_keymap_layout_get_name(keymap, layout_index);
+        let layout_name = ffi::xkb_keymap_layout_get_name(keymap, layout_index);
         let caps_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Caps Lock\0".as_ptr() as *const _);
-        let _capslock = if caps_idx != ffi::XKB_MOD_INVALID {
+        let capslock = if caps_idx != ffi::XKB_MOD_INVALID {
             let caps_mask = 1 << caps_idx;
             (self.wlr_keyboard.modifiers.locked & caps_mask) != 0
         } else {
             false
         };
         let num_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Num Lock\0".as_ptr() as *const _);
-        let _numlock = if num_idx != ffi::XKB_MOD_INVALID {
+        let numlock = if num_idx != ffi::XKB_MOD_INVALID {
             let num_mask = 1 << num_idx;
             (self.wlr_keyboard.modifiers.locked & num_mask) != 0
         } else {
             false
         };
 
-        // Note: Layout configurations broadcasting (river_xkb_keyboard_v1) is stubbed out
-        // in xkb_config.rs and will be fully ported in a later phase.
+        let server = (*self.seat).server;
+        let keyboards_head = &mut (*server).xkb_config.keyboards as *mut ffi::wl_list as *mut crate::server::WlList;
+        let mut curr = (*keyboards_head).next;
+        while curr != keyboards_head {
+            let next = (*curr).next;
+            let xkb_kbd = crate::container_of!(curr, crate::xkb_keyboard::XkbKeyboard, link);
+            let parent_dev = (*xkb_kbd).parent_device;
+            let kbd = (*parent_dev).destroy_data as *mut crate::keyboard::Keyboard;
+            if !kbd.is_null() && (*kbd).group == self as *mut KeyboardGroup {
+                (*xkb_kbd).send_state(layout_index, layout_name, capslock, numlock);
+            }
+            curr = next;
+        }
     }
 }
 
