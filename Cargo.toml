@@ -1,5 +1,5 @@
 [package]
-name = "clear-river-rust"
+name = "clear-river"
 version = "0.1.0"
 edition = "2021"
 

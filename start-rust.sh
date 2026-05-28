@@ -1,5 +1,5 @@
 #!/bin/sh
-# Launch clear-river-rust with clearwm
+# Launch clear-river with clearwm
 # Usage: ./start-rust.sh [--logging] [--debug]
 
 LOGGING=false
@@ -29,17 +29,17 @@ LAUNCH_EOF
 chmod +x /tmp/clearwm-rs-launch-rust.sh
 
 if [ "$LOGGING" = true ] || [ "$DEBUG" = true ]; then
-    echo "Starting clear-river-rust with clearwm..."
-    echo "  Logs: /tmp/river-clearwm-rust.log + /tmp/clearwm-\${WAYLAND_DISPLAY}.log"
+    echo "Starting clear-river with clearwm..."
+    echo "  Logs: /tmp/river-clearwm.log + /tmp/clearwm-\${WAYLAND_DISPLAY}.log"
     if [ "$DEBUG" = true ]; then
         echo "  Wayland debug logging enabled (WAYLAND_DEBUG=1)"
     fi
 fi
 
-# Resolve script directory to reference target/debug/clear-river-rust reliably
+# Resolve script directory to reference target/release/clear-river reliably
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ "$DEBUG" = true ]; then
     export WAYLAND_DEBUG=1
 fi
-exec "$SCRIPT_DIR/target/release/clear-river-rust" -c /tmp/clearwm-rs-launch-rust.sh 2>/tmp/river-clearwm-rust.log
+exec "$SCRIPT_DIR/target/release/clear-river" -c /tmp/clearwm-rs-launch-rust.sh 2>/tmp/river-clearwm.log
 
