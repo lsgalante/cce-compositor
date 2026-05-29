@@ -403,6 +403,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let window = (*toplevel).window;
     let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
 
+    ffi::river_scene_node_enable_blur((*window).surfaces.tree as *mut ffi::wlr_scene_node, true);
+
     let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;
     let mut geom = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut geom);

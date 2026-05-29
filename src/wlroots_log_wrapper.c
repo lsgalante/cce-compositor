@@ -46,7 +46,7 @@ void river_init_wlroots_log(enum wlr_log_importance importance) {
 }
 
 #include <time.h>
-#include <wlr/types/wlr_scene.h>
+#include <scenefx/types/wlr_scene.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_input_device.h>
@@ -644,6 +644,17 @@ void river_wlr_keyboard_init(struct wlr_keyboard *keyboard,
 		impl_initialized = true;
 	}
 	wlr_keyboard_init(keyboard, &impl, name);
+}
+
+static void enable_blur_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
+	bool enabled = *(bool *)user_data;
+	wlr_scene_buffer_set_backdrop_blur(buffer, enabled);
+	wlr_scene_buffer_set_backdrop_blur_optimized(buffer, enabled);
+	wlr_scene_buffer_set_backdrop_blur_ignore_transparent(buffer, enabled);
+}
+
+void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled) {
+	wlr_scene_node_for_each_buffer(node, enable_blur_iterator, &enabled);
 }
 
 

@@ -61,9 +61,12 @@ impl Scene {
         if !linux_dmabuf.is_null() {
             ffi::wlr_scene_set_linux_dmabuf_v1(wlr_scene, linux_dmabuf);
         }
-        if !color_manager.is_null() {
-            ffi::wlr_scene_set_color_manager_v1(wlr_scene, color_manager);
-        }
+        // SceneFX 0.4 does not support set_color_manager_v1
+        // if !color_manager.is_null() {
+        //     ffi::wlr_scene_set_color_manager_v1(wlr_scene, color_manager);
+        // }
+
+        ffi::wlr_scene_set_blur_data(wlr_scene, 3, 5, 0.0, 1.0, 1.0, 1.0);
 
         let interactive_tree = ffi::wlr_scene_tree_create(&mut (*wlr_scene).tree);
         let drag_icons = ffi::wlr_scene_tree_create(&mut (*wlr_scene).tree);

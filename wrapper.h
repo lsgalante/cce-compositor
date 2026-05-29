@@ -72,7 +72,7 @@
 #include <wlr/types/wlr_color_representation_v1.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_linux_drm_syncobj_v1.h>
-#include <wlr/types/wlr_scene.h>
+#include <scenefx/types/wlr_scene.h>
 
 #include <wlr/util/addon.h>
 #include <wlr/xwayland.h>
@@ -254,5 +254,7 @@ struct wl_signal *river_wlr_drag_get_destroy_signal(struct wlr_drag *drag);
 struct wlr_seat_client *river_wlr_drag_get_seat_client(struct wlr_drag *drag);
 
 void river_wlr_keyboard_init(struct wlr_keyboard *keyboard, void (*led_update)(struct wlr_keyboard *keyboard, uint32_t leds), const char *name);
+
+void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled);
 
 #endif // WRAPPER_H

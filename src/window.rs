@@ -236,7 +236,8 @@ impl Window {
             ffi::wlr_scene_node_destroy(popup_tree as *mut ffi::wlr_scene_node);
             return Err("Failed to create capture_scene");
         }
-        (*capture_scene).restack_xwayland_surfaces = false;
+        // SceneFX 0.4 does not support restack_xwayland_surfaces
+        // (*capture_scene).restack_xwayland_surfaces = false;
 
         let black_color = [0.0f32, 0.0f32, 0.0f32, 1.0f32];
         let fullscreen_background = ffi::wlr_scene_rect_create(tree, 0, 0, black_color.as_ptr());
@@ -1120,6 +1121,10 @@ impl Window {
 
         ffi::wlr_scene_node_set_enabled(self.tree as *mut ffi::wlr_scene_node, enabled);
         ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
+
+        if enabled {
+            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, true);
+        }
 
         self.box_geom.width = self.rendering_sent.width as i32;
         self.box_geom.height = self.rendering_sent.height as i32;

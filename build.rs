@@ -11,6 +11,11 @@ fn main() {
         .probe("wlroots-0.20")
         .expect("wlroots-0.20 is required");
 
+    let scenefx = pkg_config::Config::new()
+        .atleast_version("0.4.0")
+        .probe("scenefx-0.4")
+        .expect("scenefx-0.4 is required");
+
     let wl_server = pkg_config::probe_library("wayland-server")
         .expect("wayland-server is required");
 
@@ -115,7 +120,13 @@ fn main() {
         build.file(c_file);
     }
 
-    // Add include paths for wlroots and wayland-server
+    // Add include paths for scenefx, wlroots, and wayland-server
+    for path in &scenefx.include_paths {
+        if path.to_string_lossy().contains("wlroots-0.19") {
+            continue;
+        }
+        build.include(path);
+    }
     for path in &wlroots.include_paths {
         build.include(path);
     }
@@ -134,6 +145,12 @@ fn main() {
 
     // Pass include paths to bindgen clang argument parser
     let mut include_paths = vec![out_dir.clone()];
+    for path in scenefx.include_paths.clone() {
+        if path.to_string_lossy().contains("wlroots-0.19") {
+            continue;
+        }
+        include_paths.push(path);
+    }
     include_paths.extend(wlroots.include_paths.clone());
     include_paths.extend(wl_server.include_paths.clone());
     include_paths.extend(xkb.include_paths.clone());
