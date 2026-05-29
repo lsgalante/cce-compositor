@@ -32,8 +32,8 @@ fn resolve_window_border_font_path() -> Option<String> {
 
 /// Struct tracking the Wayland decoration resources for a window.
 pub struct WindowDecoration {
-    pub surface: wl_surface::WlSurface,
     pub decoration: RiverDecorationV1,
+    pub surface: wl_surface::WlSurface,
     pub buffer: Option<wl_buffer::WlBuffer>,
     pub pool: Option<wl_shm_pool::WlShmPool>,
     pub width: i32,
@@ -200,6 +200,116 @@ fn create_memfd(size: usize) -> Option<RawFd> {
     Some(fd)
 }
 
+fn update_transparent_decoration(
+    _wid: u64,
+    dec_opt: &mut Option<WindowDecoration>,
+    compositor: &wayland_client::protocol::wl_compositor::WlCompositor,
+    shm: &wayland_client::protocol::wl_shm::WlShm,
+    river_window: &crate::protocol::river_window_management::client::river_window_v1::RiverWindowV1,
+    qhandle: &QueueHandle<AppState>,
+    offset_x: i32,
+    offset_y: i32,
+    logical_width: i32,
+    logical_height: i32,
+    scale: i32,
+) {
+    let dec_width = logical_width * scale;
+    let dec_height = logical_height * scale;
+
+    let needs_new_buffer = match dec_opt {
+        Some(dec) => dec.width != dec_width || dec.height != dec_height,
+        None => true,
+    };
+
+    if dec_opt.is_none() {
+        let surface: wl_surface::WlSurface = compositor.create_surface(qhandle, ());
+        let decoration: RiverDecorationV1 = river_window.get_decoration_above(&surface, qhandle, ());
+
+        *dec_opt = Some(WindowDecoration {
+            decoration,
+            surface,
+            buffer: None,
+            pool: None,
+            width: 0,
+            height: 0,
+            mapped_data: ptr::null_mut(),
+            mapped_size: 0,
+        });
+    }
+
+    let dec = dec_opt.as_mut().unwrap();
+    dec.decoration.set_offset(offset_x, offset_y);
+
+    if needs_new_buffer {
+        if !dec.mapped_data.is_null() {
+            unsafe {
+                libc::munmap(dec.mapped_data as *mut libc::c_void, dec.mapped_size);
+            }
+            dec.mapped_data = ptr::null_mut();
+        }
+
+        let stride = dec_width * 4;
+        let size = (stride * dec_height) as usize;
+
+        if let Some(fd) = create_memfd(size) {
+            let mapped_data = unsafe {
+                libc::mmap(
+                    ptr::null_mut(),
+                    size,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    fd,
+                    0,
+                ) as *mut u32
+            };
+
+            if mapped_data != libc::MAP_FAILED as *mut u32 {
+                let borrowed_fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+                let pool = shm.create_pool(borrowed_fd, size as i32, qhandle, ());
+                let buffer = pool.create_buffer(
+                    0,
+                    dec_width,
+                    dec_height,
+                    stride,
+                    wl_shm::Format::Argb8888,
+                    qhandle,
+                    (),
+                );
+
+                // Clear to fully transparent
+                let buffer_slice = unsafe {
+                    std::slice::from_raw_parts_mut(mapped_data, (dec_width * dec_height) as usize)
+                };
+                for pixel in buffer_slice.iter_mut() {
+                    *pixel = 0x00000000;
+                }
+
+                dec.pool = Some(pool);
+                dec.buffer = Some(buffer);
+                dec.width = dec_width;
+                dec.height = dec_height;
+                dec.mapped_data = mapped_data;
+                dec.mapped_size = size;
+                dec.surface.set_buffer_scale(scale);
+            } else {
+                eprintln!("[decorations] failed to mmap transparent decoration buffer");
+                unsafe { libc::close(fd); }
+                return;
+            }
+            unsafe { libc::close(fd); }
+        } else {
+            eprintln!("[decorations] failed to create memfd for transparent decoration");
+            return;
+        }
+    }
+
+    if let Some(ref buffer) = dec.buffer {
+        dec.surface.attach(Some(buffer), 0, 0);
+        dec.surface.damage(0, 0, dec_width, dec_height);
+        dec.surface.commit();
+    }
+}
+
 /// Main entry point to create or update decoration surfaces during rendering.
 pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
     // Check if we need to load or reload the font
@@ -224,11 +334,30 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         _ => return,
     };
 
-    // Clean up decorations for windows that should not be decorated
+    // Clean up decorations for windows that should not be decorated,
+    // or side borders for windows that do not have them (Popup, Fullscreen).
     for (wid, wp) in &mut state.window_proxies {
         if let Some(w) = state.wm.windows.iter().find(|win| win.id == *wid) {
-            if w.closed || w.app_id.as_deref() == Some("clear-status-interface") || w.tiling_mode == crate::types::TilingMode::Popup {
+            let should_not_decorate = w.closed || w.app_id.as_deref() == Some("clear-status-interface") || w.tiling_mode == crate::types::TilingMode::Popup || w.tiling_mode == crate::types::TilingMode::Fullscreen;
+            let needs_sides = !should_not_decorate;
+
+            if should_not_decorate {
                 if let Some(dec) = wp.decoration.take() {
+                    dec.decoration.destroy();
+                    dec.surface.destroy();
+                }
+            }
+
+            if !needs_sides {
+                if let Some(dec) = wp.dec_left.take() {
+                    dec.decoration.destroy();
+                    dec.surface.destroy();
+                }
+                if let Some(dec) = wp.dec_right.take() {
+                    dec.decoration.destroy();
+                    dec.surface.destroy();
+                }
+                if let Some(dec) = wp.dec_bottom.take() {
                     dec.decoration.destroy();
                     dec.surface.destroy();
                 }
@@ -241,12 +370,12 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
     let text_color = 0xFFE0E0E0u32;
 
     // Collect window IDs to modify so we don't violate the borrow checker
-    let windows_to_decorate: Vec<(u64, i32, i32, String, u32)> = state
+    let windows_to_decorate: Vec<(u64, i32, i32, i32, String, u32, crate::types::TilingMode)> = state
         .wm
         .windows
         .iter()
         .enumerate()
-        .filter(|(_, w)| !w.closed && w.app_id.as_deref() != Some("clear-status-interface") && w.tiling_mode != crate::types::TilingMode::Popup)
+        .filter(|(_, w)| !w.closed && w.app_id.as_deref() != Some("clear-status-interface") && w.tiling_mode != crate::types::TilingMode::Popup && w.tiling_mode != crate::types::TilingMode::Fullscreen)
         .filter(|(_, w)| (w.tags & active_tags) != 0)
         .map(|(idx, w)| {
             let title = w.title.clone().unwrap_or_else(|| {
@@ -312,11 +441,11 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                     crate::types::TilingMode::Popup => 0,
                 }
             };
-            (w.id, w.width, border_w, title_with_idx, bg_color)
+            (w.id, w.width, w.height, border_w, title_with_idx, bg_color, w.tiling_mode)
         })
         .collect();
 
-    for (wid, win_width, border_width, title, bg_color) in windows_to_decorate {
+    for (wid, win_width, win_height, border_width, title, bg_color, tiling_mode) in windows_to_decorate {
         // Find or create decoration proxy
         let wp_idx = match state.window_proxies.iter().position(|(id, _)| *id == wid) {
             Some(idx) => idx,
@@ -326,6 +455,56 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         let wp = &mut state.window_proxies[wp_idx].1;
 
         let scale = (state.wm.output_scale.round() as i32).max(1);
+
+        if tiling_mode != crate::types::TilingMode::Popup && tiling_mode != crate::types::TilingMode::Fullscreen {
+            let grab_w = if tiling_mode == crate::types::TilingMode::Floating {
+                border_width.max(10)
+            } else {
+                border_width.max(1)
+            };
+
+            update_transparent_decoration(
+                wid,
+                &mut wp.dec_left,
+                compositor,
+                shm,
+                &wp.river_window,
+                qhandle,
+                -grab_w,
+                0,
+                grab_w,
+                win_height,
+                scale,
+            );
+
+            update_transparent_decoration(
+                wid,
+                &mut wp.dec_right,
+                compositor,
+                shm,
+                &wp.river_window,
+                qhandle,
+                win_width,
+                0,
+                grab_w,
+                win_height,
+                scale,
+            );
+
+            update_transparent_decoration(
+                wid,
+                &mut wp.dec_bottom,
+                compositor,
+                shm,
+                &wp.river_window,
+                qhandle,
+                -grab_w,
+                win_height,
+                win_width + 2 * grab_w,
+                grab_w,
+                scale,
+            );
+        }
 
         // Determine titlebar dimensions:
         // Height equals border_width (or 16 if border_width is too small to display font)
@@ -345,8 +524,8 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             let decoration: RiverDecorationV1 = wp.river_window.get_decoration_above(&surface, qhandle, ());
 
             wp.decoration = Some(WindowDecoration {
-                surface,
                 decoration,
+                surface,
                 buffer: None,
                 pool: None,
                 width: 0,
@@ -359,7 +538,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         let dec = wp.decoration.as_mut().unwrap();
 
         // Position decoration on top of the window top border
-        dec.decoration.set_offset(-border_width, -border_width);
+        dec.decoration.set_offset(-border_width, -logical_height);
 
         if needs_new_buffer {
             eprintln!(

@@ -253,6 +253,10 @@ fn main() {
             if let Some(ref wm) = state.window_manager {
                 wm.manage_dirty();
             }
+            if !state.wm.tap_config_applied && !state.libinput_devices.is_empty() {
+                let qh = event_queue.handle();
+                clearwm::wayland::apply_input_config(&mut state, &qh);
+            }
         }
 
         if state.exit_requested || state.wm.exit_requested {

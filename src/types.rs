@@ -340,6 +340,9 @@ pub struct WindowManager {
     pub trackpoint_accel_profile: Option<String>,
     /// Whether tap-to-click config has been applied to libinput devices yet
     pub tap_config_applied: bool,
+    pub cursor_theme: Option<String>,
+    pub cursor_size: Option<u32>,
+    pub cursor_theme_applied: bool,
     /// Whether system notifications are enabled
     pub notifications_enable: bool,
     /// Reload commands to execute on configuration reload
@@ -387,6 +390,9 @@ impl Default for WindowManager {
             trackpoint_accel_speed: None,
             trackpoint_accel_profile: None,
             tap_config_applied: false,
+            cursor_theme: None,
+            cursor_size: None,
+            cursor_theme_applied: false,
             notifications_enable: true,
             reload_commands: Vec::new(),
             input_controller: None,

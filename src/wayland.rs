@@ -58,11 +58,49 @@ const IFACE_INPUT_MANAGER: &str = "river_input_manager_v1";
 const IFACE_LIBINPUT_CONFIG: &str = "river_libinput_config_v1";
 const IFACE_WLR_OUTPUT_MANAGER: &str = "zwlr_output_manager_v1";
 
+const CORNER_THRESHOLD: f64 = 16.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerOpType {
+    Move,
+    Resize,
+    ResizeLeft,
+    ResizeRight,
+    ResizeBottom,
+    ResizeTop,
+    ResizeBottomLeft,
+    ResizeBottomRight,
+    ResizeTopLeft,
+    ResizeTopRight,
+}
+
+#[derive(Debug, Clone)]
+pub struct PointerOp {
+    pub window_id: u64,
+    pub op_type: PointerOpType,
+    pub start_x: i32,
+    pub start_y: i32,
+    pub start_width: i32,
+    pub start_height: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingBorderDrag {
+    pub window_id: u64,
+    pub seat_id: u64,
+    pub start_surface_x: f64,
+    pub start_surface_y: f64,
+    pub op_type: PointerOpType,
+}
+
 /// Wayland proxy objects stored alongside each Window, so we can
 /// call protocol methods (set_position, propose_dimensions, etc.) on it.
 pub struct WindowProxy {
     pub river_window: RiverWindowV1,
     pub decoration: Option<crate::decorations::WindowDecoration>,
+    pub dec_left: Option<crate::decorations::WindowDecoration>,
+    pub dec_right: Option<crate::decorations::WindowDecoration>,
+    pub dec_bottom: Option<crate::decorations::WindowDecoration>,
 }
 
 /// Wayland proxy objects stored alongside each Seat.
@@ -72,6 +110,7 @@ pub struct SeatProxy {
     pub wl_seat: Option<wl_seat::WlSeat>,
     pub wl_pointer: Option<wl_pointer::WlPointer>,
     pub cursor_shape_device: Option<WpCursorShapeDeviceV1>,
+    pub last_pointer_enter_serial: u32,
 }
 
 /// Wayland proxy objects stored alongside each Output.
@@ -152,6 +191,12 @@ pub struct AppState {
     pub libinput_devices: Vec<LibinputDeviceInfo>,
     /// The surface the pointer is currently hovering over
     pub pointer_hovered_surface: Option<wl_surface::WlSurface>,
+    pub active_pointer_op: Option<PointerOp>,
+    pub pointer_op_release_pending: bool,
+    pub pending_border_drag: Option<PendingBorderDrag>,
+    pub pending_pointer_op_type: Option<PointerOpType>,
+    pub last_pointer_surface_x: f64,
+    pub last_pointer_surface_y: f64,
     pub input_device_names: std::collections::HashMap<u32, String>,
     pub border_font: Option<fontdue::Font>,
     pub border_font_path: Option<String>,
@@ -215,6 +260,12 @@ impl AppState {
             libinput_config: None,
             libinput_devices: Vec::new(),
             pointer_hovered_surface: None,
+            active_pointer_op: None,
+            pointer_op_release_pending: false,
+            pending_border_drag: None,
+            pending_pointer_op_type: None,
+            last_pointer_surface_x: 0.0,
+            last_pointer_surface_y: 0.0,
             input_device_names: std::collections::HashMap::new(),
             border_font: None,
             border_font_path: None,
@@ -264,6 +315,123 @@ impl AppState {
             .iter()
             .find(|(_, sp)| sp.river_seat.id().protocol_id() == pid)
             .map(|(id, _)| *id)
+    }
+
+    fn update_cursor_shape_for_surface(state: &mut Self, pointer: &wl_pointer::WlPointer) {
+        let seat_info = state.seat_proxies.iter().find_map(|(_, sp)| {
+            if sp.wl_pointer.as_ref() == Some(pointer) {
+                Some((sp.cursor_shape_device.clone(), sp.last_pointer_enter_serial))
+            } else {
+                None
+            }
+        });
+
+        let (device, serial) = match seat_info {
+            Some((Some(dev), ser)) => (dev, ser),
+            _ => return,
+        };
+
+        let mut shape = Shape::Default;
+
+        if let Some(ref current_surface) = state.pointer_hovered_surface {
+            let matched_window = state.window_proxies.iter().find_map(|(id, proxy)| {
+                if let Some(dec) = &proxy.decoration {
+                    if &dec.surface == current_surface {
+                        return Some((*id, "top"));
+                    }
+                }
+                if let Some(dec) = &proxy.dec_left {
+                    if &dec.surface == current_surface {
+                        return Some((*id, "left"));
+                    }
+                }
+                if let Some(dec) = &proxy.dec_right {
+                    if &dec.surface == current_surface {
+                        return Some((*id, "right"));
+                    }
+                }
+                if let Some(dec) = &proxy.dec_bottom {
+                    if &dec.surface == current_surface {
+                        return Some((*id, "bottom"));
+                    }
+                }
+                None
+            });
+
+            if let Some((wid, surface_type)) = matched_window {
+                if let Some(w) = state.wm.windows.iter().find(|win| win.id == wid) {
+                    let border_w = if state.wm.expose_active && w.tiling_mode != crate::types::TilingMode::Popup {
+                        state.wm.layout.grid_border_width
+                    } else {
+                        match w.tiling_mode {
+                            crate::types::TilingMode::Cascade => state.wm.layout.cascade_border_width,
+                            crate::types::TilingMode::Fullscreen => state.wm.layout.fullscreen_border_width,
+                            crate::types::TilingMode::Grid => state.wm.layout.grid_border_width,
+                            crate::types::TilingMode::Vsplit => state.wm.layout.vsplit_border_width,
+                            crate::types::TilingMode::Hsplit => state.wm.layout.hsplit_border_width,
+                            crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
+                            crate::types::TilingMode::Popup => 0,
+                        }
+                    };
+                    let grab_w = border_w.max(10);
+
+                    shape = match surface_type {
+                        "top" => {
+                            let total_width = w.width + 2 * border_w;
+                            let edge_thresh = (border_w as f64).max(8.0);
+                            if state.last_pointer_surface_y < edge_thresh {
+                                if state.last_pointer_surface_x < CORNER_THRESHOLD {
+                                    Shape::NwseResize
+                                } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
+                                    Shape::NeswResize
+                                } else {
+                                    Shape::NsResize
+                                }
+                            } else {
+                                if state.last_pointer_surface_x < CORNER_THRESHOLD {
+                                    Shape::EwResize
+                                } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
+                                    Shape::EwResize
+                                } else {
+                                    Shape::Default
+                                }
+                            }
+                        }
+                        "left" => {
+                            if state.last_pointer_surface_y < CORNER_THRESHOLD {
+                                Shape::NwseResize
+                            } else if state.last_pointer_surface_y > (w.height as f64 - CORNER_THRESHOLD) {
+                                Shape::NeswResize
+                            } else {
+                                Shape::EwResize
+                            }
+                        }
+                        "right" => {
+                            if state.last_pointer_surface_y < CORNER_THRESHOLD {
+                                Shape::NeswResize
+                            } else if state.last_pointer_surface_y > (w.height as f64 - CORNER_THRESHOLD) {
+                                Shape::NwseResize
+                            } else {
+                                Shape::EwResize
+                            }
+                        }
+                        "bottom" => {
+                            let total_width = w.width + 2 * grab_w;
+                            if state.last_pointer_surface_x < CORNER_THRESHOLD {
+                                Shape::NeswResize
+                            } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
+                                Shape::NwseResize
+                            } else {
+                                Shape::NsResize
+                            }
+                        }
+                        _ => Shape::Default,
+                    };
+                }
+            }
+        }
+
+        device.set_shape(serial, shape);
     }
 }
 
@@ -434,9 +602,21 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 // tinyrwm's remove_windows() pattern which cleans up seat ops
                 // referencing closed window proxies.
                 for (closed_id, closed_app_id) in &closed_ids {
-                    state.window_proxies.retain(|(id, wp)| {
+                    state.window_proxies.retain_mut(|(id, wp)| {
                         if id == closed_id {
-                            if let Some(dec) = wp.decoration.as_ref() {
+                            if let Some(dec) = wp.decoration.take() {
+                                dec.decoration.destroy();
+                                dec.surface.destroy();
+                            }
+                            if let Some(dec) = wp.dec_left.take() {
+                                dec.decoration.destroy();
+                                dec.surface.destroy();
+                            }
+                            if let Some(dec) = wp.dec_right.take() {
+                                dec.decoration.destroy();
+                                dec.surface.destroy();
+                            }
+                            if let Some(dec) = wp.dec_bottom.take() {
                                 dec.decoration.destroy();
                                 dec.surface.destroy();
                             }
@@ -755,12 +935,24 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     state.wm.needs_focus = false;
                 }
 
+                if state.pointer_op_release_pending {
+                    state.pointer_op_release_pending = false;
+                    state.active_pointer_op = None;
+                    for (_sid, sp) in &state.seat_proxies {
+                        sp.river_seat.op_end();
+                    }
+                    for seat in &mut state.wm.seats {
+                        seat.interacted_window_id = None;
+                    }
+                    state.wm.needs_render = true;
+                }
+
                 // Execute pending actions from key/pointer bindings (tinyrwm pattern).
                 // Like tinyrwm, we defer action execution to ManageStart so all
                 // state mutations happen during the manage sequence.
                 // Collect pending actions first to avoid borrow checker issues
                 // (execute_action borrows state mutably).
-                let pending: Vec<(Action, Option<String>)> = state
+                let pending: Vec<(u64, Action, Option<String>)> = state
                     .wm
                     .seats
                     .iter_mut()
@@ -769,14 +961,14 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                             let action = seat.pending_action;
                             let command = seat.pending_command.take();
                             seat.pending_action = Action::None;
-                            Some((action, command))
+                            Some((seat.id, action, command))
                         } else {
                             None
                         }
                     })
                     .collect();
-                for (action, command) in pending {
-                    execute_action(state, &action, command.as_deref());
+                for (seat_id, action, command) in pending {
+                    execute_action(state, seat_id, &action, command.as_deref());
                 }
 
                 wm_proxy.manage_finish();
@@ -929,6 +1121,15 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 if !state.wm.tap_config_applied && !state.libinput_devices.is_empty() {
                     crate::wayland::apply_input_config(state, qhandle);
                 }
+
+                if !state.wm.cursor_theme_applied {
+                    let theme = state.wm.cursor_theme.clone().unwrap_or_else(|| "default".to_string());
+                    let size = state.wm.cursor_size.unwrap_or(24);
+                    for (_, sp) in &state.seat_proxies {
+                        sp.river_seat.set_xcursor_theme(theme.clone(), size);
+                    }
+                    state.wm.cursor_theme_applied = true;
+                }
             }
 
             // Window event: field is `id` (the new RiverWindowV1 proxy)
@@ -950,7 +1151,13 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 state.wm.windows.push(window);
                 state
                     .window_proxies
-                    .push((id, WindowProxy { river_window, decoration: None }));
+                    .push((id, WindowProxy {
+                        river_window,
+                        decoration: None,
+                        dec_left: None,
+                        dec_right: None,
+                        dec_bottom: None,
+                    }));
                 eprintln!("[window] new window id={} (app_id pending)", id);
             }
 
@@ -999,6 +1206,10 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 seat.id = id;
                 seat.is_new = true;
 
+                let cursor_theme = state.wm.cursor_theme.clone().unwrap_or_else(|| "default".to_string());
+                let cursor_size = state.wm.cursor_size.unwrap_or(24);
+                river_seat.set_xcursor_theme(cursor_theme, cursor_size);
+
                 state.wm.seats.push(seat);
                 state.seat_proxies.push((
                     id,
@@ -1008,6 +1219,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                         wl_seat: None,
                         wl_pointer: None,
                         cursor_shape_device: None,
+                        last_pointer_enter_serial: 0,
                     },
                 ));
                 eprintln!("wm_handle_seat: new seat id={}", id);
@@ -1337,8 +1549,76 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
                 }
             }
 
-            river_seat_v1::Event::OpDelta { .. } => {}
-            river_seat_v1::Event::OpRelease => {}
+            river_seat_v1::Event::OpDelta { dx, dy } => {
+                if let Some(ref op) = state.active_pointer_op {
+                    let wid = op.window_id;
+                    if let Some(win) = state.wm.get_window_mut(wid) {
+                        match op.op_type {
+                            PointerOpType::Move => {
+                                win.x = op.start_x + dx;
+                                win.y = op.start_y + dy;
+                            }
+                            PointerOpType::Resize | PointerOpType::ResizeRight => {
+                                win.width = std::cmp::max(50, op.start_width + dx);
+                            }
+                            PointerOpType::ResizeLeft => {
+                                let target_width = std::cmp::max(50, op.start_width - dx);
+                                let actual_dx = op.start_width - target_width;
+                                win.x = op.start_x + actual_dx;
+                                win.width = target_width;
+                            }
+                            PointerOpType::ResizeBottom => {
+                                win.height = std::cmp::max(50, op.start_height + dy);
+                            }
+                            PointerOpType::ResizeTop => {
+                                let target_height = std::cmp::max(50, op.start_height - dy);
+                                let actual_dy = op.start_height - target_height;
+                                win.y = op.start_y + actual_dy;
+                                win.height = target_height;
+                            }
+                            PointerOpType::ResizeBottomRight => {
+                                win.width = std::cmp::max(50, op.start_width + dx);
+                                win.height = std::cmp::max(50, op.start_height + dy);
+                            }
+                            PointerOpType::ResizeBottomLeft => {
+                                let target_width = std::cmp::max(50, op.start_width - dx);
+                                let actual_dx = op.start_width - target_width;
+                                win.x = op.start_x + actual_dx;
+                                win.width = target_width;
+                                win.height = std::cmp::max(50, op.start_height + dy);
+                            }
+                            PointerOpType::ResizeTopLeft => {
+                                let target_width = std::cmp::max(50, op.start_width - dx);
+                                let actual_dx = op.start_width - target_width;
+                                win.x = op.start_x + actual_dx;
+                                win.width = target_width;
+
+                                let target_height = std::cmp::max(50, op.start_height - dy);
+                                let actual_dy = op.start_height - target_height;
+                                win.y = op.start_y + actual_dy;
+                                win.height = target_height;
+                            }
+                            PointerOpType::ResizeTopRight => {
+                                win.width = std::cmp::max(50, op.start_width + dx);
+
+                                let target_height = std::cmp::max(50, op.start_height - dy);
+                                let actual_dy = op.start_height - target_height;
+                                win.y = op.start_y + actual_dy;
+                                win.height = target_height;
+                            }
+                        }
+                    }
+                    if let Some(ref wm) = state.window_manager {
+                        wm.manage_dirty();
+                    }
+                }
+            }
+            river_seat_v1::Event::OpRelease => {
+                state.pointer_op_release_pending = true;
+                if let Some(ref wm) = state.window_manager {
+                    wm.manage_dirty();
+                }
+            }
 
             _ => {}
         }
@@ -1707,7 +1987,7 @@ impl Dispatch<RiverNodeV1, ()> for AppState {
 // --- Helper functions ---
 
 /// Execute an action triggered by a keybinding or pointer binding.
-fn execute_action(state: &mut AppState, action: &crate::types::Action, command: Option<&str>) {
+fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Action, command: Option<&str>) {
     use crate::types::Action;
     match action {
         Action::None => {}
@@ -1820,11 +2100,54 @@ fn execute_action(state: &mut AppState, action: &crate::types::Action, command: 
                 }
             }
         }
-        Action::Move => {
-            // TODO: pointer move
-        }
-        Action::Resize => {
-            // TODO: pointer resize
+        Action::Move | Action::Resize => {
+            let op_type = if *action == Action::Move {
+                PointerOpType::Move
+            } else {
+                state.pending_pointer_op_type.take().unwrap_or(PointerOpType::Resize)
+            };
+
+            let target_wid = if let Some(seat) = state.wm.seats.iter().find(|s| s.id == seat_id) {
+                seat.interacted_window_id.or(seat.focused_window_id)
+            } else {
+                None
+            };
+
+            if let Some(wid) = target_wid {
+                let mut window_found = false;
+                let mut needs_render = false;
+                if let Some(win) = state.wm.get_window_mut(wid) {
+                    if win.tiling_mode != TilingMode::Fullscreen && win.tiling_mode != TilingMode::Popup {
+                        if win.tiling_mode != TilingMode::Floating {
+                            win.tiling_mode = TilingMode::Floating;
+                            needs_render = true;
+                        }
+                        win.mode_locked = true;
+                        window_found = true;
+                    }
+                }
+
+                if window_found {
+                    if needs_render {
+                        state.wm.needs_render = true;
+                        state.wm.needs_focus = true;
+                        state.wm.needs_status_update = true;
+                    }
+                    if let Some((_, sp)) = state.seat_proxies.iter().find(|(sid, _)| *sid == seat_id) {
+                        sp.river_seat.op_start_pointer();
+                    }
+                    if let Some(win) = state.wm.get_window(wid) {
+                        state.active_pointer_op = Some(PointerOp {
+                            window_id: wid,
+                            op_type,
+                            start_x: win.x,
+                            start_y: win.y,
+                            start_width: win.width,
+                            start_height: win.height,
+                        });
+                    }
+                }
+            }
         }
         Action::Exit => {
             state.wm.exit_requested = true;
@@ -2749,14 +3072,18 @@ pub fn apply_input_config(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         return;
     }
 
-    // Wait until ALL discovered devices have received their name and support events.
+    // Wait until ALL discovered devices have received their name and support events (if they have a corresponding input_device).
     let all_info_received = state.libinput_devices.iter().all(|d| {
-        d.name_received &&
-        d.tap_finger_count >= 0 &&
-        d.accel_profiles_support.is_some() &&
-        d.natural_scroll_supported.is_some() &&
-        d.dwt_supported.is_some() &&
-        d.dwtp_supported.is_some()
+        if d.input_device.is_none() {
+            true
+        } else {
+            d.name_received &&
+            d.tap_finger_count >= 0 &&
+            d.accel_profiles_support.is_some() &&
+            d.natural_scroll_supported.is_some() &&
+            d.dwt_supported.is_some() &&
+            d.dwtp_supported.is_some()
+        }
     });
     if !all_info_received {
         return;
@@ -2769,6 +3096,11 @@ pub fn apply_input_config(state: &mut AppState, qhandle: &QueueHandle<AppState>)
 
     for dev_info in &mut state.libinput_devices {
         if dev_info.config_applied {
+            continue;
+        }
+
+        if dev_info.input_device.is_none() {
+            dev_info.config_applied = true;
             continue;
         }
 
@@ -2914,7 +3246,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for AppState {
                         
                         if let Some(ref csm) = state.cursor_shape_manager {
                             let device = csm.get_pointer(&wl_pointer, qhandle, ());
-                            device.set_shape(0, Shape::Crosshair);
+                            device.set_shape(0, Shape::Default);
                             seat_proxy.cursor_shape_device = Some(device);
                         }
                         
@@ -2937,33 +3269,263 @@ impl Dispatch<wl_seat::WlSeat, ()> for AppState {
 impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
     fn event(
         state: &mut Self,
-        _proxy: &wl_pointer::WlPointer,
+        proxy: &wl_pointer::WlPointer,
         event: wl_pointer::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
         match event {
-            wl_pointer::Event::Enter { surface, .. } => {
+            wl_pointer::Event::Enter { serial, surface, surface_x, surface_y } => {
+                eprintln!("[pointer] enter surface={:?} x={} y={}", surface, surface_x, surface_y);
                 state.pointer_hovered_surface = Some(surface);
+                state.last_pointer_surface_x = surface_x;
+                state.last_pointer_surface_y = surface_y;
+
+                if let Some((_, seat_proxy)) = state.seat_proxies.iter_mut().find(|(_, sp)| {
+                    sp.wl_pointer.as_ref() == Some(proxy)
+                }) {
+                    seat_proxy.last_pointer_enter_serial = serial;
+                }
+
+                Self::update_cursor_shape_for_surface(state, proxy);
             }
             wl_pointer::Event::Leave { .. } => {
+                eprintln!("[pointer] leave");
                 state.pointer_hovered_surface = None;
+                state.pending_border_drag = None;
+                Self::update_cursor_shape_for_surface(state, proxy);
+            }
+            wl_pointer::Event::Motion { surface_x, surface_y, .. } => {
+                state.last_pointer_surface_x = surface_x;
+                state.last_pointer_surface_y = surface_y;
+
+                Self::update_cursor_shape_for_surface(state, proxy);
+
+                if let Some(pending) = state.pending_border_drag.clone() {
+                    let dx = surface_x - pending.start_surface_x;
+                    let dy = surface_y - pending.start_surface_y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    // Threshold of 12.0 logical pixels to distinguish click vs drag
+                    if dist > 12.0 {
+                        state.pending_border_drag = None;
+
+                        // Start the drag! Set the window to Floating and lock it.
+                        let mut needs_render = false;
+                        if let Some(win) = state.wm.get_window_mut(pending.window_id) {
+                            if win.tiling_mode != TilingMode::Fullscreen && win.tiling_mode != TilingMode::Popup {
+                                if win.tiling_mode != TilingMode::Floating {
+                                    win.tiling_mode = TilingMode::Floating;
+                                    needs_render = true;
+                                }
+                                win.mode_locked = true;
+                            }
+                        }
+
+                        if needs_render {
+                            state.wm.needs_render = true;
+                            state.wm.needs_focus = true;
+                            state.wm.needs_status_update = true;
+                        }
+
+                        // Store the pending op type in AppState so execute_action can retrieve it
+                        state.pending_pointer_op_type = Some(pending.op_type);
+
+                        // Tell River to start pointer move/resize grab
+                        if let Some(seat) = state.wm.seats.iter_mut().find(|s| s.id == pending.seat_id) {
+                            seat.interacted_window_id = Some(pending.window_id);
+                            seat.pending_action = if pending.op_type == PointerOpType::Move {
+                                crate::types::Action::Move
+                            } else {
+                                crate::types::Action::Resize
+                            };
+                            if let Some(ref wm) = state.window_manager {
+                                wm.manage_dirty();
+                            }
+                        }
+                    }
+                }
             }
             wl_pointer::Event::Button { button, state: btn_state, .. } => {
+                // Left click on border
+                if button == 0x110 {
+                    if btn_state == wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed) {
+                        eprintln!("[pointer] left button pressed, hovered={:?}", state.pointer_hovered_surface);
+                        if let Some(ref current_surface) = state.pointer_hovered_surface {
+                            let matched_window = state.window_proxies.iter().find_map(|(id, proxy)| {
+                                if let Some(dec) = &proxy.decoration {
+                                    if &dec.surface == current_surface {
+                                        return Some((*id, "top"));
+                                    }
+                                }
+                                if let Some(dec) = &proxy.dec_left {
+                                    if &dec.surface == current_surface {
+                                        return Some((*id, "left"));
+                                    }
+                                }
+                                if let Some(dec) = &proxy.dec_right {
+                                    if &dec.surface == current_surface {
+                                        return Some((*id, "right"));
+                                    }
+                                }
+                                if let Some(dec) = &proxy.dec_bottom {
+                                    if &dec.surface == current_surface {
+                                        return Some((*id, "bottom"));
+                                    }
+                                }
+                                None
+                            });
+                            eprintln!("[pointer] matched_window={:?}", matched_window);
+
+                            if let Some((wid, surface_type)) = matched_window {
+                                let window_tiling_mode = state.wm.windows.iter().find(|w| w.id == wid).map(|w| w.tiling_mode);
+                                if let Some(mode) = window_tiling_mode {
+                                    if mode != TilingMode::Fullscreen {
+                                        // 1. Focus the window immediately
+                                        let seat_id = state.seat_proxies.iter().find_map(|(sid, sp)| {
+                                            if sp.wl_pointer.as_ref() == Some(proxy) {
+                                                Some(*sid)
+                                            } else {
+                                                None
+                                            }
+                                        });
+
+                                        let mut focus_changed = false;
+                                        if let Some(sid) = seat_id {
+                                            if let Some(seat) = state.wm.seats.iter_mut().find(|s| s.id == sid) {
+                                                focus_changed = seat.focused_window_id != Some(wid);
+                                                seat.focused_window_id = Some(wid);
+                                                state.wm.move_window_to_end(wid);
+                                                if state.wm.expose_active {
+                                                    state.wm.expose_active = false;
+                                                }
+                                                state.wm.needs_focus = true;
+                                                state.wm.needs_render = true;
+                                                state.wm.needs_status_update = true;
+                                                if let Some(ref wm) = state.window_manager {
+                                                    wm.manage_dirty();
+                                                }
+                                            }
+
+                                            if !focus_changed {
+                                                // Determine the specific PointerOpType based on coordinates on the matched surface
+                                                let op_type = if let Some(w) = state.wm.windows.iter().find(|win| win.id == wid) {
+                                                    let border_w = if state.wm.expose_active && w.tiling_mode != crate::types::TilingMode::Popup {
+                                                        state.wm.layout.grid_border_width
+                                                    } else {
+                                                        match w.tiling_mode {
+                                                            crate::types::TilingMode::Cascade => state.wm.layout.cascade_border_width,
+                                                            crate::types::TilingMode::Fullscreen => state.wm.layout.fullscreen_border_width,
+                                                            crate::types::TilingMode::Grid => state.wm.layout.grid_border_width,
+                                                            crate::types::TilingMode::Vsplit => state.wm.layout.vsplit_border_width,
+                                                            crate::types::TilingMode::Hsplit => state.wm.layout.hsplit_border_width,
+                                                            crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
+                                                            crate::types::TilingMode::Popup => 0,
+                                                        }
+                                                    };
+                                                    let grab_w = border_w.max(10);
+
+                                                    match surface_type {
+                                                        "top" => {
+                                                            let total_width = w.width + 2 * border_w;
+                                                            let edge_thresh = (border_w as f64).max(8.0);
+                                                            if state.last_pointer_surface_y < edge_thresh {
+                                                                if state.last_pointer_surface_x < CORNER_THRESHOLD {
+                                                                    PointerOpType::ResizeTopLeft
+                                                                } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
+                                                                    PointerOpType::ResizeTopRight
+                                                                } else {
+                                                                    PointerOpType::ResizeTop
+                                                                }
+                                                            } else {
+                                                                if state.last_pointer_surface_x < CORNER_THRESHOLD {
+                                                                    PointerOpType::ResizeLeft
+                                                                } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
+                                                                    PointerOpType::ResizeRight
+                                                                } else {
+                                                                    PointerOpType::Move
+                                                                }
+                                                            }
+                                                        }
+                                                        "left" => {
+                                                            if state.last_pointer_surface_y < CORNER_THRESHOLD {
+                                                                PointerOpType::ResizeTopLeft
+                                                            } else if state.last_pointer_surface_y > (w.height as f64 - CORNER_THRESHOLD) {
+                                                                PointerOpType::ResizeBottomLeft
+                                                            } else {
+                                                                PointerOpType::ResizeLeft
+                                                            }
+                                                        }
+                                                        "right" => {
+                                                            if state.last_pointer_surface_y < CORNER_THRESHOLD {
+                                                                PointerOpType::ResizeTopRight
+                                                            } else if state.last_pointer_surface_y > (w.height as f64 - CORNER_THRESHOLD) {
+                                                                PointerOpType::ResizeBottomRight
+                                                            } else {
+                                                                PointerOpType::ResizeRight
+                                                            }
+                                                        }
+                                                        "bottom" => {
+                                                            let total_width = w.width + 2 * grab_w;
+                                                            if state.last_pointer_surface_x < CORNER_THRESHOLD {
+                                                                PointerOpType::ResizeBottomLeft
+                                                            } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
+                                                                PointerOpType::ResizeBottomRight
+                                                            } else {
+                                                                PointerOpType::ResizeBottom
+                                                            }
+                                                        }
+                                                        _ => PointerOpType::Move,
+                                                    }
+                                                } else {
+                                                    PointerOpType::Move
+                                                };
+
+                                                // 2. Store the pending drag info (threshold check is in Event::Motion)
+                                                state.pending_border_drag = Some(PendingBorderDrag {
+                                                    window_id: wid,
+                                                    seat_id: sid,
+                                                    start_surface_x: state.last_pointer_surface_x,
+                                                    start_surface_y: state.last_pointer_surface_y,
+                                                    op_type,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if btn_state == wayland_client::WEnum::Value(wl_pointer::ButtonState::Released) {
+                        eprintln!("[pointer] left button released");
+                        state.pending_border_drag = None;
+                    }
+                }
+
                 // Middle click is button 0x112 (BTN_MIDDLE)
                 if button == 0x112 && btn_state == wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed) {
                     if let Some(ref current_surface) = state.pointer_hovered_surface {
                         let matched_window_id = state.window_proxies.iter().find_map(|(id, proxy)| {
                             if let Some(dec) = &proxy.decoration {
                                 if &dec.surface == current_surface {
-                                    Some(*id)
-                                } else {
-                                    None
+                                    return Some(*id);
                                 }
-                            } else {
-                                None
                             }
+                            if let Some(dec) = &proxy.dec_left {
+                                if &dec.surface == current_surface {
+                                    return Some(*id);
+                                }
+                            }
+                            if let Some(dec) = &proxy.dec_right {
+                                if &dec.surface == current_surface {
+                                    return Some(*id);
+                                }
+                            }
+                            if let Some(dec) = &proxy.dec_bottom {
+                                if &dec.surface == current_surface {
+                                    return Some(*id);
+                                }
+                            }
+                            None
                         });
 
                         if let Some(wid) = matched_window_id {

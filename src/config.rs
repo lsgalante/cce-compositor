@@ -183,6 +183,8 @@ pub struct InputConfig {
     pub dwtp: Option<bool>,
     pub trackpoint_accel_speed: Option<f64>,
     pub trackpoint_accel_profile: Option<String>,
+    pub cursor_theme: Option<String>,
+    pub cursor_size: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -459,6 +461,12 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
     state.trackpoint_accel_speed = config.input.trackpoint_accel_speed;
     state.trackpoint_accel_profile = config.input.trackpoint_accel_profile.clone();
     state.tap_config_applied = false;
+
+    if state.cursor_theme != config.input.cursor_theme || state.cursor_size != config.input.cursor_size {
+        state.cursor_theme = config.input.cursor_theme.clone();
+        state.cursor_size = config.input.cursor_size;
+        state.cursor_theme_applied = false;
+    }
 
     // Send InertialConfig and tap_to_click state to input subsystem daemon
     let inertial_cfg = config.inertial.clone().unwrap_or_else(|| {

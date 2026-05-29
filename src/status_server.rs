@@ -106,6 +106,8 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
     let mut latest: Option<StatusUpdate> = None;
 
     loop {
+        let mut activity = false;
+
         // Accept new connections (non-blocking)
         for _ in 0..5 {
             match listener.accept() {
@@ -133,6 +135,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
                         subscription,
                         stream,
                     });
+                    activity = true;
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     break; // No more pending connections
@@ -150,6 +153,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
             match rx.try_recv() {
                 Ok(update) => {
                     latest = Some(update);
+                    activity = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -198,8 +202,10 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
             }
         }
 
-        // Small sleep to avoid busy-looping when nothing is happening
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        if !activity {
+            // Small sleep to avoid busy-looping when nothing is happening
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }
 

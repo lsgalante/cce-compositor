@@ -45,6 +45,7 @@ fn ipc_server_main(tx: mpsc::Sender<String>, pipe_write: libc::c_int) {
     let mut streams: Vec<UnixStream> = Vec::new();
 
     loop {
+        let mut activity = false;
         for _ in 0..5 {
             match listener.accept() {
                 Ok((stream, _addr)) => {
@@ -54,6 +55,7 @@ fn ipc_server_main(tx: mpsc::Sender<String>, pipe_write: libc::c_int) {
                     }
                     eprintln!("[ipc] new connection");
                     streams.push(stream);
+                    activity = true;
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(e) => {
@@ -87,6 +89,7 @@ fn ipc_server_main(tx: mpsc::Sender<String>, pipe_write: libc::c_int) {
                             libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
                         }
                     }
+                    activity = true;
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(e) => {
@@ -100,6 +103,8 @@ fn ipc_server_main(tx: mpsc::Sender<String>, pipe_write: libc::c_int) {
             streams.remove(i);
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        if !activity {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }

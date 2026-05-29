@@ -774,6 +774,25 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 }
             }
         }
+        "cursor-theme" | "cursor_theme" => {
+            let val = value_str.trim().to_string();
+            if !val.is_empty() {
+                state.cursor_theme = Some(val.clone());
+                state.cursor_theme_applied = false;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Cursor theme set to {}", val));
+                }
+            }
+        }
+        "cursor-size" | "cursor_size" => {
+            if let Ok(val) = value_str.parse::<u32>() {
+                state.cursor_size = Some(val);
+                state.cursor_theme_applied = false;
+                if state.notifications_enable {
+                    crate::config::show_notification("clearwm", &format!("Cursor size set to {}", val));
+                }
+            }
+        }
         _ => {}
     }
 }
