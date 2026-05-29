@@ -6,15 +6,15 @@ fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
 
     // Probe system libraries
-    let wlroots = pkg_config::Config::new()
-        .atleast_version("0.20.0")
-        .probe("wlroots-0.20")
-        .expect("wlroots-0.20 is required");
-
     let scenefx = pkg_config::Config::new()
         .atleast_version("0.4.0")
         .probe("scenefx-0.4")
         .expect("scenefx-0.4 is required");
+
+    let wlroots = pkg_config::Config::new()
+        .atleast_version("0.19.0")
+        .probe("wlroots-0.19")
+        .expect("wlroots-0.19 is required");
 
     let wl_server = pkg_config::probe_library("wayland-server")
         .expect("wayland-server is required");
@@ -49,6 +49,14 @@ fn main() {
         ("wlr-layer-shell-unstable-v1.xml", "protocol/upstream/wlr-layer-shell-unstable-v1.xml"),
         ("wlr-output-power-management-unstable-v1.xml", "protocol/upstream/wlr-output-power-management-unstable-v1.xml"),
         ("virtual-keyboard-unstable-v1.xml", "protocol/upstream/virtual-keyboard-unstable-v1.xml"),
+        ("tablet-v2.xml", "/usr/share/wayland-protocols/stable/tablet/tablet-v2.xml"),
+        ("xdg-shell.xml", "/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml"),
+        ("color-management-v1.xml", "/usr/share/wayland-protocols/staging/color-management/color-management-v1.xml"),
+        ("content-type-v1.xml", "/usr/share/wayland-protocols/staging/content-type/content-type-v1.xml"),
+        ("cursor-shape-v1.xml", "/usr/share/wayland-protocols/staging/cursor-shape/cursor-shape-v1.xml"),
+        ("ext-image-copy-capture-v1.xml", "/usr/share/wayland-protocols/staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml"),
+        ("pointer-constraints-unstable-v1.xml", "/usr/share/wayland-protocols/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml"),
+        ("tearing-control-v1.xml", "/usr/share/wayland-protocols/staging/tearing-control/tearing-control-v1.xml"),
     ];
 
     for (name, path) in upstream_protocols {
@@ -122,9 +130,6 @@ fn main() {
 
     // Add include paths for scenefx, wlroots, and wayland-server
     for path in &scenefx.include_paths {
-        if path.to_string_lossy().contains("wlroots-0.19") {
-            continue;
-        }
         build.include(path);
     }
     for path in &wlroots.include_paths {
@@ -145,12 +150,7 @@ fn main() {
 
     // Pass include paths to bindgen clang argument parser
     let mut include_paths = vec![out_dir.clone()];
-    for path in scenefx.include_paths.clone() {
-        if path.to_string_lossy().contains("wlroots-0.19") {
-            continue;
-        }
-        include_paths.push(path);
-    }
+    include_paths.extend(scenefx.include_paths.clone());
     include_paths.extend(wlroots.include_paths.clone());
     include_paths.extend(wl_server.include_paths.clone());
     include_paths.extend(xkb.include_paths.clone());

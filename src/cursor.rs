@@ -392,7 +392,10 @@ impl Cursor {
                     if !image.is_null() {
                         ffi::wlr_xwayland_set_cursor(
                             (*(*self.seat).server).xwayland,
-                            ffi::wlr_xcursor_image_get_buffer(image),
+                            (*image).buffer,
+                            (*image).width * 4,
+                            (*image).width,
+                            (*image).height,
                             (*image).hotspot_x as i32,
                             (*image).hotspot_y as i32,
                         );

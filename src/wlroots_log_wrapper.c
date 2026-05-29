@@ -647,6 +647,10 @@ void river_wlr_keyboard_init(struct wlr_keyboard *keyboard,
 }
 
 static void enable_blur_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
+	struct wlr_scene_surface *scene_surface = wlr_scene_surface_try_from_buffer(buffer);
+	if (!scene_surface) {
+		return;
+	}
 	bool enabled = *(bool *)user_data;
 	wlr_scene_buffer_set_backdrop_blur(buffer, enabled);
 	wlr_scene_buffer_set_backdrop_blur_optimized(buffer, enabled);

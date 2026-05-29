@@ -16,7 +16,7 @@
 #include <wlr/render/pixman.h>
 
 // Wlroots types
-#include <wlr/types/wlr_fixes.h>
+// #include <wlr/types/wlr_fixes.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_data_device.h>
@@ -69,10 +69,11 @@
 #include <wlr/types/wlr_single_pixel_buffer_v1.h>
 #include <wlr/types/wlr_alpha_modifier_v1.h>
 #include <wlr/types/wlr_color_management_v1.h>
-#include <wlr/types/wlr_color_representation_v1.h>
+// #include <wlr/types/wlr_color_representation_v1.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_linux_drm_syncobj_v1.h>
 #include <scenefx/types/wlr_scene.h>
+#include <scenefx/render/fx_renderer/fx_renderer.h>
 
 #include <wlr/util/addon.h>
 #include <wlr/xwayland.h>

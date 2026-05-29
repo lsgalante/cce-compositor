@@ -306,24 +306,26 @@ impl Seat {
         match new_focus {
             Focus::None => {}
             Focus::LayerSurface(surface) => {
-                let kbd = ffi::river_wlr_seat_get_keyboard(self.wlr_seat);
-                if !kbd.is_null() {
-                    let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
-                    ffi::wlr_seat_keyboard_notify_enter(
-                        self.wlr_seat,
-                        surface,
-                        std::ptr::null_mut(),
-                        0,
-                        modifiers,
-                    );
-                } else {
-                    ffi::wlr_seat_keyboard_notify_enter(
-                        self.wlr_seat,
-                        surface,
-                        std::ptr::null_mut(),
-                        0,
-                        std::ptr::null_mut(),
-                    );
+                if !surface.is_null() {
+                    let kbd = ffi::river_wlr_seat_get_keyboard(self.wlr_seat);
+                    if !kbd.is_null() {
+                        let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
+                        ffi::wlr_seat_keyboard_notify_enter(
+                            self.wlr_seat,
+                            surface,
+                            std::ptr::null_mut(),
+                            0,
+                            modifiers,
+                        );
+                    } else {
+                        ffi::wlr_seat_keyboard_notify_enter(
+                            self.wlr_seat,
+                            surface,
+                            std::ptr::null_mut(),
+                            0,
+                            std::ptr::null_mut(),
+                        );
+                    }
                 }
 
                 let lx = self.cursor.x();
@@ -456,6 +458,9 @@ impl Seat {
     }
 
     pub unsafe fn keyboard_notify_enter(&mut self, wlr_surface: *mut ffi::wlr_surface) {
+        if wlr_surface.is_null() {
+            return;
+        }
         let kbd = ffi::river_wlr_seat_get_keyboard(self.wlr_seat);
         if !kbd.is_null() {
             let group_ptr = ffi::river_wlr_keyboard_get_data(kbd) as *mut crate::keyboard_group::KeyboardGroup;

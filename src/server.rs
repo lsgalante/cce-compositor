@@ -50,7 +50,6 @@ pub struct WlrRendererEvents {
 
 #[repr(C)]
 pub struct WlrRendererFeatures {
-    pub input_color_transform: bool,
     pub output_color_transform: bool,
     pub timeline: bool,
 }
@@ -58,7 +57,6 @@ pub struct WlrRendererFeatures {
 #[repr(C)]
 pub struct WlrRenderer {
     pub render_buffer_caps: u32,
-    pub color_encodings: u32,
     pub events: WlrRendererEvents,
     pub features: WlrRendererFeatures,
 }
@@ -167,6 +165,7 @@ pub struct WlrXwayland {
     pub own_server: bool,
     pub xwm: *mut std::ffi::c_void,
     pub shell_v1: *mut std::ffi::c_void,
+    pub cursor: *mut std::ffi::c_void,
     pub display_name: *const std::os::raw::c_char,
     pub wl_display: *mut ffi::wl_display,
     pub compositor: *mut ffi::wlr_compositor,
@@ -221,7 +220,7 @@ pub struct Server {
     pub wl_server: *mut ffi::wl_display,
     pub sigint_source: *mut ffi::wl_event_source,
     pub sigterm_source: *mut ffi::wl_event_source,
-    pub fixes: *mut ffi::wlr_fixes,
+    // pub fixes: *mut ffi::wlr_fixes,
     pub backend: *mut ffi::wlr_backend,
     pub session: *mut ffi::wlr_session,
     pub renderer: *mut ffi::wlr_renderer,
@@ -234,7 +233,7 @@ pub struct Server {
     pub single_pixel_buffer_manager: *mut ffi::wlr_single_pixel_buffer_manager_v1,
     pub alpha_modifier: *mut ffi::wlr_alpha_modifier_v1,
     pub color_manager: *mut ffi::wlr_color_manager_v1,
-    pub color_representation_manager: *mut ffi::wlr_color_representation_manager_v1,
+    // pub color_representation_manager: *mut ffi::wlr_color_representation_manager_v1,
     pub viewporter: *mut ffi::wlr_viewporter,
     pub fractional_scale_manager: *mut ffi::wlr_fractional_scale_manager_v1,
     pub compositor: *mut ffi::wlr_compositor,
@@ -255,7 +254,7 @@ pub struct Server {
     pub output_image_capture_source_manager: *mut ffi::wlr_ext_output_image_capture_source_manager_v1,
     pub wlr_foreign_toplevel_manager: *mut ffi::wlr_foreign_toplevel_manager_v1,
     pub foreign_toplevel_list: *mut ffi::wlr_ext_foreign_toplevel_list_v1,
-    pub toplevel_capture_source_manager: *mut ffi::wlr_ext_foreign_toplevel_image_capture_source_manager_v1,
+    // pub toplevel_capture_source_manager: *mut ffi::wlr_ext_foreign_toplevel_image_capture_source_manager_v1,
     pub tearing_control_manager: *mut ffi::wlr_tearing_control_manager_v1,
 
     pub xwayland: *mut ffi::wlr_xwayland,
@@ -278,7 +277,7 @@ pub struct Server {
     pub new_toplevel_decoration: ffi::wl_listener,
     pub request_activate: ffi::wl_listener,
     pub request_set_cursor_shape: ffi::wl_listener,
-    pub toplevel_capture_request: ffi::wl_listener,
+    // pub toplevel_capture_request: ffi::wl_listener,
     pub new_xsurface: ffi::wl_listener,
 }
 
@@ -331,10 +330,10 @@ unsafe extern "C" fn handle_request_set_cursor_shape(listener: *mut ffi::wl_list
     }
 }
 
-unsafe extern "C" fn handle_toplevel_capture_request(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let _server = container_of!(listener, Server, toplevel_capture_request);
-    log::info!("toplevel capture request");
-}
+// unsafe extern "C" fn handle_toplevel_capture_request(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+//     let _server = container_of!(listener, Server, toplevel_capture_request);
+//     log::info!("toplevel capture request");
+// }
 
 unsafe extern "C" fn handle_new_xwayland_surface(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let server = container_of!(listener, Server, new_xsurface);
@@ -377,9 +376,9 @@ impl Server {
             self.backend = backend;
             self.session = session;
 
-            let renderer = ffi::wlr_renderer_autocreate(backend);
+            let renderer = ffi::fx_renderer_create(backend);
             if renderer.is_null() {
-                return Err("Failed to autocreate wlr_renderer");
+                return Err("Failed to create fx_renderer");
             }
             self.renderer = renderer;
 
@@ -395,11 +394,11 @@ impl Server {
             }
             self.xdg_foreign_registry = xdg_foreign_registry;
 
-            let fixes = ffi::wlr_fixes_create(wl_server, 1);
-            if fixes.is_null() {
-                return Err("Failed to create wlr_fixes");
-            }
-            self.fixes = fixes;
+            // let fixes = ffi::wlr_fixes_create(wl_server, 1);
+            // if fixes.is_null() {
+            //     return Err("Failed to create wlr_fixes");
+            // }
+            // self.fixes = fixes;
 
             let allocator = ffi::wlr_allocator_autocreate(backend, renderer);
             if allocator.is_null() {
@@ -431,11 +430,11 @@ impl Server {
             }
             self.alpha_modifier = alpha_modifier;
 
-            let color_representation_manager = ffi::wlr_color_representation_manager_v1_create_with_renderer(wl_server, 1, renderer);
-            if color_representation_manager.is_null() {
-                return Err("Failed to create color representation manager");
-            }
-            self.color_representation_manager = color_representation_manager;
+            // let color_representation_manager = ffi::wlr_color_representation_manager_v1_create_with_renderer(wl_server, 1, renderer);
+            // if color_representation_manager.is_null() {
+            //     return Err("Failed to create color representation manager");
+            // }
+            // self.color_representation_manager = color_representation_manager;
 
             let viewporter = ffi::wlr_viewporter_create(wl_server);
             if viewporter.is_null() {
@@ -455,7 +454,7 @@ impl Server {
             }
             self.subcompositor = subcompositor;
 
-            let cursor_shape_manager = ffi::wlr_cursor_shape_manager_v1_create(wl_server, 2);
+            let cursor_shape_manager = ffi::wlr_cursor_shape_manager_v1_create(wl_server, 1);
             if cursor_shape_manager.is_null() {
                 return Err("Failed to create cursor shape manager");
             }
@@ -545,11 +544,11 @@ impl Server {
             }
             self.foreign_toplevel_list = foreign_toplevel_list;
 
-            let toplevel_capture_source_manager = ffi::wlr_ext_foreign_toplevel_image_capture_source_manager_v1_create(wl_server, 1);
-            if toplevel_capture_source_manager.is_null() {
-                return Err("Failed to create toplevel capture source manager");
-            }
-            self.toplevel_capture_source_manager = toplevel_capture_source_manager;
+            // let toplevel_capture_source_manager = ffi::wlr_ext_foreign_toplevel_image_capture_source_manager_v1_create(wl_server, 1);
+            // if toplevel_capture_source_manager.is_null() {
+            //     return Err("Failed to create toplevel capture source manager");
+            // }
+            // self.toplevel_capture_source_manager = toplevel_capture_source_manager;
 
             let tearing_control_manager = ffi::wlr_tearing_control_manager_v1_create(wl_server, 1);
             if tearing_control_manager.is_null() {
@@ -582,39 +581,8 @@ impl Server {
             }
 
             // Setup color manager if supported
-            if (*renderer_cast).features.input_color_transform {
-                let mut len: usize = 0;
-                let primaries = ffi::wlr_color_manager_v1_primaries_list_from_renderer(renderer, &mut len);
-                let transfer_functions = ffi::wlr_color_manager_v1_transfer_function_list_from_renderer(renderer, &mut len);
-
-                let render_intents = [ffi::wp_color_manager_v1_render_intent_WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL];
-                
-                self.color_manager = ffi::wlr_color_manager_v1_create(
-                    wl_server,
-                    2,
-                    &ffi::wlr_color_manager_v1_options {
-                        features: ffi::wlr_color_manager_v1_features {
-                            icc_v2_v4: false,
-                            parametric: true,
-                            set_primaries: false,
-                            set_tf_power: false,
-                            set_luminances: false,
-                            set_mastering_display_primaries: true,
-                            extended_target_volume: false,
-                            windows_scrgb: false,
-                        },
-                        render_intents: render_intents.as_ptr(),
-                        render_intents_len: render_intents.len(),
-                        primaries,
-                        primaries_len: len,
-                        transfer_functions,
-                        transfer_functions_len: len,
-                    }
-                );
-
-                libc::free(primaries as *mut _);
-                libc::free(transfer_functions as *mut _);
-            }
+            // (Commented out for wlroots 0.19 compatibility)
+            self.color_manager = std::ptr::null_mut();
 
             // Setup subcomponents stubs
             let server_ptr = self as *mut Server;
@@ -645,21 +613,21 @@ impl Server {
             let req_cursor = &mut self.request_set_cursor_shape as *mut ffi::wl_listener as *mut WlListener;
             (*req_cursor).notify = Some(handle_request_set_cursor_shape);
 
-            let cap_req = &mut self.toplevel_capture_request as *mut ffi::wl_listener as *mut WlListener;
-            (*cap_req).notify = Some(handle_toplevel_capture_request);
+            // let cap_req = &mut self.toplevel_capture_request as *mut ffi::wl_listener as *mut WlListener;
+            // (*cap_req).notify = Some(handle_toplevel_capture_request);
 
             let xdg_shell_cast = self.xdg_shell as *mut WlrXdgShell;
             let xdg_decoration_manager_cast = self.xdg_decoration_manager as *mut WlrXdgDecorationManagerV1;
             let xdg_activation_cast = self.xdg_activation as *mut WlrXdgActivationV1;
             let cursor_shape_manager_cast = self.cursor_shape_manager as *mut WlrCursorShapeManagerV1;
-            let toplevel_capture_source_manager_cast = self.toplevel_capture_source_manager as *mut WlrExtForeignToplevelImageCaptureSourceManagerV1;
+            // let toplevel_capture_source_manager_cast = self.toplevel_capture_source_manager as *mut WlrExtForeignToplevelImageCaptureSourceManagerV1;
 
             wl_signal_add(&mut (*renderer_cast).events.lost, &mut self.renderer_lost);
             wl_signal_add(&mut (*xdg_shell_cast).events.new_toplevel, &mut self.new_xdg_toplevel);
             wl_signal_add(&mut (*xdg_decoration_manager_cast).events.new_toplevel_decoration, &mut self.new_toplevel_decoration);
             wl_signal_add(&mut (*xdg_activation_cast).events.request_activate, &mut self.request_activate);
             wl_signal_add(&mut (*cursor_shape_manager_cast).events.request_set_shape, &mut self.request_set_cursor_shape);
-            wl_signal_add(&mut (*toplevel_capture_source_manager_cast).events.new_request, &mut self.toplevel_capture_request);
+            // wl_signal_add(&mut (*toplevel_capture_source_manager_cast).events.new_request, &mut self.toplevel_capture_request);
 
             // Register Xwayland surface listener if active
             if !self.xwayland.is_null() {
@@ -684,7 +652,7 @@ impl Server {
             wl_listener_remove(&mut self.new_toplevel_decoration);
             wl_listener_remove(&mut self.request_activate);
             wl_listener_remove(&mut self.request_set_cursor_shape);
-            wl_listener_remove(&mut self.toplevel_capture_request);
+            // wl_listener_remove(&mut self.toplevel_capture_request);
 
             if !self.xwayland.is_null() {
                 wl_listener_remove(&mut self.new_xsurface);

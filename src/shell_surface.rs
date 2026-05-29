@@ -68,7 +68,7 @@ impl ShellSurface {
             shell_surface_v1,
             &SHELL_SURFACE_INTERFACE as *const _ as *const _,
             raw as *mut _,
-            None,
+            Some(handle_shell_surface_destroy_resource),
         );
 
         let hidden_tree = (*server).scene.hidden_tree;
@@ -181,10 +181,33 @@ unsafe extern "C" fn commit(surface: *mut ffi::wlr_surface) {
     }
 }
 
+unsafe extern "C" fn handle_shell_surface_destroy_resource(resource: *mut ffi::wl_resource) {
+    let shell_surface = ffi::wl_resource_get_user_data(resource) as *mut ShellSurface;
+    if !shell_surface.is_null() {
+        ffi::river_wlr_surface_set_role_object((*shell_surface).surface, std::ptr::null_mut());
+        (*shell_surface).object = std::ptr::null_mut();
+        
+        ffi::wlr_surface_unmap((*shell_surface).surface);
+        (*shell_surface).node.make_inert();
+        (*shell_surface).node.deinit();
+        ffi::wlr_scene_node_destroy((*shell_surface).tree as *mut ffi::wlr_scene_node);
+        ffi::wlr_scene_node_destroy((*shell_surface).popup_tree as *mut ffi::wlr_scene_node);
+
+        let _ = Box::from_raw(shell_surface);
+    }
+}
+
 unsafe extern "C" fn role_destroy(surface: *mut ffi::wlr_surface) {
     let shell_surface = from_wlr_surface(surface);
     if shell_surface.is_null() {
         return;
+    }
+
+    ffi::river_wlr_surface_set_role_object(surface, std::ptr::null_mut());
+    if !(*shell_surface).object.is_null() {
+        ffi::wl_resource_set_user_data((*shell_surface).object, std::ptr::null_mut());
+        ffi::wl_resource_destroy((*shell_surface).object);
+        (*shell_surface).object = std::ptr::null_mut();
     }
 
     ffi::wlr_surface_unmap((*shell_surface).surface);

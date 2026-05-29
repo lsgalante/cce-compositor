@@ -462,10 +462,12 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
     let layer_surface = crate::container_of!(listener, LayerSurface, commit);
     let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
 
-    ffi::river_scene_node_enable_blur(
-        (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-        true,
-    );
+    if (*wlr_layer_surface).current.layer != ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND {
+        ffi::river_scene_node_enable_blur(
+            (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
+            true,
+        );
+    }
 
     assert!(!(*wlr_layer_surface).output.is_null());
 

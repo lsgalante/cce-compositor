@@ -248,14 +248,7 @@ impl Window {
             return Err("Failed to create fullscreen rect");
         }
 
-        let clear_color = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
-        let border_left = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
-        let border_right = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
-        let border_top = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
-        let border_bottom = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
-
         let decorations_below_tree = ffi::wlr_scene_tree_create(tree);
-        let decorations_above_tree = ffi::wlr_scene_tree_create(tree);
 
         let surfaces = match crate::scene::SaveableSurfaces::init(tree) {
             Ok(s) => s,
@@ -266,6 +259,14 @@ impl Window {
                 return Err(e);
             }
         };
+
+        let clear_color = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
+        let border_left = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
+        let border_right = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
+        let border_top = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
+        let border_bottom = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
+
+        let decorations_above_tree = ffi::wlr_scene_tree_create(tree);
 
         let mut window = Box::new(Window {
             ref_key: crate::slotmap::Key { generation: 0, index: 0 },
@@ -1930,6 +1931,9 @@ impl Decoration {
             );
             self.object = std::ptr::null_mut();
         }
+        if !self.surface.is_null() {
+            ffi::river_wlr_surface_set_role_object(self.surface, std::ptr::null_mut());
+        }
         self.surfaces.save();
     }
 
@@ -2045,9 +2049,24 @@ static INERT_DECORATION_INTERFACE: ffi::river_decoration_v1_interface = ffi::riv
 unsafe extern "C" fn handle_dec_destroy_resource(resource: *mut ffi::wl_resource) {
     let dec = ffi::wl_resource_get_user_data(resource) as *mut Decoration;
     if !dec.is_null() {
+        ffi::river_wlr_surface_set_role_object((*dec).surface, std::ptr::null_mut());
         (*dec).object = std::ptr::null_mut();
         (*dec).destroy();
     }
+}
+
+unsafe extern "C" fn dec_role_destroy(surface: *mut ffi::wlr_surface) {
+    let dec = decoration_from_wlr_surface(surface);
+    if dec.is_null() {
+        return;
+    }
+    ffi::river_wlr_surface_set_role_object(surface, std::ptr::null_mut());
+    if !(*dec).object.is_null() {
+        ffi::wl_resource_set_user_data((*dec).object, std::ptr::null_mut());
+        ffi::wl_resource_destroy((*dec).object);
+        (*dec).object = std::ptr::null_mut();
+    }
+    (*dec).destroy();
 }
 
 #[no_mangle]
@@ -2058,5 +2077,5 @@ pub static mut DECORATION_ROLE: ffi::wlr_surface_role = ffi::wlr_surface_role {
     commit: Some(dec_commit),
     map: None,
     unmap: None,
-    destroy: None,
+    destroy: Some(dec_role_destroy),
 };
