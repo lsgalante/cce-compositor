@@ -70,7 +70,7 @@ impl XkbBindingsSeat {
         if !self.object.is_null() {
             ffi::wl_resource_set_implementation(
                 self.object,
-                std::ptr::null(),
+                &INERT_XKB_BINDINGS_SEAT_INTERFACE as *const _ as *const _,
                 std::ptr::null_mut(),
                 None,
             );
@@ -128,6 +128,13 @@ static XKB_BINDINGS_SEAT_INTERFACE: ffi::river_xkb_bindings_seat_v1_interface = 
     ensure_next_key_eaten: Some(bindings_seat_ensure_next_key_eaten),
     cancel_ensure_next_key_eaten: Some(bindings_seat_cancel_ensure_next_key_eaten),
     modifiers_watch: Some(bindings_seat_modifiers_watch),
+};
+
+static INERT_XKB_BINDINGS_SEAT_INTERFACE: ffi::river_xkb_bindings_seat_v1_interface = ffi::river_xkb_bindings_seat_v1_interface {
+    destroy: Some(bindings_seat_destroy),
+    ensure_next_key_eaten: None,
+    cancel_ensure_next_key_eaten: None,
+    modifiers_watch: None,
 };
 
 unsafe extern "C" fn bindings_seat_destroy(

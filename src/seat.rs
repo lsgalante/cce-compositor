@@ -657,7 +657,7 @@ impl Seat {
             ffi::wl_resource_post_event(self.object, 0); // river_seat_v1.removed
             ffi::wl_resource_set_implementation(
                 self.object,
-                std::ptr::null(),
+                &INERT_SEAT_INTERFACE as *const _ as *const _,
                 std::ptr::null_mut(),
                 None,
             );
@@ -1059,6 +1059,18 @@ static SEAT_INTERFACE: ffi::river_seat_v1_interface = ffi::river_seat_v1_interfa
     get_pointer_binding: Some(seat_get_pointer_binding),
     set_xcursor_theme: Some(seat_set_xcursor_theme),
     pointer_warp: Some(seat_pointer_warp),
+};
+
+static INERT_SEAT_INTERFACE: ffi::river_seat_v1_interface = ffi::river_seat_v1_interface {
+    destroy: Some(seat_destroy),
+    focus_window: None,
+    focus_shell_surface: None,
+    clear_focus: None,
+    op_start_pointer: None,
+    op_end: None,
+    get_pointer_binding: None,
+    set_xcursor_theme: None,
+    pointer_warp: None,
 };
 
 unsafe extern "C" fn handle_destroy_resource(resource: *mut ffi::wl_resource) {

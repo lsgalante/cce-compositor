@@ -556,7 +556,7 @@ impl LayerShellOutput {
         if !self.object.is_null() {
             ffi::wl_resource_set_implementation(
                 self.object,
-                std::ptr::null(),
+                &INERT_LAYER_SHELL_OUTPUT_INTERFACE as *const _ as *const _,
                 std::ptr::null_mut(),
                 None,
             );
@@ -773,6 +773,11 @@ static LAYER_SHELL_OUTPUT_INTERFACE: ffi::river_layer_shell_output_v1_interface 
     set_default: Some(layer_shell_output_set_default),
 };
 
+static INERT_LAYER_SHELL_OUTPUT_INTERFACE: ffi::river_layer_shell_output_v1_interface = ffi::river_layer_shell_output_v1_interface {
+    destroy: Some(layer_shell_output_destroy),
+    set_default: None,
+};
+
 unsafe fn container_of_output(layer_shell_output: *mut LayerShellOutput) -> *mut Output {
     crate::container_of!(layer_shell_output, Output, layer_shell)
 }
@@ -817,7 +822,7 @@ impl LayerShellSeat {
         if !self.object.is_null() {
             ffi::wl_resource_set_implementation(
                 self.object,
-                std::ptr::null(),
+                &INERT_LAYER_SHELL_SEAT_INTERFACE as *const _ as *const _,
                 std::ptr::null_mut(),
                 None,
             );
@@ -858,5 +863,9 @@ unsafe extern "C" fn layer_shell_seat_destroy(client: *mut ffi::wl_client, resou
 }
 
 static LAYER_SHELL_SEAT_INTERFACE: ffi::river_layer_shell_seat_v1_interface = ffi::river_layer_shell_seat_v1_interface {
+    destroy: Some(layer_shell_seat_destroy),
+};
+
+static INERT_LAYER_SHELL_SEAT_INTERFACE: ffi::river_layer_shell_seat_v1_interface = ffi::river_layer_shell_seat_v1_interface {
     destroy: Some(layer_shell_seat_destroy),
 };
