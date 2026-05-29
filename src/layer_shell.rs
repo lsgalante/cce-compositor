@@ -773,9 +773,14 @@ static LAYER_SHELL_OUTPUT_INTERFACE: ffi::river_layer_shell_output_v1_interface 
     set_default: Some(layer_shell_output_set_default),
 };
 
+unsafe extern "C" fn layer_shell_output_inert_set_default(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+) {}
+
 static INERT_LAYER_SHELL_OUTPUT_INTERFACE: ffi::river_layer_shell_output_v1_interface = ffi::river_layer_shell_output_v1_interface {
     destroy: Some(layer_shell_output_destroy),
-    set_default: None,
+    set_default: Some(layer_shell_output_inert_set_default),
 };
 
 unsafe fn container_of_output(layer_shell_output: *mut LayerShellOutput) -> *mut Output {

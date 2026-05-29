@@ -1061,16 +1061,65 @@ static SEAT_INTERFACE: ffi::river_seat_v1_interface = ffi::river_seat_v1_interfa
     pointer_warp: Some(seat_pointer_warp),
 };
 
+unsafe extern "C" fn seat_inert_focus_window(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+    _window_resource: *mut ffi::wl_resource,
+) {}
+
+unsafe extern "C" fn seat_inert_focus_shell_surface(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+    _shell_surface_resource: *mut ffi::wl_resource,
+) {}
+
+unsafe extern "C" fn seat_inert_clear_focus(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+) {}
+
+unsafe extern "C" fn seat_inert_op_start_pointer(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+) {}
+
+unsafe extern "C" fn seat_inert_op_end(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+) {}
+
+unsafe extern "C" fn seat_inert_get_pointer_binding(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+    _id: u32,
+    _button: u32,
+    _modifiers: u32,
+) {}
+
+unsafe extern "C" fn seat_inert_set_xcursor_theme(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+    _name: *const ::std::os::raw::c_char,
+    _size: u32,
+) {}
+
+unsafe extern "C" fn seat_inert_pointer_warp(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+    _x: i32,
+    _y: i32,
+) {}
+
 static INERT_SEAT_INTERFACE: ffi::river_seat_v1_interface = ffi::river_seat_v1_interface {
     destroy: Some(seat_destroy),
-    focus_window: None,
-    focus_shell_surface: None,
-    clear_focus: None,
-    op_start_pointer: None,
-    op_end: None,
-    get_pointer_binding: None,
-    set_xcursor_theme: None,
-    pointer_warp: None,
+    focus_window: Some(seat_inert_focus_window),
+    focus_shell_surface: Some(seat_inert_focus_shell_surface),
+    clear_focus: Some(seat_inert_clear_focus),
+    op_start_pointer: Some(seat_inert_op_start_pointer),
+    op_end: Some(seat_inert_op_end),
+    get_pointer_binding: Some(seat_inert_get_pointer_binding),
+    set_xcursor_theme: Some(seat_inert_set_xcursor_theme),
+    pointer_warp: Some(seat_inert_pointer_warp),
 };
 
 unsafe extern "C" fn handle_destroy_resource(resource: *mut ffi::wl_resource) {

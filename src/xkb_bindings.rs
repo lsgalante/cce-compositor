@@ -130,11 +130,27 @@ static XKB_BINDINGS_SEAT_INTERFACE: ffi::river_xkb_bindings_seat_v1_interface = 
     modifiers_watch: Some(bindings_seat_modifiers_watch),
 };
 
+unsafe extern "C" fn bindings_seat_inert_ensure_next_key_eaten(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+) {}
+
+unsafe extern "C" fn bindings_seat_inert_cancel_ensure_next_key_eaten(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+) {}
+
+unsafe extern "C" fn bindings_seat_inert_modifiers_watch(
+    _client: *mut ffi::wl_client,
+    _resource: *mut ffi::wl_resource,
+    _modifiers: u32,
+) {}
+
 static INERT_XKB_BINDINGS_SEAT_INTERFACE: ffi::river_xkb_bindings_seat_v1_interface = ffi::river_xkb_bindings_seat_v1_interface {
     destroy: Some(bindings_seat_destroy),
-    ensure_next_key_eaten: None,
-    cancel_ensure_next_key_eaten: None,
-    modifiers_watch: None,
+    ensure_next_key_eaten: Some(bindings_seat_inert_ensure_next_key_eaten),
+    cancel_ensure_next_key_eaten: Some(bindings_seat_inert_cancel_ensure_next_key_eaten),
+    modifiers_watch: Some(bindings_seat_inert_modifiers_watch),
 };
 
 unsafe extern "C" fn bindings_seat_destroy(
