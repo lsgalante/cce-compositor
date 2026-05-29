@@ -416,6 +416,14 @@ impl Cursor {
         Ok(())
     }
 
+    pub unsafe fn set_xcursor(&mut self, name: *const std::os::raw::c_char) {
+        ffi::wlr_cursor_set_xcursor(
+            self.wlr_cursor,
+            self.xcursor_manager,
+            name,
+        );
+    }
+
     pub unsafe fn op_start_pointer(&mut self) {
         if !self.constraint.is_null() {
             if let crate::pointer_constraint::PointerConstraintState::Active { .. } = (*self.constraint).state {

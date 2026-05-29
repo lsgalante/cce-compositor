@@ -316,9 +316,19 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, _d
     log::info!("xdg activation request");
 }
 
-unsafe extern "C" fn handle_request_set_cursor_shape(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+unsafe extern "C" fn handle_request_set_cursor_shape(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let _server = container_of!(listener, Server, request_set_cursor_shape);
-    log::info!("request set cursor shape");
+    let event = data as *mut ffi::wlr_cursor_shape_manager_v1_request_set_shape_event;
+    
+    let wlr_seat = (*(*event).seat_client).seat;
+    let focused_client = ffi::river_wlr_seat_get_pointer_focused_client(wlr_seat);
+    if focused_client == (*event).seat_client {
+        let seat = ffi::river_wlr_seat_get_data(wlr_seat) as *mut crate::seat::Seat;
+        if !seat.is_null() {
+            let shape_name = ffi::wlr_cursor_shape_v1_name((*event).shape);
+            (*seat).cursor.set_xcursor(shape_name);
+        }
+    }
 }
 
 unsafe extern "C" fn handle_toplevel_capture_request(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
