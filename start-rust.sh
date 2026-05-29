@@ -15,6 +15,7 @@ export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export XCURSOR_THEME="crosshair-theme"
 export XCURSOR_SIZE=24
 export XCURSOR_PATH="/home/lsgalante/.local/share/icons:/home/lsgalante/.icons:/usr/share/icons"
+export WLR_NO_HARDWARE_CURSORS=1
 
 # Create the clearwm launch script
 DEBUG_FLAG=""
