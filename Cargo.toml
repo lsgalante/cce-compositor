@@ -1,15 +1,19 @@
 [package]
-name = "clearwm"
+name = "ccec"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "clearwm"
+name = "ccec"
 path = "src/main.rs"
 
 [[bin]]
 name = "clearctl"
 path = "src/clearctl.rs"
+
+[[bin]]
+name = "clear-inspector"
+path = "src/inspector_cli.rs"
 
 [dependencies]
 wayland-client = "0.31"

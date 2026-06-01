@@ -100,7 +100,7 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             let visible_mode: Vec<usize> = visible
                 .iter()
                 .cloned()
-                .filter(|&i| state.expose_active || state.windows[i].tiling_mode == win.tiling_mode)
+                .filter(|&i| state.expose_visual_active || state.windows[i].tiling_mode == win.tiling_mode)
                 .collect();
             let n_visible_mode = visible_mode.len();
             let pos = visible_mode.iter().position(|&i| i == idx).unwrap_or(0);
@@ -115,15 +115,13 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             (r, g, b, ALPHA)
         };
 
-        let mut width = if state.expose_active && win.tiling_mode != TilingMode::Popup {
+        let mut width = if state.expose_visual_active && win.tiling_mode != TilingMode::Popup {
             state.layout.grid_border_width
         } else {
             match win.tiling_mode {
                 TilingMode::Cascade => state.layout.cascade_border_width,
                 TilingMode::Fullscreen => state.layout.fullscreen_border_width,
                 TilingMode::Grid => state.layout.grid_border_width,
-                TilingMode::Vsplit => state.layout.vsplit_border_width,
-                TilingMode::Hsplit => state.layout.hsplit_border_width,
                 TilingMode::Floating => state.layout.floating_border_width,
                 TilingMode::Popup => state.layout.border_width,
             }

@@ -1,4 +1,4 @@
-// Wayland display connection, registry, and event dispatch for clearwm
+// Wayland display connection, registry, and event dispatch for ccec
 
 use wayland_client::{
     event_created_child, protocol::wl_registry, Connection, Dispatch, EventQueue, Proxy,
@@ -91,6 +91,25 @@ pub struct PendingBorderDrag {
     pub start_surface_x: f64,
     pub start_surface_y: f64,
     pub op_type: PointerOpType,
+}
+
+fn update_screen_bounds(outputs: &[crate::types::Output]) {
+    let mut max_x = 1920;
+    let mut max_y = 1080;
+    for out in outputs {
+        if !out.removed {
+            let right = out.x + out.width;
+            let bottom = out.y + out.height;
+            if right > max_x {
+                max_x = right;
+            }
+            if bottom > max_y {
+                max_y = bottom;
+            }
+        }
+    }
+    crate::input::SCREEN_WIDTH.store(max_x, std::sync::atomic::Ordering::SeqCst);
+    crate::input::SCREEN_HEIGHT.store(max_y, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Wayland proxy objects stored alongside each Window, so we can
@@ -367,19 +386,18 @@ impl AppState {
                             crate::types::TilingMode::Cascade => state.wm.layout.cascade_border_width,
                             crate::types::TilingMode::Fullscreen => state.wm.layout.fullscreen_border_width,
                             crate::types::TilingMode::Grid => state.wm.layout.grid_border_width,
-                            crate::types::TilingMode::Vsplit => state.wm.layout.vsplit_border_width,
-                            crate::types::TilingMode::Hsplit => state.wm.layout.hsplit_border_width,
                             crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
                             crate::types::TilingMode::Popup => 0,
                         }
                     };
                     let grab_w = border_w.max(10);
 
+                    let logical_height = border_w.max(16);
                     shape = match surface_type {
                         "top" => {
                             let total_width = w.width + 2 * border_w;
-                            let edge_thresh = (border_w as f64).max(8.0);
-                            if state.last_pointer_surface_y < edge_thresh {
+                            let mid_y = (logical_height as f64) / 2.0;
+                            if state.last_pointer_surface_y < mid_y {
                                 if state.last_pointer_surface_x < CORNER_THRESHOLD {
                                     Shape::NwseResize
                                 } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
@@ -388,41 +406,50 @@ impl AppState {
                                     Shape::NsResize
                                 }
                             } else {
-                                if state.last_pointer_surface_x < CORNER_THRESHOLD {
-                                    Shape::EwResize
-                                } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
-                                    Shape::EwResize
-                                } else {
-                                    Shape::Default
-                                }
+                                Shape::Default
                             }
                         }
                         "left" => {
-                            if state.last_pointer_surface_y < CORNER_THRESHOLD {
-                                Shape::NwseResize
-                            } else if state.last_pointer_surface_y > (w.height as f64 - CORNER_THRESHOLD) {
-                                Shape::NeswResize
+                            let mid_x = (grab_w as f64) / 2.0;
+                            if state.last_pointer_surface_x < mid_x {
+                                if state.last_pointer_surface_y < CORNER_THRESHOLD {
+                                    Shape::NwseResize
+                                } else if state.last_pointer_surface_y > (w.height as f64 - CORNER_THRESHOLD) {
+                                    Shape::NeswResize
+                                } else {
+                                    Shape::EwResize
+                                }
                             } else {
-                                Shape::EwResize
+                                Shape::Default
                             }
                         }
                         "right" => {
-                            if state.last_pointer_surface_y < CORNER_THRESHOLD {
-                                Shape::NeswResize
-                            } else if state.last_pointer_surface_y > (w.height as f64 - CORNER_THRESHOLD) {
-                                Shape::NwseResize
+                            let mid_x = (grab_w as f64) / 2.0;
+                            if state.last_pointer_surface_x >= mid_x {
+                                if state.last_pointer_surface_y < CORNER_THRESHOLD {
+                                    Shape::NeswResize
+                                } else if state.last_pointer_surface_y > (w.height as f64 - CORNER_THRESHOLD) {
+                                    Shape::NwseResize
+                                } else {
+                                    Shape::EwResize
+                                }
                             } else {
-                                Shape::EwResize
+                                Shape::Default
                             }
                         }
                         "bottom" => {
                             let total_width = w.width + 2 * grab_w;
-                            if state.last_pointer_surface_x < CORNER_THRESHOLD {
-                                Shape::NeswResize
-                            } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
-                                Shape::NwseResize
+                            let mid_y = (grab_w as f64) / 2.0;
+                            if state.last_pointer_surface_y >= mid_y {
+                                if state.last_pointer_surface_x < CORNER_THRESHOLD {
+                                    Shape::NeswResize
+                                } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
+                                    Shape::NwseResize
+                                } else {
+                                    Shape::NsResize
+                                }
                             } else {
-                                Shape::NsResize
+                                Shape::Default
                             }
                         }
                         _ => Shape::Default,
@@ -690,6 +717,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     });
                 }
                 state.wm.outputs.retain(|o| !o.removed);
+                update_screen_bounds(&state.wm.outputs);
 
                 // Remove removed seats — destroy protocol proxies first
                 // (matching tinyrwm's remove_seats pattern which destroys
@@ -802,7 +830,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     }
                 }
 
-                // Apply persisted state from ~/.cache/clearwm_state on first ManageStart.
+                // Apply persisted state from ~/.cache/ccec_state on first ManageStart.
                 // This restores window tag assignments, active_tags, tag_layouts, and
                 // locked tiling modes from the previous session. Must run before
                 // assign_window_modes so restored tags/modes take effect.
@@ -937,6 +965,13 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
 
                 if state.pointer_op_release_pending {
                     state.pointer_op_release_pending = false;
+                    if let Some(ref op) = state.active_pointer_op {
+                        if op.op_type != PointerOpType::Move {
+                            if let Some(wp) = state.get_window_proxy(op.window_id) {
+                                wp.river_window.inform_resize_end();
+                            }
+                        }
+                    }
                     state.active_pointer_op = None;
                     for (_sid, sp) in &state.seat_proxies {
                         sp.river_seat.op_end();
@@ -967,8 +1002,15 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                         }
                     })
                     .collect();
+                let has_pending = !pending.is_empty();
                 for (seat_id, action, command) in pending {
                     execute_action(state, seat_id, &action, command.as_deref());
+                }
+
+                if has_pending {
+                    if let Some(ref wm) = state.window_manager {
+                        wm.manage_dirty();
+                    }
                 }
 
                 wm_proxy.manage_finish();
@@ -1012,6 +1054,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     // set_position and propose_dimensions are window management state
                     // and must happen during ManageStart.
                     crate::wm::render_borders(state);
+                    crate::wm::render_opacity(state);
 
                     // Update and render window title decorations on borders
                     crate::decorations::update_decorations(state, qhandle);
@@ -1103,7 +1146,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 if state.wm.needs_status_update {
                     crate::status::write_status_files(&state.wm);
 
-                    // Persist state to ~/.cache/clearwm_state for restart recovery.
+                    // Persist state to ~/.cache/ccec_state for restart recovery.
                     // Safe: just file I/O, no fork, no blocking.
                     crate::state::write_state(&state.wm);
 
@@ -1182,6 +1225,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 };
 
                 state.wm.outputs.push(output);
+                update_screen_bounds(&state.wm.outputs);
                 state.output_proxies.push((
                     id,
                     OutputProxy {
@@ -1274,6 +1318,16 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
                         );
                         window.app_id = app_id;
                         re_eval = !window.mode_locked;
+
+                        // Check if this is a blank steam_proton helper window
+                        let is_proton = window.app_id.as_deref() == Some("steam_proton");
+                        let is_blank = window.title.is_none() || window.title.as_deref().map_or(true, |t| t.is_empty());
+                        if is_proton && is_blank {
+                            if window.tags != 0 {
+                                window.tags = 0;
+                                re_eval = true;
+                            }
+                        }
                     }
                 }
                 if re_eval {
@@ -1285,10 +1339,38 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
             }
 
             river_window_v1::Event::Title { title } => {
+                let mut re_eval = false;
+                let mut needs_render = false;
+                let active_tags = state.wm.active_tags;
                 if let Some(window) = state.wm.get_window_mut(wid) {
                     if window.title != title {
                         window.title = title;
-                        state.wm.needs_render = true;
+                        needs_render = true;
+
+                        // Check if we need to update/restore tags based on title
+                        let is_proton = window.app_id.as_deref() == Some("steam_proton");
+                        let is_blank = window.title.is_none() || window.title.as_deref().map_or(true, |t| t.is_empty());
+                        if is_proton {
+                            if is_blank {
+                                if window.tags != 0 {
+                                    window.tags = 0;
+                                    re_eval = true;
+                                }
+                            } else {
+                                if window.tags == 0 {
+                                    window.tags = active_tags;
+                                    re_eval = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if needs_render {
+                    state.wm.needs_render = true;
+                }
+                if re_eval {
+                    if let Some(ref wm) = state.window_manager {
+                        wm.manage_dirty();
                     }
                 }
             }
@@ -1318,7 +1400,7 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
                     // Spawn an async xprop check for XWayland parent detection.
                     // River doesn't forward WM_TRANSIENT_FOR for XWayland windows,
                     // so we check via xdotool + xprop as a fallback.
-                    // The script writes results to /tmp/clearwm-xprop-{wid} which
+                    // The script writes results to /tmp/ccec-xprop-{wid} which
                     // is read on the next ManageStart cycle.
                     if !window.has_parent && window.pid > 0 {
                         let pid = window.pid;
@@ -1512,7 +1594,10 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
 
                         // Disable expose if it was active
                         if state.wm.expose_active {
-                            state.wm.expose_active = false;
+                            crate::wm::set_expose_active(&mut state.wm, false);
+                            if let Some(ref wm) = state.window_manager {
+                                wm.manage_dirty();
+                            }
                         }
 
                         state.wm.needs_render = true;
@@ -1655,6 +1740,7 @@ impl Dispatch<RiverOutputV1, ()> for AppState {
                                 output.x = info.x;
                                 output.y = info.y;
                                 state.wm.needs_render = true;
+                                update_screen_bounds(&state.wm.outputs);
                                 eprintln!(
                                     "river_output linked to wl_output name={} dimensions (copied): {}x{} at ({},{})",
                                     name, info.width, info.height, info.x, info.y
@@ -1705,6 +1791,7 @@ impl Dispatch<wl_output::WlOutput, ()> for AppState {
                         output.x = x;
                         output.y = y;
                         state.wm.needs_render = true;
+                        update_screen_bounds(&state.wm.outputs);
                     }
                 }
             }
@@ -1730,6 +1817,7 @@ impl Dispatch<wl_output::WlOutput, ()> for AppState {
                             output.width = width;
                             output.height = height;
                             state.wm.needs_render = true;
+                            update_screen_bounds(&state.wm.outputs);
                             eprintln!(
                                 "wl_output name={} updated current mode dimensions: {}x{}",
                                 name, width, height
@@ -1996,7 +2084,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                 eprintln!("spawn: {}", cmd);
                 // Close inherited FDs > 2 in the child so that spawned
                 // Wayland clients (fuzzel, etc.) never accidentally read
-                // from clearwm's Wayland socket fd. This prevents protocol
+                // from ccec's Wayland socket fd. This prevents protocol
                 // corruption and the CPU spin loop that results from it.
                 use std::os::unix::process::CommandExt;
                 let _ = unsafe {
@@ -2136,7 +2224,17 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                     if let Some((_, sp)) = state.seat_proxies.iter().find(|(sid, _)| *sid == seat_id) {
                         sp.river_seat.op_start_pointer();
                     }
-                    if let Some(win) = state.wm.get_window(wid) {
+                    if op_type != PointerOpType::Move {
+                        if let Some(wp) = state.get_window_proxy(wid) {
+                            wp.river_window.inform_resize_start();
+                        }
+                    }
+                    if let Some(win) = state.wm.get_window_mut(wid) {
+                        win.anim_x = None;
+                        win.anim_y = None;
+                        win.anim_w = None;
+                        win.anim_h = None;
+                        win.anim_opacity = None;
                         state.active_pointer_op = Some(PointerOp {
                             window_id: wid,
                             op_type,
@@ -2200,8 +2298,8 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                             minimize_requested: false,
                             tiling_mode: TilingMode::Fullscreen,
                             mode_locked,
-                            needs_xprop_check: false,
                             xprop_check_attempts: 0,
+                            ..Default::default()
                         };
                         crate::wm::get_mode_for_window(&state.wm, &temp_win)
                             .unwrap_or(state.wm.global_layout)
@@ -2227,8 +2325,6 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
             let cycle = [
                 TilingMode::Cascade,
                 TilingMode::Grid,
-                TilingMode::Vsplit,
-                TilingMode::Hsplit,
                 TilingMode::Fullscreen,
             ];
             // Cycle the layout for the currently active tag(s) only.
@@ -2265,7 +2361,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
             );
 
             if state.wm.notifications_enable {
-                crate::config::show_notification("clearwm", &format!("Layout set to {} for active tags", next.as_str()));
+                crate::config::show_notification("ccec", &format!("Layout set to {} for active tags", next.as_str()));
             }
 
             // Unlock windows that got their mode from the layout (not from mode_rules
@@ -2281,8 +2377,6 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
             let cycle = [
                 TilingMode::Cascade,
                 TilingMode::Grid,
-                TilingMode::Vsplit,
-                TilingMode::Hsplit,
                 TilingMode::Fullscreen,
                 TilingMode::Floating,
             ];
@@ -2311,7 +2405,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                     win.mode_locked = true;
                     if notifications_enable {
                         let win_title = win.title.as_deref().unwrap_or("Window");
-                        crate::config::show_notification("clearwm", &format!("Tiling mode set to {} for: {}", next.as_str(), win_title));
+                        crate::config::show_notification("ccec", &format!("Tiling mode set to {} for: {}", next.as_str(), win_title));
                     }
                     state.wm.needs_render = true;
                     state.wm.needs_status_update = true;
@@ -2325,7 +2419,8 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
             crate::restart::wm_restart();
         }
         Action::Expose => {
-            state.wm.expose_active = !state.wm.expose_active;
+            let active = !state.wm.expose_active;
+            crate::wm::set_expose_active(&mut state.wm, active);
             state.wm.needs_render = true;
             state.wm.needs_status_update = true;
         }
@@ -2928,7 +3023,7 @@ pub fn wayland_init() -> Result<(Connection, EventQueue<AppState>, AppState), St
         state.render_count
     );
 
-    eprintln!("clearwm: Wayland connection established");
+    eprintln!("ccec: Wayland connection established");
 
     Ok((conn, event_queue, state))
 }
@@ -3293,7 +3388,6 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
             wl_pointer::Event::Leave { .. } => {
                 eprintln!("[pointer] leave");
                 state.pointer_hovered_surface = None;
-                state.pending_border_drag = None;
                 Self::update_cursor_shape_for_surface(state, proxy);
             }
             wl_pointer::Event::Motion { surface_x, surface_y, .. } => {
@@ -3306,8 +3400,8 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
                     let dx = surface_x - pending.start_surface_x;
                     let dy = surface_y - pending.start_surface_y;
                     let dist = (dx * dx + dy * dy).sqrt();
-                    // Threshold of 12.0 logical pixels to distinguish click vs drag
-                    if dist > 12.0 {
+                    // Threshold of 4.0 logical pixels to distinguish click vs drag
+                    if dist > 4.0 {
                         state.pending_border_drag = None;
 
                         // Start the drag! Set the window to Floating and lock it.
@@ -3390,64 +3484,48 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
                                             }
                                         });
 
-                                        let mut focus_changed = false;
                                         if let Some(sid) = seat_id {
                                             if let Some(seat) = state.wm.seats.iter_mut().find(|s| s.id == sid) {
-                                                focus_changed = seat.focused_window_id != Some(wid);
                                                 seat.focused_window_id = Some(wid);
                                                 state.wm.move_window_to_end(wid);
                                                 if state.wm.expose_active {
-                                                    state.wm.expose_active = false;
+                                                    crate::wm::set_expose_active(&mut state.wm, false);
                                                 }
-                                                state.wm.needs_focus = true;
-                                                state.wm.needs_render = true;
-                                                state.wm.needs_status_update = true;
-                                                if let Some(ref wm) = state.window_manager {
-                                                    wm.manage_dirty();
                                                 }
-                                            }
-
-                                            if !focus_changed {
-                                                // Determine the specific PointerOpType based on coordinates on the matched surface
-                                                let op_type = if let Some(w) = state.wm.windows.iter().find(|win| win.id == wid) {
-                                                    let border_w = if state.wm.expose_active && w.tiling_mode != crate::types::TilingMode::Popup {
-                                                        state.wm.layout.grid_border_width
-                                                    } else {
-                                                        match w.tiling_mode {
-                                                            crate::types::TilingMode::Cascade => state.wm.layout.cascade_border_width,
-                                                            crate::types::TilingMode::Fullscreen => state.wm.layout.fullscreen_border_width,
-                                                            crate::types::TilingMode::Grid => state.wm.layout.grid_border_width,
-                                                            crate::types::TilingMode::Vsplit => state.wm.layout.vsplit_border_width,
-                                                            crate::types::TilingMode::Hsplit => state.wm.layout.hsplit_border_width,
-                                                            crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
-                                                            crate::types::TilingMode::Popup => 0,
-                                                        }
-                                                    };
-                                                    let grab_w = border_w.max(10);
-
-                                                    match surface_type {
-                                                        "top" => {
-                                                            let total_width = w.width + 2 * border_w;
-                                                            let edge_thresh = (border_w as f64).max(8.0);
-                                                            if state.last_pointer_surface_y < edge_thresh {
-                                                                if state.last_pointer_surface_x < CORNER_THRESHOLD {
-                                                                    PointerOpType::ResizeTopLeft
-                                                                } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
-                                                                    PointerOpType::ResizeTopRight
-                                                                } else {
-                                                                    PointerOpType::ResizeTop
-                                                                }
+                                                                 // Determine the specific PointerOpType based on coordinates on the matched surface
+                                            let op_type = if let Some(w) = state.wm.windows.iter().find(|win| win.id == wid) {
+                                                let border_w = if state.wm.expose_active && w.tiling_mode != crate::types::TilingMode::Popup {
+                                                    state.wm.layout.grid_border_width
+                                                } else {
+                                                    match w.tiling_mode {
+                                                        crate::types::TilingMode::Cascade => state.wm.layout.cascade_border_width,
+                                                        crate::types::TilingMode::Fullscreen => state.wm.layout.fullscreen_border_width,
+                                                        crate::types::TilingMode::Grid => state.wm.layout.grid_border_width,
+                                                        crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
+                                                        crate::types::TilingMode::Popup => 0,
+                                                    }
+                                                };
+                                                let grab_w = border_w.max(10);
+                                                let logical_height = border_w.max(16);
+                                                match surface_type {
+                                                    "top" => {
+                                                        let total_width = w.width + 2 * border_w;
+                                                        let mid_y = (logical_height as f64) / 2.0;
+                                                        if state.last_pointer_surface_y < mid_y {
+                                                            if state.last_pointer_surface_x < CORNER_THRESHOLD {
+                                                                PointerOpType::ResizeTopLeft
+                                                            } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
+                                                                PointerOpType::ResizeTopRight
                                                             } else {
-                                                                if state.last_pointer_surface_x < CORNER_THRESHOLD {
-                                                                    PointerOpType::ResizeLeft
-                                                                } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
-                                                                    PointerOpType::ResizeRight
-                                                                } else {
-                                                                    PointerOpType::Move
-                                                                }
+                                                                PointerOpType::ResizeTop
                                                             }
+                                                        } else {
+                                                            PointerOpType::Move
                                                         }
-                                                        "left" => {
+                                                    }
+                                                    "left" => {
+                                                        let mid_x = (grab_w as f64) / 2.0;
+                                                        if state.last_pointer_surface_x < mid_x {
                                                             if state.last_pointer_surface_y < CORNER_THRESHOLD {
                                                                 PointerOpType::ResizeTopLeft
                                                             } else if state.last_pointer_surface_y > (w.height as f64 - CORNER_THRESHOLD) {
@@ -3455,8 +3533,13 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
                                                             } else {
                                                                 PointerOpType::ResizeLeft
                                                             }
+                                                        } else {
+                                                            PointerOpType::Move
                                                         }
-                                                        "right" => {
+                                                    }
+                                                    "right" => {
+                                                        let mid_x = (grab_w as f64) / 2.0;
+                                                        if state.last_pointer_surface_x >= mid_x {
                                                             if state.last_pointer_surface_y < CORNER_THRESHOLD {
                                                                 PointerOpType::ResizeTopRight
                                                             } else if state.last_pointer_surface_y > (w.height as f64 - CORNER_THRESHOLD) {
@@ -3464,9 +3547,14 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
                                                             } else {
                                                                 PointerOpType::ResizeRight
                                                             }
+                                                        } else {
+                                                            PointerOpType::Move
                                                         }
-                                                        "bottom" => {
-                                                            let total_width = w.width + 2 * grab_w;
+                                                    }
+                                                    "bottom" => {
+                                                        let total_width = w.width + 2 * grab_w;
+                                                        let mid_y = (grab_w as f64) / 2.0;
+                                                        if state.last_pointer_surface_y >= mid_y {
                                                             if state.last_pointer_surface_x < CORNER_THRESHOLD {
                                                                 PointerOpType::ResizeBottomLeft
                                                             } else if state.last_pointer_surface_x > (total_width as f64 - CORNER_THRESHOLD) {
@@ -3474,22 +3562,24 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
                                                             } else {
                                                                 PointerOpType::ResizeBottom
                                                             }
+                                                        } else {
+                                                            PointerOpType::Move
                                                         }
-                                                        _ => PointerOpType::Move,
                                                     }
-                                                } else {
-                                                    PointerOpType::Move
-                                                };
+                                                    _ => PointerOpType::Move,
+                                                }
+                                            } else {
+                                                PointerOpType::Move
+                                            };
 
-                                                // 2. Store the pending drag info (threshold check is in Event::Motion)
-                                                state.pending_border_drag = Some(PendingBorderDrag {
-                                                    window_id: wid,
-                                                    seat_id: sid,
-                                                    start_surface_x: state.last_pointer_surface_x,
-                                                    start_surface_y: state.last_pointer_surface_y,
-                                                    op_type,
-                                                });
-                                            }
+                                            // 2. Store the pending drag info (threshold check is in Event::Motion)
+                                            state.pending_border_drag = Some(PendingBorderDrag {
+                                                window_id: wid,
+                                                seat_id: sid,
+                                                start_surface_x: state.last_pointer_surface_x,
+                                                start_surface_y: state.last_pointer_surface_y,
+                                                op_type,
+                                            });
                                         }
                                     }
                                 }

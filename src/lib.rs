@@ -1,4 +1,4 @@
-// clearwm — Wayland window manager for river, written in Rust
+// ccec — Wayland window manager for river, written in Rust
 
 pub mod borders;
 pub mod config;

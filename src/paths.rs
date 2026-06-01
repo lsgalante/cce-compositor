@@ -2,65 +2,65 @@ use std::env;
 
 pub fn get_socket_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/clearwm-{}.sock", display)
+        format!("/tmp/ccec-{}.sock", display)
     } else {
-        "/tmp/clearwm.sock".to_string()
+        "/tmp/ccec.sock".to_string()
     }
 }
 
 pub fn get_status_socket_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/clearwm-status-{}.sock", display)
+        format!("/tmp/ccec-status-{}.sock", display)
     } else {
-        "/tmp/clearwm-status.sock".to_string()
+        "/tmp/ccec-status.sock".to_string()
     }
 }
 
 pub fn get_windows_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/clearwm-windows-{}", display)
+        format!("/tmp/ccec-windows-{}", display)
     } else {
-        "/tmp/clearwm-windows".to_string()
+        "/tmp/ccec-windows".to_string()
     }
 }
 
 pub fn get_tags_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/clearwm-tags-{}", display)
+        format!("/tmp/ccec-tags-{}", display)
     } else {
-        "/tmp/clearwm-tags".to_string()
+        "/tmp/ccec-tags".to_string()
     }
 }
 
 pub fn get_layout_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/clearwm-layout-{}", display)
+        format!("/tmp/ccec-layout-{}", display)
     } else {
-        "/tmp/clearwm-layout".to_string()
+        "/tmp/ccec-layout".to_string()
     }
 }
 
 pub fn get_title_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/clearwm-title-{}", display)
+        format!("/tmp/ccec-title-{}", display)
     } else {
-        "/tmp/clearwm-title".to_string()
+        "/tmp/ccec-title".to_string()
     }
 }
 
 pub fn get_death_log_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/clearwm-death-{}.log", display)
+        format!("/tmp/ccec-death-{}.log", display)
     } else {
-        "/tmp/clearwm-death.log".to_string()
+        "/tmp/ccec-death.log".to_string()
     }
 }
 
 pub fn get_bt_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/clearwm-bt-{}.txt", display)
+        format!("/tmp/ccec-bt-{}.txt", display)
     } else {
-        "/tmp/clearwm-bt.txt".to_string()
+        "/tmp/ccec-bt.txt".to_string()
     }
 }
 
@@ -74,24 +74,24 @@ pub fn get_input_coords_socket_path() -> String {
 
 pub fn get_log_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/clearwm-{}.log", display)
+        format!("/tmp/ccec-{}.log", display)
     } else {
-        "/tmp/clearwm.log".to_string()
+        "/tmp/ccec.log".to_string()
     }
 }
 
 pub fn get_prev_log_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/clearwm-{}-prev.log", display)
+        format!("/tmp/ccec-{}-prev.log", display)
     } else {
-        "/tmp/clearwm-prev.log".to_string()
+        "/tmp/ccec-prev.log".to_string()
     }
 }
 
 pub fn get_xprop_path(wid: u64) -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/clearwm-xprop-{}-{}", wid, display)
+        format!("/tmp/ccec-xprop-{}-{}", wid, display)
     } else {
-        format!("/tmp/clearwm-xprop-{}", wid)
+        format!("/tmp/ccec-xprop-{}", wid)
     }
 }

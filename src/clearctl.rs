@@ -1,4 +1,4 @@
-// clearctl — IPC client for clearwm
+// clearctl — IPC client for ccec
 
 use std::env;
 use std::fs;
@@ -8,15 +8,15 @@ use std::process;
 
 fn get_socket_path() -> String {
     match env::var("WAYLAND_DISPLAY") {
-        Ok(display) => format!("/tmp/clearwm-{}.sock", display),
-        Err(_) => "/tmp/clearwm.sock".to_string(),
+        Ok(display) => format!("/tmp/ccec-{}.sock", display),
+        Err(_) => "/tmp/ccec.sock".to_string(),
     }
 }
 
 fn get_windows_path() -> String {
     match env::var("WAYLAND_DISPLAY") {
-        Ok(display) => format!("/tmp/clearwm-windows-{}", display),
-        Err(_) => "/tmp/clearwm-windows".to_string(),
+        Ok(display) => format!("/tmp/ccec-windows-{}", display),
+        Err(_) => "/tmp/ccec-windows".to_string(),
     }
 }
 
@@ -49,8 +49,17 @@ fn usage(name: &str, to_stderr: bool) {
     print("  pbind <mods> <button> <action>");
     print("  retile");
     print("  set-tag <1-4>");
-    print("  mode <cascade|grid|vsplit|hsplit|fullscreen|floating|popup> <app_id> [title]");
-    print("  tag-layout <1-4> <cascade|grid|vsplit|hsplit|fullscreen|floating|popup>");
+    print("  mode <cascade|grid|fullscreen|floating|popup> <app_id> [title]");
+    print("  tag-layout <1-4> <cascade|grid|fullscreen|floating|popup>");
+    print("  pointer-location");
+    print("  pointer-move-to <x> <y>");
+    print("  pointer-move-by <dx> <dy>");
+    print("  pointer-click <button>");
+    print("  pointer-press <button>");
+    print("  pointer-release <button>");
+    print("  keypress <key>");
+    print("  key-press <key>");
+    print("  key-release <key>");
 }
 
 fn main() {
@@ -69,7 +78,7 @@ fn main() {
     if args[1] == "windows" {
         match fs::read_to_string(get_windows_path()) {
             Ok(content) => print!("{}", content),
-            Err(_) => eprintln!("No windows info (clearwm may not be running)"),
+            Err(_) => eprintln!("No windows info (ccec may not be running)"),
         }
         return;
     }

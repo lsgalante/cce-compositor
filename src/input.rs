@@ -4,16 +4,36 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::time::Instant;
+use std::sync::atomic::{AtomicI32, Ordering};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::time::{sleep, Duration};
 use crate::config::InertialConfig;
+
+pub static POINTER_X: AtomicI32 = AtomicI32::new(0);
+pub static POINTER_Y: AtomicI32 = AtomicI32::new(0);
+pub static SCREEN_WIDTH: AtomicI32 = AtomicI32::new(1920);
+pub static SCREEN_HEIGHT: AtomicI32 = AtomicI32::new(1080);
+
+pub fn update_pointer_coords(dx: i32, dy: i32) {
+    let screen_w = SCREEN_WIDTH.load(Ordering::SeqCst);
+    let screen_h = SCREEN_HEIGHT.load(Ordering::SeqCst);
+    let mut current_x = POINTER_X.load(Ordering::SeqCst);
+    let mut current_y = POINTER_Y.load(Ordering::SeqCst);
+
+    current_x = (current_x + dx).clamp(0, screen_w);
+    current_y = (current_y + dy).clamp(0, screen_h);
+
+    POINTER_X.store(current_x, Ordering::SeqCst);
+    POINTER_Y.store(current_y, Ordering::SeqCst);
+}
 
 // IOCTL and Event constants
 const UI_DEV_CREATE: libc::c_ulong = 0x5501;
 const UI_DEV_SETUP: libc::c_ulong = 0x405C5503;
 const UI_SET_EVBIT: libc::c_ulong = 0x40045564;
 const UI_SET_RELBIT: libc::c_ulong = 0x40045566;
+const UI_SET_KEYBIT: libc::c_ulong = 0x40045565;
 
 // Linux input event codes
 const EV_SYN: u16 = 0x00;
@@ -86,14 +106,26 @@ fn eviocgabs(abs: u32) -> libc::c_ulong {
 
 const ABS_MT_SLOT: u16 = 0x2f;
 
+#[derive(Debug, Clone)]
+pub enum InputDaemonMsg {
+    UpdateConfig(InertialConfig, bool),
+    SimulateMove { dx: i32, dy: i32 },
+    SimulateButton { button: u16, press: bool },
+    SimulateKey { keycode: u16, press: bool },
+    SimulateClick { button: u16 },
+    SimulateKeyPress { keycode: u16 },
+}
+
 #[derive(Debug)]
 enum CoordinatorMsg {
     PhysicalMove { dx: i32, dy: i32, timestamp: Instant },
     PhysicalTrackpadMove { dx: i32, dy: i32, timestamp: Instant },
     PhysicalTrackpadLift { timestamp: Instant },
     PhysicalScroll { dwx: i32, dwy: i32, timestamp: Instant },
-    UpdateConfig((InertialConfig, bool)),
     FingersReport(Vec<FingerState>),
+    DaemonMsg(InputDaemonMsg),
+    InternalReleaseButton { button: u16 },
+    InternalReleaseKey { keycode: u16 },
 }
 
 fn setup_uinput() -> std::io::Result<std::fs::File> {
@@ -119,6 +151,19 @@ fn setup_uinput() -> std::io::Result<std::fs::File> {
         }
         if libc::ioctl(fd, UI_SET_RELBIT, REL_HWHEEL as libc::c_int) < 0 {
             return Err(std::io::Error::last_os_error());
+        }
+        if libc::ioctl(fd, UI_SET_EVBIT, EV_KEY as libc::c_int) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        for key in 1..=511 {
+            if libc::ioctl(fd, UI_SET_KEYBIT, key as libc::c_int) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        for btn in 272..=276 {
+            if libc::ioctl(fd, UI_SET_KEYBIT, btn as libc::c_int) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
         }
     }
 
@@ -378,57 +423,62 @@ struct PhysicsState {
     three_finger_gesture_triggered: bool,
 }
 
-fn trigger_tap_to_click_ipc(tap: bool, ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
+fn send_ipc_cmd(ipc_tx: &std::sync::mpsc::Sender<crate::ipc_server::IpcRequest>, cmd: String) {
+    let (reply_tx, _) = std::sync::mpsc::channel();
+    let _ = ipc_tx.send(crate::ipc_server::IpcRequest { command: cmd, reply_tx });
+}
+
+fn trigger_tap_to_click_ipc(tap: bool, ipc_tx: &std::sync::mpsc::Sender<crate::ipc_server::IpcRequest>, pipe_write: libc::c_int) {
     let cmd = format!("input tap-to-click {}", tap);
-    let _ = ipc_tx.send(cmd);
+    send_ipc_cmd(ipc_tx, cmd);
     unsafe {
         libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
     }
 }
 
-fn trigger_trackpad_disabled_ipc(disabled: bool, ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
+fn trigger_trackpad_disabled_ipc(disabled: bool, ipc_tx: &std::sync::mpsc::Sender<crate::ipc_server::IpcRequest>, pipe_write: libc::c_int) {
     let cmd = format!("input trackpad-disabled {}", disabled);
-    let _ = ipc_tx.send(cmd);
+    send_ipc_cmd(ipc_tx, cmd);
     unsafe {
         libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
     }
 }
 
-fn trigger_expose_ipc(ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
+fn trigger_expose_ipc(ipc_tx: &std::sync::mpsc::Sender<crate::ipc_server::IpcRequest>, pipe_write: libc::c_int) {
     let cmd = "expose".to_string();
-    let _ = ipc_tx.send(cmd);
+    send_ipc_cmd(ipc_tx, cmd);
     unsafe {
         libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
     }
 }
 
-fn trigger_expose_exit_ipc(ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
+fn trigger_expose_exit_ipc(ipc_tx: &std::sync::mpsc::Sender<crate::ipc_server::IpcRequest>, pipe_write: libc::c_int) {
     let cmd = "expose-exit".to_string();
-    let _ = ipc_tx.send(cmd);
+    send_ipc_cmd(ipc_tx, cmd);
     unsafe {
         libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
     }
 }
 
-fn trigger_view_next_ipc(ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
+fn trigger_view_next_ipc(ipc_tx: &std::sync::mpsc::Sender<crate::ipc_server::IpcRequest>, pipe_write: libc::c_int) {
     let cmd = "view-next".to_string();
-    let _ = ipc_tx.send(cmd);
+    send_ipc_cmd(ipc_tx, cmd);
     unsafe {
         libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
     }
 }
 
-fn trigger_view_prev_ipc(ipc_tx: &std::sync::mpsc::Sender<String>, pipe_write: libc::c_int) {
+fn trigger_view_prev_ipc(ipc_tx: &std::sync::mpsc::Sender<crate::ipc_server::IpcRequest>, pipe_write: libc::c_int) {
     let cmd = "view-prev".to_string();
-    let _ = ipc_tx.send(cmd);
+    send_ipc_cmd(ipc_tx, cmd);
     unsafe {
         libc::write(pipe_write, &1u8 as *const u8 as *const libc::c_void, 1);
     }
 }
 
 pub fn run_input_daemon(
-    mut event_queue_rx: tokio::sync::mpsc::UnboundedReceiver<(InertialConfig, bool)>,
-    ipc_tx: std::sync::mpsc::Sender<String>,
+    mut event_queue_rx: tokio::sync::mpsc::UnboundedReceiver<InputDaemonMsg>,
+    ipc_tx: std::sync::mpsc::Sender<crate::ipc_server::IpcRequest>,
     pipe_write: libc::c_int,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -472,8 +522,8 @@ pub fn run_input_daemon(
 
         // Wait for initial config
         let (initial_config, tap_to_click) = match event_queue_rx.recv().await {
-            Some(res) => res,
-            None => {
+            Some(InputDaemonMsg::UpdateConfig(res, tap)) => (res, tap),
+            _ => {
                 return Err(Box::from("Failed to receive initial input configuration") as Box<dyn std::error::Error>);
             }
         };
@@ -481,8 +531,8 @@ pub fn run_input_daemon(
         // Config listener task
         let tx_config = tx.clone();
         tokio::spawn(async move {
-            while let Some((config, tap)) = event_queue_rx.recv().await {
-                let _ = tx_config.send(CoordinatorMsg::UpdateConfig((config, tap)));
+            while let Some(msg) = event_queue_rx.recv().await {
+                let _ = tx_config.send(CoordinatorMsg::DaemonMsg(msg));
             }
         });
 
@@ -559,14 +609,59 @@ pub fn run_input_daemon(
             tokio::select! {
                 Some(msg) = rx.recv() => {
                     match msg {
-                        CoordinatorMsg::UpdateConfig((cfg, tap)) => {
-                            state.config = cfg;
-                            if state.tap_to_click != tap {
-                                state.tap_to_click = tap;
-                                trigger_tap_to_click_ipc(tap, &ipc_tx, pipe_write);
+                        CoordinatorMsg::DaemonMsg(daemon_msg) => {
+                            match daemon_msg {
+                                InputDaemonMsg::UpdateConfig(cfg, tap) => {
+                                    state.config = cfg;
+                                    if state.tap_to_click != tap {
+                                        state.tap_to_click = tap;
+                                        trigger_tap_to_click_ipc(tap, &ipc_tx, pipe_write);
+                                    }
+                                }
+                                InputDaemonMsg::SimulateMove { dx, dy } => {
+                                    let _ = write_mouse_move(&mut uinput_file, dx, dy);
+                                    update_pointer_coords(dx, dy);
+                                }
+                                InputDaemonMsg::SimulateButton { button, press } => {
+                                    let val = if press { 1 } else { 0 };
+                                    let _ = write_raw_event(&mut uinput_file, EV_KEY, button, val);
+                                    let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                                }
+                                InputDaemonMsg::SimulateKey { keycode, press } => {
+                                    let val = if press { 1 } else { 0 };
+                                    let _ = write_raw_event(&mut uinput_file, EV_KEY, keycode, val);
+                                    let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                                }
+                                InputDaemonMsg::SimulateClick { button } => {
+                                    let _ = write_raw_event(&mut uinput_file, EV_KEY, button, 1);
+                                    let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                                    let tx_clone = tx.clone();
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                                        let _ = tx_clone.send(CoordinatorMsg::InternalReleaseButton { button });
+                                    });
+                                }
+                                InputDaemonMsg::SimulateKeyPress { keycode } => {
+                                    let _ = write_raw_event(&mut uinput_file, EV_KEY, keycode, 1);
+                                    let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                                    let tx_clone = tx.clone();
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                                        let _ = tx_clone.send(CoordinatorMsg::InternalReleaseKey { keycode });
+                                    });
+                                }
                             }
                         }
+                        CoordinatorMsg::InternalReleaseButton { button } => {
+                            let _ = write_raw_event(&mut uinput_file, EV_KEY, button, 0);
+                            let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                        }
+                        CoordinatorMsg::InternalReleaseKey { keycode } => {
+                            let _ = write_raw_event(&mut uinput_file, EV_KEY, keycode, 0);
+                            let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                        }
                         CoordinatorMsg::PhysicalMove { dx, dy, timestamp } => {
+                            update_pointer_coords(dx, dy);
                             let dt = timestamp.duration_since(state.last_move_time).as_secs_f32();
                             state.last_move_time = timestamp;
 
@@ -586,6 +681,7 @@ pub fn run_input_daemon(
                             }
                         }
                         CoordinatorMsg::PhysicalTrackpadMove { dx, dy, timestamp } => {
+                            update_pointer_coords(dx, dy);
                             let dt = timestamp.duration_since(state.last_trackpad_move_time).as_secs_f32();
                             state.last_trackpad_move_time = timestamp;
 
@@ -739,6 +835,7 @@ pub fn run_input_daemon(
 
                                 if steps_x != 0 || steps_y != 0 {
                                     let _ = write_mouse_move(&mut uinput_file, steps_x, steps_y);
+                                    update_pointer_coords(steps_x, steps_y);
                                 }
                             }
                         }
@@ -764,6 +861,7 @@ pub fn run_input_daemon(
 
                             if steps_x != 0 || steps_y != 0 {
                                 let _ = write_mouse_move(&mut uinput_file, steps_x, steps_y);
+                                update_pointer_coords(steps_x, steps_y);
                             }
                         }
                     }

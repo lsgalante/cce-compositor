@@ -1,4 +1,4 @@
-// Tiling formulas ported from clearwm.c
+// Tiling formulas ported from ccec.c
 
 /// Cascade depth factor: each depth step multiplies channels by this
 pub const CASCADE_DEPTH_FACTOR: f64 = 0.80;
@@ -80,71 +80,7 @@ pub fn tile_grid(
     (x, y, width, height)
 }
 
-/// Tile a window in vsplit mode (vertical splits — windows side by side).
-///
-/// Each window gets an equal share of the horizontal space.
-///
-/// Screen edges use per-side gaps; inter-window spacing uses `gap`.
-///   n = total windows in vsplit
-///   width  = (screen_w - gap_left - gap_right - (n - 1) * gap) / n - 2 * bw
-///   height = screen_h - gap_top - gap_bottom - bw * 2 - bar_height
-///   x = gap_left + bw + idx * (width + 2 * bw + gap)
-///   y = bar_height + gap_top + bw
-pub fn tile_vsplit(
-    screen_w: i32,
-    screen_h: i32,
-    gap: i32,
-    gap_top: i32,
-    gap_left: i32,
-    gap_right: i32,
-    gap_bottom: i32,
-    bw: i32,
-    bar_height: i32,
-    n_vsplit: i32,
-    idx: i32,
-) -> (i32, i32, i32, i32) {
-    let n = if n_vsplit < 1 { 1 } else { n_vsplit };
-    let width = (screen_w - gap_left - gap_right - (n - 1) * gap) / n - 2 * bw;
-    let height = screen_h - gap_top - gap_bottom - bw * 2 - bar_height;
-    let width = if width < 1 { 1 } else { width };
-    let height = if height < 1 { 1 } else { height };
-    let x = gap_left + bw + idx * (width + 2 * bw + gap);
-    let y = bar_height + gap_top + bw;
-    (x, y, width, height)
-}
 
-/// Tile a window in hsplit mode (horizontal splits — windows stacked vertically).
-///
-/// Each window gets an equal share of the vertical space.
-///
-/// Screen edges use per-side gaps; inter-window spacing uses `gap`.
-///   n = total windows in hsplit
-///   width  = screen_w - gap_left - gap_right - bw * 2
-///   height = (screen_h - bar_height - gap_top - gap_bottom - (n - 1) * gap) / n - 2 * bw
-///   x = gap_left + bw
-///   y = bar_height + gap_top + bw + idx * (height + 2 * bw + gap)
-pub fn tile_hsplit(
-    screen_w: i32,
-    screen_h: i32,
-    gap: i32,
-    gap_top: i32,
-    gap_left: i32,
-    gap_right: i32,
-    gap_bottom: i32,
-    bw: i32,
-    bar_height: i32,
-    n_hsplit: i32,
-    idx: i32,
-) -> (i32, i32, i32, i32) {
-    let n = if n_hsplit < 1 { 1 } else { n_hsplit };
-    let width = screen_w - gap_left - gap_right - bw * 2;
-    let height = (screen_h - bar_height - gap_top - gap_bottom - (n - 1) * gap) / n - 2 * bw;
-    let width = if width < 1 { 1 } else { width };
-    let height = if height < 1 { 1 } else { height };
-    let x = gap_left + bw;
-    let y = bar_height + gap_top + bw + idx * (height + 2 * bw + gap);
-    (x, y, width, height)
-}
 
 /// Tile a window in fullscreen mode — fills the screen minus gaps, bar, and borders.
 ///
@@ -336,123 +272,7 @@ mod tests {
         assert_eq!(color, "#3e3e3e");
     }
 
-    #[test]
-    fn test_tile_vsplit_single() {
-        // Single vsplit window fills screen minus gaps/borders/bar
-        let (x, y, w, h) = tile_vsplit(1920, 1080, 18, 18, 18, 18, 18, 18, 28, 1, 0);
-        assert_eq!(x, 36); // gap_left + bw
-        assert_eq!(y, 64); // bar_height + gap_top + bw
-                           // w = (1920 - 18 - 18 - 0*18) / 1 - 2*18 = 1884 - 36 = 1848
-        assert_eq!(w, 1848);
-        // h = 1080 - 18 - 18 - 18*2 - 28 = 1080 - 100 = 980
-        assert_eq!(h, 980);
-    }
 
-    #[test]
-    fn test_tile_vsplit_two() {
-        // Two vsplit windows side by side
-        let (x0, y0, w0, h0) = tile_vsplit(1920, 1080, 18, 18, 18, 18, 18, 18, 28, 2, 0);
-        let (x1, y1, w1, h1) = tile_vsplit(1920, 1080, 18, 18, 18, 18, 18, 18, 28, 2, 1);
-
-        // Same dimensions
-        assert_eq!(w0, w1);
-        assert_eq!(h0, h1);
-        // Same y (same row)
-        assert_eq!(y0, y1);
-        // Window 1 is to the right
-        assert!(x1 > x0);
-
-        // w = (1920 - 18 - 18 - 1*18) / 2 - 2*18 = (1920-54)/2 - 36 = 933 - 36 = 897
-        assert_eq!(w0, 897);
-    }
-
-    #[test]
-    fn test_tile_vsplit_minimum_size() {
-        let (_, _, w, h) = tile_vsplit(100, 100, 18, 18, 18, 18, 18, 18, 28, 10, 5);
-        assert!(w >= 1);
-        assert!(h >= 1);
-    }
-
-    #[test]
-    fn test_tile_vsplit_asymmetric_gaps() {
-        // Asymmetric screen gaps with 2 vsplit windows
-        let (x0, y0, w0, h0) = tile_vsplit(1920, 1080, 12, 10, 20, 30, 40, 6, 28, 2, 0);
-        let (x1, _y1, w1, _h1) = tile_vsplit(1920, 1080, 12, 10, 20, 30, 40, 6, 28, 2, 1);
-
-        // w = (1920 - 20 - 30 - 1*12) / 2 - 2*6 = (1920-62)/2 - 12 = 929 - 12 = 917
-        assert_eq!(w0, 917);
-        assert_eq!(w0, w1);
-
-        // x0 = gap_left + bw = 20 + 6 = 26
-        assert_eq!(x0, 26);
-        // y0 = bar_height + gap_top + bw = 28 + 10 + 6 = 44
-        assert_eq!(y0, 44);
-        // h = 1080 - 10 - 40 - 6*2 - 28 = 1080 - 90 = 990
-        assert_eq!(h0, 990);
-
-        // x1 = gap_left + bw + 1*(917 + 2*6 + 12) = 26 + 941 = 967
-        assert_eq!(x1, 967);
-    }
-
-    #[test]
-    fn test_tile_hsplit_single() {
-        // Single hsplit window fills screen minus gaps/borders/bar
-        let (x, y, w, h) = tile_hsplit(1920, 1080, 18, 18, 18, 18, 18, 18, 28, 1, 0);
-        assert_eq!(x, 36); // gap_left + bw
-        assert_eq!(y, 64); // bar_height + gap_top + bw
-                           // w = 1920 - 18 - 18 - 18*2 = 1920 - 72 = 1848
-        assert_eq!(w, 1848);
-        // h = (1080 - 28 - 18 - 18 - 0*18) / 1 - 2*18 = 1016 - 36 = 980
-        assert_eq!(h, 980);
-    }
-
-    #[test]
-    fn test_tile_hsplit_two() {
-        // Two hsplit windows stacked vertically
-        let (x0, y0, w0, h0) = tile_hsplit(1920, 1080, 18, 18, 18, 18, 18, 18, 28, 2, 0);
-        let (x1, y1, w1, h1) = tile_hsplit(1920, 1080, 18, 18, 18, 18, 18, 18, 28, 2, 1);
-
-        // Same dimensions
-        assert_eq!(w0, w1);
-        assert_eq!(h0, h1);
-        // Same x (same column)
-        assert_eq!(x0, x1);
-        // Window 1 is below window 0
-        assert!(y1 > y0);
-
-        // h = (1080 - 28 - 18 - 18 - 1*18) / 2 - 2*18 = (1080-82)/2 - 36 = 499 - 36 = 463
-        assert_eq!(h0, 463);
-    }
-
-    #[test]
-    fn test_tile_hsplit_minimum_size() {
-        let (_, _, w, h) = tile_hsplit(100, 100, 18, 18, 18, 18, 18, 18, 28, 10, 5);
-        assert!(w >= 1);
-        assert!(h >= 1);
-    }
-
-    #[test]
-    fn test_tile_hsplit_asymmetric_gaps() {
-        // Asymmetric screen gaps with 2 hsplit windows
-        let (x0, y0, w0, h0) = tile_hsplit(1920, 1080, 12, 10, 20, 30, 40, 6, 28, 2, 0);
-        let (_x1, y1, w1, h1) = tile_hsplit(1920, 1080, 12, 10, 20, 30, 40, 6, 28, 2, 1);
-
-        // w = 1920 - 20 - 30 - 6*2 = 1920 - 62 = 1858
-        assert_eq!(w0, 1858);
-        assert_eq!(w0, w1);
-
-        // x0 = gap_left + bw = 20 + 6 = 26
-        assert_eq!(x0, 26);
-        // y0 = bar_height + gap_top + bw = 28 + 10 + 6 = 44
-        assert_eq!(y0, 44);
-
-        // h = (1080 - 28 - 10 - 40 - 1*12) / 2 - 2*6 = (1080-90)/2 - 12 = 495 - 12 = 483
-        assert_eq!(h0, 483);
-        assert_eq!(h0, h1);
-
-        // y1 = bar_height + gap_top + bw + 1*(483 + 2*6 + 12) = 44 + 507 = 551
-        assert_eq!(y1, 551);
-    }
 
     #[test]
     fn test_tile_fullscreen_basic() {

@@ -1,7 +1,7 @@
 // Status socket server for waybar integration
 //
 // Runs in a dedicated thread. Waybar custom module scripts connect to
-// /tmp/clearwm-status.sock, send a subscription line ("tags", "layout",
+// /tmp/ccec-status.sock, send a subscription line ("tags", "layout",
 // or "title"), and receive JSON lines whenever the status changes.
 //
 // The main loop sends updates through an mpsc channel — no blocking,
@@ -72,7 +72,7 @@ pub fn spawn_status_server() -> StatusSender {
     let (tx, rx) = mpsc::channel::<StatusUpdate>();
 
     std::thread::Builder::new()
-        .name("clearwm-status".into())
+        .name("ccec-status".into())
         .spawn(move || {
             status_server_main(rx);
         })
@@ -242,7 +242,7 @@ fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
 /// This is the same logic that write_status_files() uses, but produces
 /// the data for the socket instead of writing to files.
 pub fn build_status_update(wm: &crate::types::WindowManager) -> StatusUpdate {
-    // Tags: generate the same pango-marked JSON that clearwm-tags.sh produces
+    // Tags: generate the same pango-marked JSON that ccec-tags.sh produces
     let tags_json = render_tags_json(
         wm.active_tags,
         wm.focused_tags,
@@ -269,7 +269,7 @@ pub fn build_status_update(wm: &crate::types::WindowManager) -> StatusUpdate {
 }
 
 /// Render tag state as a JSON string with pango markup, matching the format
-/// produced by the old clearwm-tags.sh script.
+/// produced by the old ccec-tags.sh script.
 ///
 /// Colors:
 /// - Active + Focused: bright (#a8c0d8)

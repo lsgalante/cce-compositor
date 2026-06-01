@@ -1,7 +1,7 @@
-// Persistent state file for clearwm restart recovery.
+// Persistent state file for ccec restart recovery.
 //
 // Writes window tag assignments and global tag/layout state to
-// ~/.cache/clearwm_state so that it survives restarts. On startup,
+// ~/.cache/ccec_state so that it survives restarts. On startup,
 // the state file is read and applied to re-advertised windows
 // matched by their River identifier (stable across WM restarts)
 // or app_id+title as a fallback.
@@ -21,12 +21,12 @@ use std::fs;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
-/// Get the state file path: ~/.cache/clearwm_state
+/// Get the state file path: ~/.cache/ccec_state
 fn state_file_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let mut path = PathBuf::from(home);
     path.push(".cache");
-    path.push("clearwm_state");
+    path.push("ccec_state");
     path
 }
 
@@ -224,8 +224,6 @@ fn parse_tiling_mode_str(s: &str) -> TilingMode {
     match s {
         "Cascade" => TilingMode::Cascade,
         "Grid" => TilingMode::Grid,
-        "Vsplit" => TilingMode::Vsplit,
-        "Hsplit" => TilingMode::Hsplit,
         "Fullscreen" => TilingMode::Fullscreen,
         "Floating" => TilingMode::Floating,
         "Popup" => TilingMode::Popup,
@@ -306,6 +304,13 @@ pub fn apply_state(wm: &mut WindowManager, state: &PersistentState) {
                 win.mode_locked = true;
             }
         }
+
+        // Post-restore normalization: Ensure blank steam_proton helper windows are untagged (tags = 0)
+        let is_proton = win.app_id.as_deref() == Some("steam_proton");
+        let is_blank = win.title.is_none() || win.title.as_deref().map_or(true, |t| t.is_empty());
+        if is_proton && is_blank {
+            win.tags = 0;
+        }
     }
 
     eprintln!(
@@ -342,9 +347,9 @@ mod tests {
 
     #[test]
     fn test_write_read_roundtrip() {
-        let dir = std::env::temp_dir().join("clearwm_state_test");
+        let dir = std::env::temp_dir().join("ccec_state_test");
         let _ = fs::create_dir_all(&dir);
-        let path = dir.join("clearwm_state");
+        let path = dir.join("ccec_state");
 
         let mut wm = WindowManager::default();
         wm.active_tags = 0b1010; // tags 2 and 4

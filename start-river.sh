@@ -1,5 +1,5 @@
 #!/bin/bash
-# Launch river with clearwm on this TTY
+# Launch river with ccec on this TTY
 # Usage: Switch to a free TTY, log in, and run this script
 
 LOGGING=false
@@ -15,26 +15,26 @@ export XCURSOR_THEME="crosshair-theme"
 export XCURSOR_SIZE=24
 export XCURSOR_PATH="/home/lsgalante/.local/share/icons:/home/lsgalante/.icons:/usr/share/icons"
 
-# Create the River init executable (clearwm launch script)
+# Create the River init executable (ccec launch script)
 # This must exist before River starts, and /tmp is cleared on reboot.
 if [ "$LOGGING" = true ]; then
-    cat > /tmp/clearwm-rs-launch-river.sh << 'LAUNCH_EOF'
+    cat > /tmp/ccec-launch-river.sh << 'LAUNCH_EOF'
 #!/bin/sh
-exec /home/lsgalante/.local/bin/clearwm 2>/tmp/clearwm-${WAYLAND_DISPLAY}.log
+exec /home/lsgalante/.local/bin/ccec 2>/tmp/ccec-${WAYLAND_DISPLAY}.log
 LAUNCH_EOF
 else
-    cat > /tmp/clearwm-rs-launch-river.sh << 'LAUNCH_EOF'
+    cat > /tmp/ccec-launch-river.sh << 'LAUNCH_EOF'
 #!/bin/sh
-exec /home/lsgalante/.local/bin/clearwm
+exec /home/lsgalante/.local/bin/ccec
 LAUNCH_EOF
 fi
-chmod +x /tmp/clearwm-rs-launch-river.sh
+chmod +x /tmp/ccec-launch-river.sh
 
-echo "Starting river with clearwm..."
+echo "Starting river with ccec..."
 if [ "$LOGGING" = true ]; then
-    echo "Logs: /tmp/river-clearwm.log + /tmp/clearwm-${WAYLAND_DISPLAY}.log"
+    echo "Logs: /tmp/river-ccec.log + /tmp/ccec-${WAYLAND_DISPLAY}.log"
 else
     echo "Logging disabled. Use --logging to enable."
 fi
 
-exec river -c /tmp/clearwm-rs-launch-river.sh 2>/tmp/river-clearwm.log
+exec river -c /tmp/ccec-launch-river.sh 2>/tmp/river-ccec.log

@@ -1,18 +1,18 @@
-// clearwm — Wayland window manager for river
+// ccec — Wayland window manager for river
 
-use clearwm::config::parse_config;
-use clearwm::ipc;
-use clearwm::ipc_server;
-use clearwm::restart;
-use clearwm::status_server;
-use clearwm::wayland::wayland_init;
+use ccec::config::parse_config;
+use ccec::ipc;
+use ccec::ipc_server;
+use ccec::restart;
+use ccec::status_server;
+use ccec::wayland::wayland_init;
 use std::env;
 use std::fs;
 
-use clearwm::paths;
+use ccec::paths;
 
-/// Write a crash/exit trace to /tmp/clearwm-death.log so we can diagnose
-/// why clearwm dies even when the normal log gets overwritten on restart.
+/// Write a crash/exit trace to /tmp/ccec-death.log so we can diagnose
+/// why ccec dies even when the normal log gets overwritten on restart.
 fn log_death(msg: &str) {
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -40,7 +40,7 @@ fn main() {
         }
     }));
 
-    eprintln!("clearwm starting...");
+    eprintln!("ccec starting...");
 
     // Start the status socket server thread (for waybar integration)
     let status_sender = status_server::spawn_status_server();
@@ -66,7 +66,7 @@ fn main() {
     }
 
     // Connect to Wayland display and get initial state.
-    // SIGUSR2 handler: dump backtrace to /tmp/clearwm-bt.txt for debugging busy loops
+    // SIGUSR2 handler: dump backtrace to /tmp/ccec-bt.txt for debugging busy loops
     unsafe {
         nix::sys::signal::sigaction(
             nix::sys::signal::SIGUSR2,
@@ -101,16 +101,16 @@ fn main() {
     let ipc_tx = ipc_server.tx;
 
     // Setup channel for configuration updates:
-    let (config_tx, config_rx) = tokio::sync::mpsc::unbounded_channel::<(clearwm::config::InertialConfig, bool)>();
+    let (config_tx, config_rx) = tokio::sync::mpsc::unbounded_channel::<ccec::input::InputDaemonMsg>();
     state.wm.input_controller = Some(config_tx);
 
     // Spawn the input subsystem background thread:
     let pipe_write_clone = pipe_write;
     let ipc_tx_clone = ipc_tx.clone();
     std::thread::Builder::new()
-        .name("clearwm-input-subsystem".into())
+        .name("ccec-input-subsystem".into())
         .spawn(move || {
-            if let Err(e) = clearwm::input::run_input_daemon(config_rx, ipc_tx_clone, pipe_write_clone) {
+            if let Err(e) = ccec::input::run_input_daemon(config_rx, ipc_tx_clone, pipe_write_clone) {
                 eprintln!("[input-subsystem] Fatal error: {:?}", e);
             }
         })
@@ -120,8 +120,8 @@ fn main() {
     state.status_sender = Some(status_sender);
 
     // Check if this is a restart
-    let cold_start = if env::var("CLEARWM_RESTARTING").as_deref() == Ok("1") {
-        env::remove_var("CLEARWM_RESTARTING");
+    let cold_start = if env::var("CCEC_RESTARTING").as_deref() == Ok("1") {
+        env::remove_var("CCEC_RESTARTING");
         false
     } else {
         true
@@ -139,7 +139,7 @@ fn main() {
     );
     let config_start = std::time::Instant::now();
     if let Ok(home) = env::var("HOME") {
-        let config_path = format!("{}/.config/clearwm/config.toml", home);
+        let config_path = format!("{}/.config/ccec/config.toml", home);
         if fs::metadata(&config_path).is_ok() {
             if let Err(e) = parse_config(&config_path, cold_start, &mut state.wm) {
                 eprintln!("[init] failed to load config: {}", e);
@@ -156,7 +156,7 @@ fn main() {
     if state.wm.pending_scale_apply && state.wm.output_scale > 0.0 && !state.output_heads.is_empty()
     {
         let qh = event_queue.handle();
-        clearwm::wayland::apply_output_scale(&mut state, &qh);
+        ccec::wayland::apply_output_scale(&mut state, &qh);
     }
 
     // Flush any queued requests from config loading (bindings, etc.)
@@ -165,6 +165,7 @@ fn main() {
     // Main loop — using poll to block on both Wayland socket and IPC wake-up pipe.
     // All work (including spawning) happens inside Dispatch callbacks.
     let mut loop_count: u64 = 0;
+    let mut last_animation_tick = std::time::Instant::now();
     loop {
         loop_count += 1;
         if loop_count % 10000 == 0 {
@@ -202,22 +203,39 @@ fn main() {
             nix::poll::PollFd::new(unsafe { std::os::fd::BorrowedFd::borrow_raw(pipe_read) }, nix::poll::PollFlags::POLLIN),
         ];
 
-        match nix::poll::poll(&mut poll_fds, nix::poll::PollTimeout::NONE) {
-            Ok(_) => {
-                // If Wayland FD is readable, read the events
-                if poll_fds[0].revents().unwrap_or(nix::poll::PollFlags::empty()).contains(nix::poll::PollFlags::POLLIN) {
-                    let _ = read_guard.read();
-                } else {
-                    // Otherwise drop the read guard to release the lock
-                    std::mem::drop(read_guard);
-                }
+        let timeout = if state.wm.animating {
+            let elapsed = last_animation_tick.elapsed();
+            let timeout_duration = if elapsed >= std::time::Duration::from_millis(16) {
+                std::time::Duration::ZERO
+            } else {
+                std::time::Duration::from_millis(16) - elapsed
+            };
+            nix::poll::PollTimeout::try_from(timeout_duration).unwrap()
+        } else {
+            nix::poll::PollTimeout::NONE
+        };
 
-                // If IPC pipe is readable, drain it
-                if poll_fds[1].revents().unwrap_or(nix::poll::PollFlags::empty()).contains(nix::poll::PollFlags::POLLIN) {
-                    let mut buf = [0u8; 128];
-                    unsafe {
-                        libc::read(pipe_read, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+        match nix::poll::poll(&mut poll_fds, timeout) {
+            Ok(num_events) => {
+                if num_events > 0 {
+                    // If Wayland FD is readable, read the events
+                    if poll_fds[0].revents().unwrap_or(nix::poll::PollFlags::empty()).contains(nix::poll::PollFlags::POLLIN) {
+                        let _ = read_guard.read();
+                    } else {
+                        // Otherwise drop the read guard to release the lock
+                        std::mem::drop(read_guard);
                     }
+
+                    // If IPC pipe is readable, drain it
+                    if poll_fds[1].revents().unwrap_or(nix::poll::PollFlags::empty()).contains(nix::poll::PollFlags::POLLIN) {
+                        let mut buf = [0u8; 128];
+                        unsafe {
+                            libc::read(pipe_read, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+                        }
+                    }
+                } else {
+                    // Timeout (num_events == 0) — drop the read guard to release the lock
+                    std::mem::drop(read_guard);
                 }
             }
             Err(e) => {
@@ -232,13 +250,22 @@ fn main() {
         // 5. Dispatch read events
         let _ = event_queue.dispatch_pending(&mut state);
 
+        // 6. If animating and frame budget elapsed, request next frame
+        if state.wm.animating && last_animation_tick.elapsed() >= std::time::Duration::from_millis(16) {
+            if let Some(ref wm) = state.window_manager {
+                wm.manage_dirty();
+                last_animation_tick = std::time::Instant::now();
+            }
+        }
+
         // 6. Process pending IPC commands from the socket channel
         let mut ipc_commands = false;
         loop {
             match ipc_rx.try_recv() {
-                Ok(cmd) => {
-                    eprintln!("[main] IPC command: {}", cmd);
-                    ipc::handle_ipc_command(&cmd, &mut state.wm);
+                Ok(req) => {
+                    eprintln!("[main] IPC command: {}", req.command);
+                    let reply = ipc::handle_ipc_command(&req.command, &mut state.wm);
+                    let _ = req.reply_tx.send(reply);
                     ipc_commands = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
@@ -255,7 +282,7 @@ fn main() {
             }
             if !state.wm.tap_config_applied && !state.libinput_devices.is_empty() {
                 let qh = event_queue.handle();
-                clearwm::wayland::apply_input_config(&mut state, &qh);
+                ccec::wayland::apply_input_config(&mut state, &qh);
             }
         }
 

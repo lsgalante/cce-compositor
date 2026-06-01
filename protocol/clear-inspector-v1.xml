@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="clear_inspector_v1">
+  <copyright>
+    Copyright © 2026 Antigravity
+  </copyright>
+
+  <interface name="zclear_inspector_v1" version="1">
+    <description summary="query information about client surface states and layouts">
+      This interface allows clear-ui client applications to register their surfaces
+      and publish their internal widget trees and state to the compositor.
+      It also allows inspector tools to request the list of active surfaces and their states.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the inspector object"/>
+    </request>
+
+    <request name="register_client">
+      <description summary="register a wl_surface as a clear-ui client window">
+        Associate a client wl_surface with this inspector.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+
+    <request name="update_state">
+      <description summary="update the published state of a registered client surface">
+        The state is serialized as a JSON string containing widget layout and state data.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="state" type="string" summary="JSON serialized state of the application"/>
+    </request>
+
+    <request name="get_inspected_surfaces">
+      <description summary="request the list of all registered surfaces from the compositor"/>
+    </request>
+
+    <event name="inspected_surface">
+      <description summary="reports a registered surface's state and absolute coordinates"/>
+      <arg name="title" type="string" summary="window title"/>
+      <arg name="app_id" type="string" summary="application ID"/>
+      <arg name="x" type="int" summary="absolute screen X coordinate"/>
+      <arg name="y" type="int" summary="absolute screen Y coordinate"/>
+      <arg name="width" type="int" summary="surface width"/>
+      <arg name="height" type="int" summary="surface height"/>
+      <arg name="state" type="string" summary="JSON state of the application"/>
+    </event>
+
+    <event name="inspected_surface_done">
+      <description summary="indicates all inspected surfaces have been reported"/>
+    </event>
+  </interface>
+</protocol>

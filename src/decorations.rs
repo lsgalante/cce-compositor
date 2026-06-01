@@ -1,4 +1,4 @@
-// Wayland decoration surface drawing and management for clearwm
+// Wayland decoration surface drawing and management for ccec
 
 use std::ffi::CString;
 use std::os::fd::RawFd;
@@ -188,7 +188,7 @@ fn draw_char(
 
 /// Create a temporary shared memory file descriptor.
 fn create_memfd(size: usize) -> Option<RawFd> {
-    let name = CString::new("clearwm-decoration").ok()?;
+    let name = CString::new("ccec-decoration").ok()?;
     let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
     if fd < 0 {
         return None;
@@ -381,7 +381,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             let title = w.title.clone().unwrap_or_else(|| {
                 w.app_id.clone().unwrap_or_else(|| "Window".to_string())
             });
-            let mode_idx = if state.wm.expose_active && w.tiling_mode != crate::types::TilingMode::Popup {
+            let mode_idx = if state.wm.expose_visual_active && w.tiling_mode != crate::types::TilingMode::Popup {
                 state.wm.windows
                     .iter()
                     .filter(|win| !win.closed && win.app_id.as_deref() != Some("clear-status-interface") && win.tiling_mode != crate::types::TilingMode::Popup && (win.tags & active_tags) != 0)
@@ -394,15 +394,13 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                     .position(|win| win.id == w.id)
                     .unwrap_or(0)
             };
-            let indicator = if state.wm.expose_active && w.tiling_mode != crate::types::TilingMode::Popup {
+            let indicator = if state.wm.expose_visual_active && w.tiling_mode != crate::types::TilingMode::Popup {
                 "EX"
             } else {
                 match w.tiling_mode {
                     crate::types::TilingMode::Floating => "F",
                     crate::types::TilingMode::Cascade => "C",
                     crate::types::TilingMode::Grid => "G",
-                    crate::types::TilingMode::Vsplit => "V",
-                    crate::types::TilingMode::Hsplit => "H",
                     crate::types::TilingMode::Fullscreen => "S",
                     crate::types::TilingMode::Popup => "P",
                 }
@@ -428,15 +426,13 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             let bg_color = ((border_a as u32) << 24) | ((border_r as u32) << 16) | ((border_g as u32) << 8) | (border_b as u32);
 
             // Border width is mode-specific
-            let border_w = if state.wm.expose_active && w.tiling_mode != crate::types::TilingMode::Popup {
+            let border_w = if state.wm.expose_visual_active && w.tiling_mode != crate::types::TilingMode::Popup {
                 state.wm.layout.grid_border_width
             } else {
                 match w.tiling_mode {
                     crate::types::TilingMode::Cascade => state.wm.layout.cascade_border_width,
                     crate::types::TilingMode::Fullscreen => state.wm.layout.fullscreen_border_width,
                     crate::types::TilingMode::Grid => state.wm.layout.grid_border_width,
-                    crate::types::TilingMode::Vsplit => state.wm.layout.vsplit_border_width,
-                    crate::types::TilingMode::Hsplit => state.wm.layout.hsplit_border_width,
                     crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
                     crate::types::TilingMode::Popup => 0,
                 }

@@ -1,25 +1,65 @@
-// IPC command parser for clearwm
-// Ported from handle_ipc_command in clearwm.c
+// IPC command parser for ccec
+// Ported from handle_ipc_command in ccec.c
 
 use crate::config::{parse_keysym, spawn_command_bg};
 use crate::types::{
     parse_action, parse_button, parse_hex_color, parse_modifiers, parse_tiling_mode, Action,
-    ModeRule, PendingPointerBinding, PendingXkbBinding, WindowManager, NUM_TAGS,
+    ModeRule, PendingPointerBinding, PendingXkbBinding, WindowManager, NUM_TAGS, TilingMode,
 };
+
+fn get_window_under_pointer(state: &WindowManager) -> Option<u64> {
+    // 1. Check seat.hovered_window_id first
+    for seat in &state.seats {
+        if !seat.removed {
+            if let Some(wid) = seat.hovered_window_id {
+                return Some(wid);
+            }
+        }
+    }
+
+    // 2. Fallback: find it using POINTER_X/POINTER_Y and window geometries
+    let px = crate::input::POINTER_X.load(std::sync::atomic::Ordering::SeqCst) as f64;
+    let py = crate::input::POINTER_Y.load(std::sync::atomic::Ordering::SeqCst) as f64;
+
+    let active_tags = state.active_tags;
+    let mut best_wid = None;
+
+    for win in &state.windows {
+        if win.closed
+            || (win.tags & active_tags) == 0
+            || win.app_id.as_deref() == Some("clear-status-interface")
+            || win.tiling_mode == TilingMode::Popup
+        {
+            continue;
+        }
+        let wx = win.anim_x.unwrap_or(win.x as f64);
+        let wy = win.anim_y.unwrap_or(win.y as f64);
+        let ww = win.anim_w.unwrap_or(win.width as f64);
+        let wh = win.anim_h.unwrap_or(win.height as f64);
+
+        if px >= wx && px <= wx + ww && py >= wy && py <= wy + wh {
+            best_wid = Some(win.id);
+        }
+    }
+
+    best_wid
+}
 
 /// Handle an IPC command string, modifying the window manager state.
 /// This is called from the Unix socket listener when clearctl sends a command.
-pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
+pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
     // Strip trailing newlines/spaces
     let cmd = cmd.trim_end_matches(|c| c == '\n' || c == '\r' || c == ' ');
     if cmd.is_empty() {
-        return;
+        return "\n".to_string();
     }
 
     // Split the command into tokens
     let tokens: Vec<&str> = cmd.splitn(2, ' ').collect();
     let tok = tokens[0];
     let rest = if tokens.len() > 1 { tokens[1] } else { "" };
+
+    let mut reply = "ok\n".to_string();
 
     match tok {
         "spawn" => {
@@ -76,25 +116,32 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
             crate::restart::wm_restart();
         }
         "expose" => {
-            state.expose_active = !state.expose_active;
+            let active = !state.expose_active;
+            if !active {
+                // Exiting expose mode! Focus the window under pointer.
+                if let Some(wid) = get_window_under_pointer(state) {
+                    for seat in &mut state.seats {
+                        if !seat.removed {
+                            seat.focused_window_id = Some(wid);
+                        }
+                    }
+                    state.move_window_to_end(wid);
+                    state.needs_focus = true;
+                }
+            }
+            crate::wm::set_expose_active(state, active);
             state.needs_render = true;
             state.needs_status_update = true;
         }
         "expose-exit" => {
             if state.expose_active {
-                state.expose_active = false;
-                let mut windows_to_focus = Vec::new();
-                for seat in &state.seats {
-                    if seat.removed {
-                        continue;
-                    }
-                    if let Some(wid) = seat.hovered_window_id {
-                        windows_to_focus.push((seat.id, wid));
-                    }
-                }
-                for (seat_id, wid) in windows_to_focus {
-                    if let Some(seat) = state.seats.iter_mut().find(|s| s.id == seat_id) {
-                        seat.focused_window_id = Some(wid);
+                let hovered_id = get_window_under_pointer(state);
+                crate::wm::set_expose_active(state, false);
+                if let Some(wid) = hovered_id {
+                    for seat in &mut state.seats {
+                        if !seat.removed {
+                            seat.focused_window_id = Some(wid);
+                        }
                     }
                     state.move_window_to_end(wid);
                     state.needs_focus = true;
@@ -237,14 +284,110 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) {
                 }
             } else if parts.len() == 1 && !parts[0].is_empty() {
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", parts[0]);
+                    crate::config::show_notification("ccec", parts[0]);
                 }
             }
         }
+        "pointer-location" => {
+            let px = crate::input::POINTER_X.load(std::sync::atomic::Ordering::SeqCst);
+            let py = crate::input::POINTER_Y.load(std::sync::atomic::Ordering::SeqCst);
+            reply = format!("{} {}\n", px, py);
+        }
+        "pointer-move-to" => {
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() == 2 {
+                if let (Ok(target_x), Ok(target_y)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
+                    let cur_x = crate::input::POINTER_X.load(std::sync::atomic::Ordering::SeqCst);
+                    let cur_y = crate::input::POINTER_Y.load(std::sync::atomic::Ordering::SeqCst);
+                    let dx = target_x - cur_x;
+                    let dy = target_y - cur_y;
+                    if let Some(ref controller) = state.input_controller {
+                        let _ = controller.send(crate::input::InputDaemonMsg::SimulateMove { dx, dy });
+                    }
+                } else {
+                    reply = "error: invalid coordinates\n".to_string();
+                }
+            } else {
+                reply = "error: usage: pointer-move-to <x> <y>\n".to_string();
+            }
+        }
+        "pointer-move-by" => {
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() == 2 {
+                if let (Ok(dx), Ok(dy)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
+                    if let Some(ref controller) = state.input_controller {
+                        let _ = controller.send(crate::input::InputDaemonMsg::SimulateMove { dx, dy });
+                    }
+                } else {
+                    reply = "error: invalid deltas\n".to_string();
+                }
+            } else {
+                reply = "error: usage: pointer-move-by <dx> <dy>\n".to_string();
+            }
+        }
+        "pointer-click" => {
+            let btn = parse_button(rest) as u16;
+            if btn != 0 {
+                if let Some(ref controller) = state.input_controller {
+                    let _ = controller.send(crate::input::InputDaemonMsg::SimulateClick { button: btn });
+                }
+            } else {
+                reply = "error: invalid button\n".to_string();
+            }
+        }
+        "pointer-press" => {
+            let btn = parse_button(rest) as u16;
+            if btn != 0 {
+                if let Some(ref controller) = state.input_controller {
+                    let _ = controller.send(crate::input::InputDaemonMsg::SimulateButton { button: btn, press: true });
+                }
+            } else {
+                reply = "error: invalid button\n".to_string();
+            }
+        }
+        "pointer-release" => {
+            let btn = parse_button(rest) as u16;
+            if btn != 0 {
+                if let Some(ref controller) = state.input_controller {
+                    let _ = controller.send(crate::input::InputDaemonMsg::SimulateButton { button: btn, press: false });
+                }
+            } else {
+                reply = "error: invalid button\n".to_string();
+            }
+        }
+        "keypress" => {
+            if let Some(key) = parse_keycode(rest) {
+                if let Some(ref controller) = state.input_controller {
+                    let _ = controller.send(crate::input::InputDaemonMsg::SimulateKeyPress { keycode: key });
+                }
+            } else {
+                reply = "error: invalid key\n".to_string();
+            }
+        }
+        "key-press" => {
+            if let Some(key) = parse_keycode(rest) {
+                if let Some(ref controller) = state.input_controller {
+                    let _ = controller.send(crate::input::InputDaemonMsg::SimulateKey { keycode: key, press: true });
+                }
+            } else {
+                reply = "error: invalid key\n".to_string();
+            }
+        }
+        "key-release" => {
+            if let Some(key) = parse_keycode(rest) {
+                if let Some(ref controller) = state.input_controller {
+                    let _ = controller.send(crate::input::InputDaemonMsg::SimulateKey { keycode: key, press: false });
+                }
+            } else {
+                reply = "error: invalid key\n".to_string();
+            }
+        }
         _ => {
-            // Unknown command, ignore
+            reply = "error: unknown command\n".to_string();
         }
     }
+
+    reply
 }
 
 /// Parse a tag number from a command like "view-1" or "view 1"
@@ -276,7 +419,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Gap set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Gap set to {}px", value));
                 }
             }
         }
@@ -284,7 +427,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_top = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Top gap set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Top gap set to {}px", value));
                 }
             }
         }
@@ -292,7 +435,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_left = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Left gap set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Left gap set to {}px", value));
                 }
             }
         }
@@ -300,7 +443,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_right = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Right gap set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Right gap set to {}px", value));
                 }
             }
         }
@@ -308,7 +451,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_bottom = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Bottom gap set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Bottom gap set to {}px", value));
                 }
             }
         }
@@ -316,7 +459,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.cascade_offset = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Cascade offset set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Cascade offset set to {}px", value));
                 }
             }
         }
@@ -324,7 +467,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.bar_height = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Bar height set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Bar height set to {}px", value));
                 }
             }
         }
@@ -332,7 +475,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.border_width = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Border width set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Border width set to {}px", value));
                 }
             }
         }
@@ -340,7 +483,15 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.border_font_size = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Border font size set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Border font size set to {}px", value));
+                }
+            }
+        }
+        "transition_duration" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.transition_duration = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("ccec", &format!("Transition duration set to {}ms", value));
                 }
             }
         }
@@ -348,7 +499,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.fullscreen_border_width = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Fullscreen border width set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Fullscreen border width set to {}px", value));
                 }
             }
         }
@@ -356,7 +507,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.cascade_border_width = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Cascade border width set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Cascade border width set to {}px", value));
                 }
             }
         }
@@ -364,23 +515,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.grid_border_width = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Grid border width set to {}px", value));
-                }
-            }
-        }
-        "vsplit_border_width" => {
-            if let Ok(value) = value_str.parse::<i32>() {
-                state.layout.vsplit_border_width = value;
-                if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Vsplit border width set to {}px", value));
-                }
-            }
-        }
-        "hsplit_border_width" => {
-            if let Ok(value) = value_str.parse::<i32>() {
-                state.layout.hsplit_border_width = value;
-                if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Hsplit border width set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Grid border width set to {}px", value));
                 }
             }
         }
@@ -388,7 +523,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.floating_border_width = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Floating border width set to {}px", value));
+                    crate::config::show_notification("ccec", &format!("Floating border width set to {}px", value));
                 }
             }
         }
@@ -399,7 +534,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 state.layout.border_b = b;
                 state.layout.border_a = a;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Border color set to {}", value_str));
+                    crate::config::show_notification("ccec", &format!("Border color set to {}", value_str));
                 }
             }
         }
@@ -410,7 +545,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 state.layout.background_b = b;
                 state.layout.background_a = a;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Background color set to {}", value_str));
+                    crate::config::show_notification("ccec", &format!("Background color set to {}", value_str));
                 }
             }
         }
@@ -474,7 +609,7 @@ fn handle_set_mode_command(rest: &str, state: &mut WindowManager) {
         window.mode_locked = true;
         if notifications_enable {
             let win_title = window.title.as_deref().unwrap_or("Window");
-            crate::config::show_notification("clearwm", &format!("Tiling mode set to {} for: {}", mode.as_str(), win_title));
+            crate::config::show_notification("ccec", &format!("Tiling mode set to {} for: {}", mode.as_str(), win_title));
         }
         state.needs_render = true;
         state.needs_status_update = true;
@@ -551,7 +686,7 @@ fn handle_tag_layout_command(rest: &str, state: &mut WindowManager) {
             state.tag_layouts[tag as usize - 1] = mode;
             state.has_tag_layout[tag as usize - 1] = true;
             if state.notifications_enable {
-                crate::config::show_notification("clearwm", &format!("Tag {} layout set to {}", tag, mode.as_str()));
+                crate::config::show_notification("ccec", &format!("Tag {} layout set to {}", tag, mode.as_str()));
             }
             state.needs_render = true;
             state.needs_status_update = true;
@@ -632,7 +767,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
             }
             if state.tap_to_click != old_val && state.notifications_enable {
                 crate::config::show_notification(
-                    "clearwm",
+                    "ccec",
                     &format!(
                         "Tap-to-click {}",
                         if state.tap_to_click { "enabled" } else { "disabled" }
@@ -645,7 +780,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.accel_speed = Some(val);
                 state.tap_config_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Acceleration speed set to {}", val));
+                    crate::config::show_notification("ccec", &format!("Acceleration speed set to {}", val));
                 }
             }
         }
@@ -655,7 +790,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.accel_profile = Some(val.clone());
                 state.tap_config_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Acceleration profile set to {}", val));
+                    crate::config::show_notification("ccec", &format!("Acceleration profile set to {}", val));
                 }
             }
         }
@@ -677,7 +812,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.tap_config_applied = false;
                 if state.notifications_enable {
                     crate::config::show_notification(
-                        "clearwm",
+                        "ccec",
                         &format!(
                             "Natural scroll {}",
                             if state.natural_scroll.unwrap_or(false) { "enabled" } else { "disabled" }
@@ -704,7 +839,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.tap_config_applied = false;
                 if state.notifications_enable {
                     crate::config::show_notification(
-                        "clearwm",
+                        "ccec",
                         &format!(
                             "Disable-while-typing {}",
                             if state.dwt.unwrap_or(false) { "enabled" } else { "disabled" }
@@ -731,7 +866,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.tap_config_applied = false;
                 if state.notifications_enable {
                     crate::config::show_notification(
-                        "clearwm",
+                        "ccec",
                         &format!(
                             "Disable-while-trackpointing {}",
                             if state.dwtp.unwrap_or(false) { "enabled" } else { "disabled" }
@@ -760,7 +895,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.trackpoint_accel_speed = Some(val);
                 state.tap_config_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Trackpoint acceleration speed set to {}", val));
+                    crate::config::show_notification("ccec", &format!("Trackpoint acceleration speed set to {}", val));
                 }
             }
         }
@@ -770,7 +905,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.trackpoint_accel_profile = Some(val.clone());
                 state.tap_config_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Trackpoint acceleration profile set to {}", val));
+                    crate::config::show_notification("ccec", &format!("Trackpoint acceleration profile set to {}", val));
                 }
             }
         }
@@ -780,7 +915,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.cursor_theme = Some(val.clone());
                 state.cursor_theme_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Cursor theme set to {}", val));
+                    crate::config::show_notification("ccec", &format!("Cursor theme set to {}", val));
                 }
             }
         }
@@ -789,11 +924,55 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.cursor_size = Some(val);
                 state.cursor_theme_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("clearwm", &format!("Cursor size set to {}", val));
+                    crate::config::show_notification("ccec", &format!("Cursor size set to {}", val));
                 }
             }
         }
         _ => {}
+    }
+}
+
+
+fn parse_keycode(key: &str) -> Option<u16> {
+    let key = key.trim();
+    if let Ok(val) = key.parse::<u16>() {
+        return Some(val);
+    }
+    match key.to_lowercase().as_str() {
+        "esc" | "escape" => Some(1),
+        "1" => Some(2), "2" => Some(3), "3" => Some(4), "4" => Some(5),
+        "5" => Some(6), "6" => Some(7), "7" => Some(8), "8" => Some(9),
+        "9" => Some(10), "0" => Some(11),
+        "minus" => Some(12), "equal" => Some(13), "backspace" => Some(14),
+        "tab" => Some(15),
+        "q" => Some(16), "w" => Some(17), "e" => Some(18), "r" => Some(19),
+        "t" => Some(20), "y" => Some(21), "u" => Some(22), "i" => Some(23),
+        "o" => Some(24), "p" => Some(25),
+        "leftbrace" | "[" => Some(26), "rightbrace" | "]" => Some(27),
+        "enter" | "return" => Some(28),
+        "ctrl" | "leftctrl" => Some(29),
+        "a" => Some(30), "s" => Some(31), "d" => Some(32), "f" => Some(33),
+        "g" => Some(34), "h" => Some(35), "j" => Some(36), "k" => Some(37),
+        "l" => Some(38), "semicolon" | ";" => Some(39), "apostrophe" | "'" => Some(40),
+        "grave" | "`" => Some(41), "shift" | "leftshift" => Some(42),
+        "backslash" | "\\" => Some(43),
+        "z" => Some(44), "x" => Some(45), "c" => Some(46), "v" => Some(47),
+        "b" => Some(48), "n" => Some(49), "m" => Some(50),
+        "comma" | "," => Some(51), "dot" | "." => Some(52), "slash" | "/" => Some(53),
+        "rightshift" => Some(54),
+        "alt" | "leftalt" => Some(56), "space" => Some(57), "capslock" => Some(58),
+        "f1" => Some(59), "f2" => Some(60), "f3" => Some(61), "f4" => Some(62),
+        "f5" => Some(63), "f6" => Some(64), "f7" => Some(65), "f8" => Some(66),
+        "f9" => Some(67), "f10" => Some(68),
+        "f11" => Some(87), "f12" => Some(88),
+        "rightctrl" => Some(97), "rightalt" => Some(100),
+        "home" => Some(102), "up" => Some(103), "pageup" => Some(104),
+        "left" => Some(105), "right" => Some(106), "end" => Some(107),
+        "down" => Some(108), "pagedown" => Some(109), "insert" => Some(110),
+        "delete" => Some(111),
+        "super" | "hyper" | "meta" | "logo" | "leftmeta" | "leftsuper" => Some(125),
+        "rightmeta" | "rightsuper" => Some(126),
+        _ => None,
     }
 }
 
@@ -1036,5 +1215,44 @@ mod tests {
 
         handle_ipc_command("view-prev", &mut state);
         assert_eq!(state.active_tags, 1); // Tag 1
+    }
+
+    #[test]
+    fn test_ipc_pointer_and_keys() {
+        let mut state = WindowManager::default();
+        
+        // Test pointer location query
+        let location = handle_ipc_command("pointer-location", &mut state);
+        assert!(location.ends_with("\n"));
+        let coords: Vec<&str> = location.trim().split_whitespace().collect();
+        assert_eq!(coords.len(), 2);
+        assert_eq!(coords[0].parse::<i32>().is_ok(), true);
+        assert_eq!(coords[1].parse::<i32>().is_ok(), true);
+
+        // Test button parsing helpers
+        assert_eq!(parse_button("left"), 272);
+        assert_eq!(parse_button("right"), 273);
+        assert_eq!(parse_button("middle"), 274);
+        assert_eq!(parse_button("side"), 275);
+        assert_eq!(parse_button("extra"), 276);
+        assert_eq!(parse_button("280"), 280);
+        assert_eq!(parse_button("invalid"), 0);
+
+        // Test keycode parsing helpers
+        assert_eq!(parse_keycode("escape"), Some(1));
+        assert_eq!(parse_keycode("enter"), Some(28));
+        assert_eq!(parse_keycode("a"), Some(30));
+        assert_eq!(parse_keycode("30"), Some(30));
+        assert_eq!(parse_keycode("invalid"), None);
+
+        // Test some simulation commands return error if invalid or ok (without input controller it shouldn't crash)
+        let r1 = handle_ipc_command("pointer-move-to invalid", &mut state);
+        assert!(r1.starts_with("error:"));
+        let r2 = handle_ipc_command("pointer-move-by 10", &mut state);
+        assert!(r2.starts_with("error:"));
+        let r3 = handle_ipc_command("pointer-click invalid", &mut state);
+        assert!(r3.starts_with("error:"));
+        let r4 = handle_ipc_command("keypress invalid", &mut state);
+        assert!(r4.starts_with("error:"));
     }
 }

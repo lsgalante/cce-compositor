@@ -78,9 +78,19 @@ pub fn get_mode_for_window(wm: &WindowManager, win: &Window) -> Option<TilingMod
 /// Should be called during ManageStart before compute_tiling.
 pub fn assign_window_modes(wm: &mut WindowManager) {
     // Enforce that clear-status-interface is assigned all tags so that it is always visible
+    // and that blank steam_proton helper windows are always untagged so they remain hidden.
     for win in &mut wm.windows {
         if win.app_id.as_deref() == Some("clear-status-interface") {
             win.tags = u32::MAX;
+        }
+
+        let is_proton = win.app_id.as_deref() == Some("steam_proton");
+        let is_blank = win.title.is_none() || win.title.as_deref().map_or(true, |t| t.is_empty());
+        if is_proton && is_blank {
+            if win.tags != 0 {
+                eprintln!("[mode] enforcing tags=0 for blank steam_proton helper window id={}", win.id);
+                win.tags = 0;
+            }
         }
     }
 
@@ -256,13 +266,13 @@ fn compute_tiling(
                 let row = idx / cols;
                 let col = idx % cols;
 
-                let width = (screen_w - gap_left - gap_right - (cols - 1) * gap) / cols - 2 * bw;
-                let height = (screen_h - bar_height - gap_top - gap_bottom - (rows - 1) * gap) / rows - 2 * bw;
+                let width = (screen_w - gap - gap - (cols - 1) * gap) / cols - 2 * bw;
+                let height = (screen_h - bar_height - gap - gap - (rows - 1) * gap) / rows - 2 * bw;
                 let width = if width < 1 { 1 } else { width };
                 let height = if height < 1 { 1 } else { height };
 
-                let x = gap_left + bw + col * (width + 2 * bw + gap);
-                let y = bar_height + gap_top + bw + row * (height + 2 * bw + gap);
+                let x = gap + bw + col * (width + 2 * bw + gap);
+                let y = bar_height + gap + bw + row * (height + 2 * bw + gap);
 
                 results.push(TileResult {
                     wid: win.id,
@@ -330,8 +340,6 @@ fn compute_tiling(
     // Count windows per tiling mode
     let mut n_cascade = 0i32;
     let mut n_grid = 0i32;
-    let mut n_vsplit = 0i32;
-    let mut n_hsplit = 0i32;
     for win in &wm.windows {
         if (win.tags & wm.active_tags) == 0 || win.closed {
             continue;
@@ -339,8 +347,6 @@ fn compute_tiling(
         match win.tiling_mode {
             TilingMode::Cascade => n_cascade += 1,
             TilingMode::Grid => n_grid += 1,
-            TilingMode::Vsplit => n_vsplit += 1,
-            TilingMode::Hsplit => n_hsplit += 1,
             _ => {}
         }
     }
@@ -368,8 +374,6 @@ fn compute_tiling(
     let mut results = Vec::new();
     let mut idx_cascade = 0i32;
     let mut idx_grid = 0i32;
-    let mut idx_vsplit = 0i32;
-    let mut idx_hsplit = 0i32;
     let mut idx_floating = 0i32;
 
     for win in &wm.windows {
@@ -427,20 +431,7 @@ fn compute_tiling(
                 idx_grid += 1;
                 (x, y, w, h)
             }
-            TilingMode::Vsplit => {
-                let (x, y, w, h) = tiling::tile_vsplit(
-                    screen_w, screen_h, gap, gap_top, gap_left, gap_right, gap_bottom, wm.layout.vsplit_border_width, bar_height, n_vsplit, idx_vsplit,
-                );
-                idx_vsplit += 1;
-                (x, y, w, h)
-            }
-            TilingMode::Hsplit => {
-                let (x, y, w, h) = tiling::tile_hsplit(
-                    screen_w, screen_h, gap, gap_top, gap_left, gap_right, gap_bottom, wm.layout.hsplit_border_width, bar_height, n_hsplit, idx_hsplit,
-                );
-                idx_hsplit += 1;
-                (x, y, w, h)
-            }
+
             TilingMode::Floating => {
                 // Floating windows: don't tile them, but still propose
                 // dimensions so they don't end up at w=0 h=0 (which
@@ -504,7 +495,139 @@ fn compute_tiling(
 
 /// Apply computed tiling results: set position and propose dimensions.
 fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
+    let mut any_animating = false;
+
+    let focused_id = state.wm.seats.iter()
+        .find(|s| !s.removed)
+        .and_then(|s| s.focused_window_id);
+
+    let transition_duration = state.wm.layout.transition_duration;
+    let easing = if transition_duration <= 16 {
+        1.0
+    } else {
+        1.0 - 0.01f64.powf(16.0 / transition_duration as f64)
+    };
+
+    let expose_active = state.wm.expose_active;
+    let (screen_w, screen_h, _, _, _, _) = get_screen_geometry(&state.wm);
+    let fbw = state.wm.layout.floating_border_width;
+    let gap_left = state.wm.layout.gap_left;
+    let gap_top = state.wm.layout.gap_top;
+    let bar_height = state.wm.layout.bar_height;
+
     for tr in results {
+        let mut final_x = tr.x;
+        let mut final_y = tr.y;
+        let mut final_w = tr.w;
+        let mut final_h = tr.h;
+
+        if let Some(win) = state.wm.get_window_mut(tr.wid) {
+            let is_cascade = win.tiling_mode == TilingMode::Cascade;
+            let is_exposed = expose_active && win.tiling_mode != TilingMode::Popup && win.app_id.as_deref() != Some("clear-status-interface");
+            let was_animating = win.anim_x.is_some() || win.anim_y.is_some() || win.anim_w.is_some() || win.anim_h.is_some() || win.anim_opacity.is_some();
+            let should_animate = is_cascade || is_exposed || was_animating;
+
+            if should_animate {
+                let curr_x = win.anim_x.unwrap_or(win.x as f64);
+                let curr_y = win.anim_y.unwrap_or(win.y as f64);
+                let curr_w = win.anim_w.unwrap_or(win.width as f64);
+                let curr_h = win.anim_h.unwrap_or(win.height as f64);
+                let curr_opacity = win.anim_opacity.unwrap_or(1.0);
+
+                let target_opacity = if is_exposed {
+                    if Some(win.id) == focused_id { 1.0 } else { 0.75 }
+                } else if is_cascade {
+                    if Some(win.id) == focused_id { 1.0 } else { 0.75 }
+                } else {
+                    1.0
+                };
+
+                if curr_w == 0.0 || win.is_new {
+                    // New window: snap instantly
+                    win.anim_x = Some(tr.x as f64);
+                    win.anim_y = Some(tr.y as f64);
+                    win.anim_w = Some(tr.w as f64);
+                    win.anim_h = Some(tr.h as f64);
+                    win.anim_opacity = Some(target_opacity);
+                } else {
+                    let target_x = tr.x as f64;
+                    let target_y = tr.y as f64;
+                    let target_w = tr.w as f64;
+                    let target_h = tr.h as f64;
+
+                    let dx = target_x - curr_x;
+                    let dy = target_y - curr_y;
+                    let dw = target_w - curr_w;
+                    let dh = target_h - curr_h;
+                    let d_opacity = target_opacity - curr_opacity;
+
+                    if dx.abs() > 0.5 || dy.abs() > 0.5 || dw.abs() > 0.5 || dh.abs() > 0.5 || d_opacity.abs() > 0.01 {
+                        let next_x = curr_x + dx * easing;
+                        let next_y = curr_y + dy * easing;
+                        let next_w = curr_w + dw * easing;
+                        let next_h = curr_h + dh * easing;
+                        let next_opacity = curr_opacity + d_opacity * easing;
+
+                        win.anim_x = Some(next_x);
+                        win.anim_y = Some(next_y);
+                        win.anim_w = Some(next_w);
+                        win.anim_h = Some(next_h);
+                        win.anim_opacity = Some(next_opacity);
+
+                        final_x = next_x.round() as i32;
+                        final_y = next_y.round() as i32;
+                        // Propose the target size instantly during transitions to avoid configure storms and flickering
+                        final_w = tr.w;
+                        final_h = tr.h;
+
+                        any_animating = true;
+                    } else {
+                        if is_cascade || is_exposed {
+                            win.anim_x = Some(target_x);
+                            win.anim_y = Some(target_y);
+                            win.anim_w = Some(target_w);
+                            win.anim_h = Some(target_h);
+                            win.anim_opacity = Some(target_opacity);
+                        } else {
+                            win.anim_x = None;
+                            win.anim_y = None;
+                            win.anim_w = None;
+                            win.anim_h = None;
+                            win.anim_opacity = None;
+                        }
+                    }
+                }
+            } else {
+                win.anim_x = None;
+                win.anim_y = None;
+                win.anim_w = None;
+                win.anim_h = None;
+                win.anim_opacity = None;
+            }
+
+            // Update internal state
+            let is_floating_and_expose = expose_active && win.tiling_mode == TilingMode::Floating;
+            if !is_floating_and_expose {
+                win.x = final_x;
+                win.y = final_y;
+                win.width = final_w;
+                win.height = final_h;
+            } else {
+                // If it's a new floating window created during expose mode,
+                // initialize its position to the default floating position if unset.
+                if win.x == 0 && win.y == 0 {
+                    let fw = if win.hint_min_width > 32 { win.hint_min_width } else { screen_w * 2 / 3 };
+                    let fh = if win.hint_min_height > 32 { win.hint_min_height } else { screen_h * 2 / 3 };
+                    let fx = gap_left + fbw;
+                    let fy = gap_left + fbw + bar_height + gap_top;
+                    win.x = fx;
+                    win.y = fy;
+                    win.width = fw;
+                    win.height = fh;
+                }
+            }
+        }
+
         // Set position via river_node_v1
         if let Some(node) = state
             .window_nodes
@@ -512,12 +635,12 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
             .find(|(id, _)| *id == tr.wid)
             .map(|(_, n)| n)
         {
-            node.set_position(tr.x, tr.y);
+            node.set_position(final_x, final_y);
         }
 
         // Propose dimensions via river_window_v1
         if let Some(wp) = state.get_window_proxy(tr.wid) {
-            wp.river_window.propose_dimensions(tr.w, tr.h);
+            wp.river_window.propose_dimensions(final_w, final_h);
             // Tell the client to use server-side decoration.
             // Per the River protocol, use_csd is the default when neither
             // use_csd nor use_ssd is called. Calling use_ssd here ensures
@@ -526,15 +649,52 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
             // (decoration_hint == only_supports_csd).
             wp.river_window.use_ssd();
         }
+    }
 
-        // Update internal state
-        if let Some(win) = state.wm.get_window_mut(tr.wid) {
-            win.x = tr.x;
-            win.y = tr.y;
-            win.width = tr.w;
-            win.height = tr.h;
+    state.wm.animating = any_animating;
+    if any_animating {
+        state.wm.needs_render = true;
+    }
+    state.wm.expose_visual_active = state.wm.expose_active;
+}
+
+/// Set the expose_active state and initialize transition animation states to prevent flickering and enable smooth animations.
+pub fn set_expose_active(wm: &mut WindowManager, active: bool) {
+    if wm.expose_active == active {
+        return;
+    }
+    let prior_expose_visual_active = wm.expose_visual_active;
+
+    let focused_id = wm.seats.iter()
+        .find(|s| !s.removed)
+        .and_then(|s| s.focused_window_id);
+
+    for win in &mut wm.windows {
+        if win.closed || win.app_id.as_deref() == Some("clear-status-interface") || win.tiling_mode == TilingMode::Popup {
+            continue;
+        }
+        let is_focused = Some(win.id) == focused_id;
+
+        // Ensure current geometry animation states are initialized
+        if win.anim_x.is_none() { win.anim_x = Some(win.x as f64); }
+        if win.anim_y.is_none() { win.anim_y = Some(win.y as f64); }
+        if win.anim_w.is_none() { win.anim_w = Some(win.width as f64); }
+        if win.anim_h.is_none() { win.anim_h = Some(win.height as f64); }
+
+        // Ensure opacity animation state is initialized to its current visual value
+        if win.anim_opacity.is_none() {
+            let current_opacity = if win.tiling_mode == TilingMode::Cascade && !is_focused {
+                0.75
+            } else if prior_expose_visual_active && !is_focused {
+                0.75
+            } else {
+                1.0
+            };
+            win.anim_opacity = Some(current_opacity);
         }
     }
+
+    wm.expose_active = active;
 }
 
 /// Set border colors on all visible windows.
@@ -551,6 +711,45 @@ fn set_borders(state: &mut AppState) {
             let edges = Edges::from_bits_truncate(bc.edges);
             wp.river_window
                 .set_borders(edges, bc.width, bc.r, bc.g, bc.b, bc.a);
+        }
+    }
+}
+
+/// Set opacity on all visible windows.
+/// This modifies rendering state and is called during RenderStart.
+/// Opacity is applied with the next render_finish.
+pub fn render_opacity(state: &mut AppState) {
+    let focused_id = state.wm.seats.iter()
+        .find(|s| !s.removed)
+        .and_then(|s| s.focused_window_id);
+
+    for win in &state.wm.windows {
+        if win.closed {
+            continue;
+        }
+        if let Some(wp) = state.get_window_proxy(win.id) {
+            let is_cascade = win.tiling_mode == TilingMode::Cascade;
+            let is_exposed = state.wm.expose_visual_active && win.tiling_mode != TilingMode::Popup && win.app_id.as_deref() != Some("clear-status-interface");
+            let was_animating = win.anim_opacity.is_some();
+            let should_fade = is_cascade || is_exposed || was_animating;
+
+            let opacity = if should_fade {
+                win.anim_opacity.unwrap_or_else(|| {
+                    if is_exposed || is_cascade {
+                        if Some(win.id) == focused_id {
+                            1.0
+                        } else {
+                            0.75
+                        }
+                    } else {
+                        1.0
+                    }
+                })
+            } else {
+                1.0
+            };
+            let op_u32 = (opacity * u32::MAX as f64).round() as u32;
+            wp.river_window.set_opacity(op_u32);
         }
     }
 }

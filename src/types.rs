@@ -1,4 +1,4 @@
-// Core data structures for clearwm
+// Core data structures for ccec
 
 use std::collections::HashMap;
 
@@ -10,8 +10,6 @@ pub enum TilingMode {
     Floating,
     Cascade,
     Grid,
-    Vsplit,
-    Hsplit,
     Fullscreen,
     Popup,
 }
@@ -22,8 +20,6 @@ impl TilingMode {
             TilingMode::Floating => "Floating",
             TilingMode::Cascade => "Cascade",
             TilingMode::Grid => "Grid",
-            TilingMode::Vsplit => "Vsplit",
-            TilingMode::Hsplit => "Hsplit",
             TilingMode::Fullscreen => "Fullscreen",
             TilingMode::Popup => "Popup",
         }
@@ -74,8 +70,6 @@ pub struct Layout {
     pub fullscreen_border_width: i32,
     pub cascade_border_width: i32,
     pub grid_border_width: i32,
-    pub vsplit_border_width: i32,
-    pub hsplit_border_width: i32,
     pub floating_border_width: i32,
     pub border_r: u32,
     pub border_g: u32,
@@ -86,6 +80,7 @@ pub struct Layout {
     pub background_b: u32,
     pub background_a: u32,
     pub border_font_size: i32,
+    pub transition_duration: i32,
 }
 
 impl Default for Layout {
@@ -102,8 +97,6 @@ impl Default for Layout {
             fullscreen_border_width: 0,
             cascade_border_width: 6,
             grid_border_width: 6,
-            vsplit_border_width: 6,
-            hsplit_border_width: 6,
             floating_border_width: 6,
             border_r: 0x3E3E3E3Eu32,
             border_g: 0x3E3E3E3Eu32,
@@ -114,6 +107,7 @@ impl Default for Layout {
             background_b: 0x0E0E0E0Eu32,
             background_a: 0xFFFFFFFFu32,
             border_font_size: 11,
+            transition_duration: 300,
         }
     }
 }
@@ -228,6 +222,11 @@ pub struct Window {
     pub needs_xprop_check: bool,
     /// How many ManageStart cycles we've waited for the xprop result file.
     pub xprop_check_attempts: u8,
+    pub anim_x: Option<f64>,
+    pub anim_y: Option<f64>,
+    pub anim_w: Option<f64>,
+    pub anim_h: Option<f64>,
+    pub anim_opacity: Option<f64>,
 }
 
 impl Default for Window {
@@ -260,6 +259,11 @@ impl Default for Window {
             mode_locked: false,
             needs_xprop_check: false,
             xprop_check_attempts: 0,
+            anim_x: None,
+            anim_y: None,
+            anim_w: None,
+            anim_h: None,
+            anim_opacity: None,
         }
     }
 }
@@ -322,7 +326,7 @@ pub struct WindowManager {
     /// on the next output_manager done event. Set by config load and
     /// by VT-switch-back (where wlroots resets scale to 1).
     pub pending_scale_apply: bool,
-    /// When true, apply persisted state from ~/.cache/clearwm_state on the
+    /// When true, apply persisted state from ~/.cache/ccec_state on the
     /// next ManageStart cycle (after windows have been re-advertised).
     /// Set to true on startup/restart, consumed after application.
     pub needs_state_restore: bool,
@@ -347,9 +351,11 @@ pub struct WindowManager {
     pub notifications_enable: bool,
     /// Reload commands to execute on configuration reload
     pub reload_commands: Vec<String>,
-    pub input_controller: Option<tokio::sync::mpsc::UnboundedSender<(crate::config::InertialConfig, bool)>>,
+    pub input_controller: Option<tokio::sync::mpsc::UnboundedSender<crate::input::InputDaemonMsg>>,
     pub trackpad_disabled: bool,
     pub expose_active: bool,
+    pub expose_visual_active: bool,
+    pub animating: bool,
 }
 
 impl Default for WindowManager {
@@ -398,6 +404,8 @@ impl Default for WindowManager {
             input_controller: None,
             trackpad_disabled: false,
             expose_active: false,
+            expose_visual_active: false,
+            animating: false,
         }
     }
 }
@@ -483,8 +491,6 @@ pub fn parse_tiling_mode(s: &str) -> TilingMode {
     match s {
         "cascade" => TilingMode::Cascade,
         "grid" => TilingMode::Grid,
-        "vsplit" => TilingMode::Vsplit,
-        "hsplit" => TilingMode::Hsplit,
         "fullscreen" => TilingMode::Fullscreen,
         "floating" => TilingMode::Floating,
         "popup" => TilingMode::Popup,
@@ -599,11 +605,13 @@ pub fn parse_modifiers(mod_str: &str) -> u32 {
 
 /// Parse a button string ("left", "right", "middle", or numeric)
 pub fn parse_button(s: &str) -> u32 {
-    match s {
+    match s.trim() {
         "left" => 0x110,   // BTN_LEFT
         "right" => 0x111,  // BTN_RIGHT
         "middle" => 0x112, // BTN_MIDDLE
-        _ => s.parse().unwrap_or(0),
+        "side" => 0x113,   // BTN_SIDE
+        "extra" => 0x114,  // BTN_EXTRA
+        _ => s.trim().parse().unwrap_or(0),
     }
 }
 
@@ -640,8 +648,6 @@ mod tests {
     fn test_parse_tiling_mode() {
         assert_eq!(parse_tiling_mode("cascade"), TilingMode::Cascade);
         assert_eq!(parse_tiling_mode("grid"), TilingMode::Grid);
-        assert_eq!(parse_tiling_mode("vsplit"), TilingMode::Vsplit);
-        assert_eq!(parse_tiling_mode("hsplit"), TilingMode::Hsplit);
         assert_eq!(parse_tiling_mode("fullscreen"), TilingMode::Fullscreen);
         assert_eq!(parse_tiling_mode("floating"), TilingMode::Floating);
         assert_eq!(parse_tiling_mode("popup"), TilingMode::Popup);

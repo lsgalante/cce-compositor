@@ -59,3 +59,7 @@ pub mod river_libinput_config {
 pub mod wlr_output_management {
     river_protocol!("protocol/wlr-output-management-unstable-v1.xml", []);
 }
+
+pub mod clear_inspector {
+    river_protocol!("protocol/clear-inspector-v1.xml", []);
+}

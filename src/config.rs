@@ -1,4 +1,4 @@
-// TOML config parsing for clearwm
+// TOML config parsing for ccec
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -68,10 +68,6 @@ pub struct LayoutConfig {
     pub cascade_border_width: i64,
     #[serde(default = "default_grid_border_width")]
     pub grid_border_width: i64,
-    #[serde(default = "default_vsplit_border_width")]
-    pub vsplit_border_width: i64,
-    #[serde(default = "default_hsplit_border_width")]
-    pub hsplit_border_width: i64,
     #[serde(default = "default_floating_border_width")]
     pub floating_border_width: i64,
     #[serde(default = "default_border_color", alias = "high_color")]
@@ -80,6 +76,8 @@ pub struct LayoutConfig {
     pub background_color: String,
     #[serde(default = "default_border_font_size")]
     pub border_font_size: i64,
+    #[serde(default = "default_transition_duration")]
+    pub transition_duration: i64,
 }
 
 impl Default for LayoutConfig {
@@ -96,12 +94,11 @@ impl Default for LayoutConfig {
             fullscreen_border_width: default_fullscreen_border_width(),
             cascade_border_width: default_cascade_border_width(),
             grid_border_width: default_grid_border_width(),
-            vsplit_border_width: default_vsplit_border_width(),
-            hsplit_border_width: default_hsplit_border_width(),
             floating_border_width: default_floating_border_width(),
             border_color: default_border_color(),
             background_color: default_background_color(),
             border_font_size: default_border_font_size(),
+            transition_duration: default_transition_duration(),
         }
     }
 }
@@ -139,12 +136,6 @@ fn default_cascade_border_width() -> i64 {
 fn default_grid_border_width() -> i64 {
     6
 }
-fn default_vsplit_border_width() -> i64 {
-    6
-}
-fn default_hsplit_border_width() -> i64 {
-    6
-}
 fn default_floating_border_width() -> i64 {
     6
 }
@@ -156,6 +147,9 @@ fn default_background_color() -> String {
 }
 fn default_border_font_size() -> i64 {
     11
+}
+fn default_transition_duration() -> i64 {
+    300
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -303,10 +297,9 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
     state.layout.fullscreen_border_width = config.layout.fullscreen_border_width as i32;
     state.layout.cascade_border_width = config.layout.cascade_border_width as i32;
     state.layout.grid_border_width = config.layout.grid_border_width as i32;
-    state.layout.vsplit_border_width = config.layout.vsplit_border_width as i32;
-    state.layout.hsplit_border_width = config.layout.hsplit_border_width as i32;
     state.layout.floating_border_width = config.layout.floating_border_width as i32;
     state.layout.border_font_size = config.layout.border_font_size as i32;
+    state.layout.transition_duration = config.layout.transition_duration as i32;
     if let Some((r, g, b, a)) = parse_hex_color(&config.layout.border_color) {
         state.layout.border_r = r;
         state.layout.border_g = g;
@@ -421,6 +414,15 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
             match pkill_cmd.status() {
                 Ok(status) => {
                     eprintln!("[config] pkill status: {}", status);
+                    let start = std::time::Instant::now();
+                    while process_running(&name) && start.elapsed().as_secs_f64() < 1.0 {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    eprintln!(
+                        "[config] process {} exited after pkill: {}",
+                        name,
+                        !process_running(&name)
+                    );
                 }
                 Err(e) => {
                     eprintln!("[config] failed to execute pkill: {:?}", e);
@@ -483,7 +485,7 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
         }
     });
     if let Some(ref controller) = state.input_controller {
-        let _ = controller.send((inertial_cfg, config.input.tap_to_click));
+        let _ = controller.send(crate::input::InputDaemonMsg::UpdateConfig(inertial_cfg, config.input.tap_to_click));
     }
 
     // [notifications]
@@ -571,22 +573,43 @@ pub fn parse_keysym(key_str: &str) -> u32 {
 ///
 /// Closes all inherited FDs > 2 in the child via pre_exec so that
 /// spawned Wayland clients (fuzzel, foot, etc.) never accidentally
-/// read from clearwm's Wayland socket fd. Also redirects stdout/stderr
-/// to /dev/null so child output doesn't pollute clearwm's log, and
-/// calls setsid() to detach from clearwm's process group.
+/// read from ccec's Wayland socket fd. Also redirects stdout/stderr
+/// to /dev/null so child output doesn't pollute ccec's log, and
+/// calls setsid() to detach from ccec's process group.
 pub fn spawn_command_bg(cmd: &str) {
     use std::os::unix::process::CommandExt;
     let cmd = cmd.to_string();
+    
+    let stdout_cfg = if let Ok(f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/ccec-spawned-apps.log")
+    {
+        std::process::Stdio::from(f)
+    } else {
+        std::process::Stdio::null()
+    };
+
+    let stderr_cfg = if let Ok(f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/ccec-spawned-apps.log")
+    {
+        std::process::Stdio::from(f)
+    } else {
+        std::process::Stdio::null()
+    };
+
     let _ = unsafe {
         std::process::Command::new("sh")
             .arg("-c")
             .arg(&cmd)
             .env_remove("WAYLAND_DEBUG")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(stdout_cfg)
+            .stderr(stderr_cfg)
             .pre_exec(|| {
                 // Close all inherited FDs > 2 to prevent the child from
-                // accidentally reading clearwm's Wayland socket or status
+                // accidentally reading ccec's Wayland socket or status
                 // socket FDs. close() and setsid() are async-signal-safe.
                 let max_fd = libc::sysconf(libc::_SC_OPEN_MAX) as libc::c_int;
                 for fd in 3..max_fd {
@@ -615,7 +638,7 @@ pub fn process_running(name: &str) -> bool {
 pub fn show_notification(title: &str, body: &str) {
     let title_escaped = title.replace('\'', "'\\''");
     let body_escaped = body.replace('\'', "'\\''");
-    let cmd = format!("notify-send -a clearwm '{}' '{}'", title_escaped, body_escaped);
+    let cmd = format!("notify-send -a ccec '{}' '{}'", title_escaped, body_escaped);
     spawn_command_bg(&cmd);
 }
 
@@ -652,31 +675,31 @@ mod tests {
 
     #[test]
     fn test_expand_env_vars_simple() {
-        std::env::set_var("CLEARWM_TEST_VAR", "hello");
-        assert_eq!(expand_env_vars("$CLEARWM_TEST_VAR"), "hello");
-        std::env::remove_var("CLEARWM_TEST_VAR");
+        std::env::set_var("CCEC_TEST_VAR", "hello");
+        assert_eq!(expand_env_vars("$CCEC_TEST_VAR"), "hello");
+        std::env::remove_var("CCEC_TEST_VAR");
     }
 
     #[test]
     fn test_expand_env_vars_braces() {
-        std::env::set_var("CLEARWM_TEST_VAR", "world");
-        assert_eq!(expand_env_vars("${CLEARWM_TEST_VAR}!"), "world!");
-        std::env::remove_var("CLEARWM_TEST_VAR");
+        std::env::set_var("CCEC_TEST_VAR", "world");
+        assert_eq!(expand_env_vars("${CCEC_TEST_VAR}!"), "world!");
+        std::env::remove_var("CCEC_TEST_VAR");
     }
 
     #[test]
     fn test_expand_env_vars_mid_string() {
-        std::env::set_var("CLEARWM_TEST_HOME", "/home/user");
+        std::env::set_var("CCEC_TEST_HOME", "/home/user");
         assert_eq!(
-            expand_env_vars("$CLEARWM_TEST_HOME/.local/bin:$CLEARWM_TEST_HOME/bin"),
+            expand_env_vars("$CCEC_TEST_HOME/.local/bin:$CCEC_TEST_HOME/bin"),
             "/home/user/.local/bin:/home/user/bin"
         );
-        std::env::remove_var("CLEARWM_TEST_HOME");
+        std::env::remove_var("CCEC_TEST_HOME");
     }
 
     #[test]
     fn test_expand_env_vars_unset() {
-        assert_eq!(expand_env_vars("$CLEARWM_NONEXISTENT_VAR"), "");
+        assert_eq!(expand_env_vars("$CCEC_NONEXISTENT_VAR"), "");
     }
 
     #[test]
@@ -770,9 +793,9 @@ exec = "echo reloaded"
         assert_eq!(config.reload[0].exec, "pkill clear-input-daemon");
         assert_eq!(config.reload[1].exec, "echo reloaded");
 
-        // Also test integration via parse_config (we can write to a temporary file in /tmp or mock it,
-        // but wait! we can write to a temporary file inside the workspace)
-        let temp_path = "/home/lsgalante/Dropbox/Clear/clear-window-manager/scratch_config_test.toml";
+        // Also test integration via parse_config by writing to a temporary file
+        let temp_path_buf = std::env::temp_dir().join("scratch_config_test.toml");
+        let temp_path = temp_path_buf.to_str().unwrap();
         std::fs::write(temp_path, toml_str).unwrap();
 
         let mut wm = WindowManager::default();
