@@ -34,12 +34,13 @@ pub fn tile_cascade(
     n_cascade: i32,
     idx: i32,
 ) -> (i32, i32, i32, i32) {
+    let dec_h = std::cmp::max(bw, 16);
     let width = screen_w - gap_left - gap_right - bw * 2 - cascade_offset * (n_cascade - 1);
-    let height = screen_h - bar_height - gap_top - gap_bottom - bw * 2 - cascade_offset * (n_cascade - 1);
+    let height = screen_h - bar_height - gap_top - gap_bottom - (dec_h + bw) - cascade_offset * (n_cascade - 1);
     let width = if width < 1 { 1 } else { width };
     let height = if height < 1 { 1 } else { height };
     let x = gap_left + bw + idx * cascade_offset;
-    let y = bar_height + gap_top + bw + idx * cascade_offset;
+    let y = bar_height + gap_top + dec_h + idx * cascade_offset;
     (x, y, width, height)
 }
 
@@ -51,9 +52,9 @@ pub fn tile_cascade(
 ///   cols = 2
 ///   rows = (n_grid + cols - 1) / cols
 ///   width  = (screen_w - gap_left - gap_right - (cols - 1) * gap) / cols - 2 * bw
-///   height = (screen_h - gap_top - gap_bottom - (rows - 1) * gap) / rows - 2 * bw
+///   height = (screen_h - gap_top - gap_bottom - (rows - 1) * gap) / rows - (dec_h + bw)
 ///   x = gap_left + bw + col * (width + 2 * bw + gap)
-///   y = bar_height + gap_top + bw + row * (height + 2 * bw + gap)
+///   y = bar_height + gap_top + dec_h + row * (height + (dec_h + bw) + gap)
 pub fn tile_grid(
     screen_w: i32,
     screen_h: i32,
@@ -71,12 +72,13 @@ pub fn tile_grid(
     let row = idx / cols;
     let col = idx % cols;
     let rows = (n_grid + cols - 1) / cols;
+    let dec_h = std::cmp::max(bw, 16);
     let width = (screen_w - gap_left - gap_right - (cols - 1) * gap) / cols - 2 * bw;
-    let height = (screen_h - bar_height - gap_top - gap_bottom - (rows - 1) * gap) / rows - 2 * bw;
+    let height = (screen_h - bar_height - gap_top - gap_bottom - (rows - 1) * gap) / rows - (dec_h + bw);
     let width = if width < 1 { 1 } else { width };
     let height = if height < 1 { 1 } else { height };
     let x = gap_left + bw + col * (width + 2 * bw + gap);
-    let y = bar_height + gap_top + bw + row * (height + 2 * bw + gap);
+    let y = bar_height + gap_top + dec_h + row * (height + (dec_h + bw) + gap);
     (x, y, width, height)
 }
 
@@ -166,11 +168,11 @@ mod tests {
         // Asymmetric screen gaps: top=10, left=20, right=30, bottom=40
         let (x, y, w, h) = tile_cascade(1920, 1080, 12, 10, 20, 30, 40, 6, 24, 28, 1, 0);
         assert_eq!(x, 20 + 6);        // gap_left + bw = 26
-        assert_eq!(y, 28 + 10 + 6);   // bar_height + gap_top + bw = 44
+        assert_eq!(y, 28 + 10 + 16);  // bar_height + gap_top + dec_h = 54
                                        // w = 1920 - 20 - 30 - 6*2 = 1920 - 62 = 1858
         assert_eq!(w, 1858);
-        // h = 1080 - 28 (bar) - 10 - 40 - 6*2 = 1080 - 90 = 990
-        assert_eq!(h, 990);
+        // h = 1080 - 28 (bar) - 10 - 40 - (16 + 6) = 1080 - 100 = 980
+        assert_eq!(h, 980);
     }
 
     #[test]
@@ -222,10 +224,10 @@ mod tests {
 
         // x0 = gap_left + bw = 20 + 6 = 26
         assert_eq!(x0, 26);
-        // y0 = bar_height + gap_top + bw = 28 + 10 + 6 = 44
-        assert_eq!(y0, 44);
-        // rows=1, Height = (1080 - 28 (bar) - 10 - 40 - 0*12) / 1 - 2*6 = 1002 - 12 = 990
-        assert_eq!(h0, 990);
+        // y0 = bar_height + gap_top + dec_h = 28 + 10 + 16 = 54
+        assert_eq!(y0, 54);
+        // rows=1, Height = (1080 - 28 (bar) - 10 - 40 - 0*12) / 1 - (16 + 6) = 1002 - 22 = 980
+        assert_eq!(h0, 980);
 
         // x1 = gap_left + bw + 1*(917 + 2*6 + 12) = 26 + 941 = 967
         assert_eq!(x1, 967);

@@ -260,6 +260,7 @@ fn compute_tiling(
             let cols = (n_expose as f64).sqrt().ceil() as i32;
             let rows = (n_expose + cols - 1) / cols;
             let bw = wm.layout.grid_border_width;
+            let dec_h = std::cmp::max(bw, 16);
 
             for (idx, win) in expose_windows.iter().enumerate() {
                 let idx = idx as i32;
@@ -267,12 +268,12 @@ fn compute_tiling(
                 let col = idx % cols;
 
                 let width = (screen_w - gap - gap - (cols - 1) * gap) / cols - 2 * bw;
-                let height = (screen_h - bar_height - gap - gap - (rows - 1) * gap) / rows - 2 * bw;
+                let height = (screen_h - bar_height - gap - gap - (rows - 1) * gap) / rows - (dec_h + bw);
                 let width = if width < 1 { 1 } else { width };
                 let height = if height < 1 { 1 } else { height };
 
                 let x = gap + bw + col * (width + 2 * bw + gap);
-                let y = bar_height + gap + bw + row * (height + 2 * bw + gap);
+                let y = bar_height + gap + dec_h + row * (height + (dec_h + bw) + gap);
 
                 results.push(TileResult {
                     wid: win.id,
