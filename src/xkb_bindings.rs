@@ -313,7 +313,7 @@ unsafe extern "C" fn bindings_get_seat(
 }
 
 pub struct XkbBindingScheduled {
-    pub state_change: XkbBindingStateChange,
+    pub state_changes: Vec<XkbBindingStateChange>,
 }
 
 pub struct XkbBindingRequested {
@@ -347,7 +347,7 @@ impl XkbBinding {
             keysym,
             modifiers,
             wm_scheduled: XkbBindingScheduled {
-                state_change: XkbBindingStateChange::None,
+                state_changes: Vec::new(),
             },
             wm_requested: XkbBindingRequested {
                 enabled: false,
@@ -389,28 +389,26 @@ impl XkbBinding {
     }
     
     pub unsafe fn pressed(&mut self) {
-        assert!(!self.sent_pressed);
         if (*(*self.seat).server).wm.object.is_null() {
             log::warn!("Pressed keybind while window manager is disconnected");
-            self.wm_scheduled.state_change = XkbBindingStateChange::None;
             return;
         }
-        assert!(matches!(self.wm_scheduled.state_change, XkbBindingStateChange::None));
-        self.wm_scheduled.state_change = XkbBindingStateChange::Pressed;
+        self.wm_scheduled.state_changes.push(XkbBindingStateChange::Pressed);
         (*(*self.seat).server).wm.dirty_windowing();
     }
     
     pub unsafe fn released(&mut self) {
-        self.wm_scheduled.state_change = XkbBindingStateChange::Released;
+        self.wm_scheduled.state_changes.push(XkbBindingStateChange::Released);
         (*(*self.seat).server).wm.dirty_windowing();
     }
 
     pub unsafe fn stop_repeat(&mut self) {
-        if self.sent_pressed {
-            if matches!(self.wm_scheduled.state_change, XkbBindingStateChange::None) {
-                self.wm_scheduled.state_change = XkbBindingStateChange::StopRepeat;
-                (*(*self.seat).server).wm.dirty_windowing();
-            }
+        let already_releasing_or_stopping = self.wm_scheduled.state_changes.iter().any(|&s| 
+            matches!(s, XkbBindingStateChange::Released | XkbBindingStateChange::StopRepeat)
+        );
+        if self.sent_pressed && !already_releasing_or_stopping {
+            self.wm_scheduled.state_changes.push(XkbBindingStateChange::StopRepeat);
+            (*(*self.seat).server).wm.dirty_windowing();
         }
     }
 

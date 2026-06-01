@@ -181,6 +181,7 @@ pub struct WindowRenderingRequested {
     pub border: Border,
     pub clip: ffi::wlr_box,
     pub content_clip: ffi::wlr_box,
+    pub opacity: f32,
 }
 
 pub struct Window {
@@ -339,6 +340,7 @@ impl Window {
                 border: Border { edges: Edges::new(), width: 0, r: 0, g: 0, b: 0, a: 0 },
                 clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                 content_clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
+                opacity: 1.0f32,
             },
             box_geom: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
             foreign_toplevel_handle: std::ptr::null_mut(),
@@ -624,6 +626,13 @@ impl Window {
                     ffi::river_wlr_xdg_surface_get_surface(base)
                 }
             }
+            WindowImpl::Xwayland(xwindow) => {
+                if xwindow.is_null() || (*xwindow).xsurface.is_null() {
+                    std::ptr::null_mut()
+                } else {
+                    (*(*xwindow).xsurface).surface
+                }
+            }
             _ => std::ptr::null_mut(),
         }
     }
@@ -675,6 +684,7 @@ impl Window {
                     border: Border { edges: Edges::new(), width: 0, r: 0, g: 0, b: 0, a: 0 },
                     clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                     content_clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
+                    opacity: 1.0f32,
                 };
 
                 wl_list_remove(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
@@ -1025,8 +1035,9 @@ impl Window {
             }
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
-                    self.rendering_scheduled.width = (*(*xwindow).xsurface).width as u32;
-                    self.rendering_scheduled.height = (*(*xwindow).xsurface).height as u32;
+                    let scale = crate::xwayland_window::XwaylandWindow::get_scale(xwindow);
+                    self.rendering_scheduled.width = ((*(*xwindow).xsurface).width as f32 / scale).round() as u32;
+                    self.rendering_scheduled.height = ((*(*xwindow).xsurface).height as f32 / scale).round() as u32;
                 }
             }
             WindowImpl::Destroying => {}
@@ -1125,6 +1136,7 @@ impl Window {
 
         if enabled {
             ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, true);
+            ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
         }
 
         self.box_geom.width = self.rendering_sent.width as i32;
@@ -1758,6 +1770,23 @@ unsafe extern "C" fn window_set_dimension_bounds(
     };
 }
 
+unsafe extern "C" fn window_set_opacity(
+    client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+    opacity: u32,
+) {
+    let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
+    if window.is_null() {
+        return;
+    }
+    let server = (*window).server;
+    if !(*server).wm.ensure_rendering() {
+        return;
+    }
+    let opacity_f32 = opacity as f32 / u32::MAX as f32;
+    (*window).rendering_requested.opacity = opacity_f32;
+}
+
 // river_window_v1 implementation
 static WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_window_v1_interface {
     destroy: Some(window_destroy),
@@ -1784,6 +1813,7 @@ static WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_window_v1_i
     set_clip_box: Some(window_set_clip_box),
     set_content_clip_box: Some(window_set_content_clip_box),
     set_dimension_bounds: Some(window_set_dimension_bounds),
+    set_opacity: Some(window_set_opacity),
 };
 
 static INERT_WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_window_v1_interface {
@@ -1811,6 +1841,7 @@ static INERT_WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_windo
     set_clip_box: None,
     set_content_clip_box: None,
     set_dimension_bounds: None,
+    set_opacity: None,
 };
 
 unsafe extern "C" fn handle_destroy_resource(resource: *mut ffi::wl_resource) {

@@ -478,6 +478,11 @@ impl Cursor {
 
     pub unsafe fn clear_focus(&mut self) {
         ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+        ffi::wlr_cursor_set_xcursor(
+            self.wlr_cursor,
+            self.xcursor_manager,
+            b"default\0".as_ptr() as *const _,
+        );
     }
 }
 

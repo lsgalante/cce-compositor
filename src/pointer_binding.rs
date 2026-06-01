@@ -12,7 +12,7 @@ pub enum PointerBindingStateChange {
 }
 
 pub struct PointerBindingScheduled {
-    pub state_change: PointerBindingStateChange,
+    pub state_changes: Vec<PointerBindingStateChange>,
 }
 
 pub struct PointerBindingRequested {
@@ -45,7 +45,7 @@ impl PointerBinding {
             button,
             modifiers,
             wm_scheduled: PointerBindingScheduled {
-                state_change: PointerBindingStateChange::None,
+                state_changes: Vec::new(),
             },
             wm_requested: PointerBindingRequested {
                 enabled: false,
@@ -91,16 +91,12 @@ impl PointerBinding {
     }
 
     pub unsafe fn pressed(&mut self) {
-        assert!(!self.sent_pressed);
-        assert!(matches!(self.wm_scheduled.state_change, PointerBindingStateChange::None));
-        self.wm_scheduled.state_change = PointerBindingStateChange::Pressed;
+        self.wm_scheduled.state_changes.push(PointerBindingStateChange::Pressed);
         (*(*self.seat).server).wm.dirty_windowing();
     }
 
     pub unsafe fn released(&mut self) {
-        assert!(self.sent_pressed);
-        assert!(matches!(self.wm_scheduled.state_change, PointerBindingStateChange::None));
-        self.wm_scheduled.state_change = PointerBindingStateChange::Released;
+        self.wm_scheduled.state_changes.push(PointerBindingStateChange::Released);
         (*(*self.seat).server).wm.dirty_windowing();
     }
 

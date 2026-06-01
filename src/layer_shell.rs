@@ -296,6 +296,8 @@ pub struct LayerSurface {
     pub wlr_layer_surface: *mut ffi::wlr_layer_surface_v1,
     pub scene_layer_surface: *mut ffi::wlr_scene_layer_surface_v1,
     pub popup_tree: *mut ffi::wlr_scene_tree,
+    pub opacity: f32,
+    pub animation_timer: *mut ffi::wl_event_source,
 
     pub destroy: ffi::wl_listener,
     pub map: ffi::wl_listener,
@@ -327,6 +329,8 @@ impl LayerSurface {
             wlr_layer_surface,
             scene_layer_surface,
             popup_tree,
+            opacity: 1.0,
+            animation_timer: std::ptr::null_mut(),
             destroy: std::mem::zeroed(),
             map: std::mem::zeroed(),
             unmap: std::mem::zeroed(),
@@ -382,6 +386,11 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
 
     log::debug!("layer surface {:?} destroyed", CStr::from_ptr((*(*layer_surface).wlr_layer_surface).namespace));
 
+    if !(*layer_surface).animation_timer.is_null() {
+        ffi::wl_event_source_remove((*layer_surface).animation_timer);
+        (*layer_surface).animation_timer = std::ptr::null_mut();
+    }
+
     wl_listener_remove(&mut (*layer_surface).destroy);
     wl_listener_remove(&mut (*layer_surface).map);
     wl_listener_remove(&mut (*layer_surface).unmap);
@@ -399,6 +408,31 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
     let _ = Box::from_raw(layer_surface);
 }
 
+unsafe extern "C" fn handle_animation_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let layer_surface = data as *mut LayerSurface;
+
+    let new_opacity = ((*layer_surface).opacity + 0.08).min(1.0);
+    (*layer_surface).opacity = new_opacity;
+
+    ffi::river_scene_node_set_opacity(
+        (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
+        new_opacity,
+    );
+
+    if new_opacity >= 1.0 {
+        if !(*layer_surface).animation_timer.is_null() {
+            ffi::wl_event_source_remove((*layer_surface).animation_timer);
+            (*layer_surface).animation_timer = std::ptr::null_mut();
+        }
+    } else {
+        if !(*layer_surface).animation_timer.is_null() {
+            ffi::wl_event_source_timer_update((*layer_surface).animation_timer, 16);
+        }
+    }
+
+    0
+}
+
 unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let layer_surface = crate::container_of!(listener, LayerSurface, map);
     let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
@@ -406,6 +440,32 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
     log::debug!("layer surface {:?} mapped", CStr::from_ptr((*wlr_layer_surface).namespace));
 
     let server = (*layer_surface).server;
+
+    if (*wlr_layer_surface).current.layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY {
+        (*layer_surface).opacity = 0.0;
+        ffi::river_scene_node_set_opacity(
+            (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
+            0.0,
+        );
+
+        if !(*layer_surface).animation_timer.is_null() {
+            ffi::wl_event_source_remove((*layer_surface).animation_timer);
+            (*layer_surface).animation_timer = std::ptr::null_mut();
+        }
+
+        let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
+        let timer = ffi::wl_event_loop_add_timer(
+            event_loop,
+            Some(handle_animation_tick),
+            layer_surface as *mut _,
+        );
+        if timer.is_null() {
+            log::error!("Failed to create layer surface animation timer");
+        } else {
+            (*layer_surface).animation_timer = timer;
+            ffi::wl_event_source_timer_update(timer, 16);
+        }
+    }
 
     if (*wlr_layer_surface).current.keyboard_interactive == ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND {
         let seats = &mut (*server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
@@ -431,6 +491,11 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
     let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
 
     log::debug!("layer surface {:?} unmapped", CStr::from_ptr((*wlr_layer_surface).namespace));
+
+    if !(*layer_surface).animation_timer.is_null() {
+        ffi::wl_event_source_remove((*layer_surface).animation_timer);
+        (*layer_surface).animation_timer = std::ptr::null_mut();
+    }
 
     let server = (*layer_surface).server;
 
@@ -466,6 +531,13 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
         ffi::river_scene_node_enable_blur(
             (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
             true,
+        );
+    }
+
+    if (*layer_surface).opacity < 1.0 {
+        ffi::river_scene_node_set_opacity(
+            (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
+            (*layer_surface).opacity,
         );
     }
 

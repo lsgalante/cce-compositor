@@ -270,6 +270,7 @@ pub struct Server {
     pub xkb_config: XkbConfig,
     pub idle_inhibit_manager: IdleInhibitManager,
     pub lock_manager: LockManager,
+    pub inspector: crate::inspector::Inspector,
 
     // Event listeners
     pub renderer_lost: ffi::wl_listener,
@@ -316,15 +317,39 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, _d
 }
 
 unsafe extern "C" fn handle_request_set_cursor_shape(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let _server = container_of!(listener, Server, request_set_cursor_shape);
+    let server = container_of!(listener, Server, request_set_cursor_shape);
     let event = data as *mut ffi::wlr_cursor_shape_manager_v1_request_set_shape_event;
     
     let wlr_seat = (*(*event).seat_client).seat;
     let focused_client = ffi::river_wlr_seat_get_pointer_focused_client(wlr_seat);
-    if focused_client == (*event).seat_client {
+    
+    let event_client = ffi::river_wlr_seat_client_get_client((*event).seat_client);
+    let wm_client = if !(*server).wm.object.is_null() {
+        ffi::wl_resource_get_client((*server).wm.object)
+    } else {
+        std::ptr::null_mut()
+    };
+    let is_wm = !wm_client.is_null() && event_client == wm_client;
+
+    let shape_name = ffi::wlr_cursor_shape_v1_name((*event).shape);
+    let shape_str = if shape_name.is_null() {
+        "unknown".to_string()
+    } else {
+        std::ffi::CStr::from_ptr(shape_name).to_string_lossy().into_owned()
+    };
+
+    log::debug!(
+        "set_cursor_shape: event_client={:?}, wm_client={:?}, is_wm={}, focused={:?}, shape={}",
+        event_client,
+        wm_client,
+        is_wm,
+        focused_client,
+        shape_str
+    );
+
+    if focused_client == (*event).seat_client || is_wm {
         let seat = ffi::river_wlr_seat_get_data(wlr_seat) as *mut crate::seat::Seat;
         if !seat.is_null() {
-            let shape_name = ffi::wlr_cursor_shape_v1_name((*event).shape);
             (*seat).cursor.set_xcursor(shape_name);
         }
     }
@@ -596,6 +621,7 @@ impl Server {
             self.xkb_config.init(server_ptr).map_err(|_| "Failed to init xkb_config")?;
             self.idle_inhibit_manager.init(server_ptr).map_err(|_| "Failed to init idle_inhibit_manager")?;
             self.lock_manager.init(server_ptr).map_err(|_| "Failed to init lock_manager")?;
+            self.inspector.init(server_ptr).map_err(|_| "Failed to init inspector")?;
 
             // Setup listeners
             let r_lost = &mut self.renderer_lost as *mut ffi::wl_listener as *mut WlListener;
@@ -670,6 +696,7 @@ impl Server {
             self.idle_inhibit_manager.deinit();
             self.lock_manager.deinit();
             self.layer_shell.deinit();
+            self.inspector.deinit();
 
             ffi::wl_display_destroy(self.wl_server);
         }
@@ -685,6 +712,7 @@ impl Default for Server {
             // Overwrite SlotMap with a valid SlotMap::new() to avoid UB from null vec pointers
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.windows, crate::slotmap::SlotMap::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());
+            std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());
             server.assume_init()
         }
     }

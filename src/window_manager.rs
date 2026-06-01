@@ -243,7 +243,12 @@ impl WindowManager {
             curr = next;
         }
 
-        assert!(self.sent.output_config.is_null());
+        if !self.sent.output_config.is_null() {
+            log::warn!("sent.output_config was not null in manage_start, destroying old configuration");
+            ffi::wlr_output_configuration_v1_send_failed(self.sent.output_config);
+            ffi::wlr_output_configuration_v1_destroy(self.sent.output_config);
+            self.sent.output_config = std::ptr::null_mut();
+        }
         self.sent.output_config = self.scheduled.output_config;
         self.scheduled.output_config = std::ptr::null_mut();
 
@@ -489,8 +494,7 @@ unsafe extern "C" fn dirty_idle_callback(data: *mut std::ffi::c_void) {
         WindowManagerState::Idle => {
             if (*wm).rendering_scheduled.dirty {
                 (*wm).render_start();
-            } else {
-                assert!((*wm).scheduled.dirty || (*wm).scheduled.dirty_lazy);
+            } else if (*wm).scheduled.dirty || (*wm).scheduled.dirty_lazy {
                 (*wm).scheduled.dirty = true;
                 (*wm).scheduled.dirty_lazy = false;
                 (*wm).manage_start();
@@ -720,7 +724,7 @@ unsafe extern "C" fn handle_destroy_wm_resource(resource: *mut ffi::wl_resource)
         while curr_b != bindings_head {
             let next_b = (*curr_b).next;
             let binding = crate::container_of!(curr_b, crate::xkb_bindings::XkbBinding, link);
-            (*binding).wm_scheduled.state_change = crate::xkb_bindings::XkbBindingStateChange::None;
+            (*binding).wm_scheduled.state_changes.clear();
             curr_b = next_b;
         }
         

@@ -661,5 +661,15 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled) {
 	wlr_scene_node_for_each_buffer(node, enable_blur_iterator, &enabled);
 }
 
+static void set_opacity_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
+	float opacity = *(float *)user_data;
+	wlr_scene_buffer_set_opacity(buffer, opacity);
+}
+
+void river_scene_node_set_opacity(struct wlr_scene_node *node, float opacity) {
+	wlr_scene_node_for_each_buffer(node, set_opacity_iterator, &opacity);
+}
+
+
 
 

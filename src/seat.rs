@@ -554,26 +554,30 @@ impl Seat {
             while curr != bindings_head {
                 let next = (*curr).next;
                 let binding = crate::container_of!(curr, crate::xkb_bindings::XkbBinding, link);
-                match (*binding).wm_scheduled.state_change {
-                    crate::xkb_bindings::XkbBindingStateChange::None => {},
-                    crate::xkb_bindings::XkbBindingStateChange::Pressed => {
-                        assert!(!(*binding).sent_pressed);
-                        (*binding).sent_pressed = true;
-                        ffi::wl_resource_post_event((*binding).object, 0);
-                    },
-                    crate::xkb_bindings::XkbBindingStateChange::StopRepeat => {
-                        assert!((*binding).sent_pressed);
-                        if ffi::wl_resource_get_version((*binding).object) >= 2 {
-                            ffi::wl_resource_post_event((*binding).object, 2);
-                        }
-                    },
-                    crate::xkb_bindings::XkbBindingStateChange::Released => {
-                        assert!((*binding).sent_pressed);
-                        (*binding).sent_pressed = false;
-                        ffi::wl_resource_post_event((*binding).object, 1);
-                    },
+                for state in (*binding).wm_scheduled.state_changes.drain(..) {
+                    match state {
+                        crate::xkb_bindings::XkbBindingStateChange::None => {},
+                        crate::xkb_bindings::XkbBindingStateChange::Pressed => {
+                            if !(*binding).sent_pressed {
+                                (*binding).sent_pressed = true;
+                                ffi::wl_resource_post_event((*binding).object, 0);
+                            }
+                        },
+                        crate::xkb_bindings::XkbBindingStateChange::StopRepeat => {
+                            if (*binding).sent_pressed {
+                                if ffi::wl_resource_get_version((*binding).object) >= 2 {
+                                    ffi::wl_resource_post_event((*binding).object, 2);
+                                }
+                            }
+                        },
+                        crate::xkb_bindings::XkbBindingStateChange::Released => {
+                            if (*binding).sent_pressed {
+                                (*binding).sent_pressed = false;
+                                ffi::wl_resource_post_event((*binding).object, 1);
+                            }
+                        },
+                    }
                 }
-                (*binding).wm_scheduled.state_change = crate::xkb_bindings::XkbBindingStateChange::None;
                 curr = next;
             }
 
@@ -583,20 +587,23 @@ impl Seat {
             while curr_ptr != ptr_bindings_head {
                 let next = (*curr_ptr).next;
                 let binding = crate::container_of!(curr_ptr, crate::pointer_binding::PointerBinding, link);
-                match (*binding).wm_scheduled.state_change {
-                    crate::pointer_binding::PointerBindingStateChange::None => {}
-                    crate::pointer_binding::PointerBindingStateChange::Pressed => {
-                        assert!(!(*binding).sent_pressed);
-                        (*binding).sent_pressed = true;
-                        ffi::wl_resource_post_event((*binding).object, 0); // pressed
-                    }
-                    crate::pointer_binding::PointerBindingStateChange::Released => {
-                        assert!((*binding).sent_pressed);
-                        (*binding).sent_pressed = false;
-                        ffi::wl_resource_post_event((*binding).object, 1); // released
+                for state in (*binding).wm_scheduled.state_changes.drain(..) {
+                    match state {
+                        crate::pointer_binding::PointerBindingStateChange::None => {}
+                        crate::pointer_binding::PointerBindingStateChange::Pressed => {
+                            if !(*binding).sent_pressed {
+                                (*binding).sent_pressed = true;
+                                ffi::wl_resource_post_event((*binding).object, 0); // pressed
+                            }
+                        }
+                        crate::pointer_binding::PointerBindingStateChange::Released => {
+                            if (*binding).sent_pressed {
+                                (*binding).sent_pressed = false;
+                                ffi::wl_resource_post_event((*binding).object, 1); // released
+                            }
+                        }
                     }
                 }
-                (*binding).wm_scheduled.state_change = crate::pointer_binding::PointerBindingStateChange::None;
                 curr_ptr = next;
             }
 
@@ -780,7 +787,16 @@ unsafe extern "C" fn handle_request_set_cursor(
     let event = data as *mut ffi::wlr_seat_pointer_request_set_cursor_event;
     
     let focused_client = ffi::river_wlr_seat_get_pointer_focused_client(seat.wlr_seat);
-    if focused_client == (*event).seat_client {
+    
+    let event_client = ffi::river_wlr_seat_client_get_client((*event).seat_client);
+    let wm_client = if !(*seat.server).wm.object.is_null() {
+        ffi::wl_resource_get_client((*seat.server).wm.object)
+    } else {
+        std::ptr::null_mut()
+    };
+    let is_wm = !wm_client.is_null() && event_client == wm_client;
+
+    if focused_client == (*event).seat_client || is_wm {
         ffi::wlr_cursor_set_surface(
             seat.cursor.wlr_cursor,
             (*event).surface,

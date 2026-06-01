@@ -26,6 +26,7 @@ pub struct InputManager {
     pub new_input_listener: ffi::wl_listener,
     pub new_text_input: ffi::wl_listener,
     pub new_input_method: ffi::wl_listener,
+    pub new_virtual_pointer_listener: ffi::wl_listener,
 }
 
 pub struct InputManagerObject {
@@ -62,6 +63,10 @@ impl InputManager {
         // Create default seat
         self.default_seat = Seat::create(server, "default")?;
 
+        if !(*server).xwayland.is_null() {
+            ffi::wlr_xwayland_set_seat((*server).xwayland, (*self.default_seat).wlr_seat);
+        }
+
         self.global = ffi::wl_global_create(
             wl_server,
             &ffi::river_input_manager_v1_interface,
@@ -89,6 +94,11 @@ impl InputManager {
         (*new_input_method_ptr).notify = Some(handle_new_input_method);
         wl_signal_add(&mut (*self.input_method_manager).events.input_method, &mut self.new_input_method);
 
+        // Connect new_virtual_pointer listener
+        let new_virtual_pointer_ptr = &mut self.new_virtual_pointer_listener as *mut ffi::wl_listener as *mut WlListener;
+        (*new_virtual_pointer_ptr).notify = Some(handle_new_virtual_pointer);
+        wl_signal_add(&mut (*self.virtual_pointer_manager).events.new_virtual_pointer, &mut self.new_virtual_pointer_listener);
+
         Ok(())
     }
 
@@ -114,6 +124,7 @@ impl InputManager {
         wl_listener_remove(&mut self.new_input_listener);
         wl_listener_remove(&mut self.new_text_input);
         wl_listener_remove(&mut self.new_input_method);
+        wl_listener_remove(&mut self.new_virtual_pointer_listener);
     }
 }
 
@@ -329,4 +340,19 @@ unsafe extern "C" fn handle_new_input_method(listener: *mut ffi::wl_listener, da
         // Fallback to default seat if input_method.seat has no data set yet
         (*im.default_seat).relay.new_input_method(input_method);
     }
+}
+
+unsafe extern "C" fn handle_new_virtual_pointer(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+    let im = &mut *crate::container_of!(listener, InputManager, new_virtual_pointer_listener);
+    let event = data as *mut ffi::wlr_virtual_pointer_v1_new_pointer_event;
+
+    log::info!("new virtual pointer device connected");
+
+    let virtual_pointer = (*event).new_pointer;
+    let wlr_device = &mut (*virtual_pointer).pointer.base as *mut ffi::wlr_input_device;
+
+    let device = crate::input_device::InputDevice::new(im.default_seat, wlr_device, true);
+
+    // Attach device to the default seat
+    (*im.default_seat).attach_device(device);
 }

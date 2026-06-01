@@ -41,6 +41,7 @@ pub mod input_popup;
 pub mod drag_icon;
 pub mod pointer_binding;
 pub mod keyboard_group;
+pub mod inspector;
 
 
 use clap::Parser;

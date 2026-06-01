@@ -115,10 +115,37 @@ impl XwaylandWindow {
         Ok(())
     }
 
+    pub unsafe fn get_scale(xwindow: *mut XwaylandWindow) -> f32 {
+        let window = (*xwindow).window;
+        if window.is_null() {
+            return 1.0;
+        }
+        let server = (*window).server;
+        if server.is_null() {
+            return 1.0;
+        }
+        let wlr_output = (*server).om.max_overlap_output(&(*window).box_geom);
+        if !wlr_output.is_null() {
+            let output = ffi::river_wlr_output_get_data(wlr_output) as *mut crate::output::Output;
+            if !output.is_null() {
+                return (*output).current.scale;
+            }
+        }
+        // Fallback: first output in layout
+        let mut link = (*server).om.outputs.next;
+        if link != &mut (*server).om.outputs as *mut ffi::wl_list {
+            let output = crate::container_of!(link, crate::output::Output, link);
+            return (*output).current.scale;
+        }
+        1.0
+    }
+
     pub unsafe fn configure(&mut self) -> bool {
         let window = self.window;
         let scheduled = &mut (*window).configure_scheduled;
         let sent = &mut (*window).configure_sent;
+
+        let scale = Self::get_scale(self);
 
         if scheduled.width == Some(0) {
             scheduled.width = Some((*self.xsurface).width as u32);
@@ -127,20 +154,32 @@ impl XwaylandWindow {
             scheduled.height = Some((*self.xsurface).height as u32);
         }
 
-        let width = scheduled.width.unwrap_or((*self.xsurface).width as u32);
-        let height = scheduled.height.unwrap_or((*self.xsurface).height as u32);
+        let phys_width = if let Some(w) = scheduled.width {
+            (w as f32 * scale).round() as u16
+        } else {
+            (*self.xsurface).width
+        };
 
-        if (*window).box_geom.x != (*self.xsurface).x as i32
-            || (*window).box_geom.y != (*self.xsurface).y as i32
-            || width != (*self.xsurface).width as u32
-            || height != (*self.xsurface).height as u32
+        let phys_height = if let Some(h) = scheduled.height {
+            (h as f32 * scale).round() as u16
+        } else {
+            (*self.xsurface).height
+        };
+
+        let phys_x = ((*window).box_geom.x as f32 * scale).round() as i16;
+        let phys_y = ((*window).box_geom.y as f32 * scale).round() as i16;
+
+        if phys_x != (*self.xsurface).x
+            || phys_y != (*self.xsurface).y
+            || phys_width != (*self.xsurface).width
+            || phys_height != (*self.xsurface).height
         {
             ffi::wlr_xwayland_surface_configure(
                 self.xsurface,
-                (*window).box_geom.x as i16,
-                (*window).box_geom.y as i16,
-                width as u16,
-                height as u16,
+                phys_x,
+                phys_y,
+                phys_width,
+                phys_height,
             );
         }
 
@@ -153,6 +192,9 @@ impl XwaylandWindow {
         if scheduled.inform_fullscreen != sent.inform_fullscreen {
             ffi::wlr_xwayland_surface_set_fullscreen(self.xsurface, scheduled.inform_fullscreen);
         }
+
+        let width = scheduled.width.unwrap_or(((*self.xsurface).width as f32 / scale).round() as u32);
+        let height = scheduled.height.unwrap_or(((*self.xsurface).height as f32 / scale).round() as u32);
 
         (*window).configure_sent = (*window).configure_scheduled.clone();
         (*window).configure_sent.width = Some(width);
@@ -300,14 +342,20 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         return;
     }
 
+    let scale = XwaylandWindow::get_scale(xwindow);
+    let phys_x = ((*(*xwindow).window).box_geom.x as f32 * scale).round() as i16;
+    let phys_y = ((*(*xwindow).window).box_geom.y as f32 * scale).round() as i16;
+
     ffi::wlr_xwayland_surface_configure(
         (*xwindow).xsurface,
-        (*(*xwindow).window).box_geom.x as i16,
-        (*(*xwindow).window).box_geom.y as i16,
+        phys_x,
+        phys_y,
         (*event).width,
         (*event).height,
     );
-    (*(*xwindow).window).set_dimensions((*event).width as u32, (*event).height as u32);
+    let log_width = ((*event).width as f32 / scale).round() as u32;
+    let log_height = ((*event).height as f32 / scale).round() as u32;
+    (*(*xwindow).window).set_dimensions(log_width, log_height);
 }
 
 unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
