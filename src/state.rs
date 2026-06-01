@@ -23,11 +23,17 @@ use std::path::PathBuf;
 
 /// Get the state file path: ~/.cache/ccec_state
 fn state_file_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let mut path = PathBuf::from(home);
-    path.push(".cache");
-    path.push("ccec_state");
-    path
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        let mut path = PathBuf::from(runtime_dir);
+        path.push("ccec_state");
+        path
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let mut path = PathBuf::from(home);
+        path.push(".cache");
+        path.push("ccec_state");
+        path
+    }
 }
 
 /// Persistent state snapshot (plain-text, line-oriented).

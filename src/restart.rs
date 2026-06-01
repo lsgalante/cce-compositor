@@ -200,7 +200,8 @@ pub fn wm_reload(state: &mut WindowManager) {
     }
 
     // Clear per-tag layout defaults
-    state.has_tag_layout = [false; crate::types::NUM_TAGS];
+    state.tag_layouts = [crate::types::TilingMode::Cascade; crate::types::NUM_TAGS];
+    state.has_tag_layout = [true; crate::types::NUM_TAGS];
 
     // Mark status for update after reload
     state.needs_status_update = true;

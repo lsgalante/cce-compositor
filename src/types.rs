@@ -378,7 +378,7 @@ impl Default for WindowManager {
             exit_requested: false,
             global_layout: TilingMode::Cascade,
             tag_layouts: [TilingMode::Cascade; NUM_TAGS],
-            has_tag_layout: [false; NUM_TAGS],
+            has_tag_layout: [true; NUM_TAGS],
             input_devices: Vec::new(),
             env_vars: HashMap::new(),
             pending_startup_apps: Vec::new(),
