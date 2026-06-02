@@ -83,6 +83,28 @@ struct InputEvent {
     value: i32,
 }
 
+const UI_SET_ABSBIT: libc::c_ulong = 0x40045567;
+const UI_ABS_SETUP: libc::c_ulong = 1075598596; // 0x40185568
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct InputAbsinfo {
+    value: i32,
+    minimum: i32,
+    maximum: i32,
+    fuzz: i32,
+    flat: i32,
+    resolution: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct UinputAbsSetup {
+    code: u16,
+    _padding: u16,
+    absinfo: InputAbsinfo,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FingerState {
     pub slot: usize,
@@ -152,6 +174,47 @@ fn setup_uinput() -> std::io::Result<std::fs::File> {
         if libc::ioctl(fd, UI_SET_RELBIT, REL_HWHEEL as libc::c_int) < 0 {
             return Err(std::io::Error::last_os_error());
         }
+        if libc::ioctl(fd, UI_SET_EVBIT, EV_ABS as libc::c_int) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::ioctl(fd, UI_SET_ABSBIT, ABS_X as libc::c_int) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let abs_x_setup = UinputAbsSetup {
+            code: ABS_X,
+            _padding: 0,
+            absinfo: InputAbsinfo {
+                value: 0,
+                minimum: 0,
+                maximum: 1920,
+                fuzz: 0,
+                flat: 0,
+                resolution: 1,
+            },
+        };
+        if libc::ioctl(fd, UI_ABS_SETUP, &abs_x_setup as *const UinputAbsSetup as *const libc::c_void) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        if libc::ioctl(fd, UI_SET_ABSBIT, ABS_Y as libc::c_int) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let abs_y_setup = UinputAbsSetup {
+            code: ABS_Y,
+            _padding: 0,
+            absinfo: InputAbsinfo {
+                value: 0,
+                minimum: 0,
+                maximum: 1200,
+                fuzz: 0,
+                flat: 0,
+                resolution: 1,
+            },
+        };
+        if libc::ioctl(fd, UI_ABS_SETUP, &abs_y_setup as *const UinputAbsSetup as *const libc::c_void) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
         if libc::ioctl(fd, UI_SET_EVBIT, EV_KEY as libc::c_int) < 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -212,13 +275,10 @@ fn write_raw_event(file: &mut std::fs::File, type_: u16, code: u16, value: i32) 
     Ok(())
 }
 
-fn write_mouse_move(file: &mut std::fs::File, dx: i32, dy: i32) -> std::io::Result<()> {
-    if dx != 0 {
-        write_raw_event(file, EV_REL, REL_X, dx)?;
-    }
-    if dy != 0 {
-        write_raw_event(file, EV_REL, REL_Y, dy)?;
-    }
+
+fn write_mouse_absolute(file: &mut std::fs::File, x: i32, y: i32) -> std::io::Result<()> {
+    write_raw_event(file, EV_ABS, ABS_X, x)?;
+    write_raw_event(file, EV_ABS, ABS_Y, y)?;
     write_raw_event(file, EV_SYN, SYN_REPORT, 0)?;
     Ok(())
 }
@@ -619,8 +679,10 @@ pub fn run_input_daemon(
                                     }
                                 }
                                 InputDaemonMsg::SimulateMove { dx, dy } => {
-                                    let _ = write_mouse_move(&mut uinput_file, dx, dy);
                                     update_pointer_coords(dx, dy);
+                                    let px = POINTER_X.load(Ordering::SeqCst);
+                                    let py = POINTER_Y.load(Ordering::SeqCst);
+                                    let _ = write_mouse_absolute(&mut uinput_file, px, py);
                                 }
                                 InputDaemonMsg::SimulateButton { button, press } => {
                                     let val = if press { 1 } else { 0 };
@@ -834,8 +896,10 @@ pub fn run_input_daemon(
                                 state.accum_y -= steps_y as f32;
 
                                 if steps_x != 0 || steps_y != 0 {
-                                    let _ = write_mouse_move(&mut uinput_file, steps_x, steps_y);
                                     update_pointer_coords(steps_x, steps_y);
+                                    let px = POINTER_X.load(Ordering::SeqCst);
+                                    let py = POINTER_Y.load(Ordering::SeqCst);
+                                    let _ = write_mouse_absolute(&mut uinput_file, px, py);
                                 }
                             }
                         }
@@ -860,8 +924,10 @@ pub fn run_input_daemon(
                             state.accum_trackpad_y -= steps_y as f32;
 
                             if steps_x != 0 || steps_y != 0 {
-                                let _ = write_mouse_move(&mut uinput_file, steps_x, steps_y);
                                 update_pointer_coords(steps_x, steps_y);
+                                let px = POINTER_X.load(Ordering::SeqCst);
+                                let py = POINTER_Y.load(Ordering::SeqCst);
+                                let _ = write_mouse_absolute(&mut uinput_file, px, py);
                             }
                         }
                     }

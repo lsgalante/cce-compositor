@@ -33,6 +33,7 @@ pub enum Action {
     Spawn,
     Close,
     FocusNext,
+    FocusPrev,
     Move,
     Resize,
     Exit,
@@ -54,6 +55,7 @@ pub enum Action {
     SetTag3,
     SetTag4,
     Expose,
+    Minimize,
 }
 
 /// Layout parameters
@@ -81,6 +83,7 @@ pub struct Layout {
     pub background_a: u32,
     pub border_font_size: i32,
     pub transition_duration: i32,
+    pub grid_gap: i32,
 }
 
 impl Default for Layout {
@@ -108,6 +111,7 @@ impl Default for Layout {
             background_a: 0xFFFFFFFFu32,
             border_font_size: 11,
             transition_duration: 300,
+            grid_gap: 18,
         }
     }
 }
@@ -120,6 +124,7 @@ pub struct ModeRule {
     pub title_pattern: Option<String>,
     pub single_instance: bool,
     pub tag: i32,
+    pub circular: bool,
 }
 
 /// A pending keyboard binding waiting to be applied to seats
@@ -214,6 +219,7 @@ pub struct Window {
     pub fullscreen_requested: bool,
     pub maximize_requested: bool,
     pub minimize_requested: bool,
+    pub minimized: bool,
     pub tiling_mode: TilingMode,
     pub mode_locked: bool,
     /// Whether we've queued an xprop check for XWayland parent detection.
@@ -227,6 +233,7 @@ pub struct Window {
     pub anim_w: Option<f64>,
     pub anim_h: Option<f64>,
     pub anim_opacity: Option<f64>,
+    pub circular: bool,
 }
 
 impl Default for Window {
@@ -255,6 +262,7 @@ impl Default for Window {
             fullscreen_requested: false,
             maximize_requested: false,
             minimize_requested: false,
+            minimized: false,
             tiling_mode: TilingMode::Floating,
             mode_locked: false,
             needs_xprop_check: false,
@@ -264,6 +272,7 @@ impl Default for Window {
             anim_w: None,
             anim_h: None,
             anim_opacity: None,
+            circular: false,
         }
     }
 }
@@ -506,6 +515,8 @@ pub fn parse_action(s: &str) -> Action {
         Action::Exit
     } else if s == "focus-next" {
         Action::FocusNext
+    } else if s == "focus-prev" {
+        Action::FocusPrev
     } else if s == "move" {
         Action::Move
     } else if s == "resize" {
@@ -520,6 +531,8 @@ pub fn parse_action(s: &str) -> Action {
         Action::Restart
     } else if s == "fullscreen" {
         Action::Fullscreen
+    } else if s == "minimize" {
+        Action::Minimize
     } else if s.starts_with("spawn")
         && (s.len() == 5 || s.as_bytes()[5] == b' ' || s.as_bytes()[5] == b'-')
     {
@@ -659,6 +672,7 @@ mod tests {
         assert_eq!(parse_action("close"), Action::Close);
         assert_eq!(parse_action("exit"), Action::Exit);
         assert_eq!(parse_action("focus-next"), Action::FocusNext);
+        assert_eq!(parse_action("focus-prev"), Action::FocusPrev);
         assert_eq!(parse_action("move"), Action::Move);
         assert_eq!(parse_action("resize"), Action::Resize);
         assert_eq!(parse_action("layout-next"), Action::LayoutNext);
@@ -671,6 +685,7 @@ mod tests {
         assert_eq!(parse_action("toggle-2"), Action::Toggle2);
         assert_eq!(parse_action("set-tag-3"), Action::SetTag3);
         assert_eq!(parse_action("expose"), Action::Expose);
+        assert_eq!(parse_action("minimize"), Action::Minimize);
         assert_eq!(parse_action("unknown"), Action::None);
     }
 

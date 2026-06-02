@@ -127,7 +127,9 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             }
         };
 
-        if win.app_id.as_deref() == Some("clear-status-interface") {
+        if win.app_id.as_deref() == Some("clear-status-interface")
+            || win.app_id.as_deref().map_or(false, |aid| aid.contains("noborder"))
+        {
             width = 0;
         }
 

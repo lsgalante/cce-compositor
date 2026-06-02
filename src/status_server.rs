@@ -268,15 +268,40 @@ pub fn build_status_update(wm: &crate::types::WindowManager) -> StatusUpdate {
     }
 }
 
+fn read_status_normal_color_from_config() -> String {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lsgalante".to_string());
+    let path = format!("{}/.config/ccec/config.toml", home);
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("status_normal_color") {
+                let rest = rest.trim_start_matches(|c: char| c == ' ' || c == '=' || c == '"');
+                let hex = rest.trim_end_matches('"').trim();
+                if hex.starts_with('#') {
+                    return hex.to_string();
+                } else if !hex.is_empty() {
+                    return format!("#{}", hex);
+                }
+            }
+        }
+    }
+    "#ccccd8".to_string()
+}
+
 /// Render tag state as a JSON string with pango markup, matching the format
 /// produced by the old ccec-tags.sh script.
 ///
 /// Colors:
-/// - Active + Focused: bright (#a8c0d8)
+/// - Active + Focused: bright (dynamic normal color, defaults to #ccccd8)
 /// - Focused only: dim (#666666)
 /// - Active only: medium (#888888)
 /// - Neither: dark (#444444)
 fn render_tags_json(active: u32, focused: u32, num_tags: u32) -> String {
+    let normal_color = read_status_normal_color_from_config();
+    render_tags_json_with_color(active, focused, num_tags, &normal_color)
+}
+
+fn render_tags_json_with_color(active: u32, focused: u32, num_tags: u32, normal_color: &str) -> String {
     let mut text = String::new();
     for i in 0..num_tags {
         let bit = 1u32 << i;
@@ -286,7 +311,7 @@ fn render_tags_json(active: u32, focused: u32, num_tags: u32) -> String {
         let is_focused = (focused & bit) != 0;
 
         let color = if is_focused && is_active {
-            "#a8c0d8"
+            normal_color
         } else if is_focused {
             "#666666"
         } else if is_active {
@@ -310,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_render_tags_json_single_tag() {
-        let json = render_tags_json(1, 1, 4);
+        let json = render_tags_json_with_color(1, 1, 4, "#a8c0d8");
         // Tag 1 should be active+focused (#a8c0d8), tags 2-4 should be dark (#444444)
         assert!(json.contains("#a8c0d8"), "tag 1 should be bright: {}", json);
         assert!(
@@ -323,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_render_tags_json_no_focus() {
-        let json = render_tags_json(1, 0, 4);
+        let json = render_tags_json_with_color(1, 0, 4, "#a8c0d8");
         // Tag 1 is active but not focused → #888888
         assert!(
             json.contains("#888888"),

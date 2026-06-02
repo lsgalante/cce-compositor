@@ -39,8 +39,9 @@ pub fn tile_cascade(
     let height = screen_h - bar_height - gap_top - gap_bottom - (dec_h + bw) - cascade_offset * (n_cascade - 1);
     let width = if width < 1 { 1 } else { width };
     let height = if height < 1 { 1 } else { height };
-    let x = gap_left + bw + idx * cascade_offset;
-    let y = bar_height + gap_top + dec_h + idx * cascade_offset;
+    let pos_idx = n_cascade - 1 - idx;
+    let x = gap_left + bw + pos_idx * cascade_offset;
+    let y = bar_height + gap_top + dec_h + pos_idx * cascade_offset;
     (x, y, width, height)
 }
 
@@ -149,10 +150,15 @@ mod tests {
 
     #[test]
     fn test_tile_cascade_multiple() {
-        // 3 cascade windows, idx=2 (the back one)
+        // 3 cascade windows, idx=2 (the back one, highest index, should be up/left)
         let (x, y, _w, _h) = tile_cascade(1920, 1080, 18, 18, 18, 18, 18, 18, 32, 28, 3, 2);
-        assert_eq!(x, 36 + 2 * 32); // gap_left + bw + idx * offset
-        assert_eq!(y, 64 + 2 * 32); // bar + gap_top + bw + idx * offset
+        assert_eq!(x, 36); // gap_left + bw
+        assert_eq!(y, 64); // bar + gap_top + bw
+
+        // 3 cascade windows, idx=0 (the focused one, lowest index, should be down/right)
+        let (x, y, _w, _h) = tile_cascade(1920, 1080, 18, 18, 18, 18, 18, 18, 32, 28, 3, 0);
+        assert_eq!(x, 36 + 2 * 32); // gap_left + bw + 2 * offset
+        assert_eq!(y, 64 + 2 * 32); // bar + gap_top + bw + 2 * offset
     }
 
     #[test]

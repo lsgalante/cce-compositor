@@ -9,7 +9,7 @@ use crate::borders::compute_border_colors;
 use crate::protocol::river_window_management::client::river_node_v1::RiverNodeV1;
 use crate::protocol::river_window_management::client::river_window_v1::Edges;
 use crate::tiling;
-use crate::types::{TilingMode, Window, WindowManager, NUM_TAGS};
+use crate::types::{TilingMode, Window, WindowManager, NUM_TAGS, ModeRule};
 use crate::wayland::AppState;
 use wayland_client::QueueHandle;
 
@@ -74,12 +74,68 @@ pub fn get_mode_for_window(wm: &WindowManager, win: &Window) -> Option<TilingMod
     Some(wm.global_layout)
 }
 
+fn matches_mode_rule(mode_rules: &[ModeRule], win: &Window) -> bool {
+    for rule in mode_rules {
+        let has_app_id = win.app_id.as_deref().map_or(false, |s| !s.is_empty());
+        let match_app = rule.app_id_pattern == "*"
+            || win
+                .app_id
+                .as_deref()
+                .map_or(false, |aid| aid.contains(&rule.app_id_pattern))
+            || (!has_app_id && win.title.as_deref().map_or(false, |t| {
+                let normalize = |s: &str| -> String {
+                    s.to_lowercase().replace(|c: char| c == '-' || c == '_', " ")
+                };
+                normalize(t).contains(&normalize(&rule.app_id_pattern))
+            }));
+        let match_title = rule.title_pattern.as_deref() == Some("*")
+            || rule.title_pattern.is_none()
+            || win.title.as_deref().map_or(false, |t| {
+                t.contains(rule.title_pattern.as_deref().unwrap_or(""))
+            });
+
+        if match_app && match_title {
+            return true;
+        }
+    }
+    false
+}
+
+fn get_circular_for_window(mode_rules: &[ModeRule], win: &Window) -> bool {
+    for rule in mode_rules {
+        let has_app_id = win.app_id.as_deref().map_or(false, |s| !s.is_empty());
+        let match_app = rule.app_id_pattern == "*"
+            || win
+                .app_id
+                .as_deref()
+                .map_or(false, |aid| aid.contains(&rule.app_id_pattern))
+            || (!has_app_id && win.title.as_deref().map_or(false, |t| {
+                let normalize = |s: &str| -> String {
+                    s.to_lowercase().replace(|c: char| c == '-' || c == '_', " ")
+                };
+                normalize(t).contains(&normalize(&rule.app_id_pattern))
+            }));
+        let match_title = rule.title_pattern.as_deref() == Some("*")
+            || rule.title_pattern.is_none()
+            || win.title.as_deref().map_or(false, |t| {
+                t.contains(rule.title_pattern.as_deref().unwrap_or(""))
+            });
+
+        if match_app && match_title {
+            return rule.circular;
+        }
+    }
+    false
+}
+
 /// Assign tiling modes to all windows that aren't mode_locked.
 /// Should be called during ManageStart before compute_tiling.
 pub fn assign_window_modes(wm: &mut WindowManager) {
     // Enforce that clear-status-interface is assigned all tags so that it is always visible
     // and that blank steam_proton helper windows are always untagged so they remain hidden.
     for win in &mut wm.windows {
+        win.circular = get_circular_for_window(&wm.mode_rules, win);
+
         if win.app_id.as_deref() == Some("clear-status-interface") {
             win.tags = u32::MAX;
         }
@@ -90,6 +146,38 @@ pub fn assign_window_modes(wm: &mut WindowManager) {
             if win.tags != 0 {
                 eprintln!("[mode] enforcing tags=0 for blank steam_proton helper window id={}", win.id);
                 win.tags = 0;
+            }
+        }
+    }
+
+    // Have newly spawned windows adopt the window mode of the focused window, if there is one.
+    let focused_mode = wm.focused_window().map(|w| w.tiling_mode);
+    if let Some(f_mode) = focused_mode {
+        let mode_rules = &wm.mode_rules;
+        for win in &mut wm.windows {
+            if win.is_new
+                && win.app_id.as_deref() != Some("clear-status-interface")
+                && !win.has_parent
+                && !matches_mode_rule(mode_rules, win)
+            {
+                // Determine what normal fallback mode would be
+                let mut normal_fallback = wm.global_layout;
+                for tag_bit in 0..crate::types::NUM_TAGS {
+                    let tag_mask = 1u32 << tag_bit;
+                    if (win.tags & tag_mask) != 0 && wm.has_tag_layout[tag_bit] {
+                        normal_fallback = wm.tag_layouts[tag_bit];
+                        break;
+                    }
+                }
+
+                if f_mode != normal_fallback {
+                    win.mode_locked = true;
+                }
+                win.tiling_mode = f_mode;
+                eprintln!(
+                    "[mode] new window {} (app_id={:?}) inherits focus mode {:?}",
+                    win.id, win.app_id, f_mode
+                );
             }
         }
     }
@@ -251,9 +339,18 @@ fn compute_tiling(
     if wm.expose_active {
         let mut results = Vec::new();
         // Collect all active non-status-bar, non-popup windows on current tags
-        let expose_windows: Vec<&crate::types::Window> = wm.windows.iter()
-            .filter(|w| !w.closed && (w.tags & wm.active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface") && w.tiling_mode != TilingMode::Popup)
+        let mut expose_windows: Vec<&crate::types::Window> = wm.windows.iter()
+            .filter(|w| !w.closed && !w.minimized && (w.tags & wm.active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface") && w.tiling_mode != TilingMode::Popup)
             .collect();
+
+        // Sort expose_windows by current visual location (y first, then x)
+        expose_windows.sort_by(|a, b| {
+            if a.y != b.y {
+                a.y.cmp(&b.y)
+            } else {
+                a.x.cmp(&b.x)
+            }
+        });
 
         let n_expose = expose_windows.len() as i32;
         if n_expose > 0 {
@@ -338,19 +435,33 @@ fn compute_tiling(
         return results;
     }
 
-    // Count windows per tiling mode
-    let mut n_cascade = 0i32;
-    let mut n_grid = 0i32;
-    for win in &wm.windows {
-        if (win.tags & wm.active_tags) == 0 || win.closed {
-            continue;
-        }
-        match win.tiling_mode {
-            TilingMode::Cascade => n_cascade += 1,
-            TilingMode::Grid => n_grid += 1,
-            _ => {}
-        }
-    }
+    // Collect and sort grid windows by ID to ensure stable tiling layout positions
+    let mut grid_windows: Vec<&crate::types::Window> = wm
+        .windows
+        .iter()
+        .filter(|w| {
+            (w.tags & wm.active_tags) != 0
+                && !w.closed
+                && !w.minimized
+                && w.tiling_mode == TilingMode::Grid
+        })
+        .collect();
+    grid_windows.sort_by_key(|w| w.id);
+    let n_grid = grid_windows.len() as i32;
+
+    // Collect and reverse cascade windows (focused window gets index 0, next 1, etc.)
+    let mut cascade_windows: Vec<&crate::types::Window> = wm
+        .windows
+        .iter()
+        .filter(|w| {
+            (w.tags & wm.active_tags) != 0
+                && !w.closed
+                && !w.minimized
+                && w.tiling_mode == TilingMode::Cascade
+        })
+        .collect();
+    cascade_windows.reverse();
+    let n_cascade = cascade_windows.len() as i32;
 
     // Check for fullscreen window — prefer the focused window so FocusNext
     // cycles visible windows when fullscreen is used as a layout mode.
@@ -361,24 +472,22 @@ fn compute_tiling(
         .and_then(|s| s.focused_window_id)
         .filter(|&fid| {
             wm.get_window(fid).map_or(false, |w| {
-                (w.tags & wm.active_tags) != 0 && !w.closed && w.tiling_mode == TilingMode::Fullscreen && w.app_id.as_deref() != Some("clear-status-interface")
+                (w.tags & wm.active_tags) != 0 && !w.closed && !w.minimized && w.tiling_mode == TilingMode::Fullscreen && w.app_id.as_deref() != Some("clear-status-interface")
             })
         })
         .or_else(|| {
             // Fallback: first fullscreen window if no focused window qualifies
             wm.windows.iter().find(|w| {
-                (w.tags & wm.active_tags) != 0 && !w.closed && w.tiling_mode == TilingMode::Fullscreen && w.app_id.as_deref() != Some("clear-status-interface")
+                (w.tags & wm.active_tags) != 0 && !w.closed && !w.minimized && w.tiling_mode == TilingMode::Fullscreen && w.app_id.as_deref() != Some("clear-status-interface")
             }).map(|w| w.id)
         });
 
     // Compute tiling
     let mut results = Vec::new();
-    let mut idx_cascade = 0i32;
-    let mut idx_grid = 0i32;
     let mut idx_floating = 0i32;
 
     for win in &wm.windows {
-        if (win.tags & wm.active_tags) == 0 || win.closed {
+        if (win.tags & wm.active_tags) == 0 || win.closed || win.minimized {
             continue;
         }
 
@@ -409,6 +518,10 @@ fn compute_tiling(
                 }
             }
             TilingMode::Cascade => {
+                let idx = cascade_windows
+                    .iter()
+                    .position(|w| w.id == wid)
+                    .unwrap_or(0) as i32;
                 let (x, y, w, h) = tiling::tile_cascade(
                     screen_w,
                     screen_h,
@@ -421,15 +534,28 @@ fn compute_tiling(
                     cascade_offset,
                     bar_height,
                     n_cascade,
-                    idx_cascade,
+                    idx,
                 );
-                idx_cascade += 1;
                 (x, y, w, h)
             }
             TilingMode::Grid => {
-                let (x, y, w, h) =
-                    tiling::tile_grid(screen_w, screen_h, gap, gap_top, gap_left, gap_right, gap_bottom, wm.layout.grid_border_width, bar_height, n_grid, idx_grid);
-                idx_grid += 1;
+                 let idx = grid_windows
+                     .iter()
+                     .position(|w| w.id == wid)
+                     .unwrap_or(0) as i32;
+                 let (x, y, w, h) = tiling::tile_grid(
+                     screen_w,
+                     screen_h,
+                     wm.layout.grid_gap,
+                     gap_top,
+                     gap_left,
+                     gap_right,
+                     gap_bottom,
+                     wm.layout.grid_border_width,
+                     bar_height,
+                     n_grid,
+                     idx,
+                 );
                 (x, y, w, h)
             }
 
@@ -491,6 +617,29 @@ fn compute_tiling(
         results.push(TileResult { wid, x, y, w, h });
     }
 
+    // Layout minimized windows as bubbles stacked at the right edge
+    let minimized_windows: Vec<&crate::types::Window> = wm.windows.iter()
+        .filter(|w| !w.closed && w.minimized && (w.tags & wm.active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface"))
+        .collect();
+
+    let bubble_width = 160;
+    let border_w = wm.layout.grid_border_width;
+
+    for (_idx, win) in minimized_windows.iter().enumerate() {
+        let wid = win.id;
+        let x = screen_w - wm.layout.gap_right - bubble_width - border_w;
+        let y = screen_h - 2;
+        let w = if win.width > 0 { win.width } else { bubble_width };
+        let h = if win.height > 0 { win.height } else { 100 };
+        results.push(TileResult {
+            wid,
+            x,
+            y,
+            w,
+            h,
+        });
+    }
+
     results
 }
 
@@ -526,7 +675,7 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
             let is_cascade = win.tiling_mode == TilingMode::Cascade;
             let is_exposed = expose_active && win.tiling_mode != TilingMode::Popup && win.app_id.as_deref() != Some("clear-status-interface");
             let was_animating = win.anim_x.is_some() || win.anim_y.is_some() || win.anim_w.is_some() || win.anim_h.is_some() || win.anim_opacity.is_some();
-            let should_animate = is_cascade || is_exposed || was_animating;
+            let should_animate = (is_cascade || is_exposed || was_animating) && !win.minimized;
 
             if should_animate {
                 let curr_x = win.anim_x.unwrap_or(win.x as f64);
@@ -754,3 +903,222 @@ pub fn render_opacity(state: &mut AppState) {
         }
     }
 }
+
+/// Apply whether windows are circular.
+/// This modifies rendering state and is called during RenderStart.
+pub fn render_circular(state: &mut AppState) {
+    for win in &state.wm.windows {
+        if win.closed {
+            continue;
+        }
+        if let Some(wp) = state.get_window_proxy(win.id) {
+            let val = if win.circular { 1 } else { 0 };
+            wp.river_window.set_circular(val);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Window, Seat, WindowManager, TilingMode, ModeRule};
+
+    #[test]
+    fn test_assign_window_modes_inherit_focus_mode_locked() {
+        let mut wm = WindowManager::default();
+        wm.global_layout = TilingMode::Cascade;
+        wm.tag_layouts[0] = TilingMode::Cascade;
+
+        // Spawn a focused window that is in Grid mode
+        wm.windows.push(Window {
+            id: 1,
+            tiling_mode: TilingMode::Grid,
+            is_new: false,
+            ..Default::default()
+        });
+        wm.seats.push(Seat {
+            id: 1,
+            focused_window_id: Some(1),
+            ..Default::default()
+        });
+
+        // Spawn a new window
+        wm.windows.push(Window {
+            id: 2,
+            is_new: true,
+            app_id: Some("kitty".to_string()),
+            ..Default::default()
+        });
+
+        assign_window_modes(&mut wm);
+
+        // Window 2 should inherit Grid mode and be locked because Grid != Cascade
+        let win2 = wm.get_window(2).unwrap();
+        assert_eq!(win2.tiling_mode, TilingMode::Grid);
+        assert!(win2.mode_locked);
+    }
+
+    #[test]
+    fn test_assign_window_modes_inherit_focus_mode_not_locked() {
+        let mut wm = WindowManager::default();
+        wm.global_layout = TilingMode::Grid;
+        wm.tag_layouts[0] = TilingMode::Grid;
+
+        // Spawn a focused window that is in Grid mode
+        wm.windows.push(Window {
+            id: 1,
+            tiling_mode: TilingMode::Grid,
+            is_new: false,
+            ..Default::default()
+        });
+        wm.seats.push(Seat {
+            id: 1,
+            focused_window_id: Some(1),
+            ..Default::default()
+        });
+
+        // Spawn a new window
+        wm.windows.push(Window {
+            id: 2,
+            is_new: true,
+            app_id: Some("kitty".to_string()),
+            ..Default::default()
+        });
+
+        assign_window_modes(&mut wm);
+
+        // Window 2 should inherit Grid mode but NOT be locked because Grid == Grid (normal fallback)
+        let win2 = wm.get_window(2).unwrap();
+        assert_eq!(win2.tiling_mode, TilingMode::Grid);
+        assert!(!win2.mode_locked);
+    }
+
+    #[test]
+    fn test_assign_window_modes_inherit_focus_has_parent() {
+        let mut wm = WindowManager::default();
+        wm.global_layout = TilingMode::Grid;
+        wm.tag_layouts[0] = TilingMode::Grid;
+
+        // Spawn a focused window that is in Grid mode
+        wm.windows.push(Window {
+            id: 1,
+            tiling_mode: TilingMode::Grid,
+            is_new: false,
+            ..Default::default()
+        });
+        wm.seats.push(Seat {
+            id: 1,
+            focused_window_id: Some(1),
+            ..Default::default()
+        });
+
+        // Spawn a new parented window
+        wm.windows.push(Window {
+            id: 2,
+            is_new: true,
+            app_id: Some("kitty".to_string()),
+            has_parent: true,
+            ..Default::default()
+        });
+
+        assign_window_modes(&mut wm);
+
+        // Window 2 should get Floating mode (parent fallback) and not inherit Grid
+        let win2 = wm.get_window(2).unwrap();
+        assert_eq!(win2.tiling_mode, TilingMode::Floating);
+    }
+
+    #[test]
+    fn test_assign_window_modes_inherit_focus_matches_rule() {
+        let mut wm = WindowManager::default();
+        wm.global_layout = TilingMode::Cascade;
+        wm.tag_layouts[0] = TilingMode::Cascade;
+        wm.mode_rules.push(ModeRule {
+            mode: TilingMode::Fullscreen,
+            app_id_pattern: "firefox".to_string(),
+            title_pattern: None,
+            single_instance: false,
+            tag: 0,
+            circular: false,
+        });
+
+        // Spawn a focused window that is in Grid mode
+        wm.windows.push(Window {
+            id: 1,
+            tiling_mode: TilingMode::Grid,
+            is_new: false,
+            ..Default::default()
+        });
+        wm.seats.push(Seat {
+            id: 1,
+            focused_window_id: Some(1),
+            ..Default::default()
+        });
+
+        // Spawn a new firefox window matching the mode rule
+        wm.windows.push(Window {
+            id: 2,
+            is_new: true,
+            app_id: Some("firefox".to_string()),
+            ..Default::default()
+        });
+
+        assign_window_modes(&mut wm);
+
+        // Window 2 should get Fullscreen mode from rule and not inherit Grid
+        let win2 = wm.get_window(2).unwrap();
+        assert_eq!(win2.tiling_mode, TilingMode::Fullscreen);
+    }
+
+    #[test]
+    fn test_expose_mode_sorting() {
+        let mut wm = WindowManager::default();
+        wm.expose_active = true;
+        wm.active_tags = 1;
+
+        // Push windows in unordered spatial positions, representing focus ordering
+        wm.windows.push(Window {
+            id: 10,
+            x: 1000,
+            y: 500,
+            tags: 1,
+            ..Default::default()
+        });
+        wm.windows.push(Window {
+            id: 20,
+            x: 0,
+            y: 500,
+            tags: 1,
+            ..Default::default()
+        });
+        wm.windows.push(Window {
+            id: 30,
+            x: 1000,
+            y: 0,
+            tags: 1,
+            ..Default::default()
+        });
+        wm.windows.push(Window {
+            id: 40,
+            x: 0,
+            y: 0,
+            tags: 1,
+            ..Default::default()
+        });
+
+        // Compute tiling in expose mode
+        let results = compute_tiling(&wm, 1920, 1080, 1920, 1080, 0, 0);
+
+        // Expected sorted order:
+        // 1. (0, 0) -> id 40
+        // 2. (1000, 0) -> id 30
+        // 3. (0, 500) -> id 20
+        // 4. (1000, 500) -> id 10
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].wid, 40);
+        assert_eq!(results[1].wid, 30);
+        assert_eq!(results[2].wid, 20);
+        assert_eq!(results[3].wid, 10);
+    }
+}
+

@@ -58,6 +58,7 @@ pub struct PersistentWindow {
     pub tags: u32,
     pub tiling_mode: TilingMode,
     pub mode_locked: bool,
+    pub minimized: bool,
 }
 
 /// Percent-encode spaces, tabs, newlines, and percent signs in a string.
@@ -137,8 +138,8 @@ pub fn write_state(wm: &WindowManager) {
             let mode_str = win.tiling_mode.as_str();
             let _ = writeln!(
                 f,
-                "window\t{}\t{}\t{}\t{}\t{}\t{}",
-                ident, app_id, title, win.tags, mode_str, win.mode_locked
+                "window\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                ident, app_id, title, win.tags, mode_str, win.mode_locked, win.minimized
             );
         }
 
@@ -204,6 +205,7 @@ pub fn read_state() -> Option<PersistentState> {
                 let tags = parts[3].parse::<u32>().unwrap_or(1);
                 let tiling_mode = parse_tiling_mode_str(parts[4]);
                 let mode_locked = parts[5] == "true";
+                let minimized = parts.get(6).map(|&s| s == "true").unwrap_or(false);
 
                 windows.push(PersistentWindow {
                     identifier,
@@ -212,6 +214,7 @@ pub fn read_state() -> Option<PersistentState> {
                     tags,
                     tiling_mode,
                     mode_locked,
+                    minimized,
                 });
             }
             continue;
@@ -309,6 +312,7 @@ pub fn apply_state(wm: &mut WindowManager, state: &PersistentState) {
                 win.tiling_mode = pw.tiling_mode;
                 win.mode_locked = true;
             }
+            win.minimized = pw.minimized;
         }
 
         // Post-restore normalization: Ensure blank steam_proton helper windows are untagged (tags = 0)
@@ -395,8 +399,8 @@ mod tests {
                 let title = w.title.as_deref().map(pct_encode).unwrap_or("-".to_string());
                 let _ = writeln!(
                     f,
-                    "window\t{}\t{}\t{}\t{}\t{}\t{}",
-                    ident, app_id, title, w.tags, w.tiling_mode.as_str(), w.mode_locked
+                    "window\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    ident, app_id, title, w.tags, w.tiling_mode.as_str(), w.mode_locked, w.minimized
                 );
             }
         }
@@ -435,7 +439,8 @@ mod tests {
                     let tags = parts[3].parse::<u32>().unwrap_or(1);
                     let tiling_mode = parse_tiling_mode_str(parts[4]);
                     let mode_locked = parts[5] == "true";
-                    windows.push(PersistentWindow { identifier, app_id, title, tags, tiling_mode, mode_locked });
+                    let minimized = parts.get(6).map(|&s| s == "true").unwrap_or(false);
+                    windows.push(PersistentWindow { identifier, app_id, title, tags, tiling_mode, mode_locked, minimized });
                 }
             }
         }
@@ -461,6 +466,7 @@ mod tests {
         assert_eq!(pw.tags, 0b100);
         assert_eq!(pw.tiling_mode, TilingMode::Fullscreen);
         assert!(pw.mode_locked);
+        assert!(!pw.minimized);
 
         // Clean up
         let _ = fs::remove_file(&path);

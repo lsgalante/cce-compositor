@@ -338,8 +338,15 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
     // or side borders for windows that do not have them (Popup, Fullscreen).
     for (wid, wp) in &mut state.window_proxies {
         if let Some(w) = state.wm.windows.iter().find(|win| win.id == *wid) {
-            let should_not_decorate = w.closed || w.app_id.as_deref() == Some("clear-status-interface") || w.tiling_mode == crate::types::TilingMode::Popup || w.tiling_mode == crate::types::TilingMode::Fullscreen;
-            let needs_sides = !should_not_decorate;
+            let is_minimized = w.minimized;
+            let should_not_decorate = w.closed
+                || w.app_id.as_deref() == Some("clear-status-interface")
+                || w.app_id.as_deref().map_or(false, |aid| aid.contains("noborder"))
+                || w.tiling_mode == crate::types::TilingMode::Popup
+                || w.tiling_mode == crate::types::TilingMode::Fullscreen
+                || w.circular;
+            let needs_sides = !should_not_decorate && !is_minimized;
+            eprintln!("[decorations] window {} minimized={} needs_sides={} dec_right_exists={}", w.id, is_minimized, needs_sides, wp.dec_right.is_some());
 
             if should_not_decorate {
                 if let Some(dec) = wp.decoration.take() {
@@ -365,36 +372,64 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         }
     }
 
+    struct DecorateInfo {
+        id: u64,
+        win_width: i32,
+        win_height: i32,
+        border_width: i32,
+        title: String,
+        bg_color: u32,
+        tiling_mode: crate::types::TilingMode,
+        is_minimized: bool,
+        minimized_idx: Option<usize>,
+        win_y: i32,
+    }
+
     // Calculate dynamic border colors
     let border_colors = crate::borders::compute_border_colors(&state.wm);
     let text_color = 0xFFE0E0E0u32;
 
     // Collect window IDs to modify so we don't violate the borrow checker
-    let windows_to_decorate: Vec<(u64, i32, i32, i32, String, u32, crate::types::TilingMode)> = state
+    let windows_to_decorate: Vec<DecorateInfo> = state
         .wm
         .windows
         .iter()
         .enumerate()
-        .filter(|(_, w)| !w.closed && w.app_id.as_deref() != Some("clear-status-interface") && w.tiling_mode != crate::types::TilingMode::Popup && w.tiling_mode != crate::types::TilingMode::Fullscreen)
+        .filter(|(_, w)| !w.closed && w.app_id.as_deref() != Some("clear-status-interface") && !w.circular && !w.app_id.as_deref().map_or(false, |aid| aid.contains("noborder")) && (w.minimized || (w.tiling_mode != crate::types::TilingMode::Popup && w.tiling_mode != crate::types::TilingMode::Fullscreen)))
         .filter(|(_, w)| (w.tags & active_tags) != 0)
         .map(|(idx, w)| {
+            let is_minimized = w.minimized;
+            let minimized_idx = if is_minimized {
+                state.wm.windows
+                    .iter()
+                    .filter(|win| !win.closed && win.minimized && (win.tags & active_tags) != 0 && win.app_id.as_deref() != Some("clear-status-interface"))
+                    .position(|win| win.id == w.id)
+            } else {
+                None
+            };
             let title = w.title.clone().unwrap_or_else(|| {
                 w.app_id.clone().unwrap_or_else(|| "Window".to_string())
             });
             let mode_idx = if state.wm.expose_visual_active && w.tiling_mode != crate::types::TilingMode::Popup {
-                state.wm.windows
+                let list: Vec<_> = state.wm.windows
                     .iter()
                     .filter(|win| !win.closed && win.app_id.as_deref() != Some("clear-status-interface") && win.tiling_mode != crate::types::TilingMode::Popup && (win.tags & active_tags) != 0)
-                    .position(|win| win.id == w.id)
-                    .unwrap_or(0)
+                    .collect();
+                let len = list.len();
+                let pos = list.iter().position(|win| win.id == w.id).unwrap_or(0);
+                if len > 0 { len - 1 - pos } else { 0 }
             } else {
-                state.wm.windows
+                let list: Vec<_> = state.wm.windows
                     .iter()
                     .filter(|win| !win.closed && win.app_id.as_deref() != Some("clear-status-interface") && (win.tags & active_tags) != 0 && win.tiling_mode == w.tiling_mode)
-                    .position(|win| win.id == w.id)
-                    .unwrap_or(0)
+                    .collect();
+                let len = list.len();
+                let pos = list.iter().position(|win| win.id == w.id).unwrap_or(0);
+                if len > 0 { len - 1 - pos } else { 0 }
             };
-            let indicator = if state.wm.expose_visual_active && w.tiling_mode != crate::types::TilingMode::Popup {
+            let indicator = if is_minimized {
+                "M"
+            } else if state.wm.expose_visual_active && w.tiling_mode != crate::types::TilingMode::Popup {
                 "EX"
             } else {
                 match w.tiling_mode {
@@ -405,7 +440,11 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                     crate::types::TilingMode::Popup => "P",
                 }
             };
-            let title_with_idx = format!("[{}{}] {}", indicator, mode_idx, title);
+            let title_with_idx = if is_minimized {
+                format!("[{}] {}", indicator, title)
+            } else {
+                format!("[{}{}] {}", indicator, mode_idx, title)
+            };
 
             // Find matching computed border color for this window
             let bc = border_colors.iter().find(|b| b.window_idx == idx);
@@ -426,7 +465,9 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             let bg_color = ((border_a as u32) << 24) | ((border_r as u32) << 16) | ((border_g as u32) << 8) | (border_b as u32);
 
             // Border width is mode-specific
-            let border_w = if state.wm.expose_visual_active && w.tiling_mode != crate::types::TilingMode::Popup {
+            let border_width = if is_minimized {
+                state.wm.layout.grid_border_width
+            } else if state.wm.expose_visual_active && w.tiling_mode != crate::types::TilingMode::Popup {
                 state.wm.layout.grid_border_width
             } else {
                 match w.tiling_mode {
@@ -437,11 +478,33 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                     crate::types::TilingMode::Popup => 0,
                 }
             };
-            (w.id, w.width, w.height, border_w, title_with_idx, bg_color, w.tiling_mode)
+            DecorateInfo {
+                id: w.id,
+                win_width: w.width,
+                win_height: w.height,
+                border_width,
+                title: title_with_idx,
+                bg_color,
+                tiling_mode: w.tiling_mode,
+                is_minimized,
+                minimized_idx,
+                win_y: w.y,
+            }
         })
         .collect();
 
-    for (wid, win_width, win_height, border_width, title, bg_color, tiling_mode) in windows_to_decorate {
+    for info in windows_to_decorate {
+        let wid = info.id;
+        let win_width = info.win_width;
+        let win_height = info.win_height;
+        let border_width = info.border_width;
+        let title = info.title;
+        let bg_color = info.bg_color;
+        let tiling_mode = info.tiling_mode;
+        let is_minimized = info.is_minimized;
+        let minimized_idx = info.minimized_idx;
+        let win_y = info.win_y;
+
         // Find or create decoration proxy
         let wp_idx = match state.window_proxies.iter().position(|(id, _)| *id == wid) {
             Some(idx) => idx,
@@ -452,7 +515,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
 
         let scale = (state.wm.output_scale.round() as i32).max(1);
 
-        if tiling_mode != crate::types::TilingMode::Popup && tiling_mode != crate::types::TilingMode::Fullscreen {
+        if tiling_mode != crate::types::TilingMode::Popup && tiling_mode != crate::types::TilingMode::Fullscreen && !is_minimized {
             let grab_w = if tiling_mode == crate::types::TilingMode::Floating {
                 border_width.max(10)
             } else {
@@ -505,7 +568,11 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         // Determine titlebar dimensions:
         // Height equals border_width (or 16 if border_width is too small to display font)
         let logical_height = std::cmp::max(border_width, 16);
-        let logical_width = win_width + 2 * border_width;
+        let logical_width = if is_minimized {
+            160
+        } else {
+            win_width + 2 * border_width
+        };
         let dec_height = logical_height * scale;
         let dec_width = logical_width * scale;
 
@@ -534,7 +601,17 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         let dec = wp.decoration.as_mut().unwrap();
 
         // Position decoration on top of the window top border
-        dec.decoration.set_offset(-border_width, -logical_height);
+        if is_minimized {
+            if let Some(idx) = minimized_idx {
+                let bar_height = state.wm.layout.bar_height;
+                let gap_top = state.wm.layout.gap_top;
+                let bubble_gap = 8;
+                let bubble_y = bar_height + gap_top + idx as i32 * (logical_height + bubble_gap);
+                dec.decoration.set_offset(0, bubble_y - win_y);
+            }
+        } else {
+            dec.decoration.set_offset(-border_width, -logical_height);
+        }
 
         if needs_new_buffer {
             eprintln!(
@@ -696,7 +773,9 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             }
 
             // Commit surface rendering
-            dec.decoration.sync_next_commit();
+            if !is_minimized {
+                dec.decoration.sync_next_commit();
+            }
             if let Some(ref wl_buf) = dec.buffer {
                 dec.surface.attach(Some(wl_buf), 0, 0);
             }

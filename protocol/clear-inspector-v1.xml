@@ -27,7 +27,8 @@
         The state is serialized as a JSON string containing widget layout and state data.
       </description>
       <arg name="surface" type="object" interface="wl_surface"/>
-      <arg name="state" type="string" summary="JSON serialized state of the application"/>
+      <arg name="fd" type="fd" summary="JSON state file descriptor"/>
+      <arg name="len" type="uint" summary="JSON state length in bytes"/>
     </request>
 
     <request name="get_inspected_surfaces">
@@ -42,7 +43,8 @@
       <arg name="y" type="int" summary="absolute screen Y coordinate"/>
       <arg name="width" type="int" summary="surface width"/>
       <arg name="height" type="int" summary="surface height"/>
-      <arg name="state" type="string" summary="JSON state of the application"/>
+      <arg name="fd" type="fd" summary="JSON state file descriptor"/>
+      <arg name="len" type="uint" summary="JSON state length in bytes"/>
     </event>
 
     <event name="inspected_surface_done">

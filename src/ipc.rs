@@ -78,6 +78,32 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
             }
             state.needs_render = true;
         }
+        "minimize" => {
+            if let Some(seat) = state.seats.first() {
+                if let Some(focused_id) = seat.focused_window_id {
+                    if let Some(window) = state.get_window_mut(focused_id) {
+                        window.minimized = true;
+                    }
+                    // Shift focus to the next visible window
+                    let active_tags = state.active_tags;
+                    let visible_ids: Vec<u64> = state
+                        .windows
+                        .iter()
+                        .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.app_id.as_deref() != Some("clear-status-interface"))
+                        .map(|w| w.id)
+                        .collect();
+                    let next_id = visible_ids.last().copied();
+                    for s in &mut state.seats {
+                        if !s.removed {
+                            s.focused_window_id = next_id;
+                        }
+                    }
+                }
+            }
+            state.needs_render = true;
+            state.needs_focus = true;
+            state.needs_status_update = true;
+        }
         "focus-next" => {
             // Focus the next visible window (wrapping) and move it to the
             // front of the cascade stack (end of windows vector).
@@ -87,7 +113,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                 let visible_ids: Vec<u64> = state
                     .windows
                     .iter()
-                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.app_id.as_deref() != Some("clear-status-interface"))
                     .map(|w| w.id)
                     .collect();
                 if visible_ids.len() > 1 {
@@ -106,6 +132,34 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
             state.needs_focus = true;
             state.needs_status_update = true;
         }
+        "focus-prev" => {
+            // Focus the previous visible window (wrapping) and move it to the
+            // front of the cascade stack (end of windows vector).
+            if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
+                let focused_id = seat.focused_window_id;
+                let active_tags = state.active_tags;
+                let visible_ids: Vec<u64> = state
+                    .windows
+                    .iter()
+                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.app_id.as_deref() != Some("clear-status-interface"))
+                    .map(|w| w.id)
+                    .collect();
+                if visible_ids.len() > 1 {
+                    if let Some(fid) = focused_id {
+                        if let Some(idx) = visible_ids.iter().position(|id| *id == fid) {
+                            let prev_idx = if idx == 0 { visible_ids.len() - 1 } else { idx - 1 };
+                            let prev_id = visible_ids[prev_idx];
+                            seat.focused_window_id = Some(prev_id);
+                            // Move newly focused window to front of cascade stack
+                            state.move_window_to_end(prev_id);
+                        }
+                    }
+                }
+            }
+            state.needs_render = true;
+            state.needs_focus = true;
+            state.needs_status_update = true;
+        }
         "exit" => {
             // Signal exit request
         }
@@ -113,7 +167,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
             crate::restart::wm_restart();
         }
         "reload" => {
-            crate::restart::wm_restart();
+            crate::restart::wm_reload(state);
         }
         "expose" => {
             let active = !state.expose_active;
@@ -254,6 +308,9 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
         "set-mode" => {
             handle_set_mode_command(rest, state);
         }
+        "apply-mode-sharing" => {
+            handle_apply_mode_sharing_command(rest, state);
+        }
         "bind" => {
             handle_bind_command(rest, state);
         }
@@ -286,6 +343,50 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                 if state.notifications_enable {
                     crate::config::show_notification("ccec", parts[0]);
                 }
+            }
+        }
+        "focus-window" => {
+            let app_id_or_title = rest.trim();
+            if !app_id_or_title.is_empty() {
+                let mut found_id = None;
+                for win in &state.windows {
+                    if !win.closed && !win.minimized {
+                        if let Some(ref app_id) = win.app_id {
+                            if app_id.eq_ignore_ascii_case(app_id_or_title) {
+                                found_id = Some(win.id);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if found_id.is_none() {
+                    for win in &state.windows {
+                        if !win.closed && !win.minimized {
+                            if let Some(ref title) = win.title {
+                                if title.to_lowercase().contains(&app_id_or_title.to_lowercase()) {
+                                    found_id = Some(win.id);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(wid) = found_id {
+                    if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
+                        seat.focused_window_id = Some(wid);
+                        state.move_window_to_end(wid);
+                        state.needs_focus = true;
+                        state.needs_render = true;
+                        state.needs_status_update = true;
+                        reply = format!("ok focused window {}\n", wid);
+                    } else {
+                        reply = "error: no active seat\n".to_string();
+                    }
+                } else {
+                    reply = "error: window not found\n".to_string();
+                }
+            } else {
+                reply = "error: usage: focus-window <app_id|title>\n".to_string();
             }
         }
         "pointer-location" => {
@@ -511,6 +612,14 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 }
             }
         }
+        "grid_gap" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.grid_gap = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("ccec", &format!("Grid gap set to {}px", value));
+                }
+            }
+        }
         "grid_border_width" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.grid_border_width = value;
@@ -593,6 +702,7 @@ fn handle_mode_command(rest: &str, state: &mut WindowManager) {
         title_pattern,
         single_instance,
         tag,
+        circular: false,
     });
 }
 
@@ -614,6 +724,38 @@ fn handle_set_mode_command(rest: &str, state: &mut WindowManager) {
         state.needs_render = true;
         state.needs_status_update = true;
     }
+}
+
+/// Handle "apply-mode-sharing <mode>" command — apply <mode> to all windows sharing a tiling mode with the focused window.
+fn handle_apply_mode_sharing_command(rest: &str, state: &mut WindowManager) {
+    let mode_str = rest.trim();
+    if mode_str.is_empty() {
+        return;
+    }
+    let new_mode = parse_tiling_mode(mode_str);
+
+    // Find the focused window's current tiling mode
+    let old_mode = if let Some(window) = state.focused_window() {
+        window.tiling_mode
+    } else {
+        return;
+    };
+
+    let notifications_enable = state.notifications_enable;
+
+    // Iterate over all windows and update tiling mode for matching windows
+    for window in &mut state.windows {
+        if !window.closed && window.tiling_mode == old_mode {
+            window.tiling_mode = new_mode;
+            window.mode_locked = true;
+        }
+    }
+
+    if notifications_enable {
+        crate::config::show_notification("ccec", &format!("Applied tiling mode {} to all windows sharing mode {}", new_mode.as_str(), old_mode.as_str()));
+    }
+    state.needs_render = true;
+    state.needs_status_update = true;
 }
 
 /// Handle "bind <mods> <key> <action> [command]" command
@@ -1024,6 +1166,15 @@ mod tests {
     }
 
     #[test]
+    fn test_ipc_layout_grid_gap() {
+        let mut state = WindowManager::default();
+        assert_eq!(state.layout.grid_gap, 18);
+
+        handle_ipc_command("layout grid_gap 24", &mut state);
+        assert_eq!(state.layout.grid_gap, 24);
+    }
+
+    #[test]
     fn test_ipc_layout_gap_sides() {
         let mut state = WindowManager::default();
         assert_eq!(state.layout.gap_top, 48);
@@ -1215,6 +1366,31 @@ mod tests {
 
         handle_ipc_command("view-prev", &mut state);
         assert_eq!(state.active_tags, 1); // Tag 1
+    }
+
+    #[test]
+    fn test_ipc_focus_next_prev() {
+        let mut state = WindowManager::default();
+        // Setup 3 windows
+        state.windows.push(crate::types::Window { id: 1, tags: 1, ..Default::default() });
+        state.windows.push(crate::types::Window { id: 2, tags: 1, ..Default::default() });
+        state.windows.push(crate::types::Window { id: 3, tags: 1, ..Default::default() });
+        state.seats.push(crate::types::Seat { id: 1, focused_window_id: Some(1), ..Default::default() });
+
+        handle_ipc_command("focus-next", &mut state);
+        assert_eq!(state.seats[0].focused_window_id, Some(2));
+
+        handle_ipc_command("focus-next", &mut state);
+        assert_eq!(state.seats[0].focused_window_id, Some(1));
+
+        handle_ipc_command("focus-next", &mut state);
+        assert_eq!(state.seats[0].focused_window_id, Some(3));
+
+        handle_ipc_command("focus-prev", &mut state);
+        assert_eq!(state.seats[0].focused_window_id, Some(1));
+
+        handle_ipc_command("focus-prev", &mut state);
+        assert_eq!(state.seats[0].focused_window_id, Some(3));
     }
 
     #[test]

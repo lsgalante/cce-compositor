@@ -1055,6 +1055,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     // and must happen during ManageStart.
                     crate::wm::render_borders(state);
                     crate::wm::render_opacity(state);
+                    crate::wm::render_circular(state);
 
                     // Update and render window title decorations on borders
                     crate::decorations::update_decorations(state, qhandle);
@@ -1519,12 +1520,38 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
             }
 
             river_window_v1::Event::MinimizeRequested { .. } => {
+                let mut minimized_id = None;
                 if let Some(window) = state.wm.get_window_mut(wid) {
                     window.minimize_requested = true;
+                    window.minimized = true;
+                    minimized_id = Some(wid);
                     eprintln!(
                         "[window] id={} (app_id={:?}) requested minimize",
                         wid, window.app_id
                     );
+                }
+
+                if let Some(wid) = minimized_id {
+                    // Shift focus to the next visible window if the minimized window was focused
+                    if let Some(seat) = state.wm.seats.iter_mut().find(|s| !s.removed) {
+                        if seat.focused_window_id == Some(wid) {
+                            let active_tags = state.wm.active_tags;
+                            let visible_ids: Vec<u64> = state.wm
+                                .windows
+                                .iter()
+                                .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.id != wid && w.app_id.as_deref() != Some("clear-status-interface"))
+                                .map(|w| w.id)
+                                .collect();
+                            seat.focused_window_id = visible_ids.last().copied();
+                        }
+                    }
+                }
+
+                state.wm.needs_render = true;
+                state.wm.needs_focus = true;
+                state.wm.needs_status_update = true;
+                if let Some(ref wm) = state.window_manager {
+                    wm.manage_dirty();
                 }
             }
 
@@ -1588,21 +1615,27 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
                             wid,
                             target_app_id
                         );
+                        let already_focused = seat.focused_window_id == Some(wid);
                         seat.focused_window_id = Some(wid);
                         // Move clicked window to front of cascade stack
-                        state.wm.move_window_to_end(wid);
+                        let moved = state.wm.move_window_to_end(wid);
 
                         // Disable expose if it was active
+                        let mut expose_changed = false;
                         if state.wm.expose_active {
                             crate::wm::set_expose_active(&mut state.wm, false);
-                            if let Some(ref wm) = state.window_manager {
-                                wm.manage_dirty();
-                            }
+                            expose_changed = true;
                         }
 
                         state.wm.needs_render = true;
                         state.wm.needs_focus = true;
                         state.wm.needs_status_update = true;
+
+                        if !already_focused || moved || expose_changed {
+                            if let Some(ref wm) = state.window_manager {
+                                wm.manage_dirty();
+                            }
+                        }
                     }
                 }
             }
@@ -1613,6 +1646,21 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
                 if let Some(wid) = state.window_id_for_proxy(&river_window) {
                     if let Some(seat) = state.wm.seats.iter_mut().find(|s| s.id == sid) {
                         seat.hovered_window_id = Some(wid);
+
+                        if state.wm.expose_active {
+                            let already_focused = seat.focused_window_id == Some(wid);
+                            seat.focused_window_id = Some(wid);
+
+                            state.wm.needs_focus = true;
+                            state.wm.needs_render = true;
+                            state.wm.needs_status_update = true;
+
+                            if !already_focused {
+                                if let Some(ref wm) = state.window_manager {
+                                    wm.manage_dirty();
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2131,7 +2179,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                         .windows
                         .iter()
                         .filter(|w| {
-                            (w.tags & state.wm.active_tags) != 0 && !w.closed && w.id != focused_id && w.app_id.as_deref() != Some("clear-status-interface")
+                            (w.tags & state.wm.active_tags) != 0 && !w.closed && !w.minimized && w.id != focused_id && w.app_id.as_deref() != Some("clear-status-interface")
                         })
                         .map(|w| w.id)
                         .collect();
@@ -2144,6 +2192,33 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
             state.wm.needs_render = true;
             state.wm.needs_focus = true;
             state.wm.needs_status_update = true;
+        }
+        Action::Minimize => {
+            // Get the focused window ID on this seat
+            let focused_id = state.wm.seats.iter().find(|s| s.id == seat_id).and_then(|s| s.focused_window_id);
+            if let Some(focused_id) = focused_id {
+                if let Some(w) = state.wm.get_window_mut(focused_id) {
+                    w.minimized = true;
+                }
+                // Shift focus to the next visible window
+                let active_tags = state.wm.active_tags;
+                let visible_ids: Vec<u64> = state.wm
+                    .windows
+                    .iter()
+                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.id != focused_id && w.app_id.as_deref() != Some("clear-status-interface"))
+                    .map(|w| w.id)
+                    .collect();
+                let next_id = visible_ids.last().copied();
+                if let Some(seat) = state.wm.seats.iter_mut().find(|s| s.id == seat_id) {
+                    seat.focused_window_id = next_id;
+                }
+            }
+            state.wm.needs_render = true;
+            state.wm.needs_focus = true;
+            state.wm.needs_status_update = true;
+            if let Some(ref wm) = state.window_manager {
+                wm.manage_dirty();
+            }
         }
         Action::FocusNext => {
             // Focus the next visible window (wrapping) of the same tiling mode,
@@ -2160,6 +2235,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                     .filter(|w| {
                         (w.tags & state.wm.active_tags) != 0
                             && !w.closed
+                            && !w.minimized
                             && w.app_id.as_deref() != Some("clear-status-interface")
                             && (focused_mode.is_none() || Some(w.tiling_mode) == focused_mode)
                     })
@@ -2182,6 +2258,50 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                     let next_id = visible_ids[visible_ids.len() - 1];
                     seat.focused_window_id = Some(next_id);
                     state.wm.move_window_to_end(next_id);
+                    state.wm.needs_render = true;
+                    state.wm.needs_focus = true;
+                    state.wm.needs_status_update = true;
+                }
+            }
+        }
+        Action::FocusPrev => {
+            // Focus the previous visible window (wrapping) of the same tiling mode,
+            // and move it to the front of the cascade stack (end of windows vector).
+            if let Some(seat) = state.wm.seats.iter_mut().find(|s| !s.removed) {
+                let focused_id = seat.focused_window_id;
+                let focused_mode = focused_id.and_then(|fid| {
+                    state.wm.windows.iter().find(|w| w.id == fid).map(|w| w.tiling_mode)
+                });
+                let visible_ids: Vec<u64> = state
+                    .wm
+                    .windows
+                    .iter()
+                    .filter(|w| {
+                        (w.tags & state.wm.active_tags) != 0
+                            && !w.closed
+                            && !w.minimized
+                            && w.app_id.as_deref() != Some("clear-status-interface")
+                            && (focused_mode.is_none() || Some(w.tiling_mode) == focused_mode)
+                    })
+                    .map(|w| w.id)
+                    .collect();
+                if let Some(fid) = focused_id {
+                    if let Some(idx) = visible_ids.iter().position(|id| *id == fid) {
+                        let prev_idx = if idx == 0 { visible_ids.len() - 1 } else { idx - 1 };
+                        let prev_id = visible_ids[prev_idx];
+                        seat.focused_window_id = Some(prev_id);
+                        // Move the newly focused window to the end of the
+                        // windows vector so it gets the front cascade position
+                        // (rightmost/bottommost) and brightest border.
+                        state.wm.move_window_to_end(prev_id);
+                        state.wm.needs_render = true;
+                        state.wm.needs_focus = true;
+                        state.wm.needs_status_update = true;
+                    }
+                } else if !visible_ids.is_empty() {
+                    let prev_id = visible_ids[visible_ids.len() - 1];
+                    seat.focused_window_id = Some(prev_id);
+                    state.wm.move_window_to_end(prev_id);
                     state.wm.needs_render = true;
                     state.wm.needs_focus = true;
                     state.wm.needs_status_update = true;
@@ -3373,7 +3493,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
         match event {
             wl_pointer::Event::Enter { serial, surface, surface_x, surface_y } => {
                 eprintln!("[pointer] enter surface={:?} x={} y={}", surface, surface_x, surface_y);
-                state.pointer_hovered_surface = Some(surface);
+                state.pointer_hovered_surface = Some(surface.clone());
                 state.last_pointer_surface_x = surface_x;
                 state.last_pointer_surface_y = surface_y;
 
@@ -3384,6 +3504,59 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
                 }
 
                 Self::update_cursor_shape_for_surface(state, proxy);
+
+                if state.wm.expose_active {
+                    let current_surface = &surface;
+                    let matched_window = state.window_proxies.iter().find_map(|(id, proxy)| {
+                        if let Some(dec) = &proxy.decoration {
+                            if &dec.surface == current_surface {
+                                return Some(*id);
+                            }
+                        }
+                        if let Some(dec) = &proxy.dec_left {
+                            if &dec.surface == current_surface {
+                                return Some(*id);
+                            }
+                        }
+                        if let Some(dec) = &proxy.dec_right {
+                            if &dec.surface == current_surface {
+                                return Some(*id);
+                            }
+                        }
+                        if let Some(dec) = &proxy.dec_bottom {
+                            if &dec.surface == current_surface {
+                                return Some(*id);
+                            }
+                        }
+                        None
+                    });
+
+                    if let Some(wid) = matched_window {
+                        let seat_id = state.seat_proxies.iter().find_map(|(sid, sp)| {
+                            if sp.wl_pointer.as_ref() == Some(proxy) {
+                                Some(*sid)
+                            } else {
+                                None
+                            }
+                        });
+
+                        if let Some(sid) = seat_id {
+                            if let Some(seat) = state.wm.seats.iter_mut().find(|s| s.id == sid) {
+                                let already_focused = seat.focused_window_id == Some(wid);
+                                seat.focused_window_id = Some(wid);
+                                state.wm.needs_focus = true;
+                                state.wm.needs_render = true;
+                                state.wm.needs_status_update = true;
+
+                                if !already_focused {
+                                    if let Some(ref wm) = state.window_manager {
+                                        wm.manage_dirty();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             wl_pointer::Event::Leave { .. } => {
                 eprintln!("[pointer] leave");
@@ -3486,12 +3659,33 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
 
                                         if let Some(sid) = seat_id {
                                             if let Some(seat) = state.wm.seats.iter_mut().find(|s| s.id == sid) {
+                                                let already_focused = seat.focused_window_id == Some(wid);
                                                 seat.focused_window_id = Some(wid);
-                                                state.wm.move_window_to_end(wid);
+                                                let moved = state.wm.move_window_to_end(wid);
+                                                let mut expose_changed = false;
                                                 if state.wm.expose_active {
                                                     crate::wm::set_expose_active(&mut state.wm, false);
+                                                    expose_changed = true;
                                                 }
+                                                
+                                                let mut unminimized = false;
+                                                if let Some(w) = state.wm.get_window_mut(wid) {
+                                                    if w.minimized {
+                                                        w.minimized = false;
+                                                        w.minimize_requested = false;
+                                                        unminimized = true;
+                                                    }
                                                 }
+
+                                                state.wm.needs_focus = true;
+                                                state.wm.needs_render = true;
+                                                state.wm.needs_status_update = true;
+                                                if !already_focused || moved || unminimized || expose_changed {
+                                                    if let Some(ref wm) = state.window_manager {
+                                                        wm.manage_dirty();
+                                                    }
+                                                }
+                                            }
                                                                  // Determine the specific PointerOpType based on coordinates on the matched surface
                                             let op_type = if let Some(w) = state.wm.windows.iter().find(|win| win.id == wid) {
                                                 let border_w = if state.wm.expose_active && w.tiling_mode != crate::types::TilingMode::Popup {

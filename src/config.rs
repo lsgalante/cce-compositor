@@ -78,6 +78,8 @@ pub struct LayoutConfig {
     pub border_font_size: i64,
     #[serde(default = "default_transition_duration")]
     pub transition_duration: i64,
+    #[serde(default = "default_grid_gap")]
+    pub grid_gap: i64,
 }
 
 impl Default for LayoutConfig {
@@ -99,8 +101,13 @@ impl Default for LayoutConfig {
             background_color: default_background_color(),
             border_font_size: default_border_font_size(),
             transition_duration: default_transition_duration(),
+            grid_gap: default_grid_gap(),
         }
     }
+}
+
+fn default_grid_gap() -> i64 {
+    18
 }
 
 fn default_gap() -> i64 {
@@ -255,6 +262,7 @@ pub struct ModeRuleConfig {
     pub title: Option<String>,
     pub single: Option<bool>,
     pub tag: Option<i64>,
+    pub circular: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -300,6 +308,7 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
     state.layout.floating_border_width = config.layout.floating_border_width as i32;
     state.layout.border_font_size = config.layout.border_font_size as i32;
     state.layout.transition_duration = config.layout.transition_duration as i32;
+    state.layout.grid_gap = config.layout.grid_gap as i32;
     if let Some((r, g, b, a)) = parse_hex_color(&config.layout.border_color) {
         state.layout.border_r = r;
         state.layout.border_g = g;
@@ -356,6 +365,7 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
             title_pattern: mr.title.clone(),
             single_instance: mr.single.unwrap_or(false),
             tag,
+            circular: mr.circular.unwrap_or(false),
         });
     }
 
@@ -671,6 +681,7 @@ mod tests {
         assert_eq!(lc.fullscreen_border_width, 0);
         assert_eq!(lc.border_color, "#3e3e3e");
         assert_eq!(lc.border_font_size, 11);
+        assert_eq!(lc.grid_gap, 18);
     }
 
     #[test]
