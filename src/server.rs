@@ -311,9 +311,67 @@ unsafe extern "C" fn handle_new_toplevel_decoration(listener: *mut ffi::wl_liste
     crate::xdg_toplevel::XdgDecoration::init(decoration);
 }
 
-unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let _server = container_of!(listener, Server, request_activate);
-    log::info!("xdg activation request");
+unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+    let server = container_of!(listener, Server, request_activate);
+    log::info!("xdg activation request received");
+    if data.is_null() {
+        return;
+    }
+    let event = data as *mut ffi::wlr_xdg_activation_v1_request_activate_event;
+    let surface = (*event).surface;
+    if surface.is_null() {
+        return;
+    }
+
+    let default_seat = (*server).input_manager.default_seat;
+    if !default_seat.is_null() {
+        let focused_surf = ffi::river_wlr_seat_get_keyboard_focused_surface((*default_seat).wlr_seat);
+        if focused_surf == surface {
+            log::info!("xdg activation request ignored: window is already focused");
+            return;
+        }
+    }
+
+    for &win_ptr in (*server).wm.windows.iter() {
+        if !win_ptr.is_null() && (*win_ptr).root_surface() == surface {
+            let title_ptr = (*win_ptr).get_title();
+            let title = if title_ptr.is_null() {
+                "Window".to_string()
+            } else {
+                std::ffi::CStr::from_ptr(title_ptr).to_string_lossy().into_owned()
+            };
+            
+            let app_id_ptr = (*win_ptr).get_app_id();
+            let app_id = if app_id_ptr.is_null() {
+                "unknown".to_string()
+            } else {
+                std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy().into_owned()
+            };
+            
+            log::info!("xdg activation request for window '{}' ({})", title, app_id);
+            
+            let uid = unsafe { libc::getuid() };
+            let bus_address = format!("unix:path=/run/user/{}/bus", uid);
+            
+            std::process::Command::new("gdbus")
+                .env("DBUS_SESSION_BUS_ADDRESS", &bus_address)
+                .args([
+                    "call",
+                    "--session",
+                    "--dest",
+                    "org.kde.StatusNotifierWatcher",
+                    "--object-path",
+                    "/StatusInterface",
+                    "--method",
+                    "org.clear.StatusInterface.NotifyAttention",
+                    &app_id,
+                    &title,
+                ])
+                .spawn()
+                .ok();
+            break;
+        }
+    }
 }
 
 unsafe extern "C" fn handle_request_set_cursor_shape(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

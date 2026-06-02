@@ -1130,6 +1130,15 @@
       </description>
       <arg name="opacity" type="uint" summary="opacity value from 0 to 0xffffffff"/>
     </request>
+
+    <request name="set_circular" since="4">
+      <description summary="set whether the window is circular">
+        Set whether the window is circular (1 for circular, 0 for rectangular).
+        This request modifies rendering state and may only be made as part of a
+        render sequence, see the river_window_manager_v1 description.
+      </description>
+      <arg name="circular" type="uint" summary="1 if circular, 0 otherwise"/>
+    </request>
   </interface>
 
   <interface name="river_decoration_v1" version="4">

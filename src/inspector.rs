@@ -102,23 +102,62 @@ unsafe extern "C" fn inspector_register_client(
     (*inspector).client_states.entry(surface).or_insert_with(String::new);
 }
 
+unsafe fn create_memfd_with_data(name: &str, data: &[u8]) -> Option<(std::os::raw::c_int, u32)> {
+    let c_name = std::ffi::CString::new(name).ok()?;
+    let fd = libc::memfd_create(c_name.as_ptr(), libc::MFD_CLOEXEC);
+    if fd < 0 {
+        return None;
+    }
+    let mut written = 0;
+    while written < data.len() {
+        let res = libc::write(
+            fd,
+            data.as_ptr().add(written) as *const _,
+            data.len() - written,
+        );
+        if res < 0 {
+            let err = *libc::__errno_location();
+            if err == libc::EINTR {
+                continue;
+            }
+            libc::close(fd);
+            return None;
+        }
+        written += res as usize;
+    }
+    libc::lseek(fd, 0, libc::SEEK_SET);
+    Some((fd, data.len() as u32))
+}
+
 unsafe extern "C" fn inspector_update_state(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     surface_resource: *mut ffi::wl_resource,
-    state: *const std::os::raw::c_char,
+    fd: std::os::raw::c_int,
+    len: u32,
 ) {
     let inspector = ffi::wl_resource_get_user_data(resource) as *mut Inspector;
     if inspector.is_null() {
+        if fd >= 0 {
+            libc::close(fd);
+        }
         return;
     }
     let surface = ffi::wlr_surface_from_resource(surface_resource);
     if surface.is_null() {
+        if fd >= 0 {
+            libc::close(fd);
+        }
         return;
     }
-    if !state.is_null() {
-        let state_str = std::ffi::CStr::from_ptr(state).to_string_lossy().into_owned();
-        (*inspector).client_states.insert(surface, state_str);
+    if fd >= 0 {
+        use std::os::unix::io::FromRawFd;
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        let mut state_str = String::with_capacity(len as usize);
+        use std::io::Read;
+        if file.take(len as u64).read_to_string(&mut state_str).is_ok() {
+            (*inspector).client_states.insert(surface, state_str);
+        }
     }
 }
 
@@ -164,21 +203,23 @@ unsafe extern "C" fn inspector_get_inspected_surfaces(
             std::ffi::CStr::from_ptr(app_id_ptr).to_owned()
         };
 
-        let state_c = std::ffi::CString::new(state).unwrap();
-
-        // Send: inspected_surface(title, app_id, x, y, width, height, state)
-        // Event inspected_surface has index 0
-        ffi::wl_resource_post_event(
-            resource,
-            0,
-            title.as_ptr(),
-            app_id.as_ptr(),
-            (*window).box_geom.x,
-            (*window).box_geom.y,
-            (*window).box_geom.width,
-            (*window).box_geom.height,
-            state_c.as_ptr(),
-        );
+        if let Some((fd, len)) = create_memfd_with_data("clear_ui_inspected_state", state.as_bytes()) {
+            // Send: inspected_surface(title, app_id, x, y, width, height, fd, len)
+            // Event inspected_surface has index 0
+            ffi::wl_resource_post_event(
+                resource,
+                0,
+                title.as_ptr(),
+                app_id.as_ptr(),
+                (*window).box_geom.x,
+                (*window).box_geom.y,
+                (*window).box_geom.width,
+                (*window).box_geom.height,
+                fd,
+                len,
+            );
+            libc::close(fd);
+        }
     }
 
     // Send: inspected_surface_done()

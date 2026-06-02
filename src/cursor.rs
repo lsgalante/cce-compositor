@@ -516,7 +516,12 @@ unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, dat
     let cursor = &mut *crate::container_of!(listener, Cursor, motion_absolute_listener);
     let event = data as *mut ffi::wlr_pointer_motion_absolute_event;
     
-    ffi::wlr_cursor_warp_absolute(cursor.wlr_cursor, std::ptr::null_mut(), (*event).x, (*event).y);
+    let wlr_device = if (*event).pointer.is_null() {
+        std::ptr::null_mut()
+    } else {
+        &mut (*(*event).pointer).base as *mut ffi::wlr_input_device
+    };
+    ffi::wlr_cursor_warp_absolute(cursor.wlr_cursor, wlr_device, (*event).x, (*event).y);
     cursor.update_hovered();
     cursor.update_drag_icons();
 
@@ -566,6 +571,10 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             match result.data {
                 SceneNodeDataVal::Window(window) => {
                     seat.focus(Focus::Window(window));
+                    if !seat.object.is_null() && !(*window).object.is_null() {
+                        ffi::wl_resource_post_event(seat.object, 4, (*window).object);
+                        (*(*seat).server).wm.dirty_windowing();
+                    }
                 }
                 SceneNodeDataVal::LayerSurface(_) => {
                     seat.focus(Focus::LayerSurface(result.surface));

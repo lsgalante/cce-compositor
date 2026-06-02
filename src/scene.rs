@@ -117,26 +117,65 @@ impl Scene {
     pub unsafe fn deinit(&mut self) {}
 
     pub unsafe fn at(&self, lx: f64, ly: f64) -> Option<AtResult> {
-        let mut sx: f64 = 0.0;
-        let mut sy: f64 = 0.0;
-        let node = ffi::wlr_scene_node_at(self.interactive_tree as *mut ffi::wlr_scene_node, lx, ly, &mut sx, &mut sy);
-        if node.is_null() {
-            return None;
+        let mut disabled_nodes = Vec::new();
+        let mut result = None;
+
+        loop {
+            let mut sx: f64 = 0.0;
+            let mut sy: f64 = 0.0;
+            let node = ffi::wlr_scene_node_at(
+                self.interactive_tree as *mut ffi::wlr_scene_node,
+                lx,
+                ly,
+                &mut sx,
+                &mut sy,
+            );
+
+            if node.is_null() {
+                break;
+            }
+
+            if let Some(scene_node_data) = SceneNodeData::from_node(node) {
+                if let SceneNodeDataVal::Window(window) = scene_node_data.data {
+                    if (*window).rendering_requested.circular {
+                        // Check if outside the circle
+                        let w = (*window).box_geom.width as f64;
+                        let h = (*window).box_geom.height as f64;
+                        let cx = (*window).box_geom.x as f64 + w / 2.0;
+                        let cy = (*window).box_geom.y as f64 + h / 2.0;
+                        let r = w.min(h) / 2.0;
+                        let dx = lx - cx;
+                        let dy = ly - cy;
+                        if dx * dx + dy * dy > r * r {
+                            // Outside the circle! Disable the window tree node temporarily and try again.
+                            let tree_node = (*window).tree as *mut ffi::wlr_scene_node;
+                            ffi::wlr_scene_node_set_enabled(tree_node, false);
+                            disabled_nodes.push(tree_node);
+                            continue;
+                        }
+                    }
+                }
+
+                let surface = ffi::river_scene_node_get_surface(node);
+                result = Some(AtResult {
+                    node,
+                    surface,
+                    sx,
+                    sy,
+                    data: scene_node_data.data,
+                });
+                break;
+            } else {
+                break;
+            }
         }
 
-        let surface = ffi::river_scene_node_get_surface(node);
-
-        if let Some(scene_node_data) = SceneNodeData::from_node(node) {
-            Some(AtResult {
-                node,
-                surface,
-                sx,
-                sy,
-                data: scene_node_data.data,
-            })
-        } else {
-            None
+        // Re-enable all disabled nodes
+        for node in disabled_nodes {
+            ffi::wlr_scene_node_set_enabled(node, true);
         }
+
+        result
     }
 
     pub unsafe fn layer_surface_tree(&self, layer: u32) -> *mut ffi::wlr_scene_tree {

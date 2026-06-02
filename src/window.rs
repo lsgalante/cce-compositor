@@ -182,6 +182,7 @@ pub struct WindowRenderingRequested {
     pub clip: ffi::wlr_box,
     pub content_clip: ffi::wlr_box,
     pub opacity: f32,
+    pub circular: bool,
 }
 
 pub struct Window {
@@ -341,6 +342,7 @@ impl Window {
                 clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                 content_clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                 opacity: 1.0f32,
+                circular: false,
             },
             box_geom: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
             foreign_toplevel_handle: std::ptr::null_mut(),
@@ -685,6 +687,7 @@ impl Window {
                     clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                     content_clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                     opacity: 1.0f32,
+                    circular: false,
                 };
 
                 wl_list_remove(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
@@ -1137,6 +1140,34 @@ impl Window {
         if enabled {
             ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, true);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
+
+            let radius = if requested.circular {
+                let w = self.rendering_sent.width as i32;
+                let h = self.rendering_sent.height as i32;
+                w.min(h) / 2
+            } else {
+                0
+            };
+
+            unsafe extern "C" fn set_corner_radius_iterator(
+                buffer: *mut ffi::wlr_scene_buffer,
+                _sx: i32,
+                _sy: i32,
+                user_data: *mut std::ffi::c_void,
+            ) {
+                let radius = *(user_data as *const i32);
+                ffi::wlr_scene_buffer_set_corner_radius(
+                    buffer,
+                    radius,
+                    ffi::corner_location_CORNER_LOCATION_ALL,
+                );
+            }
+
+            ffi::wlr_scene_node_for_each_buffer(
+                self.surfaces.tree as *mut ffi::wlr_scene_node,
+                Some(set_corner_radius_iterator),
+                &radius as *const i32 as *mut std::ffi::c_void,
+            );
         }
 
         self.box_geom.width = self.rendering_sent.width as i32;
@@ -1194,6 +1225,13 @@ impl Window {
 
     pub unsafe fn draw_borders(&mut self) {
         let requested = &self.rendering_requested;
+        if requested.circular || requested.border.width <= 0 {
+            ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.bottom as *mut ffi::wlr_scene_node, false);
+            return;
+        }
         let content = ffi::wlr_box {
             x: 0,
             y: 0,
@@ -1787,6 +1825,22 @@ unsafe extern "C" fn window_set_opacity(
     (*window).rendering_requested.opacity = opacity_f32;
 }
 
+unsafe extern "C" fn window_set_circular(
+    client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+    circular: u32,
+) {
+    let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
+    if window.is_null() {
+        return;
+    }
+    let server = (*window).server;
+    if !(*server).wm.ensure_rendering() {
+        return;
+    }
+    (*window).rendering_requested.circular = circular != 0;
+}
+
 // river_window_v1 implementation
 static WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_window_v1_interface {
     destroy: Some(window_destroy),
@@ -1814,6 +1868,7 @@ static WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_window_v1_i
     set_content_clip_box: Some(window_set_content_clip_box),
     set_dimension_bounds: Some(window_set_dimension_bounds),
     set_opacity: Some(window_set_opacity),
+    set_circular: Some(window_set_circular),
 };
 
 static INERT_WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_window_v1_interface {
@@ -1842,6 +1897,7 @@ static INERT_WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_windo
     set_content_clip_box: None,
     set_dimension_bounds: None,
     set_opacity: None,
+    set_circular: None,
 };
 
 unsafe extern "C" fn handle_destroy_resource(resource: *mut ffi::wl_resource) {
