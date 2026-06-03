@@ -399,6 +399,7 @@ impl WindowManager {
                 crate::wm_node::WmNodeType::Window(window) => {
                     (*window).ref_key.hash(&mut hasher);
                     rendered_fullscreen(window).hash(&mut hasher);
+                    (*window).rendering_requested.circular.hash(&mut hasher);
                 }
                 crate::wm_node::WmNodeType::ShellSurface(shell_surface) => {
                     (shell_surface as usize).hash(&mut hasher);
@@ -424,6 +425,9 @@ impl WindowManager {
                             ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.fullscreen);
                             ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                             found_fullscreen = true;
+                        } else if (*window).rendering_requested.circular {
+                            ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.top);
+                            ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                         } else {
                             ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.wm);
                             ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
