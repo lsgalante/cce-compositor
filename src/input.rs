@@ -28,6 +28,16 @@ pub fn update_pointer_coords(dx: i32, dy: i32) {
     POINTER_Y.store(current_y, Ordering::SeqCst);
 }
 
+pub fn set_pointer_coords(x: i32, y: i32) {
+    let screen_w = SCREEN_WIDTH.load(Ordering::SeqCst);
+    let screen_h = SCREEN_HEIGHT.load(Ordering::SeqCst);
+    let current_x = x.clamp(0, screen_w);
+    let current_y = y.clamp(0, screen_h);
+
+    POINTER_X.store(current_x, Ordering::SeqCst);
+    POINTER_Y.store(current_y, Ordering::SeqCst);
+}
+
 // IOCTL and Event constants
 const UI_DEV_CREATE: libc::c_ulong = 0x5501;
 const UI_DEV_SETUP: libc::c_ulong = 0x405C5503;
@@ -131,7 +141,8 @@ const ABS_MT_SLOT: u16 = 0x2f;
 #[derive(Debug, Clone)]
 pub enum InputDaemonMsg {
     UpdateConfig(InertialConfig, bool),
-    SimulateMove { dx: i32, dy: i32 },
+    SimulateMoveTo { x: i32, y: i32 },
+    SimulateMoveBy { dx: i32, dy: i32 },
     SimulateButton { button: u16, press: bool },
     SimulateKey { keycode: u16, press: bool },
     SimulateClick { button: u16 },
@@ -150,7 +161,7 @@ enum CoordinatorMsg {
     InternalReleaseKey { keycode: u16 },
 }
 
-fn setup_uinput() -> std::io::Result<std::fs::File> {
+fn setup_uinput_mouse() -> std::io::Result<std::fs::File> {
     let file = OpenOptions::new()
         .write(true)
         .custom_flags(libc::O_NONBLOCK)
@@ -174,6 +185,59 @@ fn setup_uinput() -> std::io::Result<std::fs::File> {
         if libc::ioctl(fd, UI_SET_RELBIT, REL_HWHEEL as libc::c_int) < 0 {
             return Err(std::io::Error::last_os_error());
         }
+
+        if libc::ioctl(fd, UI_SET_EVBIT, EV_KEY as libc::c_int) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        for key in 1..=511 {
+            if libc::ioctl(fd, UI_SET_KEYBIT, key as libc::c_int) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        for btn in 272..=276 {
+            if libc::ioctl(fd, UI_SET_KEYBIT, btn as libc::c_int) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+    }
+
+    let mut setup = UinputSetup {
+        id: InputId {
+            bustype: 0x0006, // BUS_VIRTUAL
+            vendor: 0x1234,
+            product: 0x5678,
+            version: 1,
+        },
+        name: [0; 80],
+        ff_effects_max: 0,
+    };
+
+    let name_bytes = b"Clear Virtual Mouse";
+    setup.name[..name_bytes.len()].copy_from_slice(name_bytes);
+
+    unsafe {
+        let setup_ptr = &setup as *const UinputSetup as *const libc::c_void;
+        if libc::ioctl(fd, UI_DEV_SETUP, setup_ptr) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::ioctl(fd, UI_DEV_CREATE) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+
+    println!("[input-subsystem] Successfully created virtual uinput mouse device.");
+    Ok(file)
+}
+
+fn setup_uinput_abs() -> std::io::Result<std::fs::File> {
+    let file = OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open("/dev/uinput")?;
+
+    let fd = file.as_raw_fd();
+
+    unsafe {
         if libc::ioctl(fd, UI_SET_EVBIT, EV_ABS as libc::c_int) < 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -218,11 +282,6 @@ fn setup_uinput() -> std::io::Result<std::fs::File> {
         if libc::ioctl(fd, UI_SET_EVBIT, EV_KEY as libc::c_int) < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        for key in 1..=511 {
-            if libc::ioctl(fd, UI_SET_KEYBIT, key as libc::c_int) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-        }
         for btn in 272..=276 {
             if libc::ioctl(fd, UI_SET_KEYBIT, btn as libc::c_int) < 0 {
                 return Err(std::io::Error::last_os_error());
@@ -234,14 +293,14 @@ fn setup_uinput() -> std::io::Result<std::fs::File> {
         id: InputId {
             bustype: 0x0006, // BUS_VIRTUAL
             vendor: 0x1234,
-            product: 0x5678,
+            product: 0x5679,
             version: 1,
         },
         name: [0; 80],
         ff_effects_max: 0,
     };
 
-    let name_bytes = b"Clear Virtual Mouse";
+    let name_bytes = b"Clear Virtual Absolute Pointer";
     setup.name[..name_bytes.len()].copy_from_slice(name_bytes);
 
     unsafe {
@@ -254,7 +313,7 @@ fn setup_uinput() -> std::io::Result<std::fs::File> {
         }
     }
 
-    println!("[input-subsystem] Successfully created virtual uinput device.");
+    println!("[input-subsystem] Successfully created virtual uinput absolute pointer device.");
     Ok(file)
 }
 
@@ -279,6 +338,20 @@ fn write_raw_event(file: &mut std::fs::File, type_: u16, code: u16, value: i32) 
 fn write_mouse_absolute(file: &mut std::fs::File, x: i32, y: i32) -> std::io::Result<()> {
     write_raw_event(file, EV_ABS, ABS_X, x)?;
     write_raw_event(file, EV_ABS, ABS_Y, y)?;
+    write_raw_event(file, EV_SYN, SYN_REPORT, 0)?;
+    Ok(())
+}
+
+fn write_mouse_relative(file: &mut std::fs::File, dx: i32, dy: i32) -> std::io::Result<()> {
+    if dx == 0 && dy == 0 {
+        return Ok(());
+    }
+    if dx != 0 {
+        write_raw_event(file, EV_REL, REL_X, dx)?;
+    }
+    if dy != 0 {
+        write_raw_event(file, EV_REL, REL_Y, dy)?;
+    }
     write_raw_event(file, EV_SYN, SYN_REPORT, 0)?;
     Ok(())
 }
@@ -548,10 +621,18 @@ pub fn run_input_daemon(
     let res: Result<(), Box<dyn std::error::Error>> = rt.block_on(async move {
         println!("[input-subsystem] Starting Clear Input Subsystem...");
 
-        let mut uinput_file = match setup_uinput() {
+        let mut uinput_mouse_file = match setup_uinput_mouse() {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("[input-subsystem] FATAL: Could not initialize /dev/uinput: {}.", e);
+                eprintln!("[input-subsystem] FATAL: Could not initialize uinput mouse: {}.", e);
+                return Err(Box::new(e) as Box<dyn std::error::Error>);
+            }
+        };
+
+        let mut uinput_abs_file = match setup_uinput_abs() {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("[input-subsystem] FATAL: Could not initialize uinput absolute pointer: {}.", e);
                 return Err(Box::new(e) as Box<dyn std::error::Error>);
             }
         };
@@ -678,25 +759,29 @@ pub fn run_input_daemon(
                                         trigger_tap_to_click_ipc(tap, &ipc_tx, pipe_write);
                                     }
                                 }
-                                InputDaemonMsg::SimulateMove { dx, dy } => {
-                                    update_pointer_coords(dx, dy);
+                                InputDaemonMsg::SimulateMoveTo { x, y } => {
+                                    set_pointer_coords(x, y);
                                     let px = POINTER_X.load(Ordering::SeqCst);
                                     let py = POINTER_Y.load(Ordering::SeqCst);
-                                    let _ = write_mouse_absolute(&mut uinput_file, px, py);
+                                    let _ = write_mouse_absolute(&mut uinput_abs_file, px, py);
+                                }
+                                InputDaemonMsg::SimulateMoveBy { dx, dy } => {
+                                    update_pointer_coords(dx, dy);
+                                    let _ = write_mouse_relative(&mut uinput_mouse_file, dx, dy);
                                 }
                                 InputDaemonMsg::SimulateButton { button, press } => {
                                     let val = if press { 1 } else { 0 };
-                                    let _ = write_raw_event(&mut uinput_file, EV_KEY, button, val);
-                                    let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                                    let _ = write_raw_event(&mut uinput_mouse_file, EV_KEY, button, val);
+                                    let _ = write_raw_event(&mut uinput_mouse_file, EV_SYN, SYN_REPORT, 0);
                                 }
                                 InputDaemonMsg::SimulateKey { keycode, press } => {
                                     let val = if press { 1 } else { 0 };
-                                    let _ = write_raw_event(&mut uinput_file, EV_KEY, keycode, val);
-                                    let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                                    let _ = write_raw_event(&mut uinput_mouse_file, EV_KEY, keycode, val);
+                                    let _ = write_raw_event(&mut uinput_mouse_file, EV_SYN, SYN_REPORT, 0);
                                 }
                                 InputDaemonMsg::SimulateClick { button } => {
-                                    let _ = write_raw_event(&mut uinput_file, EV_KEY, button, 1);
-                                    let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                                    let _ = write_raw_event(&mut uinput_mouse_file, EV_KEY, button, 1);
+                                    let _ = write_raw_event(&mut uinput_mouse_file, EV_SYN, SYN_REPORT, 0);
                                     let tx_clone = tx.clone();
                                     tokio::spawn(async move {
                                         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -704,8 +789,8 @@ pub fn run_input_daemon(
                                     });
                                 }
                                 InputDaemonMsg::SimulateKeyPress { keycode } => {
-                                    let _ = write_raw_event(&mut uinput_file, EV_KEY, keycode, 1);
-                                    let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                                    let _ = write_raw_event(&mut uinput_mouse_file, EV_KEY, keycode, 1);
+                                    let _ = write_raw_event(&mut uinput_mouse_file, EV_SYN, SYN_REPORT, 0);
                                     let tx_clone = tx.clone();
                                     tokio::spawn(async move {
                                         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -715,12 +800,12 @@ pub fn run_input_daemon(
                             }
                         }
                         CoordinatorMsg::InternalReleaseButton { button } => {
-                            let _ = write_raw_event(&mut uinput_file, EV_KEY, button, 0);
-                            let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                            let _ = write_raw_event(&mut uinput_mouse_file, EV_KEY, button, 0);
+                            let _ = write_raw_event(&mut uinput_mouse_file, EV_SYN, SYN_REPORT, 0);
                         }
                         CoordinatorMsg::InternalReleaseKey { keycode } => {
-                            let _ = write_raw_event(&mut uinput_file, EV_KEY, keycode, 0);
-                            let _ = write_raw_event(&mut uinput_file, EV_SYN, SYN_REPORT, 0);
+                            let _ = write_raw_event(&mut uinput_mouse_file, EV_KEY, keycode, 0);
+                            let _ = write_raw_event(&mut uinput_mouse_file, EV_SYN, SYN_REPORT, 0);
                         }
                         CoordinatorMsg::PhysicalMove { dx, dy, timestamp } => {
                             update_pointer_coords(dx, dy);
@@ -897,9 +982,7 @@ pub fn run_input_daemon(
 
                                 if steps_x != 0 || steps_y != 0 {
                                     update_pointer_coords(steps_x, steps_y);
-                                    let px = POINTER_X.load(Ordering::SeqCst);
-                                    let py = POINTER_Y.load(Ordering::SeqCst);
-                                    let _ = write_mouse_absolute(&mut uinput_file, px, py);
+                                    let _ = write_mouse_relative(&mut uinput_mouse_file, steps_x, steps_y);
                                 }
                             }
                         }
@@ -925,9 +1008,7 @@ pub fn run_input_daemon(
 
                             if steps_x != 0 || steps_y != 0 {
                                 update_pointer_coords(steps_x, steps_y);
-                                let px = POINTER_X.load(Ordering::SeqCst);
-                                let py = POINTER_Y.load(Ordering::SeqCst);
-                                let _ = write_mouse_absolute(&mut uinput_file, px, py);
+                                let _ = write_mouse_relative(&mut uinput_mouse_file, steps_x, steps_y);
                             }
                         }
                     }
@@ -964,7 +1045,7 @@ pub fn run_input_daemon(
                                 state.accum_scroll_y -= steps_y as f32;
 
                                 if steps_x != 0 || steps_y != 0 {
-                                    let _ = write_scroll(&mut uinput_file, steps_x, steps_y);
+                                    let _ = write_scroll(&mut uinput_mouse_file, steps_x, steps_y);
                                 }
                             }
                         }

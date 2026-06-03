@@ -107,6 +107,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
 
     loop {
         let mut activity = false;
+        let mut has_new_update = false;
 
         // Accept new connections (non-blocking)
         for _ in 0..5 {
@@ -154,6 +155,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
                 Ok(update) => {
                     latest = Some(update);
                     activity = true;
+                    has_new_update = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -164,41 +166,43 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
             }
         }
 
-        // If we got an update, push it to all clients
-        if let Some(ref update) = latest {
-            let mut dead_clients = Vec::new();
+        // If we got a new update, push it to all clients
+        if has_new_update {
+            if let Some(ref update) = latest {
+                let mut dead_clients = Vec::new();
 
-            for (i, client) in clients.iter_mut().enumerate() {
-                let msg = format_for_subscription(client.subscription, update);
-                match client
-                    .stream
-                    .write_all(msg.as_bytes())
-                    .and_then(|_| client.stream.write_all(b"\n"))
-                {
-                    Ok(_) => {}
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        // Client not ready to receive — skip for now
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                        eprintln!(
-                            "[status] client {:?} disconnected (broken pipe)",
-                            client.subscription
-                        );
-                        dead_clients.push(i);
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "[status] write error to client {:?}: {}",
-                            client.subscription, e
-                        );
-                        dead_clients.push(i);
+                for (i, client) in clients.iter_mut().enumerate() {
+                    let msg = format_for_subscription(client.subscription, update);
+                    match client
+                        .stream
+                        .write_all(msg.as_bytes())
+                        .and_then(|_| client.stream.write_all(b"\n"))
+                    {
+                        Ok(_) => {}
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            // Client not ready to receive — skip for now
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                            eprintln!(
+                                "[status] client {:?} disconnected (broken pipe)",
+                                client.subscription
+                            );
+                            dead_clients.push(i);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[status] write error to client {:?}: {}",
+                                client.subscription, e
+                            );
+                            dead_clients.push(i);
+                        }
                     }
                 }
-            }
 
-            // Remove dead clients (iterate in reverse to preserve indices)
-            for i in dead_clients.into_iter().rev() {
-                clients.remove(i);
+                // Remove dead clients (iterate in reverse to preserve indices)
+                for i in dead_clients.into_iter().rev() {
+                    clients.remove(i);
+                }
             }
         }
 

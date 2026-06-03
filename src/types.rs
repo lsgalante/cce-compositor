@@ -40,6 +40,7 @@ pub enum Action {
     Fullscreen,
     LayoutNext,
     ModeNext,
+    ModeNextShared,
     Reload,
     Restart,
     View1,
@@ -525,6 +526,8 @@ pub fn parse_action(s: &str) -> Action {
         Action::LayoutNext
     } else if s == "mode-next" {
         Action::ModeNext
+    } else if s == "mode-next-shared" {
+        Action::ModeNextShared
     } else if s == "reload" {
         Action::Reload
     } else if s == "restart" {
@@ -676,6 +679,8 @@ mod tests {
         assert_eq!(parse_action("move"), Action::Move);
         assert_eq!(parse_action("resize"), Action::Resize);
         assert_eq!(parse_action("layout-next"), Action::LayoutNext);
+        assert_eq!(parse_action("mode-next"), Action::ModeNext);
+        assert_eq!(parse_action("mode-next-shared"), Action::ModeNextShared);
         assert_eq!(parse_action("reload"), Action::Reload);
         assert_eq!(parse_action("restart"), Action::Restart);
         assert_eq!(parse_action("spawn"), Action::Spawn);

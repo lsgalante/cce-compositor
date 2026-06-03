@@ -311,6 +311,58 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
         "apply-mode-sharing" => {
             handle_apply_mode_sharing_command(rest, state);
         }
+        "mode-next-shared" => {
+            let cycle = [
+                TilingMode::Cascade,
+                TilingMode::Grid,
+                TilingMode::Fullscreen,
+                TilingMode::Floating,
+            ];
+            let focused_id = state
+                .seats
+                .iter()
+                .find(|s| !s.removed)
+                .and_then(|s| s.focused_window_id);
+            if let Some(fid) = focused_id {
+                let notifications_enable = state.notifications_enable;
+                let current_mode = state.get_window(fid).map(|w| w.tiling_mode);
+                if let Some(old_mode) = current_mode {
+                    let next = cycle
+                        .iter()
+                        .position(|m| *m == old_mode)
+                        .map(|i| cycle[(i + 1) % cycle.len()])
+                        .unwrap_or(TilingMode::Cascade);
+
+                    let active_tags = state.active_tags;
+
+                    let mut updated_count = 0;
+                    for win in &mut state.windows {
+                        if !win.closed
+                            && win.app_id.as_deref() != Some("clear-status-interface")
+                            && (win.tags & active_tags) != 0
+                            && win.tiling_mode == old_mode
+                        {
+                            win.tiling_mode = next;
+                            win.mode_locked = true;
+                            updated_count += 1;
+                        }
+                    }
+
+                    if notifications_enable && updated_count > 0 {
+                        crate::config::show_notification(
+                            "ccec",
+                            &format!(
+                                "Tiling mode set to {} for all {} windows on active tag",
+                                next.as_str(),
+                                old_mode.as_str()
+                            ),
+                        );
+                    }
+                    state.needs_render = true;
+                    state.needs_status_update = true;
+                }
+            }
+        }
         "bind" => {
             handle_bind_command(rest, state);
         }
@@ -398,12 +450,8 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
             let parts: Vec<&str> = rest.split_whitespace().collect();
             if parts.len() == 2 {
                 if let (Ok(target_x), Ok(target_y)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
-                    let cur_x = crate::input::POINTER_X.load(std::sync::atomic::Ordering::SeqCst);
-                    let cur_y = crate::input::POINTER_Y.load(std::sync::atomic::Ordering::SeqCst);
-                    let dx = target_x - cur_x;
-                    let dy = target_y - cur_y;
                     if let Some(ref controller) = state.input_controller {
-                        let _ = controller.send(crate::input::InputDaemonMsg::SimulateMove { dx, dy });
+                        let _ = controller.send(crate::input::InputDaemonMsg::SimulateMoveTo { x: target_x, y: target_y });
                     }
                 } else {
                     reply = "error: invalid coordinates\n".to_string();
@@ -417,7 +465,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
             if parts.len() == 2 {
                 if let (Ok(dx), Ok(dy)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
                     if let Some(ref controller) = state.input_controller {
-                        let _ = controller.send(crate::input::InputDaemonMsg::SimulateMove { dx, dy });
+                        let _ = controller.send(crate::input::InputDaemonMsg::SimulateMoveBy { dx, dy });
                     }
                 } else {
                     reply = "error: invalid deltas\n".to_string();
@@ -696,14 +744,22 @@ fn handle_mode_command(rest: &str, state: &mut WindowManager) {
     }
 
     let mode = parse_tiling_mode(mode_str);
-    state.mode_rules.push(ModeRule {
-        mode,
-        app_id_pattern,
-        title_pattern,
-        single_instance,
-        tag,
-        circular: false,
-    });
+    if let Some(existing) = state.mode_rules.iter_mut().find(|r| {
+        r.app_id_pattern == app_id_pattern && r.title_pattern == title_pattern
+    }) {
+        existing.mode = mode;
+        existing.single_instance = single_instance;
+        existing.tag = tag;
+    } else {
+        state.mode_rules.push(ModeRule {
+            mode,
+            app_id_pattern,
+            title_pattern,
+            single_instance,
+            tag,
+            circular: false,
+        });
+    }
 }
 
 /// Handle "set-mode <mode>" command — set the focused window's tiling mode
@@ -1208,6 +1264,18 @@ mod tests {
         assert_eq!(state.mode_rules.len(), 1);
         assert_eq!(state.mode_rules[0].mode, TilingMode::Cascade);
         assert_eq!(state.mode_rules[0].app_id_pattern, "ghostty");
+    }
+
+    #[test]
+    fn test_ipc_mode_rule_update() {
+        let mut state = WindowManager::default();
+        handle_ipc_command("mode fullscreen clear-system-interface", &mut state);
+        assert_eq!(state.mode_rules.len(), 1);
+        assert_eq!(state.mode_rules[0].mode, TilingMode::Fullscreen);
+
+        handle_ipc_command("mode cascade clear-system-interface", &mut state);
+        assert_eq!(state.mode_rules.len(), 1);
+        assert_eq!(state.mode_rules[0].mode, TilingMode::Cascade);
     }
 
     #[test]

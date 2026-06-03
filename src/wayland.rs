@@ -1562,12 +1562,97 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
                 );
             }
 
-            river_window_v1::Event::PointerMoveRequested { .. } => {
-                // Will handle pointer ops later
+            river_window_v1::Event::PointerMoveRequested { seat } => {
+                if let Some(_sid) = state.seat_id_for_proxy(&seat) {
+                    let mut window_found = false;
+                    let mut needs_render = false;
+                    if let Some(win) = state.wm.get_window_mut(wid) {
+                        if win.tiling_mode != TilingMode::Fullscreen && win.tiling_mode != TilingMode::Popup {
+                            if win.tiling_mode != TilingMode::Floating {
+                                win.tiling_mode = TilingMode::Floating;
+                                needs_render = true;
+                            }
+                            win.mode_locked = true;
+                            window_found = true;
+                        }
+                    }
+                    if window_found {
+                        if needs_render {
+                            state.wm.needs_render = true;
+                            state.wm.needs_focus = true;
+                            state.wm.needs_status_update = true;
+                        }
+                        seat.op_start_pointer();
+                        if let Some(win) = state.wm.get_window_mut(wid) {
+                            win.anim_x = None;
+                            win.anim_y = None;
+                            win.anim_w = None;
+                            win.anim_h = None;
+                            win.anim_opacity = None;
+                            state.active_pointer_op = Some(PointerOp {
+                                window_id: wid,
+                                op_type: PointerOpType::Move,
+                                start_x: win.x,
+                                start_y: win.y,
+                                start_width: win.width,
+                                start_height: win.height,
+                            });
+                        }
+                    }
+                }
             }
 
-            river_window_v1::Event::PointerResizeRequested { .. } => {
-                // Will handle pointer ops later
+            river_window_v1::Event::PointerResizeRequested { seat, edges } => {
+                if let Some(_sid) = state.seat_id_for_proxy(&seat) {
+                    let mut window_found = false;
+                    let mut needs_render = false;
+                    if let Some(win) = state.wm.get_window_mut(wid) {
+                        if win.tiling_mode != TilingMode::Fullscreen && win.tiling_mode != TilingMode::Popup {
+                            if win.tiling_mode != TilingMode::Floating {
+                                win.tiling_mode = TilingMode::Floating;
+                                needs_render = true;
+                            }
+                            win.mode_locked = true;
+                            window_found = true;
+                        }
+                    }
+                    if window_found {
+                        if needs_render {
+                            state.wm.needs_render = true;
+                            state.wm.needs_focus = true;
+                            state.wm.needs_status_update = true;
+                        }
+                        seat.op_start_pointer();
+                        if let Some(win) = state.wm.get_window_mut(wid) {
+                            win.anim_x = None;
+                            win.anim_y = None;
+                            win.anim_w = None;
+                            win.anim_h = None;
+                            win.anim_opacity = None;
+                            
+                            let edges_u32: u32 = edges.into();
+                            let op_type = match edges_u32 {
+                                1 => PointerOpType::ResizeTop,
+                                2 => PointerOpType::ResizeBottom,
+                                4 => PointerOpType::ResizeLeft,
+                                8 => PointerOpType::ResizeRight,
+                                5 => PointerOpType::ResizeTopLeft,
+                                9 => PointerOpType::ResizeTopRight,
+                                6 => PointerOpType::ResizeBottomLeft,
+                                10 => PointerOpType::ResizeBottomRight,
+                                _ => PointerOpType::Resize,
+                            };
+                            state.active_pointer_op = Some(PointerOp {
+                                window_id: wid,
+                                op_type,
+                                start_x: win.x,
+                                start_y: win.y,
+                                start_width: win.width,
+                                start_height: win.height,
+                            });
+                        }
+                    }
+                }
             }
 
             _ => {}
@@ -2527,6 +2612,67 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                         let win_title = win.title.as_deref().unwrap_or("Window");
                         crate::config::show_notification("ccec", &format!("Tiling mode set to {} for: {}", next.as_str(), win_title));
                     }
+                    state.wm.needs_render = true;
+                    state.wm.needs_status_update = true;
+                }
+            }
+        }
+        Action::ModeNextShared => {
+            let cycle = [
+                TilingMode::Cascade,
+                TilingMode::Grid,
+                TilingMode::Fullscreen,
+                TilingMode::Floating,
+            ];
+            let focused_id = state
+                .wm
+                .seats
+                .iter()
+                .find(|s| !s.removed)
+                .and_then(|s| s.focused_window_id);
+            if let Some(fid) = focused_id {
+                let notifications_enable = state.wm.notifications_enable;
+                let current_mode = state.wm.get_window(fid).map(|w| w.tiling_mode);
+                if let Some(old_mode) = current_mode {
+                    let next = cycle
+                        .iter()
+                        .position(|m| *m == old_mode)
+                        .map(|i| cycle[(i + 1) % cycle.len()])
+                        .unwrap_or(TilingMode::Cascade);
+
+                    let active_tags = state.wm.active_tags;
+
+                    let mut updated_count = 0;
+                    for win in &mut state.wm.windows {
+                        if !win.closed
+                            && win.app_id.as_deref() != Some("clear-status-interface")
+                            && (win.tags & active_tags) != 0
+                            && win.tiling_mode == old_mode
+                        {
+                            win.tiling_mode = next;
+                            win.mode_locked = true;
+                            updated_count += 1;
+                        }
+                    }
+
+                    eprintln!(
+                        "mode-next-shared: updated {} windows (current tag, mode {}) -> {}",
+                        updated_count,
+                        old_mode.as_str(),
+                        next.as_str()
+                    );
+
+                    if notifications_enable && updated_count > 0 {
+                        crate::config::show_notification(
+                            "ccec",
+                            &format!(
+                                "Tiling mode set to {} for all {} windows on active tag",
+                                next.as_str(),
+                                old_mode.as_str()
+                            ),
+                        );
+                    }
+
                     state.wm.needs_render = true;
                     state.wm.needs_status_update = true;
                 }
