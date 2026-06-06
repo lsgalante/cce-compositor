@@ -95,5 +95,6 @@ fn tiling_mode_str(mode: TilingMode) -> &'static str {
         TilingMode::Grid => "Grid",
         TilingMode::Fullscreen => "Fullscreen",
         TilingMode::Popup => "Popup",
+        TilingMode::SidePanel => "Side Panel",
     }
 }

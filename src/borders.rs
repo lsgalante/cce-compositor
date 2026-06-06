@@ -112,7 +112,8 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             let r = blend_channel(state.layout.background_r, state.layout.border_r, factor);
             let g = blend_channel(state.layout.background_g, state.layout.border_g, factor);
             let b = blend_channel(state.layout.background_b, state.layout.border_b, factor);
-            (r, g, b, ALPHA)
+            let a = blend_channel(state.layout.background_a, state.layout.border_a, factor);
+            (r, g, b, a)
         };
 
         let mut width = if state.expose_visual_active && win.tiling_mode != TilingMode::Popup {
@@ -124,6 +125,7 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
                 TilingMode::Grid => state.layout.grid_border_width,
                 TilingMode::Floating => state.layout.floating_border_width,
                 TilingMode::Popup => state.layout.border_width,
+                TilingMode::SidePanel => state.layout.cascade_border_width,
             }
         };
 
@@ -133,6 +135,21 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             width = 0;
         }
 
+        let has_titlebar = !win.closed
+            && !win.minimized
+            && win.app_id.as_deref() != Some("clear-status-interface")
+            && !win.app_id.as_deref().map_or(false, |aid| aid.contains("noborder"))
+            && win.tiling_mode != TilingMode::Popup
+            && win.tiling_mode != TilingMode::Fullscreen
+            && !win.circular;
+
+        let edges = if has_titlebar {
+            // Disable compositor-drawn borders entirely; all borders are drawn by client decorations.
+            0b0000u32
+        } else {
+            all_edges
+        };
+
         eprintln!(
             "[borders]   -> r=#{:08x} g=#{:08x} b=#{:08x} a=#{:08x} width={}",
             r, g, b, a, width,
@@ -140,7 +157,7 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
 
         results.push(WindowBorders {
             window_idx: idx,
-            edges: all_edges,
+            edges,
             width,
             r,
             g,

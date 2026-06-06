@@ -12,6 +12,7 @@ pub enum TilingMode {
     Grid,
     Fullscreen,
     Popup,
+    SidePanel,
 }
 
 impl TilingMode {
@@ -22,6 +23,7 @@ impl TilingMode {
             TilingMode::Grid => "Grid",
             TilingMode::Fullscreen => "Fullscreen",
             TilingMode::Popup => "Popup",
+            TilingMode::SidePanel => "Side Panel",
         }
     }
 }
@@ -31,6 +33,7 @@ impl TilingMode {
 pub enum Action {
     None,
     Spawn,
+    Toggle,
     Close,
     FocusNext,
     FocusPrev,
@@ -85,6 +88,8 @@ pub struct Layout {
     pub border_font_size: i32,
     pub transition_duration: i32,
     pub grid_gap: i32,
+    pub border_blur: bool,
+    pub window_blur: bool,
 }
 
 impl Default for Layout {
@@ -113,6 +118,8 @@ impl Default for Layout {
             border_font_size: 11,
             transition_duration: 300,
             grid_gap: 18,
+            border_blur: false,
+            window_blur: false,
         }
     }
 }
@@ -235,6 +242,7 @@ pub struct Window {
     pub anim_h: Option<f64>,
     pub anim_opacity: Option<f64>,
     pub circular: bool,
+    pub size_hint_applied: bool,
 }
 
 impl Default for Window {
@@ -274,6 +282,7 @@ impl Default for Window {
             anim_h: None,
             anim_opacity: None,
             circular: false,
+            size_hint_applied: false,
         }
     }
 }
@@ -504,6 +513,7 @@ pub fn parse_tiling_mode(s: &str) -> TilingMode {
         "fullscreen" => TilingMode::Fullscreen,
         "floating" => TilingMode::Floating,
         "popup" => TilingMode::Popup,
+        "side-panel" | "side_panel" | "side panel" | "Side Panel" => TilingMode::SidePanel,
         _ => TilingMode::Floating,
     }
 }
@@ -575,7 +585,11 @@ pub fn parse_action(s: &str) -> Action {
                 };
             }
         }
-        Action::None
+        if s == "toggle" {
+            Action::Toggle
+        } else {
+            Action::None
+        }
     } else if s.starts_with("set-tag") {
         let rest = &s[7..];
         let tag_str = rest
@@ -667,6 +681,8 @@ mod tests {
         assert_eq!(parse_tiling_mode("fullscreen"), TilingMode::Fullscreen);
         assert_eq!(parse_tiling_mode("floating"), TilingMode::Floating);
         assert_eq!(parse_tiling_mode("popup"), TilingMode::Popup);
+        assert_eq!(parse_tiling_mode("side-panel"), TilingMode::SidePanel);
+        assert_eq!(parse_tiling_mode("Side Panel"), TilingMode::SidePanel);
         assert_eq!(parse_tiling_mode("unknown"), TilingMode::Floating);
     }
 
@@ -685,6 +701,7 @@ mod tests {
         assert_eq!(parse_action("restart"), Action::Restart);
         assert_eq!(parse_action("spawn"), Action::Spawn);
         assert_eq!(parse_action("spawn something"), Action::Spawn);
+        assert_eq!(parse_action("toggle"), Action::Toggle);
         assert_eq!(parse_action("view-1"), Action::View1);
         assert_eq!(parse_action("view-4"), Action::View4);
         assert_eq!(parse_action("toggle-2"), Action::Toggle2);

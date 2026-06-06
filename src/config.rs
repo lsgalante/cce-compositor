@@ -80,6 +80,10 @@ pub struct LayoutConfig {
     pub transition_duration: i64,
     #[serde(default = "default_grid_gap")]
     pub grid_gap: i64,
+    #[serde(default = "default_border_blur")]
+    pub border_blur: bool,
+    #[serde(default = "default_window_blur")]
+    pub window_blur: bool,
 }
 
 impl Default for LayoutConfig {
@@ -102,12 +106,22 @@ impl Default for LayoutConfig {
             border_font_size: default_border_font_size(),
             transition_duration: default_transition_duration(),
             grid_gap: default_grid_gap(),
+            border_blur: default_border_blur(),
+            window_blur: default_window_blur(),
         }
     }
 }
 
 fn default_grid_gap() -> i64 {
     18
+}
+
+fn default_border_blur() -> bool {
+    false
+}
+
+fn default_window_blur() -> bool {
+    false
 }
 
 fn default_gap() -> i64 {
@@ -309,6 +323,8 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
     state.layout.border_font_size = config.layout.border_font_size as i32;
     state.layout.transition_duration = config.layout.transition_duration as i32;
     state.layout.grid_gap = config.layout.grid_gap as i32;
+    state.layout.border_blur = config.layout.border_blur;
+    state.layout.window_blur = config.layout.window_blur;
     if let Some((r, g, b, a)) = parse_hex_color(&config.layout.border_color) {
         state.layout.border_r = r;
         state.layout.border_g = g;
@@ -328,7 +344,7 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
         let mods = parse_modifiers(&kb.mods);
         let keysym = parse_keysym(&kb.key);
         let action = parse_action(&kb.action);
-        let command = if action == crate::types::Action::Spawn {
+        let command = if action == crate::types::Action::Spawn || action == crate::types::Action::Toggle {
             kb.command.clone()
         } else {
             None
@@ -557,7 +573,7 @@ fn expand_env_vars(s: &str) -> String {
 }
 
 /// Extract the program name (first word, basename) from a command string
-fn extract_program_name(cmd: &str) -> String {
+pub fn extract_program_name(cmd: &str) -> String {
     let cmd = cmd.trim_start();
     let first_word: String = cmd.chars().take_while(|c| !c.is_whitespace()).collect();
     if let Some(slash) = first_word.rfind('/') {
@@ -686,16 +702,16 @@ mod tests {
 
     #[test]
     fn test_expand_env_vars_simple() {
-        std::env::set_var("CCEC_TEST_VAR", "hello");
-        assert_eq!(expand_env_vars("$CCEC_TEST_VAR"), "hello");
-        std::env::remove_var("CCEC_TEST_VAR");
+        std::env::set_var("CCEC_TEST_VAR_SIMPLE", "hello");
+        assert_eq!(expand_env_vars("$CCEC_TEST_VAR_SIMPLE"), "hello");
+        std::env::remove_var("CCEC_TEST_VAR_SIMPLE");
     }
 
     #[test]
     fn test_expand_env_vars_braces() {
-        std::env::set_var("CCEC_TEST_VAR", "world");
-        assert_eq!(expand_env_vars("${CCEC_TEST_VAR}!"), "world!");
-        std::env::remove_var("CCEC_TEST_VAR");
+        std::env::set_var("CCEC_TEST_VAR_BRACES", "world");
+        assert_eq!(expand_env_vars("${CCEC_TEST_VAR_BRACES}!"), "world!");
+        std::env::remove_var("CCEC_TEST_VAR_BRACES");
     }
 
     #[test]

@@ -236,6 +236,7 @@ fn parse_tiling_mode_str(s: &str) -> TilingMode {
         "Fullscreen" => TilingMode::Fullscreen,
         "Floating" => TilingMode::Floating,
         "Popup" => TilingMode::Popup,
+        "Side Panel" | "SidePanel" | "side-panel" => TilingMode::SidePanel,
         _ => TilingMode::Cascade,
     }
 }

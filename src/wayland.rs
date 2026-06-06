@@ -388,6 +388,7 @@ impl AppState {
                             crate::types::TilingMode::Grid => state.wm.layout.grid_border_width,
                             crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
                             crate::types::TilingMode::Popup => 0,
+                            crate::types::TilingMode::SidePanel => state.wm.layout.cascade_border_width,
                         }
                     };
                     let grab_w = border_w.max(10);
@@ -1056,6 +1057,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     crate::wm::render_borders(state);
                     crate::wm::render_opacity(state);
                     crate::wm::render_circular(state);
+                    crate::wm::render_blur(state);
 
                     // Update and render window title decorations on borders
                     crate::decorations::update_decorations(state, qhandle);
@@ -1441,6 +1443,16 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
                         "[window] id={} (app_id={:?}) dimensions_hint: min={}x{} max={}x{}",
                         wid, window.app_id, min_width, min_height, max_width, max_height
                     );
+
+                    if !window.size_hint_applied && min_width > 32 {
+                        window.width = min_width;
+                        window.height = min_height;
+                        window.size_hint_applied = true;
+                        state.wm.needs_render = true;
+                        if let Some(ref wm) = state.window_manager {
+                            wm.manage_dirty();
+                        }
+                    }
                 }
             }
 
@@ -2237,6 +2249,73 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                         })
                         .spawn()
                 };
+            }
+        }
+        Action::Toggle => {
+            if let Some(cmd) = command {
+                let prog_name = crate::config::extract_program_name(cmd);
+                // Look for an open window whose app_id (or title fallback) matches prog_name
+                let open_window_id = state.wm.windows.iter().find(|w| {
+                    if w.closed {
+                        return false;
+                    }
+                    if let Some(ref aid) = w.app_id {
+                        let aid_lower = aid.to_lowercase();
+                        let prog_lower = prog_name.to_lowercase();
+                        aid_lower == prog_lower || aid_lower.contains(&prog_lower) || prog_lower.contains(&aid_lower)
+                    } else if let Some(ref title) = w.title {
+                        let title_lower = title.to_lowercase();
+                        let prog_lower = prog_name.to_lowercase();
+                        title_lower.contains(&prog_lower)
+                    } else {
+                        false
+                    }
+                }).map(|w| w.id);
+
+                if let Some(win_id) = open_window_id {
+                    eprintln!("toggle: close window id={}", win_id);
+                    if let Some(wp) = state.get_window_proxy(win_id) {
+                        wp.river_window.close();
+                    }
+                    // Shift focus to the next visible window if the closed window was focused.
+                    if let Some(seat) = state.wm.seats.iter_mut().find(|s| !s.removed) {
+                        if seat.focused_window_id == Some(win_id) {
+                            let visible_ids: Vec<u64> = state
+                                .wm
+                                .windows
+                                .iter()
+                                .filter(|w| {
+                                    (w.tags & state.wm.active_tags) != 0 && !w.closed && !w.minimized && w.id != win_id && w.app_id.as_deref() != Some("clear-status-interface")
+                                })
+                                .map(|w| w.id)
+                                .collect();
+                            seat.focused_window_id = visible_ids.last().copied();
+                        }
+                    }
+                    state.wm.needs_render = true;
+                    state.wm.needs_focus = true;
+                    state.wm.needs_status_update = true;
+                } else {
+                    eprintln!("toggle: spawn command={}", cmd);
+                    use std::os::unix::process::CommandExt;
+                    let _ = unsafe {
+                        std::process::Command::new("sh")
+                            .arg("-c")
+                            .arg(cmd)
+                            .env_remove("WAYLAND_DEBUG")
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .pre_exec(|| {
+                                let max_fd = libc::sysconf(libc::_SC_OPEN_MAX) as libc::c_int;
+                                for fd in 3..max_fd {
+                                    libc::close(fd);
+                                }
+                                libc::setsid();
+                                Ok(())
+                            })
+                            .spawn()
+                    };
+                }
             }
         }
         Action::Close => {
@@ -3843,6 +3922,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
                                                         crate::types::TilingMode::Grid => state.wm.layout.grid_border_width,
                                                         crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
                                                         crate::types::TilingMode::Popup => 0,
+                                                        crate::types::TilingMode::SidePanel => state.wm.layout.cascade_border_width,
                                                     }
                                                 };
                                                 let grab_w = border_w.max(10);
@@ -3928,6 +4008,25 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
                     } else if btn_state == wayland_client::WEnum::Value(wl_pointer::ButtonState::Released) {
                         eprintln!("[pointer] left button released");
                         state.pending_border_drag = None;
+
+                        if let Some(ref op) = state.active_pointer_op {
+                            if op.op_type != PointerOpType::Move {
+                                if let Some(wp) = state.get_window_proxy(op.window_id) {
+                                    wp.river_window.inform_resize_end();
+                                }
+                            }
+                            state.active_pointer_op = None;
+                            for (_sid, sp) in &state.seat_proxies {
+                                sp.river_seat.op_end();
+                            }
+                            for seat in &mut state.wm.seats {
+                                seat.interacted_window_id = None;
+                            }
+                            state.wm.needs_render = true;
+                            if let Some(ref wm) = state.window_manager {
+                                wm.manage_dirty();
+                            }
+                        }
                     }
                 }
 

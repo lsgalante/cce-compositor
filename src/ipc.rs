@@ -837,7 +837,7 @@ fn handle_bind_command(rest: &str, state: &mut WindowManager) {
     };
 
     let action = parse_action(action_str);
-    let command = if action == Action::Spawn {
+    let command = if action == Action::Spawn || action == Action::Toggle {
         command
     } else {
         None

@@ -482,6 +482,24 @@ fn compute_tiling(
             }).map(|w| w.id)
         });
 
+    // Check if there is a visible SidePanel window on the active tag
+    let side_panel_win = wm.windows.iter().find(|w| {
+        (w.tags & wm.active_tags) != 0
+            && !w.closed
+            && !w.minimized
+            && w.tiling_mode == TilingMode::SidePanel
+    });
+
+    let shift_x = if let Some(panel_win) = side_panel_win {
+        if panel_win.hint_min_width > 32 {
+            panel_win.hint_min_width
+        } else {
+            360
+        }
+    } else {
+        0
+    };
+
     // Compute tiling
     let mut results = Vec::new();
     let mut idx_floating = 0i32;
@@ -495,6 +513,16 @@ fn compute_tiling(
         let mode = win.tiling_mode;
 
         let (x, y, w, h) = match mode {
+            TilingMode::SidePanel => {
+                let target_w = if win.hint_min_width > 32 {
+                    win.hint_min_width
+                } else {
+                    360
+                };
+                let bw = wm.layout.cascade_border_width;
+                let dec_h = std::cmp::max(bw, 16);
+                (phys_x + bw, bar_height + phys_y + dec_h, target_w - bw * 2, screen_h - bar_height - (dec_h + bw))
+            }
             TilingMode::Fullscreen => {
                 if fullscreen_id == Some(wid) || win.app_id.as_deref() == Some("clear-status-interface") {
                     let border_w = if win.app_id.as_deref() == Some("clear-status-interface") {
@@ -614,7 +642,12 @@ fn compute_tiling(
             }
         };
 
-        results.push(TileResult { wid, x, y, w, h });
+        let final_x = if mode != TilingMode::SidePanel && win.app_id.as_deref() != Some("clear-status-interface") {
+            x + shift_x
+        } else {
+            x
+        };
+        results.push(TileResult { wid, x: final_x, y, w, h });
     }
 
     // Layout minimized windows as bubbles stacked at the right edge
@@ -665,6 +698,14 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
     let gap_top = state.wm.layout.gap_top;
     let bar_height = state.wm.layout.bar_height;
 
+    let side_panel_win = state.wm.windows.iter().find(|w| {
+        (w.tags & state.wm.active_tags) != 0
+            && !w.closed
+            && !w.minimized
+            && w.tiling_mode == TilingMode::SidePanel
+    });
+    let is_side_panel_present = side_panel_win.is_some();
+
     for tr in results {
         let mut final_x = tr.x;
         let mut final_y = tr.y;
@@ -675,7 +716,7 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
             let is_cascade = win.tiling_mode == TilingMode::Cascade;
             let is_exposed = expose_active && win.tiling_mode != TilingMode::Popup && win.app_id.as_deref() != Some("clear-status-interface");
             let was_animating = win.anim_x.is_some() || win.anim_y.is_some() || win.anim_w.is_some() || win.anim_h.is_some() || win.anim_opacity.is_some();
-            let should_animate = (is_cascade || is_exposed || was_animating) && !win.minimized;
+            let should_animate = (is_cascade || is_exposed || is_side_panel_present || win.tiling_mode == TilingMode::SidePanel || was_animating) && !win.minimized;
 
             if should_animate {
                 let curr_x = win.anim_x.unwrap_or(win.x as f64);
@@ -914,6 +955,20 @@ pub fn render_circular(state: &mut AppState) {
         if let Some(wp) = state.get_window_proxy(win.id) {
             let val = if win.circular { 1 } else { 0 };
             wp.river_window.set_circular(val);
+        }
+    }
+}
+
+/// Apply window backdrop blur.
+/// This modifies rendering state and is called during RenderStart.
+pub fn render_blur(state: &mut AppState) {
+    for win in &state.wm.windows {
+        if win.closed {
+            continue;
+        }
+        if let Some(wp) = state.get_window_proxy(win.id) {
+            let val = if state.wm.layout.window_blur { 1 } else { 0 };
+            wp.river_window.set_blur(val);
         }
     }
 }

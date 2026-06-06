@@ -200,7 +200,70 @@ fn create_memfd(size: usize) -> Option<RawFd> {
     Some(fd)
 }
 
-fn update_transparent_decoration(
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CornerType {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+fn round_corner(
+    buffer_slice: &mut [u32],
+    dec_width: i32,
+    dec_height: i32,
+    cx: i32,
+    cy: i32,
+    r: i32,
+    corner: CornerType,
+) {
+    if r <= 0 {
+        return;
+    }
+    let r_f = r as f32;
+
+    let (x_range, y_range) = match corner {
+        CornerType::TopLeft => (0..cx, 0..cy),
+        CornerType::TopRight => (cx..dec_width, 0..cy),
+        CornerType::BottomLeft => (0..cx, cy..dec_height),
+        CornerType::BottomRight => (cx..dec_width, cy..dec_height),
+    };
+
+    for py in y_range {
+        if py < 0 || py >= dec_height {
+            continue;
+        }
+        let row_offset = (py * dec_width) as usize;
+        for px in x_range.clone() {
+            if px < 0 || px >= dec_width {
+                continue;
+            }
+
+            let dx = (px - cx) as f32;
+            let dy = (py - cy) as f32;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            if dist > r_f + 0.5 {
+                buffer_slice[row_offset + px as usize] = 0x00000000;
+            } else if dist > r_f - 0.5 {
+                let alpha_scale = r_f + 0.5 - dist; // value between 0.0 and 1.0
+                let index = row_offset + px as usize;
+                let pixel = buffer_slice[index];
+                let a = ((pixel >> 24) & 0xFF) as f32 * alpha_scale;
+                let r_val = ((pixel >> 16) & 0xFF) as f32 * alpha_scale;
+                let g = ((pixel >> 8) & 0xFF) as f32 * alpha_scale;
+                let b = (pixel & 0xFF) as f32 * alpha_scale;
+
+                buffer_slice[index] = ((a as u32) << 24)
+                    | ((r_val as u32) << 16)
+                    | ((g as u32) << 8)
+                    | (b as u32);
+            }
+        }
+    }
+}
+
+fn update_border_decoration(
     _wid: u64,
     dec_opt: &mut Option<WindowDecoration>,
     compositor: &wayland_client::protocol::wl_compositor::WlCompositor,
@@ -212,6 +275,14 @@ fn update_transparent_decoration(
     logical_width: i32,
     logical_height: i32,
     scale: i32,
+    border_blur: bool,
+    bg_color: u32,
+    rect_x: i32,
+    rect_y: i32,
+    rect_w: i32,
+    rect_h: i32,
+    border_width: i32,
+    round_bottom: bool,
 ) {
     let dec_width = logical_width * scale;
     let dec_height = logical_height * scale;
@@ -239,6 +310,7 @@ fn update_transparent_decoration(
 
     let dec = dec_opt.as_mut().unwrap();
     dec.decoration.set_offset(offset_x, offset_y);
+    dec.decoration.set_blur(if border_blur { 1 } else { 0 });
 
     if needs_new_buffer {
         if !dec.mapped_data.is_null() {
@@ -276,14 +348,6 @@ fn update_transparent_decoration(
                     (),
                 );
 
-                // Clear to fully transparent
-                let buffer_slice = unsafe {
-                    std::slice::from_raw_parts_mut(mapped_data, (dec_width * dec_height) as usize)
-                };
-                for pixel in buffer_slice.iter_mut() {
-                    *pixel = 0x00000000;
-                }
-
                 dec.pool = Some(pool);
                 dec.buffer = Some(buffer);
                 dec.width = dec_width;
@@ -292,18 +356,121 @@ fn update_transparent_decoration(
                 dec.mapped_size = size;
                 dec.surface.set_buffer_scale(scale);
             } else {
-                eprintln!("[decorations] failed to mmap transparent decoration buffer");
+                eprintln!("[decorations] failed to mmap border decoration buffer");
                 unsafe { libc::close(fd); }
                 return;
             }
             unsafe { libc::close(fd); }
         } else {
-            eprintln!("[decorations] failed to create memfd for transparent decoration");
+            eprintln!("[decorations] failed to create memfd for border decoration");
             return;
         }
     }
 
     if let Some(ref buffer) = dec.buffer {
+        if !dec.mapped_data.is_null() {
+            let buffer_slice = unsafe {
+                std::slice::from_raw_parts_mut(dec.mapped_data, (dec_width * dec_height) as usize)
+            };
+
+            // Clear to fully transparent
+            for pixel in buffer_slice.iter_mut() {
+                *pixel = 0x00000000;
+            }
+
+            // Draw visual border color with 3D cylindrical shading and mitred joints
+            let rx_start = rect_x * scale;
+            let ry_start = rect_y * scale;
+            let rx_end = (rect_x + rect_w) * scale;
+            let ry_end = (rect_y + rect_h) * scale;
+
+            let border_w_scaled = border_width * scale;
+            let win_w_scaled = (rect_w - 2 * border_width) * scale;
+            let grab_w_scaled = logical_height * scale;
+
+            for py in ry_start..ry_end {
+                if py >= 0 && py < dec_height {
+                    let row_offset = (py * dec_width) as usize;
+                    for px in rx_start..rx_end {
+                        if px >= 0 && px < dec_width {
+                            let s = if rect_w > rect_h {
+                                // Horizontal border (bottom)
+                                let logical_px = px - grab_w_scaled;
+                                let logical_py = py;
+
+                                if logical_px < 0 && logical_py < -logical_px {
+                                    // Left border region (outer is at t = 0)
+                                    let t_val = ((logical_px + border_w_scaled) as f32) / (border_w_scaled as f32 - 1.0).max(1.0);
+                                    if t_val < 0.5 {
+                                        1.0 + 0.45 * (1.0 - 2.0 * t_val) * (1.0 - 2.0 * t_val)
+                                    } else {
+                                        1.0
+                                    }
+                                } else if logical_px > win_w_scaled && logical_py < (logical_px - win_w_scaled) {
+                                    // Right border region (outer is at t = 0)
+                                    let t_val = 1.0 - ((logical_px - win_w_scaled) as f32) / (border_w_scaled as f32 - 1.0).max(1.0);
+                                    if t_val < 0.5 {
+                                        1.0 - 0.50 * (1.0 - 2.0 * t_val) * (1.0 - 2.0 * t_val)
+                                    } else {
+                                        1.0
+                                    }
+                                } else {
+                                    // Bottom border region (outer is at t = 0)
+                                    let t_val = 1.0 - (logical_py as f32) / (border_w_scaled as f32 - 1.0).max(1.0);
+                                    if t_val < 0.5 {
+                                        1.0 - 0.50 * (1.0 - 2.0 * t_val) * (1.0 - 2.0 * t_val)
+                                    } else {
+                                        1.0
+                                    }
+                                }
+                            } else {
+                                // Vertical border (left/right)
+                                let t_val = ((px - rx_start) as f32) / (border_w_scaled as f32 - 1.0).max(1.0);
+                                if offset_x < 0 {
+                                    // Left border: outer is at t = 0 (highlight)
+                                    if t_val < 0.5 {
+                                        1.0 + 0.45 * (1.0 - 2.0 * t_val) * (1.0 - 2.0 * t_val)
+                                    } else {
+                                        1.0
+                                    }
+                                } else {
+                                    // Right border: outer is at t = 1 (shadow)
+                                    if t_val > 0.5 {
+                                        1.0 - 0.50 * (2.0 * t_val - 1.0) * (2.0 * t_val - 1.0)
+                                    } else {
+                                        1.0
+                                    }
+                                }
+                            };
+
+                            let a = ((bg_color >> 24) & 0xFF) as f32;
+                            let r_val = (((bg_color >> 16) & 0xFF) as f32 * s).round().min(255.0) as u32;
+                            let g = (((bg_color >> 8) & 0xFF) as f32 * s).round().min(255.0) as u32;
+                            let b = ((bg_color & 0xFF) as f32 * s).round().min(255.0) as u32;
+
+                            buffer_slice[row_offset + px as usize] = ((a as u32) << 24)
+                                | (r_val << 16)
+                                | (g << 8)
+                                | b;
+                        }
+                    }
+                }
+            }
+
+            if round_bottom {
+                let r_val = (16.min(border_width)) * scale;
+                let cy = ry_end - r_val;
+                
+                // Bottom Left
+                let cx_l = rx_start + r_val;
+                round_corner(buffer_slice, dec_width, dec_height, cx_l, cy, r_val, CornerType::BottomLeft);
+
+                // Bottom Right
+                let cx_r = rx_end - r_val;
+                round_corner(buffer_slice, dec_width, dec_height, cx_r, cy, r_val, CornerType::BottomRight);
+            }
+        }
+
         dec.surface.attach(Some(buffer), 0, 0);
         dec.surface.damage(0, 0, dec_width, dec_height);
         dec.surface.commit();
@@ -438,6 +605,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                     crate::types::TilingMode::Grid => "G",
                     crate::types::TilingMode::Fullscreen => "S",
                     crate::types::TilingMode::Popup => "P",
+                    crate::types::TilingMode::SidePanel => "SP",
                 }
             };
             let title_with_idx = if is_minimized {
@@ -462,7 +630,15 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             let border_g = (g & 0xFF) as u8;
             let border_b = (b & 0xFF) as u8;
             let border_a = (a & 0xFF) as u8;
-            let bg_color = ((border_a as u32) << 24) | ((border_r as u32) << 16) | ((border_g as u32) << 8) | (border_b as u32);
+
+            let r_premult = ((border_r as u32 * border_a as u32) / 255) as u8;
+            let g_premult = ((border_g as u32 * border_a as u32) / 255) as u8;
+            let b_premult = ((border_b as u32 * border_a as u32) / 255) as u8;
+
+            let bg_color = ((border_a as u32) << 24)
+                | ((r_premult as u32) << 16)
+                | ((g_premult as u32) << 8)
+                | (b_premult as u32);
 
             // Border width is mode-specific
             let border_width = if is_minimized {
@@ -476,6 +652,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                     crate::types::TilingMode::Grid => state.wm.layout.grid_border_width,
                     crate::types::TilingMode::Floating => state.wm.layout.floating_border_width,
                     crate::types::TilingMode::Popup => 0,
+                    crate::types::TilingMode::SidePanel => state.wm.layout.cascade_border_width,
                 }
             };
             DecorateInfo {
@@ -522,7 +699,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 border_width.max(1)
             };
 
-            update_transparent_decoration(
+            update_border_decoration(
                 wid,
                 &mut wp.dec_left,
                 compositor,
@@ -534,9 +711,17 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 grab_w,
                 win_height,
                 scale,
+                state.wm.layout.border_blur,
+                bg_color,
+                grab_w - border_width,
+                0,
+                border_width,
+                win_height,
+                border_width,
+                false,
             );
 
-            update_transparent_decoration(
+            update_border_decoration(
                 wid,
                 &mut wp.dec_right,
                 compositor,
@@ -548,9 +733,17 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 grab_w,
                 win_height,
                 scale,
+                state.wm.layout.border_blur,
+                bg_color,
+                0,
+                0,
+                border_width,
+                win_height,
+                border_width,
+                false,
             );
 
-            update_transparent_decoration(
+            update_border_decoration(
                 wid,
                 &mut wp.dec_bottom,
                 compositor,
@@ -562,6 +755,14 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 win_width + 2 * grab_w,
                 grab_w,
                 scale,
+                state.wm.layout.border_blur,
+                bg_color,
+                grab_w - border_width,
+                0,
+                win_width + 2 * border_width,
+                border_width,
+                border_width,
+                true,
             );
         }
 
@@ -612,6 +813,8 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         } else {
             dec.decoration.set_offset(-border_width, -logical_height);
         }
+
+        dec.decoration.set_blur(if state.wm.layout.border_blur { 1 } else { 0 });
 
         if needs_new_buffer {
             eprintln!(
@@ -680,9 +883,53 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 std::slice::from_raw_parts_mut(dec.mapped_data, (dec_width * dec_height) as usize)
             };
 
-            // Clear background
-            for pixel in buffer_slice.iter_mut() {
-                *pixel = bg_color;
+            // Clear background with 3D cylindrical shading and mitred corners (outer edge only)
+            let border_w_scaled = border_width * scale;
+            let titlebar_h_scaled = logical_height * scale;
+            let win_w_scaled = (if is_minimized { 160 - 2 * border_width } else { win_width }) * scale;
+
+            for py in 0..dec_height {
+                let row_offset = (py * dec_width) as usize;
+                for px in 0..dec_width {
+                    // Convert to coordinates relative to client area (0, 0)
+                    let logical_px = px - border_w_scaled;
+                    let logical_py = py - titlebar_h_scaled;
+
+                    // Determine which border region this pixel belongs to, using the exact diagonal slope:
+                    let slope = (titlebar_h_scaled as f32) / (border_w_scaled as f32).max(1.0);
+                    let s = if logical_px < 0 && logical_py > (logical_px as f32 * slope) as i32 {
+                        // Left border region (outer is at t = 0)
+                        let t_val = ((logical_px + border_w_scaled) as f32) / (border_w_scaled as f32 - 1.0).max(1.0);
+                        if t_val < 0.5 {
+                            1.0 + 0.45 * (1.0 - 2.0 * t_val) * (1.0 - 2.0 * t_val)
+                        } else {
+                            1.0
+                        }
+                    } else if logical_px > win_w_scaled && logical_py > (-((logical_px - win_w_scaled) as f32 * slope)) as i32 {
+                        // Right border region (outer is at t = 0)
+                        let t_val = 1.0 - ((logical_px - win_w_scaled) as f32) / (border_w_scaled as f32 - 1.0).max(1.0);
+                        if t_val < 0.5 {
+                            1.0 - 0.50 * (1.0 - 2.0 * t_val) * (1.0 - 2.0 * t_val)
+                        } else {
+                            1.0
+                        }
+                    } else {
+                        // Top border region (outer is at t = 0)
+                        let t_val = ((logical_py + titlebar_h_scaled) as f32) / (titlebar_h_scaled as f32 - 1.0).max(1.0);
+                        if t_val < 0.5 {
+                            1.0 + 0.45 * (1.0 - 2.0 * t_val) * (1.0 - 2.0 * t_val)
+                        } else {
+                            1.0
+                        }
+                    };
+
+                    let a = ((bg_color >> 24) & 0xFF) as f32;
+                    let r_val = (((bg_color >> 16) & 0xFF) as f32 * s).round().min(255.0) as u32;
+                    let g = (((bg_color >> 8) & 0xFF) as f32 * s).round().min(255.0) as u32;
+                    let b = ((bg_color & 0xFF) as f32 * s).round().min(255.0) as u32;
+
+                    buffer_slice[row_offset + px as usize] = ((a as u32) << 24) | (r_val << 16) | (g << 8) | b;
+                }
             }
 
             // Draw window title text
@@ -709,7 +956,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 });
                 let baseline_y = (dec_height as f32 + line_metrics.ascent + line_metrics.descent) / 2.0;
 
-                let mut text_x = 8.0f32 * scale as f32; // Margin from left
+                let mut text_x = 24.0f32 * scale as f32; // Margin from left
                 for c in title.chars() {
                     let (metrics, bitmap) = font.rasterize(c, font_size);
                     if text_x + metrics.xmin as f32 + metrics.width as f32 > dec_width as f32 {
@@ -761,7 +1008,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 
                 // Vertically center the text inside the titlebar
                 let text_y = (dec_height - font_h) / 2;
-                let mut text_x = 8 * scale; // Margin from left
+                let mut text_x = 24 * scale; // Margin from left
 
                 for c in title.chars() {
                     if text_x + 8 * drawing_scale * scale > dec_width {
@@ -771,6 +1018,11 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                     text_x += 8 * drawing_scale * scale;
                 }
             }
+
+            // Apply corner rounding to top-left and top-right of titlebar
+            let r_top = 16 * scale;
+            round_corner(buffer_slice, dec_width, dec_height, r_top, r_top, r_top, CornerType::TopLeft);
+            round_corner(buffer_slice, dec_width, dec_height, dec_width - r_top, r_top, r_top, CornerType::TopRight);
 
             // Commit surface rendering
             if !is_minimized {
