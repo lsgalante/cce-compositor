@@ -183,6 +183,7 @@ pub struct WindowRenderingRequested {
     pub content_clip: ffi::wlr_box,
     pub opacity: f32,
     pub circular: bool,
+    pub blur: bool,
 }
 
 pub struct Window {
@@ -343,6 +344,7 @@ impl Window {
                 content_clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                 opacity: 1.0f32,
                 circular: false,
+                blur: false,
             },
             box_geom: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
             foreign_toplevel_handle: std::ptr::null_mut(),
@@ -688,6 +690,7 @@ impl Window {
                     content_clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                     opacity: 1.0f32,
                     circular: false,
+                    blur: false,
                 };
 
                 wl_list_remove(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
@@ -1138,7 +1141,7 @@ impl Window {
         ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
 
         if enabled {
-            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, true);
+            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, requested.blur);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
             let radius = if requested.circular {
@@ -1841,6 +1844,22 @@ unsafe extern "C" fn window_set_circular(
     (*window).rendering_requested.circular = circular != 0;
 }
 
+unsafe extern "C" fn window_set_blur(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+    blur: u32,
+) {
+    let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
+    if window.is_null() {
+        return;
+    }
+    let server = (*window).server;
+    if !(*server).wm.ensure_rendering() {
+        return;
+    }
+    (*window).rendering_requested.blur = blur != 0;
+}
+
 // river_window_v1 implementation
 static WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_window_v1_interface {
     destroy: Some(window_destroy),
@@ -1869,6 +1888,7 @@ static WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_window_v1_i
     set_dimension_bounds: Some(window_set_dimension_bounds),
     set_opacity: Some(window_set_opacity),
     set_circular: Some(window_set_circular),
+    set_blur: Some(window_set_blur),
 };
 
 static INERT_WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_window_v1_interface {
@@ -1898,6 +1918,7 @@ static INERT_WINDOW_INTERFACE: ffi::river_window_v1_interface = ffi::river_windo
     set_dimension_bounds: None,
     set_opacity: None,
     set_circular: None,
+    set_blur: None,
 };
 
 unsafe extern "C" fn handle_destroy_resource(resource: *mut ffi::wl_resource) {
@@ -1927,6 +1948,7 @@ pub struct DecorationRenderingRequested {
     pub offset_x: i32,
     pub offset_y: i32,
     pub sync_next_commit: bool,
+    pub blur: bool,
 }
 
 pub struct Decoration {
@@ -1987,6 +2009,7 @@ impl Decoration {
                 offset_x: 0,
                 offset_y: 0,
                 sync_next_commit: false,
+                blur: false,
             },
         });
         let raw = Box::into_raw(dec);
@@ -2040,6 +2063,8 @@ impl Decoration {
         }
 
         self.surfaces.drop_saved();
+
+        ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, self.rendering_requested.blur);
 
         ffi::wlr_scene_node_set_position(self.tree as *mut ffi::wlr_scene_node, self.rendering_requested.offset_x, self.rendering_requested.offset_y);
 
@@ -2121,16 +2146,34 @@ unsafe extern "C" fn dec_sync_next_commit(
     (*dec).rendering_requested.sync_next_commit = true;
 }
 
+unsafe extern "C" fn dec_set_blur(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+    blur: u32,
+) {
+    let dec = ffi::wl_resource_get_user_data(resource) as *mut Decoration;
+    if dec.is_null() {
+        return;
+    }
+    let server = (*(*dec).window).server;
+    if !(*server).wm.ensure_rendering() {
+        return;
+    }
+    (*dec).rendering_requested.blur = blur != 0;
+}
+
 static DECORATION_INTERFACE: ffi::river_decoration_v1_interface = ffi::river_decoration_v1_interface {
     destroy: Some(dec_destroy),
     set_offset: Some(dec_set_offset),
     sync_next_commit: Some(dec_sync_next_commit),
+    set_blur: Some(dec_set_blur),
 };
 
 static INERT_DECORATION_INTERFACE: ffi::river_decoration_v1_interface = ffi::river_decoration_v1_interface {
     destroy: Some(dec_destroy),
     set_offset: None,
     sync_next_commit: None,
+    set_blur: None,
 };
 
 unsafe extern "C" fn handle_dec_destroy_resource(resource: *mut ffi::wl_resource) {

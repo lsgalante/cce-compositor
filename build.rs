@@ -4,6 +4,7 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-changed=src/wlroots_log_wrapper.c");
     println!("cargo:rerun-if-changed=wrapper.h");
+    println!("cargo:rerun-if-changed=protocol/river-window-management-v1.xml");
 
     // Probe system libraries
     let scenefx = pkg_config::Config::new()

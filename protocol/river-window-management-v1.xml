@@ -1139,6 +1139,16 @@
       </description>
       <arg name="circular" type="uint" summary="1 if circular, 0 otherwise"/>
     </request>
+
+    <request name="set_blur" since="4">
+      <description summary="set whether backdrop blur is enabled">
+        Set whether backdrop blur should be enabled for this window.
+        1 to enable, 0 to disable.
+        This request modifies rendering state and may only be made as part of a
+        render sequence, see the river_window_manager_v1 description.
+      </description>
+      <arg name="blur" type="uint" summary="1 to enable, 0 to disable"/>
+    </request>
   </interface>
 
   <interface name="river_decoration_v1" version="4">
@@ -1194,6 +1204,16 @@
         This request modifies rendering state and may only be made as part of a
         render sequence, see the river_window_manager_v1 description.
       </description>
+    </request>
+
+    <request name="set_blur" since="4">
+      <description summary="set whether backdrop blur is enabled">
+        Set whether backdrop blur should be enabled for this decoration.
+        1 to enable, 0 to disable.
+        This request modifies rendering state and may only be made as part of a
+        render sequence, see the river_window_manager_v1 description.
+      </description>
+      <arg name="blur" type="uint" summary="1 to enable, 0 to disable"/>
     </request>
   </interface>
 
