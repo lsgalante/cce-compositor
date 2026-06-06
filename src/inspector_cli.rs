@@ -321,7 +321,7 @@ fn main() {
                         }
                     }
                 } else {
-                    eprintln!("Error: Widget of type '{}'{} not found in surface '{}'", 
+                    eprintln!("Error: Element of type '{}'{} not found in surface '{}'", 
                         target_type, 
                         widget_label.as_ref().map(|l| format!(" with label '{}'", l)).unwrap_or_default(),
                         target_app_id
@@ -351,7 +351,7 @@ fn main() {
         println!("  Dimensions:  {}x{} px", surface.width, surface.height);
         
         // Pretty print widget state if it's JSON
-        print!("  Widget Tree: ");
+        print!("  Element Tree: ");
         if let Ok(json_val) = serde_json::from_str::<Value>(&surface.state) {
             if let Ok(pretty_json) = serde_json::to_string_pretty(&json_val) {
                 // Indent pretty JSON for clean display

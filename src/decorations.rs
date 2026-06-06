@@ -283,6 +283,8 @@ fn update_border_decoration(
     rect_h: i32,
     border_width: i32,
     round_bottom: bool,
+    side: &str,
+    hover_info: Option<(f64, f64)>,
 ) {
     let dec_width = logical_width * scale;
     let dec_height = logical_height * scale;
@@ -378,6 +380,50 @@ fn update_border_decoration(
                 *pixel = 0x00000000;
             }
 
+            let mut highlight_region: Option<HighlightRegion> = None;
+            if let Some((hx, hy)) = hover_info {
+                const CORNER_THRESHOLD: f64 = 16.0;
+                match side {
+                    "left" => {
+                        let mid_x = (logical_width as f64) / 2.0;
+                        if hx < mid_x {
+                            if hy < CORNER_THRESHOLD {
+                                highlight_region = Some(HighlightRegion::TopLeft);
+                            } else if hy > (logical_height as f64 - CORNER_THRESHOLD) {
+                                highlight_region = Some(HighlightRegion::BottomLeft);
+                            } else {
+                                highlight_region = Some(HighlightRegion::Left);
+                            }
+                        }
+                    }
+                    "right" => {
+                        let mid_x = (logical_width as f64) / 2.0;
+                        if hx >= mid_x {
+                            if hy < CORNER_THRESHOLD {
+                                highlight_region = Some(HighlightRegion::TopRight);
+                            } else if hy > (logical_height as f64 - CORNER_THRESHOLD) {
+                                highlight_region = Some(HighlightRegion::BottomRight);
+                            } else {
+                                highlight_region = Some(HighlightRegion::Right);
+                            }
+                        }
+                    }
+                    "bottom" => {
+                        let mid_y = (logical_height as f64) / 2.0;
+                        if hy >= mid_y {
+                            if hx < CORNER_THRESHOLD {
+                                highlight_region = Some(HighlightRegion::BottomLeft);
+                            } else if hx > (logical_width as f64 - CORNER_THRESHOLD) {
+                                highlight_region = Some(HighlightRegion::BottomRight);
+                            } else {
+                                highlight_region = Some(HighlightRegion::Bottom);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             // Draw visual border color with 3D cylindrical shading and mitred joints
             let rx_start = rect_x * scale;
             let ry_start = rect_y * scale;
@@ -444,9 +490,17 @@ fn update_border_decoration(
                             };
 
                             let a = ((bg_color >> 24) & 0xFF) as f32;
-                            let r_val = (((bg_color >> 16) & 0xFF) as f32 * s).round().min(255.0) as u32;
-                            let g = (((bg_color >> 8) & 0xFF) as f32 * s).round().min(255.0) as u32;
-                            let b = ((bg_color & 0xFF) as f32 * s).round().min(255.0) as u32;
+                            let mut r_val = (((bg_color >> 16) & 0xFF) as f32 * s).round().min(255.0) as u32;
+                            let mut g = (((bg_color >> 8) & 0xFF) as f32 * s).round().min(255.0) as u32;
+                            let mut b = ((bg_color & 0xFF) as f32 * s).round().min(255.0) as u32;
+
+                            if let Some(region) = highlight_region {
+                                if is_pixel_in_highlight_region(side, region, px, py, logical_width, logical_height, scale) {
+                                    r_val = (r_val as f32 * 0.6 + 255.0 * 0.4).round() as u32;
+                                    g = (g as f32 * 0.6 + 255.0 * 0.4).round() as u32;
+                                    b = (b as f32 * 0.6 + 255.0 * 0.4).round() as u32;
+                                }
+                            }
 
                             buffer_slice[row_offset + px as usize] = ((a as u32) << 24)
                                 | (r_val << 16)
@@ -699,6 +753,10 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 border_width.max(1)
             };
 
+            let hover_left = state.pointer_hovered_surface.as_ref()
+                .filter(|surf| wp.dec_left.as_ref().map_or(false, |d| &d.surface == *surf))
+                .map(|_| (state.last_pointer_surface_x, state.last_pointer_surface_y));
+
             update_border_decoration(
                 wid,
                 &mut wp.dec_left,
@@ -719,7 +777,13 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 win_height,
                 border_width,
                 false,
+                "left",
+                hover_left,
             );
+
+            let hover_right = state.pointer_hovered_surface.as_ref()
+                .filter(|surf| wp.dec_right.as_ref().map_or(false, |d| &d.surface == *surf))
+                .map(|_| (state.last_pointer_surface_x, state.last_pointer_surface_y));
 
             update_border_decoration(
                 wid,
@@ -741,7 +805,13 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 win_height,
                 border_width,
                 false,
+                "right",
+                hover_right,
             );
+
+            let hover_bottom = state.pointer_hovered_surface.as_ref()
+                .filter(|surf| wp.dec_bottom.as_ref().map_or(false, |d| &d.surface == *surf))
+                .map(|_| (state.last_pointer_surface_x, state.last_pointer_surface_y));
 
             update_border_decoration(
                 wid,
@@ -763,6 +833,8 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 border_width,
                 border_width,
                 true,
+                "bottom",
+                hover_bottom,
             );
         }
 
@@ -798,6 +870,10 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 mapped_size: 0,
             });
         }
+
+        let hover_top = state.pointer_hovered_surface.as_ref()
+            .filter(|surf| wp.decoration.as_ref().map_or(false, |d| &d.surface == *surf))
+            .map(|_| (state.last_pointer_surface_x, state.last_pointer_surface_y));
 
         let dec = wp.decoration.as_mut().unwrap();
 
@@ -888,6 +964,21 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             let titlebar_h_scaled = logical_height * scale;
             let win_w_scaled = (if is_minimized { 160 - 2 * border_width } else { win_width }) * scale;
 
+            let mut highlight_region: Option<HighlightRegion> = None;
+            if let Some((hx, hy)) = hover_top {
+                let mid_y = (logical_height as f64) / 2.0;
+                if hy < mid_y {
+                    const CORNER_THRESHOLD: f64 = 16.0;
+                    if hx < CORNER_THRESHOLD {
+                        highlight_region = Some(HighlightRegion::TopLeft);
+                    } else if hx > (logical_width as f64 - CORNER_THRESHOLD) {
+                        highlight_region = Some(HighlightRegion::TopRight);
+                    } else {
+                        highlight_region = Some(HighlightRegion::Top);
+                    }
+                }
+            }
+
             for py in 0..dec_height {
                 let row_offset = (py * dec_width) as usize;
                 for px in 0..dec_width {
@@ -924,9 +1015,17 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                     };
 
                     let a = ((bg_color >> 24) & 0xFF) as f32;
-                    let r_val = (((bg_color >> 16) & 0xFF) as f32 * s).round().min(255.0) as u32;
-                    let g = (((bg_color >> 8) & 0xFF) as f32 * s).round().min(255.0) as u32;
-                    let b = ((bg_color & 0xFF) as f32 * s).round().min(255.0) as u32;
+                    let mut r_val = (((bg_color >> 16) & 0xFF) as f32 * s).round().min(255.0) as u32;
+                    let mut g = (((bg_color >> 8) & 0xFF) as f32 * s).round().min(255.0) as u32;
+                    let mut b = ((bg_color & 0xFF) as f32 * s).round().min(255.0) as u32;
+
+                    if let Some(region) = highlight_region {
+                        if is_pixel_in_highlight_region("top", region, px, py, logical_width, logical_height, scale) {
+                            r_val = (r_val as f32 * 0.6 + 255.0 * 0.4).round() as u32;
+                            g = (g as f32 * 0.6 + 255.0 * 0.4).round() as u32;
+                            b = (b as f32 * 0.6 + 255.0 * 0.4).round() as u32;
+                        }
+                    }
 
                     buffer_slice[row_offset + px as usize] = ((a as u32) << 24) | (r_val << 16) | (g << 8) | b;
                 }
@@ -1033,5 +1132,51 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             }
             dec.surface.commit();
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HighlightRegion {
+    TopLeft,
+    Top,
+    TopRight,
+    Left,
+    Right,
+    BottomLeft,
+    Bottom,
+    BottomRight,
+}
+
+fn is_pixel_in_highlight_region(
+    side: &str,
+    region: HighlightRegion,
+    px: i32,
+    py: i32,
+    logical_width: i32,
+    logical_height: i32,
+    scale: i32,
+) -> bool {
+    let px_logical = px as f32 / scale as f32;
+    let py_logical = py as f32 / scale as f32;
+    const CORNER_THRESHOLD: f32 = 16.0;
+
+    match (side, region) {
+        ("left", HighlightRegion::TopLeft) => py_logical < CORNER_THRESHOLD,
+        ("left", HighlightRegion::BottomLeft) => py_logical > (logical_height as f32 - CORNER_THRESHOLD),
+        ("left", HighlightRegion::Left) => py_logical >= CORNER_THRESHOLD && py_logical <= (logical_height as f32 - CORNER_THRESHOLD),
+
+        ("right", HighlightRegion::TopRight) => py_logical < CORNER_THRESHOLD,
+        ("right", HighlightRegion::BottomRight) => py_logical > (logical_height as f32 - CORNER_THRESHOLD),
+        ("right", HighlightRegion::Right) => py_logical >= CORNER_THRESHOLD && py_logical <= (logical_height as f32 - CORNER_THRESHOLD),
+
+        ("bottom", HighlightRegion::BottomLeft) => px_logical < CORNER_THRESHOLD,
+        ("bottom", HighlightRegion::BottomRight) => px_logical > (logical_width as f32 - CORNER_THRESHOLD),
+        ("bottom", HighlightRegion::Bottom) => px_logical >= CORNER_THRESHOLD && px_logical <= (logical_width as f32 - CORNER_THRESHOLD),
+
+        ("top", HighlightRegion::TopLeft) => px_logical < CORNER_THRESHOLD,
+        ("top", HighlightRegion::TopRight) => px_logical > (logical_width as f32 - CORNER_THRESHOLD),
+        ("top", HighlightRegion::Top) => px_logical >= CORNER_THRESHOLD && px_logical <= (logical_width as f32 - CORNER_THRESHOLD),
+
+        _ => false,
     }
 }

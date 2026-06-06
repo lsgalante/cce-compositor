@@ -1076,6 +1076,20 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                             0
                         } else if win.tiling_mode == crate::types::TilingMode::Popup {
                             5
+                        } else if win.tiling_mode == crate::types::TilingMode::SidePanel {
+                            if state.wm.layout.side_panel_behavior == "above" {
+                                if Some(win.id) == focused_id {
+                                    4
+                                } else {
+                                    3
+                                }
+                            } else {
+                                if Some(win.id) == focused_id {
+                                    2
+                                } else {
+                                    1
+                                }
+                            }
                         } else if win.tiling_mode != crate::types::TilingMode::Floating {
                             if Some(win.id) == focused_id {
                                 2
@@ -1616,11 +1630,32 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
 
             river_window_v1::Event::PointerResizeRequested { seat, edges } => {
                 if let Some(_sid) = state.seat_id_for_proxy(&seat) {
+                    let edges_u32: u32 = edges.into();
+                    let op_type = match edges_u32 {
+                        1 => PointerOpType::ResizeTop,
+                        2 => PointerOpType::ResizeBottom,
+                        4 => PointerOpType::ResizeLeft,
+                        8 => PointerOpType::ResizeRight,
+                        5 => PointerOpType::ResizeTopLeft,
+                        9 => PointerOpType::ResizeTopRight,
+                        6 => PointerOpType::ResizeBottomLeft,
+                        10 => PointerOpType::ResizeBottomRight,
+                        _ => PointerOpType::Resize,
+                    };
+
                     let mut window_found = false;
                     let mut needs_render = false;
                     if let Some(win) = state.wm.get_window_mut(wid) {
                         if win.tiling_mode != TilingMode::Fullscreen && win.tiling_mode != TilingMode::Popup {
-                            if win.tiling_mode != TilingMode::Floating {
+                            let is_right_resize_on_side_panel = win.tiling_mode == TilingMode::SidePanel
+                                && matches!(
+                                    op_type,
+                                    PointerOpType::Resize
+                                        | PointerOpType::ResizeRight
+                                        | PointerOpType::ResizeTopRight
+                                        | PointerOpType::ResizeBottomRight
+                                );
+                            if !is_right_resize_on_side_panel && win.tiling_mode != TilingMode::Floating {
                                 win.tiling_mode = TilingMode::Floating;
                                 needs_render = true;
                             }
@@ -1642,18 +1677,6 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
                             win.anim_h = None;
                             win.anim_opacity = None;
                             
-                            let edges_u32: u32 = edges.into();
-                            let op_type = match edges_u32 {
-                                1 => PointerOpType::ResizeTop,
-                                2 => PointerOpType::ResizeBottom,
-                                4 => PointerOpType::ResizeLeft,
-                                8 => PointerOpType::ResizeRight,
-                                5 => PointerOpType::ResizeTopLeft,
-                                9 => PointerOpType::ResizeTopRight,
-                                6 => PointerOpType::ResizeBottomLeft,
-                                10 => PointerOpType::ResizeBottomRight,
-                                _ => PointerOpType::Resize,
-                            };
                             state.active_pointer_op = Some(PointerOp {
                                 window_id: wid,
                                 op_type,
@@ -1782,6 +1805,7 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
             river_seat_v1::Event::OpDelta { dx, dy } => {
                 if let Some(ref op) = state.active_pointer_op {
                     let wid = op.window_id;
+                    let bw = state.wm.layout.cascade_border_width;
                     if let Some(win) = state.wm.get_window_mut(wid) {
                         match op.op_type {
                             PointerOpType::Move => {
@@ -1790,6 +1814,9 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
                             }
                             PointerOpType::Resize | PointerOpType::ResizeRight => {
                                 win.width = std::cmp::max(50, op.start_width + dx);
+                                if win.tiling_mode == TilingMode::SidePanel {
+                                    win.hint_min_width = win.width + bw * 2;
+                                }
                             }
                             PointerOpType::ResizeLeft => {
                                 let target_width = std::cmp::max(50, op.start_width - dx);
@@ -1809,6 +1836,9 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
                             PointerOpType::ResizeBottomRight => {
                                 win.width = std::cmp::max(50, op.start_width + dx);
                                 win.height = std::cmp::max(50, op.start_height + dy);
+                                if win.tiling_mode == TilingMode::SidePanel {
+                                    win.hint_min_width = win.width + bw * 2;
+                                }
                             }
                             PointerOpType::ResizeBottomLeft => {
                                 let target_width = std::cmp::max(50, op.start_width - dx);
@@ -1835,6 +1865,9 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
                                 let actual_dy = op.start_height - target_height;
                                 win.y = op.start_y + actual_dy;
                                 win.height = target_height;
+                                if win.tiling_mode == TilingMode::SidePanel {
+                                    win.hint_min_width = win.width + bw * 2;
+                                }
                             }
                         }
                     }
@@ -2490,7 +2523,15 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                 let mut needs_render = false;
                 if let Some(win) = state.wm.get_window_mut(wid) {
                     if win.tiling_mode != TilingMode::Fullscreen && win.tiling_mode != TilingMode::Popup {
-                        if win.tiling_mode != TilingMode::Floating {
+                        let is_right_resize_on_side_panel = win.tiling_mode == TilingMode::SidePanel
+                            && matches!(
+                                op_type,
+                                PointerOpType::Resize
+                                    | PointerOpType::ResizeRight
+                                    | PointerOpType::ResizeTopRight
+                                    | PointerOpType::ResizeBottomRight
+                            );
+                        if !is_right_resize_on_side_panel && win.tiling_mode != TilingMode::Floating {
                             win.tiling_mode = TilingMode::Floating;
                             needs_render = true;
                         }
@@ -3730,6 +3771,16 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
 
                 Self::update_cursor_shape_for_surface(state, proxy);
 
+                let is_decoration = state.window_proxies.iter().any(|(_, wp)| {
+                    wp.decoration.as_ref().map_or(false, |d| &d.surface == &surface)
+                        || wp.dec_left.as_ref().map_or(false, |d| &d.surface == &surface)
+                        || wp.dec_right.as_ref().map_or(false, |d| &d.surface == &surface)
+                        || wp.dec_bottom.as_ref().map_or(false, |d| &d.surface == &surface)
+                });
+                if is_decoration {
+                    state.wm.needs_render = true;
+                }
+
                 if state.wm.expose_active {
                     let current_surface = &surface;
                     let matched_window = state.window_proxies.iter().find_map(|(id, proxy)| {
@@ -3787,12 +3838,25 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
                 eprintln!("[pointer] leave");
                 state.pointer_hovered_surface = None;
                 Self::update_cursor_shape_for_surface(state, proxy);
+                state.wm.needs_render = true;
             }
             wl_pointer::Event::Motion { surface_x, surface_y, .. } => {
                 state.last_pointer_surface_x = surface_x;
                 state.last_pointer_surface_y = surface_y;
 
                 Self::update_cursor_shape_for_surface(state, proxy);
+
+                if let Some(ref current_surface) = state.pointer_hovered_surface {
+                    let is_decoration = state.window_proxies.iter().any(|(_, wp)| {
+                        wp.decoration.as_ref().map_or(false, |d| &d.surface == current_surface)
+                            || wp.dec_left.as_ref().map_or(false, |d| &d.surface == current_surface)
+                            || wp.dec_right.as_ref().map_or(false, |d| &d.surface == current_surface)
+                            || wp.dec_bottom.as_ref().map_or(false, |d| &d.surface == current_surface)
+                    });
+                    if is_decoration {
+                        state.wm.needs_render = true;
+                    }
+                }
 
                 if let Some(pending) = state.pending_border_drag.clone() {
                     let dx = surface_x - pending.start_surface_x;
@@ -3806,7 +3870,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for AppState {
                         let mut needs_render = false;
                         if let Some(win) = state.wm.get_window_mut(pending.window_id) {
                             if win.tiling_mode != TilingMode::Fullscreen && win.tiling_mode != TilingMode::Popup {
-                                if win.tiling_mode != TilingMode::Floating {
+                                let is_right_resize_on_side_panel = win.tiling_mode == TilingMode::SidePanel
+                                    && matches!(
+                                        pending.op_type,
+                                        PointerOpType::Resize
+                                            | PointerOpType::ResizeRight
+                                            | PointerOpType::ResizeTopRight
+                                            | PointerOpType::ResizeBottomRight
+                                    );
+                                if !is_right_resize_on_side_panel && win.tiling_mode != TilingMode::Floating {
                                     win.tiling_mode = TilingMode::Floating;
                                     needs_render = true;
                                 }

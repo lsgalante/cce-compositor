@@ -90,6 +90,8 @@ pub struct Layout {
     pub grid_gap: i32,
     pub border_blur: bool,
     pub window_blur: bool,
+    pub side_panel_behavior: String,
+    pub side_panel_width: i32,
 }
 
 impl Default for Layout {
@@ -120,6 +122,8 @@ impl Default for Layout {
             grid_gap: 18,
             border_blur: false,
             window_blur: false,
+            side_panel_behavior: "inline".to_string(),
+            side_panel_width: 360,
         }
     }
 }

@@ -84,6 +84,10 @@ pub struct LayoutConfig {
     pub border_blur: bool,
     #[serde(default = "default_window_blur")]
     pub window_blur: bool,
+    #[serde(default = "default_side_panel_behavior")]
+    pub side_panel_behavior: String,
+    #[serde(default = "default_side_panel_width")]
+    pub side_panel_width: i64,
 }
 
 impl Default for LayoutConfig {
@@ -108,6 +112,8 @@ impl Default for LayoutConfig {
             grid_gap: default_grid_gap(),
             border_blur: default_border_blur(),
             window_blur: default_window_blur(),
+            side_panel_behavior: default_side_panel_behavior(),
+            side_panel_width: default_side_panel_width(),
         }
     }
 }
@@ -122,6 +128,14 @@ fn default_border_blur() -> bool {
 
 fn default_window_blur() -> bool {
     false
+}
+
+fn default_side_panel_behavior() -> String {
+    "inline".to_string()
+}
+
+fn default_side_panel_width() -> i64 {
+    360
 }
 
 fn default_gap() -> i64 {
@@ -325,6 +339,8 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
     state.layout.grid_gap = config.layout.grid_gap as i32;
     state.layout.border_blur = config.layout.border_blur;
     state.layout.window_blur = config.layout.window_blur;
+    state.layout.side_panel_behavior = config.layout.side_panel_behavior.clone();
+    state.layout.side_panel_width = config.layout.side_panel_width as i32;
     if let Some((r, g, b, a)) = parse_hex_color(&config.layout.border_color) {
         state.layout.border_r = r;
         state.layout.border_g = g;
@@ -698,6 +714,8 @@ mod tests {
         assert_eq!(lc.border_color, "#3e3e3e");
         assert_eq!(lc.border_font_size, 11);
         assert_eq!(lc.grid_gap, 18);
+        assert_eq!(lc.side_panel_width, 360);
+        assert_eq!(lc.side_panel_behavior, "inline");
     }
 
     #[test]

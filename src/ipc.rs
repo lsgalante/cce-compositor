@@ -706,6 +706,20 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 }
             }
         }
+        "side_panel_behavior" | "side-panel-behavior" => {
+            state.layout.side_panel_behavior = value_str.to_string();
+            if state.notifications_enable {
+                crate::config::show_notification("ccec", &format!("Side panel behavior set to {}", value_str));
+            }
+        }
+        "side_panel_width" | "side-panel-width" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.side_panel_width = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("ccec", &format!("Side panel width set to {}px", value));
+                }
+            }
+        }
         _ => {}
     }
     state.needs_render = true;

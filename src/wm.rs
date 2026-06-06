@@ -491,10 +491,12 @@ fn compute_tiling(
     });
 
     let shift_x = if let Some(panel_win) = side_panel_win {
-        if panel_win.hint_min_width > 32 {
+        if wm.layout.side_panel_behavior == "above" {
+            0
+        } else if panel_win.hint_min_width > 32 {
             panel_win.hint_min_width
         } else {
-            360
+            wm.layout.side_panel_width
         }
     } else {
         0
@@ -517,7 +519,7 @@ fn compute_tiling(
                 let target_w = if win.hint_min_width > 32 {
                     win.hint_min_width
                 } else {
-                    360
+                    wm.layout.side_panel_width
                 };
                 let bw = wm.layout.cascade_border_width;
                 let dec_h = std::cmp::max(bw, 16);
