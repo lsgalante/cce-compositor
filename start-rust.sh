@@ -1,7 +1,7 @@
 #!/bin/sh
-# Launch clear-computing-environment-server with ccec
+# Launch cce-server with cce-client
 # Usage: ./start-rust.sh [--logging] [--debug]
-
+ 
 LOGGING=false
 DEBUG=false
 for arg in "$@"; do
@@ -10,37 +10,36 @@ for arg in "$@"; do
         --debug) DEBUG=true ;;
     esac
 done
-
+ 
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export XCURSOR_THEME="crosshair-theme"
 export XCURSOR_SIZE=24
 export XCURSOR_PATH="/home/lsgalante/.local/share/icons:/home/lsgalante/.icons:/usr/share/icons"
 export WLR_NO_HARDWARE_CURSORS=1
-
-# Create the ccec launch script
+ 
+# Create the cce-client launch script
 DEBUG_FLAG=""
 if [ "$DEBUG" = true ]; then
     DEBUG_FLAG="WAYLAND_DEBUG=1 "
 fi
-
-cat > /tmp/ccec-launch-rust.sh << LAUNCH_EOF
+ 
+cat > /tmp/cce-client-launch-rust.sh << LAUNCH_EOF
 #!/bin/sh
-${DEBUG_FLAG}exec /home/lsgalante/.local/bin/ccec 2>/tmp/ccec-\${WAYLAND_DISPLAY}.log
+${DEBUG_FLAG}exec /home/lsgalante/.local/bin/cce-client 2>/tmp/cce-client-\${WAYLAND_DISPLAY}.log
 LAUNCH_EOF
-chmod +x /tmp/ccec-launch-rust.sh
-
+chmod +x /tmp/cce-client-launch-rust.sh
+ 
 if [ "$LOGGING" = true ] || [ "$DEBUG" = true ]; then
-    echo "Starting clear-computing-environment-server with ccec..."
-    echo "  Logs: /tmp/river-ccec.log + /tmp/ccec-\${WAYLAND_DISPLAY}.log"
+    echo "Starting cce-server with cce-client..."
+    echo "  Logs: /tmp/river-cce-client.log + /tmp/cce-client-\${WAYLAND_DISPLAY}.log"
     if [ "$DEBUG" = true ]; then
         echo "  Wayland debug logging enabled (WAYLAND_DEBUG=1)"
     fi
 fi
-
-# Resolve script directory to reference target/release/clear-computing-environment-server reliably
+ 
+# Resolve script directory to reference target/release/cce-server reliably
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ "$DEBUG" = true ]; then
     export WAYLAND_DEBUG=1
 fi
-exec "$SCRIPT_DIR/target/release/clear-computing-environment-server" -c /tmp/ccec-launch-rust.sh 2>/tmp/river-ccec.log
-
+exec "$SCRIPT_DIR/target/release/cce-server" -c /tmp/cce-client-launch-rust.sh 2>/tmp/river-cce-client.log

@@ -5,7 +5,7 @@ build:
 
 install: build
 	mkdir -p ~/.local/bin
-	install -m 755 target/release/clear-computing-environment-server ~/.local/bin/clear-computing-environment-server
+	install -m 755 target/release/cce-server ~/.local/bin/cce-server
 
 run:
 	cargo run

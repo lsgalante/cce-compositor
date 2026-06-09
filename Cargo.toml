@@ -1,5 +1,5 @@
 [package]
-name = "clear-computing-environment-server"
+name = "cce-server"
 version = "0.1.0"
 edition = "2021"
 
