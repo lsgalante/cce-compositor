@@ -5,7 +5,7 @@ use wayland_client::{
 };
 use serde_json::Value;
 
-// Import generated client protocols from ccec crate
+// Import generated client protocols from cce-client crate
 mod protocol;
 use protocol::clear_inspector::client::zclear_inspector_v1::{self, ZclearInspectorV1};
 
@@ -79,8 +79,8 @@ impl Dispatch<ZclearInspectorV1, ()> for InspectorState {
 
 fn get_socket_path() -> String {
     match std::env::var("WAYLAND_DISPLAY") {
-        Ok(display) => format!("/tmp/ccec-{}.sock", display),
-        Err(_) => "/tmp/ccec.sock".to_string(),
+        Ok(display) => format!("/tmp/cce-client-{}.sock", display),
+        Err(_) => "/tmp/cce-client.sock".to_string(),
     }
 }
 
@@ -316,7 +316,7 @@ fn main() {
                             }
                         }
                         Err(e) => {
-                            eprintln!("Error sending IPC commands to ccec socket: {:?}", e);
+                            eprintln!("Error sending IPC commands to cce-client socket: {:?}", e);
                             std::process::exit(1);
                         }
                     }

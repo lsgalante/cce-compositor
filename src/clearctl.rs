@@ -1,4 +1,4 @@
-// clearctl — IPC client for ccec
+// clearctl — IPC client for cce-client
 
 use std::env;
 use std::fs;
@@ -8,15 +8,15 @@ use std::process;
 
 fn get_socket_path() -> String {
     match env::var("WAYLAND_DISPLAY") {
-        Ok(display) => format!("/tmp/ccec-{}.sock", display),
-        Err(_) => "/tmp/ccec.sock".to_string(),
+        Ok(display) => format!("/tmp/cce-client-{}.sock", display),
+        Err(_) => "/tmp/cce-client.sock".to_string(),
     }
 }
 
 fn get_windows_path() -> String {
     match env::var("WAYLAND_DISPLAY") {
-        Ok(display) => format!("/tmp/ccec-windows-{}", display),
-        Err(_) => "/tmp/ccec-windows".to_string(),
+        Ok(display) => format!("/tmp/cce-client-windows-{}", display),
+        Err(_) => "/tmp/cce-client-windows".to_string(),
     }
 }
 
@@ -80,7 +80,7 @@ fn main() {
     if args[1] == "windows" {
         match fs::read_to_string(get_windows_path()) {
             Ok(content) => print!("{}", content),
-            Err(_) => eprintln!("No windows info (ccec may not be running)"),
+            Err(_) => eprintln!("No windows info (cce-client may not be running)"),
         }
         return;
     }

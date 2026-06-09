@@ -1,4 +1,4 @@
-// ccec — Wayland window manager for river, written in Rust
+// cce-client — Wayland window manager for river, written in Rust
 
 pub mod borders;
 pub mod config;

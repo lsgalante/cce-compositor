@@ -1,18 +1,18 @@
-// ccec — Wayland window manager for river
+// cce-client — Wayland window manager for river
 
-use ccec::config::parse_config;
-use ccec::ipc;
-use ccec::ipc_server;
-use ccec::restart;
-use ccec::status_server;
-use ccec::wayland::wayland_init;
+use cce_client::config::parse_config;
+use cce_client::ipc;
+use cce_client::ipc_server;
+use cce_client::restart;
+use cce_client::status_server;
+use cce_client::wayland::wayland_init;
 use std::env;
 use std::fs;
 
-use ccec::paths;
+use cce_client::paths;
 
-/// Write a crash/exit trace to /tmp/ccec-death.log so we can diagnose
-/// why ccec dies even when the normal log gets overwritten on restart.
+/// Write a crash/exit trace to /tmp/cce-client-death.log so we can diagnose
+/// why cce-client dies even when the normal log gets overwritten on restart.
 fn log_death(msg: &str) {
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -40,7 +40,7 @@ fn main() {
         }
     }));
 
-    eprintln!("ccec starting...");
+    eprintln!("cce-client starting...");
 
     // Start the status socket server thread (for waybar integration)
     let status_sender = status_server::spawn_status_server();
@@ -66,7 +66,7 @@ fn main() {
     }
 
     // Connect to Wayland display and get initial state.
-    // SIGUSR2 handler: dump backtrace to /tmp/ccec-bt.txt for debugging busy loops
+    // SIGUSR2 handler: dump backtrace to /tmp/cce-client-bt.txt for debugging busy loops
     unsafe {
         nix::sys::signal::sigaction(
             nix::sys::signal::SIGUSR2,
@@ -95,22 +95,22 @@ fn main() {
     let pipe_read = pipe_fds[0];
     let pipe_write = pipe_fds[1];
 
-    // Start the IPC server thread (for clearctl and clear-system-interface)
+    // Start the IPC server thread (for clearctl and cce-system-interface)
     let ipc_server = ipc_server::spawn_ipc_server(pipe_write);
     let ipc_rx = ipc_server.rx;
     let ipc_tx = ipc_server.tx;
 
     // Setup channel for configuration updates:
-    let (config_tx, config_rx) = tokio::sync::mpsc::unbounded_channel::<ccec::input::InputDaemonMsg>();
+    let (config_tx, config_rx) = tokio::sync::mpsc::unbounded_channel::<cce_client::input::InputDaemonMsg>();
     state.wm.input_controller = Some(config_tx);
 
     // Spawn the input subsystem background thread:
     let pipe_write_clone = pipe_write;
     let ipc_tx_clone = ipc_tx.clone();
     std::thread::Builder::new()
-        .name("ccec-input-subsystem".into())
+        .name("cce-client-input-subsystem".into())
         .spawn(move || {
-            if let Err(e) = ccec::input::run_input_daemon(config_rx, ipc_tx_clone, pipe_write_clone) {
+            if let Err(e) = cce_client::input::run_input_daemon(config_rx, ipc_tx_clone, pipe_write_clone) {
                 eprintln!("[input-subsystem] Fatal error: {:?}", e);
             }
         })
@@ -120,8 +120,8 @@ fn main() {
     state.status_sender = Some(status_sender);
 
     // Check if this is a restart
-    let cold_start = if env::var("CCEC_RESTARTING").as_deref() == Ok("1") {
-        env::remove_var("CCEC_RESTARTING");
+    let cold_start = if env::var("CCE_CLIENT_RESTARTING").as_deref() == Ok("1") {
+        env::remove_var("CCE_CLIENT_RESTARTING");
         false
     } else {
         true
@@ -139,7 +139,7 @@ fn main() {
     );
     let config_start = std::time::Instant::now();
     if let Ok(home) = env::var("HOME") {
-        let config_path = format!("{}/.config/ccec/config.toml", home);
+        let config_path = format!("{}/.config/cce/config.toml", home);
         if fs::metadata(&config_path).is_ok() {
             if let Err(e) = parse_config(&config_path, cold_start, &mut state.wm) {
                 eprintln!("[init] failed to load config: {}", e);
@@ -156,7 +156,7 @@ fn main() {
     if state.wm.pending_scale_apply && state.wm.output_scale > 0.0 && !state.output_heads.is_empty()
     {
         let qh = event_queue.handle();
-        ccec::wayland::apply_output_scale(&mut state, &qh);
+        cce_client::wayland::apply_output_scale(&mut state, &qh);
     }
 
     // Flush any queued requests from config loading (bindings, etc.)
@@ -282,7 +282,7 @@ fn main() {
             }
             if !state.wm.tap_config_applied && !state.libinput_devices.is_empty() {
                 let qh = event_queue.handle();
-                ccec::wayland::apply_input_config(&mut state, &qh);
+                cce_client::wayland::apply_input_config(&mut state, &qh);
             }
         }
 

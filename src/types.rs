@@ -1,4 +1,4 @@
-// Core data structures for ccec
+// Core data structures for cce-client
 
 use std::collections::HashMap;
 
@@ -349,7 +349,7 @@ pub struct WindowManager {
     /// on the next output_manager done event. Set by config load and
     /// by VT-switch-back (where wlroots resets scale to 1).
     pub pending_scale_apply: bool,
-    /// When true, apply persisted state from ~/.cache/ccec_state on the
+    /// When true, apply persisted state from ~/.cache/cce_client_state on the
     /// next ManageStart cycle (after windows have been re-advertised).
     /// Set to true on startup/restart, consumed after application.
     pub needs_state_restore: bool,

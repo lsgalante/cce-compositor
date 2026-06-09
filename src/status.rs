@@ -12,7 +12,7 @@ pub fn write_status_files(state: &WindowManager) {
     use crate::paths;
     use std::io::Write;
 
-    // /tmp/ccec-tags: active_tags focused_tags num_tags
+    // /tmp/cce-client-tags: active_tags focused_tags num_tags
     if let Ok(mut f) = fs::File::create(paths::get_tags_path()) {
         let _ = writeln!(
             f,
@@ -21,7 +21,7 @@ pub fn write_status_files(state: &WindowManager) {
         );
     }
 
-    // /tmp/ccec-layout: focused window's tiling mode
+    // /tmp/cce-client-layout: focused window's tiling mode
     let mode_str = if state.expose_active {
         "Expose"
     } else {
@@ -35,7 +35,7 @@ pub fn write_status_files(state: &WindowManager) {
         let _ = writeln!(f, "{}", mode_str);
     }
 
-    // /tmp/ccec-windows: one line per window
+    // /tmp/cce-client-windows: one line per window
     if let Ok(mut f) = fs::File::create(paths::get_windows_path()) {
         let focused_title = state.focused_window().map(|w| w.title.clone());
 
@@ -67,7 +67,7 @@ pub fn write_status_files(state: &WindowManager) {
             );
         }
 
-        // /tmp/ccec-title
+        // /tmp/cce-client-title
         if let Some(title) = focused_title {
             if let Ok(mut tf) = fs::File::create(paths::get_title_path()) {
                 let _ = writeln!(tf, "{}", title.as_deref().unwrap_or("(null)"));

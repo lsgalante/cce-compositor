@@ -19,7 +19,7 @@ use wayland_client::QueueHandle;
 /// Returns the resolved TilingMode, or None if the window's mode is locked
 /// (i.e., the user manually set it and it should not be overridden).
 pub fn get_mode_for_window(wm: &WindowManager, win: &Window) -> Option<TilingMode> {
-    if win.app_id.as_deref() == Some("clear-status-interface") {
+    if win.app_id.as_deref() == Some("cce-status-interface") {
         return Some(TilingMode::Fullscreen);
     }
 
@@ -131,12 +131,12 @@ fn get_circular_for_window(mode_rules: &[ModeRule], win: &Window) -> bool {
 /// Assign tiling modes to all windows that aren't mode_locked.
 /// Should be called during ManageStart before compute_tiling.
 pub fn assign_window_modes(wm: &mut WindowManager) {
-    // Enforce that clear-status-interface is assigned all tags so that it is always visible
+    // Enforce that cce-status-interface is assigned all tags so that it is always visible
     // and that blank steam_proton helper windows are always untagged so they remain hidden.
     for win in &mut wm.windows {
         win.circular = get_circular_for_window(&wm.mode_rules, win);
 
-        if win.app_id.as_deref() == Some("clear-status-interface") {
+        if win.app_id.as_deref() == Some("cce-status-interface") {
             win.tags = u32::MAX;
         }
 
@@ -156,7 +156,7 @@ pub fn assign_window_modes(wm: &mut WindowManager) {
         let mode_rules = &wm.mode_rules;
         for win in &mut wm.windows {
             if win.is_new
-                && win.app_id.as_deref() != Some("clear-status-interface")
+                && win.app_id.as_deref() != Some("cce-status-interface")
                 && !win.has_parent
                 && !matches_mode_rule(mode_rules, win)
             {
@@ -197,7 +197,15 @@ pub fn assign_window_modes(wm: &mut WindowManager) {
                     "[mode] window {} (app_id={:?}): {:?} -> {:?}",
                     wid, win.app_id, win.tiling_mode, mode
                 );
+                let old_mode = win.tiling_mode;
                 win.tiling_mode = mode;
+                if (mode == TilingMode::Floating || mode == TilingMode::Popup)
+                    && old_mode != TilingMode::Floating
+                    && old_mode != TilingMode::Popup
+                {
+                    win.width = 0;
+                    win.height = 0;
+                }
             }
         }
     }
@@ -340,7 +348,7 @@ fn compute_tiling(
         let mut results = Vec::new();
         // Collect all active non-status-bar, non-popup windows on current tags
         let mut expose_windows: Vec<&crate::types::Window> = wm.windows.iter()
-            .filter(|w| !w.closed && !w.minimized && (w.tags & wm.active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface") && w.tiling_mode != TilingMode::Popup)
+            .filter(|w| !w.closed && !w.minimized && (w.tags & wm.active_tags) != 0 && w.app_id.as_deref() != Some("cce-status-interface") && w.tiling_mode != TilingMode::Popup)
             .collect();
 
         // Sort expose_windows by current visual location (y first, then x)
@@ -382,8 +390,8 @@ fn compute_tiling(
             }
         }
 
-        // Still layout clear-status-interface as fullscreen/bar if present
-        if let Some(win) = wm.windows.iter().find(|w| !w.closed && w.app_id.as_deref() == Some("clear-status-interface")) {
+        // Still layout cce-status-interface as fullscreen/bar if present
+        if let Some(win) = wm.windows.iter().find(|w| !w.closed && w.app_id.as_deref() == Some("cce-status-interface")) {
             let (tx, ty, tw, th) = tiling::tile_fullscreen(
                 phys_w,
                 phys_h,
@@ -472,13 +480,13 @@ fn compute_tiling(
         .and_then(|s| s.focused_window_id)
         .filter(|&fid| {
             wm.get_window(fid).map_or(false, |w| {
-                (w.tags & wm.active_tags) != 0 && !w.closed && !w.minimized && w.tiling_mode == TilingMode::Fullscreen && w.app_id.as_deref() != Some("clear-status-interface")
+                (w.tags & wm.active_tags) != 0 && !w.closed && !w.minimized && w.tiling_mode == TilingMode::Fullscreen && w.app_id.as_deref() != Some("cce-status-interface")
             })
         })
         .or_else(|| {
             // Fallback: first fullscreen window if no focused window qualifies
             wm.windows.iter().find(|w| {
-                (w.tags & wm.active_tags) != 0 && !w.closed && !w.minimized && w.tiling_mode == TilingMode::Fullscreen && w.app_id.as_deref() != Some("clear-status-interface")
+                (w.tags & wm.active_tags) != 0 && !w.closed && !w.minimized && w.tiling_mode == TilingMode::Fullscreen && w.app_id.as_deref() != Some("cce-status-interface")
             }).map(|w| w.id)
         });
 
@@ -494,7 +502,7 @@ fn compute_tiling(
         if wm.layout.side_panel_behavior == "above" {
             0
         } else if panel_win.hint_min_width > 32 {
-            panel_win.hint_min_width
+            std::cmp::max(wm.layout.side_panel_width, panel_win.hint_min_width)
         } else {
             wm.layout.side_panel_width
         }
@@ -517,7 +525,7 @@ fn compute_tiling(
         let (x, y, w, h) = match mode {
             TilingMode::SidePanel => {
                 let target_w = if win.hint_min_width > 32 {
-                    win.hint_min_width
+                    std::cmp::max(wm.layout.side_panel_width, win.hint_min_width)
                 } else {
                     wm.layout.side_panel_width
                 };
@@ -526,8 +534,8 @@ fn compute_tiling(
                 (phys_x + bw, bar_height + phys_y + dec_h, target_w - bw * 2, screen_h - bar_height - (dec_h + bw))
             }
             TilingMode::Fullscreen => {
-                if fullscreen_id == Some(wid) || win.app_id.as_deref() == Some("clear-status-interface") {
-                    let border_w = if win.app_id.as_deref() == Some("clear-status-interface") {
+                if fullscreen_id == Some(wid) || win.app_id.as_deref() == Some("cce-status-interface") {
+                    let border_w = if win.app_id.as_deref() == Some("cce-status-interface") {
                         0
                     } else {
                         wm.layout.fullscreen_border_width
@@ -644,7 +652,11 @@ fn compute_tiling(
             }
         };
 
-        let final_x = if mode != TilingMode::SidePanel && win.app_id.as_deref() != Some("clear-status-interface") {
+        let final_x = if mode != TilingMode::SidePanel
+            && mode != TilingMode::Fullscreen
+            && mode != TilingMode::Popup
+            && win.app_id.as_deref() != Some("cce-status-interface")
+        {
             x + shift_x
         } else {
             x
@@ -654,7 +666,7 @@ fn compute_tiling(
 
     // Layout minimized windows as bubbles stacked at the right edge
     let minimized_windows: Vec<&crate::types::Window> = wm.windows.iter()
-        .filter(|w| !w.closed && w.minimized && (w.tags & wm.active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface"))
+        .filter(|w| !w.closed && w.minimized && (w.tags & wm.active_tags) != 0 && w.app_id.as_deref() != Some("cce-status-interface"))
         .collect();
 
     let bubble_width = 160;
@@ -716,7 +728,7 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
 
         if let Some(win) = state.wm.get_window_mut(tr.wid) {
             let is_cascade = win.tiling_mode == TilingMode::Cascade;
-            let is_exposed = expose_active && win.tiling_mode != TilingMode::Popup && win.app_id.as_deref() != Some("clear-status-interface");
+            let is_exposed = expose_active && win.tiling_mode != TilingMode::Popup && win.app_id.as_deref() != Some("cce-status-interface");
             let was_animating = win.anim_x.is_some() || win.anim_y.is_some() || win.anim_w.is_some() || win.anim_h.is_some() || win.anim_opacity.is_some();
             let should_animate = (is_cascade || is_exposed || is_side_panel_present || win.tiling_mode == TilingMode::SidePanel || was_animating) && !win.minimized;
 
@@ -803,8 +815,11 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
             if !is_floating_and_expose {
                 win.x = final_x;
                 win.y = final_y;
-                win.width = final_w;
-                win.height = final_h;
+                let is_floating_or_popup = win.tiling_mode == TilingMode::Floating || win.tiling_mode == TilingMode::Popup;
+                if !(is_floating_or_popup && win.width == 0) {
+                    win.width = final_w;
+                    win.height = final_h;
+                }
             } else {
                 // If it's a new floating window created during expose mode,
                 // initialize its position to the default floating position if unset.
@@ -833,7 +848,17 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
 
         // Propose dimensions via river_window_v1
         if let Some(wp) = state.get_window_proxy(tr.wid) {
-            wp.river_window.propose_dimensions(final_w, final_h);
+            let is_floating_or_popup = if let Some(win) = state.wm.get_window(tr.wid) {
+                (win.tiling_mode == TilingMode::Floating || win.tiling_mode == TilingMode::Popup) && win.width == 0
+            } else {
+                false
+            };
+
+            if is_floating_or_popup {
+                wp.river_window.propose_dimensions(0, 0);
+            } else {
+                wp.river_window.propose_dimensions(final_w, final_h);
+            }
             // Tell the client to use server-side decoration.
             // Per the River protocol, use_csd is the default when neither
             // use_csd nor use_ssd is called. Calling use_ssd here ensures
@@ -863,7 +888,7 @@ pub fn set_expose_active(wm: &mut WindowManager, active: bool) {
         .and_then(|s| s.focused_window_id);
 
     for win in &mut wm.windows {
-        if win.closed || win.app_id.as_deref() == Some("clear-status-interface") || win.tiling_mode == TilingMode::Popup {
+        if win.closed || win.app_id.as_deref() == Some("cce-status-interface") || win.tiling_mode == TilingMode::Popup {
             continue;
         }
         let is_focused = Some(win.id) == focused_id;
@@ -922,7 +947,7 @@ pub fn render_opacity(state: &mut AppState) {
         }
         if let Some(wp) = state.get_window_proxy(win.id) {
             let is_cascade = win.tiling_mode == TilingMode::Cascade;
-            let is_exposed = state.wm.expose_visual_active && win.tiling_mode != TilingMode::Popup && win.app_id.as_deref() != Some("clear-status-interface");
+            let is_exposed = state.wm.expose_visual_active && win.tiling_mode != TilingMode::Popup && win.app_id.as_deref() != Some("cce-status-interface");
             let was_animating = win.anim_opacity.is_some();
             let should_fade = is_cascade || is_exposed || was_animating;
 

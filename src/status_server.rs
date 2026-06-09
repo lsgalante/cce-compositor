@@ -1,7 +1,7 @@
 // Status socket server for waybar integration
 //
 // Runs in a dedicated thread. Waybar custom module scripts connect to
-// /tmp/ccec-status.sock, send a subscription line ("tags", "layout",
+// /tmp/cce-client-status.sock, send a subscription line ("tags", "layout",
 // or "title"), and receive JSON lines whenever the status changes.
 //
 // The main loop sends updates through an mpsc channel — no blocking,
@@ -72,7 +72,7 @@ pub fn spawn_status_server() -> StatusSender {
     let (tx, rx) = mpsc::channel::<StatusUpdate>();
 
     std::thread::Builder::new()
-        .name("ccec-status".into())
+        .name("cce-client-status".into())
         .spawn(move || {
             status_server_main(rx);
         })
@@ -246,7 +246,7 @@ fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
 /// This is the same logic that write_status_files() uses, but produces
 /// the data for the socket instead of writing to files.
 pub fn build_status_update(wm: &crate::types::WindowManager) -> StatusUpdate {
-    // Tags: generate the same pango-marked JSON that ccec-tags.sh produces
+    // Tags: generate the same pango-marked JSON that cce-client-tags.sh produces
     let tags_json = render_tags_json(
         wm.active_tags,
         wm.focused_tags,
@@ -274,7 +274,7 @@ pub fn build_status_update(wm: &crate::types::WindowManager) -> StatusUpdate {
 
 fn read_status_normal_color_from_config() -> String {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lsgalante".to_string());
-    let path = format!("{}/.config/ccec/config.toml", home);
+    let path = format!("{}/.config/cce/config.toml", home);
     if let Ok(content) = std::fs::read_to_string(&path) {
         for line in content.lines() {
             let trimmed = line.trim();
@@ -293,7 +293,7 @@ fn read_status_normal_color_from_config() -> String {
 }
 
 /// Render tag state as a JSON string with pango markup, matching the format
-/// produced by the old ccec-tags.sh script.
+/// produced by the old cce-client-tags.sh script.
 ///
 /// Colors:
 /// - Active + Focused: bright (dynamic normal color, defaults to #ccccd8)

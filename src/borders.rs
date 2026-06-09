@@ -124,12 +124,12 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
                 TilingMode::Fullscreen => state.layout.fullscreen_border_width,
                 TilingMode::Grid => state.layout.grid_border_width,
                 TilingMode::Floating => state.layout.floating_border_width,
-                TilingMode::Popup => state.layout.border_width,
+                TilingMode::Popup => 0,
                 TilingMode::SidePanel => state.layout.cascade_border_width,
             }
         };
 
-        if win.app_id.as_deref() == Some("clear-status-interface")
+        if win.app_id.as_deref() == Some("cce-status-interface")
             || win.app_id.as_deref().map_or(false, |aid| aid.contains("noborder"))
         {
             width = 0;
@@ -137,7 +137,7 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
 
         let has_titlebar = !win.closed
             && !win.minimized
-            && win.app_id.as_deref() != Some("clear-status-interface")
+            && win.app_id.as_deref() != Some("cce-status-interface")
             && !win.app_id.as_deref().map_or(false, |aid| aid.contains("noborder"))
             && win.tiling_mode != TilingMode::Popup
             && win.tiling_mode != TilingMode::Fullscreen

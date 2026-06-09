@@ -1,4 +1,4 @@
-// Tiling formulas ported from ccec.c
+// Tiling formulas ported from cce-client.c
 
 /// Cascade depth factor: each depth step multiplies channels by this
 pub const CASCADE_DEPTH_FACTOR: f64 = 0.80;

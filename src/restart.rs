@@ -1,4 +1,4 @@
-// Restart and reload logic for ccec
+// Restart and reload logic for cce-client
 
 use crate::config::parse_config;
 use crate::types::WindowManager;
@@ -7,17 +7,17 @@ use crate::types::WindowManager;
 ///
 /// This forks a child process that waits briefly for the parent to die
 /// (so River cleans up the old Wayland connection), then execs a fresh
-/// ccec instance. The parent (current process) exits immediately.
+/// cce-client instance. The parent (current process) exits immediately.
 ///
-/// The CCEC_RESTARTING environment variable signals that this is a restart
+/// The CCE_CLIENT_RESTARTING environment variable signals that this is a restart
 /// (not a cold start), so the new process skips cold_start_only apps.
 ///
 /// ## Why setsid() is required
 ///
-/// ccec is typically a session leader (PID == SID, started by River's
+/// cce-client is typically a session leader (PID == SID, started by River's
 /// `-c` launch script). When a session leader exits, the kernel sends SIGHUP
 /// to all processes in that session — including the forked child. Without
-/// `setsid()`, the child dies from SIGHUP before it can exec, and ccec
+/// `setsid()`, the child dies from SIGHUP before it can exec, and cce-client
 /// never comes back.
 pub fn wm_restart() {
     use std::time::Instant;
@@ -58,9 +58,9 @@ pub fn wm_restart() {
     }
 
     // Signal that this is a restart, not a cold start
-    std::env::set_var("CCEC_RESTARTING", "1");
+    std::env::set_var("CCE_CLIENT_RESTARTING", "1");
 
-    // Persist state to ~/.cache/ccec_state for the new instance to restore.
+    // Persist state to ~/.cache/cce_client_state for the new instance to restore.
     // Note: we can't pass &WindowManager here since wm_restart() has no access
     // to it. The state file is kept fresh by RenderStart's needs_status_update
     // path, so it should be reasonably up-to-date already.
@@ -76,13 +76,13 @@ pub fn wm_restart() {
     // CString is required because execl() needs a null-terminated C string;
     // Rust's String::as_ptr() is NOT guaranteed to be null-terminated.
     //
-    // We prefer the symlink path (~/.local/bin/ccec) over current_exe()
+    // We prefer the symlink path (~/.local/bin/cce-client) over current_exe()
     // because current_exe() resolves through /proc/self/exe to the real path,
     // which may be on a sync filesystem (Dropbox) that temporarily moves files.
     // The symlink is on the root filesystem and always available.
     let home = std::env::var("HOME").unwrap_or_default();
     let exe_path = if !home.is_empty() {
-        let symlink = format!("{}/.local/bin/ccec", home);
+        let symlink = format!("{}/.local/bin/cce-client", home);
         if std::path::Path::new(&symlink).exists() {
             std::path::PathBuf::from(symlink)
         } else {
@@ -95,7 +95,7 @@ pub fn wm_restart() {
     let path_cstr = std::ffi::CString::new(exe_path.to_string_lossy().into_owned())
         .unwrap_or_else(|_| std::process::exit(1));
 
-    // Fork: child waits for parent to die, then execs fresh ccec.
+    // Fork: child waits for parent to die, then execs fresh cce-client.
     // Parent exits so River tears down the old Wayland connection.
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -123,7 +123,7 @@ pub fn wm_restart() {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
 
-        // Close inherited Wayland FDs so the new ccec instance doesn't
+        // Close inherited Wayland FDs so the new cce-client instance doesn't
         // confuse River with stale connections.
         // (close everything except stdin/stdout/stderr)
         let max_fd = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) } as i32;
@@ -133,7 +133,7 @@ pub fn wm_restart() {
             }
         }
 
-        // Exec the same binary — replaces this process with a fresh ccec.
+        // Exec the same binary — replaces this process with a fresh cce-client.
         // Retry up to 3 times with a short delay — the binary may be temporarily
         // unavailable if cargo build is replacing it mid-write (atomic rename).
         for attempt in 0..3 {
@@ -218,7 +218,7 @@ pub fn wm_reload(state: &mut WindowManager) {
     // Try TOML config first
     let home = std::env::var("HOME").unwrap_or_default();
     if !home.is_empty() {
-        let config_path = format!("{}/.config/ccec/config.toml", home);
+        let config_path = format!("{}/.config/cce/config.toml", home);
         if std::path::Path::new(&config_path).exists() {
             match parse_config(&config_path, false, state) {
                 Ok(_) => {
@@ -227,12 +227,12 @@ pub fn wm_reload(state: &mut WindowManager) {
                         spawn_command_bg(cmd);
                     }
                     if state.notifications_enable {
-                        crate::config::show_notification("ccec", "Configuration reloaded successfully");
+                        crate::config::show_notification("cce-client", "Configuration reloaded successfully");
                     }
                 }
                 Err(e) => {
                     if state.notifications_enable {
-                        crate::config::show_notification("ccec", &format!("Config reload failed:\n{}", e));
+                        crate::config::show_notification("cce-client", &format!("Config reload failed:\n{}", e));
                     }
                 }
             }

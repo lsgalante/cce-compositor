@@ -1,4 +1,4 @@
-// Wayland display connection, registry, and event dispatch for ccec
+// Wayland display connection, registry, and event dispatch for cce-client
 
 use wayland_client::{
     event_created_child, protocol::wl_registry, Connection, Dispatch, EventQueue, Proxy,
@@ -674,7 +674,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                                 .windows
                                 .iter()
                                 .filter(|w| {
-                                    !w.closed && (w.tags & active_tags) != 0 && w.id != *closed_id && w.app_id.as_deref() != Some("clear-status-interface")
+                                    !w.closed && (w.tags & active_tags) != 0 && w.id != *closed_id && w.app_id.as_deref() != Some("cce-status-interface")
                                 })
                                 .map(|w| w.id)
                                 .collect();
@@ -831,7 +831,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     }
                 }
 
-                // Apply persisted state from ~/.cache/ccec_state on first ManageStart.
+                // Apply persisted state from ~/.cache/cce_client_state on first ManageStart.
                 // This restores window tag assignments, active_tags, tag_layouts, and
                 // locked tiling modes from the previous session. Must run before
                 // assign_window_modes so restored tags/modes take effect.
@@ -900,7 +900,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                         .wm
                         .windows
                         .iter()
-                        .filter(|w| w.is_new && !w.closed && (w.tags & active_tags) != 0 && w.app_id.as_deref() != Some("clear-status-interface") && w.app_id.as_deref() != Some("clear-notification-daemon"))
+                        .filter(|w| w.is_new && !w.closed && (w.tags & active_tags) != 0 && w.app_id.as_deref() != Some("cce-status-interface") && w.app_id.as_deref() != Some("clear-notification-daemon"))
                         .map(|w| w.id)
                         .last();
                     if let Some(new_id) = new_focused_id {
@@ -1063,7 +1063,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     crate::decorations::update_decorations(state, qhandle);
 
                     // Raise and stack windows according to z-axis logic:
-                    // 1. clear-status-interface at the absolute bottom (score = 0)
+                    // 1. cce-status-interface at the absolute bottom (score = 0)
                     // 2. Unfocused tiled/fullscreen windows (score = 1)
                     // 3. Focused tiled/fullscreen window (score = 2)
                     // 4. Unfocused floating windows (score = 3)
@@ -1072,7 +1072,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     let focused_id = state.wm.seats.iter().find(|s| !s.removed).and_then(|s| s.focused_window_id);
 
                     let get_window_score = |win: &crate::types::Window| -> i32 {
-                        if win.app_id.as_deref() == Some("clear-status-interface") {
+                        if win.app_id.as_deref() == Some("cce-status-interface") {
                             0
                         } else if win.tiling_mode == crate::types::TilingMode::Popup {
                             5
@@ -1163,7 +1163,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                 if state.wm.needs_status_update {
                     crate::status::write_status_files(&state.wm);
 
-                    // Persist state to ~/.cache/ccec_state for restart recovery.
+                    // Persist state to ~/.cache/cce_client_state for restart recovery.
                     // Safe: just file I/O, no fork, no blocking.
                     crate::state::write_state(&state.wm);
 
@@ -1320,8 +1320,19 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
 
             river_window_v1::Event::Dimensions { width, height } => {
                 if let Some(window) = state.wm.get_window_mut(wid) {
-                    window.width = width;
-                    window.height = height;
+                    let changed = window.width != width || window.height != height;
+                    eprintln!(
+                        "[window] id={} (app_id={:?}) Event::Dimensions: {}x{} (was {}x{}) changed={}",
+                        wid, window.app_id, width, height, window.width, window.height, changed
+                    );
+                    if changed {
+                        window.width = width;
+                        window.height = height;
+                        state.wm.needs_render = true;
+                        if let Some(ref wm) = state.window_manager {
+                            wm.manage_dirty();
+                        }
+                    }
                 }
             }
 
@@ -1417,7 +1428,7 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
                     // Spawn an async xprop check for XWayland parent detection.
                     // River doesn't forward WM_TRANSIENT_FOR for XWayland windows,
                     // so we check via xdotool + xprop as a fallback.
-                    // The script writes results to /tmp/ccec-xprop-{wid} which
+                    // The script writes results to /tmp/cce-client-xprop-{wid} which
                     // is read on the next ManageStart cycle.
                     if !window.has_parent && window.pid > 0 {
                         let pid = window.pid;
@@ -1459,8 +1470,6 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
                     );
 
                     if !window.size_hint_applied && min_width > 32 {
-                        window.width = min_width;
-                        window.height = min_height;
                         window.size_hint_applied = true;
                         state.wm.needs_render = true;
                         if let Some(ref wm) = state.window_manager {
@@ -1565,7 +1574,7 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
                             let visible_ids: Vec<u64> = state.wm
                                 .windows
                                 .iter()
-                                .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.id != wid && w.app_id.as_deref() != Some("clear-status-interface"))
+                                .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.id != wid && w.app_id.as_deref() != Some("cce-status-interface"))
                                 .map(|w| w.id)
                                 .collect();
                             seat.focused_window_id = visible_ids.last().copied();
@@ -1723,7 +1732,7 @@ impl Dispatch<RiverSeatV1, ()> for AppState {
             } => {
                 if let Some(wid) = state.window_id_for_proxy(&river_window) {
                     let target_app_id = state.wm.get_window(wid).and_then(|w| w.app_id.clone());
-                    if target_app_id.as_deref() == Some("clear-status-interface") {
+                    if target_app_id.as_deref() == Some("cce-status-interface") {
                         // Do not focus status bar!
                         return;
                     }
@@ -2262,7 +2271,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                 eprintln!("spawn: {}", cmd);
                 // Close inherited FDs > 2 in the child so that spawned
                 // Wayland clients (fuzzel, etc.) never accidentally read
-                // from ccec's Wayland socket fd. This prevents protocol
+                // from cce-client's Wayland socket fd. This prevents protocol
                 // corruption and the CPU spin loop that results from it.
                 use std::os::unix::process::CommandExt;
                 let _ = unsafe {
@@ -2318,7 +2327,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                                 .windows
                                 .iter()
                                 .filter(|w| {
-                                    (w.tags & state.wm.active_tags) != 0 && !w.closed && !w.minimized && w.id != win_id && w.app_id.as_deref() != Some("clear-status-interface")
+                                    (w.tags & state.wm.active_tags) != 0 && !w.closed && !w.minimized && w.id != win_id && w.app_id.as_deref() != Some("cce-status-interface")
                                 })
                                 .map(|w| w.id)
                                 .collect();
@@ -2376,7 +2385,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                         .windows
                         .iter()
                         .filter(|w| {
-                            (w.tags & state.wm.active_tags) != 0 && !w.closed && !w.minimized && w.id != focused_id && w.app_id.as_deref() != Some("clear-status-interface")
+                            (w.tags & state.wm.active_tags) != 0 && !w.closed && !w.minimized && w.id != focused_id && w.app_id.as_deref() != Some("cce-status-interface")
                         })
                         .map(|w| w.id)
                         .collect();
@@ -2402,7 +2411,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                 let visible_ids: Vec<u64> = state.wm
                     .windows
                     .iter()
-                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.id != focused_id && w.app_id.as_deref() != Some("clear-status-interface"))
+                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.id != focused_id && w.app_id.as_deref() != Some("cce-status-interface"))
                     .map(|w| w.id)
                     .collect();
                 let next_id = visible_ids.last().copied();
@@ -2433,7 +2442,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                         (w.tags & state.wm.active_tags) != 0
                             && !w.closed
                             && !w.minimized
-                            && w.app_id.as_deref() != Some("clear-status-interface")
+                            && w.app_id.as_deref() != Some("cce-status-interface")
                             && (focused_mode.is_none() || Some(w.tiling_mode) == focused_mode)
                     })
                     .map(|w| w.id)
@@ -2477,7 +2486,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                         (w.tags & state.wm.active_tags) != 0
                             && !w.closed
                             && !w.minimized
-                            && w.app_id.as_deref() != Some("clear-status-interface")
+                            && w.app_id.as_deref() != Some("cce-status-interface")
                             && (focused_mode.is_none() || Some(w.tiling_mode) == focused_mode)
                     })
                     .map(|w| w.id)
@@ -2686,7 +2695,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
             );
 
             if state.wm.notifications_enable {
-                crate::config::show_notification("ccec", &format!("Layout set to {} for active tags", next.as_str()));
+                crate::config::show_notification("cce-client", &format!("Layout set to {} for active tags", next.as_str()));
             }
 
             // Unlock windows that got their mode from the layout (not from mode_rules
@@ -2730,7 +2739,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                     win.mode_locked = true;
                     if notifications_enable {
                         let win_title = win.title.as_deref().unwrap_or("Window");
-                        crate::config::show_notification("ccec", &format!("Tiling mode set to {} for: {}", next.as_str(), win_title));
+                        crate::config::show_notification("cce-client", &format!("Tiling mode set to {} for: {}", next.as_str(), win_title));
                     }
                     state.wm.needs_render = true;
                     state.wm.needs_status_update = true;
@@ -2765,7 +2774,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                     let mut updated_count = 0;
                     for win in &mut state.wm.windows {
                         if !win.closed
-                            && win.app_id.as_deref() != Some("clear-status-interface")
+                            && win.app_id.as_deref() != Some("cce-status-interface")
                             && (win.tags & active_tags) != 0
                             && win.tiling_mode == old_mode
                         {
@@ -2784,7 +2793,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
 
                     if notifications_enable && updated_count > 0 {
                         crate::config::show_notification(
-                            "ccec",
+                            "cce-client",
                             &format!(
                                 "Tiling mode set to {} for all {} windows on active tag",
                                 next.as_str(),
@@ -2825,7 +2834,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                 .wm
                 .windows
                 .iter()
-                .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+                .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("cce-status-interface"))
                 .map(|w| w.id)
                 .collect();
             if let Some(seat) = state.wm.seats.iter_mut().find(|s| !s.removed) {
@@ -2864,7 +2873,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                     .wm
                     .windows
                     .iter()
-                    .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+                    .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("cce-status-interface"))
                     .map(|w| w.id)
                     .collect();
                 if let Some(seat) = state.wm.seats.iter_mut().find(|s| !s.removed) {
@@ -2906,7 +2915,7 @@ fn execute_action(state: &mut AppState, seat_id: u64, action: &crate::types::Act
                         .wm
                         .windows
                         .iter()
-                        .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+                        .filter(|w| (w.tags & state.wm.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("cce-status-interface"))
                         .map(|w| w.id)
                         .collect();
                     if let Some(seat) = state.wm.seats.iter_mut().find(|s| !s.removed) {
@@ -3409,7 +3418,7 @@ pub fn wayland_init() -> Result<(Connection, EventQueue<AppState>, AppState), St
         state.render_count
     );
 
-    eprintln!("ccec: Wayland connection established");
+    eprintln!("cce-client: Wayland connection established");
 
     Ok((conn, event_queue, state))
 }

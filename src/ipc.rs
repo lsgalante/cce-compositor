@@ -1,5 +1,5 @@
-// IPC command parser for ccec
-// Ported from handle_ipc_command in ccec.c
+// IPC command parser for cce-client
+// Ported from handle_ipc_command in cce-client.c
 
 use crate::config::{parse_keysym, spawn_command_bg};
 use crate::types::{
@@ -27,7 +27,7 @@ fn get_window_under_pointer(state: &WindowManager) -> Option<u64> {
     for win in &state.windows {
         if win.closed
             || (win.tags & active_tags) == 0
-            || win.app_id.as_deref() == Some("clear-status-interface")
+            || win.app_id.as_deref() == Some("cce-status-interface")
             || win.tiling_mode == TilingMode::Popup
         {
             continue;
@@ -89,7 +89,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                     let visible_ids: Vec<u64> = state
                         .windows
                         .iter()
-                        .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.app_id.as_deref() != Some("clear-status-interface"))
+                        .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.app_id.as_deref() != Some("cce-status-interface"))
                         .map(|w| w.id)
                         .collect();
                     let next_id = visible_ids.last().copied();
@@ -113,7 +113,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                 let visible_ids: Vec<u64> = state
                     .windows
                     .iter()
-                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.app_id.as_deref() != Some("clear-status-interface"))
+                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.app_id.as_deref() != Some("cce-status-interface"))
                     .map(|w| w.id)
                     .collect();
                 if visible_ids.len() > 1 {
@@ -141,7 +141,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                 let visible_ids: Vec<u64> = state
                     .windows
                     .iter()
-                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.app_id.as_deref() != Some("clear-status-interface"))
+                    .filter(|w| (w.tags & active_tags) != 0 && !w.closed && !w.minimized && w.app_id.as_deref() != Some("cce-status-interface"))
                     .map(|w| w.id)
                     .collect();
                 if visible_ids.len() > 1 {
@@ -202,6 +202,8 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                 }
                 state.needs_render = true;
                 state.needs_status_update = true;
+            } else {
+                spawn_command_bg("clear-cloud --apps");
             }
         }
         "view-next" => {
@@ -213,7 +215,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                 let visible_ids: Vec<u64> = state
                     .windows
                     .iter()
-                    .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+                    .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("cce-status-interface"))
                     .map(|w| w.id)
                     .collect();
                 seat.focused_window_id = visible_ids.last().copied();
@@ -231,7 +233,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                 let visible_ids: Vec<u64> = state
                     .windows
                     .iter()
-                    .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+                    .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("cce-status-interface"))
                     .map(|w| w.id)
                     .collect();
                 seat.focused_window_id = visible_ids.last().copied();
@@ -251,7 +253,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                         let visible_ids: Vec<u64> = state
                             .windows
                             .iter()
-                            .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+                            .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("cce-status-interface"))
                             .map(|w| w.id)
                             .collect();
                         seat.focused_window_id = visible_ids.last().copied();
@@ -283,7 +285,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                         let visible_ids: Vec<u64> = state
                             .windows
                             .iter()
-                            .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+                            .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("cce-status-interface"))
                             .map(|w| w.id)
                             .collect();
                         if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
@@ -338,7 +340,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                     let mut updated_count = 0;
                     for win in &mut state.windows {
                         if !win.closed
-                            && win.app_id.as_deref() != Some("clear-status-interface")
+                            && win.app_id.as_deref() != Some("cce-status-interface")
                             && (win.tags & active_tags) != 0
                             && win.tiling_mode == old_mode
                         {
@@ -350,7 +352,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
 
                     if notifications_enable && updated_count > 0 {
                         crate::config::show_notification(
-                            "ccec",
+                            "cce-client",
                             &format!(
                                 "Tiling mode set to {} for all {} windows on active tag",
                                 next.as_str(),
@@ -393,7 +395,7 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                 }
             } else if parts.len() == 1 && !parts[0].is_empty() {
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", parts[0]);
+                    crate::config::show_notification("cce-client", parts[0]);
                 }
             }
         }
@@ -568,7 +570,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Gap set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Gap set to {}px", value));
                 }
             }
         }
@@ -576,7 +578,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_top = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Top gap set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Top gap set to {}px", value));
                 }
             }
         }
@@ -584,7 +586,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_left = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Left gap set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Left gap set to {}px", value));
                 }
             }
         }
@@ -592,7 +594,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_right = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Right gap set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Right gap set to {}px", value));
                 }
             }
         }
@@ -600,7 +602,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.gap_bottom = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Bottom gap set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Bottom gap set to {}px", value));
                 }
             }
         }
@@ -608,7 +610,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.cascade_offset = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Cascade offset set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Cascade offset set to {}px", value));
                 }
             }
         }
@@ -616,7 +618,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.bar_height = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Bar height set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Bar height set to {}px", value));
                 }
             }
         }
@@ -624,7 +626,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.border_width = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Border width set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Border width set to {}px", value));
                 }
             }
         }
@@ -632,7 +634,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.border_font_size = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Border font size set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Border font size set to {}px", value));
                 }
             }
         }
@@ -640,7 +642,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.transition_duration = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Transition duration set to {}ms", value));
+                    crate::config::show_notification("cce-client", &format!("Transition duration set to {}ms", value));
                 }
             }
         }
@@ -648,7 +650,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.fullscreen_border_width = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Fullscreen border width set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Fullscreen border width set to {}px", value));
                 }
             }
         }
@@ -656,7 +658,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.cascade_border_width = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Cascade border width set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Cascade border width set to {}px", value));
                 }
             }
         }
@@ -664,7 +666,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.grid_gap = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Grid gap set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Grid gap set to {}px", value));
                 }
             }
         }
@@ -672,7 +674,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.grid_border_width = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Grid border width set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Grid border width set to {}px", value));
                 }
             }
         }
@@ -680,7 +682,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.floating_border_width = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Floating border width set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Floating border width set to {}px", value));
                 }
             }
         }
@@ -691,7 +693,7 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 state.layout.border_b = b;
                 state.layout.border_a = a;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Border color set to {}", value_str));
+                    crate::config::show_notification("cce-client", &format!("Border color set to {}", value_str));
                 }
             }
         }
@@ -702,21 +704,21 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 state.layout.background_b = b;
                 state.layout.background_a = a;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Background color set to {}", value_str));
+                    crate::config::show_notification("cce-client", &format!("Background color set to {}", value_str));
                 }
             }
         }
         "side_panel_behavior" | "side-panel-behavior" => {
             state.layout.side_panel_behavior = value_str.to_string();
             if state.notifications_enable {
-                crate::config::show_notification("ccec", &format!("Side panel behavior set to {}", value_str));
+                crate::config::show_notification("cce-client", &format!("Side panel behavior set to {}", value_str));
             }
         }
         "side_panel_width" | "side-panel-width" => {
             if let Ok(value) = value_str.parse::<i32>() {
                 state.layout.side_panel_width = value;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Side panel width set to {}px", value));
+                    crate::config::show_notification("cce-client", &format!("Side panel width set to {}px", value));
                 }
             }
         }
@@ -785,11 +787,19 @@ fn handle_set_mode_command(rest: &str, state: &mut WindowManager) {
     let mode = parse_tiling_mode(mode_str);
     let notifications_enable = state.notifications_enable;
     if let Some(window) = state.focused_window_mut() {
+        let old_mode = window.tiling_mode;
         window.tiling_mode = mode;
         window.mode_locked = true;
+        if (mode == TilingMode::Floating || mode == TilingMode::Popup)
+            && old_mode != TilingMode::Floating
+            && old_mode != TilingMode::Popup
+        {
+            window.width = 0;
+            window.height = 0;
+        }
         if notifications_enable {
             let win_title = window.title.as_deref().unwrap_or("Window");
-            crate::config::show_notification("ccec", &format!("Tiling mode set to {} for: {}", mode.as_str(), win_title));
+            crate::config::show_notification("cce-client", &format!("Tiling mode set to {} for: {}", mode.as_str(), win_title));
         }
         state.needs_render = true;
         state.needs_status_update = true;
@@ -816,13 +826,21 @@ fn handle_apply_mode_sharing_command(rest: &str, state: &mut WindowManager) {
     // Iterate over all windows and update tiling mode for matching windows
     for window in &mut state.windows {
         if !window.closed && window.tiling_mode == old_mode {
+            let win_old_mode = window.tiling_mode;
             window.tiling_mode = new_mode;
             window.mode_locked = true;
+            if (new_mode == TilingMode::Floating || new_mode == TilingMode::Popup)
+                && win_old_mode != TilingMode::Floating
+                && win_old_mode != TilingMode::Popup
+            {
+                window.width = 0;
+                window.height = 0;
+            }
         }
     }
 
     if notifications_enable {
-        crate::config::show_notification("ccec", &format!("Applied tiling mode {} to all windows sharing mode {}", new_mode.as_str(), old_mode.as_str()));
+        crate::config::show_notification("cce-client", &format!("Applied tiling mode {} to all windows sharing mode {}", new_mode.as_str(), old_mode.as_str()));
     }
     state.needs_render = true;
     state.needs_status_update = true;
@@ -898,7 +916,7 @@ fn handle_tag_layout_command(rest: &str, state: &mut WindowManager) {
             state.tag_layouts[tag as usize - 1] = mode;
             state.has_tag_layout[tag as usize - 1] = true;
             if state.notifications_enable {
-                crate::config::show_notification("ccec", &format!("Tag {} layout set to {}", tag, mode.as_str()));
+                crate::config::show_notification("cce-client", &format!("Tag {} layout set to {}", tag, mode.as_str()));
             }
             state.needs_render = true;
             state.needs_status_update = true;
@@ -931,7 +949,7 @@ fn handle_set_tag_command(rest: &str, state: &mut WindowManager) {
                     let visible_ids: Vec<u64> = state
                         .windows
                         .iter()
-                        .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("clear-status-interface"))
+                        .filter(|w| (w.tags & state.active_tags) != 0 && !w.closed && w.app_id.as_deref() != Some("cce-status-interface"))
                         .map(|w| w.id)
                         .collect();
                     if let Some(seat) = state.seats.iter_mut().find(|s| !s.removed) {
@@ -979,7 +997,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
             }
             if state.tap_to_click != old_val && state.notifications_enable {
                 crate::config::show_notification(
-                    "ccec",
+                    "cce-client",
                     &format!(
                         "Tap-to-click {}",
                         if state.tap_to_click { "enabled" } else { "disabled" }
@@ -992,7 +1010,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.accel_speed = Some(val);
                 state.tap_config_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Acceleration speed set to {}", val));
+                    crate::config::show_notification("cce-client", &format!("Acceleration speed set to {}", val));
                 }
             }
         }
@@ -1002,7 +1020,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.accel_profile = Some(val.clone());
                 state.tap_config_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Acceleration profile set to {}", val));
+                    crate::config::show_notification("cce-client", &format!("Acceleration profile set to {}", val));
                 }
             }
         }
@@ -1024,7 +1042,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.tap_config_applied = false;
                 if state.notifications_enable {
                     crate::config::show_notification(
-                        "ccec",
+                        "cce-client",
                         &format!(
                             "Natural scroll {}",
                             if state.natural_scroll.unwrap_or(false) { "enabled" } else { "disabled" }
@@ -1051,7 +1069,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.tap_config_applied = false;
                 if state.notifications_enable {
                     crate::config::show_notification(
-                        "ccec",
+                        "cce-client",
                         &format!(
                             "Disable-while-typing {}",
                             if state.dwt.unwrap_or(false) { "enabled" } else { "disabled" }
@@ -1078,7 +1096,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.tap_config_applied = false;
                 if state.notifications_enable {
                     crate::config::show_notification(
-                        "ccec",
+                        "cce-client",
                         &format!(
                             "Disable-while-trackpointing {}",
                             if state.dwtp.unwrap_or(false) { "enabled" } else { "disabled" }
@@ -1107,7 +1125,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.trackpoint_accel_speed = Some(val);
                 state.tap_config_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Trackpoint acceleration speed set to {}", val));
+                    crate::config::show_notification("cce-client", &format!("Trackpoint acceleration speed set to {}", val));
                 }
             }
         }
@@ -1117,7 +1135,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.trackpoint_accel_profile = Some(val.clone());
                 state.tap_config_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Trackpoint acceleration profile set to {}", val));
+                    crate::config::show_notification("cce-client", &format!("Trackpoint acceleration profile set to {}", val));
                 }
             }
         }
@@ -1127,7 +1145,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.cursor_theme = Some(val.clone());
                 state.cursor_theme_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Cursor theme set to {}", val));
+                    crate::config::show_notification("cce-client", &format!("Cursor theme set to {}", val));
                 }
             }
         }
@@ -1136,7 +1154,7 @@ fn handle_input_command(rest: &str, state: &mut WindowManager) {
                 state.cursor_size = Some(val);
                 state.cursor_theme_applied = false;
                 if state.notifications_enable {
-                    crate::config::show_notification("ccec", &format!("Cursor size set to {}", val));
+                    crate::config::show_notification("cce-client", &format!("Cursor size set to {}", val));
                 }
             }
         }
@@ -1283,11 +1301,11 @@ mod tests {
     #[test]
     fn test_ipc_mode_rule_update() {
         let mut state = WindowManager::default();
-        handle_ipc_command("mode fullscreen clear-system-interface", &mut state);
+        handle_ipc_command("mode fullscreen cce-system-interface", &mut state);
         assert_eq!(state.mode_rules.len(), 1);
         assert_eq!(state.mode_rules[0].mode, TilingMode::Fullscreen);
 
-        handle_ipc_command("mode cascade clear-system-interface", &mut state);
+        handle_ipc_command("mode cascade cce-system-interface", &mut state);
         assert_eq!(state.mode_rules.len(), 1);
         assert_eq!(state.mode_rules[0].mode, TilingMode::Cascade);
     }

@@ -1,4 +1,4 @@
-// TOML config parsing for ccec
+// TOML config parsing for cce-client
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -615,9 +615,9 @@ pub fn parse_keysym(key_str: &str) -> u32 {
 ///
 /// Closes all inherited FDs > 2 in the child via pre_exec so that
 /// spawned Wayland clients (fuzzel, foot, etc.) never accidentally
-/// read from ccec's Wayland socket fd. Also redirects stdout/stderr
-/// to /dev/null so child output doesn't pollute ccec's log, and
-/// calls setsid() to detach from ccec's process group.
+/// read from cce-client's Wayland socket fd. Also redirects stdout/stderr
+/// to /dev/null so child output doesn't pollute cce-client's log, and
+/// calls setsid() to detach from cce-client's process group.
 pub fn spawn_command_bg(cmd: &str) {
     use std::os::unix::process::CommandExt;
     let cmd = cmd.to_string();
@@ -625,7 +625,7 @@ pub fn spawn_command_bg(cmd: &str) {
     let stdout_cfg = if let Ok(f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/ccec-spawned-apps.log")
+        .open("/tmp/cce-client-spawned-apps.log")
     {
         std::process::Stdio::from(f)
     } else {
@@ -635,7 +635,7 @@ pub fn spawn_command_bg(cmd: &str) {
     let stderr_cfg = if let Ok(f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/ccec-spawned-apps.log")
+        .open("/tmp/cce-client-spawned-apps.log")
     {
         std::process::Stdio::from(f)
     } else {
@@ -651,7 +651,7 @@ pub fn spawn_command_bg(cmd: &str) {
             .stderr(stderr_cfg)
             .pre_exec(|| {
                 // Close all inherited FDs > 2 to prevent the child from
-                // accidentally reading ccec's Wayland socket or status
+                // accidentally reading cce-client's Wayland socket or status
                 // socket FDs. close() and setsid() are async-signal-safe.
                 let max_fd = libc::sysconf(libc::_SC_OPEN_MAX) as libc::c_int;
                 for fd in 3..max_fd {
@@ -680,7 +680,7 @@ pub fn process_running(name: &str) -> bool {
 pub fn show_notification(title: &str, body: &str) {
     let title_escaped = title.replace('\'', "'\\''");
     let body_escaped = body.replace('\'', "'\\''");
-    let cmd = format!("notify-send -a ccec '{}' '{}'", title_escaped, body_escaped);
+    let cmd = format!("notify-send -a cce-client '{}' '{}'", title_escaped, body_escaped);
     spawn_command_bg(&cmd);
 }
 
@@ -720,31 +720,31 @@ mod tests {
 
     #[test]
     fn test_expand_env_vars_simple() {
-        std::env::set_var("CCEC_TEST_VAR_SIMPLE", "hello");
-        assert_eq!(expand_env_vars("$CCEC_TEST_VAR_SIMPLE"), "hello");
-        std::env::remove_var("CCEC_TEST_VAR_SIMPLE");
+        std::env::set_var("CCE_CLIENT_TEST_VAR_SIMPLE", "hello");
+        assert_eq!(expand_env_vars("$CCE_CLIENT_TEST_VAR_SIMPLE"), "hello");
+        std::env::remove_var("CCE_CLIENT_TEST_VAR_SIMPLE");
     }
 
     #[test]
     fn test_expand_env_vars_braces() {
-        std::env::set_var("CCEC_TEST_VAR_BRACES", "world");
-        assert_eq!(expand_env_vars("${CCEC_TEST_VAR_BRACES}!"), "world!");
-        std::env::remove_var("CCEC_TEST_VAR_BRACES");
+        std::env::set_var("CCE_CLIENT_TEST_VAR_BRACES", "world");
+        assert_eq!(expand_env_vars("${CCE_CLIENT_TEST_VAR_BRACES}!"), "world!");
+        std::env::remove_var("CCE_CLIENT_TEST_VAR_BRACES");
     }
 
     #[test]
     fn test_expand_env_vars_mid_string() {
-        std::env::set_var("CCEC_TEST_HOME", "/home/user");
+        std::env::set_var("CCE_CLIENT_TEST_HOME", "/home/user");
         assert_eq!(
-            expand_env_vars("$CCEC_TEST_HOME/.local/bin:$CCEC_TEST_HOME/bin"),
+            expand_env_vars("$CCE_CLIENT_TEST_HOME/.local/bin:$CCE_CLIENT_TEST_HOME/bin"),
             "/home/user/.local/bin:/home/user/bin"
         );
-        std::env::remove_var("CCEC_TEST_HOME");
+        std::env::remove_var("CCE_CLIENT_TEST_HOME");
     }
 
     #[test]
     fn test_expand_env_vars_unset() {
-        assert_eq!(expand_env_vars("$CCEC_NONEXISTENT_VAR"), "");
+        assert_eq!(expand_env_vars("$CCE_CLIENT_NONEXISTENT_VAR"), "");
     }
 
     #[test]
@@ -808,7 +808,7 @@ exec = "fuzzel"
 once = true
 
 [[startup]]
-exec = "clear-system-interface"
+exec = "cce-system-interface"
 once = true
 restart = true
 "#;
@@ -818,7 +818,7 @@ restart = true
         assert!(!config.startup[0].once);
         assert_eq!(config.startup[1].exec, "fuzzel");
         assert!(config.startup[1].once);
-        assert_eq!(config.startup[2].exec, "clear-system-interface");
+        assert_eq!(config.startup[2].exec, "cce-system-interface");
         assert!(config.startup[2].once);
         assert_eq!(config.startup[2].restart, Some(true));
         assert_eq!(config.env.get("XDG_CURRENT_DESKTOP").unwrap(), "river");

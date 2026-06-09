@@ -19,7 +19,7 @@ pub fn spawn_ipc_server(pipe_write: libc::c_int) -> IpcReceiver {
     let tx_clone = tx.clone();
 
     std::thread::Builder::new()
-        .name("ccec-ipc".into())
+        .name("cce-client-ipc".into())
         .spawn(move || {
             ipc_server_main(tx, pipe_write);
         })

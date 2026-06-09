@@ -1,4 +1,4 @@
-// Wayland decoration surface drawing and management for ccec
+// Wayland decoration surface drawing and management for cce-client
 
 use std::ffi::CString;
 use std::os::fd::RawFd;
@@ -188,7 +188,7 @@ fn draw_char(
 
 /// Create a temporary shared memory file descriptor.
 fn create_memfd(size: usize) -> Option<RawFd> {
-    let name = CString::new("ccec-decoration").ok()?;
+    let name = CString::new("cce-client-decoration").ok()?;
     let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
     if fd < 0 {
         return None;
@@ -561,7 +561,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         if let Some(w) = state.wm.windows.iter().find(|win| win.id == *wid) {
             let is_minimized = w.minimized;
             let should_not_decorate = w.closed
-                || w.app_id.as_deref() == Some("clear-status-interface")
+                || w.app_id.as_deref() == Some("cce-status-interface")
                 || w.app_id.as_deref().map_or(false, |aid| aid.contains("noborder"))
                 || w.tiling_mode == crate::types::TilingMode::Popup
                 || w.tiling_mode == crate::types::TilingMode::Fullscreen
@@ -616,14 +616,14 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         .windows
         .iter()
         .enumerate()
-        .filter(|(_, w)| !w.closed && w.app_id.as_deref() != Some("clear-status-interface") && !w.circular && !w.app_id.as_deref().map_or(false, |aid| aid.contains("noborder")) && (w.minimized || (w.tiling_mode != crate::types::TilingMode::Popup && w.tiling_mode != crate::types::TilingMode::Fullscreen)))
+        .filter(|(_, w)| !w.closed && w.app_id.as_deref() != Some("cce-status-interface") && !w.circular && !w.app_id.as_deref().map_or(false, |aid| aid.contains("noborder")) && (w.minimized || (w.tiling_mode != crate::types::TilingMode::Popup && w.tiling_mode != crate::types::TilingMode::Fullscreen)))
         .filter(|(_, w)| (w.tags & active_tags) != 0)
         .map(|(idx, w)| {
             let is_minimized = w.minimized;
             let minimized_idx = if is_minimized {
                 state.wm.windows
                     .iter()
-                    .filter(|win| !win.closed && win.minimized && (win.tags & active_tags) != 0 && win.app_id.as_deref() != Some("clear-status-interface"))
+                    .filter(|win| !win.closed && win.minimized && (win.tags & active_tags) != 0 && win.app_id.as_deref() != Some("cce-status-interface"))
                     .position(|win| win.id == w.id)
             } else {
                 None
@@ -634,7 +634,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             let mode_idx = if state.wm.expose_visual_active && w.tiling_mode != crate::types::TilingMode::Popup {
                 let list: Vec<_> = state.wm.windows
                     .iter()
-                    .filter(|win| !win.closed && win.app_id.as_deref() != Some("clear-status-interface") && win.tiling_mode != crate::types::TilingMode::Popup && (win.tags & active_tags) != 0)
+                    .filter(|win| !win.closed && win.app_id.as_deref() != Some("cce-status-interface") && win.tiling_mode != crate::types::TilingMode::Popup && (win.tags & active_tags) != 0)
                     .collect();
                 let len = list.len();
                 let pos = list.iter().position(|win| win.id == w.id).unwrap_or(0);
@@ -642,7 +642,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             } else {
                 let list: Vec<_> = state.wm.windows
                     .iter()
-                    .filter(|win| !win.closed && win.app_id.as_deref() != Some("clear-status-interface") && (win.tags & active_tags) != 0 && win.tiling_mode == w.tiling_mode)
+                    .filter(|win| !win.closed && win.app_id.as_deref() != Some("cce-status-interface") && (win.tags & active_tags) != 0 && win.tiling_mode == w.tiling_mode)
                     .collect();
                 let len = list.len();
                 let pos = list.iter().position(|win| win.id == w.id).unwrap_or(0);

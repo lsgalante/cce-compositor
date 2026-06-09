@@ -1,7 +1,7 @@
-// Persistent state file for ccec restart recovery.
+// Persistent state file for cce-client restart recovery.
 //
 // Writes window tag assignments and global tag/layout state to
-// ~/.cache/ccec_state so that it survives restarts. On startup,
+// ~/.cache/cce_client_state so that it survives restarts. On startup,
 // the state file is read and applied to re-advertised windows
 // matched by their River identifier (stable across WM restarts)
 // or app_id+title as a fallback.
@@ -21,17 +21,17 @@ use std::fs;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
-/// Get the state file path: ~/.cache/ccec_state
+/// Get the state file path: ~/.cache/cce_client_state
 fn state_file_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         let mut path = PathBuf::from(runtime_dir);
-        path.push("ccec_state");
+        path.push("cce_client_state");
         path
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         let mut path = PathBuf::from(home);
         path.push(".cache");
-        path.push("ccec_state");
+        path.push("cce_client_state");
         path
     }
 }
@@ -358,9 +358,9 @@ mod tests {
 
     #[test]
     fn test_write_read_roundtrip() {
-        let dir = std::env::temp_dir().join("ccec_state_test");
+        let dir = std::env::temp_dir().join("cce_client_state_test");
         let _ = fs::create_dir_all(&dir);
-        let path = dir.join("ccec_state");
+        let path = dir.join("cce_client_state");
 
         let mut wm = WindowManager::default();
         wm.active_tags = 0b1010; // tags 2 and 4

@@ -1,69 +1,69 @@
 use std::env;
-
+ 
 pub fn get_socket_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/ccec-{}.sock", display)
+        format!("/tmp/cce-client-{}.sock", display)
     } else {
-        "/tmp/ccec.sock".to_string()
+        "/tmp/cce-client.sock".to_string()
     }
 }
-
+ 
 pub fn get_status_socket_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/ccec-status-{}.sock", display)
+        format!("/tmp/cce-client-status-{}.sock", display)
     } else {
-        "/tmp/ccec-status.sock".to_string()
+        "/tmp/cce-client-status.sock".to_string()
     }
 }
-
+ 
 pub fn get_windows_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/ccec-windows-{}", display)
+        format!("/tmp/cce-client-windows-{}", display)
     } else {
-        "/tmp/ccec-windows".to_string()
+        "/tmp/cce-client-windows".to_string()
     }
 }
-
+ 
 pub fn get_tags_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/ccec-tags-{}", display)
+        format!("/tmp/cce-client-tags-{}", display)
     } else {
-        "/tmp/ccec-tags".to_string()
+        "/tmp/cce-client-tags".to_string()
     }
 }
-
+ 
 pub fn get_layout_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/ccec-layout-{}", display)
+        format!("/tmp/cce-client-layout-{}", display)
     } else {
-        "/tmp/ccec-layout".to_string()
+        "/tmp/cce-client-layout".to_string()
     }
 }
-
+ 
 pub fn get_title_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/ccec-title-{}", display)
+        format!("/tmp/cce-client-title-{}", display)
     } else {
-        "/tmp/ccec-title".to_string()
+        "/tmp/cce-client-title".to_string()
     }
 }
-
+ 
 pub fn get_death_log_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/ccec-death-{}.log", display)
+        format!("/tmp/cce-client-death-{}.log", display)
     } else {
-        "/tmp/ccec-death.log".to_string()
+        "/tmp/cce-client-death.log".to_string()
     }
 }
-
+ 
 pub fn get_bt_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/ccec-bt-{}.txt", display)
+        format!("/tmp/cce-client-bt-{}.txt", display)
     } else {
-        "/tmp/ccec-bt.txt".to_string()
+        "/tmp/cce-client-bt.txt".to_string()
     }
 }
-
+ 
 pub fn get_input_coords_socket_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
         format!("/tmp/clear-input-coords-{}.sock", display)
@@ -71,27 +71,27 @@ pub fn get_input_coords_socket_path() -> String {
         "/tmp/clear-input-coords.sock".to_string()
     }
 }
-
+ 
 pub fn get_log_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/ccec-{}.log", display)
+        format!("/tmp/cce-client-{}.log", display)
     } else {
-        "/tmp/ccec.log".to_string()
+        "/tmp/cce-client.log".to_string()
     }
 }
-
+ 
 pub fn get_prev_log_path() -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/ccec-{}-prev.log", display)
+        format!("/tmp/cce-client-{}-prev.log", display)
     } else {
-        "/tmp/ccec-prev.log".to_string()
+        "/tmp/cce-client-prev.log".to_string()
     }
 }
-
+ 
 pub fn get_xprop_path(wid: u64) -> String {
     if let Ok(display) = env::var("WAYLAND_DISPLAY") {
-        format!("/tmp/ccec-xprop-{}-{}", wid, display)
+        format!("/tmp/cce-client-xprop-{}-{}", wid, display)
     } else {
-        format!("/tmp/ccec-xprop-{}", wid)
+        format!("/tmp/cce-client-xprop-{}", wid)
     }
 }
