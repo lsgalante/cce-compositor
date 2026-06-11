@@ -22,6 +22,9 @@ pub fn get_mode_for_window(wm: &WindowManager, win: &Window) -> Option<TilingMod
     if win.app_id.as_deref() == Some("cce-status-interface") {
         return Some(TilingMode::Fullscreen);
     }
+    if win.app_id.as_deref() == Some("cce-notification-daemon") || win.app_id.as_deref() == Some("clear-notification-daemon") {
+        return Some(TilingMode::Popup);
+    }
 
     // If the user manually locked the mode (via set-mode, fullscreen toggle, etc.),
     // don't override it.
@@ -157,6 +160,8 @@ pub fn assign_window_modes(wm: &mut WindowManager) {
         for win in &mut wm.windows {
             if win.is_new
                 && win.app_id.as_deref() != Some("cce-status-interface")
+                && win.app_id.as_deref() != Some("cce-notification-daemon")
+                && win.app_id.as_deref() != Some("clear-notification-daemon")
                 && !win.has_parent
                 && !matches_mode_rule(mode_rules, win)
             {
@@ -227,6 +232,7 @@ struct TileResult {
 pub fn manage_windows(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
     let (screen_w, screen_h, phys_w, phys_h, phys_x, phys_y) = get_screen_geometry(&state.wm);
 
+    /*
     eprintln!(
         "[manage] windows={} outputs={} screen={}x{} (phys={}x{} at {},{})",
         state.wm.windows.len(),
@@ -238,6 +244,7 @@ pub fn manage_windows(state: &mut AppState, qhandle: &QueueHandle<AppState>) {
         phys_x,
         phys_y
     );
+    */
 
     // Ensure each window has a river_node_v1 proxy for positioning
     ensure_window_nodes(state, qhandle);
@@ -1150,6 +1157,41 @@ mod tests {
         // Window 2 should get Fullscreen mode from rule and not inherit Grid
         let win2 = wm.get_window(2).unwrap();
         assert_eq!(win2.tiling_mode, TilingMode::Fullscreen);
+    }
+
+    #[test]
+    fn test_assign_window_modes_notification_daemon_no_inherit() {
+        let mut wm = WindowManager::default();
+        wm.global_layout = TilingMode::Grid;
+        wm.tag_layouts[0] = TilingMode::Grid;
+
+        // Spawn a focused window that is in Grid mode
+        wm.windows.push(Window {
+            id: 1,
+            tiling_mode: TilingMode::Grid,
+            is_new: false,
+            ..Default::default()
+        });
+        wm.seats.push(Seat {
+            id: 1,
+            focused_window_id: Some(1),
+            ..Default::default()
+        });
+
+        // Spawn a new notification daemon window
+        wm.windows.push(Window {
+            id: 2,
+            is_new: true,
+            app_id: Some("cce-notification-daemon".to_string()),
+            ..Default::default()
+        });
+
+        assign_window_modes(&mut wm);
+
+        // Window 2 should get Popup mode (hardcoded default for notification daemon) and not inherit Grid
+        let win2 = wm.get_window(2).unwrap();
+        assert_eq!(win2.tiling_mode, TilingMode::Popup);
+        assert!(!win2.mode_locked);
     }
 
     #[test]

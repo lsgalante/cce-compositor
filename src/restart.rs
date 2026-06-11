@@ -91,8 +91,13 @@ pub fn wm_restart() {
     } else {
         std::env::current_exe().unwrap_or_else(|_| std::process::exit(1))
     };
-    eprintln!("wm_restart: exe_path={}", exe_path.display());
+    let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wm_restart: exe_path={}\n", exe_path.display()));
     let path_cstr = std::ffi::CString::new(exe_path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| std::process::exit(1));
+
+    // Prepare log path CString in the parent process before fork to be async-signal-safe.
+    let log_path = paths::get_log_path();
+    let log_path_cstr = std::ffi::CString::new(log_path)
         .unwrap_or_else(|_| std::process::exit(1));
 
     // Fork: child waits for parent to die, then execs fresh cce-client.
@@ -133,9 +138,35 @@ pub fn wm_restart() {
             }
         }
 
+        // Reopen standard input to /dev/null to ensure a clean stdin fd
+        let null_fd = unsafe { libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_RDONLY) };
+        if null_fd >= 0 {
+            unsafe {
+                libc::dup2(null_fd, 0);
+                libc::close(null_fd);
+            }
+        }
+
+        // Reopen standard output and error to the log file to prevent EPIPE panics when parent shell/session exits
+        let log_fd = unsafe {
+            libc::open(
+                log_path_cstr.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND,
+                0o644,
+            )
+        };
+        if log_fd >= 0 {
+            unsafe {
+                libc::dup2(log_fd, 1);
+                libc::dup2(log_fd, 2);
+                libc::close(log_fd);
+            }
+        }
+
         // Exec the same binary — replaces this process with a fresh cce-client.
         // Retry up to 3 times with a short delay — the binary may be temporarily
         // unavailable if cargo build is replacing it mid-write (atomic rename).
+        use std::io::Write;
         for attempt in 0..3 {
             let ret = unsafe {
                 libc::execl(
@@ -146,7 +177,8 @@ pub fn wm_restart() {
             };
             let errno = unsafe { *libc::__errno_location() };
             if attempt < 2 {
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "wm_restart: execl attempt {} failed (errno={} {}), retrying in 500ms...",
                     attempt + 1,
                     errno,
@@ -156,7 +188,8 @@ pub fn wm_restart() {
                 let _ = ret; // suppress unused
             } else {
                 // Final attempt failed — log and exit
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "wm_restart: execl failed after 3 attempts! errno={} ({})",
                     errno,
                     std::io::Error::from_raw_os_error(errno)
@@ -166,7 +199,6 @@ pub fn wm_restart() {
                     .append(true)
                     .open(paths::get_death_log_path())
                 {
-                    use std::io::Write;
                     let _ = writeln!(
                         f,
                         "child: execl failed after 3 attempts! errno={} ({}) path={}",
@@ -223,7 +255,7 @@ pub fn wm_reload(state: &mut WindowManager) {
             match parse_config(&config_path, false, state) {
                 Ok(_) => {
                     for cmd in &state.reload_commands {
-                        eprintln!("[reload] executing reload command: {}", cmd);
+                        let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("[reload] executing reload command: {}\n", cmd));
                         spawn_command_bg(cmd);
                     }
                     if state.notifications_enable {

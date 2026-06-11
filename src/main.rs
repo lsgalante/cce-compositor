@@ -21,15 +21,15 @@ fn log_death(msg: &str) {
         .open(paths::get_death_log_path())
     {
         let _ = writeln!(f, "{}", msg);
+        let _ = f.sync_all();
     }
-    eprintln!("{}", msg);
+    let _ = writeln!(std::io::stderr(), "{}", msg);
 }
 
 fn main() {
     // Install a panic hook that writes to a separate log file before aborting.
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("[PANIC] {}", info);
-        eprintln!("{}", msg);
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
@@ -37,7 +37,9 @@ fn main() {
             .open(paths::get_death_log_path())
         {
             let _ = writeln!(f, "{}", msg);
+            let _ = f.sync_all();
         }
+        let _ = writeln!(std::io::stderr(), "{}", msg);
     }));
 
     eprintln!("cce-client starting...");

@@ -900,7 +900,14 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                         .wm
                         .windows
                         .iter()
-                        .filter(|w| w.is_new && !w.closed && (w.tags & active_tags) != 0 && w.app_id.as_deref() != Some("cce-status-interface") && w.app_id.as_deref() != Some("clear-notification-daemon"))
+                        .filter(|w| {
+                            w.is_new
+                                && !w.closed
+                                && (w.tags & active_tags) != 0
+                                && w.app_id.as_deref() != Some("cce-status-interface")
+                                && w.app_id.as_deref() != Some("clear-notification-daemon")
+                                && w.app_id.as_deref() != Some("cce-notification-daemon")
+                        })
                         .map(|w| w.id)
                         .last();
                     if let Some(new_id) = new_focused_id {
@@ -1021,17 +1028,19 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     eprintln!("[manage] FATAL: flush after manage_finish failed: {:?}", e);
                 }
                 state.wm.in_manage_sequence = false;
-                eprintln!("[manage] ManageStart done in {:?}", ms_start.elapsed());
+                // eprintln!("[manage] ManageStart done in {:?}", ms_start.elapsed());
                 // NOTE: Do NOT call update_status_files() here — it calls
                 // pkill with .output() which blocks the event loop.
             }
 
             river_window_manager_v1::Event::RenderStart => {
                 state.render_count += 1;
+                /*
                 eprintln!(
                     "[render] RenderStart #{} needs_render={}",
                     state.render_count, state.wm.needs_render
                 );
+                */
 
                 // Show/hide windows based on tag visibility.
                 // This is rendering state and must happen during a render sequence.
@@ -1123,10 +1132,12 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                     nodes_to_place.sort_by_key(|&(score, idx, _, _, _)| (score, idx));
 
                     for &(score, _, id, ref app_id, node) in &nodes_to_place {
+                        /*
                         eprintln!(
                             "[render] placing node id={} (app_id={:?}) at top with score {}",
                             id, app_id, score
                         );
+                        */
                         node.place_top();
                     }
 
@@ -1143,7 +1154,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppState {
                         state.render_count, e
                     );
                 }
-                eprintln!("[render] render_finish #{} flushed", state.render_count);
+                // eprintln!("[render] render_finish #{} flushed", state.render_count);
                 // Spawn startup apps inside the callback, like tinyrwm does.
                 // Spawning between blocking_dispatch calls corrupts the Wayland
                 // connection state because the fork inherits the socket fd.
@@ -1321,11 +1332,11 @@ impl Dispatch<RiverWindowV1, ()> for AppState {
             river_window_v1::Event::Dimensions { width, height } => {
                 if let Some(window) = state.wm.get_window_mut(wid) {
                     let changed = window.width != width || window.height != height;
-                    eprintln!(
-                        "[window] id={} (app_id={:?}) Event::Dimensions: {}x{} (was {}x{}) changed={}",
-                        wid, window.app_id, width, height, window.width, window.height, changed
-                    );
                     if changed {
+                        eprintln!(
+                            "[window] id={} (app_id={:?}) Event::Dimensions: {}x{} (was {}x{})",
+                            wid, window.app_id, width, height, window.width, window.height
+                        );
                         window.width = width;
                         window.height = height;
                         state.wm.needs_render = true;
@@ -2992,11 +3003,13 @@ fn apply_pending_bindings(state: &mut AppState, qhandle: &QueueHandle<AppState>)
 
     // Apply xkb bindings to each seat
     let bindings: Vec<_> = state.wm.pending_bindings.drain(..).collect();
+    /*
     eprintln!(
         "[bindings] applying {} xkb bindings to {} seats",
         bindings.len(),
         state.seat_proxies.len()
     );
+    */
     for pb in &bindings {
         for (sid, sp) in &state.seat_proxies {
             if let Some(ref xb) = state.xkb_bindings {

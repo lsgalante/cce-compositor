@@ -567,7 +567,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 || w.tiling_mode == crate::types::TilingMode::Fullscreen
                 || w.circular;
             let needs_sides = !should_not_decorate && !is_minimized;
-            eprintln!("[decorations] window {} minimized={} needs_sides={} dec_right_exists={}", w.id, is_minimized, needs_sides, wp.dec_right.is_some());
+            // eprintln!("[decorations] window {} minimized={} needs_sides={} dec_right_exists={}", w.id, is_minimized, needs_sides, wp.dec_right.is_some());
 
             if should_not_decorate {
                 if let Some(dec) = wp.decoration.take() {
