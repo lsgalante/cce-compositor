@@ -476,6 +476,20 @@ pub fn handle_ipc_command(cmd: &str, state: &mut WindowManager) -> String {
                 reply = "error: usage: pointer-move-by <dx> <dy>\n".to_string();
             }
         }
+        "pointer-scroll" => {
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() == 2 {
+                if let (Ok(dx), Ok(dy)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
+                    if let Some(ref controller) = state.input_controller {
+                        let _ = controller.send(crate::input::InputDaemonMsg::SimulateScroll { dx, dy });
+                    }
+                } else {
+                    reply = "error: invalid deltas\n".to_string();
+                }
+            } else {
+                reply = "error: usage: pointer-scroll <dx> <dy>\n".to_string();
+            }
+        }
         "pointer-click" => {
             let btn = parse_button(rest) as u16;
             if btn != 0 {
@@ -722,6 +736,28 @@ fn handle_layout_command(rest: &str, state: &mut WindowManager) {
                 }
             }
         }
+        "side_panel_position" | "side-panel-position" => {
+            state.layout.side_panel_position = value_str.to_string();
+            if state.notifications_enable {
+                crate::config::show_notification("cce-client", &format!("Side panel position set to {}", value_str));
+            }
+        }
+        "side_panel_border_gap" | "side-panel-border-gap" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.side_panel_border_gap = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("cce-client", &format!("Side panel border gap set to {}px", value));
+                }
+            }
+        }
+        "side_panel_border_opacity" | "side-panel-border-opacity" => {
+            if let Ok(value) = value_str.parse::<i32>() {
+                state.layout.side_panel_border_opacity = value;
+                if state.notifications_enable {
+                    crate::config::show_notification("cce-client", &format!("Side panel border opacity set to {}%", value));
+                }
+            }
+        }
         _ => {}
     }
     state.needs_render = true;
@@ -774,6 +810,7 @@ fn handle_mode_command(rest: &str, state: &mut WindowManager) {
             single_instance,
             tag,
             circular: false,
+            ssd: None,
         });
     }
 }

@@ -147,6 +147,7 @@ pub enum InputDaemonMsg {
     SimulateKey { keycode: u16, press: bool },
     SimulateClick { button: u16 },
     SimulateKeyPress { keycode: u16 },
+    SimulateScroll { dx: i32, dy: i32 },
 }
 
 #[derive(Debug)]
@@ -796,6 +797,9 @@ pub fn run_input_daemon(
                                         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                                         let _ = tx_clone.send(CoordinatorMsg::InternalReleaseKey { keycode });
                                     });
+                                }
+                                InputDaemonMsg::SimulateScroll { dx, dy } => {
+                                    let _ = write_scroll(&mut uinput_mouse_file, dx, dy);
                                 }
                             }
                         }

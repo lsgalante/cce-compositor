@@ -616,7 +616,9 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
         .windows
         .iter()
         .enumerate()
-        .filter(|(_, w)| !w.closed && w.app_id.as_deref() != Some("cce-status-interface") && !w.circular && !w.app_id.as_deref().map_or(false, |aid| aid.contains("noborder")) && (w.minimized || (w.tiling_mode != crate::types::TilingMode::Popup && w.tiling_mode != crate::types::TilingMode::Fullscreen)))
+        .filter(|(_, w)| {
+            !w.closed && w.app_id.as_deref() != Some("cce-status-interface") && !w.circular && !w.app_id.as_deref().map_or(false, |aid| aid.contains("noborder")) && (w.minimized || (w.tiling_mode != crate::types::TilingMode::Popup && w.tiling_mode != crate::types::TilingMode::Fullscreen))
+        })
         .filter(|(_, w)| (w.tags & active_tags) != 0)
         .map(|(idx, w)| {
             let is_minimized = w.minimized;
@@ -711,8 +713,8 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
             };
             DecorateInfo {
                 id: w.id,
-                win_width: w.width,
-                win_height: w.height,
+                win_width: if w.committed_width > 0 { w.committed_width } else { w.width },
+                win_height: if w.committed_height > 0 { w.committed_height } else { w.height },
                 border_width,
                 title: title_with_idx,
                 bg_color,
@@ -1027,7 +1029,74 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                         }
                     }
 
-                    buffer_slice[row_offset + px as usize] = ((a as u32) << 24) | (r_val << 16) | (g << 8) | b;
+                    let base_pixel_color = ((a as u32) << 24) | (r_val << 16) | (g << 8) | b;
+                    let mut final_color = base_pixel_color;
+
+                    let lx = px as f32 / scale as f32;
+                    let ly = py as f32 / scale as f32;
+
+                    if !is_minimized && ly >= 0.0 && ly < logical_height as f32 {
+                        if lx >= (logical_width as f32 - 48.0) && lx < (logical_width as f32 - 32.0) {
+                            // Minimize button
+                            let is_hovered = hover_top.map_or(false, |(hx, hy)| {
+                                hx >= (logical_width as f64 - 48.0) && hx < (logical_width as f64 - 32.0)
+                                    && hy >= 0.0 && hy < logical_height as f64
+                            });
+                            final_color = if is_hovered {
+                                blend_colors(base_pixel_color, 0x30FFFFFF)
+                            } else {
+                                base_pixel_color
+                            };
+
+                            let cx = logical_width as f32 - 40.0;
+                            let cy = logical_height as f32 / 2.0;
+                            if lx >= (cx - 4.0) && lx <= (cx + 4.0) && ly >= (cy + 2.0) && ly < (cy + 3.0) {
+                                final_color = text_color;
+                            }
+                        } else if lx >= (logical_width as f32 - 32.0) && lx < (logical_width as f32 - 16.0) {
+                            // Maximize button
+                            let is_hovered = hover_top.map_or(false, |(hx, hy)| {
+                                hx >= (logical_width as f64 - 32.0) && hx < (logical_width as f64 - 16.0)
+                                    && hy >= 0.0 && hy < logical_height as f64
+                            });
+                            final_color = if is_hovered {
+                                blend_colors(base_pixel_color, 0x30FFFFFF)
+                            } else {
+                                base_pixel_color
+                            };
+
+                            let cx = logical_width as f32 - 24.0;
+                            let cy = logical_height as f32 / 2.0;
+                            let is_border_x = (lx >= cx - 4.0 && lx < cx - 3.0) || (lx > cx + 3.0 && lx <= cx + 4.0);
+                            let is_in_x = lx >= cx - 4.0 && lx <= cx + 4.0;
+                            let is_border_y = (ly >= cy - 4.0 && ly < cy - 3.0) || (ly > cy + 3.0 && ly <= cy + 4.0);
+                            let is_in_y = ly >= cy - 4.0 && ly <= cy + 4.0;
+                            if (is_border_x && is_in_y) || (is_border_y && is_in_x) {
+                                final_color = text_color;
+                            }
+                        } else if lx >= (logical_width as f32 - 16.0) && lx <= logical_width as f32 {
+                            // Close button
+                            let is_hovered = hover_top.map_or(false, |(hx, hy)| {
+                                hx >= (logical_width as f64 - 16.0) && hx <= logical_width as f64
+                                    && hy >= 0.0 && hy < logical_height as f64
+                            });
+                            final_color = if is_hovered {
+                                blend_colors(base_pixel_color, 0x90E53935)
+                            } else {
+                                base_pixel_color
+                            };
+
+                            let cx = logical_width as f32 - 8.0;
+                            let cy = logical_height as f32 / 2.0;
+                            let dx = (lx - cx).abs();
+                            let dy = (ly - cy).abs();
+                            if dx <= 4.0 && dy <= 4.0 && (dx - dy).abs() < 1.0 {
+                                final_color = text_color;
+                            }
+                        }
+                    }
+
+                    buffer_slice[row_offset + px as usize] = final_color;
                 }
             }
 
@@ -1058,7 +1127,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 let mut text_x = 24.0f32 * scale as f32; // Margin from left
                 for c in title.chars() {
                     let (metrics, bitmap) = font.rasterize(c, font_size);
-                    if text_x + metrics.xmin as f32 + metrics.width as f32 > dec_width as f32 {
+                    if text_x + metrics.xmin as f32 + metrics.width as f32 > dec_width as f32 - 48.0 * scale as f32 {
                         break;
                     }
 
@@ -1110,7 +1179,7 @@ pub fn update_decorations(state: &mut AppState, qhandle: &QueueHandle<AppState>)
                 let mut text_x = 24 * scale; // Margin from left
 
                 for c in title.chars() {
-                    if text_x + 8 * drawing_scale * scale > dec_width {
+                    if text_x + 8 * drawing_scale * scale > dec_width - 48 * scale {
                         break; // Out of bounds
                     }
                     draw_char(buffer_slice, dec_width, dec_height, c, text_x, text_y, drawing_scale * scale, text_color);
@@ -1179,4 +1248,29 @@ fn is_pixel_in_highlight_region(
 
         _ => false,
     }
+}
+
+fn blend_colors(bg: u32, fg: u32) -> u32 {
+    let fg_a = (fg >> 24) & 0xFF;
+    if fg_a == 0 {
+        return bg;
+    }
+    if fg_a == 255 {
+        return fg;
+    }
+    let bg_a = (bg >> 24) & 0xFF;
+    let bg_r = (bg >> 16) & 0xFF;
+    let bg_g = (bg >> 8) & 0xFF;
+    let bg_b = bg & 0xFF;
+
+    let fg_r = (fg >> 16) & 0xFF;
+    let fg_g = (fg >> 8) & 0xFF;
+    let fg_b = fg & 0xFF;
+
+    let out_r = ((fg_r * fg_a) + (bg_r * (255 - fg_a))) / 255;
+    let out_g = ((fg_g * fg_a) + (bg_g * (255 - fg_a))) / 255;
+    let out_b = ((fg_b * fg_a) + (bg_b * (255 - fg_a))) / 255;
+    let out_a = bg_a + ((255 - bg_a) * fg_a) / 255;
+
+    (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b
 }

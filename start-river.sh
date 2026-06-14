@@ -30,11 +30,8 @@ LAUNCH_EOF
 fi
 chmod +x /tmp/cce-client-launch-river.sh
  
-echo "Starting river with cce-client..."
 if [ "$LOGGING" = true ]; then
-    echo "Logs: /tmp/river-cce-client.log + /tmp/cce-client-${WAYLAND_DISPLAY}.log"
+    exec river -c /tmp/cce-client-launch-river.sh 2>/tmp/river-cce-client.log
 else
-    echo "Logging disabled. Use --logging to enable."
+    exec river -c /tmp/cce-client-launch-river.sh 2>/dev/null
 fi
- 
-exec river -c /tmp/cce-client-launch-river.sh 2>/tmp/river-cce-client.log

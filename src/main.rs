@@ -167,7 +167,6 @@ fn main() {
     // Main loop — using poll to block on both Wayland socket and IPC wake-up pipe.
     // All work (including spawning) happens inside Dispatch callbacks.
     let mut loop_count: u64 = 0;
-    let mut last_animation_tick = std::time::Instant::now();
     loop {
         loop_count += 1;
         if loop_count % 10000 == 0 {
@@ -206,11 +205,12 @@ fn main() {
         ];
 
         let timeout = if state.wm.animating {
-            let elapsed = last_animation_tick.elapsed();
-            let timeout_duration = if elapsed >= std::time::Duration::from_millis(16) {
+            let elapsed = state.wm.last_animation_tick.elapsed();
+            let target = std::time::Duration::from_millis(32);
+            let timeout_duration = if elapsed >= target {
                 std::time::Duration::ZERO
             } else {
-                std::time::Duration::from_millis(16) - elapsed
+                target - elapsed
             };
             nix::poll::PollTimeout::try_from(timeout_duration).unwrap()
         } else {
@@ -252,12 +252,9 @@ fn main() {
         // 5. Dispatch read events
         let _ = event_queue.dispatch_pending(&mut state);
 
-        // 6. If animating and frame budget elapsed, request next frame
-        if state.wm.animating && last_animation_tick.elapsed() >= std::time::Duration::from_millis(16) {
-            if let Some(ref wm) = state.window_manager {
-                wm.manage_dirty();
-                last_animation_tick = std::time::Instant::now();
-            }
+        // 6. If animating and frame budget elapsed, request next frame (fallback only)
+        if state.wm.animating && state.wm.last_animation_tick.elapsed() >= std::time::Duration::from_millis(32) {
+            state.manage_dirty();
         }
 
         // 6. Process pending IPC commands from the socket channel
@@ -279,9 +276,7 @@ fn main() {
         }
         // Force a render sequence if we processed IPC commands
         if ipc_commands {
-            if let Some(ref wm) = state.window_manager {
-                wm.manage_dirty();
-            }
+            state.manage_dirty();
             if !state.wm.tap_config_applied && !state.libinput_devices.is_empty() {
                 let qh = event_queue.handle();
                 cce_client::wayland::apply_input_config(&mut state, &qh);

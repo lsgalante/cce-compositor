@@ -56,6 +56,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  pointer-location");
     print("  pointer-move-to <x> <y>");
     print("  pointer-move-by <dx> <dy>");
+    print("  pointer-scroll <dx> <dy>");
     print("  pointer-click <button>");
     print("  pointer-press <button>");
     print("  pointer-release <button>");

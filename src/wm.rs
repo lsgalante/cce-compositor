@@ -32,6 +32,11 @@ pub fn get_mode_for_window(wm: &WindowManager, win: &Window) -> Option<TilingMod
         return None;
     }
 
+    // If the client requested fullscreen, automatically place it in Fullscreen mode.
+    if win.fullscreen_requested {
+        return Some(TilingMode::Fullscreen);
+    }
+
     // 0. Windows with a parent (dialogs, file pickers, etc.) always float.
     if win.has_parent {
         return Some(TilingMode::Floating);
@@ -131,6 +136,36 @@ fn get_circular_for_window(mode_rules: &[ModeRule], win: &Window) -> bool {
     false
 }
 
+pub fn get_ssd_override_for_window(mode_rules: &[ModeRule], win: &Window) -> Option<bool> {
+    for rule in mode_rules {
+        let has_app_id = win.app_id.as_deref().map_or(false, |s| !s.is_empty());
+        let match_app = rule.app_id_pattern == "*"
+            || win
+                .app_id
+                .as_deref()
+                .map_or(false, |aid| aid.contains(&rule.app_id_pattern))
+            || (!has_app_id && win.title.as_deref().map_or(false, |t| {
+                let normalize = |s: &str| -> String {
+                    s.to_lowercase().replace(|c: char| c == '-' || c == '_', " ")
+                };
+                normalize(t).contains(&normalize(&rule.app_id_pattern))
+            }));
+        let match_title = rule.title_pattern.as_deref() == Some("*")
+            || rule.title_pattern.is_none()
+            || win.title.as_deref().map_or(false, |t| {
+                t.contains(rule.title_pattern.as_deref().unwrap_or(""))
+            });
+
+        if match_app && match_title {
+            if rule.ssd.is_some() {
+                return rule.ssd;
+            }
+        }
+    }
+    None
+}
+
+
 /// Assign tiling modes to all windows that aren't mode_locked.
 /// Should be called during ManageStart before compute_tiling.
 pub fn assign_window_modes(wm: &mut WindowManager) {
@@ -165,6 +200,10 @@ pub fn assign_window_modes(wm: &mut WindowManager) {
                 && !win.has_parent
                 && !matches_mode_rule(mode_rules, win)
             {
+                if win.app_id.is_none() && win.title.is_none() {
+                    continue;
+                }
+
                 // Determine what normal fallback mode would be
                 let mut normal_fallback = wm.global_layout;
                 for tag_bit in 0..crate::types::NUM_TAGS {
@@ -505,17 +544,23 @@ fn compute_tiling(
             && w.tiling_mode == TilingMode::SidePanel
     });
 
+    let g = wm.layout.side_panel_border_gap;
     let shift_x = if let Some(panel_win) = side_panel_win {
         if wm.layout.side_panel_behavior == "above" {
             0
-        } else if panel_win.hint_min_width > 32 {
-            std::cmp::max(wm.layout.side_panel_width, panel_win.hint_min_width)
         } else {
-            wm.layout.side_panel_width
+            let target_w = if panel_win.hint_min_width > 32 {
+                std::cmp::max(wm.layout.side_panel_width, panel_win.hint_min_width)
+            } else {
+                wm.layout.side_panel_width
+            };
+            target_w + g
         }
     } else {
         0
     };
+
+    let tiled_screen_w = screen_w - shift_x;
 
     // Compute tiling
     let mut results = Vec::new();
@@ -538,7 +583,14 @@ fn compute_tiling(
                 };
                 let bw = wm.layout.cascade_border_width;
                 let dec_h = std::cmp::max(bw, 16);
-                (phys_x + bw, bar_height + phys_y + dec_h, target_w - bw * 2, screen_h - bar_height - (dec_h + bw))
+                let sp_x = if wm.layout.side_panel_position == "right" {
+                    phys_x + screen_w - target_w - g + bw
+                } else {
+                    phys_x + g + bw
+                };
+                let sp_y = bar_height + phys_y + dec_h + g;
+                let sp_h = (screen_h - bar_height - (dec_h + bw) - 2 * g).max(1);
+                (sp_x, sp_y, target_w - bw * 2, sp_h)
             }
             TilingMode::Fullscreen => {
                 if fullscreen_id == Some(wid) || win.app_id.as_deref() == Some("cce-status-interface") {
@@ -568,7 +620,7 @@ fn compute_tiling(
                     .position(|w| w.id == wid)
                     .unwrap_or(0) as i32;
                 let (x, y, w, h) = tiling::tile_cascade(
-                    screen_w,
+                    tiled_screen_w,
                     screen_h,
                     gap,
                     gap_top,
@@ -589,7 +641,7 @@ fn compute_tiling(
                      .position(|w| w.id == wid)
                      .unwrap_or(0) as i32;
                  let (x, y, w, h) = tiling::tile_grid(
-                     screen_w,
+                     tiled_screen_w,
                      screen_h,
                      wm.layout.grid_gap,
                      gap_top,
@@ -611,30 +663,63 @@ fn compute_tiling(
                 // Use the window's existing dimensions, or a reasonable
                 // default if unset.
                 let fbw = wm.layout.floating_border_width;
-                let fw = if win.width > 0 {
+                let mut fw = if win.width > 0 {
                     win.width
                 } else if win.hint_min_width > 32 {
                     win.hint_min_width
                 } else {
                     screen_w * 2 / 3
                 };
-                let fh = if win.height > 0 {
+                let mut fh = if win.height > 0 {
                     win.height
                 } else if win.hint_min_height > 32 {
                     win.hint_min_height
                 } else {
                     screen_h * 2 / 3
                 };
-                let fx = if win.x != 0 || win.y != 0 {
+
+                // Clamp dimensions to the screen's usable region
+                let max_w = screen_w - gap_left - gap_right;
+                let max_h = screen_h - bar_height - gap_top - gap_bottom;
+                fw = fw.clamp(1, max_w.max(1));
+                fh = fh.clamp(1, max_h.max(1));
+
+                let mut fx = if win.x != 0 || win.y != 0 {
                     win.x
                 } else {
-                    gap_left + fbw + cascade_offset * idx_floating
+                    gap_left + fbw + cascade_offset * idx_floating + phys_x
                 };
-                let fy = if win.x != 0 || win.y != 0 {
+                let mut fy = if win.x != 0 || win.y != 0 {
                     win.y
                 } else {
-                    gap_left + fbw + bar_height + gap_top + cascade_offset * idx_floating
+                    gap_left + fbw + bar_height + gap_top + cascade_offset * idx_floating + phys_y
                 };
+
+                // Clamp position so the window is fully inside usability limits.
+                // We use the actual committed size (if set) to determine the clamping bounds
+                // so that we correctly clamp windows that refuse to resize to the layout target (e.g. Steam).
+                let actual_fw = if win.committed_width > 0 { win.committed_width } else { fw };
+                let actual_fh = if win.committed_height > 0 { win.committed_height } else { fh };
+
+                let min_x = phys_x + gap_left;
+                let max_x = phys_x + screen_w - gap_right - actual_fw;
+                let min_y = phys_y + bar_height + gap_top;
+                let max_y = phys_y + screen_h - gap_bottom - actual_fh;
+
+                let (clamp_min_x, clamp_max_x) = if max_x >= min_x {
+                    (min_x, max_x)
+                } else {
+                    (max_x, min_x)
+                };
+                fx = fx.clamp(clamp_min_x, clamp_max_x);
+
+                let (clamp_min_y, clamp_max_y) = if max_y >= min_y {
+                    (min_y, max_y)
+                } else {
+                    (max_y, min_y)
+                };
+                fy = fy.clamp(clamp_min_y, clamp_max_y);
+
                 idx_floating += 1;
                 (fx, fy, fw, fh)
             }
@@ -664,7 +749,11 @@ fn compute_tiling(
             && mode != TilingMode::Popup
             && win.app_id.as_deref() != Some("cce-status-interface")
         {
-            x + shift_x
+            if wm.layout.side_panel_position == "right" {
+                x
+            } else {
+                x + shift_x
+            }
         } else {
             x
         };
@@ -705,11 +794,31 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
         .find(|s| !s.removed)
         .and_then(|s| s.focused_window_id);
 
+    let was_animating = state.wm.animating;
+    let dt = if was_animating {
+        let elapsed = state.wm.last_frame_time.elapsed().as_secs_f64();
+        // Cap dt to 0.1s to avoid huge snapping jumps on massive frame drops/system pauses
+        if elapsed > 0.1 {
+            0.1
+        } else {
+            elapsed
+        }
+    } else {
+        // Reset last_frame_time to now so that subsequent frames measure the actual elapsed time.
+        state.wm.last_frame_time = std::time::Instant::now();
+        0.016
+    };
+
+    if was_animating {
+        state.wm.last_frame_time = std::time::Instant::now();
+    }
+
     let transition_duration = state.wm.layout.transition_duration;
-    let easing = if transition_duration <= 16 {
+    let easing = if transition_duration <= 8 {
         1.0
     } else {
-        1.0 - 0.01f64.powf(16.0 / transition_duration as f64)
+        let dt_ms = dt * 1000.0;
+        1.0 - 0.01f64.powf(dt_ms / transition_duration as f64)
     };
 
     let expose_active = state.wm.expose_active;
@@ -738,6 +847,8 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
             let is_exposed = expose_active && win.tiling_mode != TilingMode::Popup && win.app_id.as_deref() != Some("cce-status-interface");
             let was_animating = win.anim_x.is_some() || win.anim_y.is_some() || win.anim_w.is_some() || win.anim_h.is_some() || win.anim_opacity.is_some();
             let should_animate = (is_cascade || is_exposed || is_side_panel_present || win.tiling_mode == TilingMode::SidePanel || was_animating) && !win.minimized;
+
+
 
             if should_animate {
                 let curr_x = win.anim_x.unwrap_or(win.x as f64);
@@ -827,6 +938,7 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
                     win.width = final_w;
                     win.height = final_h;
                 }
+
             } else {
                 // If it's a new floating window created during expose mode,
                 // initialize its position to the default floating position if unset.
@@ -855,10 +967,12 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
 
         // Propose dimensions via river_window_v1
         if let Some(wp) = state.get_window_proxy(tr.wid) {
-            let is_floating_or_popup = if let Some(win) = state.wm.get_window(tr.wid) {
-                (win.tiling_mode == TilingMode::Floating || win.tiling_mode == TilingMode::Popup) && win.width == 0
+            let (is_floating_or_popup, is_tiled) = if let Some(win) = state.wm.get_window(tr.wid) {
+                let is_float = (win.tiling_mode == TilingMode::Floating || win.tiling_mode == TilingMode::Popup) && win.width == 0;
+                let is_tile = win.tiling_mode == TilingMode::Cascade || win.tiling_mode == TilingMode::Grid || win.tiling_mode == TilingMode::SidePanel;
+                (is_float, is_tile)
             } else {
-                false
+                (false, false)
             };
 
             if is_floating_or_popup {
@@ -866,6 +980,13 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
             } else {
                 wp.river_window.propose_dimensions(final_w, final_h);
             }
+
+            if is_tiled {
+                wp.river_window.set_tiled(Edges::all());
+            } else {
+                wp.river_window.set_tiled(Edges::empty());
+            }
+
             // Tell the client to use server-side decoration.
             // Per the River protocol, use_csd is the default when neither
             // use_csd nor use_ssd is called. Calling use_ssd here ensures
@@ -879,6 +1000,9 @@ fn apply_tiling(state: &mut AppState, results: &[TileResult]) {
     state.wm.animating = any_animating;
     if any_animating {
         state.wm.needs_render = true;
+    }
+    if was_animating && !any_animating {
+        state.wm.needs_status_update = true;
     }
     state.wm.expose_visual_active = state.wm.expose_active;
 }
@@ -927,15 +1051,25 @@ fn set_borders(state: &mut AppState) {
     let border_colors = compute_border_colors(&state.wm);
 
     for bc in &border_colors {
-        let wid = match state.wm.windows.get(bc.window_idx) {
-            Some(w) => w.id,
+        let (wid, is_diff) = match state.wm.windows.get_mut(bc.window_idx) {
+            Some(win) => {
+                let current_val = (bc.edges, bc.width, bc.r, bc.g, bc.b, bc.a);
+                if win.last_borders != Some(current_val) {
+                    win.last_borders = Some(current_val);
+                    (win.id, true)
+                } else {
+                    (win.id, false)
+                }
+            }
             None => continue,
         };
 
-        if let Some(wp) = state.get_window_proxy(wid) {
-            let edges = Edges::from_bits_truncate(bc.edges);
-            wp.river_window
-                .set_borders(edges, bc.width, bc.r, bc.g, bc.b, bc.a);
+        if is_diff {
+            if let Some(wp) = state.get_window_proxy(wid) {
+                let edges = Edges::from_bits_truncate(bc.edges);
+                wp.river_window
+                    .set_borders(edges, bc.width, bc.r, bc.g, bc.b, bc.a);
+            }
         }
     }
 }
@@ -948,32 +1082,40 @@ pub fn render_opacity(state: &mut AppState) {
         .find(|s| !s.removed)
         .and_then(|s| s.focused_window_id);
 
-    for win in &state.wm.windows {
+    let mut updates = Vec::new();
+    for win in &mut state.wm.windows {
         if win.closed {
             continue;
         }
-        if let Some(wp) = state.get_window_proxy(win.id) {
-            let is_cascade = win.tiling_mode == TilingMode::Cascade;
-            let is_exposed = state.wm.expose_visual_active && win.tiling_mode != TilingMode::Popup && win.app_id.as_deref() != Some("cce-status-interface");
-            let was_animating = win.anim_opacity.is_some();
-            let should_fade = is_cascade || is_exposed || was_animating;
+        let is_cascade = win.tiling_mode == TilingMode::Cascade;
+        let is_exposed = state.wm.expose_visual_active && win.tiling_mode != TilingMode::Popup && win.app_id.as_deref() != Some("cce-status-interface");
+        let was_animating = win.anim_opacity.is_some();
+        let should_fade = is_cascade || is_exposed || was_animating;
 
-            let opacity = if should_fade {
-                win.anim_opacity.unwrap_or_else(|| {
-                    if is_exposed || is_cascade {
-                        if Some(win.id) == focused_id {
-                            1.0
-                        } else {
-                            0.75
-                        }
-                    } else {
+        let opacity = if should_fade {
+            win.anim_opacity.unwrap_or_else(|| {
+                if is_exposed || is_cascade {
+                    if Some(win.id) == focused_id {
                         1.0
+                    } else {
+                        0.75
                     }
-                })
-            } else {
-                1.0
-            };
-            let op_u32 = (opacity * u32::MAX as f64).round() as u32;
+                } else {
+                    1.0
+                }
+            })
+        } else {
+            1.0
+        };
+        let op_u32 = (opacity * u32::MAX as f64).round() as u32;
+        if win.last_opacity != Some(op_u32) {
+            win.last_opacity = Some(op_u32);
+            updates.push((win.id, op_u32));
+        }
+    }
+
+    for (wid, op_u32) in updates {
+        if let Some(wp) = state.get_window_proxy(wid) {
             wp.river_window.set_opacity(op_u32);
         }
     }
@@ -982,12 +1124,20 @@ pub fn render_opacity(state: &mut AppState) {
 /// Apply whether windows are circular.
 /// This modifies rendering state and is called during RenderStart.
 pub fn render_circular(state: &mut AppState) {
-    for win in &state.wm.windows {
+    let mut updates = Vec::new();
+    for win in &mut state.wm.windows {
         if win.closed {
             continue;
         }
-        if let Some(wp) = state.get_window_proxy(win.id) {
-            let val = if win.circular { 1 } else { 0 };
+        let val = if win.circular { 1u32 } else { 0u32 };
+        if win.last_circular != Some(val) {
+            win.last_circular = Some(val);
+            updates.push((win.id, val));
+        }
+    }
+
+    for (wid, val) in updates {
+        if let Some(wp) = state.get_window_proxy(wid) {
             wp.river_window.set_circular(val);
         }
     }
@@ -996,12 +1146,24 @@ pub fn render_circular(state: &mut AppState) {
 /// Apply window backdrop blur.
 /// This modifies rendering state and is called during RenderStart.
 pub fn render_blur(state: &mut AppState) {
-    for win in &state.wm.windows {
+    let mut updates = Vec::new();
+    for win in &mut state.wm.windows {
         if win.closed {
             continue;
         }
-        if let Some(wp) = state.get_window_proxy(win.id) {
-            let val = if state.wm.layout.window_blur { 1 } else { 0 };
+        let val = if state.wm.layout.window_blur && win.app_id.as_deref() != Some("cce-status-interface") {
+            1u32
+        } else {
+            0u32
+        };
+        if win.last_blur != Some(val) {
+            win.last_blur = Some(val);
+            updates.push((win.id, val));
+        }
+    }
+
+    for (wid, val) in updates {
+        if let Some(wp) = state.get_window_proxy(wid) {
             wp.river_window.set_blur(val);
         }
     }
@@ -1129,6 +1291,7 @@ mod tests {
             single_instance: false,
             tag: 0,
             circular: false,
+            ssd: None,
         });
 
         // Spawn a focused window that is in Grid mode
@@ -1243,6 +1406,133 @@ mod tests {
         assert_eq!(results[1].wid, 30);
         assert_eq!(results[2].wid, 20);
         assert_eq!(results[3].wid, 10);
+    }
+
+    #[test]
+    fn test_auto_fullscreen() {
+        let mut wm = WindowManager::default();
+        wm.global_layout = TilingMode::Cascade;
+        wm.tag_layouts[0] = TilingMode::Cascade;
+
+        wm.windows.push(Window {
+            id: 1,
+            fullscreen_requested: true,
+            is_new: false,
+            ..Default::default()
+        });
+
+        assign_window_modes(&mut wm);
+
+        let win1 = wm.get_window(1).unwrap();
+        assert_eq!(win1.tiling_mode, TilingMode::Fullscreen);
+    }
+
+    #[test]
+    fn test_floating_clamping() {
+        let mut wm = WindowManager::default();
+        wm.global_layout = TilingMode::Floating;
+        wm.active_tags = 1;
+        wm.layout.gap_left = 10;
+        wm.layout.gap_right = 10;
+        wm.layout.gap_top = 10;
+        wm.layout.gap_bottom = 10;
+        wm.layout.bar_height = 20;
+
+        // Large window that would overflow screen (1920x1080 screen)
+        wm.windows.push(Window {
+            id: 1,
+            tiling_mode: TilingMode::Floating,
+            x: 26,
+            y: 50,
+            width: 1920,
+            height: 1200,
+            tags: 1,
+            ..Default::default()
+        });
+
+        let results = compute_tiling(&wm, 1920, 1080, 1920, 1080, 0, 0);
+        assert_eq!(results.len(), 1);
+        let res = &results[0];
+
+        // Usable boundaries:
+        // max_w = 1920 - 10 - 10 = 1900
+        // max_h = 1080 - 20 (bar) - 10 - 10 = 1040
+        // width and height must be clamped to max_w and max_h respectively
+        assert_eq!(res.w, 1900);
+        assert_eq!(res.h, 1040);
+
+        // Coordinates:
+        // fx must be clamped to [min_x, max_x]
+        // min_x = 0 + 10 = 10
+        // max_x = 0 + 1920 - 10 - fw = 1910 - 1900 = 10
+        // So fx must be exactly 10!
+        assert_eq!(res.x, 10);
+
+        // fy must be clamped to [min_y, max_y]
+        // min_y = 0 + 20 (bar) + 10 = 30
+        // max_y = 0 + 1080 - 10 - fh = 1070 - 1040 = 30
+        // So fy must be exactly 30!
+        assert_eq!(res.y, 30);
+    }
+
+    #[test]
+    fn test_metadata_race_condition() {
+        let mut wm = WindowManager::default();
+        wm.global_layout = TilingMode::Cascade;
+        wm.tag_layouts[0] = TilingMode::Cascade;
+        wm.mode_rules.push(ModeRule {
+            mode: TilingMode::Floating,
+            app_id_pattern: "steam_proton".to_string(),
+            title_pattern: None,
+            single_instance: false,
+            tag: 0,
+            circular: false,
+            ssd: None,
+        });
+
+        // Focus window (Cascade mode)
+        wm.windows.push(Window {
+            id: 1,
+            tiling_mode: TilingMode::Cascade,
+            is_new: false,
+            ..Default::default()
+        });
+        wm.seats.push(Seat {
+            id: 1,
+            focused_window_id: Some(1),
+            ..Default::default()
+        });
+
+        // New window starts blank (is_new = true, app_id = None, title = None)
+        wm.windows.push(Window {
+            id: 2,
+            is_new: true,
+            app_id: None,
+            title: None,
+            ..Default::default()
+        });
+
+        // 1. First assign_window_modes run (blank window): inheritance should be skipped, not locked
+        assign_window_modes(&mut wm);
+        {
+            let win2 = wm.get_window(2).unwrap();
+            assert_eq!(win2.tiling_mode, TilingMode::Cascade);
+            assert!(!win2.mode_locked);
+        }
+
+        // 2. Metadata arrives (app_id = Some("steam_proton"))
+        {
+            let win2 = wm.get_window_mut(2).unwrap();
+            win2.app_id = Some("steam_proton".to_string());
+        }
+
+        // 3. Second assign_window_modes run: rule should match and resolve to Floating
+        assign_window_modes(&mut wm);
+        {
+            let win2 = wm.get_window(2).unwrap();
+            assert_eq!(win2.tiling_mode, TilingMode::Floating);
+            assert!(!win2.mode_locked);
+        }
     }
 }
 

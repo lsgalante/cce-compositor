@@ -60,6 +60,8 @@ pub enum Action {
     SetTag4,
     Expose,
     Minimize,
+    SidePanelLeft,
+    SidePanelRight,
 }
 
 /// Layout parameters
@@ -92,6 +94,9 @@ pub struct Layout {
     pub window_blur: bool,
     pub side_panel_behavior: String,
     pub side_panel_width: i32,
+    pub side_panel_position: String,
+    pub side_panel_border_gap: i32,
+    pub side_panel_border_opacity: i32,
 }
 
 impl Default for Layout {
@@ -124,6 +129,9 @@ impl Default for Layout {
             window_blur: false,
             side_panel_behavior: "inline".to_string(),
             side_panel_width: 360,
+            side_panel_position: "left".to_string(),
+            side_panel_border_gap: 0,
+            side_panel_border_opacity: 100,
         }
     }
 }
@@ -137,6 +145,7 @@ pub struct ModeRule {
     pub single_instance: bool,
     pub tag: i32,
     pub circular: bool,
+    pub ssd: Option<bool>,
 }
 
 /// A pending keyboard binding waiting to be applied to seats
@@ -216,6 +225,8 @@ pub struct Window {
     pub y: i32,
     pub width: i32,
     pub height: i32,
+    pub committed_width: i32,
+    pub committed_height: i32,
     pub app_id: Option<String>,
     pub title: Option<String>,
     pub identifier: Option<String>,
@@ -240,6 +251,8 @@ pub struct Window {
     pub needs_xprop_check: bool,
     /// How many ManageStart cycles we've waited for the xprop result file.
     pub xprop_check_attempts: u8,
+    /// How many ManageStart cycles we've waited for window metadata (app_id/title).
+    pub metadata_check_attempts: u8,
     pub anim_x: Option<f64>,
     pub anim_y: Option<f64>,
     pub anim_w: Option<f64>,
@@ -247,6 +260,10 @@ pub struct Window {
     pub anim_opacity: Option<f64>,
     pub circular: bool,
     pub size_hint_applied: bool,
+    pub last_borders: Option<(u32, i32, u32, u32, u32, u32)>,
+    pub last_opacity: Option<u32>,
+    pub last_circular: Option<u32>,
+    pub last_blur: Option<u32>,
 }
 
 impl Default for Window {
@@ -260,6 +277,8 @@ impl Default for Window {
             y: 0,
             width: 0,
             height: 0,
+            committed_width: 0,
+            committed_height: 0,
             app_id: None,
             title: None,
             identifier: None,
@@ -280,6 +299,7 @@ impl Default for Window {
             mode_locked: false,
             needs_xprop_check: false,
             xprop_check_attempts: 0,
+            metadata_check_attempts: 0,
             anim_x: None,
             anim_y: None,
             anim_w: None,
@@ -287,6 +307,10 @@ impl Default for Window {
             anim_opacity: None,
             circular: false,
             size_hint_applied: false,
+            last_borders: None,
+            last_opacity: None,
+            last_circular: None,
+            last_blur: None,
         }
     }
 }
@@ -379,6 +403,8 @@ pub struct WindowManager {
     pub expose_active: bool,
     pub expose_visual_active: bool,
     pub animating: bool,
+    pub last_animation_tick: std::time::Instant,
+    pub last_frame_time: std::time::Instant,
 }
 
 impl Default for WindowManager {
@@ -429,6 +455,8 @@ impl Default for WindowManager {
             expose_active: false,
             expose_visual_active: false,
             animating: false,
+            last_animation_tick: std::time::Instant::now(),
+            last_frame_time: std::time::Instant::now(),
         }
     }
 }
@@ -614,6 +642,10 @@ pub fn parse_action(s: &str) -> Action {
         Action::None
     } else if s == "expose" {
         Action::Expose
+    } else if s == "side-panel-left" || s == "side_panel_left" {
+        Action::SidePanelLeft
+    } else if s == "side-panel-right" || s == "side_panel_right" {
+        Action::SidePanelRight
     } else {
         Action::None
     }
@@ -712,6 +744,8 @@ mod tests {
         assert_eq!(parse_action("set-tag-3"), Action::SetTag3);
         assert_eq!(parse_action("expose"), Action::Expose);
         assert_eq!(parse_action("minimize"), Action::Minimize);
+        assert_eq!(parse_action("side-panel-left"), Action::SidePanelLeft);
+        assert_eq!(parse_action("side-panel-right"), Action::SidePanelRight);
         assert_eq!(parse_action("unknown"), Action::None);
     }
 

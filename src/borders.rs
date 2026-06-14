@@ -51,7 +51,6 @@ pub struct WindowBorders {
 /// background_color and border_color based on stack depth.
 pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
     let mut results = Vec::new();
-    let all_edges = 0b1111u32;
 
     // Find the focused window ID from the first non-removed seat
     let focused_id = state
@@ -86,7 +85,7 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
         );
         */
 
-        let (r, g, b, a) = if win.tiling_mode == TilingMode::Popup {
+        let (r, g, b, mut a) = if win.tiling_mode == TilingMode::Popup {
             // Popup windows have a transparent border
             (0, 0, 0, 0)
         } else if is_focused {
@@ -118,39 +117,15 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
             (r, g, b, a)
         };
 
-        let mut width = if state.expose_visual_active && win.tiling_mode != TilingMode::Popup {
-            state.layout.grid_border_width
-        } else {
-            match win.tiling_mode {
-                TilingMode::Cascade => state.layout.cascade_border_width,
-                TilingMode::Fullscreen => state.layout.fullscreen_border_width,
-                TilingMode::Grid => state.layout.grid_border_width,
-                TilingMode::Floating => state.layout.floating_border_width,
-                TilingMode::Popup => 0,
-                TilingMode::SidePanel => state.layout.cascade_border_width,
-            }
-        };
-
-        if win.app_id.as_deref() == Some("cce-status-interface")
-            || win.app_id.as_deref().map_or(false, |aid| aid.contains("noborder"))
-        {
-            width = 0;
+        if win.tiling_mode == TilingMode::SidePanel {
+            let opacity_factor = state.layout.side_panel_border_opacity as f64 / 100.0;
+            let base_alpha = (a & 0xFF) as f64 * opacity_factor;
+            let val = base_alpha.round().clamp(0.0, 255.0) as u8;
+            a = val as u32 * 0x01010101;
         }
 
-        let has_titlebar = !win.closed
-            && !win.minimized
-            && win.app_id.as_deref() != Some("cce-status-interface")
-            && !win.app_id.as_deref().map_or(false, |aid| aid.contains("noborder"))
-            && win.tiling_mode != TilingMode::Popup
-            && win.tiling_mode != TilingMode::Fullscreen
-            && !win.circular;
-
-        let edges = if has_titlebar {
-            // Disable compositor-drawn borders entirely; all borders are drawn by client decorations.
-            0b0000u32
-        } else {
-            all_edges
-        };
+        let edges = 0b0000u32;
+        let width = 0;
 
         /*
         eprintln!(
@@ -176,6 +151,7 @@ pub fn compute_border_colors(state: &WindowManager) -> Vec<WindowBorders> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{Window, ModeRule};
 
     #[test]
     fn test_interp_channel_depth0() {
@@ -189,5 +165,46 @@ mod tests {
         let result = interp_channel(0x90909090, 0.80, 1);
         let expected = ((0x90 as f64 * 0.80) as u8) as u32 * 0x01010101;
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_border_edges_with_decorations() {
+        let mut wm = WindowManager::default();
+        wm.active_tags = 1;
+
+        // Window with client decorations OK (should have edges = 0b0000)
+        wm.windows.push(Window {
+            id: 1,
+            tiling_mode: TilingMode::Cascade,
+            tags: 1,
+            ..Default::default()
+        });
+
+        // Window with client decorations disabled via mode rule
+        wm.mode_rules.push(ModeRule {
+            mode: TilingMode::Cascade,
+            app_id_pattern: "no-decorations".to_string(),
+            title_pattern: None,
+            single_instance: false,
+            tag: 0,
+            circular: false,
+            ssd: Some(false), // Disable CSD
+        });
+        wm.windows.push(Window {
+            id: 2,
+            tiling_mode: TilingMode::Cascade,
+            app_id: Some("no-decorations".to_string()),
+            tags: 1,
+            ..Default::default()
+        });
+
+        let results = compute_border_colors(&wm);
+        assert_eq!(results.len(), 2);
+
+        // Window 1: no compositor-drawn borders
+        assert_eq!(results[0].edges, 0);
+
+        // Window 2: no compositor-drawn borders either (all borders are handled in client)
+        assert_eq!(results[1].edges, 0);
     }
 }

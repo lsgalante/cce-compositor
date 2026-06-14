@@ -88,6 +88,12 @@ pub struct LayoutConfig {
     pub side_panel_behavior: String,
     #[serde(default = "default_side_panel_width")]
     pub side_panel_width: i64,
+    #[serde(default = "default_side_panel_position")]
+    pub side_panel_position: String,
+    #[serde(default = "default_side_panel_border_gap")]
+    pub side_panel_border_gap: i64,
+    #[serde(default = "default_side_panel_border_opacity")]
+    pub side_panel_border_opacity: i64,
 }
 
 impl Default for LayoutConfig {
@@ -114,6 +120,9 @@ impl Default for LayoutConfig {
             window_blur: default_window_blur(),
             side_panel_behavior: default_side_panel_behavior(),
             side_panel_width: default_side_panel_width(),
+            side_panel_position: default_side_panel_position(),
+            side_panel_border_gap: default_side_panel_border_gap(),
+            side_panel_border_opacity: default_side_panel_border_opacity(),
         }
     }
 }
@@ -136,6 +145,18 @@ fn default_side_panel_behavior() -> String {
 
 fn default_side_panel_width() -> i64 {
     360
+}
+
+fn default_side_panel_position() -> String {
+    "left".to_string()
+}
+
+fn default_side_panel_border_gap() -> i64 {
+    0
+}
+
+fn default_side_panel_border_opacity() -> i64 {
+    100
 }
 
 fn default_gap() -> i64 {
@@ -291,6 +312,7 @@ pub struct ModeRuleConfig {
     pub single: Option<bool>,
     pub tag: Option<i64>,
     pub circular: Option<bool>,
+    pub ssd: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -341,6 +363,9 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
     state.layout.window_blur = config.layout.window_blur;
     state.layout.side_panel_behavior = config.layout.side_panel_behavior.clone();
     state.layout.side_panel_width = config.layout.side_panel_width as i32;
+    state.layout.side_panel_position = config.layout.side_panel_position.clone();
+    state.layout.side_panel_border_gap = config.layout.side_panel_border_gap as i32;
+    state.layout.side_panel_border_opacity = config.layout.side_panel_border_opacity as i32;
     if let Some((r, g, b, a)) = parse_hex_color(&config.layout.border_color) {
         state.layout.border_r = r;
         state.layout.border_g = g;
@@ -374,6 +399,31 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
         });
     }
 
+    // Register default super+left and super+right bindings for side panel position if not overridden
+    let super_mod = parse_modifiers("super");
+    let left_sym = parse_keysym("Left");
+    let right_sym = parse_keysym("Right");
+
+    let has_super_left = state.pending_bindings.iter().any(|b| b.mods == super_mod && b.keysym == left_sym);
+    if !has_super_left {
+        state.pending_bindings.push(PendingXkbBinding {
+            mods: super_mod,
+            keysym: left_sym,
+            action: crate::types::Action::SidePanelLeft,
+            command: None,
+        });
+    }
+
+    let has_super_right = state.pending_bindings.iter().any(|b| b.mods == super_mod && b.keysym == right_sym);
+    if !has_super_right {
+        state.pending_bindings.push(PendingXkbBinding {
+            mods: super_mod,
+            keysym: right_sym,
+            action: crate::types::Action::SidePanelRight,
+            command: None,
+        });
+    }
+
     // [[pointer_bind]] array
     for pb in &config.pointer_bind {
         let mods = parse_modifiers(&pb.mods);
@@ -398,6 +448,7 @@ pub fn parse_config(path: &str, cold_start: bool, state: &mut WindowManager) -> 
             single_instance: mr.single.unwrap_or(false),
             tag,
             circular: mr.circular.unwrap_or(false),
+            ssd: mr.ssd,
         });
     }
 
@@ -716,6 +767,9 @@ mod tests {
         assert_eq!(lc.grid_gap, 18);
         assert_eq!(lc.side_panel_width, 360);
         assert_eq!(lc.side_panel_behavior, "inline");
+        assert_eq!(lc.side_panel_position, "left");
+        assert_eq!(lc.side_panel_border_gap, 0);
+        assert_eq!(lc.side_panel_border_opacity, 100);
     }
 
     #[test]
