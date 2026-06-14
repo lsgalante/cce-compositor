@@ -152,7 +152,7 @@ impl Configure {
             height: None,
             bounds: Dimensions { width: 0, height: 0 },
             activated: false,
-            ssd: false,
+            ssd: true,
             tiled: 0,
             capabilities: 0,
             maximized: false,
@@ -314,7 +314,7 @@ impl Window {
             wm_requested: WmRequestedState {
                 dimensions: None,
                 bounds: Dimensions { width: 0, height: 0 },
-                ssd: false,
+                ssd: true,
                 tiled: 0,
                 capabilities: 1 | 2 | 4 | 8,
                 resizing: false,
@@ -667,7 +667,7 @@ impl Window {
                 self.wm_requested = WmRequestedState {
                     dimensions: None,
                     bounds: Dimensions { width: 0, height: 0 },
-                    ssd: false,
+                    ssd: true,
                     tiled: 0,
                     capabilities: 1 | 2 | 4 | 8,
                     resizing: false,
@@ -713,6 +713,7 @@ impl Window {
                         return;
                     }
                     self.object = res;
+                    self.rendering_scheduled.resend_dimensions = true;
                     ffi::wl_resource_set_implementation(
                         res,
                         &WINDOW_INTERFACE as *const _ as *const _,
@@ -1041,9 +1042,20 @@ impl Window {
             }
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
-                    let scale = crate::xwayland_window::XwaylandWindow::get_scale(xwindow);
-                    self.rendering_scheduled.width = ((*(*xwindow).xsurface).width as f32 / scale).round() as u32;
-                    self.rendering_scheduled.height = ((*(*xwindow).xsurface).height as f32 / scale).round() as u32;
+                    let mut w = (*(*xwindow).xsurface).width as u32;
+                    let mut h = (*(*xwindow).xsurface).height as u32;
+                    let class_ptr = (*(*xwindow).xsurface).class;
+                    let class = if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") };
+                    let title_ptr = (*(*xwindow).xsurface).title;
+                    let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
+                    let is_wine = class.contains("steam_proton") || class.contains("wine") || class.contains("upc.exe") || title.contains("Ubisoft");
+                    let has_parent = !(*(*xwindow).xsurface).parent.is_null();
+                    if is_wine && !has_parent {
+                        w = w.saturating_sub(32);
+                        h = h.saturating_sub(32);
+                    }
+                    self.rendering_scheduled.width = w;
+                    self.rendering_scheduled.height = h;
                 }
             }
             WindowImpl::Destroying => {}
@@ -1137,6 +1149,17 @@ impl Window {
         let requested = &self.rendering_requested;
         let enabled = !requested.hidden && (matches!(self.state, WindowState::Mapped) || matches!(self.state, WindowState::Closing));
 
+        let title_ptr = match self.impl_type {
+            WindowImpl::Xwayland(xwindow) => {
+                if xwindow.is_null() { std::ptr::null() } else { (*(*xwindow).xsurface).title }
+            }
+            _ => std::ptr::null(),
+        };
+        let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
+        if title.contains("Ubisoft") {
+            log::info!("render_finish for '{}' (addr={:p}): enabled={} hidden={} state={:?}", title, self as *const Window, enabled, requested.hidden, self.state);
+        }
+
         ffi::wlr_scene_node_set_enabled(self.tree as *mut ffi::wlr_scene_node, enabled);
         ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
 
@@ -1203,6 +1226,18 @@ impl Window {
         ffi::wlr_scene_node_set_position(self.tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
         ffi::wlr_scene_node_set_position(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
 
+        let (geom_x, geom_y) = match self.impl_type {
+            WindowImpl::Toplevel(toplevel) => {
+                if toplevel.is_null() {
+                    (0, 0)
+                } else {
+                    ((*toplevel).geometry.x, (*toplevel).geometry.y)
+                }
+            }
+            _ => (0, 0),
+        };
+        ffi::wlr_scene_node_set_position(self.surfaces.tree as *mut ffi::wlr_scene_node, -geom_x, -geom_y);
+
         self.apply_surface_clip(&clip, &content_clip);
 
         for decorations in [&mut self.decorations_above as *mut ffi::wl_list, &mut self.decorations_below as *mut ffi::wl_list] {
@@ -1219,6 +1254,19 @@ impl Window {
         match self.impl_type {
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
+                    if !(*xwindow).surface_tree.is_null() {
+                        let class_ptr = (*(*xwindow).xsurface).class;
+                        let class = if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") };
+                        let title_ptr = (*(*xwindow).xsurface).title;
+                        let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
+                        let is_wine = class.contains("steam_proton") || class.contains("wine") || class.contains("upc.exe") || title.contains("Ubisoft");
+                        let has_parent = !(*(*xwindow).xsurface).parent.is_null();
+                        if is_wine && !has_parent {
+                            ffi::wlr_scene_node_set_position((*xwindow).surface_tree as *mut ffi::wlr_scene_node, -16, -16);
+                        } else {
+                            ffi::wlr_scene_node_set_position((*xwindow).surface_tree as *mut ffi::wlr_scene_node, 0, 0);
+                        }
+                    }
                     (*xwindow).configure();
                 }
             }
@@ -1315,23 +1363,70 @@ impl Window {
         let a_empty = (*a).width == 0 && (*a).height == 0;
         let b_empty = (*b).width == 0 && (*b).height == 0;
 
+        let layout_box = ffi::wlr_box {
+            x: 0,
+            y: 0,
+            width: self.box_geom.width,
+            height: self.box_geom.height,
+        };
+
         if !a_empty && !b_empty {
-            if !ffi::wlr_box_intersection(&mut surface_clip, a, b) {
+            let mut temp_clip = std::mem::zeroed::<ffi::wlr_box>();
+            if !ffi::wlr_box_intersection(&mut temp_clip, a, b) {
+                self.surfaces.set_enabled(false);
+                return;
+            }
+            if !ffi::wlr_box_intersection(&mut surface_clip, &temp_clip, &layout_box) {
                 self.surfaces.set_enabled(false);
                 return;
             }
         } else if !a_empty {
-            surface_clip = *a;
+            if !ffi::wlr_box_intersection(&mut surface_clip, a, &layout_box) {
+                self.surfaces.set_enabled(false);
+                return;
+            }
+        } else if !b_empty {
+            if !ffi::wlr_box_intersection(&mut surface_clip, b, &layout_box) {
+                self.surfaces.set_enabled(false);
+                return;
+            }
         } else {
-            surface_clip = *b;
+            surface_clip = layout_box;
         }
 
         self.surfaces.set_enabled(true);
+
+        let margin = 4;
+        surface_clip.x -= margin;
+        surface_clip.y -= margin;
+        surface_clip.width += 2 * margin;
+        surface_clip.height += 2 * margin;
+
         match self.impl_type {
             WindowImpl::Toplevel(toplevel) => {
                 if !toplevel.is_null() {
                     surface_clip.x += (*toplevel).geometry.x;
                     surface_clip.y += (*toplevel).geometry.y;
+                }
+            }
+            WindowImpl::Xwayland(xwindow) => {
+                if !xwindow.is_null() {
+                    let title_ptr = (*(*xwindow).xsurface).title;
+                    let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
+                    if title.contains("Ubisoft") {
+                        log::info!(
+                            "XWayland window clip check: title='{}' box_geom=({}, {}, {}, {}) xsurface=({}, {}, {}, {})",
+                            title,
+                            self.box_geom.x,
+                            self.box_geom.y,
+                            self.box_geom.width,
+                            self.box_geom.height,
+                            (*(*xwindow).xsurface).x,
+                            (*(*xwindow).xsurface).y,
+                            (*(*xwindow).xsurface).width,
+                            (*(*xwindow).xsurface).height,
+                        );
+                    }
                 }
             }
             _ => {}
@@ -1406,10 +1501,12 @@ unsafe extern "C" fn window_propose_dimensions(
         );
         return;
     }
-    (*window).wm_requested.dimensions = Some(Dimensions {
-        width: width as u32,
-        height: height as u32,
-    });
+    if (*window).get_parent().is_null() {
+        (*window).wm_requested.dimensions = Some(Dimensions {
+            width: width as u32,
+            height: height as u32,
+        });
+    }
 }
 
 unsafe extern "C" fn window_hide(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
@@ -1446,6 +1543,7 @@ unsafe extern "C" fn window_use_csd(client: *mut ffi::wl_client, resource: *mut 
         return;
     }
     (*window).wm_requested.ssd = false;
+    (*server).wm.dirty_windowing();
 }
 
 unsafe extern "C" fn window_use_ssd(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
@@ -1458,6 +1556,7 @@ unsafe extern "C" fn window_use_ssd(client: *mut ffi::wl_client, resource: *mut 
         return;
     }
     (*window).wm_requested.ssd = true;
+    (*server).wm.dirty_windowing();
 }
 
 unsafe extern "C" fn window_set_borders(

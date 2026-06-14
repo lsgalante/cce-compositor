@@ -115,8 +115,10 @@ unsafe extern "C" fn node_set_position(
     
     match (*node).get() {
         WmNodeType::Window(w) => {
-            (*w).rendering_requested.x = x;
-            (*w).rendering_requested.y = y;
+            if (*w).get_parent().is_null() {
+                (*w).rendering_requested.x = x;
+                (*w).rendering_requested.y = y;
+            }
         }
         WmNodeType::ShellSurface(s) => {
             (*s).rendering_requested.x = x;

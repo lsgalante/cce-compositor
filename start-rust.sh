@@ -29,17 +29,14 @@ ${DEBUG_FLAG}exec /home/lsgalante/.local/bin/cce-client 2>/tmp/cce-client-\${WAY
 LAUNCH_EOF
 chmod +x /tmp/cce-client-launch-rust.sh
  
-if [ "$LOGGING" = true ] || [ "$DEBUG" = true ]; then
-    echo "Starting cce-server with cce-client..."
-    echo "  Logs: /tmp/river-cce-client.log + /tmp/cce-client-\${WAYLAND_DISPLAY}.log"
-    if [ "$DEBUG" = true ]; then
-        echo "  Wayland debug logging enabled (WAYLAND_DEBUG=1)"
-    fi
-fi
- 
 # Resolve script directory to reference target/release/cce-server reliably
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ "$DEBUG" = true ]; then
     export WAYLAND_DEBUG=1
 fi
-exec "$SCRIPT_DIR/target/release/cce-server" -c /tmp/cce-client-launch-rust.sh 2>/tmp/river-cce-client.log
+
+if [ "$LOGGING" = true ] || [ "$DEBUG" = true ]; then
+    exec "$SCRIPT_DIR/target/release/cce-server" -c /tmp/cce-client-launch-rust.sh 2>/tmp/river-cce-client.log
+else
+    exec "$SCRIPT_DIR/target/release/cce-server" --log-level error -c /tmp/cce-client-launch-rust.sh 2>/dev/null
+fi

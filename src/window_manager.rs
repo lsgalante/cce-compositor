@@ -420,17 +420,22 @@ impl WindowManager {
                 crate::wm_node::WmNodeType::Window(window) => {
                     (*window).render_finish();
                     if reorder {
-                        ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, (*self.server).scene.layers.popups);
-                        if rendered_fullscreen(window) {
-                            ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.fullscreen);
-                            ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
-                            found_fullscreen = true;
-                        } else if (*window).rendering_requested.circular {
-                            ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.top);
-                            ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                        if (*window).rendering_requested.hidden {
+                            ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.hidden_tree);
+                            ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, (*self.server).scene.hidden_tree);
                         } else {
-                            ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.wm);
-                            ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                            ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, (*self.server).scene.layers.popups);
+                            if rendered_fullscreen(window) {
+                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.fullscreen);
+                                ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                                found_fullscreen = true;
+                            } else if (*window).rendering_requested.circular {
+                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.top);
+                                ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                            } else {
+                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.wm);
+                                ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                            }
                         }
                     }
                 }
