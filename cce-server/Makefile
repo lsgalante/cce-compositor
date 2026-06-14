@@ -5,7 +5,15 @@ build:
 
 install: build
 	mkdir -p ~/.local/bin
-	install -m 755 target/release/cce-server ~/.local/bin/cce-server
+	@if [ -f target/release/cce-server ]; then \
+		install -m 755 target/release/cce-server ~/.local/bin/cce-server; \
+	elif [ -f ../target/release/cce-server ]; then \
+		install -m 755 ../target/release/cce-server ~/.local/bin/cce-server; \
+	elif [ -f ../../target/release/cce-server ]; then \
+		install -m 755 ../../target/release/cce-server ~/.local/bin/cce-server; \
+	else \
+		echo "Error: cce-server binary not found"; exit 1; \
+	fi
 
 run:
 	cargo run
