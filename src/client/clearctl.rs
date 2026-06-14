@@ -65,8 +65,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  key-release <key>");
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
+pub fn run_clearctl(args: Vec<String>) {
     if args.len() < 2 {
         usage(&args[0], true);
         process::exit(1);

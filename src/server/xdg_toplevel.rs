@@ -682,8 +682,9 @@ pub unsafe fn override_geometry_if_needed(window: *mut crate::window::Window, ge
         let margin_x = if (*window).margin_x > 0 { (*window).margin_x } else { 10 };
         let margin_y = if (*window).margin_y > 0 { (*window).margin_y } else { 10 };
         
-        let (left_margin, right_margin) = if margin_x == 10 { (10, 34) } else { (margin_x, margin_x) };
-        let (top_margin, bottom_margin) = if margin_y == 10 { (10, 34) } else { (margin_y, margin_y) };
+        let is_antigravity = (*window).is_antigravity();
+        let (left_margin, right_margin) = if margin_x == 10 && !is_antigravity { (10, 34) } else { (margin_x, margin_x) };
+        let (top_margin, bottom_margin) = if margin_y == 10 && !is_antigravity { (10, 34) } else { (margin_y, margin_y) };
         
         geom.x = left_margin;
         geom.y = top_margin;

@@ -2,9 +2,12 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    println!("cargo:rerun-if-changed=src/wlroots_log_wrapper.c");
+    println!("cargo:rerun-if-changed=src/server/wlroots_log_wrapper.c");
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=protocol/river-window-management-v1.xml");
+    println!("cargo:rerun-if-changed=protocol/river-xkb-bindings-v1.xml");
+    println!("cargo:rerun-if-changed=protocol/river-layer-shell-v1.xml");
+    println!("cargo:rerun-if-changed=protocol/river-input-management-v1.xml");
 
     // Probe system libraries
     let scenefx = pkg_config::Config::new()
@@ -120,7 +123,7 @@ fn main() {
 
     // Compile the C wrapper and protocol C files
     let mut build = cc::Build::new();
-    build.file("src/wlroots_log_wrapper.c")
+    build.file("src/server/wlroots_log_wrapper.c")
         .define("WLR_USE_UNSTABLE", None)
         .flag("-std=c99")
         .flag("-O2")
@@ -173,6 +176,14 @@ fn main() {
         .blocklist_item("wl_listener")
         .blocklist_item("wlr_addon")
         .blocklist_item("wlr_input_device")
+        .blocklist_item("pixman_region32")
+        .blocklist_item("pixman_region32_t")
+        .blocklist_item("pixman_box32")
+        .blocklist_item("pixman_box32_t")
+        .blocklist_item("pixman_rectangle32")
+        .blocklist_item("pixman_rectangle32_t")
+        .blocklist_item("pixman_region32_data")
+        .blocklist_item("pixman_region32_data_t")
         .generate()
         .expect("Unable to generate bindings");
 

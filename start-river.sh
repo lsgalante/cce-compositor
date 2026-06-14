@@ -20,12 +20,12 @@ export XCURSOR_PATH="/home/lsgalante/.local/share/icons:/home/lsgalante/.icons:/
 if [ "$LOGGING" = true ]; then
     cat > /tmp/cce-client-launch-river.sh << 'LAUNCH_EOF'
 #!/bin/sh
-exec /home/lsgalante/.local/bin/cce-client 2>/tmp/cce-client-${WAYLAND_DISPLAY}.log
+exec /home/lsgalante/.local/bin/cce client 2>/tmp/cce-client-${WAYLAND_DISPLAY}.log
 LAUNCH_EOF
 else
     cat > /tmp/cce-client-launch-river.sh << 'LAUNCH_EOF'
 #!/bin/sh
-exec /home/lsgalante/.local/bin/cce-client
+exec /home/lsgalante/.local/bin/cce client
 LAUNCH_EOF
 fi
 chmod +x /tmp/cce-client-launch-river.sh

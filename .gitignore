@@ -1,4 +1,5 @@
 /target
 .antigravitycli/
 .gemini/
-
+*.log
+check_errors.txt

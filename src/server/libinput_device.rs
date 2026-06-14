@@ -59,14 +59,14 @@ impl LibinputDevice {
             crate::server::wl_list_remove(curr);
             ffi::wl_resource_post_event((*obj).resource, ffi::RIVER_LIBINPUT_DEVICE_V1_REMOVED);
 
-            ffi::wl_resource_set_implementation(
-                (*obj).resource,
-                std::ptr::null(),
-                std::ptr::null_mut(),
-                None,
-            );
+            // Mark the object as inert by setting device to NULL, but do NOT set the resource's
+            // implementation to NULL or free the `obj` memory here. Let handle_device_object_destroy
+            // do the cleanup when the resource is eventually destroyed by the client/server.
+            (*obj).device = std::ptr::null_mut();
 
-            let _ = Box::from_raw(obj);
+            // Re-initialize the link so it doesn't point to the freed self.objects list.
+            ffi::wl_list_init(&mut (*obj).link);
+
             curr = next;
         }
 
@@ -280,7 +280,9 @@ impl LibinputDevice {
 unsafe extern "C" fn handle_device_object_destroy(resource: *mut ffi::wl_resource) {
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if !obj.is_null() {
-        crate::server::wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+        if !(*obj).device.is_null() {
+            crate::server::wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+        }
         let _ = Box::from_raw(obj);
     }
 }
@@ -369,6 +371,10 @@ unsafe extern "C" fn device_set_send_events(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_send_events_set_mode((*dev).libinput, mode);
     if make_result(client, resource, result_id, status) {
@@ -386,6 +392,10 @@ unsafe extern "C" fn device_set_tap(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_tap_set_enabled((*dev).libinput, state);
     if make_result(client, resource, result_id, status) {
@@ -403,6 +413,10 @@ unsafe extern "C" fn device_set_tap_button_map(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_tap_set_button_map((*dev).libinput, button_map);
     if make_result(client, resource, result_id, status) {
@@ -420,6 +434,10 @@ unsafe extern "C" fn device_set_drag(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_tap_set_drag_enabled((*dev).libinput, state);
     if make_result(client, resource, result_id, status) {
@@ -437,6 +455,10 @@ unsafe extern "C" fn device_set_drag_lock(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_tap_set_drag_lock_enabled((*dev).libinput, state);
     if make_result(client, resource, result_id, status) {
@@ -454,6 +476,10 @@ unsafe extern "C" fn device_set_three_finger_drag(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_3fg_drag_set_enabled((*dev).libinput, state);
     if make_result(client, resource, result_id, status) {
@@ -471,6 +497,10 @@ unsafe extern "C" fn device_set_calibration_matrix(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     if (*matrix_arr).size != std::mem::size_of::<[f32; 6]>() {
         ffi::wl_resource_post_error(
@@ -515,6 +545,10 @@ unsafe extern "C" fn device_set_accel_profile(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_accel_set_profile((*dev).libinput, profile);
     if make_result(client, resource, result_id, status) {
@@ -532,6 +566,10 @@ unsafe extern "C" fn device_set_accel_speed(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     if (*speed_arr).size != std::mem::size_of::<f64>() {
         ffi::wl_resource_post_error(
@@ -576,13 +614,6 @@ unsafe extern "C" fn device_apply_accel_config(
     if obj.is_null() { return; }
     let dev = (*obj).device;
 
-    let accel_config = ffi::wl_resource_get_user_data(config_res) as *mut crate::libinput_accel_config::LibinputAccelConfig;
-    let config = if !accel_config.is_null() {
-        (*accel_config).libinput
-    } else {
-        std::ptr::null_mut()
-    };
-
     let result_res = ffi::wl_resource_create(
         client,
         &ffi::river_libinput_result_v1_interface,
@@ -593,6 +624,19 @@ unsafe extern "C" fn device_apply_accel_config(
         ffi::wl_client_post_no_memory(client);
         return;
     }
+
+    if dev.is_null() {
+        ffi::wl_resource_post_event(result_res, 1); // unsupported
+        ffi::wl_resource_destroy(result_res);
+        return;
+    }
+
+    let accel_config = ffi::wl_resource_get_user_data(config_res) as *mut crate::libinput_accel_config::LibinputAccelConfig;
+    let config = if !accel_config.is_null() {
+        (*accel_config).libinput
+    } else {
+        std::ptr::null_mut()
+    };
 
     if config.is_null() {
         ffi::wl_resource_post_event(result_res, 2); // invalid
@@ -634,6 +678,10 @@ unsafe extern "C" fn device_set_natural_scroll(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_scroll_set_natural_scroll_enabled((*dev).libinput, state as i32);
     if make_result(client, resource, result_id, status) {
@@ -651,6 +699,10 @@ unsafe extern "C" fn device_set_left_handed(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_left_handed_set((*dev).libinput, state as i32);
     if make_result(client, resource, result_id, status) {
@@ -668,6 +720,10 @@ unsafe extern "C" fn device_set_click_method(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_click_set_method((*dev).libinput, method);
     if make_result(client, resource, result_id, status) {
@@ -685,6 +741,10 @@ unsafe extern "C" fn device_set_clickfinger_button_map(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_click_set_clickfinger_button_map((*dev).libinput, button_map);
     if make_result(client, resource, result_id, status) {
@@ -702,6 +762,10 @@ unsafe extern "C" fn device_set_middle_emulation(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_middle_emulation_set_enabled((*dev).libinput, state);
     if make_result(client, resource, result_id, status) {
@@ -719,6 +783,10 @@ unsafe extern "C" fn device_set_scroll_method(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_scroll_set_method((*dev).libinput, method);
     if make_result(client, resource, result_id, status) {
@@ -736,6 +804,10 @@ unsafe extern "C" fn device_set_scroll_button(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_scroll_set_button((*dev).libinput, button);
     if make_result(client, resource, result_id, status) {
@@ -753,6 +825,10 @@ unsafe extern "C" fn device_set_scroll_button_lock(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_scroll_set_button_lock((*dev).libinput, state);
     if make_result(client, resource, result_id, status) {
@@ -770,6 +846,10 @@ unsafe extern "C" fn device_set_dwt(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_dwt_set_enabled((*dev).libinput, state);
     if make_result(client, resource, result_id, status) {
@@ -787,6 +867,10 @@ unsafe extern "C" fn device_set_dwtp(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_dwtp_set_enabled((*dev).libinput, state);
     if make_result(client, resource, result_id, status) {
@@ -804,6 +888,10 @@ unsafe extern "C" fn device_set_rotation(
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if obj.is_null() { return; }
     let dev = (*obj).device;
+    if dev.is_null() {
+        make_result(client, resource, result_id, ffi::libinput_config_status_LIBINPUT_CONFIG_STATUS_UNSUPPORTED);
+        return;
+    }
 
     let status = ffi::libinput_device_config_rotation_set_angle((*dev).libinput, angle);
     if make_result(client, resource, result_id, status) {

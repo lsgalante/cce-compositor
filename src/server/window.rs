@@ -427,11 +427,19 @@ impl Window {
         }
     }
 
-    pub unsafe fn is_chromium_electron(&self) -> bool {
+    pub unsafe fn is_antigravity(&self) -> bool {
         let app_id_ptr = self.get_app_id();
         if app_id_ptr.is_null() { return false; }
         let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_str().unwrap_or("").to_lowercase();
-        app_id.contains("antigravity") || app_id.contains("chromium") || app_id.contains("chrome") || app_id.contains("electron") || app_id.contains("code") || app_id.contains("discord") || app_id.contains("slack")
+        app_id.contains("antigravity")
+    }
+
+    pub unsafe fn is_chromium_electron(&self) -> bool {
+        if self.is_antigravity() { return true; }
+        let app_id_ptr = self.get_app_id();
+        if app_id_ptr.is_null() { return false; }
+        let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_str().unwrap_or("").to_lowercase();
+        app_id.contains("chromium") || app_id.contains("chrome") || app_id.contains("electron") || app_id.contains("code") || app_id.contains("discord") || app_id.contains("slack")
     }
 
     pub unsafe fn get_parent(&self) -> *mut Window {
@@ -995,8 +1003,9 @@ impl Window {
         if self.wm_requested.ssd && self.is_chromium_electron() && self.wm_requested.fullscreen.is_null() {
             let margin_x = if self.margin_x > 0 { self.margin_x } else { 10 };
             let margin_y = if self.margin_y > 0 { self.margin_y } else { 10 };
-            let (left_margin, right_margin) = if margin_x == 10 { (10, 34) } else { (margin_x, margin_x) };
-            let (top_margin, bottom_margin) = if margin_y == 10 { (10, 34) } else { (margin_y, margin_y) };
+            let is_antigravity = self.is_antigravity();
+            let (left_margin, right_margin) = if margin_x == 10 && !is_antigravity { (10, 34) } else { (margin_x, margin_x) };
+            let (top_margin, bottom_margin) = if margin_y == 10 && !is_antigravity { (10, 34) } else { (margin_y, margin_y) };
             if let Some(w) = width {
                 width = Some(w + left_margin as u32 + right_margin as u32);
             }
@@ -1300,7 +1309,7 @@ impl Window {
 
     pub unsafe fn draw_borders(&mut self) {
         let requested = &self.rendering_requested;
-        if requested.circular || requested.border.width <= 0 {
+        if requested.circular || requested.border.width == 0 {
             ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);

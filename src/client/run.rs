@@ -1,15 +1,15 @@
-// cce-client — Wayland window manager for river
+// cce-client — Wayland window manager run loop
 
-use cce_client::config::parse_config;
-use cce_client::ipc;
-use cce_client::ipc_server;
-use cce_client::restart;
-use cce_client::status_server;
-use cce_client::wayland::wayland_init;
+use crate::config::parse_config;
+use crate::ipc;
+use crate::ipc_server;
+use crate::restart;
+use crate::status_server;
+use crate::wayland::{wayland_init, AppState};
+use crate::paths;
 use std::env;
 use std::fs;
-
-use cce_client::paths;
+use wayland_client::EventQueue;
 
 /// Write a crash/exit trace to /tmp/cce-client-death.log so we can diagnose
 /// why cce-client dies even when the normal log gets overwritten on restart.
@@ -26,7 +26,7 @@ fn log_death(msg: &str) {
     let _ = writeln!(std::io::stderr(), "{}", msg);
 }
 
-fn main() {
+pub fn run_client() {
     // Install a panic hook that writes to a separate log file before aborting.
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("[PANIC] {}", info);
@@ -103,7 +103,7 @@ fn main() {
     let ipc_tx = ipc_server.tx;
 
     // Setup channel for configuration updates:
-    let (config_tx, config_rx) = tokio::sync::mpsc::unbounded_channel::<cce_client::input::InputDaemonMsg>();
+    let (config_tx, config_rx) = tokio::sync::mpsc::unbounded_channel::<crate::input::InputDaemonMsg>();
     state.wm.input_controller = Some(config_tx);
 
     // Spawn the input subsystem background thread:
@@ -112,7 +112,7 @@ fn main() {
     std::thread::Builder::new()
         .name("cce-client-input-subsystem".into())
         .spawn(move || {
-            if let Err(e) = cce_client::input::run_input_daemon(config_rx, ipc_tx_clone, pipe_write_clone) {
+            if let Err(e) = crate::input::run_input_daemon(config_rx, ipc_tx_clone, pipe_write_clone) {
                 eprintln!("[input-subsystem] Fatal error: {:?}", e);
             }
         })
@@ -158,7 +158,7 @@ fn main() {
     if state.wm.pending_scale_apply && state.wm.output_scale > 0.0 && !state.output_heads.is_empty()
     {
         let qh = event_queue.handle();
-        cce_client::wayland::apply_output_scale(&mut state, &qh);
+        crate::wayland::apply_output_scale(&mut state, &qh);
     }
 
     // Flush any queued requests from config loading (bindings, etc.)
@@ -279,7 +279,7 @@ fn main() {
             state.manage_dirty();
             if !state.wm.tap_config_applied && !state.libinput_devices.is_empty() {
                 let qh = event_queue.handle();
-                cce_client::wayland::apply_input_config(&mut state, &qh);
+                crate::wayland::apply_input_config(&mut state, &qh);
             }
         }
 

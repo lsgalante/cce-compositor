@@ -1,0 +1,141 @@
+// cce — Unified compositor server and window manager client
+
+// ==========================================
+// Compositor Server Modules
+// ==========================================
+#[path = "server/ffi.rs"]
+pub mod ffi;
+#[path = "server/server.rs"]
+pub mod server;
+#[path = "server/process.rs"]
+pub mod process;
+#[path = "server/util.rs"]
+pub mod util;
+#[path = "server/slotmap.rs"]
+pub mod slotmap;
+#[path = "server/window_manager.rs"]
+pub mod window_manager;
+#[path = "server/xkb_bindings.rs"]
+pub mod xkb_bindings;
+#[path = "server/layer_shell.rs"]
+pub mod layer_shell;
+#[path = "server/scene.rs"]
+pub mod scene;
+#[path = "server/scene_node_data.rs"]
+pub mod scene_node_data;
+#[path = "server/output.rs"]
+pub mod output;
+#[path = "server/output_manager.rs"]
+pub mod output_manager;
+#[path = "server/input_manager.rs"]
+pub mod input_manager;
+#[path = "server/libinput_config.rs"]
+pub mod libinput_config;
+#[path = "server/libinput_device.rs"]
+pub mod libinput_device;
+#[path = "server/libinput_accel_config.rs"]
+pub mod libinput_accel_config;
+#[path = "server/xkb_keyboard.rs"]
+pub mod xkb_keyboard;
+#[path = "server/xkb_config.rs"]
+pub mod xkb_config;
+#[path = "server/idle_inhibit_manager.rs"]
+pub mod idle_inhibit_manager;
+#[path = "server/lock_manager.rs"]
+pub mod lock_manager;
+#[path = "server/input_device.rs"]
+pub mod input_device;
+#[path = "server/pointer_constraint.rs"]
+pub mod pointer_constraint;
+#[path = "server/keyboard.rs"]
+pub mod keyboard;
+#[path = "server/cursor.rs"]
+pub mod cursor;
+#[path = "server/seat.rs"]
+pub mod seat;
+#[path = "server/tablet.rs"]
+pub mod tablet;
+#[path = "server/tablet_tool.rs"]
+pub mod tablet_tool;
+#[path = "server/window.rs"]
+pub mod window;
+#[path = "server/xdg_toplevel.rs"]
+pub mod xdg_toplevel;
+#[path = "server/xdg_popup.rs"]
+pub mod xdg_popup;
+#[path = "server/shell_surface.rs"]
+pub mod shell_surface;
+#[path = "server/wm_node.rs"]
+pub mod wm_node;
+#[path = "server/xwayland_window.rs"]
+pub mod xwayland_window;
+#[path = "server/xwayland_override_redirect.rs"]
+pub mod xwayland_override_redirect;
+#[path = "server/text_input.rs"]
+pub mod text_input;
+#[path = "server/input_relay.rs"]
+pub mod input_relay;
+#[path = "server/input_popup.rs"]
+pub mod input_popup;
+#[path = "server/drag_icon.rs"]
+pub mod drag_icon;
+#[path = "server/pointer_binding.rs"]
+pub mod pointer_binding;
+#[path = "server/keyboard_group.rs"]
+pub mod keyboard_group;
+#[path = "server/inspector.rs"]
+pub mod inspector;
+
+#[path = "server/run_server.rs"]
+pub mod run_server;
+pub use run_server::run_server;
+
+
+// ==========================================
+// Window Manager Client Modules
+// ==========================================
+#[path = "client/borders.rs"]
+pub mod borders;
+#[path = "client/config.rs"]
+pub mod config;
+#[path = "client/decorations.rs"]
+pub mod decorations;
+#[path = "client/ipc.rs"]
+pub mod ipc;
+#[path = "client/ipc_server.rs"]
+pub mod ipc_server;
+#[path = "client/protocol.rs"]
+pub mod protocol;
+#[path = "client/restart.rs"]
+pub mod restart;
+#[path = "client/state.rs"]
+pub mod state;
+#[path = "client/status.rs"]
+pub mod status;
+#[path = "client/status_server.rs"]
+pub mod status_server;
+#[path = "client/tiling.rs"]
+pub mod tiling;
+#[path = "client/types.rs"]
+pub mod types;
+#[allow(unreachable_patterns)]
+#[path = "client/wayland.rs"]
+pub mod wayland;
+#[path = "client/wm.rs"]
+pub mod wm;
+#[path = "client/input.rs"]
+pub mod input;
+#[path = "client/paths.rs"]
+pub mod paths;
+#[path = "client/run.rs"]
+pub mod run;
+
+pub use run::run_client;
+
+#[path = "client/clearctl.rs"]
+pub mod clearctl;
+pub use clearctl::run_clearctl;
+
+#[path = "client/clear_inspector.rs"]
+pub mod clear_inspector;
+pub use clear_inspector::run_inspector;

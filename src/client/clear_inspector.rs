@@ -5,9 +5,8 @@ use wayland_client::{
 };
 use serde_json::Value;
 
-// Import generated client protocols from cce-client crate
-mod protocol;
-use protocol::clear_inspector::client::zclear_inspector_v1::{self, ZclearInspectorV1};
+// Import generated client protocols from cce library
+use crate::protocol::clear_inspector::client::zclear_inspector_v1::{self, ZclearInspectorV1};
 
 struct InspectorState {
     inspector: Option<ZclearInspectorV1>,
@@ -52,6 +51,7 @@ impl Dispatch<ZclearInspectorV1, ()> for InspectorState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
+        #[allow(unreachable_patterns)]
         match event {
             zclear_inspector_v1::Event::InspectedSurface { title, app_id, x, y, width, height, fd, len } => {
                 let mut surface_state = String::new();
@@ -73,6 +73,7 @@ impl Dispatch<ZclearInspectorV1, ()> for InspectorState {
             zclear_inspector_v1::Event::InspectedSurfaceDone => {
                 state.done = true;
             }
+            _ => {}
         }
     }
 }
@@ -169,8 +170,7 @@ fn print_usage(bin_name: &str) {
     println!("  -l, --label <widget_label>  Optional widget label to filter by");
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
+pub fn run_inspector(args: Vec<String>) {
     let bin_name = args.get(0).map(|s| s.as_str()).unwrap_or("clear-inspector");
     
     let mut app_id = None;

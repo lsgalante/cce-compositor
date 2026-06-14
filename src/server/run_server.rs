@@ -1,53 +1,13 @@
 // SPDX-FileCopyrightText: © 2020 The River Developers
 // SPDX-License-Identifier: GPL-3.0-only
 
-mod ffi;
-mod server;
-mod process;
-mod util;
-mod slotmap;
-mod window_manager;
-mod xkb_bindings;
-mod layer_shell;
-mod scene;
-mod scene_node_data;
-mod output;
-mod output_manager;
-mod input_manager;
-mod libinput_config;
-pub mod libinput_device;
-pub mod libinput_accel_config;
-pub mod xkb_keyboard;
-mod xkb_config;
-mod idle_inhibit_manager;
-mod lock_manager;
-mod input_device;
-mod pointer_constraint;
-mod keyboard;
-mod cursor;
-mod seat;
-pub mod tablet;
-pub mod tablet_tool;
-pub mod window;
-pub mod xdg_toplevel;
-pub mod xdg_popup;
-pub mod shell_surface;
-pub mod wm_node;
-pub mod xwayland_window;
-pub mod xwayland_override_redirect;
-pub mod text_input;
-pub mod input_relay;
-pub mod input_popup;
-pub mod drag_icon;
-pub mod pointer_binding;
-pub mod keyboard_group;
-pub mod inspector;
-
-
 use clap::Parser;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
+use crate::ffi;
+use crate::server;
+use crate::process;
 
 const USAGE: &str = "\
 usage: river [options]
@@ -98,9 +58,9 @@ pub unsafe extern "C" fn river_wlroots_log_callback(
 
 fn default_init_path() -> Option<String> {
     let path = if let Ok(xdg_config_home) = std::env::var("XDG_CONFIG_HOME") {
-        format!("{}/river/init", xdg_config_home)
+        format!("{}/cce/init", xdg_config_home)
     } else if let Ok(home) = std::env::var("HOME") {
-        format!("{}/.config/river/init", home)
+        format!("{}/.config/cce/init", home)
     } else {
         return None;
     };
@@ -126,7 +86,7 @@ fn detect_classic(path: &str) {
     }
 }
 
-fn main() {
+pub fn run_server() {
     let args = match Args::try_parse() {
         Ok(a) => a,
         Err(_) => {
@@ -197,6 +157,15 @@ fn main() {
     }
     let socket_str = unsafe { CStr::from_ptr(socket_ptr).to_string_lossy().into_owned() };
     log::info!("running server on display socket: {}", socket_str);
+
+    std::env::set_var("WAYLAND_DISPLAY", &socket_str);
+    log::info!("spawning in-process cce-client thread...");
+    std::thread::Builder::new()
+        .name("cce-client".to_string())
+        .spawn(|| {
+            crate::run_client();
+        })
+        .expect("Failed to spawn cce-client thread");
 
     let started = unsafe { ffi::wlr_backend_start(server.backend) };
     if !started {

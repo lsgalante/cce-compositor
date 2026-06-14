@@ -17,5 +17,6 @@ pub mod wayland;
 pub mod wm;
 pub mod input;
 pub mod paths;
+pub mod run;
 
-
+pub use run::run_client;
