@@ -411,6 +411,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;
     let mut geom = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut geom);
+    override_geometry_if_needed(window, &mut geom);
     ffi::wlr_scene_subsurface_tree_set_clip(capture_node, &geom);
 
     let mut min_w = 0;
@@ -442,6 +443,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             let old_geometry = (*toplevel).geometry;
             let mut new_geometry = std::mem::zeroed();
             ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
+            override_geometry_if_needed(window, &mut new_geometry);
             (*toplevel).geometry = new_geometry;
 
             let size_changed = new_geometry.width != old_geometry.width || new_geometry.height != old_geometry.height;
@@ -462,6 +464,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         ConfigureState::Acked | ConfigureState::TimedOutAcked => {
             let mut new_geometry = std::mem::zeroed();
             ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
+            override_geometry_if_needed(window, &mut new_geometry);
             (*toplevel).geometry = new_geometry;
 
             (*window).rendering_scheduled.width = new_geometry.width as u32;
@@ -652,5 +655,47 @@ impl XdgDecoration {
         (*toplevel).decoration = std::ptr::null_mut();
 
         let _ = Box::from_raw(decoration);
+    }
+}
+
+pub unsafe fn override_geometry_if_needed(window: *mut crate::window::Window, geom: &mut ffi::wlr_box) {
+    let is_chromium = (*window).is_chromium_electron();
+    if is_chromium {
+        log::info!(
+            "CHROMIUM COMMIT before override: x={} y={} w={} h={} wm_ssd={}",
+            geom.x,
+            geom.y,
+            geom.width,
+            geom.height,
+            (*window).wm_requested.ssd,
+        );
+    }
+    if (*window).wm_requested.ssd && is_chromium {
+        if geom.x == 10 || geom.y == 10 {
+            (*window).margin_x = 10;
+            (*window).margin_y = 10;
+        } else if geom.x == 6 || geom.y == 6 {
+            (*window).margin_x = 6;
+            (*window).margin_y = 6;
+        }
+        
+        let margin_x = if (*window).margin_x > 0 { (*window).margin_x } else { 10 };
+        let margin_y = if (*window).margin_y > 0 { (*window).margin_y } else { 10 };
+        
+        let (left_margin, right_margin) = if margin_x == 10 { (10, 34) } else { (margin_x, margin_x) };
+        let (top_margin, bottom_margin) = if margin_y == 10 { (10, 34) } else { (margin_y, margin_y) };
+        
+        geom.x = left_margin;
+        geom.y = top_margin;
+        geom.width = geom.width.saturating_sub(left_margin + right_margin);
+        geom.height = geom.height.saturating_sub(top_margin + bottom_margin);
+        
+        log::info!(
+            "CHROMIUM COMMIT after override: x={} y={} w={} h={}",
+            geom.x,
+            geom.y,
+            geom.width,
+            geom.height,
+        );
     }
 }

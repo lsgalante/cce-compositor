@@ -215,6 +215,8 @@ pub struct Window {
     pub rendering_sent: WindowRenderingSent,
     pub rendering_requested: WindowRenderingRequested,
     pub box_geom: ffi::wlr_box,
+    pub margin_x: i32,
+    pub margin_y: i32,
     pub foreign_toplevel_handle: *mut ffi::wlr_ext_foreign_toplevel_handle_v1,
     pub wlr_toplevel_handle: *mut ffi::wlr_foreign_toplevel_handle_v1,
 }
@@ -347,6 +349,8 @@ impl Window {
                 blur: false,
             },
             box_geom: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
+            margin_x: 0,
+            margin_y: 0,
             foreign_toplevel_handle: std::ptr::null_mut(),
             wlr_toplevel_handle: std::ptr::null_mut(),
         });
@@ -421,6 +425,13 @@ impl Window {
             }
             WindowImpl::Destroying => std::ptr::null(),
         }
+    }
+
+    pub unsafe fn is_chromium_electron(&self) -> bool {
+        let app_id_ptr = self.get_app_id();
+        if app_id_ptr.is_null() { return false; }
+        let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_str().unwrap_or("").to_lowercase();
+        app_id.contains("antigravity") || app_id.contains("chromium") || app_id.contains("chrome") || app_id.contains("electron") || app_id.contains("code") || app_id.contains("discord") || app_id.contains("slack")
     }
 
     pub unsafe fn get_parent(&self) -> *mut Window {
@@ -962,7 +973,7 @@ impl Window {
             ffi::wlr_foreign_toplevel_handle_v1_set_activated(self.wlr_toplevel_handle, activated);
         }
 
-        let (width, height) = if !self.wm_requested.fullscreen.is_null() {
+        let (mut width, mut height) = if !self.wm_requested.fullscreen.is_null() {
             let output = self.wm_requested.fullscreen;
             let (w, h) = (*output).sent.dimensions();
             if self.configure_sent.width != Some(w as u32) || self.configure_sent.height != Some(h as u32) {
@@ -980,6 +991,19 @@ impl Window {
             (None, None)
         };
         self.wm_requested.dimensions = None;
+
+        if self.wm_requested.ssd && self.is_chromium_electron() && self.wm_requested.fullscreen.is_null() {
+            let margin_x = if self.margin_x > 0 { self.margin_x } else { 10 };
+            let margin_y = if self.margin_y > 0 { self.margin_y } else { 10 };
+            let (left_margin, right_margin) = if margin_x == 10 { (10, 34) } else { (margin_x, margin_x) };
+            let (top_margin, bottom_margin) = if margin_y == 10 { (10, 34) } else { (margin_y, margin_y) };
+            if let Some(w) = width {
+                width = Some(w + left_margin as u32 + right_margin as u32);
+            }
+            if let Some(h) = height {
+                height = Some(h + top_margin as u32 + bottom_margin as u32);
+            }
+        }
 
         self.configure_scheduled = Configure {
             width,
