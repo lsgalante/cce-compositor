@@ -1351,7 +1351,13 @@ impl Window {
                 if toplevel.is_null() {
                     (0, 0)
                 } else {
-                    ((*toplevel).geometry.x, (*toplevel).geometry.y)
+                    let mut x = (*toplevel).geometry.x;
+                    let mut y = (*toplevel).geometry.y;
+                    if self.wm_requested.ssd {
+                        x = 0;
+                        y = 0;
+                    }
+                    (x, y)
                 }
             }
             _ => (0, 0),
@@ -1515,9 +1521,8 @@ impl Window {
         }
 
         self.surfaces.set_enabled(true);
-
         let margin = if self.wm_requested.ssd {
-            self.rendering_requested.border.width as i32
+            0
         } else {
             4
         };
@@ -1529,8 +1534,10 @@ impl Window {
         match self.impl_type {
             WindowImpl::Toplevel(toplevel) => {
                 if !toplevel.is_null() {
-                    surface_clip.x += (*toplevel).geometry.x;
-                    surface_clip.y += (*toplevel).geometry.y;
+                    let x = if self.wm_requested.ssd { 0 } else { (*toplevel).geometry.x };
+                    let y = if self.wm_requested.ssd { 0 } else { (*toplevel).geometry.y };
+                    surface_clip.x += x;
+                    surface_clip.y += y;
                 }
             }
             WindowImpl::Xwayland(xwindow) => {
