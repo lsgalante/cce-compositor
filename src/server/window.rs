@@ -455,19 +455,22 @@ impl Window {
         }
     }
 
-    pub unsafe fn is_antigravity(&self) -> bool {
-        let app_id_ptr = self.get_app_id();
-        if app_id_ptr.is_null() { return false; }
-        let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_str().unwrap_or("").to_lowercase();
-        app_id.contains("antigravity")
+    pub unsafe fn get_app_id_string(&self) -> Option<String> {
+        let ptr = self.get_app_id();
+        if ptr.is_null() {
+            None
+        } else {
+            Some(std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned())
+        }
     }
 
-    pub unsafe fn is_chromium_electron(&self) -> bool {
-        if self.is_antigravity() { return true; }
-        let app_id_ptr = self.get_app_id();
-        if app_id_ptr.is_null() { return false; }
-        let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_str().unwrap_or("").to_lowercase();
-        app_id.contains("chromium") || app_id.contains("chrome") || app_id.contains("electron") || app_id.contains("code") || app_id.contains("discord") || app_id.contains("slack")
+    pub unsafe fn get_title_string(&self) -> Option<String> {
+        let ptr = self.get_title();
+        if ptr.is_null() {
+            None
+        } else {
+            Some(std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned())
+        }
     }
 
     pub unsafe fn get_parent(&self) -> *mut Window {
@@ -557,6 +560,27 @@ impl Window {
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
         assert_eq!(self.state, WindowState::Initialized);
         self.state = WindowState::Mapped;
+
+        let app_id_ptr = self.get_app_id();
+        let is_status_bar = if !app_id_ptr.is_null() {
+            let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
+            app_id == "cce-status-interface"
+        } else {
+            false
+        };
+
+        if !is_status_bar {
+            let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+            let mut curr = (*seats).next;
+            while curr != seats {
+                let next = (*curr).next;
+                let seat = crate::container_of!(curr, crate::seat::Seat, link);
+                (*seat).focus(crate::seat::Focus::Window(self as *mut Window));
+                curr = next;
+            }
+        }
+
+        (*self.server).wm.dirty_windowing();
         Ok(())
     }
 
@@ -749,6 +773,44 @@ impl Window {
             WindowState::Ready | WindowState::Initialized | WindowState::Mapped => {
                 let wm_v1 = (*self.server).wm.object;
                 if wm_v1.is_null() {
+                    let is_linked = self.node.link.prev as *const _ != &self.node.link as *const _;
+                    if !is_linked {
+                        wl_list_remove(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
+                        let rendering_list = &mut (*self.server).wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
+                        wl_list_insert((*rendering_list).prev, &mut self.node.link as *mut ffi::wl_list as *mut WlList);
+
+                        if self.foreign_toplevel_handle.is_null() {
+                            let list = (*self.server).foreign_toplevel_list;
+                            let title = self.get_title();
+                            let app_id = self.get_app_id();
+                            let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
+                                title,
+                                app_id,
+                            };
+                            let handle = ffi::wlr_ext_foreign_toplevel_handle_v1_create(list, &state);
+                            if !handle.is_null() {
+                                self.foreign_toplevel_handle = handle;
+                                (*handle).data = self as *mut Window as *mut _;
+                            }
+                        }
+
+                        if self.wlr_toplevel_handle.is_null() {
+                            let manager = (*self.server).wlr_foreign_toplevel_manager;
+                            let handle = ffi::wlr_foreign_toplevel_handle_v1_create(manager);
+                            if !handle.is_null() {
+                                self.wlr_toplevel_handle = handle;
+                                let title = self.get_title();
+                                if !title.is_null() {
+                                    ffi::wlr_foreign_toplevel_handle_v1_set_title(handle, title);
+                                }
+                                let app_id = self.get_app_id();
+                                if !app_id.is_null() {
+                                    ffi::wlr_foreign_toplevel_handle_v1_set_app_id(handle, app_id);
+                                }
+                            }
+                        }
+                        self.rendering_scheduled.resend_dimensions = true;
+                    }
                     return;
                 }
                 let new_resource = self.object.is_null();
@@ -1028,19 +1090,7 @@ impl Window {
         };
         self.wm_requested.dimensions = None;
 
-        if self.wm_requested.ssd && self.is_chromium_electron() && self.wm_requested.fullscreen.is_null() {
-            let margin_x = if self.margin_x > 0 { self.margin_x } else { 10 };
-            let margin_y = if self.margin_y > 0 { self.margin_y } else { 10 };
-            let is_antigravity = self.is_antigravity();
-            let (left_margin, right_margin) = if margin_x == 10 && !is_antigravity { (10, 34) } else { (margin_x, margin_x) };
-            let (top_margin, bottom_margin) = if margin_y == 10 && !is_antigravity { (10, 34) } else { (margin_y, margin_y) };
-            if let Some(w) = width {
-                width = Some(w + left_margin as u32 + right_margin as u32);
-            }
-            if let Some(h) = height {
-                height = Some(h + top_margin as u32 + bottom_margin as u32);
-            }
-        }
+
 
         self.configure_scheduled = Configure {
             width,
@@ -1267,7 +1317,16 @@ impl Window {
             let output = self.wm_requested.fullscreen;
             self.box_geom.x = (*output).sent.x;
             self.box_geom.y = (*output).sent.y;
-            ffi::wlr_scene_node_set_enabled(self.fullscreen_background as *mut ffi::wlr_scene_node, true);
+
+            let app_id_ptr = self.get_app_id();
+            let is_status_bar = if !app_id_ptr.is_null() {
+                let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
+                app_id == "cce-status-interface"
+            } else {
+                false
+            };
+
+            ffi::wlr_scene_node_set_enabled(self.fullscreen_background as *mut ffi::wlr_scene_node, !is_status_bar);
             let (width, height) = (*output).sent.dimensions();
             ffi::wlr_scene_rect_set_size(self.fullscreen_background, width as i32, height as i32);
             clip = ffi::wlr_box { x: 0, y: 0, width: width as i32, height: height as i32 };
@@ -1337,7 +1396,7 @@ impl Window {
 
     pub unsafe fn draw_borders(&mut self) {
         let requested = &self.rendering_requested;
-        if requested.circular || requested.border.width == 0 {
+        if requested.circular || requested.border.width == 0 || !self.wm_requested.ssd {
             ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);

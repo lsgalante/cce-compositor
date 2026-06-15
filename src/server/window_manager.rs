@@ -66,6 +66,7 @@ pub struct WindowManager {
     pub ipc_timer: *mut ffi::wl_event_source,
     pub startup: Vec<crate::config::StartupConfig>,
     pub status_sender: Option<crate::status_server::StatusSender>,
+    pub output_scale: f32,
 }
 
 impl WindowManager {
@@ -75,6 +76,7 @@ impl WindowManager {
         ffi::wl_list_init(&mut self.sent.outputs);
         self.scheduled.output_config = std::ptr::null_mut();
         self.sent.output_config = std::ptr::null_mut();
+        self.output_scale = 1.0;
         Ok(())
     }
 
@@ -108,6 +110,7 @@ impl WindowManager {
         self.tag_layouts = [crate::tiling::TilingMode::Cascade; 4];
         self.has_tag_layout = [false; 4];
         self.layout = crate::config::Layout::default();
+        self.output_scale = 1.0;
         self.mode_rules = Vec::new();
         self.keybinds = Vec::new();
         self.pointer_binds = Vec::new();
@@ -423,6 +426,8 @@ impl WindowManager {
             }
         }
 
+        self.keep_status_bar_on_top();
+
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*render_list).next;
@@ -522,26 +527,30 @@ impl WindowManager {
     // Add legacy fields so structural offsets are preserved if layout-based code is compiled
     pub fn sent_outputs_compat(&self) {}
 
+    pub unsafe fn get_rule_for_window(&self, win: *mut Window) -> Option<&crate::config::ModeRule> {
+        let app_id = (*win).get_app_id_string();
+        let title = (*win).get_title_string();
+
+        for rule in &self.mode_rules {
+            let match_app = rule.app_id_pattern == "*"
+                || app_id.as_ref().map_or(false, |aid| aid.contains(&rule.app_id_pattern));
+            let match_title = rule.title_pattern.as_ref().map_or(true, |tp| {
+                title.as_ref().map_or(false, |t| t.contains(tp))
+            });
+
+            if match_app && match_title {
+                return Some(rule);
+            }
+        }
+        None
+    }
+
     pub unsafe fn get_mode_for_window(&self, win: *mut Window) -> crate::tiling::TilingMode {
         if (*win).mode_locked {
             return (*win).tiling_mode;
         }
 
-        // Query app_id/title
-        let app_id_ptr = (*win).get_app_id();
-        let app_id = if app_id_ptr.is_null() {
-            None
-        } else {
-            Some(std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy().into_owned())
-        };
-
-        let title_ptr = (*win).get_title();
-        let title = if title_ptr.is_null() {
-            None
-        } else {
-            Some(std::ffi::CStr::from_ptr(title_ptr).to_string_lossy().into_owned())
-        };
-
+        let app_id = (*win).get_app_id_string();
         if app_id.as_deref() == Some("cce-status-interface") {
             return crate::tiling::TilingMode::Fullscreen;
         }
@@ -553,17 +562,8 @@ impl WindowManager {
             return crate::tiling::TilingMode::Floating;
         }
 
-        // Match mode rules
-        for rule in &self.mode_rules {
-            let match_app = rule.app_id_pattern == "*"
-                || app_id.as_ref().map_or(false, |aid| aid.contains(&rule.app_id_pattern));
-            let match_title = rule.title_pattern.as_ref().map_or(true, |tp| {
-                title.as_ref().map_or(false, |t| t.contains(tp))
-            });
-
-            if match_app && match_title {
-                return rule.mode;
-            }
+        if let Some(rule) = self.get_rule_for_window(win) {
+            return rule.mode;
         }
 
         // Check tag layouts
@@ -581,10 +581,8 @@ impl WindowManager {
         log::info!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
         for (idx, &win_ptr) in self.windows.iter().enumerate() {
             if win_ptr.is_null() { continue; }
-            let title_ptr = (*win_ptr).get_title();
-            let title = if title_ptr.is_null() { "None".to_string() } else { std::ffi::CStr::from_ptr(title_ptr).to_string_lossy().into_owned() };
-            let aid_ptr = (*win_ptr).get_app_id();
-            let aid = if aid_ptr.is_null() { "None".to_string() } else { std::ffi::CStr::from_ptr(aid_ptr).to_string_lossy().into_owned() };
+            let title = (*win_ptr).get_title_string().unwrap_or_else(|| "None".to_string());
+            let aid = (*win_ptr).get_app_id_string().unwrap_or_else(|| "None".to_string());
             log::info!("  window #{}: title={:?}, app_id={:?}, state={:?}, closed={}", idx, title, aid, (*win_ptr).state, (*win_ptr).closed);
         }
         
@@ -640,6 +638,7 @@ impl WindowManager {
 
             let mut tiled_windows: Vec<*mut Window> = Vec::new();
             let mut floating_windows: Vec<*mut Window> = Vec::new();
+            let mut side_panel_windows: Vec<*mut Window> = Vec::new();
 
             for &win_ptr in self.windows.iter() {
                 if (*win_ptr).closed {
@@ -659,12 +658,64 @@ impl WindowManager {
                 let mode = self.get_mode_for_window(win_ptr);
                 (*win_ptr).tiling_mode = mode;
 
+                // Apply ModeRule SSD configuration if defined and not locked
+                if !(*win_ptr).mode_locked {
+                    if let Some(rule) = self.get_rule_for_window(win_ptr) {
+                        if let Some(rule_ssd) = rule.ssd {
+                            (*win_ptr).wm_requested.ssd = rule_ssd;
+                        }
+                    }
+                }
+
+                let app_id = (*win_ptr).get_app_id_string();
+
+                if app_id.as_deref() == Some("cce-status-interface") {
+                    let wlr_box = (*output).sent.box_layout();
+                    (*win_ptr).rendering_requested.x = wlr_box.x;
+                    (*win_ptr).rendering_requested.y = wlr_box.y;
+                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                        width: wlr_box.width as u32,
+                        height: wlr_box.height as u32,
+                    });
+                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                        width: wlr_box.width as u32,
+                        height: wlr_box.height as u32,
+                    };
+                    (*win_ptr).wm_requested.tiled = 0;
+                    (*win_ptr).wm_requested.ssd = false;
+                    continue;
+                }
+
                 if mode == crate::tiling::TilingMode::Floating || mode == crate::tiling::TilingMode::Popup {
                     floating_windows.push(win_ptr);
+                } else if mode == crate::tiling::TilingMode::SidePanel {
+                    side_panel_windows.push(win_ptr);
                 } else {
                     tiled_windows.push(win_ptr);
                 }
             }
+
+            let side_panel_win = side_panel_windows.first().copied();
+            let mut side_panel_w = 0;
+            let mut shift_x = 0;
+            if let Some(sp_win) = side_panel_win {
+                let hint_min_w = (*sp_win).wm_scheduled.dimensions_hint.min_width as i32;
+                side_panel_w = if hint_min_w > 32 {
+                    std::cmp::max(self.layout.side_panel_width, hint_min_w)
+                } else {
+                    self.layout.side_panel_width
+                };
+                if self.layout.side_panel_behavior != "above" {
+                    shift_x = side_panel_w + self.layout.side_panel_border_gap;
+                }
+            }
+
+            let tiled_usable_w = (usable_w - shift_x).max(1);
+            let tiled_usable_x = if self.layout.side_panel_position == "right" || self.layout.side_panel_behavior == "above" {
+                usable_x
+            } else {
+                usable_x + shift_x
+            };
 
             let n_tiled = tiled_windows.len() as i32;
             let current_layout = if n_tiled > 0 {
@@ -686,19 +737,19 @@ impl WindowManager {
                 let (x, y, w, h) = match current_layout {
                     crate::tiling::TilingMode::Cascade => {
                         crate::tiling::tile_cascade(
-                            usable_w, usable_h, gap, gap_top, gap_left, gap_right, gap_bottom,
+                            tiled_usable_w, usable_h, gap, gap_top, gap_left, gap_right, gap_bottom,
                             bw, cascade_offset, bar_height, n_tiled, idx as i32
                         )
                     }
                     crate::tiling::TilingMode::Grid => {
                         crate::tiling::tile_grid(
-                            usable_w, usable_h, gap, gap_top, gap_left, gap_right, gap_bottom,
+                            tiled_usable_w, usable_h, gap, gap_top, gap_left, gap_right, gap_bottom,
                             bw, bar_height, n_tiled, idx as i32
                         )
                     }
                     crate::tiling::TilingMode::Fullscreen => {
                         crate::tiling::tile_fullscreen(
-                            usable_w, usable_h, gap_top, gap_left, gap_right, gap_bottom,
+                            tiled_usable_w, usable_h, gap_top, gap_left, gap_right, gap_bottom,
                             bw, bar_height
                         )
                     }
@@ -707,7 +758,7 @@ impl WindowManager {
                     }
                 };
 
-                let final_x = usable_x + x;
+                let final_x = tiled_usable_x + x;
                 let final_y = usable_y + y;
 
                 (*win_ptr).rendering_requested.x = final_x;
@@ -724,7 +775,7 @@ impl WindowManager {
                 (*win_ptr).wm_requested.ssd = true;
 
                 let is_focused = win_ptr == focused_window;
-                let (r, g, b, mut a) = if is_focused {
+                let (r, g_val, b, mut a) = if is_focused {
                     (
                         self.layout.border_r,
                         self.layout.border_g,
@@ -749,7 +800,7 @@ impl WindowManager {
                     edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
                     width: bw as u32,
                     r,
-                    g,
+                    g: g_val,
                     b,
                     a,
                 };
@@ -758,10 +809,59 @@ impl WindowManager {
                 (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else { 0.85f32 };
             }
 
+            let g = self.layout.side_panel_border_gap;
+            let dec_h = std::cmp::max(bw, 16);
+            for (sp_idx, &win_ptr) in side_panel_windows.iter().enumerate() {
+                if sp_idx == 0 {
+                    let sp_x = if self.layout.side_panel_position == "right" {
+                        usable_x + usable_w - side_panel_w - g + bw
+                    } else {
+                        usable_x + g + bw
+                    };
+                    let sp_y = bar_height + usable_y + dec_h + g;
+                    let sp_h = (usable_h - bar_height - (dec_h + bw) - 2 * g).max(1);
+                    let sp_w = (side_panel_w - bw * 2).max(1);
+
+                    (*win_ptr).rendering_requested.x = sp_x;
+                    (*win_ptr).rendering_requested.y = sp_y;
+                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                        width: sp_w as u32,
+                        height: sp_h as u32,
+                    });
+                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                        width: sp_w as u32,
+                        height: sp_h as u32,
+                    };
+                    (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
+                    (*win_ptr).wm_requested.ssd = true;
+
+                    let opacity_factor = self.layout.side_panel_border_opacity as f32 / 100.0;
+                    let is_focused = win_ptr == focused_window;
+                    let r = self.layout.border_r;
+                    let g_color = self.layout.border_g;
+                    let b = self.layout.border_b;
+                    let a = (self.layout.border_a as f32 * opacity_factor) as u32;
+
+                    (*win_ptr).rendering_requested.border = crate::window::Border {
+                        edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
+                        width: bw as u32,
+                        r,
+                        g: g_color,
+                        b,
+                        a,
+                    };
+                    (*win_ptr).rendering_requested.blur = self.layout.window_blur;
+                    (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else { 0.85f32 * opacity_factor };
+                } else {
+                    floating_windows.push(win_ptr);
+                }
+            }
+
+            let mut idx_floating = 0;
             for &win_ptr in &floating_windows {
                 let is_focused = win_ptr == focused_window;
                 let r = self.layout.border_r;
-                let g = self.layout.border_g;
+                let g_val = self.layout.border_g;
                 let b = self.layout.border_b;
                 let a = self.layout.border_a;
 
@@ -769,12 +869,97 @@ impl WindowManager {
                     edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
                     width: bw as u32,
                     r,
-                    g,
+                    g: g_val,
                     b,
                     a,
                 };
                 (*win_ptr).rendering_requested.blur = self.layout.window_blur;
                 (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else { 0.90f32 };
+
+                if (*win_ptr).tiling_mode == crate::tiling::TilingMode::Popup {
+                    let hint_min_w = (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32;
+                    let hint_min_h = (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32;
+                    let fw = if (*win_ptr).box_geom.width > 0 {
+                        (*win_ptr).box_geom.width as i32
+                    } else if hint_min_w > 32 {
+                        hint_min_w
+                    } else {
+                        360
+                    };
+                    let fh = if (*win_ptr).box_geom.height > 0 {
+                        (*win_ptr).box_geom.height as i32
+                    } else if hint_min_h > 32 {
+                        hint_min_h
+                    } else {
+                        100
+                    };
+                    let fx = usable_x + usable_w - fw - self.layout.gap_right;
+                    let fy = usable_y + bar_height + self.layout.gap_top;
+
+                    (*win_ptr).rendering_requested.x = fx;
+                    (*win_ptr).rendering_requested.y = fy;
+                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                        width: fw as u32,
+                        height: fh as u32,
+                    });
+                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                        width: fw as u32,
+                        height: fh as u32,
+                    };
+                } else {
+                    let fbw = self.layout.floating_border_width;
+                    let mut fw = if (*win_ptr).box_geom.width > 0 {
+                        (*win_ptr).box_geom.width as i32
+                    } else if (*win_ptr).wm_scheduled.dimensions_hint.min_width > 32 {
+                        (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32
+                    } else {
+                        usable_w * 2 / 3
+                    };
+                    let mut fh = if (*win_ptr).box_geom.height > 0 {
+                        (*win_ptr).box_geom.height as i32
+                    } else if (*win_ptr).wm_scheduled.dimensions_hint.min_height > 32 {
+                        (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32
+                    } else {
+                        usable_h * 2 / 3
+                    };
+
+                    let max_w = usable_w - gap_left - gap_right;
+                    let max_h = usable_h - bar_height - gap_top - gap_bottom;
+                    fw = fw.clamp(1, max_w.max(1));
+                    fh = fh.clamp(1, max_h.max(1));
+
+                    let mut fx = if (*win_ptr).rendering_requested.x != 0 || (*win_ptr).rendering_requested.y != 0 {
+                        (*win_ptr).rendering_requested.x
+                    } else {
+                        usable_x + gap_left + fbw + cascade_offset * idx_floating
+                    };
+                    let mut fy = if (*win_ptr).rendering_requested.x != 0 || (*win_ptr).rendering_requested.y != 0 {
+                        (*win_ptr).rendering_requested.y
+                    } else {
+                        usable_y + gap_left + fbw + bar_height + gap_top + cascade_offset * idx_floating
+                    };
+
+                    let min_x = usable_x + gap_left;
+                    let max_x = usable_x + usable_w - gap_right - fw;
+                    let min_y = usable_y + bar_height + gap_top;
+                    let max_y = usable_y + usable_h - gap_bottom - fh;
+
+                    fx = fx.clamp(min_x, max_x.max(min_x));
+                    fy = fy.clamp(min_y, max_y.max(min_y));
+
+                    (*win_ptr).rendering_requested.x = fx;
+                    (*win_ptr).rendering_requested.y = fy;
+                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                        width: fw as u32,
+                        height: fh as u32,
+                    });
+                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                        width: fw as u32,
+                        height: fh as u32,
+                    };
+
+                    idx_floating += 1;
+                }
             }
         }
         self.update_status();
@@ -824,11 +1009,42 @@ impl WindowManager {
         }
     }
 
+    pub unsafe fn keep_status_bar_on_top(&mut self) {
+        let mut status_bar_windows = Vec::new();
+        for &win_ptr in self.windows.iter() {
+            if win_ptr.is_null() || (*win_ptr).closed {
+                continue;
+            }
+            if !matches!((*win_ptr).state, crate::window::WindowState::Mapped) {
+                continue;
+            }
+            if let Some(app_id) = (*win_ptr).get_app_id_string() {
+                if app_id == "cce-status-interface" {
+                    let link = &(*win_ptr).node.link;
+                    if !link.prev.is_null() && !link.next.is_null() {
+                        status_bar_windows.push(win_ptr);
+                    }
+                }
+            }
+        }
+        for win_ptr in status_bar_windows {
+            let node_link = &mut (*win_ptr).node.link as *mut ffi::wl_list as *mut WlList;
+            let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
+            if (*node_link).next != list_head {
+                crate::server::wl_list_remove(node_link);
+                crate::server::wl_list_insert((*list_head).prev, node_link);
+            }
+        }
+    }
+
     pub unsafe fn raise_window(&mut self, window: *mut Window) {
         let node_link = &mut (*window).node.link as *mut ffi::wl_list as *mut WlList;
-        crate::server::wl_list_remove(node_link);
         let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-        crate::server::wl_list_insert((*list_head).prev, node_link);
+        if (*node_link).next != list_head {
+            crate::server::wl_list_remove(node_link);
+            crate::server::wl_list_insert((*list_head).prev, node_link);
+        }
+        self.keep_status_bar_on_top();
     }
 
     pub unsafe fn execute_action(&mut self, action: &crate::config::Action, command: Option<&str>) {
@@ -865,18 +1081,8 @@ impl WindowManager {
                     let mut matched_win: *mut Window = std::ptr::null_mut();
                     for &w in self.windows.iter() {
                         if !w.is_null() && !(*w).closed {
-                            let aid_ptr = (*w).get_app_id();
-                            let aid = if aid_ptr.is_null() {
-                                None
-                            } else {
-                                Some(std::ffi::CStr::from_ptr(aid_ptr).to_string_lossy().into_owned())
-                            };
-                            let title_ptr = (*w).get_title();
-                            let title = if title_ptr.is_null() {
-                                None
-                            } else {
-                                Some(std::ffi::CStr::from_ptr(title_ptr).to_string_lossy().into_owned())
-                            };
+                            let aid = (*w).get_app_id_string();
+                            let title = (*w).get_title_string();
 
                             let mut match_aid = false;
                             if let Some(ref aid_str) = aid {
@@ -900,12 +1106,7 @@ impl WindowManager {
                     }
 
                     if !matched_win.is_null() {
-                        let aid_ptr = (*matched_win).get_app_id();
-                        let aid = if aid_ptr.is_null() {
-                            String::new()
-                        } else {
-                            std::ffi::CStr::from_ptr(aid_ptr).to_string_lossy().into_owned()
-                        };
+                        let aid = (*matched_win).get_app_id_string().unwrap_or_default();
                         log::info!("toggle: closing window {:?}", aid);
                         (*matched_win).close();
                         if let Some(seat) = self.first_seat() {
@@ -938,6 +1139,58 @@ impl WindowManager {
                         log::info!("minimize: minimizing focused window");
                         (*fw).minimized = true;
                         self.focus_next_visible_window(seat);
+                        self.dirty_windowing();
+                    }
+                }
+            }
+            Action::FocusNext | Action::FocusPrev => {
+                if let Some(seat) = self.first_seat() {
+                    let focused_win = if let crate::seat::Focus::Window(fw) = (*seat).focused {
+                        fw
+                    } else {
+                        std::ptr::null_mut()
+                    };
+
+                    let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
+                    let mut curr = (*render_list).next;
+                    let mut visible_windows = Vec::new();
+                    while curr != render_list {
+                        let next = (*curr).next;
+                        let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
+                        if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
+                            if !window.is_null() && !(*window).closed && !(*window).minimized && ((*window).tags & self.active_tags) != 0 {
+                                let is_status_bar = (*window).get_app_id_string()
+                                    .map_or(false, |aid| aid == "cce-status-interface");
+                                if !is_status_bar {
+                                    visible_windows.push(window);
+                                }
+                            }
+                        }
+                        curr = next;
+                    }
+
+                    let n = visible_windows.len();
+                    if n > 0 {
+                        let current_idx = visible_windows.iter().position(|&w| w == focused_win);
+                        let target_idx = match current_idx {
+                            Some(idx) => {
+                                if *action == Action::FocusNext {
+                                    (idx + 1) % n
+                                } else {
+                                    (idx + n - 1) % n
+                                }
+                            }
+                            None => {
+                                if *action == Action::FocusNext {
+                                    0
+                                } else {
+                                    n - 1
+                                }
+                            }
+                        };
+                        let target_win = visible_windows[target_idx];
+                        (*seat).focus(crate::seat::Focus::Window(target_win));
+                        self.raise_window(target_win);
                         self.dirty_windowing();
                     }
                 }
@@ -1047,17 +1300,7 @@ impl WindowManager {
                     }
                 }
             }
-            Action::Reload | Action::Restart => {
-                if let Some(cfg_path) = crate::config::default_config_path() {
-                    log::info!("Reloading configuration from {}", cfg_path);
-                    if let Err(e) = crate::config::parse_config(&cfg_path, self) {
-                        log::error!("Failed to reload config: {}", e);
-                    } else {
-                        self.dirty_windowing();
-                    }
-                }
-            }
-            Action::View1 | Action::View2 | Action::View3 | Action::View4 => {
+             Action::View1 | Action::View2 | Action::View3 | Action::View4 => {
                 let tag = match action {
                     Action::View1 => 1,
                     Action::View2 => 2,
@@ -1197,18 +1440,8 @@ impl WindowManager {
                     let mut target: *mut Window = std::ptr::null_mut();
                     for &w in self.windows.iter() {
                         if !w.is_null() && !(*w).closed && !(*w).minimized && ((*w).tags & self.active_tags) != 0 {
-                            let aid_ptr = (*w).get_app_id();
-                            let aid = if aid_ptr.is_null() {
-                                None
-                            } else {
-                                Some(std::ffi::CStr::from_ptr(aid_ptr).to_string_lossy().into_owned())
-                            };
-                            let title_ptr = (*w).get_title();
-                            let title = if title_ptr.is_null() {
-                                None
-                            } else {
-                                Some(std::ffi::CStr::from_ptr(title_ptr).to_string_lossy().into_owned())
-                            };
+                            let aid = (*w).get_app_id_string();
+                            let title = (*w).get_title_string();
 
                             let mut match_found = false;
                             if let Some(ref aid_str) = aid {
@@ -1239,10 +1472,6 @@ impl WindowManager {
                 self.execute_action(&crate::config::Action::Exit, None);
                 "ok\n".to_string()
             }
-            "reload" | "restart" => {
-                self.execute_action(&crate::config::Action::Reload, None);
-                "ok\n".to_string()
-            }
             "retile" => {
                 self.dirty_windowing();
                 "ok\n".to_string()
@@ -1263,17 +1492,26 @@ impl WindowManager {
                     "gap_left" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_left = v; } }
                     "gap_right" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_right = v; } }
                     "gap_bottom" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_bottom = v; } }
-                    "offset" => { if let Ok(v) = val.parse::<i32>() { self.layout.cascade_offset = v; } }
+                    "offset" | "cascade_offset" => { if let Ok(v) = val.parse::<i32>() { self.layout.cascade_offset = v; } }
                     "grid_gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.grid_gap = v; } }
                     "bar_height" => { if let Ok(v) = val.parse::<i32>() { self.layout.bar_height = v; } }
                     "border_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.border_width = v; } }
                     "fullscreen_border_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.fullscreen_border_width = v; } }
+                    "cascade_border_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.cascade_border_width = v; } }
+                    "grid_border_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.grid_border_width = v; } }
+                    "floating_border_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.floating_border_width = v; } }
+                    "transition_duration" => { if let Ok(v) = val.parse::<i32>() { self.layout.transition_duration = v; } }
                     "border_color" => {
                         let border_color_val = crate::config::parse_hex_color(val);
                         self.layout.border_r = (border_color_val >> 16) & 0xFF;
                         self.layout.border_g = (border_color_val >> 8) & 0xFF;
                         self.layout.border_b = border_color_val & 0xFF;
                     }
+                    "side_panel_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.side_panel_width = v; } }
+                    "side_panel_behavior" => { self.layout.side_panel_behavior = val.to_string(); }
+                    "side_panel_position" => { self.layout.side_panel_position = val.to_string(); }
+                    "side_panel_border_gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.side_panel_border_gap = v; } }
+                    "side_panel_border_opacity" => { if let Ok(v) = val.parse::<i32>() { self.layout.side_panel_border_opacity = v; } }
                     _ => return format!("error: unknown layout key: {}\n", key),
                 }
                 self.dirty_windowing();
@@ -1352,14 +1590,14 @@ unsafe extern "C" fn dirty_idle_callback(data: *mut std::ffi::c_void) {
     }
     (*wm).dirty_idle = std::ptr::null_mut();
     
-    if (*wm).scheduled.dirty || (*wm).scheduled.dirty_lazy {
-        (*wm).scheduled.dirty = true;
-        (*wm).scheduled.dirty_lazy = false;
-        (*wm).manage_start();
-    }
-    
-    if (*wm).rendering_scheduled.dirty && matches!((*wm).state, WindowManagerState::Idle) {
-        (*wm).render_start();
+    if matches!((*wm).state, WindowManagerState::Idle) {
+        if (*wm).scheduled.dirty || (*wm).scheduled.dirty_lazy {
+            (*wm).scheduled.dirty = true;
+            (*wm).scheduled.dirty_lazy = false;
+            (*wm).manage_start();
+        } else if (*wm).rendering_scheduled.dirty {
+            (*wm).render_start();
+        }
     }
 }
 
@@ -1519,6 +1757,15 @@ unsafe extern "C" fn bind(
         return;
     }
 
+    let mut pid = 0;
+    let mut uid = 0;
+    let mut gid = 0;
+    ffi::wl_client_get_credentials(client, &mut pid, &mut uid, &mut gid);
+    let cmdline = std::fs::read_to_string(format!("/proc/{}/cmdline", pid))
+        .unwrap_or_default()
+        .replace('\0', " ");
+    log::info!("Client binding river_window_manager_v1: PID={}, cmdline='{}'", pid, cmdline);
+
     let resource = ffi::wl_resource_create(client, &ffi::river_window_manager_v1_interface, version as i32, id);
     if resource.is_null() {
         ffi::wl_client_post_no_memory(client);
@@ -1527,6 +1774,7 @@ unsafe extern "C" fn bind(
     }
 
     if !(*wm).object.is_null() {
+        log::warn!("river_window_manager_v1 already bound, rejecting new client PID={}", pid);
         ffi::wl_resource_post_event(resource, ffi::RIVER_WINDOW_MANAGER_V1_UNAVAILABLE);
         ffi::wl_resource_set_implementation(
             resource,

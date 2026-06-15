@@ -347,7 +347,7 @@ impl Output {
             x: 0,
             y: 0,
             mode: OutputMode::None,
-            scale: 1.0,
+            scale: (*server).wm.output_scale,
             transform: ffi::wl_output_transform_WL_OUTPUT_TRANSFORM_NORMAL,
             adaptive_sync: ffi::river_wlr_output_get_adaptive_sync_status(wlr_output) == ffi::wlr_output_adaptive_sync_status_WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED,
             auto_layout: true,

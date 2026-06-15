@@ -74,7 +74,7 @@ impl LayerShell {
     pub unsafe fn supported(&self) -> bool {
         let wm_v1 = (*self.server).wm.object;
         if wm_v1.is_null() {
-            return false;
+            return true;
         }
         let wm_client = ffi::wl_resource_get_client(wm_v1);
 

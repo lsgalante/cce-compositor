@@ -69,7 +69,7 @@ pub fn tile_grid(
     n_grid: i32,
     idx: i32,
 ) -> (i32, i32, i32, i32) {
-    let cols = 2i32;
+    let cols = if n_grid == 1 { 1i32 } else { 2i32 };
     let row = idx / cols;
     let col = idx % cols;
     let rows = (n_grid + cols - 1) / cols;

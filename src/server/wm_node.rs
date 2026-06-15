@@ -142,10 +142,12 @@ unsafe extern "C" fn node_place_top(
     if !(*server).wm.ensure_rendering() {
         return;
     }
-    wl_list_remove(&mut (*node).link as *mut ffi::wl_list as *mut WlList);
-    
+    let node_link = &mut (*node).link as *mut ffi::wl_list as *mut WlList;
     let list_head = &mut (*server).wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-    wl_list_insert((*list_head).prev, &mut (*node).link as *mut ffi::wl_list as *mut WlList);
+    if (*node_link).next != list_head {
+        wl_list_remove(node_link);
+        wl_list_insert((*list_head).prev, node_link);
+    }
 }
 
 unsafe extern "C" fn node_place_bottom(
@@ -163,10 +165,12 @@ unsafe extern "C" fn node_place_bottom(
     if !(*server).wm.ensure_rendering() {
         return;
     }
-    wl_list_remove(&mut (*node).link as *mut ffi::wl_list as *mut WlList);
-    
+    let node_link = &mut (*node).link as *mut ffi::wl_list as *mut WlList;
     let list_head = &mut (*server).wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-    wl_list_insert(list_head, &mut (*node).link as *mut ffi::wl_list as *mut WlList);
+    if (*node_link).prev != list_head {
+        wl_list_remove(node_link);
+        wl_list_insert(list_head, node_link);
+    }
 }
 
 unsafe extern "C" fn node_place_above(

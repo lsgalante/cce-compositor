@@ -104,8 +104,6 @@ pub enum Action {
     LayoutNext,
     ModeNext,
     ModeNextShared,
-    Reload,
-    Restart,
     View1,
     View2,
     View3,
@@ -163,6 +161,16 @@ pub struct PointerBind {
     pub action: Action,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct OutputConfig {
+    #[serde(default = "default_scale")]
+    pub scale: f64,
+}
+
+fn default_scale() -> f64 {
+    1.0
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -179,6 +187,8 @@ pub struct Config {
     pub tag_layout: Vec<TagLayoutConfig>,
     #[serde(default)]
     pub startup: Vec<StartupConfig>,
+    #[serde(default)]
+    pub output: Option<OutputConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -381,10 +391,6 @@ pub fn parse_action(s: &str) -> Action {
         Action::ModeNext
     } else if s == "mode-next-shared" {
         Action::ModeNextShared
-    } else if s == "reload" {
-        Action::Reload
-    } else if s == "restart" {
-        Action::Restart
     } else if s == "fullscreen" {
         Action::Fullscreen
     } else if s == "minimize" {
@@ -547,6 +553,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         Ok(c) => c,
         Err(e) => return Err(format!("TOML parse error: {}", e)),
     };
+
+    state.output_scale = config.output.as_ref().map(|o| o.scale as f32).unwrap_or(1.0f32);
 
     state.layout.gap = config.layout.gap as i32;
     state.layout.gap_top = config.layout.gap_top as i32;
