@@ -145,9 +145,6 @@ pub fn run_server() {
         std::process::exit(1);
     }
 
-    let status_sender = crate::status_server::spawn_status_server();
-    server.wm.status_sender = Some(status_sender);
-
     if let Some(path) = crate::config::default_config_path() {
         log::info!("loading config from {}", path);
         if let Err(e) = crate::config::parse_config(&path, &mut server.wm) {
@@ -171,6 +168,9 @@ pub fn run_server() {
     log::info!("running server on display socket: {}", socket_str);
 
     std::env::set_var("WAYLAND_DISPLAY", &socket_str);
+
+    let status_sender = crate::status_server::spawn_status_server();
+    server.wm.status_sender = Some(status_sender);
 
 
     let started = unsafe { ffi::wlr_backend_start(server.backend) };
