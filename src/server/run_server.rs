@@ -139,7 +139,7 @@ pub fn run_server() {
         detect_classic(cmd);
     }
 
-    let mut server = server::Server::default();
+    let mut server = Box::new(server::Server::default());
     if let Err(e) = server.init(!args.no_xwayland) {
         log::error!("failed to initialize server: {}", e);
         std::process::exit(1);
@@ -180,6 +180,7 @@ pub fn run_server() {
         std::process::exit(1);
     }
 
+    let mut startup_pids = Vec::new();
     // Spawn TOML startup programs
     for prog in &server.wm.startup {
         log::info!("spawning TOML startup program: {}", prog.exec);
@@ -213,7 +214,9 @@ pub fn run_server() {
                     let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
                     std::process::exit(1);
                 }
-                Ok(_) => {}
+                Ok(nix::unistd::ForkResult::Parent { child }) => {
+                    startup_pids.push(child);
+                }
                 Err(e) => {
                     log::error!("failed to fork child for startup program: {}", e);
                 }
@@ -221,13 +224,23 @@ pub fn run_server() {
         }
     }
 
-    struct ChildGuard(Option<nix::unistd::Pid>);
-    impl Drop for ChildGuard {
+    struct ServerGuard {
+        init_pid: Option<nix::unistd::Pid>,
+        startup_pids: Vec<nix::unistd::Pid>,
+    }
+    impl Drop for ServerGuard {
         fn drop(&mut self) {
-            if let Some(pid) = self.0 {
+            if let Some(pid) = self.init_pid {
                 log::info!("sending SIGTERM to child process group {}", pid);
                 let _ = nix::sys::signal::kill(
                     nix::unistd::Pid::from_raw(-pid.as_raw()),
+                    nix::sys::signal::Signal::SIGTERM,
+                );
+            }
+            for pid in &self.startup_pids {
+                log::info!("sending SIGTERM to startup program pid {}", pid);
+                let _ = nix::sys::signal::kill(
+                    *pid,
                     nix::sys::signal::Signal::SIGTERM,
                 );
             }
@@ -277,7 +290,10 @@ pub fn run_server() {
         None
     };
 
-    let _guard = ChildGuard(child_pgid);
+    let _guard = ServerGuard {
+        init_pid: child_pgid,
+        startup_pids,
+    };
 
     log::info!("running server");
     unsafe {
