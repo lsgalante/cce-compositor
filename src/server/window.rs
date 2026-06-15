@@ -1516,7 +1516,11 @@ impl Window {
 
         self.surfaces.set_enabled(true);
 
-        let margin = 4;
+        let margin = if self.wm_requested.ssd {
+            self.rendering_requested.border.width as i32
+        } else {
+            4
+        };
         surface_clip.x -= margin;
         surface_clip.y -= margin;
         surface_clip.width += 2 * margin;
