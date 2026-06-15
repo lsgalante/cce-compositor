@@ -991,8 +991,10 @@ impl Window {
                 self.wm_scheduled.pointer_move_requested = std::ptr::null_mut();
 
                 if let Some(ref data) = self.wm_scheduled.pointer_resize_requested {
-                    if !(*data.seat).object.is_null() {
-                        ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_POINTER_RESIZE_REQUESTED, (*data.seat).object, data.edges); // sendPointerResizeRequested
+                    if let Some(seat) = unsafe { data.seat.as_ref() } {
+                        if !seat.object.is_null() {
+                            ffi::wl_resource_post_event(window_v1, ffi::RIVER_WINDOW_V1_POINTER_RESIZE_REQUESTED, seat.object, data.edges); // sendPointerResizeRequested
+                        }
                     }
                 }
                 self.wm_scheduled.pointer_resize_requested = None;

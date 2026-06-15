@@ -179,8 +179,12 @@ impl XdgToplevel {
 
     pub unsafe fn configure(&mut self) -> bool {
         match self.configure_state {
-            ConfigureState::Idle | ConfigureState::TimedOut(..) | ConfigureState::TimedOutAcked => {}
-            _ => unreachable!(),
+            ConfigureState::Idle
+            | ConfigureState::Inflight(..)
+            | ConfigureState::Acked
+            | ConfigureState::Committed
+            | ConfigureState::TimedOut(..)
+            | ConfigureState::TimedOutAcked => {}
         }
 
         let scheduled = &(*self.window).configure_scheduled;
@@ -197,7 +201,9 @@ impl XdgToplevel {
                     self.configure_state = ConfigureState::Acked;
                     return true;
                 }
-                _ => unreachable!(),
+                ConfigureState::Inflight(..) | ConfigureState::Acked | ConfigureState::Committed => {
+                    return false;
+                }
             }
         }
 
@@ -236,8 +242,11 @@ impl XdgToplevel {
         } else {
             match self.configure_state {
                 ConfigureState::Idle => self.geometry.width as u32,
-                ConfigureState::TimedOut(..) | ConfigureState::TimedOutAcked => (*self.window).configure_sent.width.unwrap_or(0),
-                _ => unreachable!(),
+                ConfigureState::Inflight(..)
+                | ConfigureState::Acked
+                | ConfigureState::Committed
+                | ConfigureState::TimedOut(..)
+                | ConfigureState::TimedOutAcked => (*self.window).configure_sent.width.unwrap_or(0),
             }
         };
 
@@ -246,8 +255,11 @@ impl XdgToplevel {
         } else {
             match self.configure_state {
                 ConfigureState::Idle => self.geometry.height as u32,
-                ConfigureState::TimedOut(..) | ConfigureState::TimedOutAcked => (*self.window).configure_sent.height.unwrap_or(0),
-                _ => unreachable!(),
+                ConfigureState::Inflight(..)
+                | ConfigureState::Acked
+                | ConfigureState::Committed
+                | ConfigureState::TimedOut(..)
+                | ConfigureState::TimedOutAcked => (*self.window).configure_sent.height.unwrap_or(0),
             }
         };
 
