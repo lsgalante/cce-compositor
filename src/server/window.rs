@@ -1545,11 +1545,7 @@ impl Window {
         }
 
         self.surfaces.set_enabled(true);
-        let margin = if self.wm_requested.ssd {
-            0
-        } else {
-            4
-        };
+        let margin = 0;
         surface_clip.x -= margin;
         surface_clip.y -= margin;
         surface_clip.width += 2 * margin;
