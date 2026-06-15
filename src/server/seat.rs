@@ -856,6 +856,7 @@ impl Seat {
                         (*win).box_geom.x = new_x;
                         (*win).box_geom.y = new_y;
 
+                        (*win).wm_requested.resizing = true;
                         (*win).wm_requested.dimensions = Some(crate::window::Dimensions {
                             width: new_w,
                             height: new_h,
@@ -876,6 +877,14 @@ impl Seat {
     pub unsafe fn op_end(&mut self) {
         if let Some(op) = self.op.take() {
             log::debug!("end seat op");
+            let win = op.window_ptr;
+            if !win.is_null() && !(*win).closed {
+                if let PointerOpType::Resize { .. } = op.op_type {
+                    (*win).wm_requested.resizing = false;
+                    (*win).manage_finish();
+                    (*self.server).wm.dirty_windowing();
+                }
+            }
             match op.input {
                 SeatOpInput::Pointer => {
                     self.cursor.op_end_pointer();

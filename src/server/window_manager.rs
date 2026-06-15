@@ -583,6 +583,39 @@ impl WindowManager {
         self.global_layout
     }
 
+    pub unsafe fn get_active_resize_dimensions(&self, win_ptr: *mut Window) -> Option<(u32, u32)> {
+        let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
+        let mut curr_seat = (*seats_list).next;
+        while curr_seat != seats_list {
+            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+            if let Some(ref op) = (*seat).op {
+                if op.window_ptr == win_ptr {
+                    if let crate::seat::PointerOpType::Resize { edges } = op.op_type {
+                        let dx = op.x - op.start_x;
+                        let dy = op.y - op.start_y;
+                        let mut new_w = op.start_win_w;
+                        let mut new_h = op.start_win_h;
+
+                        if edges.left {
+                            new_w = std::cmp::max(50, op.start_win_w as i32 - dx) as u32;
+                        } else if edges.right {
+                            new_w = std::cmp::max(50, op.start_win_w as i32 + dx) as u32;
+                        }
+
+                        if edges.top {
+                            new_h = std::cmp::max(50, op.start_win_h as i32 - dy) as u32;
+                        } else if edges.bottom {
+                            new_h = std::cmp::max(50, op.start_win_h as i32 + dy) as u32;
+                        }
+                        return Some((new_w, new_h));
+                    }
+                }
+            }
+            curr_seat = (*curr_seat).next;
+        }
+        None
+    }
+
     pub unsafe fn arrange_views(&mut self) {
         log::info!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
         for (idx, &win_ptr) in self.windows.iter().enumerate() {
@@ -938,14 +971,18 @@ impl WindowManager {
                     };
                 } else {
                     let fbw = self.layout.floating_border_width;
-                    let mut fw = if (*win_ptr).box_geom.width > 0 {
+                    let mut fw = if let Some(resize_size) = self.get_active_resize_dimensions(win_ptr) {
+                        resize_size.0 as i32
+                    } else if (*win_ptr).box_geom.width > 0 {
                         (*win_ptr).box_geom.width as i32
                     } else if (*win_ptr).wm_scheduled.dimensions_hint.min_width > 32 {
                         (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32
                     } else {
                         usable_w * 2 / 3
                     };
-                    let mut fh = if (*win_ptr).box_geom.height > 0 {
+                    let mut fh = if let Some(resize_size) = self.get_active_resize_dimensions(win_ptr) {
+                        resize_size.1 as i32
+                    } else if (*win_ptr).box_geom.height > 0 {
                         (*win_ptr).box_geom.height as i32
                     } else if (*win_ptr).wm_scheduled.dimensions_hint.min_height > 32 {
                         (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32

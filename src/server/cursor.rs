@@ -1211,18 +1211,26 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     }
 
     if rx >= -bw && rx < content_w + bw && ry >= -bw && ry < content_h + bw {
+        let threshold = if bw <= 3.0 { bw / 2.0 } else { 3.0 };
+
         let dist_left = rx + bw;
         let dist_right = (content_w + bw) - rx;
         let dist_top = ry + bw;
         let dist_bottom = (content_h + bw) - ry;
 
-        let corner_threshold = bw + 2.0;
-        let left = dist_left < corner_threshold;
-        let right = dist_right < corner_threshold;
-        let top = dist_top < corner_threshold;
-        let bottom = dist_bottom < corner_threshold;
+        let min_dist = dist_left.min(dist_right).min(dist_top).min(dist_bottom);
 
-        return BorderZone::Resize(crate::window::Edges { top, bottom, left, right });
+        if min_dist >= 0.0 && min_dist < threshold {
+            let delta = threshold + 1.0;
+            let left = dist_left < delta;
+            let right = dist_right < delta;
+            let top = dist_top < delta;
+            let bottom = dist_bottom < delta;
+
+            return BorderZone::Resize(crate::window::Edges { top, bottom, left, right });
+        } else {
+            return BorderZone::Move;
+        }
     }
 
     BorderZone::None
