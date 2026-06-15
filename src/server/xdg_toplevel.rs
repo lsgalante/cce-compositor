@@ -415,6 +415,10 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;
     let mut geom = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut geom);
+    if (*window).wm_requested.ssd {
+        geom.x = 0;
+        geom.y = 0;
+    }
     ffi::wlr_scene_subsurface_tree_set_clip(capture_node, &geom);
 
     let mut min_w = 0;
@@ -446,6 +450,10 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             let old_geometry = (*toplevel).geometry;
             let mut new_geometry = std::mem::zeroed();
             ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
+            if (*window).wm_requested.ssd {
+                new_geometry.x = 0;
+                new_geometry.y = 0;
+            }
             (*toplevel).geometry = new_geometry;
 
             let size_changed = new_geometry.width != old_geometry.width || new_geometry.height != old_geometry.height;
@@ -466,6 +474,10 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         ConfigureState::Acked | ConfigureState::TimedOutAcked => {
             let mut new_geometry = std::mem::zeroed();
             ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
+            if (*window).wm_requested.ssd {
+                new_geometry.x = 0;
+                new_geometry.y = 0;
+            }
             (*toplevel).geometry = new_geometry;
 
             (*window).rendering_scheduled.width = new_geometry.width as u32;
