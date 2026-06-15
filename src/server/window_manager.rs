@@ -1503,9 +1503,9 @@ impl WindowManager {
                     "transition_duration" => { if let Ok(v) = val.parse::<i32>() { self.layout.transition_duration = v; } }
                     "border_color" => {
                         let border_color_val = crate::config::parse_hex_color(val);
-                        self.layout.border_r = (border_color_val >> 16) & 0xFF;
-                        self.layout.border_g = (border_color_val >> 8) & 0xFF;
-                        self.layout.border_b = border_color_val & 0xFF;
+                        self.layout.border_r = ((border_color_val >> 16) & 0xFF) * 0x01010101;
+                        self.layout.border_g = ((border_color_val >> 8) & 0xFF) * 0x01010101;
+                        self.layout.border_b = (border_color_val & 0xFF) * 0x01010101;
                     }
                     "side_panel_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.side_panel_width = v; } }
                     "side_panel_behavior" => { self.layout.side_panel_behavior = val.to_string(); }

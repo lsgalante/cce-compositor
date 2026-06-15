@@ -570,16 +570,16 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.floating_border_width = config.layout.floating_border_width as i32;
     
     let border_color_val = parse_hex_color(&config.layout.border_color);
-    state.layout.border_r = (border_color_val >> 16) & 0xFF;
-    state.layout.border_g = (border_color_val >> 8) & 0xFF;
-    state.layout.border_b = border_color_val & 0xFF;
-    state.layout.border_a = 255;
+    state.layout.border_r = ((border_color_val >> 16) & 0xFF) * 0x01010101;
+    state.layout.border_g = ((border_color_val >> 8) & 0xFF) * 0x01010101;
+    state.layout.border_b = (border_color_val & 0xFF) * 0x01010101;
+    state.layout.border_a = 0xFFFFFFFF;
 
     let background_color_val = parse_hex_color(&config.layout.background_color);
-    state.layout.background_r = (background_color_val >> 16) & 0xFF;
-    state.layout.background_g = (background_color_val >> 8) & 0xFF;
-    state.layout.background_b = background_color_val & 0xFF;
-    state.layout.background_a = 255;
+    state.layout.background_r = ((background_color_val >> 16) & 0xFF) * 0x01010101;
+    state.layout.background_g = ((background_color_val >> 8) & 0xFF) * 0x01010101;
+    state.layout.background_b = (background_color_val & 0xFF) * 0x01010101;
+    state.layout.background_a = 0xFFFFFFFF;
 
     state.layout.border_font_size = config.layout.border_font_size as i32;
     state.layout.transition_duration = config.layout.transition_duration as i32;
