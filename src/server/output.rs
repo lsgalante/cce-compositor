@@ -140,6 +140,7 @@ pub struct Output {
     pub server: *mut Server,
     pub wlr_output: *mut ffi::wlr_output,
     pub scene_output: *mut ffi::wlr_scene_output,
+    pub background_rect: *mut ffi::wlr_scene_rect,
     pub object: *mut ffi::wl_resource, // river_output_v1 resource
     pub layer_shell: LayerShellOutput,
     pub lock_render_state: LockRenderState,
@@ -301,6 +302,11 @@ impl Output {
                 if self.scheduled.state == OutputStateValue::Destroying {
                     assert!(self.wlr_output.is_null());
                     
+                    if !self.background_rect.is_null() {
+                        ffi::wlr_scene_node_destroy(self.background_rect as *mut ffi::wlr_scene_node);
+                        self.background_rect = std::ptr::null_mut();
+                    }
+
                     // remove output from windows fullscreen hint
                     for &window in (*self.server).wm.windows.iter() {
                         if let crate::window::FullscreenRequest::Fullscreen(out) = (*window).wm_scheduled.fullscreen_requested {
@@ -357,6 +363,7 @@ impl Output {
             server,
             wlr_output,
             scene_output,
+            background_rect: std::ptr::null_mut(),
             object: std::ptr::null_mut(),
             layer_shell: LayerShellOutput::default(),
             lock_render_state: LockRenderState::Blanked,
@@ -470,6 +477,19 @@ impl Output {
 
         Ok(())
     }
+
+    pub unsafe fn update_background_color(&mut self) {
+        if !self.background_rect.is_null() {
+            let wm = &(*self.server).wm;
+            let color: [f32; 4] = [
+                (wm.layout.background_r as f64 / u32::MAX as f64) as f32,
+                (wm.layout.background_g as f64 / u32::MAX as f64) as f32,
+                (wm.layout.background_b as f64 / u32::MAX as f64) as f32,
+                (wm.layout.background_a as f64 / u32::MAX as f64) as f32,
+            ];
+            ffi::wlr_scene_rect_set_color(self.background_rect, color.as_ptr());
+        }
+    }
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -482,6 +502,11 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     wl_listener_remove(&mut (*output).request_state);
     wl_listener_remove(&mut (*output).frame);
     wl_listener_remove(&mut (*output).present);
+
+    if !(*output).background_rect.is_null() {
+        ffi::wlr_scene_node_destroy((*output).background_rect as *mut ffi::wlr_scene_node);
+        (*output).background_rect = std::ptr::null_mut();
+    }
 
     if !(*output).wlr_output.is_null() {
         ffi::river_wlr_output_set_data((*output).wlr_output, std::ptr::null_mut());

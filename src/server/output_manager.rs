@@ -199,9 +199,39 @@ impl OutputManager {
                                 output.sent.y,
                             );
                         }
+
+                        let (width, height) = output.sent.dimensions();
+                        let color: [f32; 4] = [
+                            ((*server).wm.layout.background_r as f64 / u32::MAX as f64) as f32,
+                            ((*server).wm.layout.background_g as f64 / u32::MAX as f64) as f32,
+                            ((*server).wm.layout.background_b as f64 / u32::MAX as f64) as f32,
+                            ((*server).wm.layout.background_a as f64 / u32::MAX as f64) as f32,
+                        ];
+                        if output.background_rect.is_null() {
+                            output.background_rect = ffi::wlr_scene_rect_create(
+                                (*server).scene.layers.background,
+                                width,
+                                height,
+                                color.as_ptr(),
+                            );
+                        } else {
+                            ffi::wlr_scene_rect_set_size(output.background_rect, width, height);
+                            ffi::wlr_scene_rect_set_color(output.background_rect, color.as_ptr());
+                        }
+                        if !output.background_rect.is_null() {
+                            ffi::wlr_scene_node_set_position(
+                                output.background_rect as *mut ffi::wlr_scene_node,
+                                output.sent.x,
+                                output.sent.y,
+                            );
+                        }
                     }
                     OutputStateValue::DisabledHard => {
                         ffi::wlr_output_layout_remove(self.output_layout, wlr_output);
+                        if !output.background_rect.is_null() {
+                            ffi::wlr_scene_node_destroy(output.background_rect as *mut ffi::wlr_scene_node);
+                            output.background_rect = std::ptr::null_mut();
+                        }
                     }
                     OutputStateValue::Destroying => unreachable!(),
                 }

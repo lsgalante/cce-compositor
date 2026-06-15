@@ -38,6 +38,7 @@ pub struct Layout {
     pub side_panel_border_gap: i32,
     pub side_panel_border_opacity: i32,
     pub status_normal_color: String,
+    pub low_color: String,
 }
 
 impl Default for Layout {
@@ -59,9 +60,9 @@ impl Default for Layout {
             border_g: 0x3E3E3E3Eu32,
             border_b: 0x3E3E3E3Eu32,
             border_a: 0xFFFFFFFFu32,
-            background_r: 0x0A0A0A0Au32,
-            background_g: 0x1A1A1A1Au32,
-            background_b: 0x0E0E0E0Eu32,
+            background_r: 0x1C1C1C1Cu32,
+            background_g: 0x20202020u32,
+            background_b: 0x20202020u32,
             background_a: 0xFFFFFFFFu32,
             border_font_size: 11,
             transition_duration: 300,
@@ -74,6 +75,7 @@ impl Default for Layout {
             side_panel_border_gap: 0,
             side_panel_border_opacity: 100,
             status_normal_color: "#ccccd8".to_string(),
+            low_color: "#1c2020".to_string(),
         }
     }
 }
@@ -243,6 +245,8 @@ pub struct LayoutConfig {
     pub border_color: String,
     #[serde(default = "default_background_color")]
     pub background_color: String,
+    #[serde(default)]
+    pub low_color: Option<String>,
     #[serde(default = "default_border_font_size")]
     pub border_font_size: i64,
     #[serde(default = "default_transition_duration")]
@@ -284,6 +288,7 @@ impl Default for LayoutConfig {
             floating_border_width: default_floating_border_width(),
             border_color: default_border_color(),
             background_color: default_background_color(),
+            low_color: None,
             border_font_size: default_border_font_size(),
             transition_duration: default_transition_duration(),
             grid_gap: default_grid_gap(),
@@ -597,7 +602,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.border_b = (border_color_val & 0xFF) * 0x01010101;
     state.layout.border_a = 0xFFFFFFFF;
 
-    let background_color_val = parse_hex_color(&config.layout.background_color);
+    let low_color_str = config.layout.low_color.clone().unwrap_or_else(|| config.layout.background_color.clone());
+    state.layout.low_color = low_color_str.clone();
+
+    let background_color_val = parse_hex_color(&low_color_str);
     state.layout.background_r = ((background_color_val >> 16) & 0xFF) * 0x01010101;
     state.layout.background_g = ((background_color_val >> 8) & 0xFF) * 0x01010101;
     state.layout.background_b = (background_color_val & 0xFF) * 0x01010101;
@@ -710,6 +718,19 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         state.startup.len()
     );
 
+    unsafe {
+        if !state.server.is_null() {
+            let outputs_head = &mut (*state.server).om.outputs as *mut crate::ffi::wl_list as *mut crate::server::WlList;
+            let mut curr = (*outputs_head).next;
+            while curr != outputs_head {
+                let next = (*curr).next;
+                let output = &mut *crate::container_of!(curr, crate::output::Output, link);
+                output.update_background_color();
+                curr = next;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -733,6 +754,10 @@ mod tests {
             assert_eq!(server.wm.input_config.dwtp, Some(true));
             assert_eq!(server.wm.input_config.trackpoint_accel_speed, Some(0.6));
             assert_eq!(server.wm.input_config.trackpoint_accel_profile, Some("flat".to_string()));
+            assert_eq!(server.wm.layout.low_color, "#1c2020");
+            assert_eq!(server.wm.layout.background_r, 0x1C1C1C1Cu32);
+            assert_eq!(server.wm.layout.background_g, 0x20202020u32);
+            assert_eq!(server.wm.layout.background_b, 0x20202020u32);
         }
     }
 }

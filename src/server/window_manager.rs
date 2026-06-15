@@ -1493,6 +1493,19 @@ impl WindowManager {
                 self.execute_action(&crate::config::Action::Exit, None);
                 "ok\n".to_string()
             }
+            "reload" => {
+                if let Some(path) = crate::config::default_config_path() {
+                    match crate::config::parse_config(&path, self) {
+                        Ok(()) => {
+                            self.dirty_windowing();
+                            "ok\n".to_string()
+                        }
+                        Err(e) => format!("error: failed to reload config: {}\n", e),
+                    }
+                } else {
+                    "error: no config file found\n".to_string()
+                }
+            }
             "retile" => {
                 self.dirty_windowing();
                 "ok\n".to_string()
