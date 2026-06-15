@@ -448,7 +448,9 @@ impl Cursor {
             }
 
             if let SceneNodeDataVal::Window(window) = result.data {
-                if (*window).tiling_mode == crate::tiling::TilingMode::Floating {
+                if (*window).tiling_mode == crate::tiling::TilingMode::Floating
+                    || (*window).tiling_mode == crate::tiling::TilingMode::Cascade
+                {
                     match get_border_zone(window, lx, ly) {
                         BorderZone::Resize(edges) => {
                             ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
@@ -575,6 +577,10 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             }
             
             if !target_win.is_null() {
+                if (*target_win).tiling_mode == crate::tiling::TilingMode::Cascade {
+                    (*target_win).tiling_mode = crate::tiling::TilingMode::Floating;
+                    (*target_win).mode_locked = true;
+                }
                 seat.focus(Focus::Window(target_win));
                 
                 let op_type = match pb.action {
@@ -630,10 +636,19 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             }
         }
 
-        if !border_target_win.is_null() && (*border_target_win).tiling_mode == crate::tiling::TilingMode::Floating {
+        if !border_target_win.is_null() && (
+            (*border_target_win).tiling_mode == crate::tiling::TilingMode::Floating
+            || (*border_target_win).tiling_mode == crate::tiling::TilingMode::Cascade
+        ) {
+            let initial_mode = (*border_target_win).tiling_mode;
             match get_border_zone(border_target_win, lx, ly) {
                 BorderZone::Resize(edges) => {
                     if (*event).button == 0x110 { // BTN_LEFT
+                        if initial_mode == crate::tiling::TilingMode::Cascade {
+                            (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
+                            (*border_target_win).mode_locked = true;
+                        }
+
                         seat.focus(Focus::Window(border_target_win));
                         let cursor_x = (*cursor.wlr_cursor).x;
                         let cursor_y = (*cursor.wlr_cursor).y;
@@ -661,6 +676,11 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 }
                 BorderZone::Move => {
                     if (*event).button == 0x110 { // BTN_LEFT
+                        if initial_mode == crate::tiling::TilingMode::Cascade {
+                            (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
+                            (*border_target_win).mode_locked = true;
+                        }
+
                         seat.focus(Focus::Window(border_target_win));
                         let cursor_x = (*cursor.wlr_cursor).x;
                         let cursor_y = (*cursor.wlr_cursor).y;
@@ -1168,7 +1188,9 @@ pub enum BorderZone {
 }
 
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
-    if (*window).tiling_mode != crate::tiling::TilingMode::Floating {
+    if (*window).tiling_mode != crate::tiling::TilingMode::Floating
+        && (*window).tiling_mode != crate::tiling::TilingMode::Cascade
+    {
         return BorderZone::None;
     }
     
