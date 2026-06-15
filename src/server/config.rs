@@ -177,6 +177,18 @@ pub struct InputDeviceConfigRule {
     pub scroll_factor: Option<f64>,
 }
 
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct InputConfig {
+    pub tap_to_click: Option<bool>,
+    pub accel_speed: Option<f64>,
+    pub accel_profile: Option<String>,
+    pub natural_scroll: Option<bool>,
+    pub dwt: Option<bool>,
+    pub dwtp: Option<bool>,
+    pub trackpoint_accel_speed: Option<f64>,
+    pub trackpoint_accel_profile: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -197,6 +209,8 @@ pub struct Config {
     pub output: Option<OutputConfig>,
     #[serde(default)]
     pub device: Vec<InputDeviceConfigRule>,
+    #[serde(default)]
+    pub input: Option<InputConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -607,7 +621,11 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     }
 
     state.input_rules = config.device.clone();
-    unsafe { state.apply_input_rules(); }
+    state.input_config = config.input.clone().unwrap_or_default();
+    unsafe {
+        state.apply_input_rules();
+        state.apply_input_config();
+    }
 
     state.keybinds.clear();
     for kb in &config.keybind {
@@ -707,6 +725,14 @@ mod tests {
             println!("TEST_WM_STARTUP: {:?}", server.wm.startup);
             println!("TEST_WM_PATH: {:?}", std::env::var("PATH"));
             assert!(!server.wm.startup.is_empty(), "Startup list should not be empty!");
+            assert_eq!(server.wm.input_config.tap_to_click, Some(true));
+            assert_eq!(server.wm.input_config.accel_speed, Some(0.2));
+            assert_eq!(server.wm.input_config.accel_profile, Some("adaptive".to_string()));
+            assert_eq!(server.wm.input_config.natural_scroll, Some(true));
+            assert_eq!(server.wm.input_config.dwt, Some(true));
+            assert_eq!(server.wm.input_config.dwtp, Some(true));
+            assert_eq!(server.wm.input_config.trackpoint_accel_speed, Some(0.6));
+            assert_eq!(server.wm.input_config.trackpoint_accel_profile, Some("flat".to_string()));
         }
     }
 }

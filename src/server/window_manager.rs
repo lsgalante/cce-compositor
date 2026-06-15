@@ -68,6 +68,7 @@ pub struct WindowManager {
     pub status_sender: Option<crate::status_server::StatusSender>,
     pub output_scale: f32,
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
+    pub input_config: crate::config::InputConfig,
 }
 
 impl WindowManager {
@@ -79,6 +80,7 @@ impl WindowManager {
         self.sent.output_config = std::ptr::null_mut();
         self.output_scale = 1.0;
         self.input_rules = Vec::new();
+        self.input_config = crate::config::InputConfig::default();
         Ok(())
     }
 
@@ -121,6 +123,7 @@ impl WindowManager {
         self.startup = Vec::new();
         self.status_sender = None;
         self.input_rules = Vec::new();
+        self.input_config = crate::config::InputConfig::default();
 
         ffi::wl_list_init(&mut self.sent.outputs);
         ffi::wl_list_init(&mut self.sent.seats);
@@ -1626,6 +1629,22 @@ impl WindowManager {
                         }
                     }
                 }
+            }
+            curr = next;
+        }
+    }
+
+    pub unsafe fn apply_input_config(&mut self) {
+        if self.server.is_null() {
+            return;
+        }
+        let devices_head = &mut (*self.server).input_manager.devices as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*devices_head).next;
+        while curr != devices_head {
+            let next = (*curr).next;
+            let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
+            if let Some(ref mut libinput) = (*device).libinput {
+                libinput.apply_config(&self.input_config);
             }
             curr = next;
         }

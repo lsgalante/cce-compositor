@@ -49,6 +49,87 @@ impl LibinputDevice {
         dev
     }
 
+    pub unsafe fn apply_config(&self, config: &crate::config::InputConfig) {
+        let handle = self.libinput;
+        if handle.is_null() {
+            return;
+        }
+
+        // Tap to click
+        if let Some(tap) = config.tap_to_click {
+            if ffi::libinput_device_config_tap_get_finger_count(handle) > 0 {
+                let state = if tap { 1 } else { 0 };
+                ffi::libinput_device_config_tap_set_enabled(handle, state);
+            }
+        }
+
+        // Natural scroll
+        if let Some(natural) = config.natural_scroll {
+            if ffi::libinput_device_config_scroll_has_natural_scroll(handle) != 0 {
+                let state = if natural { 1 } else { 0 };
+                ffi::libinput_device_config_scroll_set_natural_scroll_enabled(handle, state);
+            }
+        }
+
+        // Dwt (Disable while typing)
+        if let Some(dwt) = config.dwt {
+            if ffi::libinput_device_config_dwt_is_available(handle) != 0 {
+                let state = if dwt { 1 } else { 0 };
+                ffi::libinput_device_config_dwt_set_enabled(handle, state);
+            }
+        }
+
+        // Dwtp (Disable while trackpointing)
+        if let Some(dwtp) = config.dwtp {
+            if ffi::libinput_device_config_dwtp_is_available(handle) != 0 {
+                let state = if dwtp { 1 } else { 0 };
+                ffi::libinput_device_config_dwtp_set_enabled(handle, state);
+            }
+        }
+
+        // Check if device name contains "trackpoint" (case-insensitive)
+        let name_ptr = ffi::river_wlr_input_device_get_name((*self.parent_device).wlr_device);
+        let name = if !name_ptr.is_null() {
+            std::ffi::CStr::from_ptr(name_ptr).to_string_lossy().to_lowercase()
+        } else {
+            String::new()
+        };
+        let is_trackpoint = name.contains("trackpoint");
+
+        // Acceleration Speed
+        let speed = if is_trackpoint {
+            config.trackpoint_accel_speed.or(config.accel_speed)
+        } else {
+            config.accel_speed
+        };
+        if let Some(s) = speed {
+            if ffi::libinput_device_config_accel_get_profiles(handle) != 0 {
+                ffi::libinput_device_config_accel_set_speed(handle, s);
+            }
+        }
+
+        // Acceleration Profile
+        let profile_str = if is_trackpoint {
+            config.trackpoint_accel_profile.as_ref().or(config.accel_profile.as_ref())
+        } else {
+            config.accel_profile.as_ref()
+        };
+        if let Some(ref p_str) = profile_str {
+            if ffi::libinput_device_config_accel_get_profiles(handle) != 0 {
+                let profile = match p_str.as_str() {
+                    "flat" => Some(ffi::libinput_config_accel_profile_LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT),
+                    "adaptive" => Some(ffi::libinput_config_accel_profile_LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE),
+                    "none" => Some(ffi::libinput_config_accel_profile_LIBINPUT_CONFIG_ACCEL_PROFILE_NONE),
+                    "custom" => Some(ffi::libinput_config_accel_profile_LIBINPUT_CONFIG_ACCEL_PROFILE_CUSTOM),
+                    _ => None,
+                };
+                if let Some(p) = profile {
+                    ffi::libinput_device_config_accel_set_profile(handle, p);
+                }
+            }
+        }
+    }
+
     pub unsafe fn deinit(&mut self) {
         let objects_head = &mut self.objects as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*objects_head).next;

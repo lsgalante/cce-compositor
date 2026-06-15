@@ -89,7 +89,10 @@ impl InputDevice {
                 std::ptr::null_mut()
             };
             if !handle.is_null() {
-                (*device).libinput = Some(crate::libinput_device::LibinputDevice::init(device, handle));
+                let libinput_dev = crate::libinput_device::LibinputDevice::init(device, handle);
+                let wm = &(*(*seat).server).wm;
+                libinput_dev.apply_config(&wm.input_config);
+                (*device).libinput = Some(libinput_dev);
             }
 
             let dev_type = ffi::river_wlr_input_device_get_type(wlr_device);
