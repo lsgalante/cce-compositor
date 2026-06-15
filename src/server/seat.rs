@@ -302,6 +302,37 @@ impl Seat {
             return;
         }
 
+        // If an exclusive layer surface is active and scheduled for focus,
+        // block any window manager or other client focus requests (via focus_requested)
+        // from stealing focus back to a regular window or shell surface.
+        if self.focus_requested {
+            if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) = self.layer_shell.scheduled_focus {
+                let server = self.server;
+                if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
+                    let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
+                    if new_focus != Focus::LayerSurface(wlr_surf) {
+                        if let Focus::Window(_) | Focus::ShellSurface(_) | Focus::OverrideRedirect(_) | Focus::None = new_focus {
+                            log::info!("[FocusDebug] Blocking window manager focus request because Exclusive layer surface {:?} is active", key);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        match new_focus {
+            Focus::None => log::info!("[FocusDebug] Seat::focus set to None"),
+            Focus::LayerSurface(surface) => log::info!("[FocusDebug] Seat::focus set to LayerSurface {:?}", surface),
+            Focus::Window(window) => {
+                let title = if window.is_null() { "null".to_string() } else { (*window).get_title_string().unwrap_or_default() };
+                let app_id = if window.is_null() { "null".to_string() } else { (*window).get_app_id_string().unwrap_or_default() };
+                log::info!("[FocusDebug] Seat::focus set to Window {:?} (title={:?}, app_id={:?})", window, title, app_id);
+            }
+            Focus::LockSurface(lock) => log::info!("[FocusDebug] Seat::focus set to LockSurface {:?}", lock),
+            Focus::OverrideRedirect(or) => log::info!("[FocusDebug] Seat::focus set to OverrideRedirect {:?}", or),
+            Focus::ShellSurface(ss) => log::info!("[FocusDebug] Seat::focus set to ShellSurface {:?}", ss),
+        }
+
         match self.focused {
             Focus::None => {}
             Focus::LayerSurface(_) | Focus::Window(_) | Focus::LockSurface(_) | Focus::OverrideRedirect(_) | Focus::ShellSurface(_) => {
@@ -642,6 +673,10 @@ impl Seat {
                     self.wm_sent_y = y;
                 }
             }
+        } else {
+            crate::server::wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
+            let sent_seats = &mut (*self.server).wm.sent.seats as *mut ffi::wl_list as *mut crate::server::WlList;
+            crate::server::wl_list_insert((*sent_seats).prev, &mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
         }
     }
 

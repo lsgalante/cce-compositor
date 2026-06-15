@@ -309,33 +309,8 @@ impl Cursor {
     }
 
     pub unsafe fn update_hovered(&mut self) {
-        let lx = self.x();
-        let ly = self.y();
-        let server = (*self.seat).server;
-
-        let at_res = (*server).scene.at(lx, ly);
-        let current_focused = &(*self.seat).focused;
-
-        if let Some(result) = at_res {
-            // Find window/surface under cursor and focus
-            match result.data {
-                SceneNodeDataVal::Window(_) => {
-                    // Update hover or click focus
-                }
-                SceneNodeDataVal::LayerSurface(_) => {
-                    let surface = result.surface;
-                    if !matches!(current_focused, Focus::LayerSurface(s) if *s == surface) {
-                        (*self.seat).focus(Focus::LayerSurface(surface));
-                    }
-                }
-                SceneNodeDataVal::LockSurface(lock_surf) => {
-                    if !matches!(current_focused, Focus::LockSurface(s) if *s == lock_surf) {
-                        (*self.seat).focus(Focus::LockSurface(lock_surf));
-                    }
-                }
-                _ => {}
-            }
-        }
+        // Keyboard focus remains stable on pointer hover/motion.
+        // It is only changed on mapping, click, touch, or shortcut focus transitions.
     }
 
     pub unsafe fn update_state(&mut self) {
