@@ -619,6 +619,18 @@ impl WindowManager {
             curr_seat = next_seat;
         }
 
+        let mut stack_order: Vec<*mut Window> = Vec::new();
+        let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*render_list).next;
+        while curr != render_list {
+            let next = (*curr).next;
+            let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
+            if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
+                stack_order.push(window);
+            }
+            curr = next;
+        }
+
         for &output in &active_outputs {
             let wlr_box = (*output).sent.box_layout();
             let phys_x = wlr_box.x;
@@ -787,7 +799,9 @@ impl WindowManager {
                         self.layout.border_a,
                     )
                 } else {
-                    let pos = tiled_windows.iter().position(|&w| w == win_ptr).unwrap_or(0);
+                    let mut tiled_stack = tiled_windows.clone();
+                    tiled_stack.sort_by_key(|&w| stack_order.iter().position(|&x| x == w).unwrap_or(usize::MAX));
+                    let pos = tiled_stack.iter().position(|&w| w == win_ptr).unwrap_or(0);
                     let depth = n_tiled - 1 - pos as i32;
                     let mut factor = 1.0_f64;
                     for _ in 0..depth {
