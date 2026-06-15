@@ -44,6 +44,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  restart");
     print("  reload");
     print("  repeat <rate> <delay>");
+    print("  input <device_name|*> scroll-factor <value>");
     print("  config-done");
     print("  spawn <command>");
     print("  notify <title> [body]");

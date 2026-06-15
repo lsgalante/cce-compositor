@@ -67,6 +67,7 @@ pub struct WindowManager {
     pub startup: Vec<crate::config::StartupConfig>,
     pub status_sender: Option<crate::status_server::StatusSender>,
     pub output_scale: f32,
+    pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
 }
 
 impl WindowManager {
@@ -77,6 +78,7 @@ impl WindowManager {
         self.scheduled.output_config = std::ptr::null_mut();
         self.sent.output_config = std::ptr::null_mut();
         self.output_scale = 1.0;
+        self.input_rules = Vec::new();
         Ok(())
     }
 
@@ -118,6 +120,7 @@ impl WindowManager {
         self.ipc_timer = std::ptr::null_mut();
         self.startup = Vec::new();
         self.status_sender = None;
+        self.input_rules = Vec::new();
 
         ffi::wl_list_init(&mut self.sent.outputs);
         ffi::wl_list_init(&mut self.sent.seats);
@@ -1548,7 +1551,69 @@ impl WindowManager {
                 self.dirty_windowing();
                 "ok\n".to_string()
             }
+            "input" => {
+                if parts.len() < 4 { return "error: usage: input <device_name|*> scroll-factor <value>\n".to_string(); }
+                let device_name = parts[1];
+                let key = parts[2];
+                let val = parts[3];
+                if key == "scroll-factor" {
+                    if let Ok(factor) = val.parse::<f64>() {
+                        if factor < 0.0 {
+                            return "error: scroll factor cannot be negative\n".to_string();
+                        }
+                        let mut found = false;
+                        let devices_head = &mut (*self.server).input_manager.devices as *mut ffi::wl_list as *mut WlList;
+                        let mut curr = (*devices_head).next;
+                        while curr != devices_head {
+                            let next = (*curr).next;
+                            let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
+                            let name_ptr = (*(*device).wlr_device).name;
+                            if !name_ptr.is_null() {
+                                let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
+                                if device_name == "*" || name.contains(device_name) {
+                                    (*device).config.scroll_factor = factor;
+                                    found = true;
+                                }
+                            }
+                            curr = next;
+                        }
+                        if found {
+                            "ok\n".to_string()
+                        } else {
+                            "error: no matching device found\n".to_string()
+                        }
+                    } else {
+                        "error: invalid scroll-factor value\n".to_string()
+                    }
+                } else {
+                    format!("error: unknown input command: {}\n", key)
+                }
+            }
             _ => format!("error: unknown command: {}\n", action),
+        }
+    }
+
+    pub unsafe fn apply_input_rules(&mut self) {
+        if self.server.is_null() {
+            return;
+        }
+        let devices_head = &mut (*self.server).input_manager.devices as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*devices_head).next;
+        while curr != devices_head {
+            let next = (*curr).next;
+            let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
+            let name_ptr = (*(*device).wlr_device).name;
+            if !name_ptr.is_null() {
+                let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
+                for rule in &self.input_rules {
+                    if rule.name == "*" || name.contains(&rule.name) {
+                        if let Some(factor) = rule.scroll_factor {
+                            (*device).config.scroll_factor = factor;
+                        }
+                    }
+                }
+            }
+            curr = next;
         }
     }
 }

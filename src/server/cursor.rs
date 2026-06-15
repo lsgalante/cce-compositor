@@ -658,12 +658,26 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
     let event = data as *mut ffi::wlr_pointer_axis_event;
     
     let seat = &mut *cursor.seat;
+    
+    let mut delta = (*event).delta;
+    let mut delta_discrete = (*event).delta_discrete;
+
+    if !(*event).pointer.is_null() {
+        let wlr_device = &mut (*(*event).pointer).base as *mut ffi::wlr_input_device;
+        let device_ptr = ffi::river_wlr_input_device_get_data(wlr_device) as *mut crate::input_device::InputDevice;
+        if !device_ptr.is_null() {
+            let factor = (*device_ptr).config.scroll_factor;
+            delta *= factor;
+            delta_discrete = (delta_discrete as f64 * factor) as i32;
+        }
+    }
+
     ffi::wlr_seat_pointer_notify_axis(
         seat.wlr_seat,
         (*event).time_msec,
         (*event).orientation,
-        (*event).delta,
-        (*event).delta_discrete,
+        delta,
+        delta_discrete,
         (*event).source,
         (*event).relative_direction,
     );

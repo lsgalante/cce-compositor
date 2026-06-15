@@ -309,6 +309,19 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
 
     let device = crate::input_device::InputDevice::new(im.default_seat, wlr_device, false);
     
+    let name_ptr = (*wlr_device).name;
+    if !name_ptr.is_null() {
+        let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
+        let wm = &mut (*im.server).wm;
+        for rule in &wm.input_rules {
+            if rule.name == "*" || name.contains(&rule.name) {
+                if let Some(factor) = rule.scroll_factor {
+                    (*device).config.scroll_factor = factor;
+                }
+            }
+        }
+    }
+    
     let dev_type = ffi::river_wlr_input_device_get_type(wlr_device);
     if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD {
         crate::keyboard::Keyboard::create(device);

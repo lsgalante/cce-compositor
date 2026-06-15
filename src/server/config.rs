@@ -171,6 +171,12 @@ fn default_scale() -> f64 {
     1.0
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct InputDeviceConfigRule {
+    pub name: String,
+    pub scroll_factor: Option<f64>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -189,6 +195,8 @@ pub struct Config {
     pub startup: Vec<StartupConfig>,
     #[serde(default)]
     pub output: Option<OutputConfig>,
+    #[serde(default)]
+    pub device: Vec<InputDeviceConfigRule>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -597,6 +605,9 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         let expanded = expand_env_vars(val);
         std::env::set_var(key, &expanded);
     }
+
+    state.input_rules = config.device.clone();
+    unsafe { state.apply_input_rules(); }
 
     state.keybinds.clear();
     for kb in &config.keybind {
