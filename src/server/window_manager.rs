@@ -671,15 +671,16 @@ impl WindowManager {
 
                 if app_id.as_deref() == Some("cce-status-interface") {
                     let wlr_box = (*output).sent.box_layout();
+                    let bar_h = self.layout.bar_height as u32;
                     (*win_ptr).rendering_requested.x = wlr_box.x;
                     (*win_ptr).rendering_requested.y = wlr_box.y;
                     (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
                         width: wlr_box.width as u32,
-                        height: wlr_box.height as u32,
+                        height: bar_h,
                     });
                     (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
                         width: wlr_box.width as u32,
-                        height: wlr_box.height as u32,
+                        height: bar_h,
                     };
                     (*win_ptr).wm_requested.tiled = 0;
                     (*win_ptr).wm_requested.ssd = false;

@@ -5,8 +5,8 @@ build:
 
 install: build
 	mkdir -p ~/.local/bin
-	@if [ -f target/release/cce ]; then \
-		install -m 755 target/release/cce ~/.local/bin/cce; \
+	@if [ -f ../target/release/cce ]; then \
+		install -m 755 ../target/release/cce ~/.local/bin/cce; \
 	else \
 		echo "Error: cce binary not found"; exit 1; \
 	fi
