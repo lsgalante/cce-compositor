@@ -5,17 +5,13 @@ fn main() {
     if args.len() > 1 {
         match args[1].as_str() {
             "client" => {
-                cce::run_client();
+                println!("cce: standalone client mode is deprecated in the monolithic architecture");
+                std::process::exit(0);
             }
             "control" => {
                 let mut control_args = vec!["clearctl".to_string()];
                 control_args.extend(args.iter().skip(2).cloned());
                 cce::run_clearctl(control_args);
-            }
-            "inspect" | "inspector" => {
-                let mut inspect_args = vec!["clear-inspector".to_string()];
-                inspect_args.extend(args.iter().skip(2).cloned());
-                cce::run_inspector(inspect_args);
             }
             "--help" | "-h" | "help" => {
                 print_help();
@@ -33,8 +29,6 @@ fn print_help() {
     println!("usage: cce <subcommand> [options]");
     println!();
     println!("subcommands:");
-    println!("  (default)          Start the compositor server and embedded client");
-    println!("  client             Start the standalone Wayland window manager client");
+    println!("  (default)          Start the monolithic compositor and window manager");
     println!("  control            Run IPC control commands (e.g. cce control layout gap 10)");
-    println!("  inspect            Run the widget tree inspector");
 }

@@ -1,25 +1,25 @@
-// clearctl — IPC client for cce-client
-
+// clearctl — IPC client for cce
+ 
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::process;
-
+ 
 fn get_socket_path() -> String {
     match env::var("WAYLAND_DISPLAY") {
         Ok(display) => format!("/tmp/cce-client-{}.sock", display),
         Err(_) => "/tmp/cce-client.sock".to_string(),
     }
 }
-
+ 
 fn get_windows_path() -> String {
     match env::var("WAYLAND_DISPLAY") {
         Ok(display) => format!("/tmp/cce-client-windows-{}", display),
         Err(_) => "/tmp/cce-client-windows".to_string(),
     }
 }
-
+ 
 fn usage(name: &str, to_stderr: bool) {
     let print = |s: &str| {
         if to_stderr {
@@ -37,7 +37,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  close");
     print("  minimize");
     print("  focus-next");
-  print("  focus-window <app_id|title>");
+    print("  focus-window <app_id|title>");
     print("  expose");
     print("  windows");
     print("  exit");
@@ -64,27 +64,27 @@ fn usage(name: &str, to_stderr: bool) {
     print("  key-press <key>");
     print("  key-release <key>");
 }
-
+ 
 pub fn run_clearctl(args: Vec<String>) {
     if args.len() < 2 {
         usage(&args[0], true);
         process::exit(1);
     }
-
+ 
     if args[1] == "--help" || args[1] == "-h" || args[1] == "help" {
         usage(&args[0], false);
         return;
     }
-
+ 
     // Special case: "windows" reads the status file directly
     if args[1] == "windows" {
         match fs::read_to_string(get_windows_path()) {
             Ok(content) => print!("{}", content),
-            Err(_) => eprintln!("No windows info (cce-client may not be running)"),
+            Err(_) => eprintln!("No windows info (cce may not be running)"),
         }
         return;
     }
-
+ 
     // Connect to IPC socket
     let stream = match UnixStream::connect(get_socket_path()) {
         Ok(s) => s,
@@ -93,7 +93,7 @@ pub fn run_clearctl(args: Vec<String>) {
             process::exit(1);
         }
     };
-
+ 
     let mut stream = stream;
     // Build command string from args
     let cmd = args[1..].join(" ") + "\n";
@@ -101,7 +101,7 @@ pub fn run_clearctl(args: Vec<String>) {
         eprintln!("write: {}", e);
         process::exit(1);
     }
-
+ 
     // Read response
     let mut buf = [0u8; 4096];
     loop {

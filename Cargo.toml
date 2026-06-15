@@ -4,10 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-wayland-client = "0.31"
-wayland-backend = "0.3"
-wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
-wayland-scanner = "0.31"
 xkbcommon = "0.7"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }

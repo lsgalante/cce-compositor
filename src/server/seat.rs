@@ -7,6 +7,12 @@ pub enum SeatOpInput {
     Pointer,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerOpType {
+    Move,
+    Resize,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct SeatOp {
     pub sent_release: bool,
@@ -15,6 +21,12 @@ pub struct SeatOp {
     pub start_y: i32,
     pub x: i32,
     pub y: i32,
+    pub window_ptr: *mut crate::window::Window,
+    pub op_type: PointerOpType,
+    pub start_win_x: i32,
+    pub start_win_y: i32,
+    pub start_win_w: u32,
+    pub start_win_h: u32,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -763,6 +775,39 @@ impl Seat {
         if let Some(ref mut op) = self.op {
             op.x = x;
             op.y = y;
+            let dx = op.x - op.start_x;
+            let dy = op.y - op.start_y;
+            
+            let win = op.window_ptr;
+            if !win.is_null() && !(*win).closed {
+                if (*win).tiling_mode != crate::tiling::TilingMode::Floating {
+                    (*win).tiling_mode = crate::tiling::TilingMode::Floating;
+                    (*win).mode_locked = true;
+                }
+                
+                match op.op_type {
+                    PointerOpType::Move => {
+                        (*win).rendering_requested.x = op.start_win_x + dx;
+                        (*win).rendering_requested.y = op.start_win_y + dy;
+                        (*win).box_geom.x = op.start_win_x + dx;
+                        (*win).box_geom.y = op.start_win_y + dy;
+                    }
+                    PointerOpType::Resize => {
+                        let new_w = std::cmp::max(50, op.start_win_w as i32 + dx) as u32;
+                        let new_h = std::cmp::max(50, op.start_win_h as i32 + dy) as u32;
+                        (*win).wm_requested.dimensions = Some(crate::window::Dimensions {
+                            width: new_w,
+                            height: new_h,
+                        });
+                        (*win).wm_requested.bounds = crate::window::Dimensions {
+                            width: new_w,
+                            height: new_h,
+                        };
+                        (*win).set_dimensions(new_w, new_h);
+                    }
+                }
+                (*win).manage_finish();
+            }
             (*self.server).wm.dirty_windowing();
         }
     }
@@ -993,6 +1038,12 @@ unsafe extern "C" fn seat_op_start_pointer(
             start_y: cursor_y as i32,
             x: cursor_x as i32,
             y: cursor_y as i32,
+            window_ptr: std::ptr::null_mut(),
+            op_type: PointerOpType::Move,
+            start_win_x: 0,
+            start_win_y: 0,
+            start_win_w: 0,
+            start_win_h: 0,
         });
         (*seat).cursor.op_start_pointer();
     }

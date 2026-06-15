@@ -145,6 +145,18 @@ pub fn run_server() {
         std::process::exit(1);
     }
 
+    let status_sender = crate::status_server::spawn_status_server();
+    server.wm.status_sender = Some(status_sender);
+
+    if let Some(path) = crate::config::default_config_path() {
+        log::info!("loading config from {}", path);
+        if let Err(e) = crate::config::parse_config(&path, &mut server.wm) {
+            log::error!("failed to parse config at {}: {}", path, e);
+        }
+    } else {
+        log::warn!("no config file found, using defaults");
+    }
+
     process::setup();
 
     let socket_ptr = unsafe {
@@ -159,19 +171,54 @@ pub fn run_server() {
     log::info!("running server on display socket: {}", socket_str);
 
     std::env::set_var("WAYLAND_DISPLAY", &socket_str);
-    log::info!("spawning in-process cce-client thread...");
-    std::thread::Builder::new()
-        .name("cce-client".to_string())
-        .spawn(|| {
-            crate::run_client();
-        })
-        .expect("Failed to spawn cce-client thread");
+
 
     let started = unsafe { ffi::wlr_backend_start(server.backend) };
     if !started {
         log::error!("failed to start wlr_backend");
         server.deinit();
         std::process::exit(1);
+    }
+
+    // Spawn TOML startup programs
+    for prog in &server.wm.startup {
+        log::info!("spawning TOML startup program: {}", prog.exec);
+        let cmd = prog.exec.clone();
+        unsafe {
+            match nix::unistd::fork() {
+                Ok(nix::unistd::ForkResult::Child) => {
+                    process::cleanup_child();
+                    std::env::set_var("WAYLAND_DISPLAY", &socket_str);
+
+                    if !args.no_xwayland && !server.xwayland.is_null() {
+                        let xwayland_cast = server.xwayland as *mut server::WlrXwayland;
+                        if !(*xwayland_cast).display_name.is_null() {
+                            let display_name = CStr::from_ptr((*xwayland_cast).display_name)
+                                .to_string_lossy()
+                                .into_owned();
+                            std::env::set_var("DISPLAY", display_name);
+                        }
+                    }
+
+                    let cmd_c = CString::new(cmd).unwrap();
+                    let sh_c = CString::new("/bin/sh").unwrap();
+                    let c_c = CString::new("-c").unwrap();
+                    let args = [sh_c.as_c_str(), c_c.as_c_str(), cmd_c.as_c_str()];
+                    
+                    let env: Vec<CString> = std::env::vars()
+                        .map(|(k, v)| CString::new(format!("{}={}", k, v)).unwrap())
+                        .collect();
+                    let env_ptrs: Vec<&CStr> = env.iter().map(|s| s.as_c_str()).collect();
+
+                    let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
+                    std::process::exit(1);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    log::error!("failed to fork child for startup program: {}", e);
+                }
+            }
+        }
     }
 
     struct ChildGuard(Option<nix::unistd::Pid>);

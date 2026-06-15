@@ -8,10 +8,11 @@ use crate::xkb_bindings::XkbBinding;
 use crate::server::wl_listener_remove;
 use std::collections::HashMap;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyConsumer {
     Builtin,
     Binding(*mut XkbBinding),
+    CceBinding(crate::config::Keybind),
     EnsureEaten,
     ImGrab,
     Focus,
@@ -343,13 +344,16 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         }
     } else {
         let xkb_keycode = (*event).keycode + 8;
+        let modifiers = ffi::wlr_keyboard_get_modifiers(&mut group.wlr_keyboard);
         
         let mut matched_builtin = false;
         let mut syms_ptr: *const ffi::xkb_keysym_t = std::ptr::null();
         let num_syms = ffi::xkb_state_key_get_syms(xkb_state, xkb_keycode, &mut syms_ptr);
+        log::info!("handle_group_key keycode={}, xkb_keycode={}, num_syms={}", (*event).keycode, xkb_keycode, num_syms);
         if num_syms > 0 && !syms_ptr.is_null() {
             let syms = std::slice::from_raw_parts(syms_ptr, num_syms as usize);
             for &sym in syms {
+                log::info!("  keysym={:#x}", sym);
                 if handle_builtin_binding(group.seat, sym) {
                     matched_builtin = true;
                     break;
@@ -359,6 +363,9 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
 
         if matched_builtin {
             KeyConsumer::Builtin
+        } else if let Some(kb) = match_cce_keybind(&(*(*group.seat).server).wm, xkb_keycode, modifiers, xkb_state) {
+            log::debug!("matched CCE monolithic keybind: {:?}", kb);
+            KeyConsumer::CceBinding(kb)
         } else if let Some(binding) = (*group.seat).match_xkb_binding(xkb_keycode, &mut group.wlr_keyboard) {
             log::debug!("matched xkb binding");
             (*group.seat).xkb_bindings_seat.ensure_next_key_eaten = false;
@@ -397,7 +404,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         group.pressed.insert(
             (*event).keycode,
             Press {
-                consumer,
+                consumer: consumer.clone(),
                 count: 1,
             },
         );
@@ -405,6 +412,12 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
 
     match consumer {
         KeyConsumer::Builtin => {}
+        KeyConsumer::CceBinding(kb) => {
+            if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED {
+                log::info!("executing CCE monolithic action: {:?}", kb.action);
+                (*(*group.seat).server).wm.execute_action(&kb.action, kb.command.as_deref());
+            }
+        }
         KeyConsumer::Binding(binding) => {
             if !binding.is_null() {
                 if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED {
@@ -434,6 +447,57 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
     }
 
     group.send_state();
+}
+
+pub unsafe fn match_cce_keybind(
+    wm: &crate::window_manager::WindowManager,
+    keycode: u32,
+    modifiers: u32,
+    xkb_state: *mut ffi::xkb_state,
+) -> Option<crate::config::Keybind> {
+    if xkb_state.is_null() {
+        return None;
+    }
+    let keymap = ffi::xkb_state_get_keymap(xkb_state);
+    if keymap.is_null() {
+        return None;
+    }
+    let layout = ffi::xkb_state_key_get_layout(xkb_state, keycode);
+
+    let mut syms_ptr: *const ffi::xkb_keysym_t = std::ptr::null();
+    let num_syms = ffi::xkb_keymap_key_get_syms_by_level(keymap, keycode, layout, 0, &mut syms_ptr);
+    if num_syms > 0 && !syms_ptr.is_null() {
+        let syms = std::slice::from_raw_parts(syms_ptr, num_syms as usize);
+        for kb in &wm.keybinds {
+            if kb.mods == modifiers {
+                for &sym in syms {
+                    if sym == kb.keysym {
+                        return Some(kb.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let level = ffi::xkb_state_key_get_level(xkb_state, keycode, layout);
+    let mut syms_ptr_level: *const ffi::xkb_keysym_t = std::ptr::null();
+    let num_syms_level = ffi::xkb_keymap_key_get_syms_by_level(keymap, keycode, layout, level, &mut syms_ptr_level);
+    if num_syms_level > 0 && !syms_ptr_level.is_null() {
+        let syms = std::slice::from_raw_parts(syms_ptr_level, num_syms_level as usize);
+        let consumed = ffi::xkb_state_key_get_consumed_mods2(xkb_state, keycode, ffi::xkb_consumed_mode_XKB_CONSUMED_MODE_XKB);
+        let modifiers_translated = modifiers & !consumed;
+        for kb in &wm.keybinds {
+            if kb.mods == modifiers_translated {
+                for &sym in syms {
+                    if sym == kb.keysym {
+                        return Some(kb.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 unsafe extern "C" fn handle_group_modifiers(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

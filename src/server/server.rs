@@ -767,8 +767,14 @@ impl Default for Server {
         unsafe {
             // Zero-initialize the memory (C structures and primitive fields)
             std::ptr::write_bytes(server.as_mut_ptr(), 0, 1);
-            // Overwrite SlotMap with a valid SlotMap::new() to avoid UB from null vec pointers
+            // Overwrite collections and SlotMap with valid instances to avoid UB/segfaults from null pointers
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.windows, crate::slotmap::SlotMap::new());
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.mode_rules, Vec::new());
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.keybinds, Vec::new());
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.pointer_binds, Vec::new());
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.ipc_rx, None);
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.startup, Vec::new());
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.status_sender, None);
             std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());
             server.assume_init()

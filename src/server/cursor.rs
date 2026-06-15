@@ -548,6 +548,65 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             return;
         }
 
+        let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+        let modifiers = if !wlr_keyboard.is_null() {
+            ffi::wlr_keyboard_get_modifiers(wlr_keyboard)
+        } else {
+            0
+        };
+        
+        let mut matched_pb: Option<crate::config::PointerBind> = None;
+        for pb in &(*(*seat).server).wm.pointer_binds {
+            if pb.button == (*event).button && pb.mods == modifiers {
+                matched_pb = Some(pb.clone());
+                break;
+            }
+        }
+        
+        if let Some(pb) = matched_pb {
+            let lx = cursor.x();
+            let ly = cursor.y();
+            let server = seat.server;
+            let mut target_win: *mut crate::window::Window = std::ptr::null_mut();
+            if let Some(result) = (*server).scene.at(lx, ly) {
+                if let SceneNodeDataVal::Window(window) = result.data {
+                    target_win = window;
+                }
+            }
+            
+            if !target_win.is_null() {
+                seat.focus(Focus::Window(target_win));
+                
+                let op_type = match pb.action {
+                    crate::config::Action::Move => Some(crate::seat::PointerOpType::Move),
+                    crate::config::Action::Resize => Some(crate::seat::PointerOpType::Resize),
+                    _ => None,
+                };
+                
+                if let Some(ot) = op_type {
+                    let cursor_x = (*cursor.wlr_cursor).x;
+                    let cursor_y = (*cursor.wlr_cursor).y;
+                    seat.op = Some(crate::seat::SeatOp {
+                        sent_release: false,
+                        input: crate::seat::SeatOpInput::Pointer,
+                        start_x: cursor_x as i32,
+                        start_y: cursor_y as i32,
+                        x: cursor_x as i32,
+                        y: cursor_y as i32,
+                        window_ptr: target_win,
+                        op_type: ot,
+                        start_win_x: (*target_win).box_geom.x,
+                        start_win_y: (*target_win).box_geom.y,
+                        start_win_w: (*target_win).box_geom.width as u32,
+                        start_win_h: (*target_win).box_geom.height as u32,
+                    });
+                    cursor.op_start_pointer();
+                    cursor.pressed.insert((*event).button, None);
+                    return;
+                }
+            }
+        }
+
         if let Some(binding) = seat.match_pointer_binding((*event).button) {
             cursor.pressed.insert((*event).button, Some(binding));
             (*binding).pressed();
@@ -584,6 +643,14 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         }
     } else {
         assert_eq!((*event).state, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED);
+        if seat.op.is_some() {
+            let cursor_x = (*cursor.wlr_cursor).x;
+            let cursor_y = (*cursor.wlr_cursor).y;
+            seat.op_update(cursor_x as i32, cursor_y as i32);
+            seat.op_end();
+            cursor.pressed.remove(&(*event).button);
+            return;
+        }
         if let Some(binding_opt) = cursor.pressed.remove(&(*event).button) {
             if let Some(binding) = binding_opt {
                 (*binding).released();

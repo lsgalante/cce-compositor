@@ -21,6 +21,14 @@ pub mod xkb_bindings;
 pub mod layer_shell;
 #[path = "server/scene.rs"]
 pub mod scene;
+#[path = "server/tiling.rs"]
+pub mod tiling;
+#[path = "server/config.rs"]
+pub mod config;
+#[path = "server/ipc_server.rs"]
+pub mod ipc_server;
+#[path = "server/status_server.rs"]
+pub mod status_server;
 #[path = "server/scene_node_data.rs"]
 pub mod scene_node_data;
 #[path = "server/output.rs"]
@@ -92,50 +100,8 @@ pub use run_server::run_server;
 
 
 // ==========================================
-// Window Manager Client Modules
+// IPC Client Modules
 // ==========================================
-#[path = "client/borders.rs"]
-pub mod borders;
-#[path = "client/config.rs"]
-pub mod config;
-#[path = "client/decorations.rs"]
-pub mod decorations;
-#[path = "client/ipc.rs"]
-pub mod ipc;
-#[path = "client/ipc_server.rs"]
-pub mod ipc_server;
-#[path = "client/protocol.rs"]
-pub mod protocol;
-#[path = "client/restart.rs"]
-pub mod restart;
-#[path = "client/state.rs"]
-pub mod state;
-#[path = "client/status.rs"]
-pub mod status;
-#[path = "client/status_server.rs"]
-pub mod status_server;
-#[path = "client/tiling.rs"]
-pub mod tiling;
-#[path = "client/types.rs"]
-pub mod types;
-#[allow(unreachable_patterns)]
-#[path = "client/wayland.rs"]
-pub mod wayland;
-#[path = "client/wm.rs"]
-pub mod wm;
-#[path = "client/input.rs"]
-pub mod input;
-#[path = "client/paths.rs"]
-pub mod paths;
-#[path = "client/run.rs"]
-pub mod run;
-
-pub use run::run_client;
-
-#[path = "client/clearctl.rs"]
+#[path = "clearctl.rs"]
 pub mod clearctl;
 pub use clearctl::run_clearctl;
-
-#[path = "client/clear_inspector.rs"]
-pub mod clear_inspector;
-pub use clear_inspector::run_inspector;

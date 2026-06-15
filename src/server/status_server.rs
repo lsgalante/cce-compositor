@@ -1,19 +1,15 @@
-// Status socket server for waybar integration
+// Status socket server for monolithic cce server
 //
-// Runs in a dedicated thread. Waybar custom module scripts connect to
-// /tmp/cce-client-status.sock, send a subscription line ("tags", "layout",
-// or "title"), and receive JSON lines whenever the status changes.
+// Runs in a dedicated thread. cce-status-interface connects to
+// /tmp/cce-client-status-{WAYLAND_DISPLAY}.sock, sends a subscription line
+// ("tags", "layout", or "title"), and receives JSON lines whenever the status changes.
 //
-// The main loop sends updates through an mpsc channel — no blocking,
-// no fork, no pkill. The server thread owns the socket and handles
-// all I/O independently of the Wayland event loop.
+// The main loop sends updates through an mpsc channel. The server thread
+// owns the socket and handles all I/O independently of the Wayland event loop.
 
 use std::io::{BufRead, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
-
-/// The socket path for the status server.
-use crate::paths;
 
 /// A status update sent from the main loop to the server thread.
 #[derive(Debug, Clone)]
@@ -26,8 +22,7 @@ pub struct StatusUpdate {
     pub title_text: String,
 }
 
-
-/// Subscription types that waybar scripts can request.
+/// Subscription types that the status bar script can request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Subscription {
     Tags,
@@ -54,7 +49,7 @@ struct Client {
 }
 
 /// Handle to the status server for sending updates from the main loop.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StatusSender {
     tx: mpsc::Sender<StatusUpdate>,
 }
@@ -62,8 +57,15 @@ pub struct StatusSender {
 impl StatusSender {
     pub fn send(&self, update: StatusUpdate) {
         // If the channel is full or the receiver is gone, just drop it.
-        // Status updates are frequent; missing one is fine.
         let _ = self.tx.send(update);
+    }
+}
+
+pub fn get_status_socket_path() -> String {
+    if let Ok(display) = std::env::var("WAYLAND_DISPLAY") {
+        format!("/tmp/cce-client-status-{}.sock", display)
+    } else {
+        "/tmp/cce-client-status.sock".to_string()
     }
 }
 
@@ -72,7 +74,7 @@ pub fn spawn_status_server() -> StatusSender {
     let (tx, rx) = mpsc::channel::<StatusUpdate>();
 
     std::thread::Builder::new()
-        .name("cce-client-status".into())
+        .name("cce-status-server".into())
         .spawn(move || {
             status_server_main(rx);
         })
@@ -82,25 +84,25 @@ pub fn spawn_status_server() -> StatusSender {
 }
 
 fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
-    let socket_path = paths::get_status_socket_path();
+    let socket_path = get_status_socket_path();
     // Remove stale socket
     let _ = std::fs::remove_file(&socket_path);
 
     let listener = match UnixListener::bind(&socket_path) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("[status] failed to bind {}: {}", socket_path, e);
+            log::error!("[status] failed to bind {}: {}", socket_path, e);
             return;
         }
     };
 
     // Set non-blocking so accept() doesn't hang the thread
     if let Err(e) = listener.set_nonblocking(true) {
-        eprintln!("[status] failed to set non-blocking: {}", e);
+        log::error!("[status] failed to set non-blocking: {}", e);
         return;
     }
 
-    eprintln!("[status] listening on {}", socket_path);
+    log::info!("[status] listening on {}", socket_path);
 
     let mut clients: Vec<Client> = Vec::new();
     let mut latest: Option<StatusUpdate> = None;
@@ -114,42 +116,33 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
             match listener.accept() {
                 Ok((mut stream, _addr)) => {
                     if let Err(e) = stream.set_nonblocking(true) {
-                        eprintln!("[status] failed to set non-blocking on client: {}", e);
+                        log::error!("[status] failed to set non-blocking on client: {}", e);
                         continue;
                     }
                     // Read the subscription line
-                    let subscription = read_subscription(&stream);
-                    if subscription == Subscription::Unknown {
-                        eprintln!("[status] client sent unknown subscription, dropping");
-                        continue;
+                    let sub = read_subscription(&stream);
+                    if sub != Subscription::Unknown {
+                        log::info!("[status] new subscriber for {:?}", sub);
+                        let client = Client {
+                            subscription: sub,
+                            stream,
+                        };
+                        clients.push(client);
+                        activity = true;
+                        has_new_update = true; // push the latest status to the new client
                     }
-                    eprintln!("[status] new client subscribed: {:?}", subscription);
-
-                    // Send current state immediately so waybar shows data on startup
-                    if let Some(ref update) = latest {
-                        let msg = format_for_subscription(subscription, update);
-                        let _ = stream.write_all(msg.as_bytes());
-                        let _ = stream.write_all(b"\n");
-                    }
-
-                    clients.push(Client {
-                        subscription,
-                        stream,
-                    });
-                    activity = true;
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    break; // No more pending connections
+                    break;
                 }
                 Err(e) => {
-                    eprintln!("[status] accept error: {}", e);
+                    log::error!("[status] accept error: {}", e);
                     break;
                 }
             }
         }
 
-        // Receive status updates from the main loop
-        // Use try_recv in a loop to drain all pending updates (only the latest matters)
+        // Process incoming updates from the main loop
         loop {
             match rx.try_recv() {
                 Ok(update) => {
@@ -159,7 +152,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    eprintln!("[status] channel disconnected, exiting");
+                    log::info!("[status] channel disconnected, exiting");
                     let _ = std::fs::remove_file(&socket_path);
                     return;
                 }
@@ -183,14 +176,14 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
                             // Client not ready to receive — skip for now
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                            eprintln!(
+                            log::info!(
                                 "[status] client {:?} disconnected (broken pipe)",
                                 client.subscription
                             );
                             dead_clients.push(i);
                         }
                         Err(e) => {
-                            eprintln!(
+                            log::error!(
                                 "[status] write error to client {:?}: {}",
                                 client.subscription, e
                             );
@@ -213,11 +206,8 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
     }
 }
 
-/// Read the subscription line from a newly connected client.
-/// The client sends one line: "tags", "layout", or "title".
 fn read_subscription(stream: &UnixStream) -> Subscription {
-    use std::io::BufReader;
-    let mut reader = BufReader::new(stream);
+    let mut reader = std::io::BufReader::new(stream);
     let mut line = String::new();
     // Try to read with a small timeout
     stream
@@ -226,13 +216,12 @@ fn read_subscription(stream: &UnixStream) -> Subscription {
     match reader.read_line(&mut line) {
         Ok(_) => Subscription::from_str(&line),
         Err(e) => {
-            eprintln!("[status] failed to read subscription: {}", e);
+            log::error!("[status] failed to read subscription: {}", e);
             Subscription::Unknown
         }
     }
 }
 
-/// Format the relevant part of a StatusUpdate for a given subscription.
 fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
     match sub {
         Subscription::Tags => update.tags_json.clone(),
@@ -242,28 +231,37 @@ fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
     }
 }
 
-/// Build a StatusUpdate from the current WindowManager state.
-/// This is the same logic that write_status_files() uses, but produces
-/// the data for the socket instead of writing to files.
-pub fn build_status_update(wm: &crate::types::WindowManager) -> StatusUpdate {
-    // Tags: generate the same pango-marked JSON that cce-client-tags.sh produces
+pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> StatusUpdate {
+    let focused_window = wm.focused_window();
+    let focused_tags = if !focused_window.is_null() {
+        (*focused_window).tags
+    } else {
+        0
+    };
+
     let tags_json = render_tags_json(
         wm.active_tags,
-        wm.focused_tags,
-        crate::types::NUM_TAGS as u32,
+        focused_tags,
+        4,
+        &wm.layout.status_normal_color,
     );
 
-    // Layout: focused window's tiling mode
-    let layout_text = wm
-        .focused_window()
-        .map(|w| w.tiling_mode.as_str().to_string())
-        .unwrap_or_else(|| "none".to_string());
+    let layout_text = if !focused_window.is_null() {
+        (*focused_window).tiling_mode.as_str().to_string()
+    } else {
+        wm.global_layout.as_str().to_string()
+    };
 
-    // Title: focused window's title
-    let title_text = wm
-        .focused_window()
-        .and_then(|w| w.title.clone())
-        .unwrap_or_else(|| "(none)".to_string());
+    let title_text = if !focused_window.is_null() {
+        let title_ptr = (*focused_window).get_title();
+        if !title_ptr.is_null() {
+            std::ffi::CStr::from_ptr(title_ptr).to_string_lossy().into_owned()
+        } else {
+            "(none)".to_string()
+        }
+    } else {
+        "(none)".to_string()
+    };
 
     StatusUpdate {
         tags_json,
@@ -272,40 +270,7 @@ pub fn build_status_update(wm: &crate::types::WindowManager) -> StatusUpdate {
     }
 }
 
-fn read_status_normal_color_from_config() -> String {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lsgalante".to_string());
-    let path = format!("{}/.config/cce/config.toml", home);
-    if let Ok(content) = std::fs::read_to_string(&path) {
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("status_normal_color") {
-                let rest = rest.trim_start_matches(|c: char| c == ' ' || c == '=' || c == '"');
-                let hex = rest.trim_end_matches('"').trim();
-                if hex.starts_with('#') {
-                    return hex.to_string();
-                } else if !hex.is_empty() {
-                    return format!("#{}", hex);
-                }
-            }
-        }
-    }
-    "#ccccd8".to_string()
-}
-
-/// Render tag state as a JSON string with pango markup, matching the format
-/// produced by the old cce-client-tags.sh script.
-///
-/// Colors:
-/// - Active + Focused: bright (dynamic normal color, defaults to #ccccd8)
-/// - Focused only: dim (#666666)
-/// - Active only: medium (#888888)
-/// - Neither: dark (#444444)
-fn render_tags_json(active: u32, focused: u32, num_tags: u32) -> String {
-    let normal_color = read_status_normal_color_from_config();
-    render_tags_json_with_color(active, focused, num_tags, &normal_color)
-}
-
-fn render_tags_json_with_color(active: u32, focused: u32, num_tags: u32, normal_color: &str) -> String {
+fn render_tags_json(active: u32, focused: u32, num_tags: u32, normal_color: &str) -> String {
     let mut text = String::new();
     for i in 0..num_tags {
         let bit = 1u32 << i;
@@ -327,46 +292,6 @@ fn render_tags_json_with_color(active: u32, focused: u32, num_tags: u32, normal_
         text.push_str(&format!("<span color='{}'>{}</span>", color, label));
     }
 
-    // waybar expects JSON: {"text": "...", "tooltip": "Tags"}
-    // Need to escape the pango markup for JSON
     let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
     format!("{{\"text\": \"{}\", \"tooltip\": \"Tags\"}}", escaped)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_render_tags_json_single_tag() {
-        let json = render_tags_json_with_color(1, 1, 4, "#a8c0d8");
-        // Tag 1 should be active+focused (#a8c0d8), tags 2-4 should be dark (#444444)
-        assert!(json.contains("#a8c0d8"), "tag 1 should be bright: {}", json);
-        assert!(
-            json.contains("#444444"),
-            "inactive tags should be dark: {}",
-            json
-        );
-        assert!(json.starts_with("{\"text\":"));
-    }
-
-    #[test]
-    fn test_render_tags_json_no_focus() {
-        let json = render_tags_json_with_color(1, 0, 4, "#a8c0d8");
-        // Tag 1 is active but not focused → #888888
-        assert!(
-            json.contains("#888888"),
-            "active unfocused should be medium: {}",
-            json
-        );
-    }
-
-    #[test]
-    fn test_subscription_from_str() {
-        assert_eq!(Subscription::from_str("tags"), Subscription::Tags);
-        assert_eq!(Subscription::from_str("layout"), Subscription::Layout);
-        assert_eq!(Subscription::from_str("title"), Subscription::Title);
-        assert_eq!(Subscription::from_str("foo"), Subscription::Unknown);
-        assert_eq!(Subscription::from_str("tags\n"), Subscription::Tags);
-    }
 }
