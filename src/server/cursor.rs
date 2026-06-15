@@ -447,6 +447,25 @@ impl Cursor {
                 }
             }
 
+            if let SceneNodeDataVal::Window(window) = result.data {
+                if (*window).tiling_mode == crate::tiling::TilingMode::Floating {
+                    match get_border_zone(window, lx, ly) {
+                        BorderZone::Resize(edges) => {
+                            ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+                            let cursor_name = get_resize_cursor_name(edges);
+                            self.set_xcursor(cursor_name.as_ptr() as *const _);
+                            return;
+                        }
+                        BorderZone::Move => {
+                            ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+                            self.set_xcursor(b"grab\0".as_ptr() as *const _);
+                            return;
+                        }
+                        BorderZone::None => {}
+                    }
+                }
+            }
+
             if !result.surface.is_null() {
                 ffi::wlr_seat_pointer_notify_enter((*self.seat).wlr_seat, result.surface, result.sx, result.sy);
                 ffi::wlr_seat_pointer_notify_motion((*self.seat).wlr_seat, time_msec, result.sx, result.sy);
@@ -560,7 +579,10 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 
                 let op_type = match pb.action {
                     crate::config::Action::Move => Some(crate::seat::PointerOpType::Move),
-                    crate::config::Action::Resize => Some(crate::seat::PointerOpType::Resize),
+                    crate::config::Action::Resize => {
+                        let edges = get_closest_edges(target_win, lx, ly);
+                        Some(crate::seat::PointerOpType::Resize { edges })
+                    }
                     _ => None,
                 };
                 
@@ -583,8 +605,87 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     });
                     cursor.op_start_pointer();
                     cursor.pressed.insert((*event).button, None);
+
+                    match ot {
+                        crate::seat::PointerOpType::Resize { edges } => {
+                            let cursor_name = get_resize_cursor_name(edges);
+                            cursor.set_xcursor(cursor_name.as_ptr() as *const _);
+                        }
+                        crate::seat::PointerOpType::Move => {
+                            cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
+                        }
+                    }
                     return;
                 }
+            }
+        }
+
+        let lx = cursor.x();
+        let ly = cursor.y();
+        let server = seat.server;
+        let mut border_target_win: *mut crate::window::Window = std::ptr::null_mut();
+        if let Some(result) = (*server).scene.at(lx, ly) {
+            if let SceneNodeDataVal::Window(window) = result.data {
+                border_target_win = window;
+            }
+        }
+
+        if !border_target_win.is_null() && (*border_target_win).tiling_mode == crate::tiling::TilingMode::Floating {
+            match get_border_zone(border_target_win, lx, ly) {
+                BorderZone::Resize(edges) => {
+                    if (*event).button == 0x110 { // BTN_LEFT
+                        seat.focus(Focus::Window(border_target_win));
+                        let cursor_x = (*cursor.wlr_cursor).x;
+                        let cursor_y = (*cursor.wlr_cursor).y;
+                        seat.op = Some(crate::seat::SeatOp {
+                            sent_release: false,
+                            input: crate::seat::SeatOpInput::Pointer,
+                            start_x: cursor_x as i32,
+                            start_y: cursor_y as i32,
+                            x: cursor_x as i32,
+                            y: cursor_y as i32,
+                            window_ptr: border_target_win,
+                            op_type: crate::seat::PointerOpType::Resize { edges },
+                            start_win_x: (*border_target_win).box_geom.x,
+                            start_win_y: (*border_target_win).box_geom.y,
+                            start_win_w: (*border_target_win).box_geom.width as u32,
+                            start_win_h: (*border_target_win).box_geom.height as u32,
+                        });
+                        cursor.op_start_pointer();
+                        cursor.pressed.insert((*event).button, None);
+
+                        let cursor_name = get_resize_cursor_name(edges);
+                        cursor.set_xcursor(cursor_name.as_ptr() as *const _);
+                        return;
+                    }
+                }
+                BorderZone::Move => {
+                    if (*event).button == 0x110 { // BTN_LEFT
+                        seat.focus(Focus::Window(border_target_win));
+                        let cursor_x = (*cursor.wlr_cursor).x;
+                        let cursor_y = (*cursor.wlr_cursor).y;
+                        seat.op = Some(crate::seat::SeatOp {
+                            sent_release: false,
+                            input: crate::seat::SeatOpInput::Pointer,
+                            start_x: cursor_x as i32,
+                            start_y: cursor_y as i32,
+                            x: cursor_x as i32,
+                            y: cursor_y as i32,
+                            window_ptr: border_target_win,
+                            op_type: crate::seat::PointerOpType::Move,
+                            start_win_x: (*border_target_win).box_geom.x,
+                            start_win_y: (*border_target_win).box_geom.y,
+                            start_win_w: (*border_target_win).box_geom.width as u32,
+                            start_win_h: (*border_target_win).box_geom.height as u32,
+                        });
+                        cursor.op_start_pointer();
+                        cursor.pressed.insert((*event).button, None);
+
+                        cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
+                        return;
+                    }
+                }
+                BorderZone::None => {}
             }
         }
 
@@ -1057,5 +1158,96 @@ unsafe extern "C" fn handle_hold_end(listener: *mut ffi::wl_listener, data: *mut
             (*event).cancelled,
         );
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BorderZone {
+    None,
+    Move,
+    Resize(crate::window::Edges),
+}
+
+pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
+    if (*window).tiling_mode != crate::tiling::TilingMode::Floating {
+        return BorderZone::None;
+    }
+    
+    let bw = (*window).rendering_requested.border.width as f64;
+    if bw <= 0.0 {
+        return BorderZone::None;
+    }
+
+    let geom = (*window).box_geom;
+    let rx = lx - geom.x as f64;
+    let ry = ly - geom.y as f64;
+
+    let content_w = geom.width as f64;
+    let content_h = geom.height as f64;
+
+    if rx >= 0.0 && rx < content_w && ry >= 0.0 && ry < content_h {
+        return BorderZone::None;
+    }
+
+    if rx >= -bw && rx < content_w + bw && ry >= -bw && ry < content_h + bw {
+        let threshold = if bw <= 3.0 { bw / 2.0 } else { 3.0 };
+
+        let dist_left = rx + bw;
+        let dist_right = (content_w + bw) - rx;
+        let dist_top = ry + bw;
+        let dist_bottom = (content_h + bw) - ry;
+
+        let min_dist = dist_left.min(dist_right).min(dist_top).min(dist_bottom);
+
+        if min_dist >= 0.0 && min_dist < threshold {
+            let delta = threshold + 1.0;
+            let left = dist_left < delta;
+            let right = dist_right < delta;
+            let top = dist_top < delta;
+            let bottom = dist_bottom < delta;
+
+            return BorderZone::Resize(crate::window::Edges { top, bottom, left, right });
+        } else {
+            return BorderZone::Move;
+        }
+    }
+
+    BorderZone::None
+}
+
+pub fn get_resize_cursor_name(edges: crate::window::Edges) -> &'static [u8] {
+    if edges.top && edges.left {
+        b"nw-resize\0"
+    } else if edges.top && edges.right {
+        b"ne-resize\0"
+    } else if edges.bottom && edges.left {
+        b"sw-resize\0"
+    } else if edges.bottom && edges.right {
+        b"se-resize\0"
+    } else if edges.top {
+        b"n-resize\0"
+    } else if edges.bottom {
+        b"s-resize\0"
+    } else if edges.left {
+        b"w-resize\0"
+    } else if edges.right {
+        b"e-resize\0"
+    } else {
+        b"default\0"
+    }
+}
+
+pub unsafe fn get_closest_edges(window: *mut crate::window::Window, lx: f64, ly: f64) -> crate::window::Edges {
+    let geom = (*window).box_geom;
+    let rx = lx - geom.x as f64;
+    let ry = ly - geom.y as f64;
+    let w = geom.width as f64;
+    let h = geom.height as f64;
+
+    let left = rx < w / 2.0;
+    let right = !left;
+    let top = ry < h / 2.0;
+    let bottom = !top;
+
+    crate::window::Edges { top, bottom, left, right }
 }
 

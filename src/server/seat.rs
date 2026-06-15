@@ -10,7 +10,7 @@ pub enum SeatOpInput {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerOpType {
     Move,
-    Resize,
+    Resize { edges: crate::window::Edges },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -827,9 +827,35 @@ impl Seat {
                         (*win).box_geom.x = op.start_win_x + dx;
                         (*win).box_geom.y = op.start_win_y + dy;
                     }
-                    PointerOpType::Resize => {
-                        let new_w = std::cmp::max(50, op.start_win_w as i32 + dx) as u32;
-                        let new_h = std::cmp::max(50, op.start_win_h as i32 + dy) as u32;
+                    PointerOpType::Resize { edges } => {
+                        let mut new_w = op.start_win_w;
+                        let mut new_h = op.start_win_h;
+                        let mut new_x = op.start_win_x;
+                        let mut new_y = op.start_win_y;
+
+                        if edges.left {
+                            let w = std::cmp::max(50, op.start_win_w as i32 - dx) as u32;
+                            let dw = w as i32 - op.start_win_w as i32;
+                            new_w = w;
+                            new_x = op.start_win_x - dw;
+                        } else if edges.right {
+                            new_w = std::cmp::max(50, op.start_win_w as i32 + dx) as u32;
+                        }
+
+                        if edges.top {
+                            let h = std::cmp::max(50, op.start_win_h as i32 - dy) as u32;
+                            let dh = h as i32 - op.start_win_h as i32;
+                            new_h = h;
+                            new_y = op.start_win_y - dh;
+                        } else if edges.bottom {
+                            new_h = std::cmp::max(50, op.start_win_h as i32 + dy) as u32;
+                        }
+
+                        (*win).rendering_requested.x = new_x;
+                        (*win).rendering_requested.y = new_y;
+                        (*win).box_geom.x = new_x;
+                        (*win).box_geom.y = new_y;
+
                         (*win).wm_requested.dimensions = Some(crate::window::Dimensions {
                             width: new_w,
                             height: new_h,
