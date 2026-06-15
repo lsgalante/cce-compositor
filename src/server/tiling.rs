@@ -45,11 +45,13 @@ pub fn tile_cascade(
     idx: i32,
 ) -> (i32, i32, i32, i32) {
     let dec_h = std::cmp::max(bw, 16);
-    let width = screen_w - gap_left - gap_right - bw * 2 - cascade_offset * (n_cascade - 1);
-    let height = screen_h - bar_height - gap_top - gap_bottom - (dec_h + bw) - cascade_offset * (n_cascade - 1);
+    let max_offsets = 5;
+    let eff_cascade = n_cascade.min(max_offsets);
+    let width = screen_w - gap_left - gap_right - bw * 2 - cascade_offset * (eff_cascade - 1);
+    let height = screen_h - bar_height - gap_top - gap_bottom - (dec_h + bw) - cascade_offset * (eff_cascade - 1);
     let width = if width < 1 { 1 } else { width };
     let height = if height < 1 { 1 } else { height };
-    let pos_idx = n_cascade - 1 - idx;
+    let pos_idx = idx.min(max_offsets - 1);
     let x = gap_left + bw + pos_idx * cascade_offset;
     let y = bar_height + gap_top + dec_h + pos_idx * cascade_offset;
     (x, y, width, height)
@@ -105,13 +107,3 @@ pub fn interp_channel(fp_channel: u32, factor: f64, depth: i32) -> u32 {
     val as u32 * 0x01010101
 }
 
-/// Compute a "#RRGGBB" hex color string for a given cascade depth.
-pub fn cascade_hex_color(r: u32, g: u32, b: u32, depth: i32) -> String {
-    let ri = interp_channel(r, CASCADE_DEPTH_FACTOR, depth);
-    let gi = interp_channel(g, CASCADE_DEPTH_FACTOR, depth);
-    let bi = interp_channel(b, CASCADE_DEPTH_FACTOR, depth);
-    let rv = ri & 0xFF;
-    let gv = gi & 0xFF;
-    let bv = bi & 0xFF;
-    format!("#{:02x}{:02x}{:02x}", rv, gv, bv)
-}

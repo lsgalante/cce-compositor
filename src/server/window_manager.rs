@@ -743,12 +743,21 @@ impl WindowManager {
                 self.global_layout
             };
 
+            if current_layout == crate::tiling::TilingMode::Cascade {
+                tiled_windows.sort_by_key(|&w| stack_order.iter().position(|&x| x == w).unwrap_or(usize::MAX));
+            }
+
             let gap = self.layout.gap;
             let gap_top = self.layout.gap_top;
             let gap_left = self.layout.gap_left;
             let gap_right = self.layout.gap_right;
             let gap_bottom = self.layout.gap_bottom;
-            let bw = self.layout.border_width;
+            let bw = match current_layout {
+                crate::tiling::TilingMode::Cascade => self.layout.cascade_border_width,
+                crate::tiling::TilingMode::Grid => self.layout.grid_border_width,
+                crate::tiling::TilingMode::Fullscreen => self.layout.fullscreen_border_width,
+                _ => self.layout.border_width,
+            };
             let cascade_offset = self.layout.cascade_offset;
             let bar_height = self.layout.bar_height;
 
