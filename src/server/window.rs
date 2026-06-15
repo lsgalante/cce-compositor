@@ -196,6 +196,7 @@ pub struct Window {
 
     pub tree: *mut ffi::wlr_scene_tree,
     pub fullscreen_background: *mut ffi::wlr_scene_rect,
+    pub window_background: *mut ffi::wlr_scene_rect,
     pub decorations_below: ffi::wl_list,
     pub decorations_below_tree: *mut ffi::wlr_scene_tree,
     pub surfaces: crate::scene::SaveableSurfaces,
@@ -269,6 +270,15 @@ impl Window {
 
         let decorations_below_tree = ffi::wlr_scene_tree_create(tree);
 
+        let clear_color = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
+        let window_background = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
+        if window_background.is_null() {
+            ffi::wlr_scene_node_destroy(tree as *mut ffi::wlr_scene_node);
+            ffi::wlr_scene_node_destroy(popup_tree as *mut ffi::wlr_scene_node);
+            ffi::wlr_scene_node_destroy(&mut (*capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
+            return Err("Failed to create window background rect");
+        }
+
         let surfaces = match crate::scene::SaveableSurfaces::init(tree) {
             Ok(s) => s,
             Err(e) => {
@@ -279,7 +289,6 @@ impl Window {
             }
         };
 
-        let clear_color = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
         let border_left = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
         let border_right = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
         let border_top = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
@@ -296,6 +305,7 @@ impl Window {
             impl_type,
             tree,
             fullscreen_background,
+            window_background,
             decorations_below: std::mem::zeroed(),
             decorations_below_tree,
             surfaces,
@@ -1336,6 +1346,7 @@ impl Window {
             ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.bottom as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, false);
         } else {
             self.box_geom.x = requested.x;
             self.box_geom.y = requested.y;
@@ -1402,6 +1413,19 @@ impl Window {
 
     pub unsafe fn draw_borders(&mut self) {
         let requested = &self.rendering_requested;
+
+        let border = &requested.border;
+        let bg_color: [f32; 4] = [
+            (border.r as f64 / u32::MAX as f64) as f32,
+            (border.g as f64 / u32::MAX as f64) as f32,
+            (border.b as f64 / u32::MAX as f64) as f32,
+            (border.a as f64 / u32::MAX as f64) as f32,
+        ];
+        ffi::wlr_scene_node_set_position(self.window_background as *mut ffi::wlr_scene_node, 0, 0);
+        ffi::wlr_scene_rect_set_size(self.window_background, self.box_geom.width, self.box_geom.height);
+        ffi::wlr_scene_rect_set_color(self.window_background, bg_color.as_ptr());
+        ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden);
+
         if requested.circular || requested.border.width == 0 || !self.wm_requested.ssd {
             ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
