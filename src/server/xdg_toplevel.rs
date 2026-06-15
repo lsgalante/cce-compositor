@@ -216,7 +216,11 @@ impl XdgToplevel {
         
         if !self.decoration.is_null() {
             let mode = if scheduled.ssd {
-                ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE
+                if (*(*self.decoration).wlr_decoration).requested_mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE {
+                    ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE
+                } else {
+                    ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE
+                }
             } else {
                 ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE
             };
