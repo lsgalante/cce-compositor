@@ -728,6 +728,33 @@ impl Server {
 
     pub fn deinit(&mut self) {
         unsafe {
+            log::info!("[deinit] Server::deinit started");
+            // 1. Terminate all client connections first
+            log::info!("[deinit] wl_display_destroy_clients started");
+            ffi::wl_display_destroy_clients(self.wl_server);
+            log::info!("[deinit] wl_display_destroy_clients finished");
+
+            // 2. Deinitialize subcomponents while backend, renderer, allocator, and display are valid
+            log::info!("[deinit] self.om.deinit started");
+            self.om.deinit();
+            log::info!("[deinit] self.om.deinit finished");
+
+            log::info!("[deinit] self.input_manager.deinit started");
+            self.input_manager.deinit();
+            log::info!("[deinit] self.input_manager.deinit finished");
+
+            log::info!("[deinit] deinitializing other subcomponents");
+            self.idle_inhibit_manager.deinit();
+            self.lock_manager.deinit();
+            self.layer_shell.deinit();
+            self.inspector.deinit();
+            self.xkb_bindings.deinit();
+            self.libinput_config.deinit();
+            self.xkb_config.deinit();
+            log::info!("[deinit] other subcomponents deinitialized");
+
+            // 3. Remove signal listeners registered directly by the server
+            log::info!("[deinit] removing server listeners");
             ffi::wl_event_source_remove(self.sigint_source);
             ffi::wl_event_source_remove(self.sigterm_source);
 
@@ -736,27 +763,26 @@ impl Server {
             wl_listener_remove(&mut self.new_toplevel_decoration);
             wl_listener_remove(&mut self.request_activate);
             wl_listener_remove(&mut self.request_set_cursor_shape);
-            // wl_listener_remove(&mut self.toplevel_capture_request);
 
+            // 4. Destroy Xwayland if active
             if !self.xwayland.is_null() {
                 wl_listener_remove(&mut self.new_xsurface);
                 ffi::wlr_xwayland_destroy(self.xwayland);
             }
+            log::info!("[deinit] server listeners removed");
 
-            ffi::wl_display_destroy_clients(self.wl_server);
+            // 5. Destroy wlroots core hardware interfaces
+            log::info!("[deinit] destroying backend");
             ffi::wlr_backend_destroy(self.backend);
-
+            log::info!("[deinit] destroying renderer");
             ffi::wlr_renderer_destroy(self.renderer);
+            log::info!("[deinit] destroying allocator");
             ffi::wlr_allocator_destroy(self.allocator);
 
-            self.om.deinit();
-            self.input_manager.deinit();
-            self.idle_inhibit_manager.deinit();
-            self.lock_manager.deinit();
-            self.layer_shell.deinit();
-            self.inspector.deinit();
-
+            // 6. Finally, destroy the display
+            log::info!("[deinit] destroying display");
             ffi::wl_display_destroy(self.wl_server);
+            log::info!("[deinit] Server::deinit finished successfully");
         }
     }
 }

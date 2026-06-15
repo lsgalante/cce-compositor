@@ -268,6 +268,12 @@ impl Cursor {
     }
 
     pub unsafe fn deinit(&mut self) {
+        wl_listener_remove(&mut self.motion_listener);
+        wl_listener_remove(&mut self.motion_absolute_listener);
+        wl_listener_remove(&mut self.button_listener);
+        wl_listener_remove(&mut self.axis_listener);
+        wl_listener_remove(&mut self.frame_listener);
+
         wl_listener_remove(&mut self.tablet_tool_axis_listener);
         wl_listener_remove(&mut self.tablet_tool_proximity_listener);
         wl_listener_remove(&mut self.tablet_tool_tip_listener);

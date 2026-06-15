@@ -103,7 +103,9 @@ impl InputManager {
     }
 
     pub unsafe fn deinit(&mut self) {
+        log::info!("[deinit] InputManager::deinit started");
         if !self.global.is_null() {
+            log::info!("[deinit] destroying input manager global");
             ffi::wl_global_destroy(self.global);
             self.global = std::ptr::null_mut();
         }
@@ -117,14 +119,42 @@ impl InputManager {
             curr = next;
         }
 
-        if !self.default_seat.is_null() {
-            Seat::destroy(self.default_seat);
-            self.default_seat = std::ptr::null_mut();
+        // Detach all devices from their seats and set their seat pointer to null
+        // so they do not attempt to access a freed seat during backend destruction.
+        log::info!("[deinit] detaching devices");
+        let devices_head = &mut self.devices as *mut ffi::wl_list as *mut WlList;
+        let mut curr_dev = (*devices_head).next;
+        while curr_dev != devices_head {
+            let next_dev = (*curr_dev).next;
+            let device = crate::container_of!(curr_dev, crate::input_device::InputDevice, link);
+            if !(*device).seat.is_null() {
+                log::info!("[deinit] detaching device from seat");
+                (*(*device).seat).detach_device(device);
+                (*device).seat = std::ptr::null_mut();
+            }
+            curr_dev = next_dev;
         }
+
+        // Destroy all seats
+        log::info!("[deinit] destroying seats");
+        let seats_head = &mut self.seats as *mut ffi::wl_list as *mut WlList;
+        let mut curr_seat = (*seats_head).next;
+        while curr_seat != seats_head {
+            let next_seat = (*curr_seat).next;
+            let seat = crate::container_of!(curr_seat, Seat, link);
+            log::info!("[deinit] calling Seat::destroy for {:?}", (*seat).wlr_seat);
+            Seat::destroy(seat);
+            curr_seat = next_seat;
+        }
+        self.default_seat = std::ptr::null_mut();
+        log::info!("[deinit] seats destroyed");
+
+        log::info!("[deinit] removing input manager listeners");
         wl_listener_remove(&mut self.new_input_listener);
         wl_listener_remove(&mut self.new_text_input);
         wl_listener_remove(&mut self.new_input_method);
         wl_listener_remove(&mut self.new_virtual_pointer_listener);
+        log::info!("[deinit] InputManager::deinit finished");
     }
 }
 
