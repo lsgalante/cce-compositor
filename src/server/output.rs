@@ -6,6 +6,7 @@ use crate::server::{Server, WlListener, WlList, wl_signal_add, wl_listener_remov
 use crate::layer_shell::LayerShellOutput;
 use crate::lock_manager::{LockSurface, LockState};
 use crate::util;
+use crate::window::Window;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OutputStateValue {
@@ -422,6 +423,14 @@ impl Output {
     pub unsafe fn render_and_commit(&mut self) -> Result<(), &'static str> {
         if !ffi::wlr_scene_output_needs_frame(self.scene_output) {
             return Ok(());
+        }
+
+        // Re-apply scale to all windows in expose mode right before rendering
+        let wm = &(*self.server).wm;
+        for &window in wm.windows.iter() {
+            if !window.is_null() && (*window).scale != 1.0 {
+                (*window).render_finish();
+            }
         }
 
         let mut state = std::mem::zeroed();
