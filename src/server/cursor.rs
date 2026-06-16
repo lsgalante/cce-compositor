@@ -1095,10 +1095,10 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     for gb in &(*seat.server).wm.gesture_binds {
         if gb.gesture_type == "swipe" && gb.fingers == (*event).fingers && gb.mods == modifiers {
             let matched = match gb.direction.as_str() {
-                "left" => cursor.gesture_dx < -150.0,
-                "right" => cursor.gesture_dx > 150.0,
-                "up" => cursor.gesture_dy < -150.0,
-                "down" => cursor.gesture_dy > 150.0,
+                "left" => cursor.gesture_dx < -50.0,
+                "right" => cursor.gesture_dx > 50.0,
+                "up" => cursor.gesture_dy < -50.0,
+                "down" => cursor.gesture_dy > 50.0,
                 _ => false,
             };
             if matched {
