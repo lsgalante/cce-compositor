@@ -322,7 +322,7 @@ impl Window {
             popup_tree,
             capture_scene,
             capture_source: std::ptr::null_mut(),
-            tags: 1, // default tag 1
+            tags: (*server).wm.active_tags,
             tiling_mode: crate::tiling::TilingMode::Floating,
             mode_locked: false,
             is_new: true,
