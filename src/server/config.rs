@@ -102,6 +102,7 @@ pub enum Action {
     Move,
     Resize,
     Exit,
+    Reload,
     Fullscreen,
     LayoutNext,
     ModeNext,
@@ -140,6 +141,18 @@ pub struct PointerBindConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct GestureBindConfig {
+    #[serde(default)]
+    pub mods: Option<String>,
+    #[serde(rename = "type")]
+    pub gesture_type: String,
+    pub fingers: u32,
+    pub direction: String,
+    pub action: String,
+    pub command: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct StartupConfig {
     pub exec: String,
     #[serde(default)]
@@ -161,6 +174,16 @@ pub struct PointerBind {
     pub mods: u32,
     pub button: u32,
     pub action: Action,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GestureBind {
+    pub mods: u32,
+    pub gesture_type: String,
+    pub fingers: u32,
+    pub direction: String,
+    pub action: Action,
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -213,6 +236,8 @@ pub struct Config {
     pub device: Vec<InputDeviceConfigRule>,
     #[serde(default)]
     pub input: Option<InputConfig>,
+    #[serde(default)]
+    pub gesture_bind: Vec<GestureBindConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -404,6 +429,8 @@ pub fn parse_action(s: &str) -> Action {
         Action::Close
     } else if s == "exit" {
         Action::Exit
+    } else if s == "reload" {
+        Action::Reload
     } else if s == "focus-next" {
         Action::FocusNext
     } else if s == "focus-prev" {
@@ -673,6 +700,17 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         });
     }
 
+    let super_shift_mod = parse_modifiers("super+shift");
+    let r_sym = parse_keysym("r");
+    if !state.keybinds.iter().any(|b| b.mods == super_shift_mod && b.keysym == r_sym) {
+        state.keybinds.push(Keybind {
+            mods: super_shift_mod,
+            keysym: r_sym,
+            action: Action::Reload,
+            command: None,
+        });
+    }
+
     state.pointer_binds.clear();
     for pb in &config.pointer_bind {
         let mods = parse_modifiers(&pb.mods);
@@ -682,6 +720,25 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             mods,
             button,
             action,
+        });
+    }
+
+    state.gesture_binds.clear();
+    for gb in &config.gesture_bind {
+        let mods = gb.mods.as_ref().map(|m| parse_modifiers(m)).unwrap_or(0);
+        let action = parse_action(&gb.action);
+        let command = if action == Action::Spawn || action == Action::Toggle {
+            gb.command.clone()
+        } else {
+            None
+        };
+        state.gesture_binds.push(GestureBind {
+            mods,
+            gesture_type: gb.gesture_type.clone(),
+            fingers: gb.fingers,
+            direction: gb.direction.clone(),
+            action,
+            command,
         });
     }
 
@@ -712,9 +769,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     }
 
     log::info!(
-        "Parsed config: {} keybinds, {} pointer binds, {} startup programs",
+        "Parsed config: {} keybinds, {} pointer binds, {} gesture binds, {} startup programs",
         state.keybinds.len(),
         state.pointer_binds.len(),
+        state.gesture_binds.len(),
         state.startup.len()
     );
 

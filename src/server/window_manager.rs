@@ -62,6 +62,7 @@ pub struct WindowManager {
     pub mode_rules: Vec<crate::config::ModeRule>,
     pub keybinds: Vec<crate::config::Keybind>,
     pub pointer_binds: Vec<crate::config::PointerBind>,
+    pub gesture_binds: Vec<crate::config::GestureBind>,
     pub ipc_rx: Option<std::sync::mpsc::Receiver<crate::ipc_server::IpcRequest>>,
     pub ipc_timer: *mut ffi::wl_event_source,
     pub startup: Vec<crate::config::StartupConfig>,
@@ -118,6 +119,7 @@ impl WindowManager {
         self.mode_rules = Vec::new();
         self.keybinds = Vec::new();
         self.pointer_binds = Vec::new();
+        self.gesture_binds = Vec::new();
         self.ipc_rx = None;
         self.ipc_timer = std::ptr::null_mut();
         self.startup = Vec::new();
@@ -1260,6 +1262,21 @@ impl WindowManager {
                         self.raise_window(target_win);
                         self.dirty_windowing();
                     }
+                }
+            }
+            Action::Reload => {
+                log::info!("monolithic execute_action: Reload requested");
+                if let Some(path) = crate::config::default_config_path() {
+                    match crate::config::parse_config(&path, self) {
+                        Ok(()) => {
+                            self.dirty_windowing();
+                        }
+                        Err(e) => {
+                            log::error!("failed to reload config: {}", e);
+                        }
+                    }
+                } else {
+                    log::error!("no config file found to reload");
                 }
             }
             Action::Exit => {

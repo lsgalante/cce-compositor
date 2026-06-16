@@ -798,6 +798,7 @@ impl Default for Server {
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.mode_rules, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.keybinds, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.pointer_binds, Vec::new());
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.gesture_binds, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.ipc_rx, None);
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.startup, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.status_sender, None);

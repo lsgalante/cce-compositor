@@ -41,6 +41,11 @@ pub struct Cursor {
 
     pub hold_begin_listener: ffi::wl_listener,
     pub hold_end_listener: ffi::wl_listener,
+
+    pub gesture_dx: f64,
+    pub gesture_dy: f64,
+    pub gesture_scale: f64,
+    pub gesture_triggered: bool,
 }
 
 impl Default for Cursor {
@@ -79,6 +84,11 @@ impl Default for Cursor {
 
             hold_begin_listener: unsafe { std::mem::zeroed() },
             hold_end_listener: unsafe { std::mem::zeroed() },
+
+            gesture_dx: 0.0,
+            gesture_dy: 0.0,
+            gesture_scale: 1.0,
+            gesture_triggered: false,
         }
     }
 }
@@ -1031,6 +1041,10 @@ unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *
     let seat = &mut *cursor.seat;
     seat.handle_activity();
 
+    cursor.gesture_dx = 0.0;
+    cursor.gesture_dy = 0.0;
+    cursor.gesture_triggered = false;
+
     let server = seat.server;
     let pointer_gestures = (*server).input_manager.pointer_gestures;
     if !pointer_gestures.is_null() {
@@ -1049,6 +1063,56 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
 
     let seat = &mut *cursor.seat;
     seat.handle_activity();
+
+    if cursor.gesture_triggered {
+        return;
+    }
+
+    cursor.gesture_dx += (*event).dx;
+    cursor.gesture_dy += (*event).dy;
+
+    let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+    let modifiers = if !wlr_keyboard.is_null() {
+        ffi::wlr_keyboard_get_modifiers(wlr_keyboard)
+    } else {
+        0
+    };
+
+    let mut matched_action = crate::config::Action::None;
+    let mut matched_command = None;
+
+    for gb in &(*seat.server).wm.gesture_binds {
+        if gb.gesture_type == "swipe" && gb.fingers == (*event).fingers && gb.mods == modifiers {
+            let matched = match gb.direction.as_str() {
+                "left" => cursor.gesture_dx < -150.0,
+                "right" => cursor.gesture_dx > 150.0,
+                "up" => cursor.gesture_dy < -150.0,
+                "down" => cursor.gesture_dy > 150.0,
+                _ => false,
+            };
+            if matched {
+                matched_action = gb.action;
+                matched_command = gb.command.clone();
+                break;
+            }
+        }
+    }
+
+    if matched_action != crate::config::Action::None {
+        cursor.gesture_triggered = true;
+        (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref());
+
+        let pointer_gestures = (*seat.server).input_manager.pointer_gestures;
+        if !pointer_gestures.is_null() {
+            ffi::wlr_pointer_gestures_v1_send_swipe_end(
+                pointer_gestures,
+                seat.wlr_seat,
+                (*event).time_msec,
+                true, // cancelled: true
+            );
+        }
+        return;
+    }
 
     let server = seat.server;
     let pointer_gestures = (*server).input_manager.pointer_gestures;
@@ -1070,6 +1134,11 @@ unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mu
     let seat = &mut *cursor.seat;
     seat.handle_activity();
 
+    if cursor.gesture_triggered {
+        cursor.gesture_triggered = false;
+        return;
+    }
+
     let server = seat.server;
     let pointer_gestures = (*server).input_manager.pointer_gestures;
     if !pointer_gestures.is_null() {
@@ -1089,6 +1158,9 @@ unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listener, data: *
     let seat = &mut *cursor.seat;
     seat.handle_activity();
 
+    cursor.gesture_scale = 1.0;
+    cursor.gesture_triggered = false;
+
     let server = seat.server;
     let pointer_gestures = (*server).input_manager.pointer_gestures;
     if !pointer_gestures.is_null() {
@@ -1107,6 +1179,53 @@ unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: 
 
     let seat = &mut *cursor.seat;
     seat.handle_activity();
+
+    if cursor.gesture_triggered {
+        return;
+    }
+
+    cursor.gesture_scale = (*event).scale;
+
+    let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+    let modifiers = if !wlr_keyboard.is_null() {
+        ffi::wlr_keyboard_get_modifiers(wlr_keyboard)
+    } else {
+        0
+    };
+
+    let mut matched_action = crate::config::Action::None;
+    let mut matched_command = None;
+
+    for gb in &(*seat.server).wm.gesture_binds {
+        if gb.gesture_type == "pinch" && gb.fingers == (*event).fingers && gb.mods == modifiers {
+            let matched = match gb.direction.as_str() {
+                "in" => cursor.gesture_scale < 0.7,
+                "out" => cursor.gesture_scale > 1.3,
+                _ => false,
+            };
+            if matched {
+                matched_action = gb.action;
+                matched_command = gb.command.clone();
+                break;
+            }
+        }
+    }
+
+    if matched_action != crate::config::Action::None {
+        cursor.gesture_triggered = true;
+        (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref());
+
+        let pointer_gestures = (*seat.server).input_manager.pointer_gestures;
+        if !pointer_gestures.is_null() {
+            ffi::wlr_pointer_gestures_v1_send_pinch_end(
+                pointer_gestures,
+                seat.wlr_seat,
+                (*event).time_msec,
+                true, // cancelled: true
+            );
+        }
+        return;
+    }
 
     let server = seat.server;
     let pointer_gestures = (*server).input_manager.pointer_gestures;
@@ -1129,6 +1248,11 @@ unsafe extern "C" fn handle_pinch_end(listener: *mut ffi::wl_listener, data: *mu
 
     let seat = &mut *cursor.seat;
     seat.handle_activity();
+
+    if cursor.gesture_triggered {
+        cursor.gesture_triggered = false;
+        return;
+    }
 
     let server = seat.server;
     let pointer_gestures = (*server).input_manager.pointer_gestures;
