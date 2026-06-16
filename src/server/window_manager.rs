@@ -141,8 +141,7 @@ impl WindowManager {
             return Err("Failed to create timer event source");
         }
 
-        let rx = crate::ipc_server::spawn_ipc_server();
-        self.ipc_rx = Some(rx);
+        self.ipc_rx = None;
         self.ipc_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_ipc_timer), self as *mut WindowManager as *mut _);
         if self.ipc_timer.is_null() {
             return Err("Failed to create IPC timer event source");
@@ -166,6 +165,13 @@ impl WindowManager {
         ffi::wl_display_add_destroy_listener((*server).wl_server, &mut self.server_destroy);
 
         Ok(())
+    }
+
+    pub fn start_ipc(&mut self) {
+        if self.ipc_rx.is_none() {
+            let rx = crate::ipc_server::spawn_ipc_server();
+            self.ipc_rx = Some(rx);
+        }
     }
 
     pub unsafe fn deinit(&mut self) {

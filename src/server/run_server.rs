@@ -169,6 +169,8 @@ pub fn run_server() {
 
     std::env::set_var("WAYLAND_DISPLAY", &socket_str);
 
+    server.wm.start_ipc();
+
     let status_sender = crate::status_server::spawn_status_server();
     server.wm.status_sender = Some(status_sender);
 
