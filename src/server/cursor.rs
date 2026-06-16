@@ -1045,6 +1045,8 @@ unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *
     cursor.gesture_dy = 0.0;
     cursor.gesture_triggered = false;
 
+    log::info!("handle_swipe_begin: fingers={}", (*event).fingers);
+
     let server = seat.server;
     let pointer_gestures = (*server).input_manager.pointer_gestures;
     if !pointer_gestures.is_null() {
@@ -1070,6 +1072,15 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
 
     cursor.gesture_dx += (*event).dx;
     cursor.gesture_dy += (*event).dy;
+
+    log::info!(
+        "handle_swipe_update: fingers={}, dx={}, dy={}, accumulated_dx={}, accumulated_dy={}",
+        (*event).fingers,
+        (*event).dx,
+        (*event).dy,
+        cursor.gesture_dx,
+        cursor.gesture_dy
+    );
 
     let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
     let modifiers = if !wlr_keyboard.is_null() {
@@ -1099,6 +1110,7 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     }
 
     if matched_action != crate::config::Action::None {
+        log::info!("Swipe gesture matched action: {:?}", matched_action);
         cursor.gesture_triggered = true;
         (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref());
 
@@ -1133,6 +1145,8 @@ unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mu
 
     let seat = &mut *cursor.seat;
     seat.handle_activity();
+
+    log::info!("handle_swipe_end: cancelled={}", (*event).cancelled);
 
     if cursor.gesture_triggered {
         cursor.gesture_triggered = false;

@@ -70,6 +70,7 @@ pub struct WindowManager {
     pub output_scale: f32,
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
     pub input_config: crate::config::InputConfig,
+    pub expose_active: bool,
 }
 
 impl WindowManager {
@@ -126,6 +127,7 @@ impl WindowManager {
         self.status_sender = None;
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
+        self.expose_active = false;
 
         ffi::wl_list_init(&mut self.sent.outputs);
         ffi::wl_list_init(&mut self.sent.seats);
@@ -554,16 +556,20 @@ impl WindowManager {
     }
 
     pub unsafe fn get_mode_for_window(&self, win: *mut Window) -> crate::tiling::TilingMode {
-        if (*win).mode_locked {
-            return (*win).tiling_mode;
-        }
-
         let app_id = (*win).get_app_id_string();
         if app_id.as_deref() == Some("cce-status-interface") {
             return crate::tiling::TilingMode::Fullscreen;
         }
         if app_id.as_deref() == Some("cce-notification-daemon") || app_id.as_deref() == Some("clear-notification-daemon") {
             return crate::tiling::TilingMode::Popup;
+        }
+
+        if self.expose_active {
+            return crate::tiling::TilingMode::Grid;
+        }
+
+        if (*win).mode_locked {
+            return (*win).tiling_mode;
         }
 
         if (*win).has_parent {
@@ -1461,6 +1467,11 @@ impl WindowManager {
                 self.layout.side_panel_position = "right".to_string();
                 self.dirty_windowing();
             }
+            Action::Expose => {
+                self.expose_active = !self.expose_active;
+                log::info!("Expose mode toggled: {}", self.expose_active);
+                self.dirty_windowing();
+            }
             _ => {}
         }
     }
@@ -1519,6 +1530,10 @@ impl WindowManager {
             }
             "close" => {
                 self.execute_action(&crate::config::Action::Close, None);
+                "ok\n".to_string()
+            }
+            "expose" => {
+                self.execute_action(&crate::config::Action::Expose, None);
                 "ok\n".to_string()
             }
             "minimize" => {
