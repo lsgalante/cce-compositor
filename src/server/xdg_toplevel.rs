@@ -239,29 +239,24 @@ impl XdgToplevel {
 
         let width = if let Some(w) = scheduled.width {
             w
+        } else if let Some(w) = (*self.window).configure_sent.width {
+            w
         } else {
-            match self.configure_state {
-                ConfigureState::Idle => self.geometry.width as u32,
-                ConfigureState::Inflight(..)
-                | ConfigureState::Acked
-                | ConfigureState::Committed
-                | ConfigureState::TimedOut(..)
-                | ConfigureState::TimedOutAcked => (*self.window).configure_sent.width.unwrap_or(0),
-            }
+            self.geometry.width as u32
         };
 
         let height = if let Some(h) = scheduled.height {
             h
+        } else if let Some(h) = (*self.window).configure_sent.height {
+            h
         } else {
-            match self.configure_state {
-                ConfigureState::Idle => self.geometry.height as u32,
-                ConfigureState::Inflight(..)
-                | ConfigureState::Acked
-                | ConfigureState::Committed
-                | ConfigureState::TimedOut(..)
-                | ConfigureState::TimedOutAcked => (*self.window).configure_sent.height.unwrap_or(0),
-            }
+            self.geometry.height as u32
         };
+
+        log::info!(
+            "XdgToplevel::configure: sending size {}x{} (scheduled={:?}, sent={:?}, geometry={:?}) to client '{}'",
+            width, height, scheduled.width, sent.width, (self.geometry.width, self.geometry.height), (*self.window).get_title_string().unwrap_or_else(|| "None".to_string())
+        );
 
         let configure_serial = ffi::wlr_xdg_toplevel_set_size(self.wlr_toplevel, width as i32, height as i32);
 
@@ -467,7 +462,13 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
                     "client initiated size change: {}x{} -> {}x{}",
                     old_geometry.width, old_geometry.height, new_geometry.width, new_geometry.height
                 );
-                (*window).set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
+                if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) {
+                    (*window).set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
+                    (*window).configure_sent.width = Some(new_geometry.width as u32);
+                    (*window).configure_sent.height = Some(new_geometry.height as u32);
+                } else {
+                    (*window).render_finish();
+                }
             } else if old_geometry.x != new_geometry.x || old_geometry.y != new_geometry.y {
                 (*window).render_finish();
             }

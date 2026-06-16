@@ -345,6 +345,7 @@ impl Seat {
         }
 
         self.focused = new_focus;
+        (*self.server).wm.update_status();
 
         match new_focus {
             Focus::None => {}

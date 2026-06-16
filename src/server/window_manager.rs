@@ -213,20 +213,22 @@ impl WindowManager {
     }
 
     pub unsafe fn dirty_windowing(&mut self) {
+        let bt = std::backtrace::Backtrace::force_capture();
+        log::info!("dirty_windowing called from backtrace:\n{}", bt);
         self.scheduled.dirty = true;
         self.add_dirty_idle();
     }
-
+ 
     pub unsafe fn dirty_windowing_lazy(&mut self) {
         self.scheduled.dirty_lazy = true;
         self.add_dirty_idle();
     }
-
+ 
     pub unsafe fn clean_windowing(&mut self) {
         self.scheduled.dirty = false;
         self.remove_dirty_idle();
     }
-
+ 
     pub unsafe fn dirty_rendering(&mut self) {
         self.rendering_scheduled.dirty = true;
         self.add_dirty_idle();
@@ -706,7 +708,9 @@ impl WindowManager {
                     continue;
                 }
 
-                let visible = ((*win_ptr).tags & self.active_tags) != 0;
+                let app_id = (*win_ptr).get_app_id_string();
+                let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
+                let visible = is_status_bar || ((*win_ptr).tags & self.active_tags) != 0;
                 if !visible {
                     ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, false);
                     (*win_ptr).rendering_requested.hidden = true;
@@ -1125,7 +1129,11 @@ impl WindowManager {
         let mut next_focus: *mut Window = std::ptr::null_mut();
         for &w in self.windows.iter() {
             if !w.is_null() && !(*w).closed && !(*w).minimized && ((*w).tags & self.active_tags) != 0 {
-                next_focus = w;
+                let app_id = (*w).get_app_id_string();
+                let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
+                if !is_status_bar {
+                    next_focus = w;
+                }
             }
         }
         if !next_focus.is_null() {

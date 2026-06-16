@@ -692,7 +692,11 @@ impl Window {
     pub unsafe fn set_dimensions_hint(&mut self, hint: DimensionsHint) {
         self.wm_scheduled.dimensions_hint = hint;
         if self.wm_sent.dimensions_hint != hint {
-            (*self.server).wm.dirty_windowing();
+            if matches!(self.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) {
+                (*self.server).wm.dirty_windowing();
+            } else {
+                self.wm_sent.dimensions_hint = hint;
+            }
         }
     }
 
@@ -1333,6 +1337,7 @@ impl Window {
 
             struct ScaleData {
                 scale: f64,
+                ancestor: *mut ffi::wlr_scene_node,
             }
 
             unsafe extern "C" fn set_expose_scale_iterator(
@@ -1348,29 +1353,37 @@ impl Window {
                 if !surface.is_null() {
                     let w = ffi::river_wlr_surface_get_width(surface);
                     let h = ffi::river_wlr_surface_get_height(surface);
-                    let dest_w = (w as f64 * data.scale) as i32;
-                    let dest_h = (h as f64 * data.scale) as i32;
-                    ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
+                    if data.scale == 1.0 {
+                        ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
+                        ffi::river_scene_node_set_position_if_changed(node, 0, 0);
+                    } else {
+                        let dest_w = (w as f64 * data.scale) as i32;
+                        let dest_h = (h as f64 * data.scale) as i32;
+                        ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
 
-                    let dest_x = (sx as f64 * data.scale) as i32;
-                    let dest_y = (sy as f64 * data.scale) as i32;
-                    ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
+                        let (px, py) = get_parent_position_relative_to(node, data.ancestor);
+                        let dest_x = (px as f64 * (data.scale - 1.0)) as i32;
+                        let dest_y = (py as f64 * (data.scale - 1.0)) as i32;
+                        ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
+                    }
                 } else if data.scale == 1.0 {
                     ffi::river_scene_buffer_set_dest_size_if_changed(buffer, 0, 0);
                     ffi::river_scene_node_set_position_if_changed(node, sx, sy);
                 }
             }
 
-            let scale_data = ScaleData { scale: self.scale };
+            let scale_data_surfaces = ScaleData { scale: self.scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.surfaces.tree as *mut ffi::wlr_scene_node,
                 Some(set_expose_scale_iterator),
-                &scale_data as *const ScaleData as *mut std::ffi::c_void,
+                &scale_data_surfaces as *const ScaleData as *mut std::ffi::c_void,
             );
+            
+            let scale_data_popup = ScaleData { scale: self.scale, ancestor: self.popup_tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.popup_tree as *mut ffi::wlr_scene_node,
                 Some(set_expose_scale_iterator),
-                &scale_data as *const ScaleData as *mut std::ffi::c_void,
+                &scale_data_popup as *const ScaleData as *mut std::ffi::c_void,
             );
         }
 
@@ -2386,6 +2399,7 @@ impl Decoration {
 
         struct ScaleData {
             scale: f64,
+            ancestor: *mut ffi::wlr_scene_node,
         }
 
         unsafe extern "C" fn set_expose_scale_iterator(
@@ -2401,20 +2415,26 @@ impl Decoration {
             if !surface.is_null() {
                 let w = ffi::river_wlr_surface_get_width(surface);
                 let h = ffi::river_wlr_surface_get_height(surface);
-                let dest_w = (w as f64 * data.scale) as i32;
-                let dest_h = (h as f64 * data.scale) as i32;
-                ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
+                if data.scale == 1.0 {
+                    ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
+                    ffi::river_scene_node_set_position_if_changed(node, 0, 0);
+                } else {
+                    let dest_w = (w as f64 * data.scale) as i32;
+                    let dest_h = (h as f64 * data.scale) as i32;
+                    ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
 
-                let dest_x = (sx as f64 * data.scale) as i32;
-                let dest_y = (sy as f64 * data.scale) as i32;
-                ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
+                    let (px, py) = get_parent_position_relative_to(node, data.ancestor);
+                    let dest_x = (px as f64 * (data.scale - 1.0)) as i32;
+                    let dest_y = (py as f64 * (data.scale - 1.0)) as i32;
+                    ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
+                }
             } else if data.scale == 1.0 {
                 ffi::river_scene_buffer_set_dest_size_if_changed(buffer, 0, 0);
                 ffi::river_scene_node_set_position_if_changed(node, sx, sy);
             }
         }
 
-        let scale_data = ScaleData { scale };
+        let scale_data = ScaleData { scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
         ffi::wlr_scene_node_for_each_buffer(
             self.surfaces.tree as *mut ffi::wlr_scene_node,
             Some(set_expose_scale_iterator),
@@ -2562,6 +2582,23 @@ pub static mut DECORATION_ROLE: ffi::wlr_surface_role = ffi::wlr_surface_role {
     unmap: None,
     destroy: Some(dec_role_destroy),
 };
+
+unsafe fn get_parent_position_relative_to(
+    node: *mut ffi::wlr_scene_node,
+    ancestor: *mut ffi::wlr_scene_node,
+) -> (i32, i32) {
+    let mut x = 0;
+    let mut y = 0;
+    if !node.is_null() {
+        let mut curr = ffi::river_scene_node_get_parent(node) as *mut ffi::wlr_scene_node;
+        while !curr.is_null() && curr != ancestor {
+            x += ffi::river_scene_node_get_x(curr);
+            y += ffi::river_scene_node_get_y(curr);
+            curr = ffi::river_scene_node_get_parent(curr) as *mut ffi::wlr_scene_node;
+        }
+    }
+    (x, y)
+}
 
 unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
     let prev = (*listener).link.prev;
