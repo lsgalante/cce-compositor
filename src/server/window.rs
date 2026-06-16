@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
+use crate::server::{Server, WlList, wl_list_insert, wl_list_remove, WlListener, wl_signal_add};
 use crate::wm_node::WmNode;
 use crate::xdg_toplevel::ConfigureState;
 
@@ -221,6 +221,7 @@ pub struct Window {
     pub circular: bool,
     pub blur: bool,
     pub scale: f64,
+    pub commit: ffi::wl_listener,
 
     pub wm_scheduled: WmScheduledState,
     pub wm_sent: WmSentState,
@@ -336,6 +337,7 @@ impl Window {
             circular: false,
             blur: false,
             scale: 1.0,
+            commit: std::mem::zeroed(),
             wm_scheduled: WmScheduledState {
                 dimensions_hint: DimensionsHint { min_width: 0, min_height: 0, max_width: 0, max_height: 0 },
                 decoration_hint: ffi::river_window_v1_decoration_hint_RIVER_WINDOW_V1_DECORATION_HINT_ONLY_SUPPORTS_CSD,
@@ -573,6 +575,13 @@ impl Window {
         assert_eq!(self.state, WindowState::Initialized);
         self.state = WindowState::Mapped;
 
+        let surface = self.root_surface();
+        if !surface.is_null() {
+            let commit_listener = &mut self.commit as *mut ffi::wl_listener as *mut WlListener;
+            (*commit_listener).notify = Some(handle_window_commit);
+            wl_signal_add(ffi::river_wlr_surface_get_commit_signal(surface), &mut self.commit);
+        }
+
         let app_id_ptr = self.get_app_id();
         let is_status_bar = if !app_id_ptr.is_null() {
             let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
@@ -598,6 +607,7 @@ impl Window {
 
     pub unsafe fn unmap(&mut self) {
         log::debug!("window '{:?}' unmapped", self.get_title());
+        wl_listener_remove_safe(&mut self.commit);
         self.surfaces.save();
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
         assert_eq!(self.state, WindowState::Mapped);
@@ -667,6 +677,7 @@ impl Window {
             }
         }
 
+        wl_listener_remove_safe(&mut (*window).commit);
         ffi::wlr_scene_node_destroy((*window).tree as *mut ffi::wlr_scene_node);
         ffi::wlr_scene_node_destroy((*window).popup_tree as *mut ffi::wlr_scene_node);
         ffi::wlr_scene_node_destroy(&mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
@@ -2551,3 +2562,20 @@ pub static mut DECORATION_ROLE: ffi::wlr_surface_role = ffi::wlr_surface_role {
     unmap: None,
     destroy: Some(dec_role_destroy),
 };
+
+unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
+    let prev = (*listener).link.prev;
+    let next = (*listener).link.next;
+    if !prev.is_null() && !next.is_null() && prev != listener as *mut ffi::wl_list && next != listener as *mut ffi::wl_list {
+        ffi::wl_list_remove(&mut (*listener).link);
+        (*listener).link.prev = std::ptr::null_mut();
+        (*listener).link.next = std::ptr::null_mut();
+    }
+}
+
+unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    let window = crate::container_of!(listener, Window, commit);
+    if (*window).scale != 1.0 {
+        (*window).render_finish();
+    }
+}
