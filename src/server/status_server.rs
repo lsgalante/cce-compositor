@@ -262,7 +262,17 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
             "(none)".to_string()
         }
     } else {
-        "(none)".to_string()
+        let focused_layer = wm.focused_layer_surface();
+        if !focused_layer.is_null() {
+            let wlr_layer_surface = crate::ffi::wlr_layer_surface_v1_try_from_wlr_surface(focused_layer);
+            if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
+                std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy().into_owned()
+            } else {
+                "(none)".to_string()
+            }
+        } else {
+            "(none)".to_string()
+        }
     };
 
     StatusUpdate {

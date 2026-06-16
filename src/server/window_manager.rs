@@ -1104,6 +1104,20 @@ impl WindowManager {
         std::ptr::null_mut()
     }
 
+    pub unsafe fn focused_layer_surface(&self) -> *mut ffi::wlr_surface {
+        let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
+        let mut curr_seat = (*seats_list).next;
+        while curr_seat != seats_list {
+            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+            if let crate::seat::Focus::LayerSurface(s) = (*seat).focused {
+                return s;
+            }
+            curr_seat = (*curr_seat).next;
+        }
+        std::ptr::null_mut()
+    }
+
+
     pub unsafe fn update_status(&self) {
         if let Some(ref sender) = self.status_sender {
             let update = crate::status_server::build_status_update(self);
