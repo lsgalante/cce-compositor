@@ -1326,6 +1326,9 @@ pub enum BorderZone {
 }
 
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
+    if (*(*window).server).wm.expose_active {
+        return BorderZone::None;
+    }
     if (*window).tiling_mode != crate::tiling::TilingMode::Floating
         && (*window).tiling_mode != crate::tiling::TilingMode::Cascade
     {

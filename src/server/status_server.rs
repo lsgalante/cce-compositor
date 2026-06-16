@@ -246,7 +246,9 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
         &wm.layout.status_normal_color,
     );
 
-    let layout_text = if !focused_window.is_null() {
+    let layout_text = if wm.expose_active {
+        "Expose".to_string()
+    } else if !focused_window.is_null() {
         (*focused_window).tiling_mode.as_str().to_string()
     } else {
         wm.global_layout.as_str().to_string()

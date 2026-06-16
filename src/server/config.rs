@@ -392,6 +392,7 @@ pub fn parse_tiling_mode(s: &str) -> TilingMode {
         "fullscreen" => TilingMode::Fullscreen,
         "popup" => TilingMode::Popup,
         "sidepanel" | "side_panel" | "side-panel" => TilingMode::SidePanel,
+        "expose" => TilingMode::Expose,
         _ => TilingMode::Cascade,
     }
 }

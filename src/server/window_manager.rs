@@ -565,7 +565,7 @@ impl WindowManager {
         }
 
         if self.expose_active {
-            return crate::tiling::TilingMode::Grid;
+            return crate::tiling::TilingMode::Expose;
         }
 
         if (*win).mode_locked {
@@ -715,7 +715,9 @@ impl WindowManager {
                 (*win_ptr).rendering_requested.hidden = false;
 
                 let mode = self.get_mode_for_window(win_ptr);
-                (*win_ptr).tiling_mode = mode;
+                if !self.expose_active {
+                    (*win_ptr).tiling_mode = mode;
+                }
 
                 // Apply ModeRule SSD configuration if defined and not locked
                 if !(*win_ptr).mode_locked {
@@ -784,6 +786,8 @@ impl WindowManager {
                 self.global_layout
             };
 
+            log::info!("arrange_views: n_tiled = {}, current_layout = {:?}, expose_active = {}", n_tiled, current_layout, self.expose_active);
+
             if current_layout == crate::tiling::TilingMode::Cascade {
                 tiled_windows.sort_by_key(|&w| stack_order.iter().position(|&x| x == w).unwrap_or(usize::MAX));
             }
@@ -795,7 +799,7 @@ impl WindowManager {
             let gap_bottom = self.layout.gap_bottom;
             let bw = match current_layout {
                 crate::tiling::TilingMode::Cascade => self.layout.cascade_border_width,
-                crate::tiling::TilingMode::Grid => self.layout.grid_border_width,
+                crate::tiling::TilingMode::Grid | crate::tiling::TilingMode::Expose => self.layout.grid_border_width,
                 crate::tiling::TilingMode::Fullscreen => self.layout.fullscreen_border_width,
                 _ => self.layout.border_width,
             };
@@ -816,6 +820,12 @@ impl WindowManager {
                             bw, bar_height, n_tiled, idx as i32
                         )
                     }
+                    crate::tiling::TilingMode::Expose => {
+                        crate::tiling::tile_expose(
+                            tiled_usable_w, usable_h, gap, gap_top, gap_left, gap_right, gap_bottom,
+                            bw, bar_height, n_tiled, idx as i32
+                        )
+                    }
                     crate::tiling::TilingMode::Fullscreen => {
                         crate::tiling::tile_fullscreen(
                             tiled_usable_w, usable_h, gap_top, gap_left, gap_right, gap_bottom,
@@ -827,21 +837,55 @@ impl WindowManager {
                     }
                 };
 
-                let final_x = tiled_usable_x + x;
-                let final_y = usable_y + y;
+                let mut final_x = tiled_usable_x + x;
+                let mut final_y = usable_y + y;
+
+                if self.expose_active {
+                    let orig_w = (*win_ptr).box_geom.width;
+                    let orig_h = (*win_ptr).box_geom.height;
+                    let scale = if orig_w > 0 && orig_h > 0 {
+                        let scale_x = w as f64 / orig_w as f64;
+                        let scale_y = h as f64 / orig_h as f64;
+                        scale_x.min(scale_y).min(1.0)
+                    } else {
+                        1.0
+                    };
+                    (*win_ptr).scale = scale;
+
+                    let visual_w = orig_w as f64 * scale;
+                    let visual_h = orig_h as f64 * scale;
+                    let offset_x = (w as f64 - visual_w) / 2.0;
+                    let offset_y = (h as f64 - visual_h) / 2.0;
+
+                    final_x += offset_x as i32;
+                    final_y += offset_y as i32;
+                } else {
+                    (*win_ptr).scale = 1.0;
+                }
+
+                log::info!("arrange_views: tiled window index {}, title = {:?}, app_id = {:?}, geom_box = (x={}, y={}, w={}, h={}), target_box = (x={}, y={}, w={}, h={}), scale = {}",
+                    idx,
+                    (*win_ptr).get_title_string(),
+                    (*win_ptr).get_app_id_string(),
+                    (*win_ptr).box_geom.x, (*win_ptr).box_geom.y, (*win_ptr).box_geom.width, (*win_ptr).box_geom.height,
+                    final_x, final_y, w, h, (*win_ptr).scale
+                );
 
                 (*win_ptr).rendering_requested.x = final_x;
                 (*win_ptr).rendering_requested.y = final_y;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                    width: w as u32,
-                    height: h as u32,
-                });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                    width: w as u32,
-                    height: h as u32,
-                };
-                (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
-                (*win_ptr).wm_requested.ssd = true;
+
+                if !self.expose_active {
+                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                        width: w as u32,
+                        height: h as u32,
+                    });
+                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                        width: w as u32,
+                        height: h as u32,
+                    };
+                    (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
+                    (*win_ptr).wm_requested.ssd = true;
+                }
 
                 let is_focused = win_ptr == focused_window;
                 let (r, g_val, b, mut a) = if is_focused {
