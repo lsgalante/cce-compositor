@@ -12,7 +12,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
 
 /// A status update sent from the main loop to the server thread.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusUpdate {
     /// JSON string for tags module subscribers
     pub tags_json: String,

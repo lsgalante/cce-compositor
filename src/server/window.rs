@@ -1333,22 +1333,20 @@ impl Window {
                 let data = &*(user_data as *const ScaleData);
                 let node = buffer as *mut ffi::wlr_scene_node;
 
-                if data.scale == 1.0 {
+                let surface = ffi::river_scene_node_get_surface(node);
+                if !surface.is_null() {
+                    let w = ffi::river_wlr_surface_get_width(surface);
+                    let h = ffi::river_wlr_surface_get_height(surface);
+                    let dest_w = (w as f64 * data.scale) as i32;
+                    let dest_h = (h as f64 * data.scale) as i32;
+                    ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
+
+                    let dest_x = (sx as f64 * data.scale) as i32;
+                    let dest_y = (sy as f64 * data.scale) as i32;
+                    ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
+                } else if data.scale == 1.0 {
                     ffi::river_scene_buffer_set_dest_size_if_changed(buffer, 0, 0);
                     ffi::river_scene_node_set_position_if_changed(node, sx, sy);
-                } else {
-                    let surface = ffi::river_scene_node_get_surface(node);
-                    if !surface.is_null() {
-                        let w = ffi::river_wlr_surface_get_width(surface);
-                        let h = ffi::river_wlr_surface_get_height(surface);
-                        let dest_w = (w as f64 * data.scale) as i32;
-                        let dest_h = (h as f64 * data.scale) as i32;
-                        ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
-
-                        let dest_x = (sx as f64 * data.scale) as i32;
-                        let dest_y = (sy as f64 * data.scale) as i32;
-                        ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
-                    }
                 }
             }
 
@@ -2388,22 +2386,20 @@ impl Decoration {
             let data = &*(user_data as *const ScaleData);
             let node = buffer as *mut ffi::wlr_scene_node;
 
-            if data.scale == 1.0 {
+            let surface = ffi::river_scene_node_get_surface(node);
+            if !surface.is_null() {
+                let w = ffi::river_wlr_surface_get_width(surface);
+                let h = ffi::river_wlr_surface_get_height(surface);
+                let dest_w = (w as f64 * data.scale) as i32;
+                let dest_h = (h as f64 * data.scale) as i32;
+                ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
+
+                let dest_x = (sx as f64 * data.scale) as i32;
+                let dest_y = (sy as f64 * data.scale) as i32;
+                ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
+            } else if data.scale == 1.0 {
                 ffi::river_scene_buffer_set_dest_size_if_changed(buffer, 0, 0);
                 ffi::river_scene_node_set_position_if_changed(node, sx, sy);
-            } else {
-                let surface = ffi::river_scene_node_get_surface(node);
-                if !surface.is_null() {
-                    let w = ffi::river_wlr_surface_get_width(surface);
-                    let h = ffi::river_wlr_surface_get_height(surface);
-                    let dest_w = (w as f64 * data.scale) as i32;
-                    let dest_h = (h as f64 * data.scale) as i32;
-                    ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
-
-                    let dest_x = (sx as f64 * data.scale) as i32;
-                    let dest_y = (sy as f64 * data.scale) as i32;
-                    ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
-                }
             }
         }
 

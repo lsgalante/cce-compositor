@@ -71,6 +71,7 @@ pub struct WindowManager {
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
     pub input_config: crate::config::InputConfig,
     pub expose_active: bool,
+    pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
 }
 
 impl WindowManager {
@@ -128,6 +129,7 @@ impl WindowManager {
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
         self.expose_active = false;
+        self.last_status_update = std::cell::RefCell::new(None);
 
         ffi::wl_list_init(&mut self.sent.outputs);
         ffi::wl_list_init(&mut self.sent.seats);
@@ -1100,7 +1102,12 @@ impl WindowManager {
 
     pub unsafe fn update_status(&self) {
         if let Some(ref sender) = self.status_sender {
-            sender.send(crate::status_server::build_status_update(self));
+            let update = crate::status_server::build_status_update(self);
+            let mut last = self.last_status_update.borrow_mut();
+            if last.as_ref() != Some(&update) {
+                sender.send(update.clone());
+                *last = Some(update);
+            }
         }
     }
 
