@@ -453,6 +453,7 @@ impl WindowManager {
                     (*window).ref_key.hash(&mut hasher);
                     rendered_fullscreen(window).hash(&mut hasher);
                     (*window).rendering_requested.circular.hash(&mut hasher);
+                    (*window).rendering_requested.hidden.hash(&mut hasher);
                 }
                 crate::wm_node::WmNodeType::ShellSurface(shell_surface) => {
                     (shell_surface as usize).hash(&mut hasher);
