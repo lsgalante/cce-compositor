@@ -41,12 +41,12 @@ pub fn tile_cascade(
     gap_right: i32,
     gap_bottom: i32,
     bw: i32,
+    dec_h: i32,
     cascade_offset: i32,
     bar_height: i32,
     n_cascade: i32,
     idx: i32,
 ) -> (i32, i32, i32, i32) {
-    let dec_h = std::cmp::max(bw, 16);
     let max_offsets = 5;
     let eff_cascade = n_cascade.min(max_offsets);
     let width = screen_w - gap_left - gap_right - bw * 2 - cascade_offset * (eff_cascade - 1);
@@ -69,6 +69,7 @@ pub fn tile_grid(
     gap_right: i32,
     gap_bottom: i32,
     bw: i32,
+    dec_h: i32,
     bar_height: i32,
     n_grid: i32,
     idx: i32,
@@ -77,7 +78,6 @@ pub fn tile_grid(
     let row = idx / cols;
     let col = idx % cols;
     let rows = (n_grid + cols - 1) / cols;
-    let dec_h = std::cmp::max(bw, 16);
     let width = (screen_w - gap_left - gap_right - (cols - 1) * gap) / cols - 2 * bw;
     let height = (screen_h - bar_height - gap_top - gap_bottom - (rows - 1) * gap) / rows - (dec_h + bw);
     let width = if width < 1 { 1 } else { width };
@@ -97,11 +97,11 @@ pub fn tile_expose(
     gap_right: i32,
     gap_bottom: i32,
     bw: i32,
+    dec_h: i32,
     bar_height: i32,
     n_expose: i32,
     idx: i32,
 ) -> (i32, i32, i32, i32) {
-    let dec_h = std::cmp::max(bw, 16);
     if n_expose == 1 {
         // Center the single window and scale to 70% of the screen
         let usable_h = screen_h - bar_height - gap_top - gap_bottom;

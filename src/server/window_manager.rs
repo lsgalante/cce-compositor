@@ -820,29 +820,40 @@ impl WindowManager {
             let bar_height = self.layout.bar_height;
 
             for (idx, &win_ptr) in tiled_windows.iter().enumerate() {
+                let win_bw = if !(*win_ptr).wm_requested.ssd {
+                    0
+                } else {
+                    bw
+                };
+                let win_dec_h = if !(*win_ptr).wm_requested.ssd {
+                    0
+                } else {
+                    std::cmp::max(win_bw, 16)
+                };
+
                 let (x, y, w, h) = match current_layout {
                     crate::tiling::TilingMode::Cascade => {
                         crate::tiling::tile_cascade(
                             tiled_usable_w, usable_h, gap, gap_top, gap_left, gap_right, gap_bottom,
-                            bw, cascade_offset, bar_height, n_tiled, idx as i32
+                            win_bw, win_dec_h, cascade_offset, bar_height, n_tiled, idx as i32
                         )
                     }
                     crate::tiling::TilingMode::Grid => {
                         crate::tiling::tile_grid(
                             tiled_usable_w, usable_h, gap, gap_top, gap_left, gap_right, gap_bottom,
-                            bw, bar_height, n_tiled, idx as i32
+                            win_bw, win_dec_h, bar_height, n_tiled, idx as i32
                         )
                     }
                     crate::tiling::TilingMode::Expose => {
                         crate::tiling::tile_expose(
                             tiled_usable_w, usable_h, gap, gap_top, gap_left, gap_right, gap_bottom,
-                            bw, bar_height, n_tiled, idx as i32
+                            win_bw, win_dec_h, bar_height, n_tiled, idx as i32
                         )
                     }
                     crate::tiling::TilingMode::Fullscreen => {
                         crate::tiling::tile_fullscreen(
                             tiled_usable_w, usable_h, gap_top, gap_left, gap_right, gap_bottom,
-                            bw, bar_height
+                            win_bw, bar_height
                         )
                     }
                     _ => {

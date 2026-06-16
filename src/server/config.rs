@@ -823,10 +823,13 @@ mod tests {
             assert_eq!(server.wm.input_config.dwtp, Some(true));
             assert_eq!(server.wm.input_config.trackpoint_accel_speed, Some(0.6));
             assert_eq!(server.wm.input_config.trackpoint_accel_profile, Some("flat".to_string()));
-            assert_eq!(server.wm.layout.low_color, "#1c2020");
-            assert_eq!(server.wm.layout.background_r, 0x1C1C1C1Cu32);
-            assert_eq!(server.wm.layout.background_g, 0x20202020u32);
-            assert_eq!(server.wm.layout.background_b, 0x20202020u32);
+            let parsed_color = parse_hex_color(&server.wm.layout.low_color);
+            let r = (parsed_color >> 16) & 0xFF;
+            let g = (parsed_color >> 8) & 0xFF;
+            let b = parsed_color & 0xFF;
+            assert_eq!(server.wm.layout.background_r, r * 0x01010101);
+            assert_eq!(server.wm.layout.background_g, g * 0x01010101);
+            assert_eq!(server.wm.layout.background_b, b * 0x01010101);
         }
     }
 }

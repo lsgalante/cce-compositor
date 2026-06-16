@@ -458,8 +458,8 @@ impl Cursor {
             }
 
             if let SceneNodeDataVal::Window(window) = result.data {
-                if (*window).tiling_mode == crate::tiling::TilingMode::Floating
-                    || (*window).tiling_mode == crate::tiling::TilingMode::Cascade
+                if (*window).tiling_mode != crate::tiling::TilingMode::Popup
+                    && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
                 {
                     match get_border_zone(window, lx, ly) {
                         BorderZone::Resize(edges) => {
@@ -587,7 +587,10 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             }
             
             if !target_win.is_null() {
-                if (*target_win).tiling_mode == crate::tiling::TilingMode::Cascade {
+                if (*target_win).tiling_mode != crate::tiling::TilingMode::Floating
+                    && (*target_win).tiling_mode != crate::tiling::TilingMode::Popup
+                    && (*target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
+                {
                     (*target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*target_win).mode_locked = true;
                 }
@@ -647,14 +650,14 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         }
 
         if !border_target_win.is_null() && (
-            (*border_target_win).tiling_mode == crate::tiling::TilingMode::Floating
-            || (*border_target_win).tiling_mode == crate::tiling::TilingMode::Cascade
+            (*border_target_win).tiling_mode != crate::tiling::TilingMode::Popup
+            && (*border_target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
         ) {
             let initial_mode = (*border_target_win).tiling_mode;
             match get_border_zone(border_target_win, lx, ly) {
                 BorderZone::Resize(edges) => {
                     if (*event).button == 0x110 { // BTN_LEFT
-                        if initial_mode == crate::tiling::TilingMode::Cascade {
+                        if initial_mode != crate::tiling::TilingMode::Floating {
                             (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                             (*border_target_win).mode_locked = true;
                         }
@@ -686,7 +689,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 }
                 BorderZone::Move => {
                     if (*event).button == 0x110 { // BTN_LEFT
-                        if initial_mode == crate::tiling::TilingMode::Cascade {
+                        if initial_mode != crate::tiling::TilingMode::Floating {
                             (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                             (*border_target_win).mode_locked = true;
                         }
@@ -1329,8 +1332,8 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     if (*(*window).server).wm.expose_active {
         return BorderZone::None;
     }
-    if (*window).tiling_mode != crate::tiling::TilingMode::Floating
-        && (*window).tiling_mode != crate::tiling::TilingMode::Cascade
+    if (*window).tiling_mode == crate::tiling::TilingMode::Popup
+        || (*window).tiling_mode == crate::tiling::TilingMode::Fullscreen
     {
         return BorderZone::None;
     }
