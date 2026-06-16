@@ -1496,7 +1496,7 @@ impl Window {
         let bg_height = (self.box_geom.height as f64 * self.scale) as i32;
         ffi::river_scene_rect_set_size_if_changed(self.window_background, bg_width, bg_height);
         ffi::wlr_scene_rect_set_color(self.window_background, bg_color.as_ptr());
-        ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden);
+        ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden && self.wm_requested.ssd);
 
         if requested.circular || requested.border.width == 0 || !self.wm_requested.ssd {
             ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
