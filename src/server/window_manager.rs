@@ -1270,13 +1270,25 @@ impl WindowManager {
                     match crate::config::parse_config(&path, self) {
                         Ok(()) => {
                             self.dirty_windowing();
+                            let _ = std::process::Command::new("notify-send")
+                                .arg("cce")
+                                .arg("Configuration reloaded successfully")
+                                .spawn();
                         }
                         Err(e) => {
                             log::error!("failed to reload config: {}", e);
+                            let _ = std::process::Command::new("notify-send")
+                                .arg("cce")
+                                .arg(format!("Failed to reload config:\n{}", e))
+                                .spawn();
                         }
                     }
                 } else {
                     log::error!("no config file found to reload");
+                    let _ = std::process::Command::new("notify-send")
+                        .arg("cce")
+                        .arg("No config file found to reload")
+                        .spawn();
                 }
             }
             Action::Exit => {
