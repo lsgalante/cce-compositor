@@ -1094,8 +1094,16 @@ impl WindowManager {
             let next_seat = (*curr_seat).next;
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
             let mut focused_visible = false;
-            if let crate::seat::Focus::Window(w) = (*seat).focused {
-                if !w.is_null() && !(*w).closed && !(*w).minimized && ((*w).tags & self.active_tags) != 0 {
+            match (*seat).focused {
+                crate::seat::Focus::Window(w) => {
+                    if !w.is_null() && !(*w).closed && !(*w).minimized && ((*w).tags & self.active_tags) != 0 {
+                        focused_visible = true;
+                    }
+                }
+                crate::seat::Focus::None => {
+                    focused_visible = false;
+                }
+                _ => {
                     focused_visible = true;
                 }
             }
