@@ -280,6 +280,7 @@ pub struct Server {
     pub request_set_cursor_shape: ffi::wl_listener,
     // pub toplevel_capture_request: ffi::wl_listener,
     pub new_xsurface: ffi::wl_listener,
+    pub xwayland_ready: ffi::wl_listener,
 }
 
 unsafe extern "C" fn terminate(_signum: std::os::raw::c_int, data: *mut std::ffi::c_void) -> std::os::raw::c_int {
@@ -431,6 +432,18 @@ unsafe extern "C" fn handle_new_xwayland_surface(listener: *mut ffi::wl_listener
         if let Err(e) = crate::xwayland_window::XwaylandWindow::create(xsurface, server) {
             log::error!("Failed to create xwayland window surface: {}", e);
         }
+    }
+}
+
+unsafe extern "C" fn handle_xwayland_ready(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    let server = container_of!(listener, Server, xwayland_ready);
+    let xwayland_cast = (*server).xwayland as *mut WlrXwayland;
+    if !xwayland_cast.is_null() && !(*xwayland_cast).display_name.is_null() {
+        let display_name = std::ffi::CStr::from_ptr((*xwayland_cast).display_name)
+            .to_string_lossy()
+            .into_owned();
+        log::info!("Xwayland is ready on display {}", display_name);
+        std::env::set_var("DISPLAY", &display_name);
     }
 }
 
@@ -720,6 +733,10 @@ impl Server {
 
                 let xwayland_cast = self.xwayland as *mut WlrXwayland;
                 wl_signal_add(&mut (*xwayland_cast).events.new_surface, &mut self.new_xsurface);
+
+                let ready_x = &mut self.xwayland_ready as *mut ffi::wl_listener as *mut WlListener;
+                (*ready_x).notify = Some(handle_xwayland_ready);
+                wl_signal_add(&mut (*xwayland_cast).events.ready, &mut self.xwayland_ready);
             }
         }
 
@@ -767,6 +784,7 @@ impl Server {
             // 4. Destroy Xwayland if active
             if !self.xwayland.is_null() {
                 wl_listener_remove(&mut self.new_xsurface);
+                wl_listener_remove(&mut self.xwayland_ready);
                 ffi::wlr_xwayland_destroy(self.xwayland);
             }
             log::info!("[deinit] server listeners removed");
