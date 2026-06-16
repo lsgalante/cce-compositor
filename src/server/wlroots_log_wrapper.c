@@ -670,6 +670,24 @@ void river_scene_node_set_opacity(struct wlr_scene_node *node, float opacity) {
 	wlr_scene_node_for_each_buffer(node, set_opacity_iterator, &opacity);
 }
 
+void river_scene_buffer_set_dest_size_if_changed(struct wlr_scene_buffer *scene_buffer, int width, int height) {
+	if (scene_buffer->dst_width != width || scene_buffer->dst_height != height) {
+		wlr_scene_buffer_set_dest_size(scene_buffer, width, height);
+	}
+}
+
+void river_scene_node_set_position_if_changed(struct wlr_scene_node *node, int x, int y) {
+	if (node->x != x || node->y != y) {
+		wlr_scene_node_set_position(node, x, y);
+	}
+}
+
+void river_scene_rect_set_size_if_changed(struct wlr_scene_rect *rect, int width, int height) {
+	if (rect->width != width || rect->height != height) {
+		wlr_scene_rect_set_size(rect, width, height);
+	}
+}
+
 
 
 

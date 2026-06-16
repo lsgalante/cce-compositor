@@ -1334,8 +1334,8 @@ impl Window {
                 let node = buffer as *mut ffi::wlr_scene_node;
 
                 if data.scale == 1.0 {
-                    ffi::wlr_scene_buffer_set_dest_size(buffer, 0, 0);
-                    ffi::wlr_scene_node_set_position(node, sx, sy);
+                    ffi::river_scene_buffer_set_dest_size_if_changed(buffer, 0, 0);
+                    ffi::river_scene_node_set_position_if_changed(node, sx, sy);
                 } else {
                     let surface = ffi::river_scene_node_get_surface(node);
                     if !surface.is_null() {
@@ -1343,11 +1343,11 @@ impl Window {
                         let h = ffi::river_wlr_surface_get_height(surface);
                         let dest_w = (w as f64 * data.scale) as i32;
                         let dest_h = (h as f64 * data.scale) as i32;
-                        ffi::wlr_scene_buffer_set_dest_size(buffer, dest_w, dest_h);
+                        ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
 
                         let dest_x = (sx as f64 * data.scale) as i32;
                         let dest_y = (sy as f64 * data.scale) as i32;
-                        ffi::wlr_scene_node_set_position(node, dest_x, dest_y);
+                        ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
                     }
                 }
             }
@@ -1402,8 +1402,8 @@ impl Window {
             self.draw_borders();
         }
 
-        ffi::wlr_scene_node_set_position(self.tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
-        ffi::wlr_scene_node_set_position(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
+        ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
+        ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
 
         let (geom_x, geom_y) = match self.impl_type {
             WindowImpl::Toplevel(toplevel) => {
@@ -1421,7 +1421,7 @@ impl Window {
             }
             _ => (0, 0),
         };
-        ffi::wlr_scene_node_set_position(self.surfaces.tree as *mut ffi::wlr_scene_node, -geom_x, -geom_y);
+        ffi::river_scene_node_set_position_if_changed(self.surfaces.tree as *mut ffi::wlr_scene_node, -geom_x, -geom_y);
 
         self.apply_surface_clip(&clip, &content_clip);
 
@@ -1469,10 +1469,10 @@ impl Window {
             (border.b as f64 / u32::MAX as f64) as f32,
             (border.a as f64 / u32::MAX as f64) as f32,
         ];
-        ffi::wlr_scene_node_set_position(self.window_background as *mut ffi::wlr_scene_node, 0, 0);
+        ffi::river_scene_node_set_position_if_changed(self.window_background as *mut ffi::wlr_scene_node, 0, 0);
         let bg_width = (self.box_geom.width as f64 * self.scale) as i32;
         let bg_height = (self.box_geom.height as f64 * self.scale) as i32;
-        ffi::wlr_scene_rect_set_size(self.window_background, bg_width, bg_height);
+        ffi::river_scene_rect_set_size_if_changed(self.window_background, bg_width, bg_height);
         ffi::wlr_scene_rect_set_color(self.window_background, bg_color.as_ptr());
         ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden);
 
@@ -1555,8 +1555,8 @@ impl Window {
                 let scaled_y = ((*edge_box).y as f64 * self.scale) as i32;
                 let scaled_w = ((*edge_box).width as f64 * self.scale) as i32;
                 let scaled_h = ((*edge_box).height as f64 * self.scale) as i32;
-                ffi::wlr_scene_node_set_position(*rect as *mut ffi::wlr_scene_node, scaled_x, scaled_y);
-                ffi::wlr_scene_rect_set_size(*rect, scaled_w, scaled_h);
+                ffi::river_scene_node_set_position_if_changed(*rect as *mut ffi::wlr_scene_node, scaled_x, scaled_y);
+                ffi::river_scene_rect_set_size_if_changed(*rect, scaled_w, scaled_h);
                 ffi::wlr_scene_rect_set_color(*rect, color.as_ptr());
             }
         }
@@ -2373,7 +2373,7 @@ impl Decoration {
         let scale = (*self.window).scale;
         let scaled_x = (self.rendering_requested.offset_x as f64 * scale) as i32;
         let scaled_y = (self.rendering_requested.offset_y as f64 * scale) as i32;
-        ffi::wlr_scene_node_set_position(self.tree as *mut ffi::wlr_scene_node, scaled_x, scaled_y);
+        ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, scaled_x, scaled_y);
 
         struct ScaleData {
             scale: f64,
@@ -2389,8 +2389,8 @@ impl Decoration {
             let node = buffer as *mut ffi::wlr_scene_node;
 
             if data.scale == 1.0 {
-                ffi::wlr_scene_buffer_set_dest_size(buffer, 0, 0);
-                ffi::wlr_scene_node_set_position(node, sx, sy);
+                ffi::river_scene_buffer_set_dest_size_if_changed(buffer, 0, 0);
+                ffi::river_scene_node_set_position_if_changed(node, sx, sy);
             } else {
                 let surface = ffi::river_scene_node_get_surface(node);
                 if !surface.is_null() {
@@ -2398,11 +2398,11 @@ impl Decoration {
                     let h = ffi::river_wlr_surface_get_height(surface);
                     let dest_w = (w as f64 * data.scale) as i32;
                     let dest_h = (h as f64 * data.scale) as i32;
-                    ffi::wlr_scene_buffer_set_dest_size(buffer, dest_w, dest_h);
+                    ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
 
                     let dest_x = (sx as f64 * data.scale) as i32;
                     let dest_y = (sy as f64 * data.scale) as i32;
-                    ffi::wlr_scene_node_set_position(node, dest_x, dest_y);
+                    ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
                 }
             }
         }
