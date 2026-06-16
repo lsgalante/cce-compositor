@@ -897,7 +897,6 @@ impl WindowManager {
                         height: h as u32,
                     };
                     (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
-                    (*win_ptr).wm_requested.ssd = true;
                 }
 
                 let is_focused = win_ptr == focused_window;
@@ -963,7 +962,6 @@ impl WindowManager {
                         height: sp_h as u32,
                     };
                     (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
-                    (*win_ptr).wm_requested.ssd = true;
 
                     let opacity_factor = if self.layout.transparency_opacity >= 1.0 { 1.0f32 } else { self.layout.side_panel_border_opacity as f32 / 100.0 };
                     let is_focused = win_ptr == focused_window;

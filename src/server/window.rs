@@ -152,7 +152,7 @@ impl Configure {
             height: None,
             bounds: Dimensions { width: 0, height: 0 },
             activated: false,
-            ssd: true,
+            ssd: false,
             tiled: 0,
             capabilities: 0,
             maximized: false,
@@ -358,7 +358,7 @@ impl Window {
             wm_requested: WmRequestedState {
                 dimensions: None,
                 bounds: Dimensions { width: 0, height: 0 },
-                ssd: true,
+                ssd: false,
                 tiled: 0,
                 capabilities: 1 | 2 | 4 | 8,
                 resizing: false,
@@ -765,7 +765,7 @@ impl Window {
                 self.wm_requested = WmRequestedState {
                     dimensions: None,
                     bounds: Dimensions { width: 0, height: 0 },
-                    ssd: true,
+                    ssd: false,
                     tiled: 0,
                     capabilities: 1 | 2 | 4 | 8,
                     resizing: false,
