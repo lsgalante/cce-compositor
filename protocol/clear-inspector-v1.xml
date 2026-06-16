@@ -6,7 +6,7 @@
 
   <interface name="zclear_inspector_v1" version="1">
     <description summary="query information about client surface states and layouts">
-      This interface allows clear-ui client applications to register their surfaces
+      This interface allows cce-ui client applications to register their surfaces
       and publish their internal widget trees and state to the compositor.
       It also allows inspector tools to request the list of active surfaces and their states.
     </description>
@@ -16,7 +16,7 @@
     </request>
 
     <request name="register_client">
-      <description summary="register a wl_surface as a clear-ui client window">
+      <description summary="register a wl_surface as a cce-ui client window">
         Associate a client wl_surface with this inspector.
       </description>
       <arg name="surface" type="object" interface="wl_surface"/>

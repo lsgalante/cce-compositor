@@ -928,7 +928,9 @@ impl WindowManager {
                 };
 
                 (*win_ptr).rendering_requested.blur = self.layout.window_blur;
-                (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else { 0.85f32 };
+                (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
+                    if self.layout.transparency_opacity >= 1.0 { 1.0f32 } else { 0.85f32 }
+                };
             }
 
             let g = self.layout.side_panel_border_gap;
@@ -957,7 +959,7 @@ impl WindowManager {
                     (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
                     (*win_ptr).wm_requested.ssd = true;
 
-                    let opacity_factor = self.layout.side_panel_border_opacity as f32 / 100.0;
+                    let opacity_factor = if self.layout.transparency_opacity >= 1.0 { 1.0f32 } else { self.layout.side_panel_border_opacity as f32 / 100.0 };
                     let is_focused = win_ptr == focused_window;
                     let r = self.layout.border_r;
                     let g_color = self.layout.border_g;
@@ -973,7 +975,9 @@ impl WindowManager {
                         a,
                     };
                     (*win_ptr).rendering_requested.blur = self.layout.window_blur;
-                    (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else { 0.85f32 * opacity_factor };
+                    (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
+                        if self.layout.transparency_opacity >= 1.0 { 1.0f32 } else { 0.85f32 * opacity_factor }
+                    };
                 } else {
                     floating_windows.push(win_ptr);
                 }
@@ -996,7 +1000,9 @@ impl WindowManager {
                     a,
                 };
                 (*win_ptr).rendering_requested.blur = self.layout.window_blur;
-                (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else { 0.90f32 };
+                (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
+                    if self.layout.transparency_opacity >= 1.0 { 1.0f32 } else { 0.90f32 }
+                };
 
                 if (*win_ptr).tiling_mode == crate::tiling::TilingMode::Popup {
                     let hint_min_w = (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32;

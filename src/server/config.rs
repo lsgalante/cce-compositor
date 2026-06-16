@@ -39,6 +39,7 @@ pub struct Layout {
     pub side_panel_border_opacity: i32,
     pub status_normal_color: String,
     pub low_color: String,
+    pub transparency_opacity: f32,
 }
 
 impl Default for Layout {
@@ -76,6 +77,7 @@ impl Default for Layout {
             side_panel_border_opacity: 100,
             status_normal_color: "#ccccd8".to_string(),
             low_color: "#1c2020".to_string(),
+            transparency_opacity: 0.9,
         }
     }
 }
@@ -214,6 +216,11 @@ pub struct InputConfig {
     pub trackpoint_accel_profile: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct TransparencyConfig {
+    pub opacity: Option<f64>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -238,6 +245,8 @@ pub struct Config {
     pub input: Option<InputConfig>,
     #[serde(default)]
     pub gesture_bind: Vec<GestureBindConfig>,
+    #[serde(default)]
+    pub transparency: Option<TransparencyConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -650,6 +659,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.side_panel_border_gap = config.layout.side_panel_border_gap as i32;
     state.layout.side_panel_border_opacity = config.layout.side_panel_border_opacity as i32;
     state.layout.status_normal_color = config.layout.status_normal_color.clone();
+    state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
 
     for (key, val) in &config.env {
         let expanded = expand_env_vars(val);

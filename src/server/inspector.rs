@@ -203,7 +203,7 @@ unsafe extern "C" fn inspector_get_inspected_surfaces(
             std::ffi::CStr::from_ptr(app_id_ptr).to_owned()
         };
 
-        if let Some((fd, len)) = create_memfd_with_data("clear_ui_inspected_state", state.as_bytes()) {
+        if let Some((fd, len)) = create_memfd_with_data("cce_ui_inspected_state", state.as_bytes()) {
             // Send: inspected_surface(title, app_id, x, y, width, height, fd, len)
             // Event inspected_surface has index 0
             ffi::wl_resource_post_event(
