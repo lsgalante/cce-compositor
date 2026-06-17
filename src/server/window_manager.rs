@@ -907,7 +907,8 @@ impl WindowManager {
                         width: w as u32,
                         height: h as u32,
                     };
-                    (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
+                    let is_cascade = self.get_mode_for_window(win_ptr) == crate::tiling::TilingMode::Cascade;
+                    (*win_ptr).wm_requested.tiled = if is_cascade { 0 } else { 1 | 2 | 4 | 8 };
                 }
 
                 let is_focused = win_ptr == focused_window;

@@ -1121,6 +1121,7 @@ impl Window {
 
 
 
+        let is_cascade = (*self.server).wm.get_mode_for_window(self as *mut Window) == crate::tiling::TilingMode::Cascade;
         self.configure_scheduled = Configure {
             width,
             height,
@@ -1129,7 +1130,7 @@ impl Window {
             ssd: self.wm_requested.ssd,
             tiled: self.wm_requested.tiled,
             capabilities: self.wm_requested.capabilities,
-            maximized: self.wm_requested.maximized,
+            maximized: self.wm_requested.maximized || is_cascade,
             inform_fullscreen: self.wm_requested.inform_fullscreen,
             resizing: self.wm_requested.resizing,
         };

@@ -552,12 +552,20 @@ unsafe extern "C" fn handle_set_decorations(listener: *mut ffi::wl_listener, _da
 unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, request_maximize);
     let maximized = (*(*xwindow).xsurface).maximized_vert || (*(*xwindow).xsurface).maximized_horz;
-    (*(*xwindow).window).wm_scheduled.maximize_requested = if maximized {
+    let window = (*xwindow).window;
+    if maximized {
+        (*window).tiling_mode = crate::tiling::TilingMode::Cascade;
+        (*window).mode_locked = true;
+    } else {
+        (*window).tiling_mode = crate::tiling::TilingMode::Floating;
+        (*window).mode_locked = true;
+    }
+    (*window).wm_scheduled.maximize_requested = if maximized {
         crate::window::MaximizeRequest::Maximize
     } else {
         crate::window::MaximizeRequest::Unmaximize
     };
-    (*(*(*xwindow).window).server).wm.dirty_windowing();
+    (*(*window).server).wm.dirty_windowing();
 }
 
 unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
