@@ -1152,8 +1152,7 @@ impl Window {
 
 
 
-        let mode = (*self.server).wm.get_mode_for_window(self as *mut Window);
-        let is_maximized_layout = mode == crate::tiling::TilingMode::Cascade || mode == crate::tiling::TilingMode::Grid;
+        let is_maximized_layout = self.tiling_mode == crate::tiling::TilingMode::Cascade || self.tiling_mode == crate::tiling::TilingMode::Grid;
         self.configure_scheduled = Configure {
             width,
             height,
