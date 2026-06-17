@@ -234,6 +234,8 @@ pub struct Window {
     pub box_geom: ffi::wlr_box,
     pub margin_x: i32,
     pub margin_y: i32,
+    pub last_decor_w: i32,
+    pub last_decor_h: i32,
     pub foreign_toplevel_handle: *mut ffi::wlr_ext_foreign_toplevel_handle_v1,
     pub wlr_toplevel_handle: *mut ffi::wlr_foreign_toplevel_handle_v1,
 }
@@ -393,6 +395,8 @@ impl Window {
             box_geom: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
             margin_x: 0,
             margin_y: 0,
+            last_decor_w: 0,
+            last_decor_h: 0,
             foreign_toplevel_handle: std::ptr::null_mut(),
             wlr_toplevel_handle: std::ptr::null_mut(),
         });
@@ -737,6 +741,33 @@ impl Window {
             }
             _ => std::ptr::null_mut(),
         }
+    }
+
+    pub unsafe fn get_decorations_size(&self) -> (i32, i32) {
+        if self.wm_requested.ssd {
+            return (0, 0);
+        }
+        let surface = self.root_surface();
+        if surface.is_null() {
+            return (0, 0);
+        }
+        let surf_w = ffi::river_wlr_surface_get_width(surface);
+        let surf_h = ffi::river_wlr_surface_get_height(surface);
+        
+        let (geom_w, geom_h) = match self.impl_type {
+            WindowImpl::Toplevel(toplevel) => {
+                if toplevel.is_null() {
+                    (surf_w, surf_h)
+                } else {
+                    ((*toplevel).geometry.width, (*toplevel).geometry.height)
+                }
+            }
+            _ => (surf_w, surf_h),
+        };
+        
+        let dec_w = (surf_w - geom_w).max(0);
+        let dec_h = (surf_h - geom_h).max(0);
+        (dec_w, dec_h)
     }
 
     pub unsafe fn send_frame_done(&self) {
@@ -1121,7 +1152,8 @@ impl Window {
 
 
 
-        let is_cascade = (*self.server).wm.get_mode_for_window(self as *mut Window) == crate::tiling::TilingMode::Cascade;
+        let mode = (*self.server).wm.get_mode_for_window(self as *mut Window);
+        let is_maximized_layout = mode == crate::tiling::TilingMode::Cascade || mode == crate::tiling::TilingMode::Grid;
         self.configure_scheduled = Configure {
             width,
             height,
@@ -1130,7 +1162,7 @@ impl Window {
             ssd: self.wm_requested.ssd,
             tiled: self.wm_requested.tiled,
             capabilities: self.wm_requested.capabilities,
-            maximized: self.wm_requested.maximized || is_cascade,
+            maximized: self.wm_requested.maximized || is_maximized_layout,
             inform_fullscreen: self.wm_requested.inform_fullscreen,
             resizing: self.wm_requested.resizing,
         };
@@ -1439,6 +1471,13 @@ impl Window {
                         x = 0;
                         y = 0;
                     }
+                    // For tiled CSD windows, do not shift the surfaces tree
+                    if !self.wm_requested.ssd &&
+                       self.tiling_mode != crate::tiling::TilingMode::Floating &&
+                       self.tiling_mode != crate::tiling::TilingMode::Popup {
+                        x = 0;
+                        y = 0;
+                    }
                     (x, y)
                 }
             }
@@ -1662,7 +1701,7 @@ impl Window {
 
         let children_head = ffi::river_scene_tree_get_children(self.surfaces.tree) as *mut WlList;
         if (*children_head).next != children_head {
-            ffi::wlr_scene_subsurface_tree_set_clip(self.surfaces.tree as *mut ffi::wlr_scene_node, &surface_clip);
+            ffi::wlr_scene_subsurface_tree_set_clip(self.surfaces.tree as *mut ffi::wlr_scene_node, std::ptr::null());
         }
     }
 }
@@ -2444,10 +2483,7 @@ impl Decoration {
 
         let children_head = ffi::river_scene_tree_get_children(self.surfaces.tree) as *mut WlList;
         if (*children_head).next != children_head {
-            let mut clip = *window_clip;
-            clip.x -= self.rendering_requested.offset_x;
-            clip.y -= self.rendering_requested.offset_y;
-            ffi::wlr_scene_subsurface_tree_set_clip(self.surfaces.tree as *mut ffi::wlr_scene_node, &clip);
+            ffi::wlr_scene_subsurface_tree_set_clip(self.surfaces.tree as *mut ffi::wlr_scene_node, std::ptr::null());
         }
     }
 }

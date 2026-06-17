@@ -9,29 +9,29 @@ pub struct IpcRequest {
     pub reply_tx: mpsc::Sender<String>,
 }
 
-fn get_ipc_socket_path() -> String {
-    if let Ok(display) = std::env::var("WAYLAND_DISPLAY") {
+fn get_ipc_socket_path(display_socket: Option<&str>) -> String {
+    if let Some(display) = display_socket {
         format!("/tmp/cce-client-{}.sock", display)
     } else {
         "/tmp/cce-client.sock".to_string()
     }
 }
 
-pub fn spawn_ipc_server() -> mpsc::Receiver<IpcRequest> {
+pub fn spawn_ipc_server(display_socket: Option<String>) -> mpsc::Receiver<IpcRequest> {
     let (tx, rx) = mpsc::channel::<IpcRequest>();
     
     thread::Builder::new()
         .name("cce-ipc-server".to_string())
         .spawn(move || {
-            ipc_server_main(tx);
+            ipc_server_main(tx, display_socket);
         })
         .expect("Failed to spawn CCE IPC server thread");
 
     rx
 }
 
-fn ipc_server_main(tx: mpsc::Sender<IpcRequest>) {
-    let socket_path = get_ipc_socket_path();
+fn ipc_server_main(tx: mpsc::Sender<IpcRequest>, display_socket: Option<String>) {
+    let socket_path = get_ipc_socket_path(display_socket.as_deref());
     let _ = std::fs::remove_file(&socket_path);
 
     let listener = match UnixListener::bind(&socket_path) {

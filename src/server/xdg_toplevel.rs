@@ -484,6 +484,13 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             (*window).rendering_scheduled.width = new_geometry.width as u32;
             (*window).rendering_scheduled.height = new_geometry.height as u32;
 
+            let (dec_w, dec_h) = (*window).get_decorations_size();
+            if dec_w != (*window).last_decor_w || dec_h != (*window).last_decor_h {
+                (*window).last_decor_w = dec_w;
+                (*window).last_decor_h = dec_h;
+                (*(*window).server).wm.dirty_windowing();
+            }
+
             match (*toplevel).configure_state {
                 ConfigureState::Acked => {
                     (*toplevel).configure_state = ConfigureState::Committed;

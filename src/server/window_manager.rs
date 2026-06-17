@@ -167,9 +167,9 @@ impl WindowManager {
         Ok(())
     }
 
-    pub fn start_ipc(&mut self) {
+    pub fn start_ipc(&mut self, display_socket: Option<String>) {
         if self.ipc_rx.is_none() {
-            let rx = crate::ipc_server::spawn_ipc_server();
+            let rx = crate::ipc_server::spawn_ipc_server(display_socket);
             self.ipc_rx = Some(rx);
         }
     }
@@ -899,16 +899,24 @@ impl WindowManager {
                 (*win_ptr).rendering_requested.y = final_y;
 
                 if !self.expose_active {
+                    let mut target_w = w;
+                    let mut target_h = h;
+                    if !(*win_ptr).wm_requested.ssd {
+                        let (dec_w, dec_h) = (*win_ptr).get_decorations_size();
+                        target_w = (w - dec_w).max(1);
+                        target_h = (h - dec_h).max(1);
+                    }
                     (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                        width: w as u32,
-                        height: h as u32,
+                        width: target_w as u32,
+                        height: target_h as u32,
                     });
                     (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                        width: w as u32,
-                        height: h as u32,
+                        width: target_w as u32,
+                        height: target_h as u32,
                     };
-                    let is_cascade = self.get_mode_for_window(win_ptr) == crate::tiling::TilingMode::Cascade;
-                    (*win_ptr).wm_requested.tiled = if is_cascade { 0 } else { 1 | 2 | 4 | 8 };
+                    let mode = self.get_mode_for_window(win_ptr);
+                    let is_maximized_layout = mode == crate::tiling::TilingMode::Cascade || mode == crate::tiling::TilingMode::Grid;
+                    (*win_ptr).wm_requested.tiled = if is_maximized_layout { 0 } else { 1 | 2 | 4 | 8 };
                 }
 
                 let is_focused = win_ptr == focused_window;
@@ -965,13 +973,20 @@ impl WindowManager {
 
                     (*win_ptr).rendering_requested.x = sp_x;
                     (*win_ptr).rendering_requested.y = sp_y;
+                    let mut sp_target_w = sp_w;
+                    let mut sp_target_h = sp_h;
+                    if !(*win_ptr).wm_requested.ssd {
+                        let (dec_w, dec_h) = (*win_ptr).get_decorations_size();
+                        sp_target_w = (sp_w - dec_w).max(1);
+                        sp_target_h = (sp_h - dec_h).max(1);
+                    }
                     (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                        width: sp_w as u32,
-                        height: sp_h as u32,
+                        width: sp_target_w as u32,
+                        height: sp_target_h as u32,
                     });
                     (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                        width: sp_w as u32,
-                        height: sp_h as u32,
+                        width: sp_target_w as u32,
+                        height: sp_target_h as u32,
                     };
                     (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
 
@@ -1087,10 +1102,11 @@ impl WindowManager {
                         usable_y + gap_left + fbw + bar_height + gap_top + cascade_offset * idx_floating
                     };
 
-                    let min_x = usable_x + gap_left;
-                    let max_x = usable_x + usable_w - gap_right - fw;
-                    let min_y = usable_y + bar_height + gap_top;
-                    let max_y = usable_y + usable_h - gap_bottom - fh;
+                    let min_visible = 64;
+                    let min_x = usable_x + gap_left - fw + fw.min(min_visible);
+                    let max_x = usable_x + usable_w - gap_right - fw.min(min_visible);
+                    let min_y = usable_y + bar_height + gap_top - fh + fh.min(min_visible);
+                    let max_y = usable_y + usable_h - gap_bottom - fh.min(min_visible);
 
                     fx = fx.clamp(min_x, max_x.max(min_x));
                     fy = fy.clamp(min_y, max_y.max(min_y));

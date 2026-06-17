@@ -61,8 +61,8 @@ impl StatusSender {
     }
 }
 
-pub fn get_status_socket_path() -> String {
-    if let Ok(display) = std::env::var("WAYLAND_DISPLAY") {
+pub fn get_status_socket_path(display_socket: Option<&str>) -> String {
+    if let Some(display) = display_socket {
         format!("/tmp/cce-client-status-{}.sock", display)
     } else {
         "/tmp/cce-client-status.sock".to_string()
@@ -70,21 +70,21 @@ pub fn get_status_socket_path() -> String {
 }
 
 /// Spawn the status server thread. Returns a StatusSender for the main loop.
-pub fn spawn_status_server() -> StatusSender {
+pub fn spawn_status_server(display_socket: Option<String>) -> StatusSender {
     let (tx, rx) = mpsc::channel::<StatusUpdate>();
 
     std::thread::Builder::new()
         .name("cce-status-server".into())
         .spawn(move || {
-            status_server_main(rx);
+            status_server_main(rx, display_socket);
         })
         .expect("failed to spawn status server thread");
 
     StatusSender { tx }
 }
 
-fn status_server_main(rx: mpsc::Receiver<StatusUpdate>) {
-    let socket_path = get_status_socket_path();
+fn status_server_main(rx: mpsc::Receiver<StatusUpdate>, display_socket: Option<String>) {
+    let socket_path = get_status_socket_path(display_socket.as_deref());
     // Remove stale socket
     let _ = std::fs::remove_file(&socket_path);
 
