@@ -8,15 +8,15 @@ use std::process;
  
 fn get_socket_path() -> String {
     match env::var("WAYLAND_DISPLAY") {
-        Ok(display) => format!("/tmp/cce-client-{}.sock", display),
-        Err(_) => "/tmp/cce-client.sock".to_string(),
+        Ok(display) => format!("/tmp/cce-{}.sock", display),
+        Err(_) => "/tmp/cce.sock".to_string(),
     }
 }
  
 fn get_windows_path() -> String {
     match env::var("WAYLAND_DISPLAY") {
-        Ok(display) => format!("/tmp/cce-client-windows-{}", display),
-        Err(_) => "/tmp/cce-client-windows".to_string(),
+        Ok(display) => format!("/tmp/cce-windows-{}", display),
+        Err(_) => "/tmp/cce-windows".to_string(),
     }
 }
  
@@ -77,14 +77,6 @@ pub fn run_clearctl(args: Vec<String>) {
         return;
     }
  
-    // Special case: "windows" reads the status file directly
-    if args[1] == "windows" {
-        match fs::read_to_string(get_windows_path()) {
-            Ok(content) => print!("{}", content),
-            Err(_) => eprintln!("No windows info (cce may not be running)"),
-        }
-        return;
-    }
  
     // Connect to IPC socket
     let stream = match UnixStream::connect(get_socket_path()) {

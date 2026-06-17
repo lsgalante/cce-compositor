@@ -1724,6 +1724,30 @@ impl WindowManager {
                 self.dirty_windowing();
                 "ok\n".to_string()
             }
+            "windows" => {
+                let mut out = String::new();
+                for &w in self.windows.iter() {
+                    if !w.is_null() && !(*w).closed {
+                        let app_id = (*w).get_app_id_string().unwrap_or_default();
+                        let title = (*w).get_title_string().unwrap_or_default();
+                        out.push_str(&format!(
+                            "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} tags={} minimized={} has_parent={}\n",
+                            (*w).ref_key.index,
+                            app_id,
+                            title,
+                            (*w).tiling_mode.as_str(),
+                            (*w).box_geom.x,
+                            (*w).box_geom.y,
+                            (*w).box_geom.width,
+                            (*w).box_geom.height,
+                            (*w).tags,
+                            (*w).minimized,
+                            (*w).has_parent,
+                        ));
+                    }
+                }
+                out
+            }
             "spawn" => {
                 if parts.len() < 2 { return "error: missing command\n".to_string(); }
                 let cmd = parts[1..].join(" ");

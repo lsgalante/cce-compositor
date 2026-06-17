@@ -11,9 +11,9 @@ pub struct IpcRequest {
 
 fn get_ipc_socket_path(display_socket: Option<&str>) -> String {
     if let Some(display) = display_socket {
-        format!("/tmp/cce-client-{}.sock", display)
+        format!("/tmp/cce-{}.sock", display)
     } else {
-        "/tmp/cce-client.sock".to_string()
+        "/tmp/cce.sock".to_string()
     }
 }
 

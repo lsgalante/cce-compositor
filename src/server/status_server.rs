@@ -1,7 +1,7 @@
 // Status socket server for monolithic cce server
 //
 // Runs in a dedicated thread. cce-status-interface connects to
-// /tmp/cce-client-status-{WAYLAND_DISPLAY}.sock, sends a subscription line
+// /tmp/cce-status-{WAYLAND_DISPLAY}.sock, sends a subscription line
 // ("tags", "layout", or "title"), and receives JSON lines whenever the status changes.
 //
 // The main loop sends updates through an mpsc channel. The server thread
@@ -63,9 +63,9 @@ impl StatusSender {
 
 pub fn get_status_socket_path(display_socket: Option<&str>) -> String {
     if let Some(display) = display_socket {
-        format!("/tmp/cce-client-status-{}.sock", display)
+        format!("/tmp/cce-status-{}.sock", display)
     } else {
-        "/tmp/cce-client-status.sock".to_string()
+        "/tmp/cce-status.sock".to_string()
     }
 }
 
