@@ -562,6 +562,36 @@ unsafe extern "C" fn handle_request_move(
     let seat = ffi::river_wlr_seat_get_data((*(*event).seat).seat) as *mut crate::seat::Seat;
 
     if ffi::wlr_seat_validate_pointer_grab_serial((*seat).wlr_seat, std::ptr::null_mut(), (*event).serial) {
+        let initial_mode = (*window).tiling_mode;
+        if initial_mode != crate::tiling::TilingMode::Floating
+            && initial_mode != crate::tiling::TilingMode::Popup
+            && initial_mode != crate::tiling::TilingMode::Fullscreen
+        {
+            (*window).tiling_mode = crate::tiling::TilingMode::Floating;
+            (*window).mode_locked = true;
+        }
+
+        (*seat).focus(crate::seat::Focus::Window(window));
+        let cursor = &mut (*seat).cursor;
+        let cursor_x = (*cursor.wlr_cursor).x;
+        let cursor_y = (*cursor.wlr_cursor).y;
+
+        (*seat).op = Some(crate::seat::SeatOp {
+            sent_release: false,
+            input: crate::seat::SeatOpInput::Pointer,
+            start_x: cursor_x as i32,
+            start_y: cursor_y as i32,
+            x: cursor_x as i32,
+            y: cursor_y as i32,
+            window_ptr: window,
+            op_type: crate::seat::PointerOpType::Move,
+            start_win_x: (*window).box_geom.x,
+            start_win_y: (*window).box_geom.y,
+            start_win_w: (*window).box_geom.width as u32,
+            start_win_h: (*window).box_geom.height as u32,
+        });
+        cursor.op_start_pointer();
+
         (*window).wm_scheduled.pointer_move_requested = seat;
         (*(*window).server).wm.dirty_windowing();
     }
@@ -577,6 +607,38 @@ unsafe extern "C" fn handle_request_resize(
     let seat = ffi::river_wlr_seat_get_data((*(*event).seat).seat) as *mut crate::seat::Seat;
 
     if ffi::wlr_seat_validate_pointer_grab_serial((*seat).wlr_seat, std::ptr::null_mut(), (*event).serial) {
+        let initial_mode = (*window).tiling_mode;
+        if initial_mode != crate::tiling::TilingMode::Floating
+            && initial_mode != crate::tiling::TilingMode::Popup
+            && initial_mode != crate::tiling::TilingMode::Fullscreen
+        {
+            (*window).tiling_mode = crate::tiling::TilingMode::Floating;
+            (*window).mode_locked = true;
+        }
+
+        (*seat).focus(crate::seat::Focus::Window(window));
+        let cursor = &mut (*seat).cursor;
+        let cursor_x = (*cursor.wlr_cursor).x;
+        let cursor_y = (*cursor.wlr_cursor).y;
+
+        (*seat).op = Some(crate::seat::SeatOp {
+            sent_release: false,
+            input: crate::seat::SeatOpInput::Pointer,
+            start_x: cursor_x as i32,
+            start_y: cursor_y as i32,
+            x: cursor_x as i32,
+            y: cursor_y as i32,
+            window_ptr: window,
+            op_type: crate::seat::PointerOpType::Resize {
+                edges: crate::window::Edges::from_u32((*event).edges),
+            },
+            start_win_x: (*window).box_geom.x,
+            start_win_y: (*window).box_geom.y,
+            start_win_w: (*window).box_geom.width as u32,
+            start_win_h: (*window).box_geom.height as u32,
+        });
+        cursor.op_start_pointer();
+
         (*window).wm_scheduled.pointer_resize_requested = Some(crate::window::PointerResizeRequest {
             seat,
             edges: (*event).edges,
