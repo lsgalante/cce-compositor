@@ -539,9 +539,9 @@ pub fn parse_keysym(key_str: &str) -> u32 {
 
 pub fn default_config_path() -> Option<String> {
     let path = if let Ok(xdg_config_home) = std::env::var("XDG_CONFIG_HOME") {
-        format!("{}/cce/config.toml", xdg_config_home)
+        format!("{}/cce/config.json", xdg_config_home)
     } else if let Ok(home) = std::env::var("HOME") {
-        format!("{}/.config/cce/config.toml", home)
+        format!("{}/.config/cce/config.json", home)
     } else {
         return None;
     };
@@ -613,9 +613,9 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         Err(e) => return Err(format!("cannot open {}: {}", path, e)),
     };
 
-    let config: Config = match toml::from_str(&content) {
+    let config: Config = match serde_json::from_str(&content) {
         Ok(c) => c,
-        Err(e) => return Err(format!("TOML parse error: {}", e)),
+        Err(e) => return Err(format!("JSON parse error: {}", e)),
     };
 
     state.output_scale = config.output.as_ref().map(|o| o.scale as f32).unwrap_or(1.0f32);
