@@ -480,8 +480,13 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
         }
     }
 
-    let output = ffi::river_wlr_output_get_data((*wlr_layer_surface).output) as *mut Output;
-    (*output).layer_shell.arrange(output);
+    let wlr_output = (*wlr_layer_surface).output;
+    if !wlr_output.is_null() {
+        let output = ffi::river_wlr_output_get_data(wlr_output) as *mut Output;
+        if !output.is_null() {
+            (*output).layer_shell.arrange(output);
+        }
+    }
     (*server).layer_shell.check_exclusive_focus();
     (*server).wm.dirty_windowing();
 }
@@ -518,8 +523,13 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
         curr = next;
     }
 
-    let output = ffi::river_wlr_output_get_data((*wlr_layer_surface).output) as *mut Output;
-    (*output).layer_shell.arrange(output);
+    let wlr_output = (*wlr_layer_surface).output;
+    if !wlr_output.is_null() {
+        let output = ffi::river_wlr_output_get_data(wlr_output) as *mut Output;
+        if !output.is_null() {
+            (*output).layer_shell.arrange(output);
+        }
+    }
     (*server).layer_shell.check_exclusive_focus();
     (*server).wm.dirty_windowing();
 }
@@ -542,7 +552,14 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
         );
     }
 
-    assert!(!(*wlr_layer_surface).output.is_null());
+    let wlr_output = (*wlr_layer_surface).output;
+    if wlr_output.is_null() {
+        return;
+    }
+    let output = ffi::river_wlr_output_get_data(wlr_output) as *mut Output;
+    if output.is_null() {
+        return;
+    }
 
     let server = (*layer_surface).server;
 
@@ -556,7 +573,6 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
     }
 
     if (*wlr_layer_surface).initial_commit || ((*wlr_layer_surface).current.committed != 0) {
-        let output = ffi::river_wlr_output_get_data((*wlr_layer_surface).output) as *mut Output;
         (*output).layer_shell.arrange(output);
         (*server).layer_shell.check_exclusive_focus();
         (*server).wm.dirty_windowing();
