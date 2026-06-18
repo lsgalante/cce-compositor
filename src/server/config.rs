@@ -382,7 +382,8 @@ pub struct TagLayoutConfig {
 }
 
 pub fn parse_hex_color(hex_str: &str) -> u32 {
-    let hex = hex_str.trim_start_matches('#');
+    let hex = hex_str.trim_matches(|c| c == '"' || c == '\'' || c == ' ');
+    let hex = hex.trim_start_matches('#');
     if hex.len() != 6 {
         return 0xFFFFFFFF; // fallback to white
     }
