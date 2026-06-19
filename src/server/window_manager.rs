@@ -571,10 +571,10 @@ impl WindowManager {
     }
 
     pub unsafe fn get_mode_for_window(&self, win: *mut Window) -> crate::tiling::TilingMode {
-        let app_id = (*win).get_app_id_string();
-        if app_id.as_deref() == Some("cce-status-interface") {
-            return crate::tiling::TilingMode::Fullscreen;
+        if (*win).is_status_bar() {
+            return crate::tiling::TilingMode::Status;
         }
+        let app_id = (*win).get_app_id_string();
         if app_id.as_deref() == Some("cce-notification-daemon") || app_id.as_deref() == Some("clear-notification-daemon") {
             return crate::tiling::TilingMode::Popup;
         }
@@ -766,7 +766,7 @@ impl WindowManager {
                     continue;
                 }
 
-                if mode == crate::tiling::TilingMode::Floating || mode == crate::tiling::TilingMode::Popup {
+                if mode == crate::tiling::TilingMode::Floating || mode == crate::tiling::TilingMode::Popup || mode == crate::tiling::TilingMode::Status {
                     floating_windows.push(win_ptr);
                 } else if mode == crate::tiling::TilingMode::SidePanel {
                     side_panel_windows.push(win_ptr);

@@ -468,6 +468,7 @@ impl Cursor {
 
                 if (*window).tiling_mode != crate::tiling::TilingMode::Popup
                     && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
+                    && (*window).tiling_mode != crate::tiling::TilingMode::Status
                     && !(*server).wm.expose_active
                 {
                     match get_border_zone(window, lx, ly) {
@@ -585,7 +586,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             (*server).wm.expose_active = false;
             log::info!("Expose mode exited via left click");
 
-            if !clicked_win.is_null() {
+            if !clicked_win.is_null() && !(*clicked_win).is_status_bar() {
                 seat.focus(Focus::Window(clicked_win));
                 if !seat.object.is_null() && !(*clicked_win).object.is_null() {
                     ffi::wl_resource_post_event(seat.object, 4, (*clicked_win).object);
@@ -637,7 +638,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 }
             }
             
-            if !target_win.is_null() {
+            if !target_win.is_null() && !(*target_win).is_status_bar() {
                 if (*target_win).tiling_mode != crate::tiling::TilingMode::Floating
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Popup
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
@@ -700,7 +701,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             }
         }
 
-        if !border_target_win.is_null() && (
+        if !border_target_win.is_null() && !(*border_target_win).is_status_bar() && (
             (*border_target_win).tiling_mode != crate::tiling::TilingMode::Popup
             && (*border_target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
         ) {
@@ -1385,6 +1386,7 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     }
     if (*window).tiling_mode == crate::tiling::TilingMode::Popup
         || (*window).tiling_mode == crate::tiling::TilingMode::Fullscreen
+        || (*window).tiling_mode == crate::tiling::TilingMode::Status
     {
         return BorderZone::None;
     }

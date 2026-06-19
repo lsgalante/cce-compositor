@@ -271,6 +271,10 @@ impl Window {
             || !self.wm_requested.fullscreen.is_null()
     }
 
+    pub unsafe fn is_status_bar(&self) -> bool {
+        self.get_app_id_string().as_deref() == Some("cce-status-interface")
+    }
+
 
     pub unsafe fn create(impl_type: WindowImpl, server: *mut Server) -> Result<*mut Self, &'static str> {
         let hidden_tree = (*server).scene.hidden_tree;
@@ -741,7 +745,7 @@ impl Window {
     pub unsafe fn set_dimensions_hint(&mut self, hint: DimensionsHint) {
         self.wm_scheduled.dimensions_hint = hint;
         if self.wm_sent.dimensions_hint != hint {
-            if matches!(self.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) {
+            if matches!(self.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Status) {
                 (*self.server).wm.dirty_windowing();
             } else {
                 self.wm_sent.dimensions_hint = hint;
@@ -1513,7 +1517,8 @@ impl Window {
                     // For tiled CSD windows, do not shift the surfaces tree
                     if !self.wm_requested.ssd &&
                        self.tiling_mode != crate::tiling::TilingMode::Floating &&
-                       self.tiling_mode != crate::tiling::TilingMode::Popup {
+                       self.tiling_mode != crate::tiling::TilingMode::Popup &&
+                       self.tiling_mode != crate::tiling::TilingMode::Status {
                         x = 0;
                         y = 0;
                     }

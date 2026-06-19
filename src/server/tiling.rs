@@ -9,6 +9,7 @@ pub enum TilingMode {
     Popup,
     SidePanel,
     Expose,
+    Status,
 }
 
 impl TilingMode {
@@ -21,6 +22,7 @@ impl TilingMode {
             TilingMode::Popup => "Popup",
             TilingMode::SidePanel => "Side Panel",
             TilingMode::Expose => "Expose",
+            TilingMode::Status => "Status",
         }
     }
 }
