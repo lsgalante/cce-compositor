@@ -816,8 +816,8 @@ impl LayerShellOutput {
                     self.scheduled.non_exclusive_area.width,
                     self.scheduled.non_exclusive_area.height,
                 );
-                self.sent.non_exclusive_area = Some(self.scheduled.non_exclusive_area);
             }
+            self.sent.non_exclusive_area = Some(self.scheduled.non_exclusive_area);
         }
     }
 }
