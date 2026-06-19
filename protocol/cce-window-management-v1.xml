@@ -1490,7 +1490,7 @@
       </description>
     </event>
   </interface>
-  <interface name="zcce_toplevel_v1" version="1">
+  <interface name="zcce_toplevel_v1" version="2">
     <description summary="toplevel window management controls">
       An interface to control and listen to CCE-specific window management states
       for a client surface.
@@ -1522,6 +1522,16 @@
     </request>
     <request name="set_minimized">
       <description summary="request minimized state"/>
+    </request>
+    <request name="set_popup" since="2">
+      <description summary="request popup mode">
+        Explicitly request the compositor to place the window in popup mode.
+      </description>
+    </request>
+    <request name="unset_popup" since="2">
+      <description summary="unset popup mode">
+        Request the compositor to return the window to normal tiling mode.
+      </description>
     </request>
     <event name="floating_state">
       <description summary="floating status event">

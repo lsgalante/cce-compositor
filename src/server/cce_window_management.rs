@@ -227,6 +227,39 @@ unsafe extern "C" fn toplevel_set_minimized(
     }
 }
 
+unsafe extern "C" fn toplevel_set_popup(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+) {
+    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
+    if data.is_null() {
+        return;
+    }
+    let server = (*data).server;
+    let window_key = (*data).window_key;
+    if let Some(window) = resolve_window(server, window_key) {
+        (*window).tiling_mode = crate::tiling::TilingMode::Popup;
+        (*window).mode_locked = true;
+        (*server).wm.dirty_windowing();
+    }
+}
+
+unsafe extern "C" fn toplevel_unset_popup(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+) {
+    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
+    if data.is_null() {
+        return;
+    }
+    let server = (*data).server;
+    let window_key = (*data).window_key;
+    if let Some(window) = resolve_window(server, window_key) {
+        (*window).mode_locked = false;
+        (*server).wm.dirty_windowing();
+    }
+}
+
 static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_toplevel_v1_interface {
     destroy: Some(toplevel_destroy),
     set_floating: Some(toplevel_set_floating),
@@ -236,6 +269,8 @@ static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_tople
     set_fullscreen: Some(toplevel_set_fullscreen),
     unset_fullscreen: Some(toplevel_unset_fullscreen),
     set_minimized: Some(toplevel_set_minimized),
+    set_popup: Some(toplevel_set_popup),
+    unset_popup: Some(toplevel_unset_popup),
 };
 
 unsafe fn resolve_window(server: *mut Server, key: SlotMapKey) -> Option<*mut Window> {
