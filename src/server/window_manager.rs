@@ -825,6 +825,9 @@ impl WindowManager {
             let bar_height = self.layout.bar_height;
 
             for (idx, &win_ptr) in tiled_windows.iter().enumerate() {
+                if !self.expose_active {
+                    (*win_ptr).tiling_mode = current_layout;
+                }
                 let win_bw = if !(*win_ptr).wm_requested.ssd {
                     0
                 } else {
