@@ -669,6 +669,13 @@ impl Window {
             curr = next;
         }
 
+        if (*(*window).server).wm.expose_hovered_window == window {
+            (*(*window).server).wm.expose_hovered_window = std::ptr::null_mut();
+        }
+        if (*(*window).server).wm.expose_initial_focus == window {
+            (*(*window).server).wm.expose_initial_focus = std::ptr::null_mut();
+        }
+
         // Destroy decorations
         for decorations in [&mut (*window).decorations_above as *mut ffi::wl_list, &mut (*window).decorations_below as *mut ffi::wl_list] {
             let list_head = decorations as *mut WlList;

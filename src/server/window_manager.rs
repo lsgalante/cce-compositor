@@ -71,6 +71,8 @@ pub struct WindowManager {
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
     pub input_config: crate::config::InputConfig,
     pub expose_active: bool,
+    pub expose_hovered_window: *mut Window,
+    pub expose_initial_focus: *mut Window,
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
 }
 
@@ -129,6 +131,8 @@ impl WindowManager {
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
         self.expose_active = false;
+        self.expose_hovered_window = std::ptr::null_mut();
+        self.expose_initial_focus = std::ptr::null_mut();
         self.last_status_update = std::cell::RefCell::new(None);
 
         ffi::wl_list_init(&mut self.sent.outputs);
@@ -920,32 +924,47 @@ impl WindowManager {
                 }
 
                 let is_focused = win_ptr == focused_window;
-                let (r, g_val, b, mut a) = if is_focused {
-                    (
-                        self.layout.border_r,
-                        self.layout.border_g,
-                        self.layout.border_b,
-                        self.layout.border_a,
-                    )
-                } else {
-                    let mut tiled_stack = tiled_windows.clone();
-                    tiled_stack.sort_by_key(|&w| stack_order.iter().position(|&x| x == w).unwrap_or(usize::MAX));
-                    let pos = tiled_stack.iter().position(|&w| w == win_ptr).unwrap_or(0);
-                    let depth = n_tiled - 1 - pos as i32;
-                    let mut factor = 1.0_f64;
-                    for _ in 0..depth {
-                        factor *= 0.70; // UNFOCUSED_DEPTH_FACTOR
+                let (win_bw, r, g_val, b, a) = if self.expose_active {
+                    if self.window_is_valid(self.expose_hovered_window) && win_ptr == self.expose_hovered_window {
+                        (
+                            bw as u32,
+                            self.layout.border_r,
+                            self.layout.border_g,
+                            self.layout.border_b,
+                            self.layout.border_a,
+                        )
+                    } else {
+                        (0, 0, 0, 0, 0)
                     }
-                    let r = blend_channel(self.layout.background_r, self.layout.border_r, factor);
-                    let g = blend_channel(self.layout.background_g, self.layout.border_g, factor);
-                    let b = blend_channel(self.layout.background_b, self.layout.border_b, factor);
-                    let a = blend_channel(self.layout.background_a, self.layout.border_a, factor);
-                    (r, g, b, a)
+                } else {
+                    let (r, g_val, b, a) = if is_focused {
+                        (
+                            self.layout.border_r,
+                            self.layout.border_g,
+                            self.layout.border_b,
+                            self.layout.border_a,
+                        )
+                    } else {
+                        let mut tiled_stack = tiled_windows.clone();
+                        tiled_stack.sort_by_key(|&w| stack_order.iter().position(|&x| x == w).unwrap_or(usize::MAX));
+                        let pos = tiled_stack.iter().position(|&w| w == win_ptr).unwrap_or(0);
+                        let depth = n_tiled - 1 - pos as i32;
+                        let mut factor = 1.0_f64;
+                        for _ in 0..depth {
+                            factor *= 0.70; // UNFOCUSED_DEPTH_FACTOR
+                        }
+                        let r = blend_channel(self.layout.background_r, self.layout.border_r, factor);
+                        let g = blend_channel(self.layout.background_g, self.layout.border_g, factor);
+                        let b = blend_channel(self.layout.background_b, self.layout.border_b, factor);
+                        let a = blend_channel(self.layout.background_a, self.layout.border_a, factor);
+                        (r, g, b, a)
+                    };
+                    (bw as u32, r, g_val, b, a)
                 };
 
                 (*win_ptr).rendering_requested.border = crate::window::Border {
                     edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
-                    width: bw as u32,
+                    width: win_bw,
                     r,
                     g: g_val,
                     b,
@@ -1167,6 +1186,13 @@ impl WindowManager {
             curr_seat = (*curr_seat).next;
         }
         std::ptr::null_mut()
+    }
+
+    pub unsafe fn window_is_valid(&self, win: *mut Window) -> bool {
+        if win.is_null() {
+            return false;
+        }
+        self.windows.iter().any(|&w| w == win)
     }
 
     pub unsafe fn focused_layer_surface(&self) -> *mut ffi::wlr_surface {
@@ -1594,6 +1620,27 @@ impl WindowManager {
             Action::Expose => {
                 self.expose_active = !self.expose_active;
                 log::info!("Expose mode toggled: {}", self.expose_active);
+                if self.expose_active {
+                    self.expose_initial_focus = self.focused_window();
+                    let mut hovered_win = std::ptr::null_mut();
+                    if let Some(seat) = self.first_seat() {
+                        let cursor = &(*seat).cursor;
+                        let lx = cursor.x();
+                        let ly = cursor.y();
+                        if let Some(result) = (*self.server).scene.at(lx, ly) {
+                            if let crate::scene_node_data::SceneNodeDataVal::Window(window) = result.data {
+                                hovered_win = window;
+                            }
+                        }
+                    }
+                    if hovered_win.is_null() {
+                        hovered_win = self.expose_initial_focus;
+                    }
+                    self.expose_hovered_window = hovered_win;
+                } else {
+                    self.expose_hovered_window = std::ptr::null_mut();
+                    self.expose_initial_focus = std::ptr::null_mut();
+                }
                 self.dirty_windowing();
             }
             _ => {}

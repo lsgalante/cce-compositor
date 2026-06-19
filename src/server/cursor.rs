@@ -458,8 +458,17 @@ impl Cursor {
             }
 
             if let SceneNodeDataVal::Window(window) = result.data {
+                if (*server).wm.expose_active {
+                    let old_hovered = (*server).wm.expose_hovered_window;
+                    if old_hovered != window {
+                        (*server).wm.expose_hovered_window = window;
+                        (*server).wm.dirty_windowing();
+                    }
+                }
+
                 if (*window).tiling_mode != crate::tiling::TilingMode::Popup
                     && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
+                    && !(*server).wm.expose_active
                 {
                     match get_border_zone(window, lx, ly) {
                         BorderZone::Resize(edges) => {
@@ -557,6 +566,48 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
     if (*event).state == ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED {
         if cursor.pressed.contains_key(&(*event).button) {
             log::error!("ignoring duplicate pointer button {} press", (*event).button);
+            return;
+        }
+
+        // --- EXPOSE MODE LEFT CLICK HANDLING ---
+        if (*(*seat).server).wm.expose_active && (*event).button == 0x110 {
+            let lx = cursor.x();
+            let ly = cursor.y();
+            let server = seat.server;
+            let mut clicked_win: *mut crate::window::Window = std::ptr::null_mut();
+            if let Some(result) = (*server).scene.at(lx, ly) {
+                if let SceneNodeDataVal::Window(window) = result.data {
+                    clicked_win = window;
+                }
+            }
+
+            // Exit expose mode
+            (*server).wm.expose_active = false;
+            log::info!("Expose mode exited via left click");
+
+            if !clicked_win.is_null() {
+                seat.focus(Focus::Window(clicked_win));
+                if !seat.object.is_null() && !(*clicked_win).object.is_null() {
+                    ffi::wl_resource_post_event(seat.object, 4, (*clicked_win).object);
+                }
+            } else {
+                let initial = (*server).wm.expose_initial_focus;
+                if (*server).wm.window_is_valid(initial) {
+                    seat.focus(Focus::Window(initial));
+                    if !seat.object.is_null() && !(*initial).object.is_null() {
+                        ffi::wl_resource_post_event(seat.object, 4, (*initial).object);
+                    }
+                } else {
+                    seat.focus(Focus::None);
+                }
+            }
+
+            (*server).wm.expose_hovered_window = std::ptr::null_mut();
+            (*server).wm.expose_initial_focus = std::ptr::null_mut();
+            (*server).wm.dirty_windowing();
+
+            // Insert into pressed so we handle the release correctly (standard wayland behavior)
+            cursor.pressed.insert((*event).button, None);
             return;
         }
 
