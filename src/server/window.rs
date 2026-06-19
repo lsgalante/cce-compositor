@@ -241,6 +241,31 @@ pub struct Window {
 }
 
 impl Window {
+    pub unsafe fn is_wine(&self) -> bool {
+        match self.impl_type {
+            WindowImpl::Xwayland(xwindow) => {
+                if xwindow.is_null() {
+                    return false;
+                }
+                let class_ptr = (*(*xwindow).xsurface).class;
+                let class = if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") };
+                let title_ptr = (*(*xwindow).xsurface).title;
+                let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
+                
+                let class_lower = class.to_lowercase();
+                let title_lower = title.to_lowercase();
+                class_lower.contains("steam_proton")
+                    || class_lower.contains("steam_app")
+                    || class_lower.contains("wine")
+                    || class_lower.contains("upc.exe")
+                    || class_lower.contains("trackmania")
+                    || title_lower.contains("ubisoft")
+                    || title_lower.contains("trackmania")
+            }
+            _ => false,
+        }
+    }
+
     pub unsafe fn create(impl_type: WindowImpl, server: *mut Server) -> Result<*mut Self, &'static str> {
         let hidden_tree = (*server).scene.hidden_tree;
         let tree = ffi::wlr_scene_tree_create(hidden_tree);
@@ -1230,13 +1255,8 @@ impl Window {
                 if !xwindow.is_null() {
                     let mut w = (*(*xwindow).xsurface).width as u32;
                     let mut h = (*(*xwindow).xsurface).height as u32;
-                    let class_ptr = (*(*xwindow).xsurface).class;
-                    let class = if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") };
-                    let title_ptr = (*(*xwindow).xsurface).title;
-                    let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
-                    let is_wine = class.contains("steam_proton") || class.contains("wine") || class.contains("upc.exe") || title.contains("Ubisoft");
                     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
-                    if is_wine && !has_parent {
+                    if self.is_wine() && !has_parent {
                         w = w.saturating_sub(32);
                         h = h.saturating_sub(32);
                     }
@@ -1515,13 +1535,8 @@ impl Window {
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
                     if !(*xwindow).surface_tree.is_null() {
-                        let class_ptr = (*(*xwindow).xsurface).class;
-                        let class = if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") };
-                        let title_ptr = (*(*xwindow).xsurface).title;
-                        let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
-                        let is_wine = class.contains("steam_proton") || class.contains("wine") || class.contains("upc.exe") || title.contains("Ubisoft");
                         let has_parent = !(*(*xwindow).xsurface).parent.is_null();
-                        if is_wine && !has_parent {
+                        if self.is_wine() && !has_parent {
                             ffi::wlr_scene_node_set_position((*xwindow).surface_tree as *mut ffi::wlr_scene_node, -16, -16);
                         } else {
                             ffi::wlr_scene_node_set_position((*xwindow).surface_tree as *mut ffi::wlr_scene_node, 0, 0);

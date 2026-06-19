@@ -169,14 +169,9 @@ impl XwaylandWindow {
         let mut phys_x = ((*window).box_geom.x as f32 * scale).round() as i16;
         let mut phys_y = ((*window).box_geom.y as f32 * scale).round() as i16;
 
-        let class_ptr = (*self.xsurface).class;
-        let class = if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") };
-        let title_ptr = (*self.xsurface).title;
-        let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
-        let is_wine = class.contains("steam_proton") || class.contains("wine") || class.contains("upc.exe") || title.contains("Ubisoft");
         let has_parent = !(*self.xsurface).parent.is_null();
 
-        if is_wine && !has_parent {
+        if (*window).is_wine() && !has_parent {
             if scheduled.width.is_some() {
                 phys_width += 32;
             }
@@ -214,7 +209,7 @@ impl XwaylandWindow {
         let mut width = scheduled.width.unwrap_or((*self.xsurface).width as u32);
         let mut height = scheduled.height.unwrap_or((*self.xsurface).height as u32);
 
-        if is_wine && !has_parent {
+        if (*window).is_wine() && !has_parent {
             if scheduled.width.is_none() {
                 width = width.saturating_sub(32);
             }
@@ -317,14 +312,9 @@ unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
     }
     (*xwindow).surface_tree = surface_tree;
 
-    let class_ptr = (*(*xwindow).xsurface).class;
-    let class = if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") };
-    let title_ptr = (*(*xwindow).xsurface).title;
-    let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
-    let is_wine = class.contains("steam_proton") || class.contains("wine") || class.contains("upc.exe") || title.contains("Ubisoft");
     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
 
-    if is_wine && !has_parent {
+    if (*(*xwindow).window).is_wine() && !has_parent {
         ffi::wlr_scene_node_set_position(surface_tree as *mut ffi::wlr_scene_node, -16, -16);
     }
 
@@ -387,7 +377,8 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     let class = if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") };
     let title_ptr = (*(*xwindow).xsurface).title;
     let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
-    let is_wine = class.contains("steam_proton") || class.contains("wine") || class.contains("upc.exe") || title.contains("Ubisoft");
+    let window = (*xwindow).window;
+    let is_wine = (*window).is_wine();
 
     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
     log::info!(
@@ -414,7 +405,6 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         let log_width = (*event).width as u32;
         let log_height = (*event).height as u32;
         
-        let window = (*xwindow).window;
         (*window).box_geom.x = log_x;
         (*window).box_geom.y = log_y;
         (*window).box_geom.width = log_width as i32;
@@ -427,8 +417,9 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         return;
     }
 
-    let window = (*xwindow).window;
-    let is_tiled = unsafe { (*window).wm_requested.tiled != 0 };
+    let is_tiled = unsafe {
+        (*window).wm_requested.tiled != 0 || !matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup)
+    };
 
     let (phys_width, phys_height) = if is_tiled {
         let log_w = (*window).configure_sent.width.unwrap_or((*window).box_geom.width as u32);
