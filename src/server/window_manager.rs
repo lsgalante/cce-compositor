@@ -1989,7 +1989,7 @@ fn blend_channel(bg_channel: u32, fg_channel: u32, factor: f64) -> u32 {
 }
 
 unsafe fn rendered_fullscreen(window: *mut Window) -> bool {
-    !(*window).wm_requested.fullscreen.is_null() && !(*window).rendering_requested.hidden
+    (*window).is_fullscreen() && !(*window).rendering_requested.hidden
 }
 
 unsafe extern "C" fn dirty_idle_callback(data: *mut std::ffi::c_void) {
