@@ -2176,26 +2176,14 @@ unsafe extern "C" fn bind(
         return;
     }
 
-    if !(*wm).object.is_null() {
-        log::warn!("zcce_window_manager_v1 already bound, rejecting new client PID={}", pid);
-        ffi::wl_resource_post_event(resource, ffi::ZCCE_WINDOW_MANAGER_V1_UNAVAILABLE);
-        ffi::wl_resource_set_implementation(
-            resource,
-            &INERT_WM_INTERFACE as *const _ as *const _,
-            std::ptr::null_mut(),
-            None,
-        );
-        return;
-    }
-
-    (*wm).object = resource;
+    // We do not set (*wm).object = resource, so the built-in window manager remains active.
+    // We just set the implementation to WM_INTERFACE so the client can call get_cce_toplevel.
     ffi::wl_resource_set_implementation(
         resource,
         &WM_INTERFACE as *const _ as *const _,
         wm as *mut _,
-        Some(handle_destroy_wm_resource),
+        None,
     );
-    (*wm).dirty_windowing();
 }
 
 unsafe extern "C" fn handle_destroy_wm_resource(resource: *mut ffi::wl_resource) {
