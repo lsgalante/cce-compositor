@@ -1180,8 +1180,26 @@ impl Window {
             ffi::wlr_foreign_toplevel_handle_v1_set_activated(self.wlr_toplevel_handle, activated);
         }
 
-        let (width, height) = if !self.wm_requested.fullscreen.is_null() {
-            let output = self.wm_requested.fullscreen;
+        let output = if !self.wm_requested.fullscreen.is_null() {
+            self.wm_requested.fullscreen
+        } else if self.is_fullscreen() {
+            let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+            let mut curr = (*outputs_list).next;
+            let mut found_output = std::ptr::null_mut();
+            while curr != outputs_list {
+                let out = crate::container_of!(curr, crate::output::Output, link);
+                if (*out).sent.state == crate::output::OutputStateValue::Enabled {
+                    found_output = out;
+                    break;
+                }
+                curr = (*curr).next;
+            }
+            found_output
+        } else {
+            std::ptr::null_mut()
+        };
+
+        let (width, height) = if !output.is_null() {
             let (w, h) = (*output).sent.dimensions();
             if self.configure_sent.width != Some(w as u32) || self.configure_sent.height != Some(h as u32) {
                 self.configure_scheduled.width = Some(w as u32);
@@ -1199,8 +1217,6 @@ impl Window {
         };
         self.wm_requested.dimensions = None;
 
-
-
         let is_maximized_layout = self.tiling_mode == crate::tiling::TilingMode::Cascade || self.tiling_mode == crate::tiling::TilingMode::Grid;
         self.configure_scheduled = Configure {
             width,
@@ -1211,7 +1227,7 @@ impl Window {
             tiled: self.wm_requested.tiled,
             capabilities: self.wm_requested.capabilities,
             maximized: self.wm_requested.maximized || is_maximized_layout,
-            inform_fullscreen: self.wm_requested.inform_fullscreen,
+            inform_fullscreen: self.wm_requested.inform_fullscreen || self.is_fullscreen(),
             resizing: self.wm_requested.resizing,
         };
 
@@ -1469,8 +1485,26 @@ impl Window {
         let mut clip = requested.clip;
         let mut content_clip = requested.content_clip;
 
-        if !self.wm_requested.fullscreen.is_null() {
-            let output = self.wm_requested.fullscreen;
+        let output = if !self.wm_requested.fullscreen.is_null() {
+            self.wm_requested.fullscreen
+        } else if self.is_fullscreen() {
+            let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+            let mut curr = (*outputs_list).next;
+            let mut found_output = std::ptr::null_mut();
+            while curr != outputs_list {
+                let out = crate::container_of!(curr, crate::output::Output, link);
+                if (*out).sent.state == crate::output::OutputStateValue::Enabled {
+                    found_output = out;
+                    break;
+                }
+                curr = (*curr).next;
+            }
+            found_output
+        } else {
+            std::ptr::null_mut()
+        };
+
+        if !output.is_null() {
             self.box_geom.x = (*output).sent.x;
             self.box_geom.y = (*output).sent.y;
 
