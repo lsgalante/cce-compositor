@@ -3,6 +3,9 @@ name = "cce"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+doctest = false
+
 [dependencies]
 xkbcommon = "0.7"
 serde = { version = "1", features = ["derive"] }
