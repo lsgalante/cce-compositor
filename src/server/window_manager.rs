@@ -722,7 +722,7 @@ impl WindowManager {
                 let app_id = (*win_ptr).get_app_id_string();
                 let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
                 let visible = (is_status_bar || ((*win_ptr).tags & self.active_tags) != 0)
-                    && matches!((*win_ptr).state, crate::window::WindowState::Mapped);
+                    && !matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
                 if !visible {
                     ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, false);
                     (*win_ptr).rendering_requested.hidden = true;
@@ -1558,7 +1558,7 @@ impl WindowManager {
                         
                         let active_tags = self.active_tags;
                         for &w in self.windows.iter() {
-                            if !w.is_null() && !(*w).closed && matches!((*w).state, crate::window::WindowState::Mapped) && ((*w).tags & active_tags) != 0 && (*w).tiling_mode == current_mode {
+                            if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) && ((*w).tags & active_tags) != 0 && (*w).tiling_mode == current_mode {
                                 (*w).tiling_mode = next;
                                 (*w).mode_locked = true;
                             }
@@ -1775,7 +1775,7 @@ impl WindowManager {
             "windows" => {
                 let mut out = String::new();
                 for &w in self.windows.iter() {
-                    if !w.is_null() && !(*w).closed && matches!((*w).state, crate::window::WindowState::Mapped) {
+                    if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                         let app_id = (*w).get_app_id_string().unwrap_or_default();
                         let title = (*w).get_title_string().unwrap_or_default();
                         out.push_str(&format!(
