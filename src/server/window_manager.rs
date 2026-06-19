@@ -860,8 +860,8 @@ impl WindowManager {
                     }
                     crate::tiling::TilingMode::Fullscreen => {
                         crate::tiling::tile_fullscreen(
-                            tiled_usable_w, usable_h, gap_top, gap_left, gap_right, gap_bottom,
-                            win_bw, bar_height
+                            phys_w, phys_h, 0, 0, 0, 0,
+                            0, 0
                         )
                     }
                     _ => {
@@ -869,8 +869,16 @@ impl WindowManager {
                     }
                 };
 
-                let mut final_x = tiled_usable_x + x;
-                let mut final_y = usable_y + y;
+                let mut final_x = if current_layout == crate::tiling::TilingMode::Fullscreen {
+                    phys_x + x
+                } else {
+                    tiled_usable_x + x
+                };
+                let mut final_y = if current_layout == crate::tiling::TilingMode::Fullscreen {
+                    phys_y + y
+                } else {
+                    usable_y + y
+                };
 
                 if self.expose_active {
                     let orig_w = (*win_ptr).box_geom.width;
