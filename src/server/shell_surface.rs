@@ -13,7 +13,7 @@ pub struct ShellSurfaceRenderingRequested {
 
 pub struct ShellSurface {
     pub server: *mut Server,
-    pub object: *mut ffi::wl_resource, // river_shell_surface_v1
+    pub object: *mut ffi::wl_resource, // zcce_shell_surface_v1
     pub surface: *mut ffi::wlr_surface,
     pub tree: *mut ffi::wlr_scene_tree,
     pub surfaces: crate::scene::SaveableSurfaces,
@@ -30,9 +30,9 @@ impl ShellSurface {
         surface: *mut ffi::wlr_surface,
         server: *mut Server,
     ) -> Result<(), &'static str> {
-        log::debug!("new river_shell_surface_v1");
+        log::debug!("new zcce_shell_surface_v1");
 
-        let shell_surface_v1 = ffi::wl_resource_create(client, &ffi::river_shell_surface_v1_interface, version as i32, id);
+        let shell_surface_v1 = ffi::wl_resource_create(client, &ffi::zcce_shell_surface_v1_interface, version as i32, id);
         if shell_surface_v1.is_null() {
             ffi::wl_client_post_no_memory(client);
             return Err("wl_resource_create failed");
@@ -42,7 +42,7 @@ impl ShellSurface {
             surface,
             &SHELL_SURFACE_ROLE,
             shell_surface_v1,
-            ffi::river_window_manager_v1_error_RIVER_WINDOW_MANAGER_V1_ERROR_ROLE,
+            ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_ROLE,
         ) {
             return Err("wlr_surface_set_role failed");
         }
@@ -129,7 +129,7 @@ impl ShellSurface {
             if !self.surfaces.saved {
                 ffi::wl_resource_post_error(
                     self.object,
-                    ffi::river_shell_surface_v1_error_RIVER_SHELL_SURFACE_V1_ERROR_NO_COMMIT,
+                    ffi::zcce_shell_surface_v1_error_ZCCE_SHELL_SURFACE_V1_ERROR_NO_COMMIT,
                     b"no wl_surface.commit after sync_next_commit and before update_rendering_finish\0".as_ptr() as *const _,
                 );
             }
@@ -241,7 +241,7 @@ unsafe extern "C" fn shell_surface_get_node(
     if !(*shell_surface).node.object.is_null() {
         ffi::wl_resource_post_error(
             resource,
-            ffi::river_shell_surface_v1_error_RIVER_SHELL_SURFACE_V1_ERROR_NODE_EXISTS,
+            ffi::zcce_shell_surface_v1_error_ZCCE_SHELL_SURFACE_V1_ERROR_NODE_EXISTS,
             b"shell surface already has a node object\0".as_ptr() as *const _,
         );
         return;
@@ -271,7 +271,7 @@ unsafe extern "C" fn shell_surface_sync_next_commit(
     (*shell_surface).rendering_requested.sync_next_commit = true;
 }
 
-static SHELL_SURFACE_INTERFACE: ffi::river_shell_surface_v1_interface = ffi::river_shell_surface_v1_interface {
+static SHELL_SURFACE_INTERFACE: ffi::zcce_shell_surface_v1_interface = ffi::zcce_shell_surface_v1_interface {
     destroy: Some(shell_surface_destroy),
     get_node: Some(shell_surface_get_node),
     sync_next_commit: Some(shell_surface_sync_next_commit),
@@ -279,7 +279,7 @@ static SHELL_SURFACE_INTERFACE: ffi::river_shell_surface_v1_interface = ffi::riv
 
 #[no_mangle]
 pub static mut SHELL_SURFACE_ROLE: ffi::wlr_surface_role = ffi::wlr_surface_role {
-    name: b"river_shell_surface_v1\0".as_ptr() as *const _,
+    name: b"zcce_shell_surface_v1\0".as_ptr() as *const _,
     no_object: false,
     client_commit: Some(client_commit),
     commit: Some(commit),

@@ -542,9 +542,9 @@ unsafe extern "C" fn handle_set_decorations(listener: *mut ffi::wl_listener, _da
         != 0;
 
     let hint = if prefers_csd {
-        ffi::river_window_v1_decoration_hint_RIVER_WINDOW_V1_DECORATION_HINT_PREFERS_CSD
+        ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_PREFERS_CSD
     } else {
-        ffi::river_window_v1_decoration_hint_RIVER_WINDOW_V1_DECORATION_HINT_PREFERS_SSD
+        ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_PREFERS_SSD
     };
     (*(*xwindow).window).set_decoration_hint(hint);
 }

@@ -61,7 +61,7 @@
         river_output_v1 object.
       </description>
       <arg name="id" type="new_id" interface="river_layer_shell_output_v1"/>
-      <arg name="output" type="object" interface="river_output_v1"/>
+      <arg name="output" type="object" interface="zcce_output_v1"/>
     </request>
 
     <request name="get_seat">
@@ -70,7 +70,7 @@
         river_seat_v1 object.
       </description>
       <arg name="id" type="new_id" interface="river_layer_shell_seat_v1"/>
-      <arg name="seat" type="object" interface="river_seat_v1"/>
+      <arg name="seat" type="object" interface="zcce_seat_v1"/>
     </request>
   </interface>
 

@@ -562,9 +562,9 @@ impl Seat {
             if new {
                 let client = ffi::wl_resource_get_client(wm_v1);
                 let version = ffi::wl_resource_get_version(wm_v1);
-                let seat_v1 = ffi::wl_resource_create(client, &ffi::river_seat_v1_interface, version, 0);
+                let seat_v1 = ffi::wl_resource_create(client, &ffi::zcce_seat_v1_interface, version, 0);
                 if seat_v1.is_null() {
-                    log::error!("out of memory creating river_seat_v1");
+                    log::error!("out of memory creating zcce_seat_v1");
                     return;
                 }
                 self.object = seat_v1;
@@ -576,7 +576,7 @@ impl Seat {
                     Some(handle_destroy_resource),
                 );
                 
-                ffi::wl_resource_post_event(wm_v1, ffi::RIVER_WINDOW_MANAGER_V1_SEAT, seat_v1); // river_window_manager_v1.seat
+                ffi::wl_resource_post_event(wm_v1, ffi::ZCCE_WINDOW_MANAGER_V1_SEAT, seat_v1); // zcce_window_manager_v1.seat
 
                 crate::server::wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
                 let sent_seats = &mut (*self.server).wm.sent.seats as *mut ffi::wl_list as *mut crate::server::WlList;
@@ -1192,7 +1192,7 @@ unsafe extern "C" fn seat_pointer_warp(
     ffi::wlr_cursor_warp_absolute(cursor.wlr_cursor, std::ptr::null_mut(), x as f64, y as f64);
 }
 
-static SEAT_INTERFACE: ffi::river_seat_v1_interface = ffi::river_seat_v1_interface {
+static SEAT_INTERFACE: ffi::zcce_seat_v1_interface = ffi::zcce_seat_v1_interface {
     destroy: Some(seat_destroy),
     focus_window: Some(seat_focus_window),
     focus_shell_surface: Some(seat_focus_shell_surface),
@@ -1253,7 +1253,7 @@ unsafe extern "C" fn seat_inert_pointer_warp(
     _y: i32,
 ) {}
 
-static INERT_SEAT_INTERFACE: ffi::river_seat_v1_interface = ffi::river_seat_v1_interface {
+static INERT_SEAT_INTERFACE: ffi::zcce_seat_v1_interface = ffi::zcce_seat_v1_interface {
     destroy: Some(seat_destroy),
     focus_window: Some(seat_inert_focus_window),
     focus_shell_surface: Some(seat_inert_focus_shell_surface),

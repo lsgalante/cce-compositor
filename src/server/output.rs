@@ -142,7 +142,7 @@ pub struct Output {
     pub wlr_output: *mut ffi::wlr_output,
     pub scene_output: *mut ffi::wlr_scene_output,
     pub background_rect: *mut ffi::wlr_scene_rect,
-    pub object: *mut ffi::wl_resource, // river_output_v1 resource
+    pub object: *mut ffi::wl_resource, // zcce_output_v1 resource
     pub layer_shell: LayerShellOutput,
     pub lock_render_state: LockRenderState,
     pub link: ffi::wl_list,
@@ -188,28 +188,28 @@ unsafe extern "C" fn output_set_presentation_mode(
         return;
     }
     match mode {
-        ffi::river_output_v1_presentation_mode_RIVER_OUTPUT_V1_PRESENTATION_MODE_VSYNC => {
+        ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_VSYNC => {
             (*output).rendering_requested.tearing = false;
         }
-        ffi::river_output_v1_presentation_mode_RIVER_OUTPUT_V1_PRESENTATION_MODE_ASYNC => {
+        ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_ASYNC => {
             (*output).rendering_requested.tearing = true;
         }
         _ => {
             ffi::wl_resource_post_error(
                 resource,
-                ffi::river_output_v1_error_RIVER_OUTPUT_V1_ERROR_INVALID_PRESENTATION_MODE,
+                ffi::zcce_output_v1_error_ZCCE_OUTPUT_V1_ERROR_INVALID_PRESENTATION_MODE,
                 b"invalid presentation mode enum value\0".as_ptr() as *const _,
             );
         }
     }
 }
 
-static OUTPUT_INTERFACE: ffi::river_output_v1_interface = ffi::river_output_v1_interface {
+static OUTPUT_INTERFACE: ffi::zcce_output_v1_interface = ffi::zcce_output_v1_interface {
     destroy: Some(output_destroy),
     set_presentation_mode: Some(output_set_presentation_mode),
 };
 
-static INERT_OUTPUT_INTERFACE: ffi::river_output_v1_interface = ffi::river_output_v1_interface {
+static INERT_OUTPUT_INTERFACE: ffi::zcce_output_v1_interface = ffi::zcce_output_v1_interface {
     destroy: Some(output_destroy),
     set_presentation_mode: None,
 };
@@ -217,7 +217,7 @@ static INERT_OUTPUT_INTERFACE: ffi::river_output_v1_interface = ffi::river_outpu
 impl Output {
     pub unsafe fn make_inert(&mut self) {
         if !self.object.is_null() {
-            ffi::wl_resource_post_event(self.object, 0); // river_output.removed
+            ffi::wl_resource_post_event(self.object, 0); // zcce_output.removed
             ffi::wl_resource_set_implementation(
                 self.object,
                 &INERT_OUTPUT_INTERFACE as *const _ as *const _,
@@ -247,7 +247,7 @@ impl Output {
                         let client = ffi::wl_resource_get_client(wm_v1);
                         let res = ffi::wl_resource_create(
                             client,
-                            &ffi::river_output_v1_interface,
+                            &ffi::zcce_output_v1_interface,
                             ffi::wl_resource_get_version(wm_v1),
                             0,
                         );
@@ -262,7 +262,7 @@ impl Output {
                             self as *mut Output as *mut _,
                             Some(handle_destroy_resource),
                         );
-                        ffi::wl_resource_post_event(wm_v1, ffi::RIVER_WINDOW_MANAGER_V1_OUTPUT, res); // river_window_manager_v1.output
+                        ffi::wl_resource_post_event(wm_v1, ffi::ZCCE_WINDOW_MANAGER_V1_OUTPUT, res); // zcce_window_manager_v1.output
                         res
                     } else {
                         self.object
@@ -273,7 +273,7 @@ impl Output {
                         if !global.is_null() {
                             let client = ffi::wl_resource_get_client(output_v1);
                             let wl_output_name = ffi::wl_global_get_name(global, client);
-                            river_output_send_wl_output(output_v1, wl_output_name);
+                            zcce_output_send_wl_output(output_v1, wl_output_name);
                             self.sent_wl_output = true;
                         }
                     }
@@ -282,10 +282,10 @@ impl Output {
                     let (sent_width, sent_height) = self.sent.dimensions();
 
                     if new || scheduled_width != sent_width || scheduled_height != sent_height {
-                        river_output_send_dimensions(output_v1, scheduled_width, scheduled_height);
+                        zcce_output_send_dimensions(output_v1, scheduled_width, scheduled_height);
                     }
                     if new || self.scheduled.x != self.sent.x || self.scheduled.y != self.sent.y {
-                        river_output_send_position(output_v1, self.scheduled.x, self.scheduled.y);
+                        zcce_output_send_position(output_v1, self.scheduled.x, self.scheduled.y);
                     }
                 }
 
@@ -588,18 +588,18 @@ unsafe extern "C" fn handle_present(listener: *mut ffi::wl_listener, data: *mut 
 }
 
 // Helpers for raw Wayland FFI protocol events
-pub unsafe fn river_output_send_removed(resource: *mut ffi::wl_resource) {
+pub unsafe fn zcce_output_send_removed(resource: *mut ffi::wl_resource) {
     ffi::wl_resource_post_event(resource, 0);
 }
 
-pub unsafe fn river_output_send_wl_output(resource: *mut ffi::wl_resource, name: u32) {
+pub unsafe fn zcce_output_send_wl_output(resource: *mut ffi::wl_resource, name: u32) {
     ffi::wl_resource_post_event(resource, 1, name);
 }
 
-pub unsafe fn river_output_send_position(resource: *mut ffi::wl_resource, x: i32, y: i32) {
+pub unsafe fn zcce_output_send_position(resource: *mut ffi::wl_resource, x: i32, y: i32) {
     ffi::wl_resource_post_event(resource, 2, x, y);
 }
 
-pub unsafe fn river_output_send_dimensions(resource: *mut ffi::wl_resource, width: i32, height: i32) {
+pub unsafe fn zcce_output_send_dimensions(resource: *mut ffi::wl_resource, width: i32, height: i32) {
     ffi::wl_resource_post_event(resource, 3, width, height);
 }

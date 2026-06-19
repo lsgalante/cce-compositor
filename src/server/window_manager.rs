@@ -150,14 +150,14 @@ impl WindowManager {
 
         self.global = ffi::wl_global_create(
             (*server).wl_server,
-            &ffi::river_window_manager_v1_interface,
+            &ffi::zcce_window_manager_v1_interface,
             4,
             self as *mut WindowManager as *mut _,
             Some(bind),
         );
         if self.global.is_null() {
             ffi::wl_event_source_remove(self.timeout);
-            return Err("Failed to create river_window_manager_v1 global");
+            return Err("Failed to create zcce_window_manager_v1 global");
         }
 
         let server_destroy_ptr = &mut self.server_destroy as *mut ffi::wl_listener as *mut WlListener;
@@ -193,7 +193,7 @@ impl WindowManager {
                 if !self.object.is_null() {
                     ffi::wl_resource_post_error(
                         self.object,
-                        ffi::river_window_manager_v1_error_RIVER_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
+                        ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
                         b"invalid modification of window management state\0".as_ptr() as *const _,
                     );
                 }
@@ -209,7 +209,7 @@ impl WindowManager {
                 if !self.object.is_null() {
                     ffi::wl_resource_post_error(
                         self.object,
-                        ffi::river_window_manager_v1_error_RIVER_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
+                        ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
                         b"invalid modification of rendering state\0".as_ptr() as *const _,
                     );
                 }
@@ -279,9 +279,9 @@ impl WindowManager {
         if session_locked != self.sent.session_locked {
             if !self.object.is_null() {
                 if session_locked {
-                    ffi::wl_resource_post_event(self.object, ffi::RIVER_WINDOW_MANAGER_V1_SESSION_LOCKED);
+                    ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_MANAGER_V1_SESSION_LOCKED);
                 } else {
-                    ffi::wl_resource_post_event(self.object, ffi::RIVER_WINDOW_MANAGER_V1_SESSION_UNLOCKED);
+                    ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_MANAGER_V1_SESSION_UNLOCKED);
                 }
             }
             self.sent.session_locked = session_locked;
@@ -323,7 +323,7 @@ impl WindowManager {
         self.arrange_views();
 
         if !self.object.is_null() {
-            ffi::wl_resource_post_event(self.object, ffi::RIVER_WINDOW_MANAGER_V1_MANAGE_START);
+            ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_MANAGER_V1_MANAGE_START);
             self.start_timeout_timer(3000);
         } else {
             self.manage_finish();
@@ -420,7 +420,7 @@ impl WindowManager {
         }
 
         if !self.object.is_null() {
-            ffi::wl_resource_post_event(self.object, ffi::RIVER_WINDOW_MANAGER_V1_RENDER_START);
+            ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_MANAGER_V1_RENDER_START);
             self.start_timeout_timer(3000);
         } else {
             self.render_finish();
@@ -1969,7 +1969,7 @@ unsafe extern "C" fn handle_timeout(data: *mut std::ffi::c_void) -> std::os::raw
                 log::error!("window manager unresponsive for more than 3 seconds, disconnecting");
                 ffi::wl_resource_post_error(
                     (*wm).object,
-                    ffi::river_window_manager_v1_error_RIVER_WINDOW_MANAGER_V1_ERROR_UNRESPONSIVE,
+                    ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_UNRESPONSIVE,
                     b"unresponsive for more than 3 seconds\0".as_ptr() as *const _,
                 );
                 let client = ffi::wl_resource_get_client((*wm).object);
@@ -1994,7 +1994,7 @@ unsafe extern "C" fn wm_stop(client: *mut ffi::wl_client, resource: *mut ffi::wl
     let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
     if !wm.is_null() {
         (*wm).object = std::ptr::null_mut();
-        ffi::wl_resource_post_event(resource, ffi::RIVER_WINDOW_MANAGER_V1_FINISHED);
+        ffi::wl_resource_post_event(resource, ffi::ZCCE_WINDOW_MANAGER_V1_FINISHED);
         ffi::wl_resource_set_implementation(
             resource,
             &INERT_WM_INTERFACE as *const _ as *const _,
@@ -2016,7 +2016,7 @@ unsafe extern "C" fn wm_manage_finish(client: *mut ffi::wl_client, resource: *mu
     if !matches!((*wm).state, WindowManagerState::Manage) {
         ffi::wl_resource_post_error(
             resource,
-            ffi::river_window_manager_v1_error_RIVER_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
+            ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
             b"manage_finish request does not match manage_start\0".as_ptr() as *const _,
         );
         return;
@@ -2041,7 +2041,7 @@ unsafe extern "C" fn wm_render_finish(client: *mut ffi::wl_client, resource: *mu
     if !matches!((*wm).state, WindowManagerState::Render) {
         ffi::wl_resource_post_error(
             resource,
-            ffi::river_window_manager_v1_error_RIVER_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
+            ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
             b"render_finish request does not match render_start\0".as_ptr() as *const _,
         );
         return;
@@ -2076,7 +2076,7 @@ unsafe extern "C" fn wm_exit_session(client: *mut ffi::wl_client, resource: *mut
     ffi::wl_display_terminate((*(*wm).server).wl_server);
 }
 
-static WM_INTERFACE: ffi::river_window_manager_v1_interface = ffi::river_window_manager_v1_interface {
+static WM_INTERFACE: ffi::zcce_window_manager_v1_interface = ffi::zcce_window_manager_v1_interface {
     stop: Some(wm_stop),
     destroy: Some(wm_destroy),
     manage_finish: Some(wm_manage_finish),
@@ -2084,9 +2084,10 @@ static WM_INTERFACE: ffi::river_window_manager_v1_interface = ffi::river_window_
     render_finish: Some(wm_render_finish),
     get_shell_surface: Some(wm_get_shell_surface),
     exit_session: Some(wm_exit_session),
+    get_cce_toplevel: Some(crate::cce_window_management::cce_wm_get_cce_toplevel),
 };
 
-static INERT_WM_INTERFACE: ffi::river_window_manager_v1_interface = ffi::river_window_manager_v1_interface {
+static INERT_WM_INTERFACE: ffi::zcce_window_manager_v1_interface = ffi::zcce_window_manager_v1_interface {
     stop: None,
     destroy: Some(wm_destroy),
     manage_finish: None,
@@ -2094,6 +2095,7 @@ static INERT_WM_INTERFACE: ffi::river_window_manager_v1_interface = ffi::river_w
     render_finish: None,
     get_shell_surface: None,
     exit_session: None,
+    get_cce_toplevel: None,
 };
 
 unsafe extern "C" fn bind(
@@ -2114,18 +2116,18 @@ unsafe extern "C" fn bind(
     let cmdline = std::fs::read_to_string(format!("/proc/{}/cmdline", pid))
         .unwrap_or_default()
         .replace('\0', " ");
-    log::info!("Client binding river_window_manager_v1: PID={}, cmdline='{}'", pid, cmdline);
+    log::info!("Client binding zcce_window_manager_v1: PID={}, cmdline='{}'", pid, cmdline);
 
-    let resource = ffi::wl_resource_create(client, &ffi::river_window_manager_v1_interface, version as i32, id);
+    let resource = ffi::wl_resource_create(client, &ffi::zcce_window_manager_v1_interface, version as i32, id);
     if resource.is_null() {
         ffi::wl_client_post_no_memory(client);
-        log::error!("out of memory binding river_window_manager_v1");
+        log::error!("out of memory binding zcce_window_manager_v1");
         return;
     }
 
     if !(*wm).object.is_null() {
-        log::warn!("river_window_manager_v1 already bound, rejecting new client PID={}", pid);
-        ffi::wl_resource_post_event(resource, ffi::RIVER_WINDOW_MANAGER_V1_UNAVAILABLE);
+        log::warn!("zcce_window_manager_v1 already bound, rejecting new client PID={}", pid);
+        ffi::wl_resource_post_event(resource, ffi::ZCCE_WINDOW_MANAGER_V1_UNAVAILABLE);
         ffi::wl_resource_set_implementation(
             resource,
             &INERT_WM_INTERFACE as *const _ as *const _,
@@ -2153,7 +2155,7 @@ unsafe extern "C" fn handle_destroy_wm_resource(resource: *mut ffi::wl_resource)
     if (*wm).object != resource {
         return;
     }
-    log::debug!("active river_window_manager_v1 destroyed");
+    log::debug!("active zcce_window_manager_v1 destroyed");
     (*wm).object = std::ptr::null_mut();
 
     let server = (*wm).server;

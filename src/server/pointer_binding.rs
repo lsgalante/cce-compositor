@@ -54,7 +54,7 @@ impl PointerBinding {
             link: std::mem::zeroed(),
         }));
 
-        let resource = ffi::wl_resource_create(client, &ffi::river_pointer_binding_v1_interface, version as i32, id);
+        let resource = ffi::wl_resource_create(client, &ffi::zcce_pointer_binding_v1_interface, version as i32, id);
         if resource.is_null() {
             let _ = Box::from_raw(binding_ptr);
             return Err("wl_resource_create failed");
@@ -72,7 +72,7 @@ impl PointerBinding {
         crate::server::wl_list_insert((*pointer_bindings_list).prev, &mut (*binding_ptr).link as *mut ffi::wl_list as *mut crate::server::WlList);
 
         log::debug!(
-            "new river_pointer_binding_v1: button: {} modifiers: {}",
+            "new zcce_pointer_binding_v1: button: {} modifiers: {}",
             button,
             modifiers
         );
@@ -124,7 +124,7 @@ unsafe extern "C" fn handle_binding_resource_destroy(resource: *mut ffi::wl_reso
     }
 }
 
-static POINTER_BINDING_INTERFACE: ffi::river_pointer_binding_v1_interface = ffi::river_pointer_binding_v1_interface {
+static POINTER_BINDING_INTERFACE: ffi::zcce_pointer_binding_v1_interface = ffi::zcce_pointer_binding_v1_interface {
     destroy: Some(pointer_binding_destroy),
     enable: Some(pointer_binding_enable),
     disable: Some(pointer_binding_disable),

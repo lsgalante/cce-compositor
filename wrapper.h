@@ -91,7 +91,6 @@
 #include <pixman.h>
 
 // Custom and upstream protocols generated via wayland-scanner
-#include "river-window-management-v1-protocol.h"
 #include "river-xkb-bindings-v1-protocol.h"
 #include "river-layer-shell-v1-protocol.h"
 #include "river-input-management-v1-protocol.h"

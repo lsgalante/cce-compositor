@@ -58,10 +58,10 @@
         The new key binding is not enabled until initial configuration is
         completed and the enable request is made during a manage sequence.
       </description>
-      <arg name="seat" type="object" interface="river_seat_v1"/>
+      <arg name="seat" type="object" interface="zcce_seat_v1"/>
       <arg name="id" type="new_id" interface="river_xkb_binding_v1"/>
       <arg name="keysym" type="uint" summary="an xkbcommon keysym"/>
-      <arg name="modifiers" type="uint" enum="river_seat_v1.modifiers"/>
+      <arg name="modifiers" type="uint" enum="zcce_seat_v1.modifiers"/>
     </request>
 
     <request name="get_seat" since="2">
@@ -72,7 +72,7 @@
         river_seat_v1 object.
       </description>
       <arg name="id" type="new_id" interface="river_xkb_bindings_seat_v1"/>
-      <arg name="seat" type="object" interface="river_seat_v1"/>
+      <arg name="seat" type="object" interface="zcce_seat_v1"/>
     </request>
   </interface>
 

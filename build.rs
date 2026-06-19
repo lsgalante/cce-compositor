@@ -4,7 +4,6 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-changed=src/server/wlroots_log_wrapper.c");
     println!("cargo:rerun-if-changed=wrapper.h");
-    println!("cargo:rerun-if-changed=protocol/river-window-management-v1.xml");
     println!("cargo:rerun-if-changed=protocol/river-xkb-bindings-v1.xml");
     println!("cargo:rerun-if-changed=protocol/river-layer-shell-v1.xml");
     println!("cargo:rerun-if-changed=protocol/river-input-management-v1.xml");
@@ -80,7 +79,6 @@ fn main() {
 
     // Generate custom river protocol headers and private-code C files
     let custom_protocols = vec![
-        ("river-window-management-v1.xml", "protocol/river-window-management-v1.xml"),
         ("river-xkb-bindings-v1.xml", "protocol/river-xkb-bindings-v1.xml"),
         ("river-layer-shell-v1.xml", "protocol/river-layer-shell-v1.xml"),
         ("river-input-management-v1.xml", "protocol/river-input-management-v1.xml"),

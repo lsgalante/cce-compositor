@@ -5,7 +5,6 @@ use crate::slotmap::Key as SlotMapKey;
 
 pub struct CceWindowManagement {
     pub server: *mut Server,
-    pub global: *mut ffi::wl_global,
     pub toplevels: Vec<*mut ffi::wl_resource>,
 }
 
@@ -13,7 +12,6 @@ impl CceWindowManagement {
     pub fn new() -> Self {
         Self {
             server: std::ptr::null_mut(),
-            global: std::ptr::null_mut(),
             toplevels: Vec::new(),
         }
     }
@@ -21,58 +19,9 @@ impl CceWindowManagement {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.server = server;
         self.toplevels = Vec::new();
-
-        self.global = ffi::wl_global_create(
-            (*server).wl_server,
-            &ffi::zcce_window_manager_v1_interface,
-            1,
-            self as *mut CceWindowManagement as *mut _,
-            Some(bind_wm),
-        );
-
-        if self.global.is_null() {
-            return Err("Failed to create zcce_window_manager_v1 global");
-        }
-
-        log::info!("zcce_window_manager_v1 protocol global initialized successfully");
+        log::info!("CceWindowManagement initialized successfully");
         Ok(())
     }
-
-    pub unsafe fn deinit(&mut self) {
-        if !self.global.is_null() {
-            ffi::wl_global_destroy(self.global);
-            self.global = std::ptr::null_mut();
-        }
-    }
-}
-
-unsafe extern "C" fn bind_wm(
-    client: *mut ffi::wl_client,
-    data: *mut std::ffi::c_void,
-    version: u32,
-    id: u32,
-) {
-    let wm = data as *mut CceWindowManagement;
-    if wm.is_null() {
-        return;
-    }
-
-    let resource = ffi::wl_resource_create(client, &ffi::zcce_window_manager_v1_interface, version as i32, id);
-    if resource.is_null() {
-        ffi::wl_client_post_no_memory(client);
-        return;
-    }
-
-    ffi::wl_resource_set_implementation(
-        resource,
-        &CCE_WM_INTERFACE as *const _ as *const _,
-        wm as *mut _,
-        None,
-    );
-}
-
-unsafe extern "C" fn wm_destroy(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
-    ffi::wl_resource_destroy(resource);
 }
 
 struct CceToplevelData {
@@ -81,26 +30,31 @@ struct CceToplevelData {
     _resource: *mut ffi::wl_resource,
 }
 
-unsafe extern "C" fn wm_get_cce_toplevel(
+pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
     client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     id: u32,
     surface_resource: *mut ffi::wl_resource,
 ) {
-    let wm = ffi::wl_resource_get_user_data(resource) as *mut CceWindowManagement;
+    let wm = ffi::wl_resource_get_user_data(resource) as *mut crate::window_manager::WindowManager;
     if wm.is_null() {
         return;
     }
+    let server = (*wm).server;
+    if server.is_null() {
+        return;
+    }
+    let cce_wm = &mut (*server).cce_window_management as *mut CceWindowManagement;
 
     let surface = ffi::wlr_surface_from_resource(surface_resource);
     if surface.is_null() {
-        log::error!("wm_get_cce_toplevel: surface is null");
+        log::error!("cce_wm_get_cce_toplevel: surface is null");
         return;
     }
 
     // Find the Window corresponding to the surface
     let mut target_window = std::ptr::null_mut();
-    for &window in (*(*wm).server).wm.windows.iter() {
+    for &window in (*server).wm.windows.iter() {
         if !window.is_null() && (*window).root_surface() == surface {
             target_window = window;
             break;
@@ -108,7 +62,7 @@ unsafe extern "C" fn wm_get_cce_toplevel(
     }
 
     if target_window.is_null() {
-        log::error!("wm_get_cce_toplevel: no Window structure found for surface");
+        log::error!("cce_wm_get_cce_toplevel: no Window structure found for surface");
         return;
     }
 
@@ -120,7 +74,7 @@ unsafe extern "C" fn wm_get_cce_toplevel(
     }
 
     let data = Box::into_raw(Box::new(CceToplevelData {
-        server: (*wm).server,
+        server,
         window_key: (*target_window).ref_key,
         _resource: toplevel_res,
     }));
@@ -132,7 +86,7 @@ unsafe extern "C" fn wm_get_cce_toplevel(
         Some(handle_destroy_toplevel_resource),
     );
 
-    (*wm).toplevels.push(toplevel_res);
+    (*cce_wm).toplevels.push(toplevel_res);
 
     // Initial event: send current floating state
     let state = if (*target_window).tiling_mode == crate::tiling::TilingMode::Floating { 1 } else { 0 };
@@ -146,11 +100,6 @@ unsafe extern "C" fn handle_destroy_toplevel_resource(resource: *mut ffi::wl_res
         let _ = Box::from_raw(data_ptr);
     }
 }
-
-static CCE_WM_INTERFACE: ffi::zcce_window_manager_v1_interface = ffi::zcce_window_manager_v1_interface {
-    destroy: Some(wm_destroy),
-    get_cce_toplevel: Some(wm_get_cce_toplevel),
-};
 
 unsafe extern "C" fn toplevel_destroy(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     ffi::wl_resource_destroy(resource);

@@ -690,15 +690,15 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
 
     let hint = match (*(*decoration).wlr_decoration).requested_mode {
         ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_NONE => {
-            ffi::river_window_v1_decoration_hint_RIVER_WINDOW_V1_DECORATION_HINT_NO_PREFERENCE
+            ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_NO_PREFERENCE
         }
         ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE => {
-            ffi::river_window_v1_decoration_hint_RIVER_WINDOW_V1_DECORATION_HINT_PREFERS_CSD
+            ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_PREFERS_CSD
         }
         ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE => {
-            ffi::river_window_v1_decoration_hint_RIVER_WINDOW_V1_DECORATION_HINT_PREFERS_SSD
+            ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_PREFERS_SSD
         }
-        _ => ffi::river_window_v1_decoration_hint_RIVER_WINDOW_V1_DECORATION_HINT_NO_PREFERENCE,
+        _ => ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_NO_PREFERENCE,
     };
     (*window).set_decoration_hint(hint);
 }

@@ -397,7 +397,7 @@ impl OutputManager {
                 if !global.is_null() {
                     if !output.object.is_null() {
                         let name = ffi::wl_global_get_name(global, ffi::wl_resource_get_client(output.object));
-                        crate::output::river_output_send_wl_output(output.object, name);
+                        crate::output::zcce_output_send_wl_output(output.object, name);
                         output.sent_wl_output = true;
                     }
                 }

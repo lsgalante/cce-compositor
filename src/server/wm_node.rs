@@ -14,7 +14,7 @@ pub enum WmNodeTag {
 
 pub struct WmNode {
     pub tag: WmNodeTag,
-    pub object: *mut ffi::wl_resource, // river_node_v1
+    pub object: *mut ffi::wl_resource, // zcce_node_v1
     pub link: ffi::wl_list,
 }
 
@@ -53,7 +53,7 @@ impl WmNode {
 
     pub unsafe fn create_object(&mut self, client: *mut ffi::wl_client, version: u32, id: u32) {
         assert!(self.object.is_null());
-        let resource = ffi::wl_resource_create(client, &ffi::river_node_v1_interface, version as i32, id);
+        let resource = ffi::wl_resource_create(client, &ffi::zcce_node_v1_interface, version as i32, id);
         if resource.is_null() {
             log::error!("out of memory");
             ffi::wl_client_post_no_memory(client);
@@ -231,7 +231,7 @@ unsafe extern "C" fn node_place_below(
     );
 }
 
-static NODE_INTERFACE: ffi::river_node_v1_interface = ffi::river_node_v1_interface {
+static NODE_INTERFACE: ffi::zcce_node_v1_interface = ffi::zcce_node_v1_interface {
     destroy: Some(node_destroy),
     set_position: Some(node_set_position),
     place_top: Some(node_place_top),
@@ -240,7 +240,7 @@ static NODE_INTERFACE: ffi::river_node_v1_interface = ffi::river_node_v1_interfa
     place_below: Some(node_place_below),
 };
 
-static INERT_NODE_INTERFACE: ffi::river_node_v1_interface = ffi::river_node_v1_interface {
+static INERT_NODE_INTERFACE: ffi::zcce_node_v1_interface = ffi::zcce_node_v1_interface {
     destroy: Some(node_destroy),
     set_position: None,
     place_top: None,
