@@ -93,6 +93,8 @@ pub mod pointer_binding;
 pub mod keyboard_group;
 #[path = "server/inspector.rs"]
 pub mod inspector;
+#[path = "server/cce_window_management.rs"]
+pub mod cce_window_management;
 
 #[path = "server/run_server.rs"]
 pub mod run_server;

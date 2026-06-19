@@ -271,6 +271,7 @@ pub struct Server {
     pub idle_inhibit_manager: IdleInhibitManager,
     pub lock_manager: LockManager,
     pub inspector: crate::inspector::Inspector,
+    pub cce_window_management: crate::cce_window_management::CceWindowManagement,
 
     // Event listeners
     pub renderer_lost: ffi::wl_listener,
@@ -693,6 +694,7 @@ impl Server {
             self.idle_inhibit_manager.init(server_ptr).map_err(|_| "Failed to init idle_inhibit_manager")?;
             self.lock_manager.init(server_ptr).map_err(|_| "Failed to init lock_manager")?;
             self.inspector.init(server_ptr).map_err(|_| "Failed to init inspector")?;
+            self.cce_window_management.init(server_ptr).map_err(|_| "Failed to init cce_window_management")?;
 
             // Setup listeners
             let r_lost = &mut self.renderer_lost as *mut ffi::wl_listener as *mut WlListener;
@@ -822,6 +824,7 @@ impl Default for Server {
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.status_sender, None);
             std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());
+            std::ptr::write(&mut (*server.as_mut_ptr()).cce_window_management, crate::cce_window_management::CceWindowManagement::new());
             server.assume_init()
         }
     }

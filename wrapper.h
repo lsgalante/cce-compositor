@@ -98,6 +98,7 @@
 #include "river-libinput-config-v1-protocol.h"
 #include "river-xkb-config-v1-protocol.h"
 #include "clear-inspector-v1-protocol.h"
+#include "cce-window-management-v1-protocol.h"
 #include "virtual-keyboard-unstable-v1-protocol.h"
 #include <wlr/backend/libinput.h>
 

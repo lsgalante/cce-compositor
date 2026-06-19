@@ -87,6 +87,7 @@ fn main() {
         ("river-libinput-config-v1.xml", "protocol/river-libinput-config-v1.xml"),
         ("river-xkb-config-v1.xml", "protocol/river-xkb-config-v1.xml"),
         ("clear-inspector-v1.xml", "protocol/clear-inspector-v1.xml"),
+        ("cce-window-management-v1.xml", "protocol/cce-window-management-v1.xml"),
     ];
 
     let mut generated_c_files = Vec::new();

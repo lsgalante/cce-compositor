@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cce_window_management_v1">
+  <copyright>
+    Copyright © 2026 Antigravity
+  </copyright>
+
+  <interface name="zcce_window_manager_v1" version="1">
+    <description summary="cce window management interface">
+      This global interface allows clients to obtain custom window management
+      controls for their surfaces.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the window manager object"/>
+    </request>
+
+    <request name="get_cce_toplevel">
+      <description summary="get a cce toplevel for a surface">
+        Create a zcce_toplevel_v1 object for a given wl_surface.
+      </description>
+      <arg name="id" type="new_id" interface="zcce_toplevel_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="zcce_toplevel_v1" version="1">
+    <description summary="toplevel window management controls">
+      An interface to control and listen to CCE-specific window management states
+      for a client surface.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the cce toplevel object"/>
+    </request>
+
+    <request name="set_floating">
+      <description summary="request floating mode">
+        Explicitly request the compositor to place the window in floating mode.
+      </description>
+    </request>
+
+    <request name="unset_floating">
+      <description summary="unset floating mode">
+        Request the compositor to return the window to normal tiling mode.
+      </description>
+    </request>
+
+    <request name="set_maximized">
+      <description summary="request maximized state"/>
+    </request>
+
+    <request name="unset_maximized">
+      <description summary="unset maximized state"/>
+    </request>
+
+    <request name="set_fullscreen">
+      <description summary="request fullscreen state"/>
+    </request>
+
+    <request name="unset_fullscreen">
+      <description summary="unset fullscreen state"/>
+    </request>
+
+    <request name="set_minimized">
+      <description summary="request minimized state"/>
+    </request>
+
+    <event name="floating_state">
+      <description summary="floating status event">
+        Sent by the compositor to inform the client of its current floating status.
+      </description>
+      <arg name="state" type="uint" summary="1 if floating, 0 otherwise"/>
+    </event>
+  </interface>
+</protocol>
