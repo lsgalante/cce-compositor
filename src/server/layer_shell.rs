@@ -488,7 +488,7 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
         }
     }
     (*server).layer_shell.check_exclusive_focus();
-    (*server).wm.dirty_windowing();
+    (*server).wm.dirty_rendering();
 }
 
 unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -531,7 +531,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
         }
     }
     (*server).layer_shell.check_exclusive_focus();
-    (*server).wm.dirty_windowing();
+    (*server).wm.dirty_rendering();
 }
 
 unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -575,7 +575,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
     if (*wlr_layer_surface).initial_commit || ((*wlr_layer_surface).current.committed != 0) {
         (*output).layer_shell.arrange(output);
         (*server).layer_shell.check_exclusive_focus();
-        (*server).wm.dirty_windowing();
+        (*server).wm.dirty_rendering();
     }
 }
 
