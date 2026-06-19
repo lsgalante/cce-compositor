@@ -266,6 +266,12 @@ impl Window {
         }
     }
 
+    pub unsafe fn is_fullscreen(&self) -> bool {
+        self.tiling_mode == crate::tiling::TilingMode::Fullscreen
+            || !self.wm_requested.fullscreen.is_null()
+    }
+
+
     pub unsafe fn create(impl_type: WindowImpl, server: *mut Server) -> Result<*mut Self, &'static str> {
         let hidden_tree = (*server).scene.hidden_tree;
         let tree = ffi::wlr_scene_tree_create(hidden_tree);
@@ -1256,7 +1262,7 @@ impl Window {
                     let mut w = (*(*xwindow).xsurface).width as u32;
                     let mut h = (*(*xwindow).xsurface).height as u32;
                     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
-                    if self.is_wine() && !has_parent {
+                    if self.is_wine() && !has_parent && !self.is_fullscreen() {
                         w = w.saturating_sub(32);
                         h = h.saturating_sub(32);
                     }
@@ -1536,7 +1542,7 @@ impl Window {
                 if !xwindow.is_null() {
                     if !(*xwindow).surface_tree.is_null() {
                         let has_parent = !(*(*xwindow).xsurface).parent.is_null();
-                        if self.is_wine() && !has_parent {
+                        if self.is_wine() && !has_parent && !self.is_fullscreen() {
                             ffi::wlr_scene_node_set_position((*xwindow).surface_tree as *mut ffi::wlr_scene_node, -16, -16);
                         } else {
                             ffi::wlr_scene_node_set_position((*xwindow).surface_tree as *mut ffi::wlr_scene_node, 0, 0);

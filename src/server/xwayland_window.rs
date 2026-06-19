@@ -171,7 +171,7 @@ impl XwaylandWindow {
 
         let has_parent = !(*self.xsurface).parent.is_null();
 
-        if (*window).is_wine() && !has_parent {
+        if (*window).is_wine() && !has_parent && !(*window).is_fullscreen() {
             if scheduled.width.is_some() {
                 phys_width += 32;
             }
@@ -209,7 +209,7 @@ impl XwaylandWindow {
         let mut width = scheduled.width.unwrap_or((*self.xsurface).width as u32);
         let mut height = scheduled.height.unwrap_or((*self.xsurface).height as u32);
 
-        if (*window).is_wine() && !has_parent {
+        if (*window).is_wine() && !has_parent && !(*window).is_fullscreen() {
             if scheduled.width.is_none() {
                 width = width.saturating_sub(32);
             }
@@ -314,7 +314,7 @@ unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
 
     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
 
-    if (*(*xwindow).window).is_wine() && !has_parent {
+    if (*(*xwindow).window).is_wine() && !has_parent && !(*(*xwindow).window).is_fullscreen() {
         ffi::wlr_scene_node_set_position(surface_tree as *mut ffi::wlr_scene_node, -16, -16);
     }
 
@@ -421,13 +421,15 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         (*window).wm_requested.tiled != 0 || !matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup)
     };
 
+    let is_fullscreen = unsafe { (*window).is_fullscreen() };
+
     let (phys_width, phys_height) = if is_tiled {
         let log_w = (*window).configure_sent.width.unwrap_or((*window).box_geom.width as u32);
         let log_h = (*window).configure_sent.height.unwrap_or((*window).box_geom.height as u32);
         if log_w > 0 && log_h > 0 {
             let mut w = log_w;
             let mut h = log_h;
-            if is_wine && !has_parent {
+            if is_wine && !has_parent && !is_fullscreen {
                 w += 32;
                 h += 32;
             }
@@ -442,7 +444,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     let mut phys_x = ((*window).box_geom.x as f32 * scale).round() as i16;
     let mut phys_y = ((*window).box_geom.y as f32 * scale).round() as i16;
 
-    if is_wine && !has_parent {
+    if is_wine && !has_parent && !is_fullscreen {
         phys_x -= (16.0 * scale).round() as i16;
         phys_y -= (16.0 * scale).round() as i16;
     }
@@ -456,7 +458,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     );
     let mut log_width = phys_width as u32;
     let mut log_height = phys_height as u32;
-    if is_wine && !has_parent {
+    if is_wine && !has_parent && !is_fullscreen {
         log_width = log_width.saturating_sub(32);
         log_height = log_height.saturating_sub(32);
     }
