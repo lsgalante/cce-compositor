@@ -9,9 +9,9 @@ fn main() {
                 std::process::exit(0);
             }
             "control" => {
-                let mut control_args = vec!["clearctl".to_string()];
+                let mut control_args = vec!["cce-ctl".to_string()];
                 control_args.extend(args.iter().skip(2).cloned());
-                cce::run_clearctl(control_args);
+                cce::run_cce_ctl(control_args);
             }
             "--help" | "-h" | "help" => {
                 print_help();

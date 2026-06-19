@@ -104,6 +104,6 @@ pub use run_server::run_server;
 // ==========================================
 // IPC Client Modules
 // ==========================================
-#[path = "clearctl.rs"]
-pub mod clearctl;
-pub use clearctl::run_clearctl;
+#[path = "cce_ctl.rs"]
+pub mod cce_ctl;
+pub use cce_ctl::run_cce_ctl;

@@ -1,4 +1,4 @@
-// clearctl — IPC client for cce
+// cce-ctl — IPC client for cce
  
 use std::env;
 use std::fs;
@@ -66,7 +66,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  key-release <key>");
 }
  
-pub fn run_clearctl(args: Vec<String>) {
+pub fn run_cce_ctl(args: Vec<String>) {
     if args.len() < 2 {
         usage(&args[0], true);
         process::exit(1);
