@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, wl_listener_remove, wl_signal_add};
+use crate::server::{WlListener, wl_listener_remove, wl_signal_add};
 
 pub struct XdgPopup {
     pub wlr_popup: *mut ffi::wlr_xdg_popup,

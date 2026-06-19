@@ -46,7 +46,7 @@ fn ipc_server_main(tx: mpsc::Sender<IpcRequest>, display_socket: Option<String>)
 
     for stream in listener.incoming() {
         match stream {
-            Ok(mut s) => {
+            Ok(s) => {
                 let tx_clone = tx.clone();
                 thread::spawn(move || {
                     handle_client(s, tx_clone);

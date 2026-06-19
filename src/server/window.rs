@@ -1145,7 +1145,7 @@ impl Window {
             ffi::wlr_foreign_toplevel_handle_v1_set_activated(self.wlr_toplevel_handle, activated);
         }
 
-        let (mut width, mut height) = if !self.wm_requested.fullscreen.is_null() {
+        let (width, height) = if !self.wm_requested.fullscreen.is_null() {
             let output = self.wm_requested.fullscreen;
             let (w, h) = (*output).sent.dimensions();
             if self.configure_sent.width != Some(w as u32) || self.configure_sent.height != Some(h as u32) {
@@ -1637,6 +1637,7 @@ impl Window {
         }
     }
 
+    #[allow(unused_assignments)]
     pub unsafe fn apply_surface_clip(&mut self, a: *const ffi::wlr_box, b: *const ffi::wlr_box) {
         let mut surface_clip = std::mem::zeroed::<ffi::wlr_box>();
         let a_empty = (*a).width == 0 && (*a).height == 0;
@@ -1723,11 +1724,11 @@ unsafe fn clock_gettime(clk_id: libc::clockid_t, tp: &mut libc::timespec) -> lib
     libc::clock_gettime(clk_id, tp)
 }
 
-unsafe extern "C" fn window_destroy(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn window_destroy(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     ffi::wl_resource_destroy(resource);
 }
 
-unsafe extern "C" fn window_close(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn window_close(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
     if window.is_null() {
         return;
@@ -1760,7 +1761,7 @@ unsafe extern "C" fn window_get_node(
 }
 
 unsafe extern "C" fn window_propose_dimensions(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     width: i32,
     height: i32,
@@ -1789,7 +1790,7 @@ unsafe extern "C" fn window_propose_dimensions(
     }
 }
 
-unsafe extern "C" fn window_hide(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn window_hide(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
     if window.is_null() {
         return;
@@ -1801,7 +1802,7 @@ unsafe extern "C" fn window_hide(client: *mut ffi::wl_client, resource: *mut ffi
     (*window).rendering_requested.hidden = true;
 }
 
-unsafe extern "C" fn window_show(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn window_show(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
     if window.is_null() {
         return;
@@ -1813,7 +1814,7 @@ unsafe extern "C" fn window_show(client: *mut ffi::wl_client, resource: *mut ffi
     (*window).rendering_requested.hidden = false;
 }
 
-unsafe extern "C" fn window_use_csd(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn window_use_csd(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
     if window.is_null() {
         return;
@@ -1826,7 +1827,7 @@ unsafe extern "C" fn window_use_csd(client: *mut ffi::wl_client, resource: *mut 
     (*server).wm.dirty_windowing();
 }
 
-unsafe extern "C" fn window_use_ssd(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn window_use_ssd(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
     if window.is_null() {
         return;
@@ -1840,7 +1841,7 @@ unsafe extern "C" fn window_use_ssd(client: *mut ffi::wl_client, resource: *mut 
 }
 
 unsafe extern "C" fn window_set_borders(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     edges: u32,
     width: i32,
@@ -1876,7 +1877,7 @@ unsafe extern "C" fn window_set_borders(
 }
 
 unsafe extern "C" fn window_set_tiled(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     edges: u32,
 ) {
@@ -1952,7 +1953,7 @@ unsafe extern "C" fn window_get_decoration_below(
 }
 
 unsafe extern "C" fn window_inform_resize_start(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
@@ -1967,7 +1968,7 @@ unsafe extern "C" fn window_inform_resize_start(
 }
 
 unsafe extern "C" fn window_inform_resize_end(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
@@ -1982,7 +1983,7 @@ unsafe extern "C" fn window_inform_resize_end(
 }
 
 unsafe extern "C" fn window_set_capabilities(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     caps: u32,
 ) {
@@ -1998,7 +1999,7 @@ unsafe extern "C" fn window_set_capabilities(
 }
 
 unsafe extern "C" fn window_inform_maximized(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
@@ -2013,7 +2014,7 @@ unsafe extern "C" fn window_inform_maximized(
 }
 
 unsafe extern "C" fn window_inform_unmaximized(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
@@ -2028,7 +2029,7 @@ unsafe extern "C" fn window_inform_unmaximized(
 }
 
 unsafe extern "C" fn window_inform_fullscreen(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
@@ -2043,7 +2044,7 @@ unsafe extern "C" fn window_inform_fullscreen(
 }
 
 unsafe extern "C" fn window_inform_not_fullscreen(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
@@ -2058,7 +2059,7 @@ unsafe extern "C" fn window_inform_not_fullscreen(
 }
 
 unsafe extern "C" fn window_fullscreen(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     output: *mut ffi::wl_resource,
 ) {
@@ -2084,7 +2085,7 @@ unsafe extern "C" fn window_fullscreen(
 }
 
 unsafe extern "C" fn window_exit_fullscreen(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
     let window = ffi::wl_resource_get_user_data(resource) as *mut Window;
@@ -2099,7 +2100,7 @@ unsafe extern "C" fn window_exit_fullscreen(
 }
 
 unsafe extern "C" fn window_set_clip_box(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     x: i32,
     y: i32,
@@ -2131,7 +2132,7 @@ unsafe extern "C" fn window_set_clip_box(
 }
 
 unsafe extern "C" fn window_set_content_clip_box(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     x: i32,
     y: i32,
@@ -2163,7 +2164,7 @@ unsafe extern "C" fn window_set_content_clip_box(
 }
 
 unsafe extern "C" fn window_set_dimension_bounds(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     max_width: i32,
     max_height: i32,
@@ -2191,7 +2192,7 @@ unsafe extern "C" fn window_set_dimension_bounds(
 }
 
 unsafe extern "C" fn window_set_opacity(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     opacity: u32,
 ) {
@@ -2208,7 +2209,7 @@ unsafe extern "C" fn window_set_opacity(
 }
 
 unsafe extern "C" fn window_set_circular(
-    client: *mut ffi::wl_client,
+    _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
     circular: u32,
 ) {
@@ -2357,7 +2358,7 @@ impl Decoration {
 
         if !ffi::wlr_surface_set_role(
             surface,
-            &DECORATION_ROLE,
+            &raw const DECORATION_ROLE,
             decoration_v1,
             ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_ROLE,
         ) {
@@ -2426,7 +2427,7 @@ impl Decoration {
         self.surfaces.save();
     }
 
-    pub unsafe fn render_finish(&mut self, window_clip: *const ffi::wlr_box) {
+    pub unsafe fn render_finish(&mut self, _window_clip: *const ffi::wlr_box) {
         if self.rendering_requested.sync_next_commit {
             self.rendering_requested.sync_next_commit = false;
 
@@ -2506,7 +2507,7 @@ pub unsafe fn decoration_from_wlr_surface(surface: *mut ffi::wlr_surface) -> *mu
         return std::ptr::null_mut();
     }
     let role_ptr = ffi::river_wlr_surface_get_role(surface);
-    if role_ptr != &DECORATION_ROLE as *const _ {
+    if role_ptr != &raw const DECORATION_ROLE {
         return std::ptr::null_mut();
     }
     let resource = ffi::river_wlr_surface_get_role_resource(surface);

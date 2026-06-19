@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, wl_signal_add, wl_listener_remove, WlList, wl_list_insert, wl_list_remove};
+use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
 
 pub struct XkbConfig {
     pub server: *mut Server,

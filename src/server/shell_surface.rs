@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
+use crate::server::{Server, WlList, wl_list_insert};
 use crate::wm_node::WmNode;
 
 pub struct ShellSurfaceRenderingRequested {
@@ -40,7 +40,7 @@ impl ShellSurface {
 
         if !ffi::wlr_surface_set_role(
             surface,
-            &SHELL_SURFACE_ROLE,
+            &raw const SHELL_SURFACE_ROLE,
             shell_surface_v1,
             ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_ROLE,
         ) {
@@ -155,7 +155,7 @@ pub unsafe fn from_wlr_surface(surface: *mut ffi::wlr_surface) -> *mut ShellSurf
         return std::ptr::null_mut();
     }
     let role_ptr = ffi::river_wlr_surface_get_role(surface);
-    if role_ptr != &SHELL_SURFACE_ROLE as *const _ {
+    if role_ptr != &raw const SHELL_SURFACE_ROLE {
         return std::ptr::null_mut();
     }
     let resource = ffi::river_wlr_surface_get_role_resource(surface);

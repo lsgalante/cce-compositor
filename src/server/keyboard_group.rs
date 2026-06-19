@@ -3,7 +3,7 @@
 
 use crate::ffi;
 use crate::seat::Seat;
-use crate::keyboard::{Keyboard, KeyboardConfig};
+use crate::keyboard::KeyboardConfig;
 use crate::xkb_bindings::XkbBinding;
 use crate::server::wl_listener_remove;
 use std::collections::HashMap;

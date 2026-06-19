@@ -647,6 +647,8 @@ void river_wlr_keyboard_init(struct wlr_keyboard *keyboard,
 }
 
 static void enable_blur_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
+	(void)sx;
+	(void)sy;
 	struct wlr_scene_surface *scene_surface = wlr_scene_surface_try_from_buffer(buffer);
 	if (!scene_surface) {
 		return;
@@ -662,6 +664,8 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled) {
 }
 
 static void set_opacity_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
+	(void)sx;
+	(void)sy;
 	float opacity = *(float *)user_data;
 	wlr_scene_buffer_set_opacity(buffer, opacity);
 }

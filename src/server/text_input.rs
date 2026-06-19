@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{WlListener, wl_listener_remove, wl_signal_add, WlList};
+use crate::server::{WlListener, wl_signal_add, WlList};
 use crate::seat::Seat;
 
 #[repr(C)]

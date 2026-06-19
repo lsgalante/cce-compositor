@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, wl_signal_add, wl_listener_remove};
+use crate::server::{Server, WlListener, wl_signal_add};
 use crate::window::{Window, WindowImpl, WindowState};
 use crate::xwayland_override_redirect::XwaylandOverrideRedirect;
 
@@ -132,7 +132,7 @@ impl XwaylandWindow {
             }
         }
         // Fallback: first output in layout
-        let mut link = (*server).om.outputs.next;
+        let link = (*server).om.outputs.next;
         if link != &mut (*server).om.outputs as *mut ffi::wl_list {
             let output = crate::container_of!(link, crate::output::Output, link);
             return (*output).current.scale;
@@ -493,6 +493,7 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     }
 }
 
+#[allow(dead_code)]
 unsafe extern "C" fn handle_set_size_hints(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, set_size_hints);
     let size_hints = (*(*xwindow).xsurface).size_hints;

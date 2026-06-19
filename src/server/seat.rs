@@ -1024,7 +1024,7 @@ unsafe extern "C" fn handle_request_set_primary_selection(
     ffi::wlr_seat_set_primary_selection(seat.wlr_seat, (*event).source, (*event).serial);
 }
 
-unsafe extern "C" fn seat_destroy(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn seat_destroy(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     ffi::wl_resource_destroy(resource);
 }
 

@@ -882,7 +882,7 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
 }
 
 unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_axis_listener);
+    let _cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_axis_listener);
     let event = data as *mut ffi::wlr_tablet_tool_axis_event;
 
     let wlr_tablet = (*event).tablet;
@@ -905,7 +905,7 @@ unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, da
 }
 
 unsafe extern "C" fn handle_tablet_tool_proximity(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_proximity_listener);
+    let _cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_proximity_listener);
     let event = data as *mut ffi::wlr_tablet_tool_proximity_event;
 
     let wlr_tablet = (*event).tablet;
@@ -928,7 +928,7 @@ unsafe extern "C" fn handle_tablet_tool_proximity(listener: *mut ffi::wl_listene
 }
 
 unsafe extern "C" fn handle_tablet_tool_tip(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_tip_listener);
+    let _cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_tip_listener);
     let event = data as *mut ffi::wlr_tablet_tool_tip_event;
 
     let wlr_tablet = (*event).tablet;
@@ -951,7 +951,7 @@ unsafe extern "C" fn handle_tablet_tool_tip(listener: *mut ffi::wl_listener, dat
 }
 
 unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_button_listener);
+    let _cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_button_listener);
     let event = data as *mut ffi::wlr_tablet_tool_button_event;
 
     let wlr_tablet = (*event).tablet;

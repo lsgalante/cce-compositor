@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
+use crate::server::{WlList, wl_list_insert, wl_list_remove};
 use crate::window::Window;
 use crate::shell_surface::ShellSurface;
 

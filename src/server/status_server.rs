@@ -114,7 +114,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>, display_socket: Option<S
         // Accept new connections (non-blocking)
         for _ in 0..5 {
             match listener.accept() {
-                Ok((mut stream, _addr)) => {
+                Ok((stream, _addr)) => {
                     if let Err(e) = stream.set_nonblocking(true) {
                         log::error!("[status] failed to set non-blocking on client: {}", e);
                         continue;

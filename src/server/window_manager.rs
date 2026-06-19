@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, WlList, wl_list_insert, wl_list_remove, wl_listener_remove};
-use crate::slotmap::{SlotMap, Key};
+use crate::server::{Server, WlListener, WlList, wl_listener_remove};
+use crate::slotmap::SlotMap;
 use std::hash::{Hash, Hasher};
 
 pub use crate::window::Window;
@@ -1226,7 +1226,7 @@ impl WindowManager {
 
     pub unsafe fn first_seat(&self) -> Option<*mut crate::seat::Seat> {
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr_seat = (*seats_list).next;
+        let curr_seat = (*seats_list).next;
         if curr_seat != seats_list {
             Some(crate::container_of!(curr_seat, crate::seat::Seat, link))
         } else {
@@ -2041,7 +2041,7 @@ unsafe extern "C" fn handle_server_destroy(
 }
 
 // WM request handlers
-unsafe extern "C" fn wm_stop(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn wm_stop(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
     if !wm.is_null() {
         (*wm).object = std::ptr::null_mut();
@@ -2055,11 +2055,11 @@ unsafe extern "C" fn wm_stop(client: *mut ffi::wl_client, resource: *mut ffi::wl
     }
 }
 
-unsafe extern "C" fn wm_destroy(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn wm_destroy(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     ffi::wl_resource_destroy(resource);
 }
 
-unsafe extern "C" fn wm_manage_finish(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn wm_manage_finish(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
     if wm.is_null() {
         return;
@@ -2075,7 +2075,7 @@ unsafe extern "C" fn wm_manage_finish(client: *mut ffi::wl_client, resource: *mu
     (*wm).manage_finish();
 }
 
-unsafe extern "C" fn wm_manage_dirty(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn wm_manage_dirty(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
     if wm.is_null() {
         return;
@@ -2084,7 +2084,7 @@ unsafe extern "C" fn wm_manage_dirty(client: *mut ffi::wl_client, resource: *mut
     (*wm).add_dirty_idle();
 }
 
-unsafe extern "C" fn wm_render_finish(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn wm_render_finish(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
     if wm.is_null() {
         return;
@@ -2118,7 +2118,7 @@ unsafe extern "C" fn wm_get_shell_surface(
     }
 }
 
-unsafe extern "C" fn wm_exit_session(client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
+unsafe extern "C" fn wm_exit_session(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
     if wm.is_null() {
         return;
@@ -2182,7 +2182,7 @@ unsafe extern "C" fn bind(
         resource,
         &WM_INTERFACE as *const _ as *const _,
         wm as *mut _,
-        None,
+        Some(handle_destroy_wm_resource),
     );
 }
 

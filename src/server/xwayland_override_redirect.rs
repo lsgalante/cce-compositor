@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, wl_signal_add, wl_listener_remove};
+use crate::server::{Server, WlListener, wl_signal_add};
 use crate::xwayland_window::XwaylandWindow;
 
 #[repr(C)]
@@ -116,7 +116,7 @@ impl XwaylandOverrideRedirect {
     }
 }
 
-unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+unsafe extern "C" fn handle_request_configure(_listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let event = data as *mut ffi::wlr_xwayland_surface_configure_event;
     ffi::wlr_xwayland_surface_configure((*event).surface, (*event).x, (*event).y, (*event).width, (*event).height);
 }

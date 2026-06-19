@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, wl_signal_add, wl_listener_remove, WlList, wl_list_insert, wl_list_remove};
+use crate::server::{Server, WlListener, wl_signal_add, wl_listener_remove, WlList};
 use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
 use crate::seat::Focus;
 

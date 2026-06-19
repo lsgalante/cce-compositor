@@ -4,9 +4,8 @@
 use crate::ffi;
 use crate::server::{Server, WlListener, WlList, wl_signal_add, wl_listener_remove, wl_list_insert, wl_list_remove};
 use crate::layer_shell::LayerShellOutput;
-use crate::lock_manager::{LockSurface, LockState};
+use crate::lock_manager::LockState;
 use crate::util;
-use crate::window::Window;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OutputStateValue {

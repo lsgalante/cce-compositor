@@ -50,7 +50,7 @@ impl Scene {
     pub unsafe fn init(
         &mut self,
         linux_dmabuf: *mut ffi::wlr_linux_dmabuf_v1,
-        color_manager: *mut ffi::wlr_color_manager_v1,
+        _color_manager: *mut ffi::wlr_color_manager_v1,
     ) -> Result<(), &'static str> {
         let wlr_scene = ffi::wlr_scene_create();
         if wlr_scene.is_null() {

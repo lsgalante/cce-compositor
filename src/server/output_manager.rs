@@ -451,7 +451,7 @@ impl OutputManager {
         wm.dirty_windowing();
     }
 
-    pub unsafe fn send_config(&mut self, server: *mut Server) -> Result<(), &'static str> {
+    pub unsafe fn send_config(&mut self, _server: *mut Server) -> Result<(), &'static str> {
         let config = ffi::wlr_output_configuration_v1_create();
         if config.is_null() {
             return Err("Failed to create configuration v1");
@@ -531,7 +531,7 @@ fn validate_config_coordinates(server: *mut Server, config: *mut ffi::wlr_output
         let mut head_link = (*config).heads.next;
         while head_link != &mut (*config).heads {
             let head = crate::container_of!(head_link, ffi::wlr_output_configuration_head_v1, link);
-            let output_global = ffi::river_wlr_output_get_global((*head).state.output);
+            let _output_global = ffi::river_wlr_output_get_global((*head).state.output);
             
             if (*head).state.enabled {
                 let proposed = crate::output::OutputState::from_head_state(&((*head).state));

@@ -1,7 +1,6 @@
 // cce-ctl — IPC client for cce
  
 use std::env;
-use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::process;
@@ -13,6 +12,7 @@ fn get_socket_path() -> String {
     }
 }
  
+#[allow(dead_code)]
 fn get_windows_path() -> String {
     match env::var("WAYLAND_DISPLAY") {
         Ok(display) => format!("/tmp/cce-windows-{}", display),
