@@ -721,7 +721,8 @@ impl WindowManager {
 
                 let app_id = (*win_ptr).get_app_id_string();
                 let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
-                let visible = is_status_bar || ((*win_ptr).tags & self.active_tags) != 0;
+                let visible = (is_status_bar || ((*win_ptr).tags & self.active_tags) != 0)
+                    && matches!((*win_ptr).state, crate::window::WindowState::Mapped);
                 if !visible {
                     ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, false);
                     (*win_ptr).rendering_requested.hidden = true;
@@ -1233,7 +1234,7 @@ impl WindowManager {
     pub unsafe fn focus_next_visible_window(&mut self, seat: *mut crate::seat::Seat) {
         let mut next_focus: *mut Window = std::ptr::null_mut();
         for &w in self.windows.iter() {
-            if !w.is_null() && !(*w).closed && !(*w).minimized && ((*w).tags & self.active_tags) != 0 {
+            if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) && ((*w).tags & self.active_tags) != 0 {
                 let app_id = (*w).get_app_id_string();
                 let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
                 if !is_status_bar {
@@ -1319,7 +1320,7 @@ impl WindowManager {
                     let prog_name = crate::config::extract_program_name(cmd);
                     let mut matched_win: *mut Window = std::ptr::null_mut();
                     for &w in self.windows.iter() {
-                        if !w.is_null() && !(*w).closed {
+                        if !w.is_null() && !(*w).closed && matches!((*w).state, crate::window::WindowState::Mapped) {
                             let aid = (*w).get_app_id_string();
                             let title = (*w).get_title_string();
 
@@ -1557,7 +1558,7 @@ impl WindowManager {
                         
                         let active_tags = self.active_tags;
                         for &w in self.windows.iter() {
-                            if !w.is_null() && !(*w).closed && ((*w).tags & active_tags) != 0 && (*w).tiling_mode == current_mode {
+                            if !w.is_null() && !(*w).closed && matches!((*w).state, crate::window::WindowState::Mapped) && ((*w).tags & active_tags) != 0 && (*w).tiling_mode == current_mode {
                                 (*w).tiling_mode = next;
                                 (*w).mode_locked = true;
                             }
@@ -1721,7 +1722,7 @@ impl WindowManager {
                 if let Some(seat) = self.first_seat() {
                     let mut target: *mut Window = std::ptr::null_mut();
                     for &w in self.windows.iter() {
-                        if !w.is_null() && !(*w).closed && !(*w).minimized && ((*w).tags & self.active_tags) != 0 {
+                        if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) && ((*w).tags & self.active_tags) != 0 {
                             let aid = (*w).get_app_id_string();
                             let title = (*w).get_title_string();
 
@@ -1774,7 +1775,7 @@ impl WindowManager {
             "windows" => {
                 let mut out = String::new();
                 for &w in self.windows.iter() {
-                    if !w.is_null() && !(*w).closed {
+                    if !w.is_null() && !(*w).closed && matches!((*w).state, crate::window::WindowState::Mapped) {
                         let app_id = (*w).get_app_id_string().unwrap_or_default();
                         let title = (*w).get_title_string().unwrap_or_default();
                         out.push_str(&format!(

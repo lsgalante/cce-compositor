@@ -626,6 +626,13 @@ impl Window {
             ffi::wlr_foreign_toplevel_handle_v1_destroy(self.wlr_toplevel_handle);
             self.wlr_toplevel_handle = std::ptr::null_mut();
         }
+
+        if (*self.server).wm.expose_hovered_window == self as *mut Window {
+            (*self.server).wm.expose_hovered_window = std::ptr::null_mut();
+        }
+        if (*self.server).wm.expose_initial_focus == self as *mut Window {
+            (*self.server).wm.expose_initial_focus = std::ptr::null_mut();
+        }
     }
 
     pub unsafe fn close(&mut self) {
