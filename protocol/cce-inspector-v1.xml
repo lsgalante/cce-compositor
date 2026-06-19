@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<protocol name="clear_inspector_v1">
+<protocol name="cce_inspector_v1">
   <copyright>
     Copyright © 2026 Antigravity
   </copyright>
 
-  <interface name="zclear_inspector_v1" version="1">
+  <interface name="zcce_inspector_v1" version="1">
     <description summary="query information about client surface states and layouts">
       This interface allows cce-ui client applications to register their surfaces
       and publish their internal widget trees and state to the compositor.

@@ -26,17 +26,17 @@ impl Inspector {
 
         self.global = ffi::wl_global_create(
             (*server).wl_server,
-            &ffi::zclear_inspector_v1_interface,
+            &ffi::zcce_inspector_v1_interface,
             1,
             self as *mut Inspector as *mut _,
             Some(bind),
         );
 
         if self.global.is_null() {
-            return Err("Failed to create zclear_inspector_v1 global");
+            return Err("Failed to create zcce_inspector_v1 global");
         }
 
-        log::info!("zclear_inspector_v1 protocol global initialized successfully");
+        log::info!("zcce_inspector_v1 protocol global initialized successfully");
         Ok(())
     }
 
@@ -66,7 +66,7 @@ unsafe extern "C" fn bind(
         return;
     }
 
-    let resource = ffi::wl_resource_create(client, &ffi::zclear_inspector_v1_interface, version as i32, id);
+    let resource = ffi::wl_resource_create(client, &ffi::zcce_inspector_v1_interface, version as i32, id);
     if resource.is_null() {
         ffi::wl_client_post_no_memory(client);
         return;
@@ -227,7 +227,7 @@ unsafe extern "C" fn inspector_get_inspected_surfaces(
     ffi::wl_resource_post_event(resource, 1);
 }
 
-static INSPECTOR_INTERFACE: ffi::zclear_inspector_v1_interface = ffi::zclear_inspector_v1_interface {
+static INSPECTOR_INTERFACE: ffi::zcce_inspector_v1_interface = ffi::zcce_inspector_v1_interface {
     destroy: Some(inspector_destroy),
     register_client: Some(inspector_register_client),
     update_state: Some(inspector_update_state),

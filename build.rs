@@ -86,7 +86,7 @@ fn main() {
         ("river-input-management-v1.xml", "protocol/river-input-management-v1.xml"),
         ("river-libinput-config-v1.xml", "protocol/river-libinput-config-v1.xml"),
         ("river-xkb-config-v1.xml", "protocol/river-xkb-config-v1.xml"),
-        ("clear-inspector-v1.xml", "protocol/clear-inspector-v1.xml"),
+        ("cce-inspector-v1.xml", "protocol/cce-inspector-v1.xml"),
         ("cce-window-management-v1.xml", "protocol/cce-window-management-v1.xml"),
     ];
 
