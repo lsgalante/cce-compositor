@@ -918,11 +918,14 @@ impl WindowManager {
                     let mut target_w = w;
                     let mut target_h = h;
                     if !(*win_ptr).wm_requested.ssd {
+                        let (dec_w, dec_h) = (*win_ptr).get_decorations_size();
                         let is_tiled = current_layout != crate::tiling::TilingMode::Floating &&
                                        current_layout != crate::tiling::TilingMode::Popup &&
                                        current_layout != crate::tiling::TilingMode::Status;
-                        if !is_tiled {
-                            let (dec_w, dec_h) = (*win_ptr).get_decorations_size();
+                        if (*win_ptr).csd_buffer_size_bug {
+                            target_w = w + dec_w;
+                            target_h = h + dec_h;
+                        } else if !is_tiled {
                             target_w = (w - dec_w).max(1);
                             target_h = (h - dec_h).max(1);
                         }

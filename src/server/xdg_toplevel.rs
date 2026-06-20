@@ -491,6 +491,16 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
                 (*(*window).server).wm.dirty_windowing();
             }
 
+            if let Some(sent_w) = (*window).configure_sent.width {
+                if !(*window).wm_requested.ssd && dec_w > 0 && new_geometry.width as u32 == sent_w.saturating_sub(dec_w as u32) {
+                    if !(*window).csd_buffer_size_bug {
+                        (*window).csd_buffer_size_bug = true;
+                        log::info!("Detected CSD buffer size bug for window '{}'. Activating workaround.", (*window).get_title_string().unwrap_or_default());
+                        (*(*window).server).wm.dirty_windowing();
+                    }
+                }
+            }
+
             match (*toplevel).configure_state {
                 ConfigureState::Acked => {
                     (*toplevel).configure_state = ConfigureState::Committed;

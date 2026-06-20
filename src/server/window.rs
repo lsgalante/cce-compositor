@@ -238,6 +238,7 @@ pub struct Window {
     pub last_decor_h: i32,
     pub foreign_toplevel_handle: *mut ffi::wlr_ext_foreign_toplevel_handle_v1,
     pub wlr_toplevel_handle: *mut ffi::wlr_foreign_toplevel_handle_v1,
+    pub csd_buffer_size_bug: bool,
 }
 
 impl Window {
@@ -434,6 +435,7 @@ impl Window {
             last_decor_h: 0,
             foreign_toplevel_handle: std::ptr::null_mut(),
             wlr_toplevel_handle: std::ptr::null_mut(),
+            csd_buffer_size_bug: false,
         });
 
         ffi::wl_list_init(&mut window.decorations_below);
