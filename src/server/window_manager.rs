@@ -918,9 +918,14 @@ impl WindowManager {
                     let mut target_w = w;
                     let mut target_h = h;
                     if !(*win_ptr).wm_requested.ssd {
-                        let (dec_w, dec_h) = (*win_ptr).get_decorations_size();
-                        target_w = (w - dec_w).max(1);
-                        target_h = (h - dec_h).max(1);
+                        let is_tiled = current_layout != crate::tiling::TilingMode::Floating &&
+                                       current_layout != crate::tiling::TilingMode::Popup &&
+                                       current_layout != crate::tiling::TilingMode::Status;
+                        if !is_tiled {
+                            let (dec_w, dec_h) = (*win_ptr).get_decorations_size();
+                            target_w = (w - dec_w).max(1);
+                            target_h = (h - dec_h).max(1);
+                        }
                     }
                     (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
                         width: target_w as u32,

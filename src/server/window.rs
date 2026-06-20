@@ -1548,14 +1548,7 @@ impl Window {
                         x = 0;
                         y = 0;
                     }
-                    // For tiled CSD windows, do not shift the surfaces tree
-                    if !self.wm_requested.ssd &&
-                       self.tiling_mode != crate::tiling::TilingMode::Floating &&
-                       self.tiling_mode != crate::tiling::TilingMode::Popup &&
-                       self.tiling_mode != crate::tiling::TilingMode::Status {
-                        x = 0;
-                        y = 0;
-                    }
+
                     (x, y)
                 }
             }
