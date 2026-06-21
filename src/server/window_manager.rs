@@ -993,7 +993,7 @@ impl WindowManager {
 
                 (*win_ptr).rendering_requested.blur = self.layout.window_blur;
                 (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
-                    if self.layout.transparency_opacity >= 1.0 { 1.0f32 } else { 0.85f32 }
+                    if !self.layout.window_opacity { 1.0f32 } else { 0.85f32 }
                 };
             }
 
@@ -1029,7 +1029,7 @@ impl WindowManager {
                     };
                     (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
 
-                    let opacity_factor = if self.layout.transparency_opacity >= 1.0 { 1.0f32 } else { self.layout.side_panel_border_opacity as f32 / 100.0 };
+                    let opacity_factor = if !self.layout.window_opacity { 1.0f32 } else { self.layout.side_panel_border_opacity as f32 / 100.0 };
                     let is_focused = win_ptr == focused_window;
                     let r = self.layout.border_r;
                     let g_color = self.layout.border_g;
@@ -1046,7 +1046,7 @@ impl WindowManager {
                     };
                     (*win_ptr).rendering_requested.blur = self.layout.window_blur;
                     (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
-                        if self.layout.transparency_opacity >= 1.0 { 1.0f32 } else { 0.85f32 * opacity_factor }
+                        if !self.layout.window_opacity { 1.0f32 } else { 0.85f32 * opacity_factor }
                     };
                 } else {
                     floating_windows.push(win_ptr);
@@ -1071,7 +1071,7 @@ impl WindowManager {
                 };
                 (*win_ptr).rendering_requested.blur = self.layout.window_blur;
                 (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
-                    if self.layout.transparency_opacity >= 1.0 { 1.0f32 } else { 0.90f32 }
+                    if !self.layout.window_opacity { 1.0f32 } else { 0.90f32 }
                 };
 
                 if (*win_ptr).tiling_mode == crate::tiling::TilingMode::Popup {
@@ -1826,6 +1826,23 @@ impl WindowManager {
                 let key = parts[1];
                 let val = parts[2];
                 match key {
+                    "desktop_background" => {
+                        self.layout.desktop_background = val.to_string();
+                        let parsed_color = crate::config::parse_hex_color(val);
+                        self.layout.background_r = ((parsed_color >> 16) & 0xFF) * 0x01010101;
+                        self.layout.background_g = ((parsed_color >> 8) & 0xFF) * 0x01010101;
+                        self.layout.background_b = (parsed_color & 0xFF) * 0x01010101;
+                        unsafe {
+                            let outputs_head = &mut (*self.server).om.outputs as *mut crate::ffi::wl_list as *mut crate::server::WlList;
+                            let mut curr = (*outputs_head).next;
+                            while curr != outputs_head {
+                                let next = (*curr).next;
+                                let output = &mut *crate::container_of!(curr, crate::output::Output, link);
+                                output.update_background_color();
+                                curr = next;
+                            }
+                        }
+                    }
                     "gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap = v; } }
                     "gap_top" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_top = v; } }
                     "gap_left" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_left = v; } }

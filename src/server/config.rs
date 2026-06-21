@@ -38,8 +38,9 @@ pub struct Layout {
     pub side_panel_border_gap: i32,
     pub side_panel_border_opacity: i32,
     pub status_normal_color: String,
-    pub low_color: String,
+    pub desktop_background: String,
     pub transparency_opacity: f32,
+    pub window_opacity: bool,
 }
 
 impl Default for Layout {
@@ -76,8 +77,9 @@ impl Default for Layout {
             side_panel_border_gap: 0,
             side_panel_border_opacity: 100,
             status_normal_color: "#ccccd8".to_string(),
-            low_color: "#1c2020".to_string(),
+            desktop_background: "#000000".to_string(),
             transparency_opacity: 0.9,
+            window_opacity: true,
         }
     }
 }
@@ -221,6 +223,25 @@ pub struct TransparencyConfig {
     pub opacity: Option<f64>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct SurfacesConfig {
+    #[serde(default = "default_desktop_background")]
+    pub desktop_background: String,
+}
+
+impl Default for SurfacesConfig {
+    fn default() -> Self {
+        Self {
+            desktop_background: default_desktop_background(),
+        }
+    }
+}
+
+fn default_desktop_background() -> String {
+    "#000000".to_string()
+}
+
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -247,6 +268,8 @@ pub struct Config {
     pub gesture_bind: Vec<GestureBindConfig>,
     #[serde(default)]
     pub transparency: Option<TransparencyConfig>,
+    #[serde(default)]
+    pub surfaces: SurfacesConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -279,8 +302,6 @@ pub struct LayoutConfig {
     pub border_color: String,
     #[serde(default = "default_background_color")]
     pub background_color: String,
-    #[serde(default)]
-    pub low_color: Option<String>,
     #[serde(default = "default_border_font_size")]
     pub border_font_size: i64,
     #[serde(default = "default_transition_duration")]
@@ -303,6 +324,8 @@ pub struct LayoutConfig {
     pub side_panel_border_opacity: i64,
     #[serde(default = "default_status_normal_color")]
     pub status_normal_color: String,
+    #[serde(default = "default_window_opacity")]
+    pub window_opacity: bool,
 }
 
 impl Default for LayoutConfig {
@@ -322,7 +345,6 @@ impl Default for LayoutConfig {
             floating_border_width: default_floating_border_width(),
             border_color: default_border_color(),
             background_color: default_background_color(),
-            low_color: None,
             border_font_size: default_border_font_size(),
             transition_duration: default_transition_duration(),
             grid_gap: default_grid_gap(),
@@ -334,6 +356,7 @@ impl Default for LayoutConfig {
             side_panel_border_gap: default_side_panel_border_gap(),
             side_panel_border_opacity: default_side_panel_border_opacity(),
             status_normal_color: default_status_normal_color(),
+            window_opacity: default_window_opacity(),
         }
     }
 }
@@ -363,6 +386,7 @@ fn default_side_panel_position() -> String { "left".to_string() }
 fn default_side_panel_border_gap() -> i64 { 0 }
 fn default_side_panel_border_opacity() -> i64 { 100 }
 fn default_status_normal_color() -> String { "#ccccd8".to_string() }
+fn default_window_opacity() -> bool { true }
 
 #[derive(Debug, Deserialize)]
 pub struct ModeRuleConfig {
@@ -641,10 +665,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.border_b = (border_color_val & 0xFF) * 0x01010101;
     state.layout.border_a = 0xFFFFFFFF;
 
-    let low_color_str = config.layout.low_color.clone().unwrap_or_else(|| config.layout.background_color.clone());
-    state.layout.low_color = low_color_str.clone();
+    let desktop_background_str = config.surfaces.desktop_background.clone();
+    state.layout.desktop_background = desktop_background_str.clone();
 
-    let background_color_val = parse_hex_color(&low_color_str);
+    let background_color_val = parse_hex_color(&desktop_background_str);
     state.layout.background_r = ((background_color_val >> 16) & 0xFF) * 0x01010101;
     state.layout.background_g = ((background_color_val >> 8) & 0xFF) * 0x01010101;
     state.layout.background_b = (background_color_val & 0xFF) * 0x01010101;
@@ -662,6 +686,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.side_panel_border_opacity = config.layout.side_panel_border_opacity as i32;
     state.layout.status_normal_color = config.layout.status_normal_color.clone();
     state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
+    state.layout.window_opacity = config.layout.window_opacity;
 
     for (key, val) in &config.env {
         let expanded = expand_env_vars(val);
@@ -825,7 +850,7 @@ mod tests {
             assert_eq!(server.wm.input_config.dwtp, Some(true));
             assert_eq!(server.wm.input_config.trackpoint_accel_speed, Some(0.6));
             assert_eq!(server.wm.input_config.trackpoint_accel_profile, Some("flat".to_string()));
-            let parsed_color = parse_hex_color(&server.wm.layout.low_color);
+            let parsed_color = parse_hex_color(&server.wm.layout.desktop_background);
             let r = (parsed_color >> 16) & 0xFF;
             let g = (parsed_color >> 8) & 0xFF;
             let b = parsed_color & 0xFF;
