@@ -9,8 +9,11 @@ static ORIGINAL_RLIMIT: Mutex<Option<libc::rlimit>> = Mutex::new(None);
 pub fn setup() {
     // Ignore SIGPIPE so we don't get killed when writing to a socket that
     // has had its read end closed by another process.
+    // Also ignore SIGCHLD to automatically reap terminated child processes
+    // and prevent them from becoming zombies.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+        libc::signal(libc::SIGCHLD, libc::SIG_IGN);
     }
 
     // Most unix systems have a default limit of 1024 file descriptors.
@@ -44,6 +47,7 @@ pub fn cleanup_child() {
         libc::sigprocmask(libc::SIG_SETMASK, &empty_mask, std::ptr::null_mut());
 
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        libc::signal(libc::SIGCHLD, libc::SIG_DFL);
     }
 
     let orig = ORIGINAL_RLIMIT.lock().unwrap();

@@ -453,6 +453,7 @@ impl WindowManager {
         self.keep_status_bar_on_top();
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.layout.side_panel_behavior.hash(&mut hasher);
         let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*render_list).next;
         while curr != render_list {
@@ -464,6 +465,7 @@ impl WindowManager {
                     rendered_fullscreen(window).hash(&mut hasher);
                     (*window).rendering_requested.circular.hash(&mut hasher);
                     (*window).rendering_requested.hidden.hash(&mut hasher);
+                    (*window).tiling_mode.hash(&mut hasher);
                 }
                 crate::wm_node::WmNodeType::ShellSurface(shell_surface) => {
                     (shell_surface as usize).hash(&mut hasher);
@@ -494,6 +496,9 @@ impl WindowManager {
                                 ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                                 found_fullscreen = true;
                             } else if (*window).rendering_requested.circular {
+                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.top);
+                                ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                            } else if (*window).tiling_mode == crate::tiling::TilingMode::SidePanel && self.layout.side_panel_behavior == "above" {
                                 ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.top);
                                 ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                             } else {
