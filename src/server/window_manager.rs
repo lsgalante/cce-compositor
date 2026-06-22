@@ -652,6 +652,14 @@ impl WindowManager {
             let aid = (*win_ptr).get_app_id_string().unwrap_or_else(|| "None".to_string());
             log::info!("  window #{}: title={:?}, app_id={:?}, state={:?}, closed={}", idx, title, aid, (*win_ptr).state, (*win_ptr).closed);
         }
+
+        if !self.expose_active {
+            for &win_ptr in self.windows.iter() {
+                if !win_ptr.is_null() {
+                    (*win_ptr).scale = 1.0;
+                }
+            }
+        }
         
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr_out = (*outputs_list).next;
