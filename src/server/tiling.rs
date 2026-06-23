@@ -7,7 +7,7 @@ pub enum TilingMode {
     Grid,
     Fullscreen,
     Popup,
-    SidePanel,
+    Pinned,
     Expose,
     Status,
 }
@@ -20,7 +20,7 @@ impl TilingMode {
             TilingMode::Grid => "Grid",
             TilingMode::Fullscreen => "Fullscreen",
             TilingMode::Popup => "Popup",
-            TilingMode::SidePanel => "Side Panel",
+            TilingMode::Pinned => "Pinned",
             TilingMode::Expose => "Expose",
             TilingMode::Status => "Status",
         }

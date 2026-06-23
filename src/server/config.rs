@@ -32,11 +32,11 @@ pub struct Layout {
     pub grid_gap: i32,
     pub border_blur: bool,
     pub window_blur: bool,
-    pub side_panel_behavior: String,
-    pub side_panel_width: i32,
-    pub side_panel_position: String,
-    pub side_panel_border_gap: i32,
-    pub side_panel_border_opacity: i32,
+    pub pinned_behavior: String,
+    pub pinned_width: i32,
+    pub pinned_position: String,
+    pub pinned_border_gap: i32,
+    pub pinned_border_opacity: i32,
     pub status_normal_color: String,
     pub desktop_background: String,
     pub transparency_opacity: f32,
@@ -71,11 +71,11 @@ impl Default for Layout {
             grid_gap: 18,
             border_blur: false,
             window_blur: false,
-            side_panel_behavior: "inline".to_string(),
-            side_panel_width: 360,
-            side_panel_position: "left".to_string(),
-            side_panel_border_gap: 0,
-            side_panel_border_opacity: 100,
+            pinned_behavior: "inline".to_string(),
+            pinned_width: 360,
+            pinned_position: "left".to_string(),
+            pinned_border_gap: 0,
+            pinned_border_opacity: 100,
             status_normal_color: "#ccccd8".to_string(),
             desktop_background: "#000000".to_string(),
             transparency_opacity: 0.9,
@@ -125,8 +125,8 @@ pub enum Action {
     SetTag4,
     Expose,
     Minimize,
-    SidePanelLeft,
-    SidePanelRight,
+    PinnedLeft,
+    PinnedRight,
     ZoomIn,
     ZoomOut,
     ZoomReset,
@@ -319,16 +319,16 @@ pub struct LayoutConfig {
     pub border_blur: bool,
     #[serde(default = "default_window_blur")]
     pub window_blur: bool,
-    #[serde(default = "default_side_panel_behavior")]
-    pub side_panel_behavior: String,
-    #[serde(default = "default_side_panel_width")]
-    pub side_panel_width: i64,
-    #[serde(default = "default_side_panel_position")]
-    pub side_panel_position: String,
-    #[serde(default = "default_side_panel_border_gap")]
-    pub side_panel_border_gap: i64,
-    #[serde(default = "default_side_panel_border_opacity")]
-    pub side_panel_border_opacity: i64,
+    #[serde(default = "default_pinned_behavior", alias = "side_panel_behavior")]
+    pub pinned_behavior: String,
+    #[serde(default = "default_pinned_width", alias = "side_panel_width")]
+    pub pinned_width: i64,
+    #[serde(default = "default_pinned_position", alias = "side_panel_position")]
+    pub pinned_position: String,
+    #[serde(default = "default_pinned_border_gap", alias = "side_panel_border_gap")]
+    pub pinned_border_gap: i64,
+    #[serde(default = "default_pinned_border_opacity", alias = "side_panel_border_opacity")]
+    pub pinned_border_opacity: i64,
     #[serde(default = "default_status_normal_color")]
     pub status_normal_color: String,
     #[serde(default = "default_window_opacity")]
@@ -357,11 +357,11 @@ impl Default for LayoutConfig {
             grid_gap: default_grid_gap(),
             border_blur: default_border_blur(),
             window_blur: default_window_blur(),
-            side_panel_behavior: default_side_panel_behavior(),
-            side_panel_width: default_side_panel_width(),
-            side_panel_position: default_side_panel_position(),
-            side_panel_border_gap: default_side_panel_border_gap(),
-            side_panel_border_opacity: default_side_panel_border_opacity(),
+            pinned_behavior: default_pinned_behavior(),
+            pinned_width: default_pinned_width(),
+            pinned_position: default_pinned_position(),
+            pinned_border_gap: default_pinned_border_gap(),
+            pinned_border_opacity: default_pinned_border_opacity(),
             status_normal_color: default_status_normal_color(),
             window_opacity: default_window_opacity(),
         }
@@ -387,11 +387,11 @@ fn default_transition_duration() -> i64 { 300 }
 fn default_grid_gap() -> i64 { 18 }
 fn default_border_blur() -> bool { false }
 fn default_window_blur() -> bool { false }
-fn default_side_panel_behavior() -> String { "inline".to_string() }
-fn default_side_panel_width() -> i64 { 360 }
-fn default_side_panel_position() -> String { "left".to_string() }
-fn default_side_panel_border_gap() -> i64 { 0 }
-fn default_side_panel_border_opacity() -> i64 { 100 }
+fn default_pinned_behavior() -> String { "inline".to_string() }
+fn default_pinned_width() -> i64 { 360 }
+fn default_pinned_position() -> String { "left".to_string() }
+fn default_pinned_border_gap() -> i64 { 0 }
+fn default_pinned_border_opacity() -> i64 { 100 }
 fn default_status_normal_color() -> String { "#ccccd8".to_string() }
 fn default_window_opacity() -> bool { true }
 
@@ -432,7 +432,7 @@ pub fn parse_tiling_mode(s: &str) -> TilingMode {
         "grid" => TilingMode::Grid,
         "fullscreen" => TilingMode::Fullscreen,
         "popup" => TilingMode::Popup,
-        "sidepanel" | "side_panel" | "side-panel" => TilingMode::SidePanel,
+        "sidepanel" | "side_panel" | "side-panel" | "pinned" => TilingMode::Pinned,
         "expose" => TilingMode::Expose,
         "status" => TilingMode::Status,
         _ => TilingMode::Cascade,
@@ -552,10 +552,10 @@ pub fn parse_action(s: &str) -> Action {
         Action::None
     } else if s == "expose" {
         Action::Expose
-    } else if s == "side-panel-left" {
-        Action::SidePanelLeft
-    } else if s == "side-panel-right" {
-        Action::SidePanelRight
+    } else if s == "side-panel-left" || s == "pinned-left" {
+        Action::PinnedLeft
+    } else if s == "side-panel-right" || s == "pinned-right" {
+        Action::PinnedRight
     } else if s == "zoom-in" {
         Action::ZoomIn
     } else if s == "zoom-out" {
@@ -700,11 +700,11 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.grid_gap = config.layout.grid_gap as i32;
     state.layout.border_blur = config.layout.border_blur;
     state.layout.window_blur = config.layout.window_blur;
-    state.layout.side_panel_behavior = config.layout.side_panel_behavior;
-    state.layout.side_panel_width = config.layout.side_panel_width as i32;
-    state.layout.side_panel_position = config.layout.side_panel_position;
-    state.layout.side_panel_border_gap = config.layout.side_panel_border_gap as i32;
-    state.layout.side_panel_border_opacity = config.layout.side_panel_border_opacity as i32;
+    state.layout.pinned_behavior = config.layout.pinned_behavior;
+    state.layout.pinned_width = config.layout.pinned_width as i32;
+    state.layout.pinned_position = config.layout.pinned_position;
+    state.layout.pinned_border_gap = config.layout.pinned_border_gap as i32;
+    state.layout.pinned_border_opacity = config.layout.pinned_border_opacity as i32;
     state.layout.status_normal_color = config.layout.status_normal_color.clone();
     state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
     state.layout.window_opacity = config.layout.window_opacity;
@@ -746,7 +746,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         state.keybinds.push(Keybind {
             mods: super_mod,
             keysym: left_sym,
-            action: Action::SidePanelLeft,
+            action: Action::PinnedLeft,
             command: None,
         });
     }
@@ -754,7 +754,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         state.keybinds.push(Keybind {
             mods: super_mod,
             keysym: right_sym,
-            action: Action::SidePanelRight,
+            action: Action::PinnedRight,
             command: None,
         });
     }
