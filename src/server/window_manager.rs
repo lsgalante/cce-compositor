@@ -54,10 +54,10 @@ pub struct WindowManager {
     pub rendering_requested: WindowManagerRenderingRequested,
     pub dirty_idle: *mut ffi::wl_event_source,
     pub timeout: *mut ffi::wl_event_source,
-    pub active_tags: u32,
+    pub desk_pan_x: f64,
+    pub desk_pan_y: f64,
+    pub desk_zoom: f64,
     pub global_layout: crate::tiling::TilingMode,
-    pub tag_layouts: [crate::tiling::TilingMode; 4],
-    pub has_tag_layout: [bool; 4],
     pub layout: crate::config::Layout,
     pub mode_rules: Vec<crate::config::ModeRule>,
     pub keybinds: Vec<crate::config::Keybind>,
@@ -114,10 +114,10 @@ impl WindowManager {
             order_hash: 0,
         };
         self.dirty_idle = std::ptr::null_mut();
-        self.active_tags = 1;
+        self.desk_pan_x = 0.0;
+        self.desk_pan_y = 0.0;
+        self.desk_zoom = 1.0;
         self.global_layout = crate::tiling::TilingMode::Cascade;
-        self.tag_layouts = [crate::tiling::TilingMode::Cascade; 4];
-        self.has_tag_layout = [false; 4];
         self.layout = crate::config::Layout::default();
         self.output_scale = 1.0;
         self.mode_rules = Vec::new();
@@ -600,15 +600,7 @@ impl WindowManager {
             return rule.mode;
         }
 
-        // Check tag layouts
-        for tag_bit in 0..4 {
-            let tag_mask = 1u32 << tag_bit;
-            if ((*win).tags & tag_mask) != 0 && self.has_tag_layout[tag_bit] {
-                return self.tag_layouts[tag_bit];
-            }
-        }
-
-        self.global_layout
+        crate::tiling::TilingMode::Floating
     }
 
     pub unsafe fn get_active_resize_dimensions(&self, win_ptr: *mut Window) -> Option<(u32, u32)> {
@@ -653,14 +645,6 @@ impl WindowManager {
             log::info!("  window #{}: title={:?}, app_id={:?}, state={:?}, closed={}", idx, title, aid, (*win_ptr).state, (*win_ptr).closed);
         }
 
-        if !self.expose_active {
-            for &win_ptr in self.windows.iter() {
-                if !win_ptr.is_null() {
-                    (*win_ptr).scale = 1.0;
-                }
-            }
-        }
-        
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr_out = (*outputs_list).next;
         
@@ -691,18 +675,6 @@ impl WindowManager {
             curr_seat = next_seat;
         }
 
-        let mut stack_order: Vec<*mut Window> = Vec::new();
-        let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*render_list).next;
-        while curr != render_list {
-            let next = (*curr).next;
-            let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
-                stack_order.push(window);
-            }
-            curr = next;
-        }
-
         for &output in &active_outputs {
             let wlr_box = (*output).sent.box_layout();
             let phys_x = wlr_box.x;
@@ -723,9 +695,8 @@ impl WindowManager {
                 usable_h = non_ex.height;
             }
 
-            let mut tiled_windows: Vec<*mut Window> = Vec::new();
-            let mut floating_windows: Vec<*mut Window> = Vec::new();
             let mut side_panel_windows: Vec<*mut Window> = Vec::new();
+            let mut normal_windows: Vec<*mut Window> = Vec::new();
 
             for &win_ptr in self.windows.iter() {
                 if (*win_ptr).closed {
@@ -734,35 +705,8 @@ impl WindowManager {
 
                 let app_id = (*win_ptr).get_app_id_string();
                 let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
-                let visible = (is_status_bar || ((*win_ptr).tags & self.active_tags) != 0)
-                    && !matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
-                if !visible {
-                    ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, false);
-                    (*win_ptr).rendering_requested.hidden = true;
-                    continue;
-                }
-
-                ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
-                (*win_ptr).rendering_requested.hidden = false;
-
-                let mode = self.get_mode_for_window(win_ptr);
-                if !self.expose_active {
-                    (*win_ptr).tiling_mode = mode;
-                }
-
-                // Apply ModeRule SSD configuration if defined and not locked
-                if !(*win_ptr).mode_locked {
-                    if let Some(rule) = self.get_rule_for_window(win_ptr) {
-                        if let Some(rule_ssd) = rule.ssd {
-                            (*win_ptr).wm_requested.ssd = rule_ssd;
-                        }
-                    }
-                }
-
-                let app_id = (*win_ptr).get_app_id_string();
-
-                if app_id.as_deref() == Some("cce-status-interface") {
-                    let wlr_box = (*output).sent.box_layout();
+                
+                if is_status_bar {
                     let bar_h = self.layout.bar_height as u32;
                     (*win_ptr).rendering_requested.x = wlr_box.x;
                     (*win_ptr).rendering_requested.y = wlr_box.y;
@@ -776,237 +720,51 @@ impl WindowManager {
                     };
                     (*win_ptr).wm_requested.tiled = 0;
                     (*win_ptr).wm_requested.ssd = false;
+                    (*win_ptr).scale = 1.0;
+                    ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
+                    (*win_ptr).rendering_requested.hidden = false;
                     continue;
                 }
 
-                if mode == crate::tiling::TilingMode::Floating || mode == crate::tiling::TilingMode::Popup || mode == crate::tiling::TilingMode::Status {
-                    floating_windows.push(win_ptr);
-                } else if mode == crate::tiling::TilingMode::SidePanel {
+                let visible = !(*win_ptr).minimized
+                    && !matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
+                if !visible {
+                    ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, false);
+                    (*win_ptr).rendering_requested.hidden = true;
+                    continue;
+                }
+
+                ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
+                (*win_ptr).rendering_requested.hidden = false;
+
+                let mode = self.get_mode_for_window(win_ptr);
+                (*win_ptr).tiling_mode = mode;
+
+                if !(*win_ptr).mode_locked {
+                    if let Some(rule) = self.get_rule_for_window(win_ptr) {
+                        if let Some(rule_ssd) = rule.ssd {
+                            (*win_ptr).wm_requested.ssd = rule_ssd;
+                        }
+                    }
+                }
+
+                if mode == crate::tiling::TilingMode::SidePanel {
                     side_panel_windows.push(win_ptr);
                 } else {
-                    tiled_windows.push(win_ptr);
+                    normal_windows.push(win_ptr);
                 }
             }
 
+            // Arrange side panel windows (fixed on screen, scale = 1.0)
             let side_panel_win = side_panel_windows.first().copied();
             let mut side_panel_w = 0;
-            let mut shift_x = 0;
+            let bw = self.layout.border_width;
             if let Some(sp_win) = side_panel_win {
                 let hint_min_w = (*sp_win).wm_scheduled.dimensions_hint.min_width as i32;
                 side_panel_w = if hint_min_w > 32 {
                     std::cmp::max(self.layout.side_panel_width, hint_min_w)
                 } else {
                     self.layout.side_panel_width
-                };
-                if self.layout.side_panel_behavior != "above" {
-                    shift_x = side_panel_w + self.layout.side_panel_border_gap;
-                }
-            }
-
-            let tiled_usable_w = (usable_w - shift_x).max(1);
-            let tiled_usable_x = if self.layout.side_panel_position == "right" || self.layout.side_panel_behavior == "above" {
-                usable_x
-            } else {
-                usable_x + shift_x
-            };
-
-            let n_tiled = tiled_windows.len() as i32;
-            let current_layout = if n_tiled > 0 {
-                self.get_mode_for_window(tiled_windows[0])
-            } else {
-                self.global_layout
-            };
-
-            log::info!("arrange_views: n_tiled = {}, current_layout = {:?}, expose_active = {}", n_tiled, current_layout, self.expose_active);
-
-            if current_layout == crate::tiling::TilingMode::Cascade {
-                tiled_windows.sort_by_key(|&w| stack_order.iter().position(|&x| x == w).unwrap_or(usize::MAX));
-            }
-
-            let gap = self.layout.gap;
-            let gap_top = self.layout.gap_top;
-            let gap_left = self.layout.gap_left;
-            let gap_right = self.layout.gap_right;
-            let gap_bottom = self.layout.gap_bottom;
-            let bw = match current_layout {
-                crate::tiling::TilingMode::Cascade => self.layout.cascade_border_width,
-                crate::tiling::TilingMode::Grid | crate::tiling::TilingMode::Expose => self.layout.grid_border_width,
-                crate::tiling::TilingMode::Fullscreen => self.layout.fullscreen_border_width,
-                _ => self.layout.border_width,
-            };
-            let cascade_offset = self.layout.cascade_offset;
-            let bar_height = self.layout.bar_height;
-
-            for (idx, &win_ptr) in tiled_windows.iter().enumerate() {
-                if !self.expose_active {
-                    (*win_ptr).tiling_mode = current_layout;
-                }
-                let win_bw = if !(*win_ptr).wm_requested.ssd {
-                    0
-                } else {
-                    bw
-                };
-                let win_dec_h = if !(*win_ptr).wm_requested.ssd {
-                    0
-                } else {
-                    std::cmp::max(win_bw, 16)
-                };
-
-                let (x, y, w, h) = match current_layout {
-                    crate::tiling::TilingMode::Cascade => {
-                        crate::tiling::tile_cascade(
-                            tiled_usable_w, usable_h, gap, gap_top, gap_left, gap_right, gap_bottom,
-                            win_bw, win_dec_h, cascade_offset, bar_height, n_tiled, idx as i32
-                        )
-                    }
-                    crate::tiling::TilingMode::Grid => {
-                        crate::tiling::tile_grid(
-                            tiled_usable_w, usable_h, gap, gap_top, gap_left, gap_right, gap_bottom,
-                            win_bw, win_dec_h, bar_height, n_tiled, idx as i32
-                        )
-                    }
-                    crate::tiling::TilingMode::Expose => {
-                        crate::tiling::tile_expose(
-                            tiled_usable_w, usable_h, gap, gap_top, gap_left, gap_right, gap_bottom,
-                            win_bw, win_dec_h, bar_height, n_tiled, idx as i32
-                        )
-                    }
-                    crate::tiling::TilingMode::Fullscreen => {
-                        crate::tiling::tile_fullscreen(
-                            phys_w, phys_h, 0, 0, 0, 0,
-                            0, 0
-                        )
-                    }
-                    _ => {
-                        ((*win_ptr).box_geom.x, (*win_ptr).box_geom.y, (*win_ptr).box_geom.width as i32, (*win_ptr).box_geom.height as i32)
-                    }
-                };
-
-                let mut final_x = if current_layout == crate::tiling::TilingMode::Fullscreen {
-                    phys_x + x
-                } else {
-                    tiled_usable_x + x
-                };
-                let mut final_y = if current_layout == crate::tiling::TilingMode::Fullscreen {
-                    phys_y + y
-                } else {
-                    usable_y + y
-                };
-
-                if self.expose_active {
-                    let orig_w = (*win_ptr).box_geom.width;
-                    let orig_h = (*win_ptr).box_geom.height;
-                    let scale = if orig_w > 0 && orig_h > 0 {
-                        let scale_x = w as f64 / orig_w as f64;
-                        let scale_y = h as f64 / orig_h as f64;
-                        scale_x.min(scale_y).min(1.0)
-                    } else {
-                        1.0
-                    };
-                    (*win_ptr).scale = scale;
-
-                    let visual_w = orig_w as f64 * scale;
-                    let visual_h = orig_h as f64 * scale;
-                    let offset_x = (w as f64 - visual_w) / 2.0;
-                    let offset_y = (h as f64 - visual_h) / 2.0;
-
-                    final_x += offset_x as i32;
-                    final_y += offset_y as i32;
-                } else {
-                    (*win_ptr).scale = 1.0;
-                }
-
-                log::info!("arrange_views: tiled window index {}, title = {:?}, app_id = {:?}, geom_box = (x={}, y={}, w={}, h={}), target_box = (x={}, y={}, w={}, h={}), scale = {}",
-                    idx,
-                    (*win_ptr).get_title_string(),
-                    (*win_ptr).get_app_id_string(),
-                    (*win_ptr).box_geom.x, (*win_ptr).box_geom.y, (*win_ptr).box_geom.width, (*win_ptr).box_geom.height,
-                    final_x, final_y, w, h, (*win_ptr).scale
-                );
-
-                (*win_ptr).rendering_requested.x = final_x;
-                (*win_ptr).rendering_requested.y = final_y;
-
-                if !self.expose_active {
-                    let mut target_w = w;
-                    let mut target_h = h;
-                    if !(*win_ptr).wm_requested.ssd {
-                        let (dec_w, dec_h) = (*win_ptr).get_decorations_size();
-                        let is_tiled = current_layout != crate::tiling::TilingMode::Floating &&
-                                       current_layout != crate::tiling::TilingMode::Popup &&
-                                       current_layout != crate::tiling::TilingMode::Status;
-                        if (*win_ptr).csd_buffer_size_bug {
-                            target_w = w + dec_w;
-                            target_h = h + dec_h;
-                        } else if !is_tiled {
-                            target_w = (w - dec_w).max(1);
-                            target_h = (h - dec_h).max(1);
-                        }
-                    }
-                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                        width: target_w as u32,
-                        height: target_h as u32,
-                    });
-                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                        width: target_w as u32,
-                        height: target_h as u32,
-                    };
-                    let mode = self.get_mode_for_window(win_ptr);
-                    let is_maximized_layout = mode == crate::tiling::TilingMode::Cascade || mode == crate::tiling::TilingMode::Grid;
-                    (*win_ptr).wm_requested.tiled = if is_maximized_layout { 0 } else { 1 | 2 | 4 | 8 };
-                }
-
-                let is_focused = win_ptr == focused_window;
-                let (win_bw, r, g_val, b, a) = if self.expose_active {
-                    if self.window_is_valid(self.expose_hovered_window) && win_ptr == self.expose_hovered_window {
-                        (
-                            bw as u32,
-                            self.layout.border_r,
-                            self.layout.border_g,
-                            self.layout.border_b,
-                            self.layout.border_a,
-                        )
-                    } else {
-                        (0, 0, 0, 0, 0)
-                    }
-                } else {
-                    let (r, g_val, b, a) = if is_focused {
-                        (
-                            self.layout.border_r,
-                            self.layout.border_g,
-                            self.layout.border_b,
-                            self.layout.border_a,
-                        )
-                    } else {
-                        let mut tiled_stack = tiled_windows.clone();
-                        tiled_stack.sort_by_key(|&w| stack_order.iter().position(|&x| x == w).unwrap_or(usize::MAX));
-                        let pos = tiled_stack.iter().position(|&w| w == win_ptr).unwrap_or(0);
-                        let depth = n_tiled - 1 - pos as i32;
-                        let mut factor = 1.0_f64;
-                        for _ in 0..depth {
-                            factor *= 0.70; // UNFOCUSED_DEPTH_FACTOR
-                        }
-                        let r = blend_channel(self.layout.background_r, self.layout.border_r, factor);
-                        let g = blend_channel(self.layout.background_g, self.layout.border_g, factor);
-                        let b = blend_channel(self.layout.background_b, self.layout.border_b, factor);
-                        let a = blend_channel(self.layout.background_a, self.layout.border_a, factor);
-                        (r, g, b, a)
-                    };
-                    (bw as u32, r, g_val, b, a)
-                };
-
-                (*win_ptr).rendering_requested.border = crate::window::Border {
-                    edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
-                    width: win_bw,
-                    r,
-                    g: g_val,
-                    b,
-                    a,
-                };
-
-                (*win_ptr).rendering_requested.blur = self.layout.window_blur;
-                (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
-                    if !self.layout.window_opacity { 1.0f32 } else { 0.85f32 }
                 };
             }
 
@@ -1019,12 +777,14 @@ impl WindowManager {
                     } else {
                         usable_x + g + bw
                     };
-                    let sp_y = bar_height + usable_y + dec_h + g;
-                    let sp_h = (usable_h - bar_height - (dec_h + bw) - 2 * g).max(1);
+                    let sp_y = usable_y + dec_h + g;
+                    let sp_h = (usable_h - (dec_h + bw) - 2 * g).max(1);
                     let sp_w = (side_panel_w - bw * 2).max(1);
 
                     (*win_ptr).rendering_requested.x = sp_x;
                     (*win_ptr).rendering_requested.y = sp_y;
+                    (*win_ptr).scale = 1.0;
+                    
                     let mut sp_target_w = sp_w;
                     let mut sp_target_h = sp_h;
                     if !(*win_ptr).wm_requested.ssd {
@@ -1062,32 +822,16 @@ impl WindowManager {
                         if !self.layout.window_opacity { 1.0f32 } else { 0.85f32 * opacity_factor }
                     };
                 } else {
-                    floating_windows.push(win_ptr);
+                    normal_windows.push(win_ptr);
                 }
             }
 
-            let mut idx_floating = 0;
-            for &win_ptr in &floating_windows {
+            // Arrange normal windows on the virtual surface
+            for &win_ptr in &normal_windows {
+                let mode = (*win_ptr).tiling_mode;
                 let is_focused = win_ptr == focused_window;
-                let r = self.layout.border_r;
-                let g_val = self.layout.border_g;
-                let b = self.layout.border_b;
-                let a = self.layout.border_a;
 
-                (*win_ptr).rendering_requested.border = crate::window::Border {
-                    edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
-                    width: bw as u32,
-                    r,
-                    g: g_val,
-                    b,
-                    a,
-                };
-                (*win_ptr).rendering_requested.blur = self.layout.window_blur;
-                (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
-                    if !self.layout.window_opacity { 1.0f32 } else { 0.90f32 }
-                };
-
-                if (*win_ptr).tiling_mode == crate::tiling::TilingMode::Popup {
+                if mode == crate::tiling::TilingMode::Popup {
                     let hint_min_w = (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32;
                     let hint_min_h = (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32;
                     let fw = if (*win_ptr).box_geom.width > 0 {
@@ -1105,10 +849,11 @@ impl WindowManager {
                         100
                     };
                     let fx = usable_x + usable_w - fw - self.layout.gap_right;
-                    let fy = usable_y + bar_height + self.layout.gap_top;
+                    let fy = usable_y + self.layout.gap_top;
 
                     (*win_ptr).rendering_requested.x = fx;
                     (*win_ptr).rendering_requested.y = fy;
+                    (*win_ptr).scale = 1.0;
                     (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
                         width: fw as u32,
                         height: fh as u32,
@@ -1117,54 +862,47 @@ impl WindowManager {
                         width: fw as u32,
                         height: fh as u32,
                     };
+                } else if mode == crate::tiling::TilingMode::Fullscreen {
+                    (*win_ptr).rendering_requested.x = phys_x;
+                    (*win_ptr).rendering_requested.y = phys_y;
+                    (*win_ptr).scale = 1.0;
+                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                        width: phys_w as u32,
+                        height: phys_h as u32,
+                    });
+                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                        width: phys_w as u32,
+                        height: phys_h as u32,
+                    };
+                    (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
                 } else {
-                    let fbw = self.layout.floating_border_width;
-                    let mut fw = if let Some(resize_size) = self.get_active_resize_dimensions(win_ptr) {
+                    // Regular pannable window on the virtual surface
+                    let fw = if let Some(resize_size) = self.get_active_resize_dimensions(win_ptr) {
                         resize_size.0 as i32
                     } else if (*win_ptr).box_geom.width > 0 {
                         (*win_ptr).box_geom.width as i32
                     } else if (*win_ptr).wm_scheduled.dimensions_hint.min_width > 32 {
                         (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32
                     } else {
-                        usable_w * 2 / 3
+                        800
                     };
-                    let mut fh = if let Some(resize_size) = self.get_active_resize_dimensions(win_ptr) {
+                    let fh = if let Some(resize_size) = self.get_active_resize_dimensions(win_ptr) {
                         resize_size.1 as i32
                     } else if (*win_ptr).box_geom.height > 0 {
                         (*win_ptr).box_geom.height as i32
                     } else if (*win_ptr).wm_scheduled.dimensions_hint.min_height > 32 {
                         (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32
                     } else {
-                        usable_h * 2 / 3
+                        600
                     };
 
-                    let max_w = usable_w - gap_left - gap_right;
-                    let max_h = usable_h - bar_height - gap_top - gap_bottom;
-                    fw = fw.clamp(1, max_w.max(1));
-                    fh = fh.clamp(1, max_h.max(1));
+                    let final_x = phys_x + (((*win_ptr).virtual_x - self.desk_pan_x) * self.desk_zoom) as i32;
+                    let final_y = phys_y + (((*win_ptr).virtual_y - self.desk_pan_y) * self.desk_zoom) as i32;
 
-                    let mut fx = if (*win_ptr).rendering_requested.x != 0 || (*win_ptr).rendering_requested.y != 0 {
-                        (*win_ptr).rendering_requested.x
-                    } else {
-                        usable_x + gap_left + fbw + cascade_offset * idx_floating
-                    };
-                    let mut fy = if (*win_ptr).rendering_requested.x != 0 || (*win_ptr).rendering_requested.y != 0 {
-                        (*win_ptr).rendering_requested.y
-                    } else {
-                        usable_y + gap_left + fbw + bar_height + gap_top + cascade_offset * idx_floating
-                    };
+                    (*win_ptr).rendering_requested.x = final_x;
+                    (*win_ptr).rendering_requested.y = final_y;
+                    (*win_ptr).scale = self.desk_zoom;
 
-                    let min_visible = 64;
-                    let min_x = usable_x + gap_left - fw + fw.min(min_visible);
-                    let max_x = usable_x + usable_w - gap_right - fw.min(min_visible);
-                    let min_y = usable_y + bar_height + gap_top - fh + fh.min(min_visible);
-                    let max_y = usable_y + usable_h - gap_bottom - fh.min(min_visible);
-
-                    fx = fx.clamp(min_x, max_x.max(min_x));
-                    fy = fy.clamp(min_y, max_y.max(min_y));
-
-                    (*win_ptr).rendering_requested.x = fx;
-                    (*win_ptr).rendering_requested.y = fy;
                     (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
                         width: fw as u32,
                         height: fh as u32,
@@ -1173,9 +911,26 @@ impl WindowManager {
                         width: fw as u32,
                         height: fh as u32,
                     };
-
-                    idx_floating += 1;
                 }
+
+                // Apply borders, opacity, and blur to normal windows
+                let r = self.layout.border_r;
+                let g_val = self.layout.border_g;
+                let b = self.layout.border_b;
+                let a = self.layout.border_a;
+
+                (*win_ptr).rendering_requested.border = crate::window::Border {
+                    edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
+                    width: bw as u32,
+                    r,
+                    g: g_val,
+                    b,
+                    a,
+                };
+                (*win_ptr).rendering_requested.blur = self.layout.window_blur;
+                (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
+                    if !self.layout.window_opacity { 1.0f32 } else { 0.90f32 }
+                };
             }
         }
         // If the focused window is no longer visible on the active tags, refocus
@@ -1187,7 +942,7 @@ impl WindowManager {
             let mut focused_visible = false;
             match (*seat).focused {
                 crate::seat::Focus::Window(w) => {
-                    if !w.is_null() && !(*w).closed && !(*w).minimized && ((*w).tags & self.active_tags) != 0 {
+                    if !w.is_null() && !(*w).closed && !(*w).minimized {
                         focused_visible = true;
                     }
                 }
@@ -1266,7 +1021,7 @@ impl WindowManager {
     pub unsafe fn focus_next_visible_window(&mut self, seat: *mut crate::seat::Seat) {
         let mut next_focus: *mut Window = std::ptr::null_mut();
         for &w in self.windows.iter() {
-            if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) && ((*w).tags & self.active_tags) != 0 {
+            if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                 let app_id = (*w).get_app_id_string();
                 let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
                 if !is_status_bar {
@@ -1430,7 +1185,7 @@ impl WindowManager {
                         let next = (*curr).next;
                         let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
                         if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
-                            if !window.is_null() && !(*window).closed && !(*window).minimized && ((*window).tags & self.active_tags) != 0 {
+                            if !window.is_null() && !(*window).closed && !(*window).minimized {
                                 let is_status_bar = (*window).get_app_id_string()
                                     .map_or(false, |aid| aid == "cce-status-interface");
                                 if !is_status_bar {
@@ -1518,45 +1273,11 @@ impl WindowManager {
                     }
                 }
             }
-            Action::LayoutNext => {
-                let cycle = [
-                    crate::tiling::TilingMode::Cascade,
-                    crate::tiling::TilingMode::Grid,
-                    crate::tiling::TilingMode::Fullscreen,
-                ];
-                let active_tags = self.active_tags;
-                let first_tag_bit = (0..4).find(|b| (active_tags & (1u32 << b)) != 0);
-                let current = if let Some(bit) = first_tag_bit {
-                    if self.has_tag_layout[bit] {
-                        self.tag_layouts[bit]
-                    } else {
-                        self.global_layout
-                    }
-                } else {
-                    self.global_layout
-                };
-                
-                let next = cycle
-                    .iter()
-                    .position(|m| *m == current)
-                    .map(|i| cycle[(i + 1) % cycle.len()])
-                    .unwrap_or(crate::tiling::TilingMode::Cascade);
-                    
-                for tag_bit in 0..4 {
-                    if (active_tags & (1u32 << tag_bit)) != 0 {
-                        self.tag_layouts[tag_bit] = next;
-                        self.has_tag_layout[tag_bit] = true;
-                    }
-                }
-                log::info!("layout-next: cycled layout to {:?}", next);
-                self.dirty_windowing();
-            }
+            Action::LayoutNext => {}
             Action::ModeNext => {
                 let cycle = [
-                    crate::tiling::TilingMode::Cascade,
-                    crate::tiling::TilingMode::Grid,
-                    crate::tiling::TilingMode::Fullscreen,
                     crate::tiling::TilingMode::Floating,
+                    crate::tiling::TilingMode::Fullscreen,
                 ];
                 if let Some(seat) = self.first_seat() {
                     if let crate::seat::Focus::Window(fw) = (*seat).focused {
@@ -1565,7 +1286,7 @@ impl WindowManager {
                             .iter()
                             .position(|m| *m == current_mode)
                             .map(|i| cycle[(i + 1) % cycle.len()])
-                            .unwrap_or(crate::tiling::TilingMode::Cascade);
+                            .unwrap_or(crate::tiling::TilingMode::Floating);
                         (*fw).tiling_mode = next;
                         (*fw).mode_locked = true;
                         self.dirty_windowing();
@@ -1574,10 +1295,8 @@ impl WindowManager {
             }
             Action::ModeNextShared => {
                 let cycle = [
-                    crate::tiling::TilingMode::Cascade,
-                    crate::tiling::TilingMode::Grid,
-                    crate::tiling::TilingMode::Fullscreen,
                     crate::tiling::TilingMode::Floating,
+                    crate::tiling::TilingMode::Fullscreen,
                 ];
                 if let Some(seat) = self.first_seat() {
                     if let crate::seat::Focus::Window(fw) = (*seat).focused {
@@ -1586,11 +1305,10 @@ impl WindowManager {
                             .iter()
                             .position(|m| *m == current_mode)
                             .map(|i| cycle[(i + 1) % cycle.len()])
-                            .unwrap_or(crate::tiling::TilingMode::Cascade);
+                            .unwrap_or(crate::tiling::TilingMode::Floating);
                         
-                        let active_tags = self.active_tags;
                         for &w in self.windows.iter() {
-                            if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) && ((*w).tags & active_tags) != 0 && (*w).tiling_mode == current_mode {
+                            if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) && (*w).tiling_mode == current_mode {
                                 (*w).tiling_mode = next;
                                 (*w).mode_locked = true;
                             }
@@ -1599,48 +1317,92 @@ impl WindowManager {
                     }
                 }
             }
-             Action::View1 | Action::View2 | Action::View3 | Action::View4 => {
-                let tag = match action {
-                    Action::View1 => 1,
-                    Action::View2 => 2,
-                    Action::View3 => 3,
-                    Action::View4 => 4,
-                    _ => 1,
+            Action::View1 | Action::View2 | Action::View3 | Action::View4 => {
+                let (target_x, target_y) = match action {
+                    Action::View1 => (0.0, 0.0),
+                    Action::View2 => (2000.0, 0.0),
+                    Action::View3 => (0.0, 2000.0),
+                    Action::View4 => (2000.0, 2000.0),
+                    _ => (0.0, 0.0),
                 };
-                self.active_tags = 1 << (tag - 1);
-                self.dirty_windowing();
-            }
-            Action::Toggle1 | Action::Toggle2 | Action::Toggle3 | Action::Toggle4 => {
-                let tag = match action {
-                    Action::Toggle1 => 1,
-                    Action::Toggle2 => 2,
-                    Action::Toggle3 => 3,
-                    Action::Toggle4 => 4,
-                    _ => 1,
-                };
-                self.active_tags ^= 1 << (tag - 1);
-                if self.active_tags == 0 {
-                    self.active_tags = 1;
+                
+                let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
+                let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                let mut curr_out = (*outputs_list).next;
+                while curr_out != outputs_list {
+                    let output = crate::container_of!(curr_out, crate::output::Output, link);
+                    if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                        let wlr_box = (*output).sent.box_layout();
+                        viewport_w = wlr_box.width as f64;
+                        viewport_h = wlr_box.height as f64;
+                        break;
+                    }
+                    curr_out = (*curr_out).next;
                 }
+                
+                self.desk_pan_x = target_x - (viewport_w / 2.0) / self.desk_zoom;
+                self.desk_pan_y = target_y - (viewport_h / 2.0) / self.desk_zoom;
                 self.dirty_windowing();
             }
+            Action::Toggle1 | Action::Toggle2 | Action::Toggle3 | Action::Toggle4 => {}
             Action::SetTag1 | Action::SetTag2 | Action::SetTag3 | Action::SetTag4 => {
-                let tag = match action {
-                    Action::SetTag1 => 1,
-                    Action::SetTag2 => 2,
-                    Action::SetTag3 => 3,
-                    Action::SetTag4 => 4,
-                    _ => 1,
+                let (target_x, target_y) = match action {
+                    Action::SetTag1 => (0.0, 0.0),
+                    Action::SetTag2 => (2000.0, 0.0),
+                    Action::SetTag3 => (0.0, 2000.0),
+                    Action::SetTag4 => (2000.0, 2000.0),
+                    _ => (0.0, 0.0),
                 };
                 if let Some(seat) = self.first_seat() {
                     if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                        (*fw).tags = 1 << (tag - 1);
-                        if ((*fw).tags & self.active_tags) == 0 {
-                            self.focus_next_visible_window(seat);
-                        }
+                        let w = if (*fw).box_geom.width > 0 { (*fw).box_geom.width as f64 } else { 800.0 };
+                        let h = if (*fw).box_geom.height > 0 { (*fw).box_geom.height as f64 } else { 600.0 };
+                        (*fw).virtual_x = target_x - w / 2.0;
+                        (*fw).virtual_y = target_y - h / 2.0;
                         self.dirty_windowing();
                     }
                 }
+            }
+            Action::ZoomIn | Action::ZoomOut | Action::ZoomReset => {
+                let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
+                let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                let mut curr_out = (*outputs_list).next;
+                while curr_out != outputs_list {
+                    let output = crate::container_of!(curr_out, crate::output::Output, link);
+                    if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                        let wlr_box = (*output).sent.box_layout();
+                        viewport_w = wlr_box.width as f64;
+                        viewport_h = wlr_box.height as f64;
+                        break;
+                    }
+                    curr_out = (*curr_out).next;
+                }
+                
+                let cx = self.desk_pan_x + (viewport_w / 2.0) / self.desk_zoom;
+                let cy = self.desk_pan_y + (viewport_h / 2.0) / self.desk_zoom;
+                
+                let new_zoom = match action {
+                    Action::ZoomIn => (self.desk_zoom * 1.1).min(10.0),
+                    Action::ZoomOut => (self.desk_zoom / 1.1).max(0.1),
+                    Action::ZoomReset => 1.0,
+                    _ => self.desk_zoom,
+                };
+                
+                self.desk_pan_x = cx - (viewport_w / 2.0) / new_zoom;
+                self.desk_pan_y = cy - (viewport_h / 2.0) / new_zoom;
+                self.desk_zoom = new_zoom;
+                self.dirty_windowing();
+            }
+            Action::PanLeft | Action::PanRight | Action::PanUp | Action::PanDown => {
+                let step = 100.0 / self.desk_zoom;
+                match action {
+                    Action::PanLeft => self.desk_pan_x -= step,
+                    Action::PanRight => self.desk_pan_x += step,
+                    Action::PanUp => self.desk_pan_y -= step,
+                    Action::PanDown => self.desk_pan_y += step,
+                    _ => {}
+                }
+                self.dirty_windowing();
             }
             Action::SidePanelLeft => {
                 self.layout.side_panel_position = "left".to_string();
@@ -1692,7 +1454,14 @@ impl WindowManager {
                 if parts.len() < 2 { return "error: missing tag\n".to_string(); }
                 if let Ok(tag) = parts[1].parse::<i32>() {
                     if tag >= 1 && tag <= 4 {
-                        self.execute_action(&crate::config::Action::View1, Some(parts[1]));
+                        let act = match tag {
+                            1 => crate::config::Action::View1,
+                            2 => crate::config::Action::View2,
+                            3 => crate::config::Action::View3,
+                            4 => crate::config::Action::View4,
+                            _ => crate::config::Action::None,
+                        };
+                        self.execute_action(&act, None);
                         return "ok\n".to_string();
                     }
                 }
@@ -1732,6 +1501,101 @@ impl WindowManager {
                 }
                 "error: invalid tag\n".to_string()
             }
+            "pan-by" => {
+                if parts.len() < 3 { return "error: missing dx or dy\n".to_string(); }
+                if let (Ok(dx), Ok(dy)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                    self.desk_pan_x += dx;
+                    self.desk_pan_y += dy;
+                    self.dirty_windowing();
+                    return "ok\n".to_string();
+                }
+                "error: invalid dx or dy\n".to_string()
+            }
+            "pan-to" => {
+                if parts.len() < 3 { return "error: missing x or y\n".to_string(); }
+                if let (Ok(x), Ok(y)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                    self.desk_pan_x = x;
+                    self.desk_pan_y = y;
+                    self.dirty_windowing();
+                    return "ok\n".to_string();
+                }
+                "error: invalid x or y\n".to_string()
+            }
+            "zoom-in" => {
+                self.execute_action(&crate::config::Action::ZoomIn, None);
+                "ok\n".to_string()
+            }
+            "zoom-out" => {
+                self.execute_action(&crate::config::Action::ZoomOut, None);
+                "ok\n".to_string()
+            }
+            "set-zoom" => {
+                if parts.len() < 2 { return "error: missing zoom factor\n".to_string(); }
+                if let Ok(factor) = parts[1].parse::<f64>() {
+                    let new_zoom = factor.clamp(0.1, 10.0);
+                    let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
+                    let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                    let mut curr_out = (*outputs_list).next;
+                    while curr_out != outputs_list {
+                        let output = crate::container_of!(curr_out, crate::output::Output, link);
+                        if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                            let wlr_box = (*output).sent.box_layout();
+                            viewport_w = wlr_box.width as f64;
+                            viewport_h = wlr_box.height as f64;
+                            break;
+                        }
+                        curr_out = (*curr_out).next;
+                    }
+                    let cx = self.desk_pan_x + (viewport_w / 2.0) / self.desk_zoom;
+                    let cy = self.desk_pan_y + (viewport_h / 2.0) / self.desk_zoom;
+                    self.desk_pan_x = cx - (viewport_w / 2.0) / new_zoom;
+                    self.desk_pan_y = cy - (viewport_h / 2.0) / new_zoom;
+                    self.desk_zoom = new_zoom;
+                    self.dirty_windowing();
+                    return "ok\n".to_string();
+                }
+                "error: invalid zoom factor\n".to_string()
+            }
+            "set-coords" => {
+                if parts.len() < 3 { return "error: missing x or y\n".to_string(); }
+                if let (Ok(x), Ok(y)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                    if let Some(seat) = self.first_seat() {
+                        if let crate::seat::Focus::Window(fw) = (*seat).focused {
+                            (*fw).virtual_x = x;
+                            (*fw).virtual_y = y;
+                            self.dirty_windowing();
+                            return "ok\n".to_string();
+                        }
+                    }
+                    return "error: no focused window\n".to_string();
+                }
+                "error: invalid x or y\n".to_string()
+            }
+            "set-coords-of" => {
+                if parts.len() < 4 { return "error: missing app_id, x, or y\n".to_string(); }
+                let app_id_query = parts[1];
+                if let (Ok(x), Ok(y)) = (parts[2].parse::<f64>(), parts[3].parse::<f64>()) {
+                    let mut found = false;
+                    for &w in self.windows.iter() {
+                        if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
+                            if let Some(aid) = (*w).get_app_id_string() {
+                                if aid.to_lowercase() == app_id_query.to_lowercase() {
+                                    (*w).virtual_x = x;
+                                    (*w).virtual_y = y;
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                    if found {
+                        self.dirty_windowing();
+                        return "ok\n".to_string();
+                    } else {
+                        return "error: window not found\n".to_string();
+                    }
+                }
+                "error: invalid x or y\n".to_string()
+            }
             "close" => {
                 self.execute_action(&crate::config::Action::Close, None);
                 "ok\n".to_string()
@@ -1754,7 +1618,7 @@ impl WindowManager {
                 if let Some(seat) = self.first_seat() {
                     let mut target: *mut Window = std::ptr::null_mut();
                     for &w in self.windows.iter() {
-                        if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) && ((*w).tags & self.active_tags) != 0 {
+                        if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                             let aid = (*w).get_app_id_string();
                             let title = (*w).get_title_string();
 
@@ -1811,7 +1675,7 @@ impl WindowManager {
                         let app_id = (*w).get_app_id_string().unwrap_or_default();
                         let title = (*w).get_title_string().unwrap_or_default();
                         out.push_str(&format!(
-                            "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} tags={} minimized={} has_parent={}\n",
+                            "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} minimized={} has_parent={}\n",
                             (*w).ref_key.index,
                             app_id,
                             title,
@@ -1820,7 +1684,8 @@ impl WindowManager {
                             (*w).box_geom.y,
                             (*w).box_geom.width,
                             (*w).box_geom.height,
-                            (*w).tags,
+                            (*w).virtual_x,
+                            (*w).virtual_y,
                             (*w).minimized,
                             (*w).has_parent,
                         ));
@@ -1887,17 +1752,7 @@ impl WindowManager {
                 "ok\n".to_string()
             }
             "tag-layout" => {
-                if parts.len() < 3 { return "error: missing tag or layout mode\n".to_string(); }
-                if let Ok(tag) = parts[1].parse::<usize>() {
-                    if tag >= 1 && tag <= 4 {
-                        let mode = crate::config::parse_tiling_mode(parts[2]);
-                        self.tag_layouts[tag - 1] = mode;
-                        self.has_tag_layout[tag - 1] = true;
-                        self.dirty_windowing();
-                        return "ok\n".to_string();
-                    }
-                }
-                "error: invalid tag\n".to_string()
+                "ok\n".to_string()
             }
             "mode" => {
                 if parts.len() < 3 { return "error: missing mode or app_id\n".to_string(); }
@@ -2017,13 +1872,6 @@ unsafe extern "C" fn handle_ipc_timer(data: *mut std::ffi::c_void) -> std::os::r
     }
     
     0
-}
-
-fn blend_channel(bg_channel: u32, fg_channel: u32, factor: f64) -> u32 {
-    let bg = (bg_channel & 0xFF) as u8 as f64;
-    let fg = (fg_channel & 0xFF) as u8 as f64;
-    let val = (bg + (fg - bg) * factor) as u8;
-    val as u32 * 0x01010101
 }
 
 unsafe fn rendered_fullscreen(window: *mut Window) -> bool {

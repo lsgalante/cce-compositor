@@ -610,6 +610,8 @@ unsafe extern "C" fn handle_request_move(
             start_win_y: (*window).box_geom.y,
             start_win_w: (*window).box_geom.width as u32,
             start_win_h: (*window).box_geom.height as u32,
+            start_win_virtual_x: (*window).virtual_x,
+            start_win_virtual_y: (*window).virtual_y,
         });
         cursor.op_start_pointer();
 
@@ -657,6 +659,8 @@ unsafe extern "C" fn handle_request_resize(
             start_win_y: (*window).box_geom.y,
             start_win_w: (*window).box_geom.width as u32,
             start_win_h: (*window).box_geom.height as u32,
+            start_win_virtual_x: (*window).virtual_x,
+            start_win_virtual_y: (*window).virtual_y,
         });
         cursor.op_start_pointer();
 

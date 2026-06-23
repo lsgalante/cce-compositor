@@ -139,8 +139,8 @@ impl Scene {
                 if let SceneNodeDataVal::Window(window) = scene_node_data.data {
                     if (*window).rendering_requested.circular {
                         // Check if outside the circle
-                        let w = (*window).box_geom.width as f64;
-                        let h = (*window).box_geom.height as f64;
+                        let w = (*window).box_geom.width as f64 * (*window).scale;
+                        let h = (*window).box_geom.height as f64 * (*window).scale;
                         let cx = (*window).box_geom.x as f64 + w / 2.0;
                         let cy = (*window).box_geom.y as f64 + h / 2.0;
                         let r = w.min(h) / 2.0;

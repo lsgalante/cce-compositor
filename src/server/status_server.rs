@@ -233,25 +233,15 @@ fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
 
 pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> StatusUpdate {
     let focused_window = wm.focused_window();
-    let focused_tags = if !focused_window.is_null() {
-        (*focused_window).tags
-    } else {
-        0
-    };
 
-    let tags_json = render_tags_json(
-        wm.active_tags,
-        focused_tags,
-        4,
-        &wm.layout.status_normal_color,
-    );
+    let text = format!("Zoom: {:.2} | Pan: ({:.0}, {:.0})", wm.desk_zoom, wm.desk_pan_x, wm.desk_pan_y);
+    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+    let tags_json = format!("{{\"text\": \"{}\", \"tooltip\": \"Camera State\"}}", escaped);
 
     let layout_text = if wm.expose_active {
         "Expose".to_string()
-    } else if !focused_window.is_null() {
-        (*focused_window).tiling_mode.as_str().to_string()
     } else {
-        wm.global_layout.as_str().to_string()
+        "Pannable".to_string()
     };
 
     let title_text = if !focused_window.is_null() {
@@ -280,30 +270,4 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
         layout_text,
         title_text,
     }
-}
-
-fn render_tags_json(active: u32, focused: u32, num_tags: u32, normal_color: &str) -> String {
-    let mut text = String::new();
-    for i in 0..num_tags {
-        let bit = 1u32 << i;
-        let label = i + 1;
-
-        let is_active = (active & bit) != 0;
-        let is_focused = (focused & bit) != 0;
-
-        let color = if is_focused && is_active {
-            normal_color
-        } else if is_focused {
-            "#666666"
-        } else if is_active {
-            "#888888"
-        } else {
-            "#444444"
-        };
-
-        text.push_str(&format!("<span color='{}'>{}</span>", color, label));
-    }
-
-    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("{{\"text\": \"{}\", \"tooltip\": \"Tags\"}}", escaped)
 }

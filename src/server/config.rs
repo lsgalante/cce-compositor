@@ -127,6 +127,13 @@ pub enum Action {
     Minimize,
     SidePanelLeft,
     SidePanelRight,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    PanLeft,
+    PanRight,
+    PanUp,
+    PanDown,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -549,6 +556,20 @@ pub fn parse_action(s: &str) -> Action {
         Action::SidePanelLeft
     } else if s == "side-panel-right" {
         Action::SidePanelRight
+    } else if s == "zoom-in" {
+        Action::ZoomIn
+    } else if s == "zoom-out" {
+        Action::ZoomOut
+    } else if s == "zoom-reset" {
+        Action::ZoomReset
+    } else if s == "pan-left" {
+        Action::PanLeft
+    } else if s == "pan-right" {
+        Action::PanRight
+    } else if s == "pan-up" {
+        Action::PanUp
+    } else if s == "pan-down" {
+        Action::PanDown
     } else {
         Action::None
     }
@@ -738,6 +759,70 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         });
     }
 
+    let super_ctrl_mod = parse_modifiers("super+ctrl");
+    let up_sym = parse_keysym("Up");
+    let down_sym = parse_keysym("Down");
+    let equal_sym = parse_keysym("equal");
+    let minus_sym = parse_keysym("minus");
+    let zero_sym = parse_keysym("0");
+
+    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == up_sym) {
+        state.keybinds.push(Keybind {
+            mods: super_ctrl_mod,
+            keysym: up_sym,
+            action: Action::PanUp,
+            command: None,
+        });
+    }
+    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == down_sym) {
+        state.keybinds.push(Keybind {
+            mods: super_ctrl_mod,
+            keysym: down_sym,
+            action: Action::PanDown,
+            command: None,
+        });
+    }
+    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == left_sym) {
+        state.keybinds.push(Keybind {
+            mods: super_ctrl_mod,
+            keysym: left_sym,
+            action: Action::PanLeft,
+            command: None,
+        });
+    }
+    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == right_sym) {
+        state.keybinds.push(Keybind {
+            mods: super_ctrl_mod,
+            keysym: right_sym,
+            action: Action::PanRight,
+            command: None,
+        });
+    }
+    if !state.keybinds.iter().any(|b| b.mods == super_mod && b.keysym == equal_sym) {
+        state.keybinds.push(Keybind {
+            mods: super_mod,
+            keysym: equal_sym,
+            action: Action::ZoomIn,
+            command: None,
+        });
+    }
+    if !state.keybinds.iter().any(|b| b.mods == super_mod && b.keysym == minus_sym) {
+        state.keybinds.push(Keybind {
+            mods: super_mod,
+            keysym: minus_sym,
+            action: Action::ZoomOut,
+            command: None,
+        });
+    }
+    if !state.keybinds.iter().any(|b| b.mods == super_mod && b.keysym == zero_sym) {
+        state.keybinds.push(Keybind {
+            mods: super_mod,
+            keysym: zero_sym,
+            action: Action::ZoomReset,
+            command: None,
+        });
+    }
+
     let super_shift_mod = parse_modifiers("super+shift");
     let r_sym = parse_keysym("r");
     if !state.keybinds.iter().any(|b| b.mods == super_shift_mod && b.keysym == r_sym) {
@@ -793,12 +878,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         });
     }
 
-    for tag_layout in config.tag_layout {
-        let idx = tag_layout.tag as usize - 1;
-        if idx < 4 {
-            state.tag_layouts[idx] = parse_tiling_mode(&tag_layout.mode);
-            state.has_tag_layout[idx] = true;
-        }
+    for _tag_layout in config.tag_layout {
+        // Tag layouts are ignored in the pannable coordinate system.
     }
 
     state.startup.clear();

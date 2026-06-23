@@ -221,6 +221,8 @@ pub struct Window {
     pub circular: bool,
     pub blur: bool,
     pub scale: f64,
+    pub virtual_x: f64,
+    pub virtual_y: f64,
     pub commit: ffi::wl_listener,
 
     pub wm_scheduled: WmScheduledState,
@@ -360,7 +362,7 @@ impl Window {
             popup_tree,
             capture_scene,
             capture_source: std::ptr::null_mut(),
-            tags: (*server).wm.active_tags,
+            tags: 1,
             tiling_mode: crate::tiling::TilingMode::Floating,
             mode_locked: false,
             is_new: true,
@@ -375,6 +377,8 @@ impl Window {
             circular: false,
             blur: false,
             scale: 1.0,
+            virtual_x: unsafe { (*server).wm.desk_pan_x + 100.0 },
+            virtual_y: unsafe { (*server).wm.desk_pan_y + 100.0 },
             commit: std::mem::zeroed(),
             wm_scheduled: WmScheduledState {
                 dimensions_hint: DimensionsHint { min_width: 0, min_height: 0, max_width: 0, max_height: 0 },

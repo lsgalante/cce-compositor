@@ -673,6 +673,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         start_win_y: (*target_win).box_geom.y,
                         start_win_w: (*target_win).box_geom.width as u32,
                         start_win_h: (*target_win).box_geom.height as u32,
+                        start_win_virtual_x: (*target_win).virtual_x,
+                        start_win_virtual_y: (*target_win).virtual_y,
                     });
                     cursor.op_start_pointer();
                     cursor.pressed.insert((*event).button, None);
@@ -730,6 +732,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                             start_win_y: (*border_target_win).box_geom.y,
                             start_win_w: (*border_target_win).box_geom.width as u32,
                             start_win_h: (*border_target_win).box_geom.height as u32,
+                            start_win_virtual_x: (*border_target_win).virtual_x,
+                            start_win_virtual_y: (*border_target_win).virtual_y,
                         });
                         cursor.op_start_pointer();
                         cursor.pressed.insert((*event).button, None);
@@ -762,6 +766,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                             start_win_y: (*border_target_win).box_geom.y,
                             start_win_w: (*border_target_win).box_geom.width as u32,
                             start_win_h: (*border_target_win).box_geom.height as u32,
+                            start_win_virtual_x: (*border_target_win).virtual_x,
+                            start_win_virtual_y: (*border_target_win).virtual_y,
                         });
                         cursor.op_start_pointer();
                         cursor.pressed.insert((*event).button, None);
