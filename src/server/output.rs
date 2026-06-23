@@ -141,6 +141,7 @@ pub struct Output {
     pub wlr_output: *mut ffi::wlr_output,
     pub scene_output: *mut ffi::wlr_scene_output,
     pub background_rect: *mut ffi::wlr_scene_rect,
+    pub grid_tree: *mut ffi::wlr_scene_tree,
     pub object: *mut ffi::wl_resource, // zcce_output_v1 resource
     pub layer_shell: LayerShellOutput,
     pub lock_render_state: LockRenderState,
@@ -307,6 +308,11 @@ impl Output {
                         self.background_rect = std::ptr::null_mut();
                     }
 
+                    if !self.grid_tree.is_null() {
+                        ffi::wlr_scene_node_destroy(self.grid_tree as *mut ffi::wlr_scene_node);
+                        self.grid_tree = std::ptr::null_mut();
+                    }
+
                     // remove output from windows fullscreen hint
                     for &window in (*self.server).wm.windows.iter() {
                         if let crate::window::FullscreenRequest::Fullscreen(out) = (*window).wm_scheduled.fullscreen_requested {
@@ -364,6 +370,7 @@ impl Output {
             wlr_output,
             scene_output,
             background_rect: std::ptr::null_mut(),
+            grid_tree: std::ptr::null_mut(),
             object: std::ptr::null_mut(),
             layer_shell: LayerShellOutput::default(),
             lock_render_state: LockRenderState::Blanked,
@@ -432,6 +439,8 @@ impl Output {
             }
         }
 
+        self.draw_grid();
+
         let mut state = std::mem::zeroed();
         ffi::wlr_output_state_init(&mut state);
         
@@ -498,6 +507,73 @@ impl Output {
             ffi::wlr_scene_rect_set_color(self.background_rect, color.as_ptr());
         }
     }
+
+    pub unsafe fn draw_grid(&mut self) {
+        if self.grid_tree.is_null() {
+            return;
+        }
+
+        // Clear previous grid lines
+        ffi::river_scene_tree_clear_children(self.grid_tree);
+
+        let wm = &(*self.server).wm;
+        let (viewport_w, viewport_h) = self.current.dimensions();
+        let zoom = wm.desk_zoom;
+
+        // Dynamic spacing based on zoom to avoid rendering too many lines (LOD)
+        let mut grid_spacing = 100.0;
+        while grid_spacing * zoom < 40.0 {
+            grid_spacing *= 2.0;
+        }
+
+        let min_x = wm.desk_pan_x;
+        let max_x = wm.desk_pan_x + (viewport_w as f64) / zoom;
+        let min_y = wm.desk_pan_y;
+        let max_y = wm.desk_pan_y + (viewport_h as f64) / zoom;
+
+        // Subtle semi-transparent grid color (e.g. 5% white)
+        let grid_color: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
+
+        // Draw vertical lines
+        let mut x_val = (min_x / grid_spacing).ceil() * grid_spacing;
+        while x_val <= max_x {
+            let rel_x = ((x_val - wm.desk_pan_x) * zoom) as i32;
+            let line_rect = ffi::wlr_scene_rect_create(
+                self.grid_tree,
+                1, // width of line
+                viewport_h,
+                grid_color.as_ptr(),
+            );
+            if !line_rect.is_null() {
+                ffi::wlr_scene_node_set_position(
+                    line_rect as *mut ffi::wlr_scene_node,
+                    rel_x,
+                    0,
+                );
+            }
+            x_val += grid_spacing;
+        }
+
+        // Draw horizontal lines
+        let mut y_val = (min_y / grid_spacing).ceil() * grid_spacing;
+        while y_val <= max_y {
+            let rel_y = ((y_val - wm.desk_pan_y) * zoom) as i32;
+            let line_rect = ffi::wlr_scene_rect_create(
+                self.grid_tree,
+                viewport_w,
+                1, // height of line
+                grid_color.as_ptr(),
+            );
+            if !line_rect.is_null() {
+                ffi::wlr_scene_node_set_position(
+                    line_rect as *mut ffi::wlr_scene_node,
+                    0,
+                    rel_y,
+                );
+            }
+            y_val += grid_spacing;
+        }
+    }
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -514,6 +590,11 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     if !(*output).background_rect.is_null() {
         ffi::wlr_scene_node_destroy((*output).background_rect as *mut ffi::wlr_scene_node);
         (*output).background_rect = std::ptr::null_mut();
+    }
+
+    if !(*output).grid_tree.is_null() {
+        ffi::wlr_scene_node_destroy((*output).grid_tree as *mut ffi::wlr_scene_node);
+        (*output).grid_tree = std::ptr::null_mut();
     }
 
     if !(*output).wlr_output.is_null() {

@@ -764,7 +764,6 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     let down_sym = parse_keysym("Down");
     let equal_sym = parse_keysym("equal");
     let minus_sym = parse_keysym("minus");
-    let zero_sym = parse_keysym("0");
 
     if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == up_sym) {
         state.keybinds.push(Keybind {
@@ -798,26 +797,27 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             command: None,
         });
     }
-    if !state.keybinds.iter().any(|b| b.mods == super_mod && b.keysym == equal_sym) {
+    let super_ctrl_shift_mod = parse_modifiers("super+ctrl+shift");
+    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_shift_mod && b.keysym == equal_sym) {
         state.keybinds.push(Keybind {
-            mods: super_mod,
+            mods: super_ctrl_shift_mod,
             keysym: equal_sym,
             action: Action::ZoomIn,
             command: None,
         });
     }
-    if !state.keybinds.iter().any(|b| b.mods == super_mod && b.keysym == minus_sym) {
+    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == minus_sym) {
         state.keybinds.push(Keybind {
-            mods: super_mod,
+            mods: super_ctrl_mod,
             keysym: minus_sym,
             action: Action::ZoomOut,
             command: None,
         });
     }
-    if !state.keybinds.iter().any(|b| b.mods == super_mod && b.keysym == zero_sym) {
+    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == equal_sym) {
         state.keybinds.push(Keybind {
-            mods: super_mod,
-            keysym: zero_sym,
+            mods: super_ctrl_mod,
+            keysym: equal_sym,
             action: Action::ZoomReset,
             command: None,
         });

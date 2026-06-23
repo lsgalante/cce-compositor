@@ -225,12 +225,26 @@ impl OutputManager {
                                 output.sent.y,
                             );
                         }
+                        if output.grid_tree.is_null() {
+                            output.grid_tree = ffi::wlr_scene_tree_create((*server).scene.layers.background);
+                        }
+                        if !output.grid_tree.is_null() {
+                            ffi::wlr_scene_node_set_position(
+                                output.grid_tree as *mut ffi::wlr_scene_node,
+                                output.sent.x,
+                                output.sent.y,
+                            );
+                        }
                     }
                     OutputStateValue::DisabledHard => {
                         ffi::wlr_output_layout_remove(self.output_layout, wlr_output);
                         if !output.background_rect.is_null() {
                             ffi::wlr_scene_node_destroy(output.background_rect as *mut ffi::wlr_scene_node);
                             output.background_rect = std::ptr::null_mut();
+                        }
+                        if !output.grid_tree.is_null() {
+                            ffi::wlr_scene_node_destroy(output.grid_tree as *mut ffi::wlr_scene_node);
+                            output.grid_tree = std::ptr::null_mut();
                         }
                     }
                     OutputStateValue::Destroying => unreachable!(),
