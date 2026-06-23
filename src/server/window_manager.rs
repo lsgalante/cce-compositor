@@ -66,6 +66,7 @@ pub struct WindowManager {
     pub ipc_rx: Option<std::sync::mpsc::Receiver<crate::ipc_server::IpcRequest>>,
     pub ipc_timer: *mut ffi::wl_event_source,
     pub startup: Vec<crate::config::StartupConfig>,
+    pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
     pub status_sender: Option<crate::status_server::StatusSender>,
     pub output_scale: f32,
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
@@ -127,6 +128,7 @@ impl WindowManager {
         self.ipc_rx = None;
         self.ipc_timer = std::ptr::null_mut();
         self.startup = Vec::new();
+        self.startup_pids = Vec::new();
         self.status_sender = None;
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
@@ -1248,29 +1250,19 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             }
             Action::Reload => {
                 log::info!("monolithic execute_action: Reload requested");
-                if let Some(path) = crate::config::default_config_path() {
-                    match crate::config::parse_config(&path, self) {
-                        Ok(()) => {
-                            self.dirty_windowing();
-                            let _ = std::process::Command::new("notify-send")
-                                .arg("cce")
-                                .arg("Configuration reloaded successfully")
-                                .spawn();
-                        }
-                        Err(e) => {
-                            log::error!("failed to reload config: {}", e);
-                            let _ = std::process::Command::new("notify-send")
-                                .arg("cce")
-                                .arg(format!("Failed to reload config:\n{}", e))
-                                .spawn();
-                        }
+                match self.reload_config() {
+                    Ok(()) => {
+                        let _ = std::process::Command::new("notify-send")
+                            .arg("cce")
+                            .arg("Configuration reloaded successfully")
+                            .spawn();
                     }
-                } else {
-                    log::error!("no config file found to reload");
-                    let _ = std::process::Command::new("notify-send")
-                        .arg("cce")
-                        .arg("No config file found to reload")
-                        .spawn();
+                    Err(e) => {
+                        let _ = std::process::Command::new("notify-send")
+                            .arg("cce")
+                            .arg(format!("Failed to reload config:\n{}", e))
+                            .spawn();
+                    }
                 }
             }
             Action::Exit => {
@@ -1676,16 +1668,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 "ok\n".to_string()
             }
             "reload" => {
-                if let Some(path) = crate::config::default_config_path() {
-                    match crate::config::parse_config(&path, self) {
-                        Ok(()) => {
-                            self.dirty_windowing();
-                            "ok\n".to_string()
-                        }
+                unsafe {
+                    match self.reload_config() {
+                        Ok(()) => "ok\n".to_string(),
                         Err(e) => format!("error: failed to reload config: {}\n", e),
                     }
-                } else {
-                    "error: no config file found\n".to_string()
                 }
             }
             "retile" => {
@@ -1893,6 +1880,91 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 libinput.apply_config(&self.input_config);
             }
             curr = next;
+        }
+    }
+
+    pub unsafe fn spawn_startup_program(&mut self, prog: crate::config::StartupConfig) {
+        log::info!("spawning TOML startup program: {}", prog.exec);
+        let cmd = prog.exec.clone();
+        match nix::unistd::fork() {
+            Ok(nix::unistd::ForkResult::Child) => {
+                crate::process::cleanup_child();
+
+                if !self.server.is_null() && !(*self.server).xwayland.is_null() {
+                    let xwayland_cast = (*self.server).xwayland as *mut crate::server::WlrXwayland;
+                    if !(*xwayland_cast).display_name.is_null() {
+                        let display_name = std::ffi::CStr::from_ptr((*xwayland_cast).display_name)
+                            .to_string_lossy()
+                            .into_owned();
+                        std::env::set_var("DISPLAY", display_name);
+                    }
+                }
+
+                let env: Vec<std::ffi::CString> = std::env::vars()
+                    .map(|(k, v)| std::ffi::CString::new(format!("{}={}", k, v)).unwrap())
+                    .collect();
+                let env_ptrs: Vec<&std::ffi::CStr> = env.iter().map(|s| s.as_c_str()).collect();
+                let sh_c = std::ffi::CString::new("/bin/sh").unwrap();
+                let c_c = std::ffi::CString::new("-c").unwrap();
+                let cmd_c = std::ffi::CString::new(cmd).unwrap();
+                let args = [sh_c.as_c_str(), c_c.as_c_str(), cmd_c.as_c_str()];
+                let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
+                std::process::exit(1);
+            }
+            Ok(nix::unistd::ForkResult::Parent { child }) => {
+                self.startup_pids.push((prog, child));
+            }
+            Err(e) => {
+                log::error!("failed to fork child for startup program: {}", e);
+            }
+        }
+    }
+
+    pub unsafe fn reload_config(&mut self) -> Result<(), String> {
+        if let Some(path) = crate::config::default_config_path() {
+            let old_pids = std::mem::take(&mut self.startup_pids);
+            match crate::config::parse_config(&path, self) {
+                Ok(()) => {
+                    self.dirty_windowing();
+
+                    // Process old PIDs
+                    for (old_prog, old_pid) in old_pids {
+                        // If it is still in new startup and once == true, keep it running
+                        let still_exists_and_once = self.startup.iter().any(|p| p.exec == old_prog.exec && p.once);
+                        if still_exists_and_once {
+                            self.startup_pids.push((old_prog, old_pid));
+                        } else {
+                            log::info!("Terminating old startup program pid {} ({})", old_pid, old_prog.exec);
+                            let _ = nix::sys::signal::kill(old_pid, nix::sys::signal::Signal::SIGTERM);
+                        }
+                    }
+
+                    // Spawn new/restarted programs
+                    let current_startup = self.startup.clone();
+                    for prog in current_startup {
+                        if prog.once {
+                            // Only spawn if not already running
+                            let running = self.startup_pids.iter().any(|(p, _)| p.exec == prog.exec);
+                            if !running {
+                                self.spawn_startup_program(prog);
+                            }
+                        } else {
+                            // once == false: spawn a new instance
+                            self.spawn_startup_program(prog);
+                        }
+                    }
+
+                    Ok(())
+                }
+                Err(e) => {
+                    self.startup_pids = old_pids;
+                    log::error!("failed to reload config: {}", e);
+                    Err(e)
+                }
+            }
+        } else {
+            log::error!("no config file found to reload");
+            Err("No config file found".to_string())
         }
     }
 }

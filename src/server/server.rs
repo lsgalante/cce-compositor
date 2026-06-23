@@ -832,6 +832,7 @@ impl Default for Server {
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.gesture_binds, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.ipc_rx, None);
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.startup, Vec::new());
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.startup_pids, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.status_sender, None);
             std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());

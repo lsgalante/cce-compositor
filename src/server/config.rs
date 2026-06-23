@@ -163,7 +163,7 @@ pub struct GestureBindConfig {
     pub command: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct StartupConfig {
     pub exec: String,
     #[serde(default)]

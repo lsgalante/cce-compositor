@@ -182,53 +182,17 @@ pub fn run_server() {
         std::process::exit(1);
     }
 
-    let mut startup_pids = Vec::new();
     // Spawn TOML startup programs
-    for prog in &server.wm.startup {
-        log::info!("spawning TOML startup program: {}", prog.exec);
-        let cmd = prog.exec.clone();
+    let current_startup = server.wm.startup.clone();
+    for prog in current_startup {
         unsafe {
-            match nix::unistd::fork() {
-                Ok(nix::unistd::ForkResult::Child) => {
-                    process::cleanup_child();
-                    std::env::set_var("WAYLAND_DISPLAY", &socket_str);
-
-                    if !args.no_xwayland && !server.xwayland.is_null() {
-                        let xwayland_cast = server.xwayland as *mut server::WlrXwayland;
-                        if !(*xwayland_cast).display_name.is_null() {
-                            let display_name = CStr::from_ptr((*xwayland_cast).display_name)
-                                .to_string_lossy()
-                                .into_owned();
-                            std::env::set_var("DISPLAY", display_name);
-                        }
-                    }
-
-                    let cmd_c = CString::new(cmd).unwrap();
-                    let sh_c = CString::new("/bin/sh").unwrap();
-                    let c_c = CString::new("-c").unwrap();
-                    let args = [sh_c.as_c_str(), c_c.as_c_str(), cmd_c.as_c_str()];
-                    
-                    let env: Vec<CString> = std::env::vars()
-                        .map(|(k, v)| CString::new(format!("{}={}", k, v)).unwrap())
-                        .collect();
-                    let env_ptrs: Vec<&CStr> = env.iter().map(|s| s.as_c_str()).collect();
-
-                    let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
-                    std::process::exit(1);
-                }
-                Ok(nix::unistd::ForkResult::Parent { child }) => {
-                    startup_pids.push(child);
-                }
-                Err(e) => {
-                    log::error!("failed to fork child for startup program: {}", e);
-                }
-            }
+            server.wm.spawn_startup_program(prog);
         }
     }
 
     struct ServerGuard {
         init_pid: Option<nix::unistd::Pid>,
-        startup_pids: Vec<nix::unistd::Pid>,
+        wm: *mut crate::window_manager::WindowManager,
     }
     impl Drop for ServerGuard {
         fn drop(&mut self) {
@@ -239,12 +203,16 @@ pub fn run_server() {
                     nix::sys::signal::Signal::SIGTERM,
                 );
             }
-            for pid in &self.startup_pids {
-                log::info!("sending SIGTERM to startup program pid {}", pid);
-                let _ = nix::sys::signal::kill(
-                    *pid,
-                    nix::sys::signal::Signal::SIGTERM,
-                );
+            unsafe {
+                if !self.wm.is_null() {
+                    for (_, pid) in &(*self.wm).startup_pids {
+                        log::info!("sending SIGTERM to startup program pid {}", pid);
+                        let _ = nix::sys::signal::kill(
+                            *pid,
+                            nix::sys::signal::Signal::SIGTERM,
+                        );
+                    }
+                }
             }
         }
     }
@@ -294,7 +262,7 @@ pub fn run_server() {
 
     let _guard = ServerGuard {
         init_pid: child_pgid,
-        startup_pids,
+        wm: &mut server.wm as *mut crate::window_manager::WindowManager,
     };
 
     log::info!("running server");
@@ -303,5 +271,6 @@ pub fn run_server() {
     }
 
     log::info!("shutting down server");
+    std::mem::drop(_guard);
     server.deinit();
 }
