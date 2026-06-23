@@ -948,6 +948,46 @@ impl Seat {
                     (*win).manage_finish();
                     (*self.server).wm.dirty_windowing();
                 }
+                if let PointerOpType::Move = op.op_type {
+                    if (*win).tiling_mode == crate::tiling::TilingMode::Pinned {
+                        let outputs_list = &mut (*(*self.server).wm.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                        let mut curr_out = (*outputs_list).next;
+                        let mut target_output: *mut crate::output::Output = std::ptr::null_mut();
+                        while curr_out != outputs_list {
+                            let output = crate::container_of!(curr_out, crate::output::Output, link);
+                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                                target_output = output;
+                                let wlr_box = (*output).sent.box_layout();
+                                let wx = (*win).box_geom.x;
+                                let wy = (*win).box_geom.y;
+                                if wx >= wlr_box.x && wx < wlr_box.x + wlr_box.width
+                                    && wy >= wlr_box.y && wy < wlr_box.y + wlr_box.height
+                                {
+                                    break;
+                                }
+                            }
+                            curr_out = (*curr_out).next;
+                        }
+
+                        if !target_output.is_null() {
+                            let wlr_box = (*target_output).sent.box_layout();
+                            let rx = (*win).box_geom.x - wlr_box.x;
+                            let mid_x = wlr_box.width / 2;
+                            let new_position = if rx < mid_x {
+                                "left".to_string()
+                            } else {
+                                "right".to_string()
+                            };
+
+                            let wm = &mut (*self.server).wm;
+                            if wm.layout.pinned_position != new_position {
+                                wm.layout.pinned_position = new_position;
+                                log::info!("Pinned window moved/dropped, updating pinned_position to {:?}", wm.layout.pinned_position);
+                            }
+                        }
+                        (*self.server).wm.dirty_windowing();
+                    }
+                }
             }
             match op.input {
                 SeatOpInput::Pointer => {
