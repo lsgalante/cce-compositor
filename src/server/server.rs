@@ -220,6 +220,7 @@ pub struct Server {
     pub wl_server: *mut ffi::wl_display,
     pub sigint_source: *mut ffi::wl_event_source,
     pub sigterm_source: *mut ffi::wl_event_source,
+    pub sigchld_source: *mut ffi::wl_event_source,
     // pub fixes: *mut ffi::wlr_fixes,
     pub backend: *mut ffi::wlr_backend,
     pub session: *mut ffi::wlr_session,
@@ -287,6 +288,12 @@ pub struct Server {
 unsafe extern "C" fn terminate(_signum: std::os::raw::c_int, data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let wl_server = data as *mut ffi::wl_display;
     ffi::wl_display_terminate(wl_server);
+    0
+}
+
+unsafe extern "C" fn handle_sigchld(_signum: std::os::raw::c_int, _data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let mut status = 0;
+    while libc::waitpid(-1, &mut status, libc::WNOHANG) > 0 {}
     0
 }
 
@@ -464,6 +471,7 @@ impl Server {
 
             self.sigint_source = ffi::wl_event_loop_add_signal(loop_, libc::SIGINT, Some(terminate), wl_server as *mut _);
             self.sigterm_source = ffi::wl_event_loop_add_signal(loop_, libc::SIGTERM, Some(terminate), wl_server as *mut _);
+            self.sigchld_source = ffi::wl_event_loop_add_signal(loop_, libc::SIGCHLD, Some(handle_sigchld), wl_server as *mut _);
 
             let mut session: *mut ffi::wlr_session = ptr::null_mut();
             let backend = ffi::wlr_backend_autocreate(loop_, &mut session);
@@ -776,6 +784,9 @@ impl Server {
             log::info!("[deinit] removing server listeners");
             ffi::wl_event_source_remove(self.sigint_source);
             ffi::wl_event_source_remove(self.sigterm_source);
+            if !self.sigchld_source.is_null() {
+                ffi::wl_event_source_remove(self.sigchld_source);
+            }
 
             wl_listener_remove(&mut self.renderer_lost);
             wl_listener_remove(&mut self.new_xdg_toplevel);
