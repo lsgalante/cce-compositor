@@ -210,6 +210,7 @@ pub struct Window {
     pub tiling_mode: crate::tiling::TilingMode,
     pub mode_locked: bool,
     pub is_new: bool,
+    pub restored: bool,
     pub closed: bool,
     pub has_parent: bool,
     pub minimized: bool,
@@ -366,6 +367,7 @@ impl Window {
             tiling_mode: crate::tiling::TilingMode::Floating,
             mode_locked: false,
             is_new: true,
+            restored: false,
             closed: false,
             has_parent: false,
             minimized: false,
@@ -614,27 +616,46 @@ impl Window {
         }
     }
 
+    pub unsafe fn try_restore(&mut self) {
+        if self.restored {
+            return;
+        }
+        let app_id_str = self.get_app_id_string().unwrap_or_default();
+        if app_id_str.is_empty() || app_id_str == "cce-status-interface" {
+            return;
+        }
+        let title_str = self.get_title_string().unwrap_or_default();
+        if let Some(saved) = (*self.server).wm.match_and_remove_restore_state(&app_id_str, &title_str) {
+            log::info!("Restoring saved state for window: app_id={}, title={}. Position: ({}, {}), Size: {}x{}", app_id_str, title_str, saved.virtual_x, saved.virtual_y, saved.width, saved.height);
+            self.tiling_mode = saved.tiling_mode;
+            self.tags = saved.tags;
+            self.minimized = saved.minimized;
+            self.virtual_x = saved.virtual_x;
+            self.virtual_y = saved.virtual_y;
+            self.scale = saved.scale;
+            self.box_geom.width = saved.width as i32;
+            self.box_geom.height = saved.height as i32;
+            
+            self.wm_requested.dimensions = Some(crate::window::Dimensions {
+                width: saved.width,
+                height: saved.height,
+            });
+            self.wm_requested.bounds = crate::window::Dimensions {
+                width: saved.width,
+                height: saved.height,
+            };
+            
+            self.restored = true;
+        }
+    }
+
     pub unsafe fn map(&mut self) -> Result<(), &'static str> {
         log::debug!("window '{:?}' mapped", self.get_title());
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
         assert_eq!(self.state, WindowState::Initialized);
         self.state = WindowState::Mapped;
 
-        let app_id_str = self.get_app_id_string().unwrap_or_default();
-        let title_str = self.get_title_string().unwrap_or_default();
-        if app_id_str != "cce-status-interface" {
-            if let Some(saved) = (*self.server).wm.match_and_remove_restore_state(&app_id_str, &title_str) {
-                log::info!("Restoring saved state for window: app_id={}, title={}. Position: ({}, {}), Size: {}x{}", app_id_str, title_str, saved.virtual_x, saved.virtual_y, saved.width, saved.height);
-                self.tiling_mode = saved.tiling_mode;
-                self.tags = saved.tags;
-                self.minimized = saved.minimized;
-                self.virtual_x = saved.virtual_x;
-                self.virtual_y = saved.virtual_y;
-                self.scale = saved.scale;
-                self.box_geom.width = saved.width as i32;
-                self.box_geom.height = saved.height as i32;
-            }
-        }
+        self.try_restore();
 
         let surface = self.root_surface();
         if !surface.is_null() {
@@ -1357,6 +1378,7 @@ impl Window {
 
     pub unsafe fn notify_title(&mut self) {
         self.wm_scheduled.dirty_title = true;
+        self.try_restore();
         (*self.server).wm.dirty_windowing();
 
         if !self.foreign_toplevel_handle.is_null() {
@@ -1379,6 +1401,7 @@ impl Window {
 
     pub unsafe fn notify_app_id(&mut self) {
         self.wm_scheduled.dirty_app_id = true;
+        self.try_restore();
         (*self.server).wm.dirty_windowing();
 
         if !self.foreign_toplevel_handle.is_null() {
