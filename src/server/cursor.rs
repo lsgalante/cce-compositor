@@ -873,6 +873,29 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
         }
     }
 
+    let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+    let modifiers = if !wlr_keyboard.is_null() {
+        ffi::wlr_keyboard_get_modifiers(wlr_keyboard)
+    } else {
+        0
+    };
+
+    if (modifiers & 0x40) != 0 {
+        let wm = &mut (*seat.server).wm;
+        let step = delta / wm.desk_zoom;
+        match (*event).orientation {
+            ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL => {
+                wm.desk_pan_y += step;
+            }
+            ffi::wl_pointer_axis_WL_POINTER_AXIS_HORIZONTAL_SCROLL => {
+                wm.desk_pan_x += step;
+            }
+            _ => {}
+        }
+        wm.dirty_windowing();
+        return;
+    }
+
     ffi::wlr_seat_pointer_notify_axis(
         seat.wlr_seat,
         (*event).time_msec,

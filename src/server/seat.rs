@@ -31,7 +31,7 @@ pub struct SeatOp {
     pub start_win_virtual_y: f64,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Focus {
     None,
     LayerSurface(*mut ffi::wlr_surface),
@@ -303,6 +303,9 @@ impl Seat {
         if self.focused == new_focus {
             return;
         }
+
+        let bt = std::backtrace::Backtrace::capture();
+        log::info!("[FocusDebug] Seat::focus changing from {:?} to {:?}. Backtrace:\n{}", self.focused, new_focus, bt);
 
         // If an exclusive layer surface is active and scheduled for focus,
         // block any window manager or other client focus requests (via focus_requested)

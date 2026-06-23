@@ -1833,6 +1833,25 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     format!("error: unknown input command: {}\n", key)
                 }
             }
+            "pointer-move-to" => {
+                if parts.len() < 3 { return "error: usage: pointer-move-to <x> <y>\n".to_string(); }
+                if let (Ok(x), Ok(y)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                    let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+                    let mut curr_seat = (*seats_list).next;
+                    while curr_seat != seats_list {
+                        let next_seat = (*curr_seat).next;
+                        let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+                        let cursor = &mut (*seat).cursor;
+                        ffi::wlr_cursor_warp_absolute(cursor.wlr_cursor, std::ptr::null_mut(), x, y);
+                        cursor.update_hovered();
+                        cursor.passthrough(crate::util::msec_timestamp());
+                        curr_seat = next_seat;
+                    }
+                    "ok\n".to_string()
+                } else {
+                    "error: invalid x or y\n".to_string()
+                }
+            }
             _ => format!("error: unknown command: {}\n", action),
         }
     }

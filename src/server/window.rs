@@ -2722,7 +2722,5 @@ unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
 
 unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let window = crate::container_of!(listener, Window, commit);
-    if (*window).scale != 1.0 {
-        (*window).render_finish();
-    }
+    (*window).render_finish();
 }
