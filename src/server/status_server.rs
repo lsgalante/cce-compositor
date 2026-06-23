@@ -238,10 +238,10 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
     let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
     let tags_json = format!("{{\"text\": \"{}\", \"tooltip\": \"Camera State\"}}", escaped);
 
-    let layout_text = if wm.expose_active {
-        "Expose".to_string()
+    let layout_text = if !focused_window.is_null() {
+        (*focused_window).tiling_mode.as_str().to_string()
     } else {
-        "Pannable".to_string()
+        "---".to_string()
     };
 
     let title_text = if !focused_window.is_null() {
