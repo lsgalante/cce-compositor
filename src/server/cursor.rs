@@ -642,6 +642,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 if (*target_win).tiling_mode != crate::tiling::TilingMode::Floating
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Popup
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
+                    && (*target_win).tiling_mode != crate::tiling::TilingMode::Pinned
                 {
                     (*target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*target_win).mode_locked = true;
@@ -745,7 +746,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 }
                 BorderZone::Move => {
                     if (*event).button == 0x110 { // BTN_LEFT
-                        if initial_mode != crate::tiling::TilingMode::Floating {
+                        if initial_mode != crate::tiling::TilingMode::Floating
+                            && initial_mode != crate::tiling::TilingMode::Pinned
+                        {
                             (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                             (*border_target_win).mode_locked = true;
                         }

@@ -821,7 +821,9 @@ impl Seat {
             
             let win = op.window_ptr;
             if !win.is_null() && !(*win).closed {
-                if (*win).tiling_mode != crate::tiling::TilingMode::Floating {
+                if (*win).tiling_mode != crate::tiling::TilingMode::Floating
+                    && (*win).tiling_mode != crate::tiling::TilingMode::Pinned
+                {
                     (*win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*win).mode_locked = true;
                 }
