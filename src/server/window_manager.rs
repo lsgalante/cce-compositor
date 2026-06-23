@@ -782,6 +782,24 @@ impl WindowManager {
         None
     }
 
+    pub unsafe fn is_window_being_moved(&self, win_ptr: *mut Window) -> bool {
+        let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
+        let mut curr_seat = (*seats_list).next;
+        while curr_seat != seats_list {
+            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+            if let Some(ref op) = (*seat).op {
+                if op.window_ptr == win_ptr {
+                    if let crate::seat::PointerOpType::Move = op.op_type {
+                        return true;
+                    }
+                }
+            }
+            curr_seat = (*curr_seat).next;
+        }
+        false
+    }
+
+
 fn get_closest_tag(x: f64, y: f64) -> i32 {
     let centers = [(0.0, 0.0), (2000.0, 0.0), (0.0, 2000.0), (2000.0, 2000.0)];
     let mut min_dist = f64::MAX;
@@ -861,7 +879,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let viewport_h = wlr_box.height as f64;
             let camera_center_x = self.desk_pan_x + (viewport_w / 2.0) / self.desk_zoom;
             let camera_center_y = self.desk_pan_y + (viewport_h / 2.0) / self.desk_zoom;
-            let active_tag = Self::get_closest_tag(camera_center_x, camera_center_y);
+            let _active_tag = Self::get_closest_tag(camera_center_x, camera_center_y);
 
             let mut pinned_windows: Vec<*mut Window> = Vec::new();
             let mut normal_windows: Vec<*mut Window> = Vec::new();
@@ -916,8 +934,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     }
                 }
 
-                let window_tag = Self::get_closest_tag((*win_ptr).virtual_x, (*win_ptr).virtual_y);
-                if mode == crate::tiling::TilingMode::Pinned && window_tag == active_tag {
+                let is_moving = self.is_window_being_moved(win_ptr);
+                if mode == crate::tiling::TilingMode::Pinned && !is_moving {
                     pinned_windows.push(win_ptr);
                 } else {
                     normal_windows.push(win_ptr);
@@ -953,6 +971,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     (*win_ptr).rendering_requested.x = sp_x;
                     (*win_ptr).rendering_requested.y = sp_y;
                     (*win_ptr).scale = 1.0;
+
+                    let vx = self.desk_pan_x + (sp_x - phys_x) as f64 / self.desk_zoom;
+                    let vy = self.desk_pan_y + (sp_y - phys_y) as f64 / self.desk_zoom;
+                    (*win_ptr).virtual_x = vx;
+                    (*win_ptr).virtual_y = vy;
                     
                     let mut sp_target_w = sp_w;
                     let mut sp_target_h = sp_h;
