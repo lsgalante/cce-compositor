@@ -942,31 +942,37 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 }
             }
 
-            // Arrange pinned windows (fixed on screen, scale = 1.0)
-            let pinned_win = pinned_windows.first().copied();
-            let mut pinned_w = 0;
             let bw = self.layout.border_width;
-            if let Some(sp_win) = pinned_win {
-                let hint_min_w = (*sp_win).wm_scheduled.dimensions_hint.min_width as i32;
-                pinned_w = if hint_min_w > 32 {
-                    std::cmp::max(self.layout.pinned_width, hint_min_w)
-                } else {
-                    self.layout.pinned_width
-                };
-            }
 
             let g = self.layout.pinned_border_gap;
             let dec_h = std::cmp::max(bw, 16);
             for (sp_idx, &win_ptr) in pinned_windows.iter().enumerate() {
                 if sp_idx == 0 {
-                    let sp_x = if self.layout.pinned_position == "right" {
-                        usable_x + usable_w - pinned_w - g + bw
-                    } else {
-                        usable_x + g + bw
-                    };
-                    let sp_y = usable_y + dec_h + g;
-                    let sp_h = (usable_h - (dec_h + bw) - 2 * g).max(1);
-                    let sp_w = (pinned_w - bw * 2).max(1);
+                    let mut sp_x = (*win_ptr).box_geom.x;
+                    let mut sp_y = (*win_ptr).box_geom.y;
+                    let mut sp_w = (*win_ptr).box_geom.width as i32;
+                    let mut sp_h = (*win_ptr).box_geom.height as i32;
+
+                    if sp_w == 0 || sp_h == 0 {
+                        sp_w = if (*win_ptr).wm_scheduled.dimensions_hint.min_width > 32 {
+                            std::cmp::max(self.layout.pinned_width, (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32)
+                        } else {
+                            self.layout.pinned_width
+                        };
+                        sp_h = (usable_h - (dec_h + bw) - 2 * g).max(1);
+
+                        sp_x = if self.layout.pinned_position == "right" {
+                            usable_x + usable_w - sp_w - g + bw
+                        } else {
+                            usable_x + g + bw
+                        };
+                        sp_y = usable_y + dec_h + g;
+
+                        (*win_ptr).box_geom.x = sp_x;
+                        (*win_ptr).box_geom.y = sp_y;
+                        (*win_ptr).box_geom.width = sp_w;
+                        (*win_ptr).box_geom.height = sp_h;
+                    }
 
                     (*win_ptr).rendering_requested.x = sp_x;
                     (*win_ptr).rendering_requested.y = sp_y;
