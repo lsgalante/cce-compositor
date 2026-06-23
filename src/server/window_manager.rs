@@ -236,6 +236,7 @@ impl WindowManager {
  
     pub unsafe fn clean_windowing(&mut self) {
         self.scheduled.dirty = false;
+        self.scheduled.dirty_lazy = false;
         self.remove_dirty_idle();
     }
  
@@ -263,7 +264,7 @@ impl WindowManager {
     }
 
     unsafe fn remove_dirty_idle(&mut self) {
-        if !self.scheduled.dirty && !self.rendering_scheduled.dirty {
+        if !self.scheduled.dirty && !self.scheduled.dirty_lazy && !self.rendering_scheduled.dirty {
             if !self.dirty_idle.is_null() {
                 ffi::wl_event_source_remove(self.dirty_idle);
                 self.dirty_idle = std::ptr::null_mut();
@@ -636,6 +637,22 @@ impl WindowManager {
         None
     }
 
+fn get_closest_tag(x: f64, y: f64) -> i32 {
+    let centers = [(0.0, 0.0), (2000.0, 0.0), (0.0, 2000.0), (2000.0, 2000.0)];
+    let mut min_dist = f64::MAX;
+    let mut best_tag = 1;
+    for (i, &(cx, cy)) in centers.iter().enumerate() {
+        let dx = x - cx;
+        let dy = y - cy;
+        let dist = dx * dx + dy * dy;
+        if dist < min_dist {
+            min_dist = dist;
+            best_tag = (i + 1) as i32;
+        }
+    }
+    best_tag
+}
+
     pub unsafe fn arrange_views(&mut self) {
         log::info!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
         for (idx, &win_ptr) in self.windows.iter().enumerate() {
@@ -695,6 +712,12 @@ impl WindowManager {
                 usable_h = non_ex.height;
             }
 
+            let viewport_w = wlr_box.width as f64;
+            let viewport_h = wlr_box.height as f64;
+            let camera_center_x = self.desk_pan_x + (viewport_w / 2.0) / self.desk_zoom;
+            let camera_center_y = self.desk_pan_y + (viewport_h / 2.0) / self.desk_zoom;
+            let active_tag = Self::get_closest_tag(camera_center_x, camera_center_y);
+
             let mut side_panel_windows: Vec<*mut Window> = Vec::new();
             let mut normal_windows: Vec<*mut Window> = Vec::new();
 
@@ -748,7 +771,8 @@ impl WindowManager {
                     }
                 }
 
-                if mode == crate::tiling::TilingMode::SidePanel {
+                let window_tag = Self::get_closest_tag((*win_ptr).virtual_x, (*win_ptr).virtual_y);
+                if mode == crate::tiling::TilingMode::SidePanel && window_tag == active_tag {
                     side_panel_windows.push(win_ptr);
                 } else {
                     normal_windows.push(win_ptr);
