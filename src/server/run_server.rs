@@ -154,6 +154,12 @@ pub fn run_server() {
         log::warn!("no config file found, using defaults");
     }
 
+    if let Some(state_path) = crate::config::default_state_path() {
+        unsafe {
+            server.wm.load_state(&state_path);
+        }
+    }
+
     process::setup();
 
     let socket_ptr = unsafe {
@@ -188,6 +194,10 @@ pub fn run_server() {
         unsafe {
             server.wm.spawn_startup_program(prog);
         }
+    }
+
+    unsafe {
+        server.wm.spawn_restored_windows();
     }
 
     struct ServerGuard {
@@ -271,6 +281,10 @@ pub fn run_server() {
     }
 
     log::info!("shutting down server");
+    unsafe {
+        server.wm.save_state();
+    }
+    server.wm.shutting_down = true;
     std::mem::drop(_guard);
     server.deinit();
 }

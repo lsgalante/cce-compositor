@@ -1,6 +1,6 @@
 // Tiling formulas ported from cce-client
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TilingMode {
     Floating,
     Cascade,

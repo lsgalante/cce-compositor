@@ -620,6 +620,22 @@ impl Window {
         assert_eq!(self.state, WindowState::Initialized);
         self.state = WindowState::Mapped;
 
+        let app_id_str = self.get_app_id_string().unwrap_or_default();
+        let title_str = self.get_title_string().unwrap_or_default();
+        if app_id_str != "cce-status-interface" {
+            if let Some(saved) = (*self.server).wm.match_and_remove_restore_state(&app_id_str, &title_str) {
+                log::info!("Restoring saved state for window: app_id={}, title={}. Position: ({}, {}), Size: {}x{}", app_id_str, title_str, saved.virtual_x, saved.virtual_y, saved.width, saved.height);
+                self.tiling_mode = saved.tiling_mode;
+                self.tags = saved.tags;
+                self.minimized = saved.minimized;
+                self.virtual_x = saved.virtual_x;
+                self.virtual_y = saved.virtual_y;
+                self.scale = saved.scale;
+                self.box_geom.width = saved.width as i32;
+                self.box_geom.height = saved.height as i32;
+            }
+        }
+
         let surface = self.root_surface();
         if !surface.is_null() {
             let commit_listener = &mut self.commit as *mut ffi::wl_listener as *mut WlListener;

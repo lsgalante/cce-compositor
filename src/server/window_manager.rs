@@ -41,6 +41,30 @@ pub struct WindowManagerRenderingRequested {
     pub order_hash: u64,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct SavedWindowState {
+    pub app_id: String,
+    pub title: String,
+    pub tiling_mode: crate::tiling::TilingMode,
+    pub tags: u32,
+    pub minimized: bool,
+    pub virtual_x: f64,
+    pub virtual_y: f64,
+    pub scale: f64,
+    pub width: u32,
+    pub height: u32,
+    pub cmdline: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct SavedState {
+    pub desk_pan_x: f64,
+    pub desk_pan_y: f64,
+    pub desk_zoom: f64,
+    pub global_layout: crate::tiling::TilingMode,
+    pub windows: Vec<SavedWindowState>,
+}
+
 pub struct WindowManager {
     pub server: *mut Server,
     pub global: *mut ffi::wl_global,
@@ -75,6 +99,8 @@ pub struct WindowManager {
     pub expose_hovered_window: *mut Window,
     pub expose_initial_focus: *mut Window,
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
+    pub restore_queue: Vec<SavedWindowState>,
+    pub shutting_down: bool,
 }
 
 impl WindowManager {
@@ -119,6 +145,8 @@ impl WindowManager {
         self.desk_pan_y = 0.0;
         self.desk_zoom = 1.0;
         self.global_layout = crate::tiling::TilingMode::Cascade;
+        self.restore_queue = Vec::new();
+        self.shutting_down = false;
         self.layout = crate::config::Layout::default();
         self.output_scale = 1.0;
         self.mode_rules = Vec::new();
@@ -171,6 +199,120 @@ impl WindowManager {
         ffi::wl_display_add_destroy_listener((*server).wl_server, &mut self.server_destroy);
 
         Ok(())
+    }
+
+    pub unsafe fn load_state(&mut self, path: &str) {
+        log::info!("Loading state from {}", path);
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(state) = serde_json::from_str::<SavedState>(&content) {
+                self.desk_pan_x = state.desk_pan_x;
+                self.desk_pan_y = state.desk_pan_y;
+                self.desk_zoom = state.desk_zoom;
+                self.global_layout = state.global_layout;
+                self.restore_queue = state.windows;
+                log::info!("State loaded successfully. {} windows in restore queue.", self.restore_queue.len());
+            } else {
+                log::error!("Failed to parse state JSON from {}", path);
+            }
+        } else {
+            log::info!("State file not found or unreadable at {}, starting with empty state.", path);
+        }
+    }
+
+    pub unsafe fn save_state(&self) {
+        if self.shutting_down {
+            return;
+        }
+        let Some(path_str) = crate::config::default_state_path() else {
+            log::error!("Could not resolve state file path");
+            return;
+        };
+        log::debug!("Saving state to {}", path_str);
+        
+        let mut saved_wins = Vec::new();
+        for &w in self.windows.iter() {
+            if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
+                continue;
+            }
+            if (*w).is_status_bar() {
+                continue;
+            }
+            
+            let app_id = (*w).get_app_id_string().unwrap_or_default();
+            let title = (*w).get_title_string().unwrap_or_default();
+            
+            let pid = (*w).unreliable_pid();
+            let mut cmdline = if pid > 0 {
+                std::fs::read_to_string(format!("/proc/{}/cmdline", pid))
+                    .unwrap_or_default()
+                    .replace('\0', " ")
+                    .trim()
+                    .to_string()
+            } else {
+                String::new()
+            };
+            if cmdline.is_empty() {
+                cmdline = app_id.clone();
+            }
+
+            saved_wins.push(SavedWindowState {
+                app_id,
+                title,
+                tiling_mode: (*w).tiling_mode,
+                tags: (*w).tags,
+                minimized: (*w).minimized,
+                virtual_x: (*w).virtual_x,
+                virtual_y: (*w).virtual_y,
+                scale: (*w).scale,
+                width: (*w).box_geom.width as u32,
+                height: (*w).box_geom.height as u32,
+                cmdline,
+            });
+        }
+        
+        let state = SavedState {
+            desk_pan_x: self.desk_pan_x,
+            desk_pan_y: self.desk_pan_y,
+            desk_zoom: self.desk_zoom,
+            global_layout: self.global_layout,
+            windows: saved_wins,
+        };
+        
+        if let Ok(json_str) = serde_json::to_string_pretty(&state) {
+            let path = std::path::Path::new(&path_str);
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(path, json_str) {
+                log::error!("Failed to write state file: {}", e);
+            }
+        }
+    }
+
+    pub unsafe fn match_and_remove_restore_state(&mut self, app_id: &str, title: &str) -> Option<SavedWindowState> {
+        if app_id.is_empty() {
+            return None;
+        }
+        // First pass: Exact match (app_id AND title)
+        if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id && w.title == title) {
+            return Some(self.restore_queue.remove(pos));
+        }
+        // Second pass: app_id only match
+        if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id) {
+            return Some(self.restore_queue.remove(pos));
+        }
+        None
+    }
+
+    pub unsafe fn spawn_restored_windows(&mut self) {
+        log::info!("Spawning restored windows. Total: {}", self.restore_queue.len());
+        let restored = self.restore_queue.clone();
+        for w in restored {
+            if !w.cmdline.is_empty() {
+                log::info!("Spawning restored window command: {}", w.cmdline);
+                self.execute_action(&crate::config::Action::Spawn, Some(&w.cmdline));
+            }
+        }
     }
 
     pub fn start_ipc(&mut self, display_socket: Option<String>) {
@@ -545,6 +687,7 @@ impl WindowManager {
         if self.scheduled.dirty || self.scheduled.dirty_lazy || self.rendering_scheduled.dirty {
             self.add_dirty_idle();
         }
+        self.save_state();
     }
 }
 
@@ -1930,7 +2073,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     // Process old PIDs
                     for (old_prog, old_pid) in old_pids {
                         // If it is still in new startup and once == true, keep it running
-                        let still_exists_and_once = self.startup.iter().any(|p| p.exec == old_prog.exec && p.once);
+                        let still_exists_and_once = self.startup.iter().any(|p| p.exec == old_prog.exec && p.once && !p.restart);
                         if still_exists_and_once {
                             self.startup_pids.push((old_prog, old_pid));
                         } else {

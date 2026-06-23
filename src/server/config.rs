@@ -599,6 +599,16 @@ pub fn default_config_path() -> Option<String> {
     }
 }
 
+pub fn default_state_path() -> Option<String> {
+    if let Ok(xdg_state_home) = std::env::var("XDG_STATE_HOME") {
+        Some(format!("{}/cce/state.json", xdg_state_home))
+    } else if let Ok(home) = std::env::var("HOME") {
+        Some(format!("{}/.local/state/cce/state.json", home))
+    } else {
+        None
+    }
+}
+
 pub fn extract_program_name(cmd: &str) -> String {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
