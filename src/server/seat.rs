@@ -394,69 +394,80 @@ impl Seat {
                 }
             }
             Focus::Window(window) => {
+                let is_new = if !window.is_null() {
+                    let was_new = (*window).is_new;
+                    (*window).is_new = false;
+                    was_new
+                } else {
+                    false
+                };
+
                 if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
-                    let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                    let mut curr_out = (*outputs_list).next;
-                    let mut target_output: *mut crate::output::Output = std::ptr::null_mut();
-                    while curr_out != outputs_list {
-                        let output = crate::container_of!(curr_out, crate::output::Output, link);
-                        if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                            if target_output.is_null() {
-                                target_output = output;
+                    let should_pan = !is_new || !(*window).restored;
+                    if should_pan {
+                        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                        let mut curr_out = (*outputs_list).next;
+                        let mut target_output: *mut crate::output::Output = std::ptr::null_mut();
+                        while curr_out != outputs_list {
+                            let output = crate::container_of!(curr_out, crate::output::Output, link);
+                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                                if target_output.is_null() {
+                                    target_output = output;
+                                }
+                                let wlr_box = (*output).sent.box_layout();
+                                let wx = (*window).box_geom.x;
+                                let wy = (*window).box_geom.y;
+                                if wx >= wlr_box.x && wx < wlr_box.x + wlr_box.width
+                                    && wy >= wlr_box.y && wy < wlr_box.y + wlr_box.height
+                                {
+                                    target_output = output;
+                                    break;
+                                }
                             }
-                            let wlr_box = (*output).sent.box_layout();
-                            let wx = (*window).box_geom.x;
-                            let wy = (*window).box_geom.y;
-                            if wx >= wlr_box.x && wx < wlr_box.x + wlr_box.width
-                                && wy >= wlr_box.y && wy < wlr_box.y + wlr_box.height
-                            {
-                                target_output = output;
-                                break;
-                            }
-                        }
-                        curr_out = (*curr_out).next;
-                    }
-
-                    if !target_output.is_null() {
-                        let wlr_box = (*target_output).sent.box_layout();
-                        let viewport_w = wlr_box.width as f64;
-                        let viewport_h = wlr_box.height as f64;
-
-                        let fw = if (*window).box_geom.width > 0 {
-                            (*window).box_geom.width as f64
-                        } else if (*window).wm_scheduled.dimensions_hint.min_width > 32 {
-                            (*window).wm_scheduled.dimensions_hint.min_width as f64
-                        } else {
-                            800.0
-                        };
-                        let fh = if (*window).box_geom.height > 0 {
-                            (*window).box_geom.height as f64
-                        } else if (*window).wm_scheduled.dimensions_hint.min_height > 32 {
-                            (*window).wm_scheduled.dimensions_hint.min_height as f64
-                        } else {
-                            600.0
-                        };
-
-                        let wm = &mut (*self.server).wm;
-                        let scale = wm.desk_zoom;
-
-                        let target_x = (*window).virtual_x + (fw / 2.0 - viewport_w / 2.0) / scale;
-                        let target_y = (*window).virtual_y + (fh / 2.0 - viewport_h / 2.0) / scale;
-
-                        wm.target_desk_pan_x = Some(target_x);
-                        wm.target_desk_pan_y = Some(target_y);
-
-                        if wm.animation_timer.is_null() {
-                            let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-                            wm.animation_timer = ffi::wl_event_loop_add_timer(
-                                event_loop,
-                                Some(crate::window_manager::handle_panning_animation_tick),
-                                wm as *mut crate::window_manager::WindowManager as *mut _,
-                            );
+                            curr_out = (*curr_out).next;
                         }
 
-                        if !wm.animation_timer.is_null() {
-                            ffi::wl_event_source_timer_update(wm.animation_timer, 16);
+                        if !target_output.is_null() {
+                            let wlr_box = (*target_output).sent.box_layout();
+                            let viewport_w = wlr_box.width as f64;
+                            let viewport_h = wlr_box.height as f64;
+
+                            let fw = if (*window).box_geom.width > 0 {
+                                (*window).box_geom.width as f64
+                            } else if (*window).wm_scheduled.dimensions_hint.min_width > 32 {
+                                (*window).wm_scheduled.dimensions_hint.min_width as f64
+                            } else {
+                                800.0
+                            };
+                            let fh = if (*window).box_geom.height > 0 {
+                                (*window).box_geom.height as f64
+                            } else if (*window).wm_scheduled.dimensions_hint.min_height > 32 {
+                                (*window).wm_scheduled.dimensions_hint.min_height as f64
+                            } else {
+                                600.0
+                            };
+
+                            let wm = &mut (*self.server).wm;
+                            let scale = wm.desk_zoom;
+
+                            let target_x = (*window).virtual_x + (fw / 2.0 - viewport_w / 2.0) / scale;
+                            let target_y = (*window).virtual_y + (fh / 2.0 - viewport_h / 2.0) / scale;
+
+                            wm.target_desk_pan_x = Some(target_x);
+                            wm.target_desk_pan_y = Some(target_y);
+
+                            if wm.animation_timer.is_null() {
+                                let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+                                wm.animation_timer = ffi::wl_event_loop_add_timer(
+                                    event_loop,
+                                    Some(crate::window_manager::handle_panning_animation_tick),
+                                    wm as *mut crate::window_manager::WindowManager as *mut _,
+                                );
+                            }
+
+                            if !wm.animation_timer.is_null() {
+                                ffi::wl_event_source_timer_update(wm.animation_timer, 16);
+                            }
                         }
                     }
                 }
