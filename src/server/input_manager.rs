@@ -339,7 +339,7 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
 
     let device = crate::input_device::InputDevice::new(im.default_seat, wlr_device, false);
     
-    let name_ptr = (*wlr_device).name;
+    let name_ptr = ffi::river_wlr_input_device_get_name(wlr_device);
     if !name_ptr.is_null() {
         let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
         let wm = &mut (*im.server).wm;

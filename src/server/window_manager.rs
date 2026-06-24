@@ -1988,7 +1988,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         while curr != devices_head {
                             let next = (*curr).next;
                             let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
-                            let name_ptr = (*(*device).wlr_device).name;
+                            let name_ptr = ffi::river_wlr_input_device_get_name((*device).wlr_device);
                             if !name_ptr.is_null() {
                                 let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
                                 if device_name == "*" || name.contains(device_name) {
@@ -2042,7 +2042,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
         while curr != devices_head {
             let next = (*curr).next;
             let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
-            let name_ptr = (*(*device).wlr_device).name;
+            let name_ptr = ffi::river_wlr_input_device_get_name((*device).wlr_device);
             if !name_ptr.is_null() {
                 let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
                 for rule in &self.input_rules {
