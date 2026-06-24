@@ -303,7 +303,18 @@ impl WindowManager {
         if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id && w.title == title) {
             return Some(self.restore_queue.remove(pos));
         }
-        // Second pass: app_id only match
+        // Second pass: Fuzzy title match (e.g. prefix match, asterisk stripping)
+        if let Some(pos) = self.restore_queue.iter().position(|w| {
+            if w.app_id != app_id {
+                return false;
+            }
+            let t1 = title.trim_end_matches('*');
+            let t2 = w.title.trim_end_matches('*');
+            t1 == t2 || t1.starts_with(t2) || t2.starts_with(t1)
+        }) {
+            return Some(self.restore_queue.remove(pos));
+        }
+        // Third pass: app_id only match
         if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id) {
             return Some(self.restore_queue.remove(pos));
         }

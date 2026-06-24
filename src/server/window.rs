@@ -645,6 +645,27 @@ impl Window {
                 height: saved.height,
             };
             
+            self.rendering_scheduled.width = saved.width;
+            self.rendering_scheduled.height = saved.height;
+            self.rendering_sent.width = saved.width;
+            self.rendering_sent.height = saved.height;
+
+            match self.impl_type {
+                WindowImpl::Toplevel(toplevel) => {
+                    if !toplevel.is_null() {
+                        (*toplevel).geometry.width = saved.width as i32;
+                        (*toplevel).geometry.height = saved.height as i32;
+                    }
+                }
+                WindowImpl::Xwayland(xwindow) => {
+                    if !xwindow.is_null() && !(*xwindow).xsurface.is_null() {
+                        (*(*xwindow).xsurface).width = saved.width as u16;
+                        (*(*xwindow).xsurface).height = saved.height as u16;
+                    }
+                }
+                _ => {}
+            }
+
             self.restored = true;
         }
     }

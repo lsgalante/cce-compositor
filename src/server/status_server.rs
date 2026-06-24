@@ -20,6 +20,8 @@ pub struct StatusUpdate {
     pub layout_text: String,
     /// Plain text for title module subscribers
     pub title_text: String,
+    /// Plain text for modifiers subscriber
+    pub modifiers_text: String,
 }
 
 /// Subscription types that the status bar script can request.
@@ -28,6 +30,7 @@ enum Subscription {
     Tags,
     Layout,
     Title,
+    Modifiers,
     Unknown,
 }
 
@@ -37,6 +40,7 @@ impl Subscription {
             "tags" => Subscription::Tags,
             "layout" => Subscription::Layout,
             "title" => Subscription::Title,
+            "modifiers" => Subscription::Modifiers,
             _ => Subscription::Unknown,
         }
     }
@@ -227,6 +231,7 @@ fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
         Subscription::Tags => update.tags_json.clone(),
         Subscription::Layout => update.layout_text.clone(),
         Subscription::Title => update.title_text.clone(),
+        Subscription::Modifiers => update.modifiers_text.clone(),
         Subscription::Unknown => String::new(),
     }
 }
@@ -265,9 +270,21 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
         }
     };
 
+    let seat_ptr = wm.first_seat().unwrap_or(std::ptr::null_mut());
+    let mut super_pressed = false;
+    if !seat_ptr.is_null() {
+        let wlr_keyboard = crate::ffi::river_wlr_seat_get_keyboard((*seat_ptr).wlr_seat);
+        if !wlr_keyboard.is_null() {
+            let modifiers = crate::ffi::wlr_keyboard_get_modifiers(wlr_keyboard);
+            super_pressed = modifiers & 0x40 != 0;
+        }
+    }
+    let modifiers_text = if super_pressed { "super" } else { "none" }.to_string();
+
     StatusUpdate {
         tags_json,
         layout_text,
         title_text,
+        modifiers_text,
     }
 }

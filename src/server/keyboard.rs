@@ -247,5 +247,10 @@ unsafe extern "C" fn handle_modifiers(listener: *mut ffi::wl_listener, _data: *m
     if !keyboard.group.is_null() {
         let modifiers = ffi::river_wlr_keyboard_get_modifiers(keyboard.wlr_keyboard);
         (*keyboard.group).process_modifiers(*modifiers);
+        
+        let seat = (*keyboard.group).seat;
+        if !seat.is_null() && !(*seat).server.is_null() {
+            (*(*seat).server).wm.update_status();
+        }
     }
 }
