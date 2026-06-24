@@ -672,7 +672,9 @@ impl Window {
             false
         };
 
-        if !is_status_bar {
+        if is_status_bar {
+            self.tiling_mode = crate::tiling::TilingMode::Status;
+        } else {
             let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
             let mut curr = (*seats).next;
             while curr != seats {
@@ -1401,6 +1403,9 @@ impl Window {
 
     pub unsafe fn notify_app_id(&mut self) {
         self.wm_scheduled.dirty_app_id = true;
+        if self.get_app_id_string().as_deref() == Some("cce-status-interface") {
+            self.tiling_mode = crate::tiling::TilingMode::Status;
+        }
         self.try_restore();
         (*self.server).wm.dirty_windowing();
 

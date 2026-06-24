@@ -300,6 +300,13 @@ impl Seat {
     }
 
     pub unsafe fn focus(&mut self, new_focus: Focus) {
+        if let Focus::Window(window) = new_focus {
+            if !window.is_null() && (*window).is_status_bar() {
+                log::info!("[FocusDebug] Seat::focus blocking focus to status bar window");
+                return;
+            }
+        }
+
         if self.focused == new_focus {
             return;
         }

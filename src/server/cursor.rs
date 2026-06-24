@@ -808,13 +808,15 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         if let Some(result) = (*server).scene.at(lx, ly) {
             match result.data {
                 SceneNodeDataVal::Window(window) => {
-                    if !seat.object.is_null() {
-                        if !(*window).object.is_null() {
-                            ffi::wl_resource_post_event(seat.object, 4, (*window).object);
-                            (*(*seat).server).wm.dirty_windowing();
+                    if !(*window).is_status_bar() {
+                        if !seat.object.is_null() {
+                            if !(*window).object.is_null() {
+                                ffi::wl_resource_post_event(seat.object, 4, (*window).object);
+                                (*(*seat).server).wm.dirty_windowing();
+                            }
+                        } else {
+                            seat.focus(Focus::Window(window));
                         }
-                    } else {
-                        seat.focus(Focus::Window(window));
                     }
                 }
                 SceneNodeDataVal::LayerSurface(_) => {

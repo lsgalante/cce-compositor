@@ -908,6 +908,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
                 
                 if is_status_bar {
+                    (*win_ptr).tiling_mode = crate::tiling::TilingMode::Status;
                     let bar_h = self.layout.bar_height as u32;
                     (*win_ptr).rendering_requested.x = wlr_box.x;
                     (*win_ptr).rendering_requested.y = wlr_box.y;
