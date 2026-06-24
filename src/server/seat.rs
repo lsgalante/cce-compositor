@@ -387,6 +387,58 @@ impl Seat {
                 }
             }
             Focus::Window(window) => {
+                if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
+                    let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                    let mut curr_out = (*outputs_list).next;
+                    let mut target_output: *mut crate::output::Output = std::ptr::null_mut();
+                    while curr_out != outputs_list {
+                        let output = crate::container_of!(curr_out, crate::output::Output, link);
+                        if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                            if target_output.is_null() {
+                                target_output = output;
+                            }
+                            let wlr_box = (*output).sent.box_layout();
+                            let wx = (*window).box_geom.x;
+                            let wy = (*window).box_geom.y;
+                            if wx >= wlr_box.x && wx < wlr_box.x + wlr_box.width
+                                && wy >= wlr_box.y && wy < wlr_box.y + wlr_box.height
+                            {
+                                target_output = output;
+                                break;
+                            }
+                        }
+                        curr_out = (*curr_out).next;
+                    }
+
+                    if !target_output.is_null() {
+                        let wlr_box = (*target_output).sent.box_layout();
+                        let viewport_w = wlr_box.width as f64;
+                        let viewport_h = wlr_box.height as f64;
+
+                        let fw = if (*window).box_geom.width > 0 {
+                            (*window).box_geom.width as f64
+                        } else if (*window).wm_scheduled.dimensions_hint.min_width > 32 {
+                            (*window).wm_scheduled.dimensions_hint.min_width as f64
+                        } else {
+                            800.0
+                        };
+                        let fh = if (*window).box_geom.height > 0 {
+                            (*window).box_geom.height as f64
+                        } else if (*window).wm_scheduled.dimensions_hint.min_height > 32 {
+                            (*window).wm_scheduled.dimensions_hint.min_height as f64
+                        } else {
+                            600.0
+                        };
+
+                        let wm = &mut (*self.server).wm;
+                        let scale = wm.desk_zoom;
+
+                        wm.desk_pan_x = (*window).virtual_x + (fw / 2.0 - viewport_w / 2.0) / scale;
+                        wm.desk_pan_y = (*window).virtual_y + (fh / 2.0 - viewport_h / 2.0) / scale;
+                        wm.dirty_windowing();
+                    }
+                }
+
                 // Focus root surface of window
                 let surface = (*window).root_surface();
                 if !surface.is_null() {
