@@ -433,9 +433,24 @@ impl Seat {
                         let wm = &mut (*self.server).wm;
                         let scale = wm.desk_zoom;
 
-                        wm.desk_pan_x = (*window).virtual_x + (fw / 2.0 - viewport_w / 2.0) / scale;
-                        wm.desk_pan_y = (*window).virtual_y + (fh / 2.0 - viewport_h / 2.0) / scale;
-                        wm.dirty_windowing();
+                        let target_x = (*window).virtual_x + (fw / 2.0 - viewport_w / 2.0) / scale;
+                        let target_y = (*window).virtual_y + (fh / 2.0 - viewport_h / 2.0) / scale;
+
+                        wm.target_desk_pan_x = Some(target_x);
+                        wm.target_desk_pan_y = Some(target_y);
+
+                        if wm.animation_timer.is_null() {
+                            let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+                            wm.animation_timer = ffi::wl_event_loop_add_timer(
+                                event_loop,
+                                Some(crate::window_manager::handle_panning_animation_tick),
+                                wm as *mut crate::window_manager::WindowManager as *mut _,
+                            );
+                        }
+
+                        if !wm.animation_timer.is_null() {
+                            ffi::wl_event_source_timer_update(wm.animation_timer, 16);
+                        }
                     }
                 }
 
@@ -1238,6 +1253,7 @@ unsafe extern "C" fn seat_op_start_pointer(
             start_win_virtual_x: 0.0,
             start_win_virtual_y: 0.0,
         });
+        (*(*seat).server).wm.stop_panning_animation();
         (*seat).cursor.op_start_pointer();
     }
 }

@@ -659,6 +659,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 };
                 
                 if let Some(ot) = op_type {
+                    (*server).wm.stop_panning_animation();
                     let cursor_x = (*cursor.wlr_cursor).x;
                     let cursor_y = (*cursor.wlr_cursor).y;
                     seat.op = Some(crate::seat::SeatOp {
@@ -718,6 +719,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         }
 
                         seat.focus(Focus::Window(border_target_win));
+                        (*server).wm.stop_panning_animation();
                         let cursor_x = (*cursor.wlr_cursor).x;
                         let cursor_y = (*cursor.wlr_cursor).y;
                         seat.op = Some(crate::seat::SeatOp {
@@ -754,6 +756,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         }
 
                         seat.focus(Focus::Window(border_target_win));
+                        (*server).wm.stop_panning_animation();
                         let cursor_x = (*cursor.wlr_cursor).x;
                         let cursor_y = (*cursor.wlr_cursor).y;
                         seat.op = Some(crate::seat::SeatOp {
@@ -885,6 +888,7 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
 
     if (modifiers & 0x40) != 0 {
         let wm = &mut (*seat.server).wm;
+        wm.stop_panning_animation();
         let step = delta / wm.desk_zoom;
         match (*event).orientation {
             ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL => {

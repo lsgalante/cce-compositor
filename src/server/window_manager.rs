@@ -101,6 +101,9 @@ pub struct WindowManager {
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
     pub restore_queue: Vec<SavedWindowState>,
     pub shutting_down: bool,
+    pub target_desk_pan_x: Option<f64>,
+    pub target_desk_pan_y: Option<f64>,
+    pub animation_timer: *mut ffi::wl_event_source,
 }
 
 impl WindowManager {
@@ -143,6 +146,9 @@ impl WindowManager {
         self.dirty_idle = std::ptr::null_mut();
         self.desk_pan_x = 0.0;
         self.desk_pan_y = 0.0;
+        self.target_desk_pan_x = None;
+        self.target_desk_pan_y = None;
+        self.animation_timer = std::ptr::null_mut();
         self.desk_zoom = 1.0;
         self.global_layout = crate::tiling::TilingMode::Cascade;
         self.restore_queue = Vec::new();
@@ -331,7 +337,16 @@ impl WindowManager {
             ffi::wl_event_source_remove(self.timeout);
             self.timeout = std::ptr::null_mut();
         }
+        if !self.animation_timer.is_null() {
+            ffi::wl_event_source_remove(self.animation_timer);
+            self.animation_timer = std::ptr::null_mut();
+        }
         wl_listener_remove(&mut self.server_destroy);
+    }
+
+    pub unsafe fn stop_panning_animation(&mut self) {
+        self.target_desk_pan_x = None;
+        self.target_desk_pan_y = None;
     }
 
     pub unsafe fn ensure_windowing(&self) -> bool {
@@ -1274,6 +1289,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
     pub unsafe fn execute_action(&mut self, action: &crate::config::Action, command: Option<&str>) {
         use crate::config::Action;
+        self.stop_panning_animation();
         match action {
             Action::None => {}
             Action::Spawn => {
@@ -1631,6 +1647,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
     }
 
     pub unsafe fn process_ipc_command(&mut self, cmd: &str) -> String {
+        self.stop_panning_animation();
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
             return "error: empty command\n".to_string();
@@ -2420,4 +2437,45 @@ unsafe extern "C" fn handle_destroy_wm_resource(resource: *mut ffi::wl_resource)
         WindowManagerState::Manage => (*wm).manage_finish(),
         WindowManagerState::Render => (*wm).render_finish(),
     }
+}
+
+pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = data as *mut WindowManager;
+    if wm.is_null() {
+        return 0;
+    }
+    
+    let mut done = true;
+    let factor = 0.15;
+    
+    if let Some(target_x) = (*wm).target_desk_pan_x {
+        let dx = target_x - (*wm).desk_pan_x;
+        if dx.abs() > 0.5 {
+            (*wm).desk_pan_x += dx * factor;
+            done = false;
+        } else {
+            (*wm).desk_pan_x = target_x;
+            (*wm).target_desk_pan_x = None;
+        }
+    }
+    
+    if let Some(target_y) = (*wm).target_desk_pan_y {
+        let dy = target_y - (*wm).desk_pan_y;
+        if dy.abs() > 0.5 {
+            (*wm).desk_pan_y += dy * factor;
+            done = false;
+        } else {
+            (*wm).desk_pan_y = target_y;
+            (*wm).target_desk_pan_y = None;
+        }
+    }
+    
+    (*wm).dirty_windowing();
+    
+    if !done {
+        if !(*wm).animation_timer.is_null() {
+            ffi::wl_event_source_timer_update((*wm).animation_timer, 16);
+        }
+    }
+    0
 }
