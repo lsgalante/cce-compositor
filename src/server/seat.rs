@@ -457,23 +457,50 @@ impl Seat {
                             let wm = &mut (*self.server).wm;
                             let scale = wm.desk_zoom;
 
-                            let target_x = (*window).virtual_x + (fw / 2.0 - viewport_w / 2.0) / scale;
-                            let target_y = (*window).virtual_y + (fh / 2.0 - viewport_h / 2.0) / scale;
+                            // Calculate window visibility percentage in viewport
+                            let v_w = viewport_w / scale;
+                            let v_h = viewport_h / scale;
+                            let v_left = wm.desk_pan_x;
+                            let v_right = v_left + v_w;
+                            let v_top = wm.desk_pan_y;
+                            let v_bottom = v_top + v_h;
 
-                            wm.target_desk_pan_x = Some(target_x);
-                            wm.target_desk_pan_y = Some(target_y);
+                            let w_left = (*window).virtual_x;
+                            let w_top = (*window).virtual_y;
+                            let w_right = w_left + fw;
+                            let w_bottom = w_top + fh;
 
-                            if wm.animation_timer.is_null() {
-                                let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-                                wm.animation_timer = ffi::wl_event_loop_add_timer(
-                                    event_loop,
-                                    Some(crate::window_manager::handle_panning_animation_tick),
-                                    wm as *mut crate::window_manager::WindowManager as *mut _,
-                                );
-                            }
+                            let i_left = w_left.max(v_left);
+                            let i_right = w_right.min(v_right);
+                            let i_top = w_top.max(v_top);
+                            let i_bottom = w_bottom.min(v_bottom);
 
-                            if !wm.animation_timer.is_null() {
-                                ffi::wl_event_source_timer_update(wm.animation_timer, 16);
+                            let i_w = (i_right - i_left).max(0.0);
+                            let i_h = (i_bottom - i_top).max(0.0);
+                            let i_area = i_w * i_h;
+                            let w_area = fw * fh;
+
+                            let visible_percent = if w_area > 0.0 { i_area / w_area } else { 0.0 };
+
+                            if visible_percent < 0.75 {
+                                let target_x = (*window).virtual_x + (fw / 2.0 - viewport_w / 2.0) / scale;
+                                let target_y = (*window).virtual_y + (fh / 2.0 - viewport_h / 2.0) / scale;
+
+                                wm.target_desk_pan_x = Some(target_x);
+                                wm.target_desk_pan_y = Some(target_y);
+
+                                if wm.animation_timer.is_null() {
+                                    let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+                                    wm.animation_timer = ffi::wl_event_loop_add_timer(
+                                        event_loop,
+                                        Some(crate::window_manager::handle_panning_animation_tick),
+                                        wm as *mut crate::window_manager::WindowManager as *mut _,
+                                    );
+                                }
+
+                                if !wm.animation_timer.is_null() {
+                                    ffi::wl_event_source_timer_update(wm.animation_timer, 16);
+                                }
                             }
                         }
                     }
