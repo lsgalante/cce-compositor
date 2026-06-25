@@ -33,7 +33,6 @@ fn usage(name: &str, to_stderr: bool) {
     print("commands:");
     print("  layout <gap|gap_top|gap_left|gap_right|gap_bottom|offset|grid_gap|bar_height|border_width|fullscreen_border_width|border_color> <value>");
     print("  view <1-4>");
-    print("  toggle <1-4>");
     print("  close");
     print("  minimize");
     print("  focus-next");
@@ -51,9 +50,9 @@ fn usage(name: &str, to_stderr: bool) {
     print("  bind <mods> <keysym> <action> [args...]");
     print("  pbind <mods> <button> <action>");
     print("  retile");
-    print("  set-tag <1-4>");
+    print("  set-viewport <1-4>");
     print("  mode <cascade|grid|fullscreen|floating|popup> <app_id> [title]");
-    print("  tag-layout <1-4> <cascade|grid|fullscreen|floating|popup>");
+    print("  viewport-layout <1-4> <cascade|grid|fullscreen|floating|popup>");
     print("  pointer-location");
     print("  pointer-move-to <x> <y>");
     print("  pointer-move-by <dx> <dy>");

@@ -2,7 +2,7 @@
 //
 // Runs in a dedicated thread. cce-status-interface connects to
 // /tmp/cce-status-{WAYLAND_DISPLAY}.sock, sends a subscription line
-// ("tags", "layout", or "title"), and receives JSON lines whenever the status changes.
+// ("viewport", "layout", or "title"), and receives JSON lines whenever the status changes.
 //
 // The main loop sends updates through an mpsc channel. The server thread
 // owns the socket and handles all I/O independently of the Wayland event loop.
@@ -14,8 +14,8 @@ use std::sync::mpsc;
 /// A status update sent from the main loop to the server thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusUpdate {
-    /// JSON string for tags module subscribers
-    pub tags_json: String,
+    /// JSON string for viewport module subscribers
+    pub viewport_json: String,
     /// Plain text for layout module subscribers
     pub layout_text: String,
     /// Plain text for title module subscribers
@@ -27,7 +27,7 @@ pub struct StatusUpdate {
 /// Subscription types that the status bar script can request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Subscription {
-    Tags,
+    Viewport,
     Layout,
     Title,
     Modifiers,
@@ -37,7 +37,7 @@ enum Subscription {
 impl Subscription {
     fn from_str(s: &str) -> Self {
         match s.trim() {
-            "tags" => Subscription::Tags,
+            "viewport" => Subscription::Viewport,
             "layout" => Subscription::Layout,
             "title" => Subscription::Title,
             "modifiers" => Subscription::Modifiers,
@@ -228,7 +228,7 @@ fn read_subscription(stream: &UnixStream) -> Subscription {
 
 fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
     match sub {
-        Subscription::Tags => update.tags_json.clone(),
+        Subscription::Viewport => update.viewport_json.clone(),
         Subscription::Layout => update.layout_text.clone(),
         Subscription::Title => update.title_text.clone(),
         Subscription::Modifiers => update.modifiers_text.clone(),
@@ -241,7 +241,7 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
 
     let text = format!("Zoom: {:.2} | Pan: ({:.0}, {:.0})", wm.desk_zoom, wm.desk_pan_x, wm.desk_pan_y);
     let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-    let tags_json = format!("{{\"text\": \"{}\", \"tooltip\": \"Camera State\"}}", escaped);
+    let viewport_json = format!("{{\"text\": \"{}\", \"tooltip\": \"Camera State\"}}", escaped);
 
     let layout_text = if !focused_window.is_null() {
         (*focused_window).tiling_mode.as_str().to_string()
@@ -282,7 +282,7 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
     let modifiers_text = if super_pressed { "super" } else { "none" }.to_string();
 
     StatusUpdate {
-        tags_json,
+        viewport_json,
         layout_text,
         title_text,
         modifiers_text,

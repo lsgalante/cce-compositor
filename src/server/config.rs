@@ -115,14 +115,10 @@ pub enum Action {
     View2,
     View3,
     View4,
-    Toggle1,
-    Toggle2,
-    Toggle3,
-    Toggle4,
-    SetTag1,
-    SetTag2,
-    SetTag3,
-    SetTag4,
+    SetViewport1,
+    SetViewport2,
+    SetViewport3,
+    SetViewport4,
     Expose,
     Minimize,
     PinnedLeft,
@@ -513,26 +509,11 @@ pub fn parse_action(s: &str) -> Action {
             }
         }
         Action::None
-    } else if s.starts_with("toggle") {
-        let rest = &s[6..];
-        let tag_str = rest
-            .strip_prefix('-')
-            .or_else(|| rest.strip_prefix(' '))
-            .unwrap_or(rest);
-        if let Ok(tag) = tag_str.parse::<i32>() {
-            if tag >= 1 && tag <= 4 {
-                return match tag {
-                    1 => Action::Toggle1,
-                    2 => Action::Toggle2,
-                    3 => Action::Toggle3,
-                    4 => Action::Toggle4,
-                    _ => Action::None,
-                };
-            }
-        }
+    } else if s == "toggle" {
         Action::Toggle
-    } else if s.starts_with("set-tag") {
-        let rest = &s[7..];
+    } else if s.starts_with("set-viewport") || s.starts_with("set-tag") {
+        let is_viewport = s.starts_with("set-viewport");
+        let rest = if is_viewport { &s[12..] } else { &s[7..] };
         let tag_str = rest
             .strip_prefix('-')
             .or_else(|| rest.strip_prefix(' '))
@@ -540,10 +521,10 @@ pub fn parse_action(s: &str) -> Action {
         if let Ok(tag) = tag_str.parse::<i32>() {
             if tag >= 1 && tag <= 4 {
                 return match tag {
-                    1 => Action::SetTag1,
-                    2 => Action::SetTag2,
-                    3 => Action::SetTag3,
-                    4 => Action::SetTag4,
+                    1 => Action::SetViewport1,
+                    2 => Action::SetViewport2,
+                    3 => Action::SetViewport3,
+                    4 => Action::SetViewport4,
                     _ => Action::None,
                 };
             }

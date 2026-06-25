@@ -206,7 +206,6 @@ pub struct Window {
     pub popup_tree: *mut ffi::wlr_scene_tree,
     pub capture_scene: *mut ffi::wlr_scene,
     pub capture_source: *mut ffi::wlr_ext_image_capture_source_v1,
-    pub tags: u32,
     pub tiling_mode: crate::tiling::TilingMode,
     pub mode_locked: bool,
     pub is_new: bool,
@@ -363,7 +362,6 @@ impl Window {
             popup_tree,
             capture_scene,
             capture_source: std::ptr::null_mut(),
-            tags: 1,
             tiling_mode: crate::tiling::TilingMode::Floating,
             mode_locked: false,
             is_new: true,
@@ -628,7 +626,6 @@ impl Window {
         if let Some(saved) = (*self.server).wm.match_and_remove_restore_state(&app_id_str, &title_str) {
             log::info!("Restoring saved state for window: app_id={}, title={}. Position: ({}, {}), Size: {}x{}", app_id_str, title_str, saved.virtual_x, saved.virtual_y, saved.width, saved.height);
             self.tiling_mode = saved.tiling_mode;
-            self.tags = saved.tags;
             self.minimized = saved.minimized;
             self.virtual_x = saved.virtual_x;
             self.virtual_y = saved.virtual_y;

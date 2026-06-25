@@ -46,7 +46,6 @@ pub struct SavedWindowState {
     pub app_id: String,
     pub title: String,
     pub tiling_mode: crate::tiling::TilingMode,
-    pub tags: u32,
     pub minimized: bool,
     pub virtual_x: f64,
     pub virtual_y: f64,
@@ -259,7 +258,6 @@ impl WindowManager {
                 app_id,
                 title,
                 tiling_mode: (*w).tiling_mode,
-                tags: (*w).tags,
                 minimized: (*w).minimized,
                 virtual_x: (*w).virtual_x,
                 virtual_y: (*w).virtual_y,
@@ -1150,7 +1148,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 };
             }
         }
-        // If the focused window is no longer visible on the active tags, refocus
+        // If the focused window is no longer visible, refocus
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
@@ -1552,13 +1550,12 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 self.desk_pan_y = target_y - (viewport_h / 2.0) / self.desk_zoom;
                 self.dirty_windowing();
             }
-            Action::Toggle1 | Action::Toggle2 | Action::Toggle3 | Action::Toggle4 => {}
-            Action::SetTag1 | Action::SetTag2 | Action::SetTag3 | Action::SetTag4 => {
+            Action::SetViewport1 | Action::SetViewport2 | Action::SetViewport3 | Action::SetViewport4 => {
                 let (target_x, target_y) = match action {
-                    Action::SetTag1 => (0.0, 0.0),
-                    Action::SetTag2 => (2000.0, 0.0),
-                    Action::SetTag3 => (0.0, 2000.0),
-                    Action::SetTag4 => (2000.0, 2000.0),
+                    Action::SetViewport1 => (0.0, 0.0),
+                    Action::SetViewport2 => (2000.0, 0.0),
+                    Action::SetViewport3 => (0.0, 2000.0),
+                    Action::SetViewport4 => (2000.0, 2000.0),
                     _ => (0.0, 0.0),
                 };
                 if let Some(seat) = self.first_seat() {
@@ -1769,39 +1766,22 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 }
                 "error: invalid tag\n".to_string()
             }
-            "toggle" => {
-                if parts.len() < 2 { return "error: missing tag\n".to_string(); }
+            "set-viewport" | "set-tag" => {
+                if parts.len() < 2 { return "error: missing viewport index\n".to_string(); }
                 if let Ok(tag) = parts[1].parse::<i32>() {
                     if tag >= 1 && tag <= 4 {
                         let act = match tag {
-                            1 => crate::config::Action::Toggle1,
-                            2 => crate::config::Action::Toggle2,
-                            3 => crate::config::Action::Toggle3,
-                            4 => crate::config::Action::Toggle4,
+                            1 => crate::config::Action::SetViewport1,
+                            2 => crate::config::Action::SetViewport2,
+                            3 => crate::config::Action::SetViewport3,
+                            4 => crate::config::Action::SetViewport4,
                             _ => crate::config::Action::None,
                         };
                         self.execute_action(&act, None);
                         return "ok\n".to_string();
                     }
                 }
-                "error: invalid tag\n".to_string()
-            }
-            "set-tag" => {
-                if parts.len() < 2 { return "error: missing tag\n".to_string(); }
-                if let Ok(tag) = parts[1].parse::<i32>() {
-                    if tag >= 1 && tag <= 4 {
-                        let act = match tag {
-                            1 => crate::config::Action::SetTag1,
-                            2 => crate::config::Action::SetTag2,
-                            3 => crate::config::Action::SetTag3,
-                            4 => crate::config::Action::SetTag4,
-                            _ => crate::config::Action::None,
-                        };
-                        self.execute_action(&act, None);
-                        return "ok\n".to_string();
-                    }
-                }
-                "error: invalid tag\n".to_string()
+                "error: invalid viewport index\n".to_string()
             }
             "pan-by" => {
                 if parts.len() < 3 { return "error: missing dx or dy\n".to_string(); }
@@ -2074,7 +2054,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 self.dirty_windowing();
                 "ok\n".to_string()
             }
-            "tag-layout" => {
+            "viewport-layout" => {
                 "ok\n".to_string()
             }
             "mode" => {
