@@ -575,11 +575,6 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             }
 
             if !clicked_win.is_null() && !(*clicked_win).is_status_bar() {
-                seat.focus(Focus::Window(clicked_win));
-                if !seat.object.is_null() && !(*clicked_win).object.is_null() {
-                    ffi::wl_resource_post_event(seat.object, 4, (*clicked_win).object);
-                }
-
                 let mut viewport_w = 1920.0;
                 let mut viewport_h = 1080.0;
                 let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
@@ -595,17 +590,22 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     curr_out = (*curr_out).next;
                 }
 
-                (*server).wm.desk_zoom = 1.0;
-
                 let win_w = if (*clicked_win).box_geom.width > 0 { (*clicked_win).box_geom.width as f64 } else { 800.0 };
                 let win_h = if (*clicked_win).box_geom.height > 0 { (*clicked_win).box_geom.height as f64 } else { 600.0 };
 
                 let center_x = (*clicked_win).virtual_x + win_w / 2.0;
                 let center_y = (*clicked_win).virtual_y + win_h / 2.0;
 
+                (*server).wm.desk_zoom = 1.0;
                 (*server).wm.desk_pan_x = center_x - viewport_w / 2.0;
                 (*server).wm.desk_pan_y = center_y - viewport_h / 2.0;
 
+                seat.focus(Focus::Window(clicked_win));
+                if !seat.object.is_null() && !(*clicked_win).object.is_null() {
+                    ffi::wl_resource_post_event(seat.object, 4, (*clicked_win).object);
+                }
+
+                (*server).wm.stop_panning_animation();
                 (*server).wm.dirty_windowing();
 
                 cursor.pressed.insert((*event).button, None);

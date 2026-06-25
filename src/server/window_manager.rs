@@ -1647,6 +1647,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                                 self.desk_zoom = 1.0;
                                 self.desk_pan_x = center_x - viewport_w / 2.0;
                                 self.desk_pan_y = center_y - viewport_h / 2.0;
+                                self.stop_panning_animation();
                                 self.dirty_windowing();
                                 return;
                             }
@@ -1655,6 +1656,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     self.desk_zoom = 1.0;
                     self.desk_pan_x = 0.0;
                     self.desk_pan_y = 0.0;
+                    self.stop_panning_animation();
                     self.dirty_windowing();
                 } else {
                     let mut min_vx = f64::MAX;
