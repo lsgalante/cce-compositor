@@ -1209,6 +1209,24 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     if matched_action != crate::config::Action::None {
         log::info!("Swipe gesture matched action: {:?}", matched_action);
         cursor.gesture_triggered = true;
+
+        if matched_action == crate::config::Action::Expose && (*seat.server).wm.desk_zoom < 0.999 {
+            let lx = cursor.x();
+            let ly = cursor.y();
+            let mut hovered_win: *mut crate::window::Window = std::ptr::null_mut();
+            if let Some(result) = (*seat.server).scene.at(lx, ly) {
+                if let SceneNodeDataVal::Window(window) = result.data {
+                    hovered_win = window;
+                }
+            }
+            if !hovered_win.is_null() && !(*hovered_win).is_status_bar() {
+                seat.focus(Focus::Window(hovered_win));
+                if !seat.object.is_null() && !(*hovered_win).object.is_null() {
+                    ffi::wl_resource_post_event(seat.object, 4, (*hovered_win).object);
+                }
+            }
+        }
+
         (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref());
 
         let pointer_gestures = (*seat.server).input_manager.pointer_gestures;
