@@ -1939,7 +1939,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 "ok\n".to_string()
             }
             "focus-window" => {
-                if parts.len() < 2 { return "error: missing app_id or title\n".to_string(); }
+                if parts.len() < 2 { return "error: missing app_id\n".to_string(); }
                 let query = parts[1..].join(" ").to_lowercase();
                 if let Some(seat) = self.first_seat() {
                     let mut best_target: *mut Window = std::ptr::null_mut();
@@ -1947,7 +1947,6 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     for &w in self.windows.iter() {
                         if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                             let aid = (*w).get_app_id_string();
-                            let title = (*w).get_title_string();
 
                             let mut score = 0;
                             if let Some(ref aid_str) = aid {
@@ -1956,14 +1955,6 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                                     score = score.max(100);
                                 } else if aid_lower.contains(&query) {
                                     score = score.max(50);
-                                }
-                            }
-                            if let Some(ref title_str) = title {
-                                let title_lower = title_str.to_lowercase();
-                                if title_lower == query {
-                                    score = score.max(80);
-                                } else if title_lower.contains(&query) {
-                                    score = score.max(30);
                                 }
                             }
 

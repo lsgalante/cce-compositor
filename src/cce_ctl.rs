@@ -36,7 +36,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  close");
     print("  minimize");
     print("  focus-next");
-    print("  focus-window <app_id|title>");
+    print("  focus-window <app_id>");
     print("  expose");
     print("  windows");
     print("  exit");
