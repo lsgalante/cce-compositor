@@ -403,7 +403,9 @@ impl Seat {
                 };
 
                 if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
-                    let should_pan = !is_new || !(*window).restored;
+                    let app_id = (*window).get_app_id_string();
+                    let is_cce_cloud = app_id.as_ref().map(|id| id == "cce-cloud").unwrap_or(false);
+                    let should_pan = (!is_new || !(*window).restored) && !is_cce_cloud;
                     if should_pan {
                         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
                         let mut curr_out = (*outputs_list).next;
