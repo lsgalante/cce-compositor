@@ -1159,7 +1159,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let mut focused_visible = false;
             match (*seat).focused {
                 crate::seat::Focus::Window(w) => {
-                    if !w.is_null() && !(*w).closed && !(*w).minimized {
+                    if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                         focused_visible = true;
                     }
                 }
