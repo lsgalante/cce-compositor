@@ -1893,13 +1893,26 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 "ok\n".to_string()
             }
             "windows" => {
+                let mut focused_window: *mut Window = std::ptr::null_mut();
+                let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+                let mut curr_seat = (*seats_list).next;
+                while curr_seat != seats_list {
+                    let next_seat = (*curr_seat).next;
+                    let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+                    if let crate::seat::Focus::Window(w) = (*seat).focused {
+                        focused_window = w;
+                        break;
+                    }
+                    curr_seat = next_seat;
+                }
+
                 let mut out = String::new();
                 for &w in self.windows.iter() {
                     if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                         let app_id = (*w).get_app_id_string().unwrap_or_default();
                         let title = (*w).get_title_string().unwrap_or_default();
                         out.push_str(&format!(
-                            "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} minimized={} has_parent={}\n",
+                            "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} minimized={} has_parent={} focused={}\n",
                             (*w).ref_key.index,
                             app_id,
                             title,
@@ -1912,6 +1925,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                             (*w).virtual_y,
                             (*w).minimized,
                             (*w).has_parent,
+                            w == focused_window,
                         ));
                     }
                 }
