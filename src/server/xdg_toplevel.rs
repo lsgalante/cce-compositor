@@ -616,6 +616,7 @@ unsafe extern "C" fn handle_request_move(
             start_win_virtual_y: (*window).virtual_y,
         });
         cursor.op_start_pointer();
+        cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
 
         (*window).wm_scheduled.pointer_move_requested = seat;
         (*(*window).server).wm.dirty_windowing();
@@ -647,6 +648,7 @@ unsafe extern "C" fn handle_request_resize(
         let cursor_x = (*cursor.wlr_cursor).x;
         let cursor_y = (*cursor.wlr_cursor).y;
 
+        let edges = crate::window::Edges::from_u32((*event).edges);
         (*seat).op = Some(crate::seat::SeatOp {
             sent_release: false,
             input: crate::seat::SeatOpInput::Pointer,
@@ -656,7 +658,7 @@ unsafe extern "C" fn handle_request_resize(
             y: cursor_y as i32,
             window_ptr: window,
             op_type: crate::seat::PointerOpType::Resize {
-                edges: crate::window::Edges::from_u32((*event).edges),
+                edges,
             },
             start_win_x: (*window).box_geom.x,
             start_win_y: (*window).box_geom.y,
@@ -666,6 +668,8 @@ unsafe extern "C" fn handle_request_resize(
             start_win_virtual_y: (*window).virtual_y,
         });
         cursor.op_start_pointer();
+        let cursor_name = crate::cursor::get_resize_cursor_name(edges);
+        cursor.set_xcursor(cursor_name.as_ptr() as *const _);
 
         (*window).wm_scheduled.pointer_resize_requested = Some(crate::window::PointerResizeRequest {
             seat,
