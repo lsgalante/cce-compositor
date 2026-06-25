@@ -41,6 +41,9 @@ pub struct Layout {
     pub desktop_background: String,
     pub transparency_opacity: f32,
     pub window_opacity: bool,
+    pub desktop_grid_color: [f32; 4],
+    pub desktop_grid_scale: f64,
+    pub desktop_line_width: i32,
 }
 
 impl Default for Layout {
@@ -80,6 +83,9 @@ impl Default for Layout {
             desktop_background: "#000000".to_string(),
             transparency_opacity: 0.9,
             window_opacity: true,
+            desktop_grid_color: [1.0, 1.0, 1.0, 0.05],
+            desktop_grid_scale: 100.0,
+            desktop_line_width: 1,
         }
     }
 }
@@ -230,18 +236,39 @@ pub struct TransparencyConfig {
 pub struct SurfacesConfig {
     #[serde(default = "default_desktop_background")]
     pub desktop_background: String,
+    #[serde(default = "default_desktop_grid_color")]
+    pub desktop_grid_color: String,
+    #[serde(default = "default_desktop_grid_scale")]
+    pub desktop_grid_scale: i64,
+    #[serde(default = "default_desktop_line_width")]
+    pub desktop_line_width: i64,
 }
 
 impl Default for SurfacesConfig {
     fn default() -> Self {
         Self {
             desktop_background: default_desktop_background(),
+            desktop_grid_color: default_desktop_grid_color(),
+            desktop_grid_scale: default_desktop_grid_scale(),
+            desktop_line_width: default_desktop_line_width(),
         }
     }
 }
 
 fn default_desktop_background() -> String {
     "#000000".to_string()
+}
+
+fn default_desktop_grid_color() -> String {
+    "#ffffff0d".to_string()
+}
+
+fn default_desktop_grid_scale() -> i64 {
+    100
+}
+
+fn default_desktop_line_width() -> i64 {
+    1
 }
 
 
@@ -419,6 +446,40 @@ pub fn parse_hex_color(hex_str: &str) -> u32 {
     } else {
         0xFFFFFFFF
     }
+}
+
+pub fn parse_hex_color_rgba(hex_str: &str) -> [f32; 4] {
+    let hex = hex_str.trim_matches(|c| c == '"' || c == '\'' || c == ' ');
+    let hex = hex.trim_start_matches('#');
+    if hex.len() == 8 {
+        if let (Ok(r), Ok(g), Ok(b), Ok(a)) = (
+            u8::from_str_radix(&hex[0..2], 16),
+            u8::from_str_radix(&hex[2..4], 16),
+            u8::from_str_radix(&hex[4..6], 16),
+            u8::from_str_radix(&hex[6..8], 16),
+        ) {
+            return [
+                r as f32 / 255.0,
+                g as f32 / 255.0,
+                b as f32 / 255.0,
+                a as f32 / 255.0,
+            ];
+        }
+    } else if hex.len() == 6 {
+        if let (Ok(r), Ok(g), Ok(b)) = (
+            u8::from_str_radix(&hex[0..2], 16),
+            u8::from_str_radix(&hex[2..4], 16),
+            u8::from_str_radix(&hex[4..6], 16),
+        ) {
+            return [
+                r as f32 / 255.0,
+                g as f32 / 255.0,
+                b as f32 / 255.0,
+                1.0,
+            ];
+        }
+    }
+    [1.0, 1.0, 1.0, 0.05] // fallback default (5% white)
 }
 
 pub fn parse_tiling_mode(s: &str) -> TilingMode {
@@ -684,6 +745,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.background_g = ((background_color_val >> 8) & 0xFF) * 0x01010101;
     state.layout.background_b = (background_color_val & 0xFF) * 0x01010101;
     state.layout.background_a = 0xFFFFFFFF;
+
+    state.layout.desktop_grid_color = parse_hex_color_rgba(&config.surfaces.desktop_grid_color);
+    state.layout.desktop_grid_scale = config.surfaces.desktop_grid_scale as f64;
+    state.layout.desktop_line_width = config.surfaces.desktop_line_width as i32;
 
     state.layout.border_font_size = config.layout.border_font_size as i32;
     state.layout.transition_duration = config.layout.transition_duration as i32;

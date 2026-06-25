@@ -521,7 +521,7 @@ impl Output {
         let zoom = wm.desk_zoom;
 
         // Dynamic spacing based on zoom to avoid rendering too many lines (LOD)
-        let mut grid_spacing = 100.0;
+        let mut grid_spacing = wm.layout.desktop_grid_scale;
         while grid_spacing * zoom < 40.0 {
             grid_spacing *= 2.0;
         }
@@ -531,8 +531,8 @@ impl Output {
         let min_y = wm.desk_pan_y;
         let max_y = wm.desk_pan_y + (viewport_h as f64) / zoom;
 
-        // Subtle semi-transparent grid color (e.g. 5% white)
-        let grid_color: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
+        // Subtle semi-transparent grid color from layout config
+        let grid_color: [f32; 4] = wm.layout.desktop_grid_color;
 
         // Draw vertical lines
         let mut x_val = (min_x / grid_spacing).ceil() * grid_spacing;
@@ -540,7 +540,7 @@ impl Output {
             let rel_x = ((x_val - wm.desk_pan_x) * zoom) as i32;
             let line_rect = ffi::wlr_scene_rect_create(
                 self.grid_tree,
-                1, // width of line
+                wm.layout.desktop_line_width, // width of line
                 viewport_h,
                 grid_color.as_ptr(),
             );
@@ -561,7 +561,7 @@ impl Output {
             let line_rect = ffi::wlr_scene_rect_create(
                 self.grid_tree,
                 viewport_w,
-                1, // height of line
+                wm.layout.desktop_line_width, // height of line
                 grid_color.as_ptr(),
             );
             if !line_rect.is_null() {

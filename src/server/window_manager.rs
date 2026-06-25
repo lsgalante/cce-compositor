@@ -2026,6 +2026,19 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                             }
                         }
                     }
+                    "desktop_grid_color" => {
+                        self.layout.desktop_grid_color = crate::config::parse_hex_color_rgba(val);
+                    }
+                    "desktop_grid_scale" => {
+                        if let Ok(v) = val.parse::<f64>() {
+                            self.layout.desktop_grid_scale = v;
+                        }
+                    }
+                    "desktop_line_width" => {
+                        if let Ok(v) = val.parse::<i32>() {
+                            self.layout.desktop_line_width = v;
+                        }
+                    }
                     "gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap = v; } }
                     "gap_top" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_top = v; } }
                     "gap_left" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_left = v; } }
