@@ -95,9 +95,6 @@ pub struct WindowManager {
     pub output_scale: f32,
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
     pub input_config: crate::config::InputConfig,
-    pub expose_active: bool,
-    pub expose_hovered_window: *mut Window,
-    pub expose_initial_focus: *mut Window,
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
     pub restore_queue: Vec<SavedWindowState>,
     pub shutting_down: bool,
@@ -166,9 +163,6 @@ impl WindowManager {
         self.status_sender = None;
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
-        self.expose_active = false;
-        self.expose_hovered_window = std::ptr::null_mut();
-        self.expose_initial_focus = std::ptr::null_mut();
         self.last_status_update = std::cell::RefCell::new(None);
 
         ffi::wl_list_init(&mut self.sent.outputs);
@@ -756,9 +750,7 @@ impl WindowManager {
             return crate::tiling::TilingMode::Popup;
         }
 
-        if self.expose_active {
-            return crate::tiling::TilingMode::Expose;
-        }
+
 
         if (*win).mode_locked {
             return (*win).tiling_mode;
@@ -1629,43 +1621,134 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 self.dirty_windowing();
             }
             Action::Expose => {
-                self.expose_active = !self.expose_active;
-                log::info!("Expose mode toggled: {}", self.expose_active);
-                if self.expose_active {
-                    self.expose_initial_focus = self.focused_window();
-                    let mut hovered_win = std::ptr::null_mut();
+                if self.desk_zoom < 0.999 {
+                    let mut viewport_w = 1920.0;
+                    let mut viewport_h = 1080.0;
+                    let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                    let mut curr_out = (*outputs_list).next;
+                    while curr_out != outputs_list {
+                        let output = crate::container_of!(curr_out, crate::output::Output, link);
+                        if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                            let wlr_box = (*output).sent.box_layout();
+                            viewport_w = wlr_box.width as f64;
+                            viewport_h = wlr_box.height as f64;
+                            break;
+                        }
+                        curr_out = (*curr_out).next;
+                    }
+
                     if let Some(seat) = self.first_seat() {
-                        let cursor = &(*seat).cursor;
-                        let lx = cursor.x();
-                        let ly = cursor.y();
-                        if let Some(result) = (*self.server).scene.at(lx, ly) {
-                            if let crate::scene_node_data::SceneNodeDataVal::Window(window) = result.data {
-                                hovered_win = window;
+                        if let crate::seat::Focus::Window(fw) = (*seat).focused {
+                            if self.window_is_valid(fw) {
+                                let win_w = if (*fw).box_geom.width > 0 { (*fw).box_geom.width as f64 } else { 800.0 };
+                                let win_h = if (*fw).box_geom.height > 0 { (*fw).box_geom.height as f64 } else { 600.0 };
+                                let center_x = (*fw).virtual_x + win_w / 2.0;
+                                let center_y = (*fw).virtual_y + win_h / 2.0;
+                                self.desk_zoom = 1.0;
+                                self.desk_pan_x = center_x - viewport_w / 2.0;
+                                self.desk_pan_y = center_y - viewport_h / 2.0;
+                                self.dirty_windowing();
+                                return;
                             }
                         }
                     }
-                    if hovered_win.is_null() {
-                        hovered_win = self.expose_initial_focus;
-                    }
-                    self.expose_hovered_window = hovered_win;
+                    self.desk_zoom = 1.0;
+                    self.desk_pan_x = 0.0;
+                    self.desk_pan_y = 0.0;
+                    self.dirty_windowing();
                 } else {
-                    self.expose_hovered_window = std::ptr::null_mut();
-                    self.expose_initial_focus = std::ptr::null_mut();
+                    let mut min_vx = f64::MAX;
+                    let mut max_vx = f64::MIN;
+                    let mut min_vy = f64::MAX;
+                    let mut max_vy = f64::MIN;
+                    let mut has_visible_windows = false;
+
+                    for &win_ptr in self.windows.iter() {
+                        if win_ptr.is_null() || (*win_ptr).closed || (*win_ptr).minimized {
+                            continue;
+                        }
+
+                        let app_id = (*win_ptr).get_app_id_string();
+                        let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
+                        if is_status_bar {
+                            continue;
+                        }
+
+                        let visible = !matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
+                        if !visible {
+                            continue;
+                        }
+
+                        let mode = self.get_mode_for_window(win_ptr);
+                        if mode == crate::tiling::TilingMode::Popup || mode == crate::tiling::TilingMode::Pinned {
+                            continue;
+                        }
+
+                        let win_w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as f64 } else { 800.0 };
+                        let win_h = if (*win_ptr).box_geom.height > 0 { (*win_ptr).box_geom.height as f64 } else { 600.0 };
+
+                        let vx = (*win_ptr).virtual_x;
+                        let vy = (*win_ptr).virtual_y;
+
+                        if vx < min_vx { min_vx = vx; }
+                        if vx + win_w > max_vx { max_vx = vx + win_w; }
+                        if vy < min_vy { min_vy = vy; }
+                        if vy + win_h > max_vy { max_vy = vy + win_h; }
+                        has_visible_windows = true;
+                    }
+
+                    if has_visible_windows {
+                        let mut viewport_w = 1920.0;
+                        let mut viewport_h = 1080.0;
+                        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                        let mut curr_out = (*outputs_list).next;
+                        while curr_out != outputs_list {
+                            let output = crate::container_of!(curr_out, crate::output::Output, link);
+                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                                let wlr_box = (*output).sent.box_layout();
+                                viewport_w = wlr_box.width as f64;
+                                viewport_h = wlr_box.height as f64;
+                                break;
+                            }
+                            curr_out = (*curr_out).next;
+                        }
+
+                        let box_w = max_vx - min_vx;
+                        let box_h = max_vy - min_vy;
+
+                        let margin = 100.0;
+                        let avail_w = (viewport_w - 2.0 * margin).max(200.0);
+                        let avail_h = (viewport_h - 2.0 * margin).max(200.0);
+
+                        let zoom_x = avail_w / box_w.max(1.0);
+                        let zoom_y = avail_h / box_h.max(1.0);
+                        let new_zoom = zoom_x.min(zoom_y).min(1.0).max(0.05);
+
+                        let center_x = min_vx + box_w / 2.0;
+                        let center_y = min_vy + box_h / 2.0;
+
+                        self.desk_zoom = new_zoom;
+                        self.desk_pan_x = center_x - (viewport_w / 2.0) / new_zoom;
+                        self.desk_pan_y = center_y - (viewport_h / 2.0) / new_zoom;
+                        self.dirty_windowing();
+                    }
                 }
-                self.dirty_windowing();
             }
             _ => {}
         }
     }
 
     pub unsafe fn process_ipc_command(&mut self, cmd: &str) -> String {
-        self.stop_panning_animation();
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
+            self.stop_panning_animation();
             return "error: empty command\n".to_string();
         }
         
         let action = parts[0];
+        if action != "focus-window" {
+            self.stop_panning_animation();
+        }
         match action {
             "view" => {
                 if parts.len() < 2 { return "error: missing tag\n".to_string(); }

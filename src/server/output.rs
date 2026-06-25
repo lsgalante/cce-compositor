@@ -431,7 +431,7 @@ impl Output {
             return Ok(());
         }
 
-        // Re-apply scale to all windows in expose mode right before rendering
+        // Re-apply scale to all windows whose scale is not 1.0 right before rendering
         let wm = &(*self.server).wm;
         for &window in wm.windows.iter() {
             if !window.is_null() && (*window).scale != 1.0 {

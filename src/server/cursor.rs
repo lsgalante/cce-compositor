@@ -458,18 +458,10 @@ impl Cursor {
             }
 
             if let SceneNodeDataVal::Window(window) = result.data {
-                if (*server).wm.expose_active {
-                    let old_hovered = (*server).wm.expose_hovered_window;
-                    if old_hovered != window {
-                        (*server).wm.expose_hovered_window = window;
-                        (*server).wm.dirty_windowing();
-                    }
-                }
-
                 if (*window).tiling_mode != crate::tiling::TilingMode::Popup
                     && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
                     && (*window).tiling_mode != crate::tiling::TilingMode::Status
-                    && !(*server).wm.expose_active
+                    && (*server).wm.desk_zoom >= 0.999
                 {
                     match get_border_zone(window, lx, ly) {
                         BorderZone::Resize(edges) => {
@@ -570,8 +562,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             return;
         }
 
-        // --- EXPOSE MODE LEFT CLICK HANDLING ---
-        if (*(*seat).server).wm.expose_active && (*event).button == 0x110 {
+        // --- ZOOMED OUT CLICK HANDLING ---
+        if (*event).button == 0x110 && (*(*seat).server).wm.desk_zoom < 0.999 {
             let lx = cursor.x();
             let ly = cursor.y();
             let server = seat.server;
@@ -582,34 +574,43 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 }
             }
 
-            // Exit expose mode
-            (*server).wm.expose_active = false;
-            log::info!("Expose mode exited via left click");
-
             if !clicked_win.is_null() && !(*clicked_win).is_status_bar() {
                 seat.focus(Focus::Window(clicked_win));
                 if !seat.object.is_null() && !(*clicked_win).object.is_null() {
                     ffi::wl_resource_post_event(seat.object, 4, (*clicked_win).object);
                 }
-            } else {
-                let initial = (*server).wm.expose_initial_focus;
-                if (*server).wm.window_is_valid(initial) {
-                    seat.focus(Focus::Window(initial));
-                    if !seat.object.is_null() && !(*initial).object.is_null() {
-                        ffi::wl_resource_post_event(seat.object, 4, (*initial).object);
+
+                let mut viewport_w = 1920.0;
+                let mut viewport_h = 1080.0;
+                let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                let mut curr_out = (*outputs_list).next;
+                while curr_out != outputs_list {
+                    let output = crate::container_of!(curr_out, crate::output::Output, link);
+                    if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                        let wlr_box = (*output).sent.box_layout();
+                        viewport_w = wlr_box.width as f64;
+                        viewport_h = wlr_box.height as f64;
+                        break;
                     }
-                } else {
-                    seat.focus(Focus::None);
+                    curr_out = (*curr_out).next;
                 }
+
+                (*server).wm.desk_zoom = 1.0;
+
+                let win_w = if (*clicked_win).box_geom.width > 0 { (*clicked_win).box_geom.width as f64 } else { 800.0 };
+                let win_h = if (*clicked_win).box_geom.height > 0 { (*clicked_win).box_geom.height as f64 } else { 600.0 };
+
+                let center_x = (*clicked_win).virtual_x + win_w / 2.0;
+                let center_y = (*clicked_win).virtual_y + win_h / 2.0;
+
+                (*server).wm.desk_pan_x = center_x - viewport_w / 2.0;
+                (*server).wm.desk_pan_y = center_y - viewport_h / 2.0;
+
+                (*server).wm.dirty_windowing();
+
+                cursor.pressed.insert((*event).button, None);
+                return;
             }
-
-            (*server).wm.expose_hovered_window = std::ptr::null_mut();
-            (*server).wm.expose_initial_focus = std::ptr::null_mut();
-            (*server).wm.dirty_windowing();
-
-            // Insert into pressed so we handle the release correctly (standard wayland behavior)
-            cursor.pressed.insert((*event).button, None);
-            return;
         }
 
         let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
@@ -1422,7 +1423,7 @@ pub enum BorderZone {
 }
 
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
-    if (*(*window).server).wm.expose_active {
+    if (*(*window).server).wm.desk_zoom < 0.999 {
         return BorderZone::None;
     }
     if (*window).tiling_mode == crate::tiling::TilingMode::Popup

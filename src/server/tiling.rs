@@ -8,7 +8,6 @@ pub enum TilingMode {
     Fullscreen,
     Popup,
     Pinned,
-    Expose,
     Status,
 }
 
@@ -21,7 +20,6 @@ impl TilingMode {
             TilingMode::Fullscreen => "Fullscreen",
             TilingMode::Popup => "Popup",
             TilingMode::Pinned => "Pinned",
-            TilingMode::Expose => "Expose",
             TilingMode::Status => "Status",
         }
     }
@@ -87,55 +85,6 @@ pub fn tile_grid(
     let x = gap_left + bw + col * (width + 2 * bw + gap);
     let y = bar_height + gap_top + dec_h + row * (height + (dec_h + bw) + gap);
     (x, y, width, height)
-}
-
-/// Tile a window in expose mode.
-pub fn tile_expose(
-    screen_w: i32,
-    screen_h: i32,
-    gap: i32,
-    gap_top: i32,
-    gap_left: i32,
-    gap_right: i32,
-    gap_bottom: i32,
-    bw: i32,
-    dec_h: i32,
-    bar_height: i32,
-    n_expose: i32,
-    idx: i32,
-) -> (i32, i32, i32, i32) {
-    if n_expose == 1 {
-        // Center the single window and scale to 70% of the screen
-        let usable_h = screen_h - bar_height - gap_top - gap_bottom;
-        let width = (screen_w * 7) / 10 - 2 * bw;
-        let height = (usable_h * 7) / 10 - (dec_h + bw);
-        let width = if width < 1 { 1 } else { width };
-        let height = if height < 1 { 1 } else { height };
-        
-        let x = gap_left + (screen_w - gap_left - gap_right - width - 2 * bw) / 2;
-        let y = bar_height + gap_top + (usable_h - height - (dec_h + bw)) / 2 + dec_h;
-        (x, y, width, height)
-    } else {
-        // Tile in a square-root layout grid with a 60px outer margin
-        let outer_margin = 60;
-        let inner_w = screen_w - 2 * outer_margin;
-        let inner_h = screen_h - bar_height - 2 * outer_margin;
-        
-        let cols = (n_expose as f32).sqrt().ceil() as i32;
-        let rows = (n_expose + cols - 1) / cols;
-        
-        let row = idx / cols;
-        let col = idx % cols;
-        
-        let width = (inner_w - gap_left - gap_right - (cols - 1) * gap) / cols - 2 * bw;
-        let height = (inner_h - gap_top - gap_bottom - (rows - 1) * gap) / rows - (dec_h + bw);
-        let width = if width < 1 { 1 } else { width };
-        let height = if height < 1 { 1 } else { height };
-        
-        let x = outer_margin + gap_left + bw + col * (width + 2 * bw + gap);
-        let y = bar_height + outer_margin + gap_top + dec_h + row * (height + (dec_h + bw) + gap);
-        (x, y, width, height)
-    }
 }
 
 /// Tile a window in fullscreen mode.

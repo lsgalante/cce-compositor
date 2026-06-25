@@ -728,12 +728,7 @@ impl Window {
             self.wlr_toplevel_handle = std::ptr::null_mut();
         }
 
-        if (*self.server).wm.expose_hovered_window == self as *mut Window {
-            (*self.server).wm.expose_hovered_window = std::ptr::null_mut();
-        }
-        if (*self.server).wm.expose_initial_focus == self as *mut Window {
-            (*self.server).wm.expose_initial_focus = std::ptr::null_mut();
-        }
+
     }
 
     pub unsafe fn close(&mut self) {
@@ -777,12 +772,7 @@ impl Window {
             curr = next;
         }
 
-        if (*(*window).server).wm.expose_hovered_window == window {
-            (*(*window).server).wm.expose_hovered_window = std::ptr::null_mut();
-        }
-        if (*(*window).server).wm.expose_initial_focus == window {
-            (*(*window).server).wm.expose_initial_focus = std::ptr::null_mut();
-        }
+
 
         // Destroy decorations
         for decorations in [&mut (*window).decorations_above as *mut ffi::wl_list, &mut (*window).decorations_below as *mut ffi::wl_list] {
