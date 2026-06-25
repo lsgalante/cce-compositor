@@ -1412,6 +1412,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         curr = next;
                     }
 
+                    visible_windows.sort_by_key(|&w| unsafe { (*w).ref_key.index });
+
                     let n = visible_windows.len();
                     if n > 0 {
                         let current_idx = visible_windows.iter().position(|&w| w == focused_win);
