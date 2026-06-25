@@ -1833,28 +1833,40 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 if parts.len() < 2 { return "error: missing app_id or title\n".to_string(); }
                 let query = parts[1..].join(" ").to_lowercase();
                 if let Some(seat) = self.first_seat() {
-                    let mut target: *mut Window = std::ptr::null_mut();
+                    let mut best_target: *mut Window = std::ptr::null_mut();
+                    let mut best_score = 0;
                     for &w in self.windows.iter() {
                         if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                             let aid = (*w).get_app_id_string();
                             let title = (*w).get_title_string();
 
-                            let mut match_found = false;
+                            let mut score = 0;
                             if let Some(ref aid_str) = aid {
-                                if aid_str.to_lowercase().contains(&query) { match_found = true; }
+                                let aid_lower = aid_str.to_lowercase();
+                                if aid_lower == query {
+                                    score = score.max(100);
+                                } else if aid_lower.contains(&query) {
+                                    score = score.max(50);
+                                }
                             }
                             if let Some(ref title_str) = title {
-                                if title_str.to_lowercase().contains(&query) { match_found = true; }
+                                let title_lower = title_str.to_lowercase();
+                                if title_lower == query {
+                                    score = score.max(80);
+                                } else if title_lower.contains(&query) {
+                                    score = score.max(30);
+                                }
                             }
-                            if match_found {
-                                target = w;
-                                break;
+
+                            if score > best_score {
+                                best_score = score;
+                                best_target = w;
                             }
                         }
                     }
-                    if !target.is_null() {
-                        (*seat).focus(crate::seat::Focus::Window(target));
-                        self.raise_window(target);
+                    if !best_target.is_null() {
+                        (*seat).focus(crate::seat::Focus::Window(best_target));
+                        self.raise_window(best_target);
                         self.dirty_windowing();
                         "ok\n".to_string()
                     } else {
