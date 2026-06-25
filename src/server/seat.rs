@@ -357,6 +357,11 @@ impl Seat {
         }
 
         self.focused = new_focus;
+        if let Focus::Window(window) = new_focus {
+            if !window.is_null() {
+                (*self.server).wm.record_focus(window);
+            }
+        }
         (*self.server).wm.update_status();
 
         match new_focus {

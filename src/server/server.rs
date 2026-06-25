@@ -826,6 +826,7 @@ impl Default for Server {
             std::ptr::write_bytes(server.as_mut_ptr(), 0, 1);
             // Overwrite collections and SlotMap with valid instances to avoid UB/segfaults from null pointers
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.windows, crate::slotmap::SlotMap::new());
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.focus_history, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.mode_rules, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.keybinds, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.pointer_binds, Vec::new());

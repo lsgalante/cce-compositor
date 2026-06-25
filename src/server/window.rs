@@ -790,6 +790,7 @@ impl Window {
 
         (*window).node.deinit();
 
+        (*(*window).server).wm.remove_from_history(window);
         (*(*window).server).wm.windows.remove((*window).ref_key);
 
         let _ = Box::from_raw(window);

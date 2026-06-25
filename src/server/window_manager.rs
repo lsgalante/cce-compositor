@@ -71,6 +71,7 @@ pub struct WindowManager {
     pub object: *mut ffi::wl_resource,
     pub state: WindowManagerState,
     pub windows: SlotMap<*mut Window>,
+    pub focus_history: Vec<*mut Window>,
     pub scheduled: WindowManagerScheduled,
     pub sent: WindowManagerSent,
     pub rendering_scheduled: WindowManagerRenderingScheduled,
@@ -121,6 +122,7 @@ impl WindowManager {
         self.object = std::ptr::null_mut();
         self.state = WindowManagerState::Idle;
         self.windows = SlotMap::new();
+        self.focus_history = Vec::new();
         self.scheduled = WindowManagerScheduled {
             dirty: false,
             dirty_lazy: false,
@@ -1233,14 +1235,38 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
         }
     }
 
+    pub unsafe fn record_focus(&mut self, window: *mut Window) {
+        if window.is_null() {
+            return;
+        }
+        self.focus_history.retain(|&w| w != window);
+        self.focus_history.insert(0, window);
+    }
+
+    pub unsafe fn remove_from_history(&mut self, window: *mut Window) {
+        self.focus_history.retain(|&w| w != window);
+    }
+
     pub unsafe fn focus_next_visible_window(&mut self, seat: *mut crate::seat::Seat) {
         let mut next_focus: *mut Window = std::ptr::null_mut();
-        for &w in self.windows.iter() {
+        for &w in self.focus_history.iter() {
             if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                 let app_id = (*w).get_app_id_string();
                 let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
                 if !is_status_bar {
                     next_focus = w;
+                    break;
+                }
+            }
+        }
+        if next_focus.is_null() {
+            for &w in self.windows.iter() {
+                if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
+                    let app_id = (*w).get_app_id_string();
+                    let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
+                    if !is_status_bar {
+                        next_focus = w;
+                    }
                 }
             }
         }
