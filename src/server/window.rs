@@ -210,6 +210,7 @@ pub struct Window {
     pub mode_locked: bool,
     pub is_new: bool,
     pub restored: bool,
+    pub restored_focused: bool,
     pub closed: bool,
     pub has_parent: bool,
     pub minimized: bool,
@@ -366,6 +367,7 @@ impl Window {
             mode_locked: false,
             is_new: true,
             restored: false,
+            restored_focused: false,
             closed: false,
             has_parent: false,
             minimized: false,
@@ -664,6 +666,7 @@ impl Window {
             }
 
             self.restored = true;
+            self.restored_focused = saved.focused;
         }
     }
 
@@ -693,13 +696,28 @@ impl Window {
         if is_status_bar {
             self.tiling_mode = crate::tiling::TilingMode::Status;
         } else {
-            let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-            let mut curr = (*seats).next;
-            while curr != seats {
-                let next = (*curr).next;
-                let seat = crate::container_of!(curr, crate::seat::Seat, link);
-                (*seat).focus(crate::seat::Focus::Window(self as *mut Window));
-                curr = next;
+            let mut should_focus = true;
+            if self.restored {
+                if self.restored_focused {
+                    (*self.server).wm.restored_focused_window_mapped = true;
+                    log::info!("[FocusRestore] Restored focused window mapped: {:?}", self.get_title());
+                } else {
+                    if (*self.server).wm.has_restored_focused_window && (*self.server).wm.restored_focused_window_mapped {
+                        log::info!("[FocusRestore] Blocking focus to non-focused restored window {:?} because restored focused window is already mapped", self.get_title());
+                        should_focus = false;
+                    }
+                }
+            }
+
+            if should_focus {
+                let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+                let mut curr = (*seats).next;
+                while curr != seats {
+                    let next = (*curr).next;
+                    let seat = crate::container_of!(curr, crate::seat::Seat, link);
+                    (*seat).focus(crate::seat::Focus::Window(self as *mut Window));
+                    curr = next;
+                }
             }
         }
 

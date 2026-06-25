@@ -53,6 +53,8 @@ pub struct SavedWindowState {
     pub width: u32,
     pub height: u32,
     pub cmdline: String,
+    #[serde(default)]
+    pub focused: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -101,6 +103,8 @@ pub struct WindowManager {
     pub target_desk_pan_x: Option<f64>,
     pub target_desk_pan_y: Option<f64>,
     pub animation_timer: *mut ffi::wl_event_source,
+    pub has_restored_focused_window: bool,
+    pub restored_focused_window_mapped: bool,
 }
 
 impl WindowManager {
@@ -153,6 +157,8 @@ impl WindowManager {
         self.shutting_down = false;
         self.layout = crate::config::Layout::default();
         self.output_scale = 1.0;
+        self.has_restored_focused_window = false;
+        self.restored_focused_window_mapped = false;
         self.mode_rules = Vec::new();
         self.keybinds = Vec::new();
         self.pointer_binds = Vec::new();
@@ -211,7 +217,13 @@ impl WindowManager {
                 self.desk_zoom = state.desk_zoom;
                 self.global_layout = state.global_layout;
                 self.restore_queue = state.windows;
-                log::info!("State loaded successfully. {} windows in restore queue.", self.restore_queue.len());
+                self.has_restored_focused_window = self.restore_queue.iter().any(|w| w.focused);
+                self.restored_focused_window_mapped = false;
+                log::info!(
+                    "State loaded successfully. {} windows in restore queue, has_restored_focused_window={}.",
+                    self.restore_queue.len(),
+                    self.has_restored_focused_window
+                );
             } else {
                 log::error!("Failed to parse state JSON from {}", path);
             }
@@ -230,6 +242,7 @@ impl WindowManager {
         };
         log::debug!("Saving state to {}", path_str);
         
+        let focused_win = self.focused_window();
         let mut saved_wins = Vec::new();
         for &w in self.windows.iter() {
             if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
@@ -256,6 +269,8 @@ impl WindowManager {
                 cmdline = app_id.clone();
             }
 
+            let is_focused = w == focused_win;
+
             saved_wins.push(SavedWindowState {
                 app_id,
                 title,
@@ -267,6 +282,7 @@ impl WindowManager {
                 width: (*w).box_geom.width as u32,
                 height: (*w).box_geom.height as u32,
                 cmdline,
+                focused: is_focused,
             });
         }
         
