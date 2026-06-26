@@ -349,11 +349,11 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         let mut matched_builtin = false;
         let mut syms_ptr: *const ffi::xkb_keysym_t = std::ptr::null();
         let num_syms = ffi::xkb_state_key_get_syms(xkb_state, xkb_keycode, &mut syms_ptr);
-        log::info!("handle_group_key keycode={}, xkb_keycode={}, num_syms={}", (*event).keycode, xkb_keycode, num_syms);
+        log::debug!("handle_group_key keycode={}, xkb_keycode={}, num_syms={}", (*event).keycode, xkb_keycode, num_syms);
         if num_syms > 0 && !syms_ptr.is_null() {
             let syms = std::slice::from_raw_parts(syms_ptr, num_syms as usize);
             for &sym in syms {
-                log::info!("  keysym={:#x}", sym);
+                log::debug!("  keysym={:#x}", sym);
                 if handle_builtin_binding(group.seat, sym) {
                     matched_builtin = true;
                     break;
