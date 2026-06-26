@@ -978,7 +978,22 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
         return;
     }
 
-    if (modifiers & 0x40) != 0 {
+    let is_on_background = {
+        let lx = cursor.x();
+        let ly = cursor.y();
+        let server = seat.server;
+        let mut over_interactive = false;
+        if let Some(result) = (*server).scene.at(lx, ly) {
+            match result.data {
+                SceneNodeDataVal::Window(_) | SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                    over_interactive = true;
+                }
+            }
+        }
+        !over_interactive
+    };
+
+    if (modifiers & 0x40) != 0 || is_on_background {
         let wm = &mut (*seat.server).wm;
         wm.stop_panning_animation();
         let step = delta / wm.desk_zoom;
