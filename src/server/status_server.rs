@@ -239,7 +239,7 @@ fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
 pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> StatusUpdate {
     let focused_window = wm.focused_window();
 
-    let text = format!("Zoom: {:.2} | Pan: ({:.0}, {:.0})", wm.desk_zoom, wm.desk_pan_x, wm.desk_pan_y);
+    let text = format!("Mode: {:?} | Zoom: {:.2} | Pan: ({:.0}, {:.0})", wm.mode, wm.desk_zoom, wm.desk_pan_x, wm.desk_pan_y);
     let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
     let viewport_json = format!("{{\"text\": \"{}\", \"tooltip\": \"Camera State\"}}", escaped);
 

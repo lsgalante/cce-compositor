@@ -514,6 +514,68 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             }
         }
     }
+
+    if let Some(edges) = (*window).resize_edges {
+        let geometry = (*toplevel).geometry;
+        let mut resize_active = false;
+        let server = (*window).server;
+        let seats_list = &mut (*server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+        let mut curr_seat = (*seats_list).next;
+        while curr_seat != seats_list {
+            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+            if let Some(ref op) = (*seat).op {
+                if op.window_ptr == window {
+                    if let crate::seat::PointerOpType::Resize { .. } = op.op_type {
+                        resize_active = true;
+                        break;
+                    }
+                }
+            }
+            curr_seat = (*curr_seat).next;
+        }
+
+        let mut new_vx = (*window).virtual_x;
+        let mut new_vy = (*window).virtual_y;
+        if edges.left {
+            new_vx = (*window).resize_start_vx + ((*window).resize_start_w as f64 - geometry.width as f64);
+        }
+        if edges.top {
+            new_vy = (*window).resize_start_vy + ((*window).resize_start_h as f64 - geometry.height as f64);
+        }
+        (*window).virtual_x = new_vx;
+        (*window).virtual_y = new_vy;
+
+        let scale = (*server).wm.desk_zoom;
+        let pan_x = (*server).wm.desk_pan_x;
+        let pan_y = (*server).wm.desk_pan_y;
+
+        let mut out_x = 0;
+        let mut out_y = 0;
+        let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                let wlr_box = (*output).sent.box_layout();
+                out_x = wlr_box.x;
+                out_y = wlr_box.y;
+                break;
+            }
+            curr_out = (*curr_out).next;
+        }
+
+        let final_x = out_x + ((new_vx - pan_x) * scale) as i32;
+        let final_y = out_y + ((new_vy - pan_y) * scale) as i32;
+
+        (*window).rendering_requested.x = final_x;
+        (*window).rendering_requested.y = final_y;
+        (*window).box_geom.x = final_x;
+        (*window).box_geom.y = final_y;
+
+        if !resize_active {
+            (*window).resize_edges = None;
+        }
+    }
 }
 
 unsafe extern "C" fn handle_request_show_window_menu(

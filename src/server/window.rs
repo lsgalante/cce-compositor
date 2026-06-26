@@ -224,6 +224,11 @@ pub struct Window {
     pub scale: f64,
     pub virtual_x: f64,
     pub virtual_y: f64,
+    pub resize_start_vx: f64,
+    pub resize_start_vy: f64,
+    pub resize_start_w: u32,
+    pub resize_start_h: u32,
+    pub resize_edges: Option<Edges>,
     pub commit: ffi::wl_listener,
 
     pub wm_scheduled: WmScheduledState,
@@ -381,6 +386,11 @@ impl Window {
             scale: 1.0,
             virtual_x: unsafe { (*server).wm.desk_pan_x + 100.0 },
             virtual_y: unsafe { (*server).wm.desk_pan_y + 100.0 },
+            resize_start_vx: 0.0,
+            resize_start_vy: 0.0,
+            resize_start_w: 0,
+            resize_start_h: 0,
+            resize_edges: None,
             commit: std::mem::zeroed(),
             wm_scheduled: WmScheduledState {
                 dimensions_hint: DimensionsHint { min_width: 0, min_height: 0, max_width: 0, max_height: 0 },

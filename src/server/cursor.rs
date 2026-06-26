@@ -461,7 +461,7 @@ impl Cursor {
                 if (*window).tiling_mode != crate::tiling::TilingMode::Popup
                     && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
                     && (*window).tiling_mode != crate::tiling::TilingMode::Status
-                    && (*server).wm.desk_zoom >= 0.999
+                    && (*server).wm.mode == crate::window_manager::WindowManagerMode::Normal
                 {
                     match get_border_zone(window, lx, ly) {
                         BorderZone::Resize(edges) => {
@@ -563,7 +563,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         }
 
         // --- ZOOMED OUT CLICK HANDLING ---
-        if (*event).button == 0x110 && (*(*seat).server).wm.desk_zoom < 0.999 {
+        if (*event).button == 0x110 && (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
             let lx = cursor.x();
             let ly = cursor.y();
             let server = seat.server;
@@ -597,6 +597,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 let center_y = (*clicked_win).virtual_y + win_h / 2.0;
 
                 (*server).wm.desk_zoom = 1.0;
+                (*server).wm.mode = crate::window_manager::WindowManagerMode::Normal;
                 (*server).wm.desk_pan_x = center_x - viewport_w / 2.0;
                 (*server).wm.desk_pan_y = center_y - viewport_h / 2.0;
 
@@ -911,6 +912,7 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
                     wm.desk_pan_x += (cx - phys_x) * (1.0 / old_zoom - 1.0 / new_zoom);
                     wm.desk_pan_y += (cy - phys_y) * (1.0 / old_zoom - 1.0 / new_zoom);
                     wm.desk_zoom = new_zoom;
+                    wm.mode = if new_zoom < 0.999 { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal };
                     wm.dirty_windowing();
                 }
             }
@@ -1239,7 +1241,7 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         log::info!("Swipe gesture matched action: {:?}", matched_action);
         cursor.gesture_triggered = true;
 
-        if matched_action == crate::config::Action::Expose && (*seat.server).wm.desk_zoom < 0.999 {
+        if matched_action == crate::config::Action::Expose && (*seat.server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
             let lx = cursor.x();
             let ly = cursor.y();
             let mut hovered_win: *mut crate::window::Window = std::ptr::null_mut();
@@ -1470,7 +1472,7 @@ pub enum BorderZone {
 }
 
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
-    if (*(*window).server).wm.desk_zoom < 0.999 {
+    if (*(*window).server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
         return BorderZone::None;
     }
     if (*window).tiling_mode == crate::tiling::TilingMode::Popup

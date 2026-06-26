@@ -19,6 +19,12 @@ pub enum WindowManagerState {
     Render,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowManagerMode {
+    Normal,
+    Overview,
+}
+
 pub struct WindowManagerScheduled {
     pub dirty: bool,
     pub dirty_lazy: bool,
@@ -83,6 +89,7 @@ pub struct WindowManager {
     pub desk_pan_x: f64,
     pub desk_pan_y: f64,
     pub desk_zoom: f64,
+    pub mode: WindowManagerMode,
     pub global_layout: crate::tiling::TilingMode,
     pub layout: crate::config::Layout,
     pub mode_rules: Vec<crate::config::ModeRule>,
@@ -117,6 +124,7 @@ impl WindowManager {
         self.output_scale = 1.0;
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
+        self.mode = WindowManagerMode::Normal;
         Ok(())
     }
 
@@ -152,6 +160,7 @@ impl WindowManager {
         self.target_desk_pan_y = None;
         self.animation_timer = std::ptr::null_mut();
         self.desk_zoom = 1.0;
+        self.mode = WindowManagerMode::Normal;
         self.global_layout = crate::tiling::TilingMode::Cascade;
         self.restore_queue = Vec::new();
         self.shutting_down = false;
@@ -215,6 +224,7 @@ impl WindowManager {
                 self.desk_pan_x = state.desk_pan_x;
                 self.desk_pan_y = state.desk_pan_y;
                 self.desk_zoom = state.desk_zoom;
+                self.mode = if state.desk_zoom < 0.999 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
                 self.global_layout = state.global_layout;
                 self.restore_queue = state.windows;
                 self.has_restored_focused_window = self.restore_queue.iter().any(|w| w.focused);
@@ -1640,6 +1650,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 self.desk_pan_x = cx - (viewport_w / 2.0) / new_zoom;
                 self.desk_pan_y = cy - (viewport_h / 2.0) / new_zoom;
                 self.desk_zoom = new_zoom;
+                self.mode = if new_zoom < 0.999 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
                 self.dirty_windowing();
             }
             Action::PanLeft | Action::PanRight | Action::PanUp | Action::PanDown => {
@@ -1662,7 +1673,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 self.dirty_windowing();
             }
             Action::Expose => {
-                if self.desk_zoom < 0.999 {
+                if self.mode == WindowManagerMode::Overview {
                     let mut viewport_w = 1920.0;
                     let mut viewport_h = 1080.0;
                     let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
@@ -1686,6 +1697,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                                 let center_x = (*fw).virtual_x + win_w / 2.0;
                                 let center_y = (*fw).virtual_y + win_h / 2.0;
                                 self.desk_zoom = 1.0;
+                                self.mode = WindowManagerMode::Normal;
                                 self.desk_pan_x = center_x - viewport_w / 2.0;
                                 self.desk_pan_y = center_y - viewport_h / 2.0;
                                 self.stop_panning_animation();
@@ -1695,6 +1707,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         }
                     }
                     self.desk_zoom = 1.0;
+                    self.mode = WindowManagerMode::Normal;
                     self.desk_pan_x = 0.0;
                     self.desk_pan_y = 0.0;
                     self.stop_panning_animation();
@@ -1771,6 +1784,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         let center_y = min_vy + box_h / 2.0;
 
                         self.desk_zoom = new_zoom;
+                        self.mode = WindowManagerMode::Overview;
                         self.desk_pan_x = center_x - (viewport_w / 2.0) / new_zoom;
                         self.desk_pan_y = center_y - (viewport_h / 2.0) / new_zoom;
                         self.dirty_windowing();
@@ -1877,6 +1891,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     self.desk_pan_x = cx - (viewport_w / 2.0) / new_zoom;
                     self.desk_pan_y = cy - (viewport_h / 2.0) / new_zoom;
                     self.desk_zoom = new_zoom;
+                    self.mode = if new_zoom < 0.999 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
                     self.dirty_windowing();
                     return "ok\n".to_string();
                 }
@@ -1929,6 +1944,24 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             "expose" => {
                 self.execute_action(&crate::config::Action::Expose, None);
                 "ok\n".to_string()
+            }
+            "wm-mode" => {
+                if parts.len() < 2 {
+                    return format!("{:?}\n", self.mode).to_lowercase();
+                }
+                let target = parts[1].to_lowercase();
+                if target == "normal" {
+                    if self.mode == WindowManagerMode::Overview {
+                        self.execute_action(&crate::config::Action::Expose, None);
+                    }
+                    return "ok\n".to_string();
+                } else if target == "overview" {
+                    if self.mode == WindowManagerMode::Normal {
+                        self.execute_action(&crate::config::Action::Expose, None);
+                    }
+                    return "ok\n".to_string();
+                }
+                "error: invalid mode, specify 'normal' or 'overview'\n".to_string()
             }
             "minimize" => {
                 self.execute_action(&crate::config::Action::Minimize, None);

@@ -996,19 +996,30 @@ impl Seat {
                         let mut vy = op.start_win_virtual_y;
 
                         if edges.left {
+                            vx = (*win).virtual_x;
+                        }
+                        if edges.top {
+                            vy = (*win).virtual_y;
+                        }
+
+                        if (*win).resize_edges != Some(edges) {
+                            (*win).resize_start_vx = op.start_win_virtual_x;
+                            (*win).resize_start_vy = op.start_win_virtual_y;
+                            (*win).resize_start_w = op.start_win_w;
+                            (*win).resize_start_h = op.start_win_h;
+                            (*win).resize_edges = Some(edges);
+                        }
+
+                        if edges.left {
                             let w = std::cmp::max(50, (op.start_win_w as f64 - virtual_dx) as i32) as u32;
-                            let dw = w as i32 - op.start_win_w as i32;
                             new_w = w;
-                            vx = op.start_win_virtual_x - dw as f64;
                         } else if edges.right {
                             new_w = std::cmp::max(50, (op.start_win_w as f64 + virtual_dx) as i32) as u32;
                         }
 
                         if edges.top {
                             let h = std::cmp::max(50, (op.start_win_h as f64 - virtual_dy) as i32) as u32;
-                            let dh = h as i32 - op.start_win_h as i32;
                             new_h = h;
-                            vy = op.start_win_virtual_y - dh as f64;
                         } else if edges.bottom {
                             new_h = std::cmp::max(50, (op.start_win_h as f64 + virtual_dy) as i32) as u32;
                         }
