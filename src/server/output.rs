@@ -154,6 +154,16 @@ pub struct Output {
     pub rendering_requested: RenderingState,
     pub rendering_current: RenderingState,
 
+    // Cached grid parameters to avoid redrawing when unchanged
+    pub last_grid_viewport_w: i32,
+    pub last_grid_viewport_h: i32,
+    pub last_grid_zoom: f64,
+    pub last_grid_pan_x: f64,
+    pub last_grid_pan_y: f64,
+    pub last_grid_spacing: f64,
+    pub last_grid_line_width: i32,
+    pub last_grid_color: [f32; 4],
+
     pub destroy: ffi::wl_listener,
     pub request_state: ffi::wl_listener,
     pub frame: ffi::wl_listener,
@@ -382,6 +392,14 @@ impl Output {
             sent_wl_output: false,
             rendering_requested: RenderingState { tearing: false },
             rendering_current: RenderingState { tearing: false },
+            last_grid_viewport_w: 0,
+            last_grid_viewport_h: 0,
+            last_grid_zoom: 0.0,
+            last_grid_pan_x: 0.0,
+            last_grid_pan_y: 0.0,
+            last_grid_spacing: 0.0,
+            last_grid_line_width: 0,
+            last_grid_color: [0.0, 0.0, 0.0, 0.0],
             destroy: std::mem::zeroed(),
             request_state: std::mem::zeroed(),
             frame: std::mem::zeroed(),
@@ -513,9 +531,6 @@ impl Output {
             return;
         }
 
-        // Clear previous grid lines
-        ffi::river_scene_tree_clear_children(self.grid_tree);
-
         let wm = &(*self.server).wm;
         let (viewport_w, viewport_h) = self.current.dimensions();
         let zoom = wm.desk_zoom;
@@ -526,13 +541,39 @@ impl Output {
             grid_spacing *= 2.0;
         }
 
+        let line_width = wm.layout.desktop_line_width;
+        let grid_color: [f32; 4] = wm.layout.desktop_grid_color;
+
+        // Check if cached grid parameters match current parameters
+        if self.last_grid_viewport_w == viewport_w
+            && self.last_grid_viewport_h == viewport_h
+            && self.last_grid_zoom == zoom
+            && self.last_grid_pan_x == wm.desk_pan_x
+            && self.last_grid_pan_y == wm.desk_pan_y
+            && self.last_grid_spacing == grid_spacing
+            && self.last_grid_line_width == line_width
+            && self.last_grid_color == grid_color
+        {
+            return;
+        }
+
+        // Cache current parameters
+        self.last_grid_viewport_w = viewport_w;
+        self.last_grid_viewport_h = viewport_h;
+        self.last_grid_zoom = zoom;
+        self.last_grid_pan_x = wm.desk_pan_x;
+        self.last_grid_pan_y = wm.desk_pan_y;
+        self.last_grid_spacing = grid_spacing;
+        self.last_grid_line_width = line_width;
+        self.last_grid_color = grid_color;
+
+        // Clear previous grid lines
+        ffi::river_scene_tree_clear_children(self.grid_tree);
+
         let min_x = wm.desk_pan_x;
         let max_x = wm.desk_pan_x + (viewport_w as f64) / zoom;
         let min_y = wm.desk_pan_y;
         let max_y = wm.desk_pan_y + (viewport_h as f64) / zoom;
-
-        // Subtle semi-transparent grid color from layout config
-        let grid_color: [f32; 4] = wm.layout.desktop_grid_color;
 
         // Draw vertical lines
         let mut x_val = (min_x / grid_spacing).ceil() * grid_spacing;
@@ -540,7 +581,7 @@ impl Output {
             let rel_x = ((x_val - wm.desk_pan_x) * zoom) as i32;
             let line_rect = ffi::wlr_scene_rect_create(
                 self.grid_tree,
-                wm.layout.desktop_line_width, // width of line
+                line_width, // width of line
                 viewport_h,
                 grid_color.as_ptr(),
             );
@@ -561,7 +602,7 @@ impl Output {
             let line_rect = ffi::wlr_scene_rect_create(
                 self.grid_tree,
                 viewport_w,
-                wm.layout.desktop_line_width, // height of line
+                line_width, // height of line
                 grid_color.as_ptr(),
             );
             if !line_rect.is_null() {
