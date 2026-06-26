@@ -314,8 +314,10 @@ impl Seat {
             return;
         }
 
-        let bt = std::backtrace::Backtrace::capture();
-        log::info!("[FocusDebug] Seat::focus changing from {:?} to {:?}. Backtrace:\n{}", self.focused, new_focus, bt);
+        if log::log_enabled!(log::Level::Debug) {
+            let bt = std::backtrace::Backtrace::capture();
+            log::debug!("[FocusDebug] Seat::focus changing from {:?} to {:?}. Backtrace:\n{}", self.focused, new_focus, bt);
+        }
 
         // If an exclusive layer surface is active and scheduled for focus,
         // block any window manager or other client focus requests (via focus_requested)

@@ -413,8 +413,10 @@ impl WindowManager {
     }
 
     pub unsafe fn dirty_windowing(&mut self) {
-        let bt = std::backtrace::Backtrace::force_capture();
-        log::info!("dirty_windowing called from backtrace:\n{}", bt);
+        if log::log_enabled!(log::Level::Debug) {
+            let bt = std::backtrace::Backtrace::force_capture();
+            log::debug!("dirty_windowing called from backtrace:\n{}", bt);
+        }
         self.scheduled.dirty = true;
         self.add_dirty_idle();
     }
@@ -861,12 +863,14 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 }
 
     pub unsafe fn arrange_views(&mut self) {
-        log::info!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
-        for (idx, &win_ptr) in self.windows.iter().enumerate() {
-            if win_ptr.is_null() { continue; }
-            let title = (*win_ptr).get_title_string().unwrap_or_else(|| "None".to_string());
-            let aid = (*win_ptr).get_app_id_string().unwrap_or_else(|| "None".to_string());
-            log::info!("  window #{}: title={:?}, app_id={:?}, state={:?}, closed={}", idx, title, aid, (*win_ptr).state, (*win_ptr).closed);
+        log::debug!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
+        if log::log_enabled!(log::Level::Debug) {
+            for (idx, &win_ptr) in self.windows.iter().enumerate() {
+                if win_ptr.is_null() { continue; }
+                let title = (*win_ptr).get_title_string().unwrap_or_else(|| "None".to_string());
+                let aid = (*win_ptr).get_app_id_string().unwrap_or_else(|| "None".to_string());
+                log::debug!("  window #{}: title={:?}, app_id={:?}, state={:?}, closed={}", idx, title, aid, (*win_ptr).state, (*win_ptr).closed);
+            }
         }
 
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;

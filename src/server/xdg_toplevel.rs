@@ -253,10 +253,12 @@ impl XdgToplevel {
             self.geometry.height as u32
         };
 
-        log::info!(
-            "XdgToplevel::configure: sending size {}x{} (scheduled={:?}, sent={:?}, geometry={:?}) to client '{}'",
-            width, height, scheduled.width, sent.width, (self.geometry.width, self.geometry.height), (*self.window).get_title_string().unwrap_or_else(|| "None".to_string())
-        );
+        if log::log_enabled!(log::Level::Debug) {
+            log::debug!(
+                "XdgToplevel::configure: sending size {}x{} (scheduled={:?}, sent={:?}, geometry={:?}) to client '{}'",
+                width, height, scheduled.width, sent.width, (self.geometry.width, self.geometry.height), (*self.window).get_title_string().unwrap_or_else(|| "None".to_string())
+            );
+        }
 
         let configure_serial = ffi::wlr_xdg_toplevel_set_size(self.wlr_toplevel, width as i32, height as i32);
 
