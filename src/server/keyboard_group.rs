@@ -441,7 +441,9 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             }
         }
         KeyConsumer::Focus => {
-            if (*(*group.seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+            if (*(*group.seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview
+                || (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
+            {
                 ffi::wlr_seat_set_keyboard((*group.seat).wlr_seat, &mut group.wlr_keyboard);
                 ffi::wlr_seat_keyboard_notify_key((*group.seat).wlr_seat, (*event).time_msec, (*event).keycode, (*event).state);
             }

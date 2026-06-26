@@ -458,30 +458,36 @@ impl Cursor {
             }
 
             let mut is_window = false;
-            if let SceneNodeDataVal::Window(window) = result.data {
-                if !(*window).is_status_bar() {
-                    is_window = true;
-                }
-                if (*window).tiling_mode != crate::tiling::TilingMode::Popup
-                    && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
-                    && (*window).tiling_mode != crate::tiling::TilingMode::Status
-                    && (*server).wm.mode == crate::window_manager::WindowManagerMode::Normal
-                {
-                    match get_border_zone(window, lx, ly) {
-                        BorderZone::Resize(edges) => {
-                            ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
-                            let cursor_name = get_resize_cursor_name(edges);
-                            self.set_xcursor(cursor_name.as_ptr() as *const _);
-                            return;
+            match result.data {
+                SceneNodeDataVal::Window(window) => {
+                    if !(*window).is_status_bar() {
+                        is_window = true;
+                    }
+                    if (*window).tiling_mode != crate::tiling::TilingMode::Popup
+                        && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
+                        && (*window).tiling_mode != crate::tiling::TilingMode::Status
+                        && (*server).wm.mode == crate::window_manager::WindowManagerMode::Normal
+                    {
+                        match get_border_zone(window, lx, ly) {
+                            BorderZone::Resize(edges) => {
+                                ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+                                let cursor_name = get_resize_cursor_name(edges);
+                                self.set_xcursor(cursor_name.as_ptr() as *const _);
+                                return;
+                            }
+                            BorderZone::Move => {
+                                ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+                                self.set_xcursor(b"grab\0".as_ptr() as *const _);
+                                return;
+                            }
+                            BorderZone::None => {}
                         }
-                        BorderZone::Move => {
-                            ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
-                            self.set_xcursor(b"grab\0".as_ptr() as *const _);
-                            return;
-                        }
-                        BorderZone::None => {}
                     }
                 }
+                SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                    is_window = true;
+                }
+                _ => {}
             }
 
             if is_window && (*server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
@@ -564,6 +570,25 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
     let event = data as *mut ffi::wlr_pointer_button_event;
     
     let seat = &mut *cursor.seat;
+    let lx = cursor.x();
+    let ly = cursor.y();
+    let server = seat.server;
+
+    let mut is_app_surface = false;
+    if let Some(result) = (*server).scene.at(lx, ly) {
+        match result.data {
+            SceneNodeDataVal::Window(window) => {
+                if !(*window).is_status_bar() {
+                    is_app_surface = true;
+                }
+            }
+            SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                is_app_surface = true;
+            }
+            _ => {}
+        }
+    }
+    let should_block_button = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface;
     
     if (*event).state == ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED {
         if cursor.pressed.contains_key(&(*event).button) {
@@ -573,9 +598,6 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
 
         // --- ZOOMED OUT CLICK HANDLING ---
         if (*event).button == 0x110 && (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
-            let lx = cursor.x();
-            let ly = cursor.y();
-            let server = seat.server;
             let mut clicked_win: *mut crate::window::Window = std::ptr::null_mut();
             if let Some(result) = (*server).scene.at(lx, ly) {
                 if let SceneNodeDataVal::Window(window) = result.data {
@@ -804,7 +826,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
 
         cursor.pressed.insert((*event).button, None);
 
-        if (*(*seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+        if !should_block_button {
             ffi::wlr_seat_pointer_notify_button(
                 seat.wlr_seat,
                 (*event).time_msec,
@@ -916,7 +938,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 return;
             }
 
-            if (*(*seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+            if !should_block_button {
                 ffi::wlr_seat_pointer_notify_button(
                     seat.wlr_seat,
                     (*event).time_msec,
@@ -1163,7 +1185,22 @@ unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *m
             }
             _ => {}
         }
-        if !result.surface.is_null() && (*(*seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+        
+        let mut is_app_surface = false;
+        match result.data {
+            SceneNodeDataVal::Window(window) => {
+                if !(*window).is_status_bar() {
+                    is_app_surface = true;
+                }
+            }
+            SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                is_app_surface = true;
+            }
+            _ => {}
+        }
+        let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface;
+
+        if !result.surface.is_null() && !should_block_touch {
             ffi::wlr_seat_touch_notify_down(
                 seat.wlr_seat,
                 result.surface,
@@ -1202,7 +1239,21 @@ unsafe extern "C" fn handle_touch_motion(listener: *mut ffi::wl_listener, data: 
 
         let server = seat.server;
         if let Some(result) = (*server).scene.at(lx, ly) {
-            if (*(*seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+            let mut is_app_surface = false;
+            match result.data {
+                SceneNodeDataVal::Window(window) => {
+                    if !(*window).is_status_bar() {
+                        is_app_surface = true;
+                    }
+                }
+                SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                    is_app_surface = true;
+                }
+                _ => {}
+            }
+            let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface;
+
+            if !should_block_touch {
                 ffi::wlr_seat_touch_notify_motion(
                     seat.wlr_seat,
                     (*event).time_msec,
@@ -1222,8 +1273,25 @@ unsafe extern "C" fn handle_touch_up(listener: *mut ffi::wl_listener, data: *mut
     let seat = &mut *cursor.seat;
     seat.handle_activity();
 
-    if cursor.touch_points.remove(&(*event).touch_id).is_some() {
-        if (*(*seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+    if let Some((lx, ly)) = cursor.touch_points.remove(&(*event).touch_id) {
+        let server = seat.server;
+        let mut is_app_surface = false;
+        if let Some(result) = (*server).scene.at(lx, ly) {
+            match result.data {
+                SceneNodeDataVal::Window(window) => {
+                    if !(*window).is_status_bar() {
+                        is_app_surface = true;
+                    }
+                }
+                SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                    is_app_surface = true;
+                }
+                _ => {}
+            }
+        }
+        let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface;
+
+        if !should_block_touch {
             ffi::wlr_seat_touch_notify_up(
                 seat.wlr_seat,
                 (*event).time_msec,
