@@ -46,6 +46,7 @@ pub struct Cursor {
     pub gesture_dy: f64,
     pub gesture_scale: f64,
     pub gesture_triggered: bool,
+    pub panning_gesture_active: bool,
 }
 
 impl Default for Cursor {
@@ -89,6 +90,7 @@ impl Default for Cursor {
             gesture_dy: 0.0,
             gesture_scale: 1.0,
             gesture_triggered: false,
+            panning_gesture_active: false,
         }
     }
 }
@@ -1029,7 +1031,21 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
     };
     let is_overview = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview;
 
-    if (modifiers & 0x40) != 0 || is_on_background || is_overview {
+    let is_finger = (*event).source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_FINGER
+        || (*event).source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_CONTINUOUS;
+
+    let mut was_panning = cursor.panning_gesture_active;
+
+    if is_finger {
+        if delta == 0.0 {
+            cursor.panning_gesture_active = false;
+        } else if !cursor.panning_gesture_active && (is_on_background || is_overview) {
+            cursor.panning_gesture_active = true;
+            was_panning = true;
+        }
+    }
+
+    if (modifiers & 0x40) != 0 || is_on_background || is_overview || was_panning {
         let wm = &mut (*seat.server).wm;
         wm.stop_panning_animation();
         let step = delta / wm.desk_zoom;
