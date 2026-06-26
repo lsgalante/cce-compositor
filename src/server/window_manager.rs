@@ -1976,32 +1976,50 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 "ok\n".to_string()
             }
             "focus-window" => {
-                if parts.len() < 2 { return "error: missing app_id\n".to_string(); }
+                if parts.len() < 2 { return "error: missing app_id/id\n".to_string(); }
                 let query = parts[1..].join(" ").to_lowercase();
                 if let Some(seat) = self.first_seat() {
                     let mut best_target: *mut Window = std::ptr::null_mut();
                     let mut best_score = 0;
-                    for &w in self.windows.iter() {
-                        if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
-                            let aid = (*w).get_app_id_string();
 
-                            let mut score = 0;
-                            if let Some(ref aid_str) = aid {
-                                let aid_lower = aid_str.to_lowercase();
-                                if aid_lower == query {
-                                    score = score.max(100);
-                                } else if aid_lower.contains(&query) {
-                                    score = score.max(50);
-                                }
-                            }
-
-                            if score > best_score {
-                                best_score = score;
+                    // Try to match by numerical window index first
+                    if let Ok(id) = query.parse::<u32>() {
+                        for &w in self.windows.iter() {
+                            if !w.is_null() && !(*w).closed && (*w).ref_key.index == id {
                                 best_target = w;
+                                break;
                             }
                         }
                     }
+
+                    // Fallback to matching by app_id
+                    if best_target.is_null() {
+                        for &w in self.windows.iter() {
+                            if !w.is_null() && !(*w).closed {
+                                let aid = (*w).get_app_id_string();
+
+                                let mut score = 0;
+                                if let Some(ref aid_str) = aid {
+                                    let aid_lower = aid_str.to_lowercase();
+                                    if aid_lower == query {
+                                        score = score.max(100);
+                                    } else if aid_lower.contains(&query) {
+                                        score = score.max(50);
+                                    }
+                                }
+
+                                if score > best_score {
+                                    best_score = score;
+                                    best_target = w;
+                                }
+                            }
+                        }
+                    }
+
                     if !best_target.is_null() {
+                        if (*best_target).minimized {
+                            (*best_target).minimized = false;
+                        }
                         (*seat).focus(crate::seat::Focus::Window(best_target));
                         self.raise_window(best_target);
                         self.dirty_windowing();
