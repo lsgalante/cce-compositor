@@ -457,7 +457,11 @@ impl Cursor {
                 }
             }
 
+            let mut is_window = false;
             if let SceneNodeDataVal::Window(window) = result.data {
+                if !(*window).is_status_bar() {
+                    is_window = true;
+                }
                 if (*window).tiling_mode != crate::tiling::TilingMode::Popup
                     && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
                     && (*window).tiling_mode != crate::tiling::TilingMode::Status
@@ -478,6 +482,11 @@ impl Cursor {
                         BorderZone::None => {}
                     }
                 }
+            }
+
+            if is_window && (*server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
+                self.clear_focus();
+                return;
             }
 
             if !result.surface.is_null() {
@@ -795,12 +804,14 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
 
         cursor.pressed.insert((*event).button, None);
 
-        ffi::wlr_seat_pointer_notify_button(
-            seat.wlr_seat,
-            (*event).time_msec,
-            (*event).button,
-            (*event).state,
-        );
+        if (*(*seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+            ffi::wlr_seat_pointer_notify_button(
+                seat.wlr_seat,
+                (*event).time_msec,
+                (*event).button,
+                (*event).state,
+            );
+        }
 
         // If pressed, update focus to window under cursor
         let lx = cursor.x();
@@ -905,12 +916,14 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 return;
             }
 
-            ffi::wlr_seat_pointer_notify_button(
-                seat.wlr_seat,
-                (*event).time_msec,
-                (*event).button,
-                (*event).state,
-            );
+            if (*(*seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+                ffi::wlr_seat_pointer_notify_button(
+                    seat.wlr_seat,
+                    (*event).time_msec,
+                    (*event).button,
+                    (*event).state,
+                );
+            }
 
             if cursor.pressed.is_empty() && seat.op.is_some() {
                 seat.op_release = true;
@@ -992,8 +1005,9 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
         }
         !over_interactive
     };
+    let is_overview = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview;
 
-    if (modifiers & 0x40) != 0 || is_on_background {
+    if (modifiers & 0x40) != 0 || is_on_background || is_overview {
         let wm = &mut (*seat.server).wm;
         wm.stop_panning_animation();
         let step = delta / wm.desk_zoom;
@@ -1149,7 +1163,7 @@ unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *m
             }
             _ => {}
         }
-        if !result.surface.is_null() {
+        if !result.surface.is_null() && (*(*seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
             ffi::wlr_seat_touch_notify_down(
                 seat.wlr_seat,
                 result.surface,
@@ -1188,13 +1202,15 @@ unsafe extern "C" fn handle_touch_motion(listener: *mut ffi::wl_listener, data: 
 
         let server = seat.server;
         if let Some(result) = (*server).scene.at(lx, ly) {
-            ffi::wlr_seat_touch_notify_motion(
-                seat.wlr_seat,
-                (*event).time_msec,
-                (*event).touch_id,
-                result.sx,
-                result.sy,
-            );
+            if (*(*seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+                ffi::wlr_seat_touch_notify_motion(
+                    seat.wlr_seat,
+                    (*event).time_msec,
+                    (*event).touch_id,
+                    result.sx,
+                    result.sy,
+                );
+            }
         }
     }
 }
@@ -1207,11 +1223,13 @@ unsafe extern "C" fn handle_touch_up(listener: *mut ffi::wl_listener, data: *mut
     seat.handle_activity();
 
     if cursor.touch_points.remove(&(*event).touch_id).is_some() {
-        ffi::wlr_seat_touch_notify_up(
-            seat.wlr_seat,
-            (*event).time_msec,
-            (*event).touch_id,
-        );
+        if (*(*seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+            ffi::wlr_seat_touch_notify_up(
+                seat.wlr_seat,
+                (*event).time_msec,
+                (*event).touch_id,
+            );
+        }
     }
 }
 
