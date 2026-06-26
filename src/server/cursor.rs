@@ -575,41 +575,31 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             }
 
             if !clicked_win.is_null() && !(*clicked_win).is_status_bar() {
-                let mut viewport_w = 1920.0;
-                let mut viewport_h = 1080.0;
-                let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                let mut curr_out = (*outputs_list).next;
-                while curr_out != outputs_list {
-                    let output = crate::container_of!(curr_out, crate::output::Output, link);
-                    if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                        let wlr_box = (*output).sent.box_layout();
-                        viewport_w = wlr_box.width as f64;
-                        viewport_h = wlr_box.height as f64;
-                        break;
-                    }
-                    curr_out = (*curr_out).next;
-                }
-
-                let win_w = if (*clicked_win).box_geom.width > 0 { (*clicked_win).box_geom.width as f64 } else { 800.0 };
-                let win_h = if (*clicked_win).box_geom.height > 0 { (*clicked_win).box_geom.height as f64 } else { 600.0 };
-
-                let center_x = (*clicked_win).virtual_x + win_w / 2.0;
-                let center_y = (*clicked_win).virtual_y + win_h / 2.0;
-
-                (*server).wm.desk_zoom = 1.0;
-                (*server).wm.mode = crate::window_manager::WindowManagerMode::Normal;
-                (*server).wm.desk_pan_x = center_x - viewport_w / 2.0;
-                (*server).wm.desk_pan_y = center_y - viewport_h / 2.0;
-
-                seat.focus(Focus::Window(clicked_win));
-                if !seat.object.is_null() && !(*clicked_win).object.is_null() {
-                    ffi::wl_resource_post_event(seat.object, 4, (*clicked_win).object);
-                }
-
                 (*server).wm.stop_panning_animation();
-                (*server).wm.dirty_windowing();
-
+                let cursor_x = (*cursor.wlr_cursor).x;
+                let cursor_y = (*cursor.wlr_cursor).y;
+                seat.op = Some(crate::seat::SeatOp {
+                    sent_release: false,
+                    input: crate::seat::SeatOpInput::Pointer,
+                    start_x: cursor_x as i32,
+                    start_y: cursor_y as i32,
+                    x: cursor_x as i32,
+                    y: cursor_y as i32,
+                    window_ptr: clicked_win,
+                    op_type: crate::seat::PointerOpType::Move,
+                    start_win_x: (*clicked_win).box_geom.x,
+                    start_win_y: (*clicked_win).box_geom.y,
+                    start_win_w: (*clicked_win).box_geom.width as u32,
+                    start_win_h: (*clicked_win).box_geom.height as u32,
+                    start_win_virtual_x: (*clicked_win).virtual_x,
+                    start_win_virtual_y: (*clicked_win).virtual_y,
+                    start_tiling_mode: (*clicked_win).tiling_mode,
+                    start_mode_locked: (*clicked_win).mode_locked,
+                    started_in_overview: true,
+                });
+                cursor.op_start_pointer();
                 cursor.pressed.insert((*event).button, None);
+                cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
                 return;
             }
         }
@@ -679,6 +669,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         start_win_h: (*target_win).box_geom.height as u32,
                         start_win_virtual_x: (*target_win).virtual_x,
                         start_win_virtual_y: (*target_win).virtual_y,
+                        start_tiling_mode: (*target_win).tiling_mode,
+                        start_mode_locked: (*target_win).mode_locked,
+                        started_in_overview: (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
                     });
                     cursor.op_start_pointer();
                     cursor.pressed.insert((*event).button, None);
@@ -739,6 +732,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                             start_win_h: (*border_target_win).box_geom.height as u32,
                             start_win_virtual_x: (*border_target_win).virtual_x,
                             start_win_virtual_y: (*border_target_win).virtual_y,
+                            start_tiling_mode: (*border_target_win).tiling_mode,
+                            start_mode_locked: (*border_target_win).mode_locked,
+                            started_in_overview: (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
                         });
                         cursor.op_start_pointer();
                         cursor.pressed.insert((*event).button, None);
@@ -776,6 +772,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                             start_win_h: (*border_target_win).box_geom.height as u32,
                             start_win_virtual_x: (*border_target_win).virtual_x,
                             start_win_virtual_y: (*border_target_win).virtual_y,
+                            start_tiling_mode: (*border_target_win).tiling_mode,
+                            start_mode_locked: (*border_target_win).mode_locked,
+                            started_in_overview: (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
                         });
                         cursor.op_start_pointer();
                         cursor.pressed.insert((*event).button, None);
@@ -833,6 +832,55 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             let cursor_x = (*cursor.wlr_cursor).x;
             let cursor_y = (*cursor.wlr_cursor).y;
             seat.op_update(cursor_x as i32, cursor_y as i32);
+            
+            let op = seat.op.unwrap();
+            if op.started_in_overview && (*event).button == 0x110 {
+                let moved = (cursor_x as i32 - op.start_x).abs() > 5 || (cursor_y as i32 - op.start_y).abs() > 5;
+                if !moved && !op.window_ptr.is_null() {
+                    let win_ptr = op.window_ptr;
+                    // Restore original tiling mode & lock status
+                    (*win_ptr).tiling_mode = op.start_tiling_mode;
+                    (*win_ptr).mode_locked = op.start_mode_locked;
+                    
+                    let server = seat.server;
+                    if !(*win_ptr).closed && !(*win_ptr).is_status_bar() {
+                        let mut viewport_w = 1920.0;
+                        let mut viewport_h = 1080.0;
+                        let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                        let mut curr_out = (*outputs_list).next;
+                        while curr_out != outputs_list {
+                            let output = crate::container_of!(curr_out, crate::output::Output, link);
+                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                                let wlr_box = (*output).sent.box_layout();
+                                viewport_w = wlr_box.width as f64;
+                                viewport_h = wlr_box.height as f64;
+                                break;
+                            }
+                            curr_out = (*curr_out).next;
+                        }
+
+                        let win_w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as f64 } else { 800.0 };
+                        let win_h = if (*win_ptr).box_geom.height > 0 { (*win_ptr).box_geom.height as f64 } else { 600.0 };
+
+                        let center_x = (*win_ptr).virtual_x + win_w / 2.0;
+                        let center_y = (*win_ptr).virtual_y + win_h / 2.0;
+
+                        (*server).wm.desk_zoom = 1.0;
+                        (*server).wm.mode = crate::window_manager::WindowManagerMode::Normal;
+                        (*server).wm.desk_pan_x = center_x - viewport_w / 2.0;
+                        (*server).wm.desk_pan_y = center_y - viewport_h / 2.0;
+
+                        seat.focus(Focus::Window(win_ptr));
+                        if !seat.object.is_null() && !(*win_ptr).object.is_null() {
+                            ffi::wl_resource_post_event(seat.object, 4, (*win_ptr).object);
+                        }
+
+                        (*server).wm.stop_panning_animation();
+                        (*server).wm.dirty_windowing();
+                    }
+                }
+            }
+            
             seat.op_end();
             cursor.pressed.remove(&(*event).button);
             return;

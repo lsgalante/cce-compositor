@@ -676,6 +676,9 @@ unsafe extern "C" fn handle_request_move(
             start_win_h: (*window).box_geom.height as u32,
             start_win_virtual_x: (*window).virtual_x,
             start_win_virtual_y: (*window).virtual_y,
+            start_tiling_mode: (*window).tiling_mode,
+            start_mode_locked: (*window).mode_locked,
+            started_in_overview: (*(*window).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
         });
         cursor.op_start_pointer();
         cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
@@ -728,6 +731,9 @@ unsafe extern "C" fn handle_request_resize(
             start_win_h: (*window).box_geom.height as u32,
             start_win_virtual_x: (*window).virtual_x,
             start_win_virtual_y: (*window).virtual_y,
+            start_tiling_mode: (*window).tiling_mode,
+            start_mode_locked: (*window).mode_locked,
+            started_in_overview: (*(*window).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
         });
         cursor.op_start_pointer();
         let cursor_name = crate::cursor::get_resize_cursor_name(edges);

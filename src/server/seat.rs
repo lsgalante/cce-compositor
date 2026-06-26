@@ -29,6 +29,9 @@ pub struct SeatOp {
     pub start_win_h: u32,
     pub start_win_virtual_x: f64,
     pub start_win_virtual_y: f64,
+    pub start_tiling_mode: crate::tiling::TilingMode,
+    pub start_mode_locked: bool,
+    pub started_in_overview: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1315,6 +1318,9 @@ unsafe extern "C" fn seat_op_start_pointer(
             start_win_h: 0,
             start_win_virtual_x: 0.0,
             start_win_virtual_y: 0.0,
+            start_tiling_mode: crate::tiling::TilingMode::Floating,
+            start_mode_locked: false,
+            started_in_overview: false,
         });
         (*(*seat).server).wm.stop_panning_animation();
         (*seat).cursor.op_start_pointer();
