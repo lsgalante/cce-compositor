@@ -806,9 +806,11 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         let lx = cursor.x();
         let ly = cursor.y();
         let server = seat.server;
+        let mut clicked_something = false;
         if let Some(result) = (*server).scene.at(lx, ly) {
             match result.data {
                 SceneNodeDataVal::Window(window) => {
+                    clicked_something = true;
                     if !(*window).is_status_bar() {
                         if !seat.object.is_null() {
                             if !(*window).object.is_null() {
@@ -821,10 +823,18 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     }
                 }
                 SceneNodeDataVal::LayerSurface(_) => {
+                    clicked_something = true;
                     seat.focus(Focus::LayerSurface(result.surface));
                 }
-                _ => {}
+                SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                    clicked_something = true;
+                }
             }
+        }
+
+        if !clicked_something && (*event).button == 0x110 {
+            seat.focus(Focus::None);
+            (*(*seat).server).wm.dirty_windowing();
         }
     } else {
         assert_eq!((*event).state, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED);
