@@ -36,7 +36,6 @@ pub struct Layout {
     pub pinned_width: i32,
     pub pinned_position: String,
     pub pinned_border_gap: i32,
-    pub pinned_border_opacity: i32,
     pub status_normal_color: String,
     pub desktop_background: String,
     pub transparency_opacity: f32,
@@ -78,7 +77,6 @@ impl Default for Layout {
             pinned_width: 360,
             pinned_position: "left".to_string(),
             pinned_border_gap: 0,
-            pinned_border_opacity: 100,
             status_normal_color: "#ccccd8".to_string(),
             desktop_background: "#000000".to_string(),
             transparency_opacity: 0.9,
@@ -350,8 +348,6 @@ pub struct LayoutConfig {
     pub pinned_position: String,
     #[serde(default = "default_pinned_border_gap", alias = "side_panel_border_gap")]
     pub pinned_border_gap: i64,
-    #[serde(default = "default_pinned_border_opacity", alias = "side_panel_border_opacity")]
-    pub pinned_border_opacity: i64,
     #[serde(default = "default_status_normal_color")]
     pub status_normal_color: String,
     #[serde(default = "default_window_opacity")]
@@ -384,7 +380,6 @@ impl Default for LayoutConfig {
             pinned_width: default_pinned_width(),
             pinned_position: default_pinned_position(),
             pinned_border_gap: default_pinned_border_gap(),
-            pinned_border_opacity: default_pinned_border_opacity(),
             status_normal_color: default_status_normal_color(),
             window_opacity: default_window_opacity(),
         }
@@ -414,7 +409,6 @@ fn default_pinned_behavior() -> String { "inline".to_string() }
 fn default_pinned_width() -> i64 { 360 }
 fn default_pinned_position() -> String { "left".to_string() }
 fn default_pinned_border_gap() -> i64 { 0 }
-fn default_pinned_border_opacity() -> i64 { 100 }
 fn default_status_normal_color() -> String { "#ccccd8".to_string() }
 fn default_window_opacity() -> bool { true }
 
@@ -759,7 +753,6 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.pinned_width = config.layout.pinned_width as i32;
     state.layout.pinned_position = config.layout.pinned_position;
     state.layout.pinned_border_gap = config.layout.pinned_border_gap as i32;
-    state.layout.pinned_border_opacity = config.layout.pinned_border_opacity as i32;
     state.layout.status_normal_color = config.layout.status_normal_color.clone();
     state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
     state.layout.window_opacity = config.layout.window_opacity;

@@ -1011,6 +1011,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     (*win_ptr).scale = 1.0;
                     ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
                     (*win_ptr).rendering_requested.hidden = false;
+                    (*win_ptr).rendering_requested.blur = self.layout.window_blur;
                     continue;
                 }
 
@@ -1102,12 +1103,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     };
                     (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
 
-                    let opacity_factor = if !self.layout.window_opacity { 1.0f32 } else { self.layout.pinned_border_opacity as f32 / 100.0 };
                     let is_focused = win_ptr == focused_window;
                     let r = self.layout.border_r;
                     let g_color = self.layout.border_g;
                     let b = self.layout.border_b;
-                    let a = (self.layout.border_a as f32 * opacity_factor) as u32;
+                    let a = self.layout.border_a;
 
                     (*win_ptr).rendering_requested.border = crate::window::Border {
                         edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
@@ -1119,7 +1119,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     };
                     (*win_ptr).rendering_requested.blur = self.layout.window_blur;
                     (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
-                        if !self.layout.window_opacity { 1.0f32 } else { 0.85f32 * opacity_factor }
+                        if !self.layout.window_opacity { 1.0f32 } else { 0.85f32 }
                     };
                 } else {
                     normal_windows.push(win_ptr);
@@ -2205,7 +2205,6 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     "side_panel_behavior" | "pinned_behavior" => { self.layout.pinned_behavior = val.to_string(); }
                     "side_panel_position" | "pinned_position" => { self.layout.pinned_position = val.to_string(); }
                     "side_panel_border_gap" | "pinned_border_gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.pinned_border_gap = v; } }
-                    "side_panel_border_opacity" | "pinned_border_opacity" => { if let Ok(v) = val.parse::<i32>() { self.layout.pinned_border_opacity = v; } }
                     _ => return format!("error: unknown layout key: {}\n", key),
                 }
                 self.dirty_windowing();
