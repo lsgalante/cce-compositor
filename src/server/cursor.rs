@@ -669,6 +669,22 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Pinned
                 {
+                    if (*target_win).was_maximized {
+                        (*target_win).box_geom.width = (*target_win).saved_maximized_width;
+                        (*target_win).box_geom.height = (*target_win).saved_maximized_height;
+                        (*target_win).virtual_x = (*target_win).saved_maximized_virtual_x;
+                        (*target_win).virtual_y = (*target_win).saved_maximized_virtual_y;
+                        (*target_win).was_maximized = false;
+                        
+                        (*target_win).wm_requested.dimensions = Some(crate::window::Dimensions {
+                            width: (*target_win).saved_maximized_width as u32,
+                            height: (*target_win).saved_maximized_height as u32,
+                        });
+                        (*target_win).wm_requested.bounds = crate::window::Dimensions {
+                            width: (*target_win).saved_maximized_width as u32,
+                            height: (*target_win).saved_maximized_height as u32,
+                        };
+                    }
                     (*target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*target_win).mode_locked = true;
                 }
@@ -742,6 +758,22 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 BorderZone::Resize(edges) => {
                     if (*event).button == 0x110 { // BTN_LEFT
                         if initial_mode != crate::tiling::TilingMode::Floating {
+                            if (*border_target_win).was_maximized {
+                                (*border_target_win).box_geom.width = (*border_target_win).saved_maximized_width;
+                                (*border_target_win).box_geom.height = (*border_target_win).saved_maximized_height;
+                                (*border_target_win).virtual_x = (*border_target_win).saved_maximized_virtual_x;
+                                (*border_target_win).virtual_y = (*border_target_win).saved_maximized_virtual_y;
+                                (*border_target_win).was_maximized = false;
+                                
+                                (*border_target_win).wm_requested.dimensions = Some(crate::window::Dimensions {
+                                    width: (*border_target_win).saved_maximized_width as u32,
+                                    height: (*border_target_win).saved_maximized_height as u32,
+                                });
+                                (*border_target_win).wm_requested.bounds = crate::window::Dimensions {
+                                    width: (*border_target_win).saved_maximized_width as u32,
+                                    height: (*border_target_win).saved_maximized_height as u32,
+                                };
+                            }
                             (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                             (*border_target_win).mode_locked = true;
                         }
@@ -782,6 +814,22 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         if initial_mode != crate::tiling::TilingMode::Floating
                             && initial_mode != crate::tiling::TilingMode::Pinned
                         {
+                            if (*border_target_win).was_maximized {
+                                (*border_target_win).box_geom.width = (*border_target_win).saved_maximized_width;
+                                (*border_target_win).box_geom.height = (*border_target_win).saved_maximized_height;
+                                (*border_target_win).virtual_x = (*border_target_win).saved_maximized_virtual_x;
+                                (*border_target_win).virtual_y = (*border_target_win).saved_maximized_virtual_y;
+                                (*border_target_win).was_maximized = false;
+                                
+                                (*border_target_win).wm_requested.dimensions = Some(crate::window::Dimensions {
+                                    width: (*border_target_win).saved_maximized_width as u32,
+                                    height: (*border_target_win).saved_maximized_height as u32,
+                                });
+                                (*border_target_win).wm_requested.bounds = crate::window::Dimensions {
+                                    width: (*border_target_win).saved_maximized_width as u32,
+                                    height: (*border_target_win).saved_maximized_height as u32,
+                                };
+                            }
                             (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                             (*border_target_win).mode_locked = true;
                         }

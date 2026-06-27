@@ -485,6 +485,7 @@ pub fn parse_tiling_mode(s: &str) -> TilingMode {
         "popup" => TilingMode::Popup,
         "sidepanel" | "side_panel" | "side-panel" | "pinned" => TilingMode::Pinned,
         "status" => TilingMode::Status,
+        "maximized" => TilingMode::Maximized,
         _ => TilingMode::Cascade,
     }
 }

@@ -1126,6 +1126,63 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 }
             }
 
+            // Manage entering/exiting Maximized state for normal windows
+            for &win_ptr in &normal_windows {
+                let mode = (*win_ptr).tiling_mode;
+                if mode == crate::tiling::TilingMode::Maximized && !(*win_ptr).was_maximized {
+                    // Entering Maximized mode
+                    let mut w = (*win_ptr).box_geom.width;
+                    let mut h = (*win_ptr).box_geom.height;
+                    if w <= 0 {
+                        w = if (*win_ptr).wm_scheduled.dimensions_hint.min_width > 32 {
+                            (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32
+                        } else {
+                            800
+                        };
+                    }
+                    if h <= 0 {
+                        h = if (*win_ptr).wm_scheduled.dimensions_hint.min_height > 32 {
+                            (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32
+                        } else {
+                            600
+                        };
+                    }
+                    (*win_ptr).saved_maximized_width = w;
+                    (*win_ptr).saved_maximized_height = h;
+                    (*win_ptr).saved_maximized_virtual_x = (*win_ptr).virtual_x;
+                    (*win_ptr).saved_maximized_virtual_y = (*win_ptr).virtual_y;
+                    (*win_ptr).was_maximized = true;
+                    log::info!("[Maximized] Saved window {:?} geometry: {}x{} at ({}, {})", 
+                        (*win_ptr).get_title_string().as_deref().unwrap_or(""), 
+                        (*win_ptr).saved_maximized_width, (*win_ptr).saved_maximized_height, 
+                        (*win_ptr).saved_maximized_virtual_x, (*win_ptr).saved_maximized_virtual_y
+                    );
+                } else if mode != crate::tiling::TilingMode::Maximized && (*win_ptr).was_maximized {
+                    // Exiting Maximized mode
+                    if (*win_ptr).saved_maximized_width > 0 && (*win_ptr).saved_maximized_height > 0 {
+                        (*win_ptr).box_geom.width = (*win_ptr).saved_maximized_width;
+                        (*win_ptr).box_geom.height = (*win_ptr).saved_maximized_height;
+                        (*win_ptr).virtual_x = (*win_ptr).saved_maximized_virtual_x;
+                        (*win_ptr).virtual_y = (*win_ptr).saved_maximized_virtual_y;
+                        (*win_ptr).was_maximized = false;
+                        
+                        (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                            width: (*win_ptr).saved_maximized_width as u32,
+                            height: (*win_ptr).saved_maximized_height as u32,
+                        });
+                        (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                            width: (*win_ptr).saved_maximized_width as u32,
+                            height: (*win_ptr).saved_maximized_height as u32,
+                        };
+                        log::info!("[Maximized] Restored window {:?} geometry: {}x{} at ({}, {})", 
+                            (*win_ptr).get_title_string().as_deref().unwrap_or(""), 
+                            (*win_ptr).saved_maximized_width, (*win_ptr).saved_maximized_height, 
+                            (*win_ptr).saved_maximized_virtual_x, (*win_ptr).saved_maximized_virtual_y
+                        );
+                    }
+                }
+            }
+
             // Arrange normal windows on the virtual surface
             for &win_ptr in &normal_windows {
                 let mode = (*win_ptr).tiling_mode;
@@ -1175,6 +1232,50 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         height: phys_h as u32,
                     };
                     (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
+                } else if mode == crate::tiling::TilingMode::Maximized {
+                    // Maximized mode: Resizes to fully fill all cells of the desktop grid it is fully/partially inside of.
+                    let scale = self.layout.desktop_grid_scale;
+                    
+                    // Use saved maximized geometry for cell calculation
+                    let x1 = (*win_ptr).saved_maximized_virtual_x;
+                    let y1 = (*win_ptr).saved_maximized_virtual_y;
+                    let w = (*win_ptr).saved_maximized_width as f64;
+                    let h = (*win_ptr).saved_maximized_height as f64;
+                    let x2 = x1 + w;
+                    let y2 = y1 + h;
+                    
+                    let col_min = (x1 / scale).floor() as i32;
+                    let col_max = ((x2 / scale).ceil() as i32 - 1).max(col_min);
+                    let row_min = (y1 / scale).floor() as i32;
+                    let row_max = ((y2 / scale).ceil() as i32 - 1).max(row_min);
+                    
+                    let snapped_x1 = col_min as f64 * scale;
+                    let snapped_x2 = (col_max + 1) as f64 * scale;
+                    let snapped_y1 = row_min as f64 * scale;
+                    let snapped_y2 = (row_max + 1) as f64 * scale;
+                    
+                    let fw = snapped_x2 - snapped_x1;
+                    let fh = snapped_y2 - snapped_y1;
+                    
+                    // Update current virtual position for rendering
+                    (*win_ptr).virtual_x = snapped_x1;
+                    (*win_ptr).virtual_y = snapped_y1;
+                    
+                    let final_x = phys_x + (((*win_ptr).virtual_x - self.desk_pan_x) * self.desk_zoom) as i32;
+                    let final_y = phys_y + (((*win_ptr).virtual_y - self.desk_pan_y) * self.desk_zoom) as i32;
+
+                    (*win_ptr).rendering_requested.x = final_x;
+                    (*win_ptr).rendering_requested.y = final_y;
+                    (*win_ptr).scale = self.desk_zoom;
+
+                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                        width: fw as u32,
+                        height: fh as u32,
+                    });
+                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                        width: fw as u32,
+                        height: fh as u32,
+                    };
                 } else {
                     // Regular pannable window on the virtual surface
                     let fw = if let Some(resize_size) = self.get_active_resize_dimensions(win_ptr) {

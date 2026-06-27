@@ -235,6 +235,11 @@ pub struct Window {
     pub saved_height: i32,
     pub saved_virtual_x: f64,
     pub saved_virtual_y: f64,
+    pub was_maximized: bool,
+    pub saved_maximized_width: i32,
+    pub saved_maximized_height: i32,
+    pub saved_maximized_virtual_x: f64,
+    pub saved_maximized_virtual_y: f64,
 
     pub wm_scheduled: WmScheduledState,
     pub wm_sent: WmSentState,
@@ -402,6 +407,11 @@ impl Window {
             saved_height: 0,
             saved_virtual_x: 0.0,
             saved_virtual_y: 0.0,
+            was_maximized: false,
+            saved_maximized_width: 0,
+            saved_maximized_height: 0,
+            saved_maximized_virtual_x: 0.0,
+            saved_maximized_virtual_y: 0.0,
             wm_scheduled: WmScheduledState {
                 dimensions_hint: DimensionsHint { min_width: 0, min_height: 0, max_width: 0, max_height: 0 },
                 decoration_hint: ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_ONLY_SUPPORTS_CSD,
@@ -1350,7 +1360,9 @@ impl Window {
         };
         self.wm_requested.dimensions = None;
 
-        let is_maximized_layout = self.tiling_mode == crate::tiling::TilingMode::Cascade || self.tiling_mode == crate::tiling::TilingMode::Grid;
+        let is_maximized_layout = self.tiling_mode == crate::tiling::TilingMode::Cascade
+            || self.tiling_mode == crate::tiling::TilingMode::Grid
+            || self.tiling_mode == crate::tiling::TilingMode::Maximized;
         self.configure_scheduled = Configure {
             width,
             height,

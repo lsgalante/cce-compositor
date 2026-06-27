@@ -9,6 +9,7 @@ pub enum TilingMode {
     Popup,
     Pinned,
     Status,
+    Maximized,
 }
 
 impl TilingMode {
@@ -21,6 +22,7 @@ impl TilingMode {
             TilingMode::Popup => "Popup",
             TilingMode::Pinned => "Pinned",
             TilingMode::Status => "Status",
+            TilingMode::Maximized => "Maximized",
         }
     }
 }

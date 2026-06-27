@@ -155,7 +155,7 @@ unsafe extern "C" fn toplevel_set_maximized(
     let server = (*data).server;
     let window_key = (*data).window_key;
     if let Some(window) = resolve_window(server, window_key) {
-        (*window).tiling_mode = crate::tiling::TilingMode::Cascade;
+        (*window).tiling_mode = crate::tiling::TilingMode::Maximized;
         (*window).mode_locked = true;
         (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Maximize;
         (*server).wm.dirty_windowing();
