@@ -1534,7 +1534,14 @@ impl Window {
         ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
 
         if enabled {
-            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, requested.blur);
+            let mut blur_enabled = requested.blur;
+            if !self.wm_requested.ssd {
+                let (dec_w, dec_h) = self.get_decorations_size();
+                if dec_w > 0 || dec_h > 0 {
+                    blur_enabled = false;
+                }
+            }
+            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
             let radius = if requested.circular {
