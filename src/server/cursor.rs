@@ -588,6 +588,18 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     }
                 }
             }
+            SceneNodeDataVal::LayerSurface(layer_surface) => {
+                if !layer_surface.is_null() {
+                    is_app_surface = true;
+                    let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
+                    if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
+                        let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
+                        if ns == "cce-cloud" {
+                            is_overlay_window = true;
+                        }
+                    }
+                }
+            }
             SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                 is_app_surface = true;
             }
@@ -1265,6 +1277,18 @@ unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *m
                     }
                 }
             }
+            SceneNodeDataVal::LayerSurface(layer_surface) => {
+                if !layer_surface.is_null() {
+                    is_app_surface = true;
+                    let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
+                    if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
+                        let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
+                        if ns == "cce-cloud" {
+                            is_overlay_window = true;
+                        }
+                    }
+                }
+            }
             SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                 is_app_surface = true;
             }
@@ -1322,6 +1346,18 @@ unsafe extern "C" fn handle_touch_motion(listener: *mut ffi::wl_listener, data: 
                         }
                     }
                 }
+                SceneNodeDataVal::LayerSurface(layer_surface) => {
+                    if !layer_surface.is_null() {
+                        is_app_surface = true;
+                        let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
+                        if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
+                            let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
+                            if ns == "cce-cloud" {
+                                is_overlay_window = true;
+                            }
+                        }
+                    }
+                }
                 SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                     is_app_surface = true;
                 }
@@ -1360,6 +1396,18 @@ unsafe extern "C" fn handle_touch_up(listener: *mut ffi::wl_listener, data: *mut
                         is_app_surface = true;
                         if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
                             is_overlay_window = true;
+                        }
+                    }
+                }
+                SceneNodeDataVal::LayerSurface(layer_surface) => {
+                    if !layer_surface.is_null() {
+                        is_app_surface = true;
+                        let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
+                        if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
+                            let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
+                            if ns == "cce-cloud" {
+                                is_overlay_window = true;
+                            }
                         }
                     }
                 }

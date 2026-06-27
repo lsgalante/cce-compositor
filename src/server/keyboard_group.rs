@@ -447,6 +447,18 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
                 } else {
                     false
                 }
+            } else if let crate::seat::Focus::LayerSurface(focused_layer) = (*group.seat).focused {
+                if !focused_layer.is_null() {
+                    let wlr_layer_surface = crate::ffi::wlr_layer_surface_v1_try_from_wlr_surface(focused_layer);
+                    if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
+                        let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
+                        ns == "cce-cloud"
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
             } else {
                 false
             };
