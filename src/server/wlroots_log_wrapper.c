@@ -102,11 +102,17 @@ struct wl_signal *river_scene_node_get_destroy_signal(struct wlr_scene_node *nod
 
 static void save_surface_tree_iter(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
 	struct wlr_scene_tree *saved_tree = user_data;
-	struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_create(saved_tree, buffer->buffer);
-	if (!scene_buffer) {
+	struct wlr_scene_tree *buffer_tree = wlr_scene_tree_create(saved_tree);
+	if (!buffer_tree) {
 		return;
 	}
-	wlr_scene_node_set_position(&scene_buffer->node, sx, sy);
+	wlr_scene_node_set_position(&buffer_tree->node, sx, sy);
+	struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_create(buffer_tree, buffer->buffer);
+	if (!scene_buffer) {
+		wlr_scene_node_destroy(&buffer_tree->node);
+		return;
+	}
+	wlr_scene_node_set_position(&scene_buffer->node, 0, 0);
 	wlr_scene_buffer_set_dest_size(scene_buffer, buffer->dst_width, buffer->dst_height);
 	wlr_scene_buffer_set_source_box(scene_buffer, &buffer->src_box);
 	wlr_scene_buffer_set_transform(scene_buffer, buffer->transform);
@@ -692,6 +698,16 @@ void river_scene_rect_set_size_if_changed(struct wlr_scene_rect *rect, int width
 	}
 }
 
+int river_scene_buffer_get_width(struct wlr_scene_buffer *scene_buffer) {
+	if (scene_buffer->buffer) {
+		return scene_buffer->buffer->width;
+	}
+	return scene_buffer->dst_width;
+}
 
-
-
+int river_scene_buffer_get_height(struct wlr_scene_buffer *scene_buffer) {
+	if (scene_buffer->buffer) {
+		return scene_buffer->buffer->height;
+	}
+	return scene_buffer->dst_height;
+}
