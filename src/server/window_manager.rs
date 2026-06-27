@@ -803,21 +803,24 @@ impl WindowManager {
             if let Some(ref op) = (*seat).op {
                 if op.window_ptr == win_ptr {
                     if let crate::seat::PointerOpType::Resize { edges } = op.op_type {
+                        let scale = self.desk_zoom;
                         let dx = op.x - op.start_x;
                         let dy = op.y - op.start_y;
+                        let virtual_dx = dx as f64 / scale;
+                        let virtual_dy = dy as f64 / scale;
                         let mut new_w = op.start_win_w;
                         let mut new_h = op.start_win_h;
 
                         if edges.left {
-                            new_w = std::cmp::max(50, op.start_win_w as i32 - dx) as u32;
+                            new_w = std::cmp::max(50, (op.start_win_w as f64 - virtual_dx) as i32) as u32;
                         } else if edges.right {
-                            new_w = std::cmp::max(50, op.start_win_w as i32 + dx) as u32;
+                            new_w = std::cmp::max(50, (op.start_win_w as f64 + virtual_dx) as i32) as u32;
                         }
 
                         if edges.top {
-                            new_h = std::cmp::max(50, op.start_win_h as i32 - dy) as u32;
+                            new_h = std::cmp::max(50, (op.start_win_h as f64 - virtual_dy) as i32) as u32;
                         } else if edges.bottom {
-                            new_h = std::cmp::max(50, op.start_win_h as i32 + dy) as u32;
+                            new_h = std::cmp::max(50, (op.start_win_h as f64 + virtual_dy) as i32) as u32;
                         }
                         return Some((new_w, new_h));
                     }
@@ -1985,7 +1988,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     // Try to match by numerical window index first
                     if let Ok(id) = query.parse::<u32>() {
                         for &w in self.windows.iter() {
-                            if !w.is_null() && !(*w).closed && (*w).ref_key.index == id {
+                            if !w.is_null() && !(*w).closed && matches!((*w).state, crate::window::WindowState::Mapped) && (*w).ref_key.index == id {
                                 best_target = w;
                                 break;
                             }
@@ -1995,9 +1998,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     // Fallback to matching by app_id
                     if best_target.is_null() {
                         for &w in self.windows.iter() {
-                            if !w.is_null() && !(*w).closed {
+                            if !w.is_null() && !(*w).closed && matches!((*w).state, crate::window::WindowState::Mapped) {
                                 let aid = (*w).get_app_id_string();
-
+                                
                                 let mut score = 0;
                                 if let Some(ref aid_str) = aid {
                                     let aid_lower = aid_str.to_lowercase();

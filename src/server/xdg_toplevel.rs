@@ -350,7 +350,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     match (*window).state {
         crate::window::WindowState::Init | crate::window::WindowState::Closing => {}
         crate::window::WindowState::Ready | crate::window::WindowState::Initialized | crate::window::WindowState::Mapped => {
-            (*window).state = crate::window::WindowState::Closing;
+            (*window).set_closing();
             (*(*window).server).wm.dirty_windowing();
         }
     }

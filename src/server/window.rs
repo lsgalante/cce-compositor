@@ -230,6 +230,11 @@ pub struct Window {
     pub resize_start_h: u32,
     pub resize_edges: Option<Edges>,
     pub commit: ffi::wl_listener,
+    pub was_fullscreen: bool,
+    pub saved_width: i32,
+    pub saved_height: i32,
+    pub saved_virtual_x: f64,
+    pub saved_virtual_y: f64,
 
     pub wm_scheduled: WmScheduledState,
     pub wm_sent: WmSentState,
@@ -392,6 +397,11 @@ impl Window {
             resize_start_h: 0,
             resize_edges: None,
             commit: std::mem::zeroed(),
+            was_fullscreen: false,
+            saved_width: 0,
+            saved_height: 0,
+            saved_virtual_x: 0.0,
+            saved_virtual_y: 0.0,
             wm_scheduled: WmScheduledState {
                 dimensions_hint: DimensionsHint { min_width: 0, min_height: 0, max_width: 0, max_height: 0 },
                 decoration_hint: ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_ONLY_SUPPORTS_CSD,
@@ -735,13 +745,22 @@ impl Window {
         Ok(())
     }
 
+    pub unsafe fn set_closing(&mut self) {
+        if self.state != WindowState::Closing {
+            self.state = WindowState::Closing;
+            wl_list_remove(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
+            self.node.link.prev = &mut self.node.link;
+            self.node.link.next = &mut self.node.link;
+        }
+    }
+
     pub unsafe fn unmap(&mut self) {
         log::debug!("window '{:?}' unmapped", self.get_title());
         wl_listener_remove_safe(&mut self.commit);
         self.surfaces.save();
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
         assert_eq!(self.state, WindowState::Mapped);
-        self.state = WindowState::Closing;
+        self.set_closing();
         (*self.server).wm.dirty_windowing();
 
         if !self.foreign_toplevel_handle.is_null() {
@@ -1280,6 +1299,38 @@ impl Window {
         } else {
             std::ptr::null_mut()
         };
+
+        let new_fullscreen = !output.is_null();
+        if new_fullscreen && !self.was_fullscreen {
+            if self.box_geom.width > 0 && self.box_geom.height > 0 {
+                self.saved_width = self.box_geom.width;
+                self.saved_height = self.box_geom.height;
+                self.saved_virtual_x = self.virtual_x;
+                self.saved_virtual_y = self.virtual_y;
+                self.was_fullscreen = true;
+                log::info!("[Fullscreen] Saved window {:?} geometry: {}x{} at ({}, {})", self.get_title_string().as_deref().unwrap_or(""), self.saved_width, self.saved_height, self.saved_virtual_x, self.saved_virtual_y);
+            }
+        } else if !new_fullscreen && self.was_fullscreen {
+            if self.saved_width > 0 && self.saved_height > 0 {
+                self.box_geom.width = self.saved_width;
+                self.box_geom.height = self.saved_height;
+                self.virtual_x = self.saved_virtual_x;
+                self.virtual_y = self.saved_virtual_y;
+                self.was_fullscreen = false;
+
+                self.wm_requested.dimensions = Some(crate::window::Dimensions {
+                    width: self.saved_width as u32,
+                    height: self.saved_height as u32,
+                });
+                self.wm_requested.bounds = crate::window::Dimensions {
+                    width: self.saved_width as u32,
+                    height: self.saved_height as u32,
+                };
+
+                (*self.server).wm.dirty_windowing();
+                log::info!("[Fullscreen] Restored window {:?} geometry: {}x{} at ({}, {})", self.get_title_string().as_deref().unwrap_or(""), self.saved_width, self.saved_height, self.saved_virtual_x, self.saved_virtual_y);
+            }
+        }
 
         let (width, height) = if !output.is_null() {
             let (w, h) = (*output).sent.dimensions();
