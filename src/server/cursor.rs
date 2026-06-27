@@ -47,6 +47,8 @@ pub struct Cursor {
     pub gesture_scale: f64,
     pub gesture_triggered: bool,
     pub panning_gesture_active: bool,
+    pub last_click_time: u32,
+    pub last_click_window: *mut crate::window::Window,
 }
 
 impl Default for Cursor {
@@ -91,6 +93,8 @@ impl Default for Cursor {
             gesture_scale: 1.0,
             gesture_triggered: false,
             panning_gesture_active: false,
+            last_click_time: 0,
+            last_click_window: std::ptr::null_mut(),
         }
     }
 }
@@ -827,6 +831,30 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 }
                 BorderZone::Move => {
                     if (*event).button == 0x110 { // BTN_LEFT
+                        let current_time = (*event).time_msec;
+                        let is_titlebar = ly < (*border_target_win).box_geom.y as f64;
+                        let is_double_click = is_titlebar
+                            && border_target_win == cursor.last_click_window
+                            && current_time.saturating_sub(cursor.last_click_time) < 300;
+
+                        cursor.last_click_time = current_time;
+                        cursor.last_click_window = border_target_win;
+
+                        if is_double_click {
+                            if initial_mode == crate::tiling::TilingMode::Maximized {
+                                (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
+                                (*border_target_win).mode_locked = true;
+                            } else {
+                                (*border_target_win).tiling_mode = crate::tiling::TilingMode::Maximized;
+                                (*border_target_win).mode_locked = true;
+                            }
+                            seat.focus(Focus::Window(border_target_win));
+                            (*server).wm.dirty_windowing();
+                            cursor.last_click_time = 0;
+                            cursor.last_click_window = std::ptr::null_mut();
+                            return;
+                        }
+
                         if initial_mode != crate::tiling::TilingMode::Floating
                             && initial_mode != crate::tiling::TilingMode::Overlay
                         {
