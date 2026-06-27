@@ -246,7 +246,22 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
     let layout_text = if !focused_window.is_null() {
         (*focused_window).tiling_mode.as_str().to_string()
     } else {
-        "---".to_string()
+        let focused_layer = wm.focused_layer_surface();
+        let mut is_cce_cloud = false;
+        if !focused_layer.is_null() {
+            let wlr_layer_surface = crate::ffi::wlr_layer_surface_v1_try_from_wlr_surface(focused_layer);
+            if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
+                let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
+                if ns == "cce-cloud" {
+                    is_cce_cloud = true;
+                }
+            }
+        }
+        if is_cce_cloud {
+            "Overlay".to_string()
+        } else {
+            "---".to_string()
+        }
     };
 
     let title_text = if !focused_window.is_null() {
