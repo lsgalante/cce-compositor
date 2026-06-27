@@ -946,7 +946,7 @@ impl Seat {
             let win = op.window_ptr;
             if !win.is_null() && !(*win).closed {
                 if (*win).tiling_mode != crate::tiling::TilingMode::Floating
-                    && (*win).tiling_mode != crate::tiling::TilingMode::Pinned
+                    && (*win).tiling_mode != crate::tiling::TilingMode::Overlay
                 {
                     (*win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*win).mode_locked = true;
@@ -1084,7 +1084,7 @@ impl Seat {
                     (*self.server).wm.dirty_windowing();
                 }
                 if let PointerOpType::Move = op.op_type {
-                    if (*win).tiling_mode == crate::tiling::TilingMode::Pinned {
+                    if (*win).tiling_mode == crate::tiling::TilingMode::Overlay {
                         (*self.server).wm.dirty_windowing();
                     }
                 }

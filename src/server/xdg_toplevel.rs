@@ -643,7 +643,7 @@ unsafe extern "C" fn handle_request_move(
         if initial_mode != crate::tiling::TilingMode::Floating
             && initial_mode != crate::tiling::TilingMode::Popup
             && initial_mode != crate::tiling::TilingMode::Fullscreen
-            && initial_mode != crate::tiling::TilingMode::Pinned
+            && initial_mode != crate::tiling::TilingMode::Overlay
         {
             (*window).tiling_mode = crate::tiling::TilingMode::Floating;
             (*window).mode_locked = true;

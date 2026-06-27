@@ -441,7 +441,18 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             }
         }
         KeyConsumer::Focus => {
+            let is_overlay_mode = if let crate::seat::Focus::Window(fw) = (*group.seat).focused {
+                if !fw.is_null() {
+                    (*fw).tiling_mode == crate::tiling::TilingMode::Overlay
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
             if (*(*group.seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview
+                || is_overlay_mode
                 || (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
             {
                 ffi::wlr_seat_set_keyboard((*group.seat).wlr_seat, &mut group.wlr_keyboard);

@@ -577,11 +577,15 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
     let server = seat.server;
 
     let mut is_app_surface = false;
+    let mut is_overlay_window = false;
     if let Some(result) = (*server).scene.at(lx, ly) {
         match result.data {
             SceneNodeDataVal::Window(window) => {
                 if !(*window).is_status_bar() {
                     is_app_surface = true;
+                    if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
+                        is_overlay_window = true;
+                    }
                 }
             }
             SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
@@ -590,7 +594,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             _ => {}
         }
     }
-    let should_block_button = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface;
+    let should_block_button = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface && !is_overlay_window;
     
     if (*event).state == ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED {
         if cursor.pressed.contains_key(&(*event).button) {
@@ -667,7 +671,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 if (*target_win).tiling_mode != crate::tiling::TilingMode::Floating
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Popup
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
-                    && (*target_win).tiling_mode != crate::tiling::TilingMode::Pinned
+                    && (*target_win).tiling_mode != crate::tiling::TilingMode::Overlay
                 {
                     if (*target_win).was_maximized {
                         (*target_win).box_geom.width = (*target_win).saved_maximized_width;
@@ -812,7 +816,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 BorderZone::Move => {
                     if (*event).button == 0x110 { // BTN_LEFT
                         if initial_mode != crate::tiling::TilingMode::Floating
-                            && initial_mode != crate::tiling::TilingMode::Pinned
+                            && initial_mode != crate::tiling::TilingMode::Overlay
                         {
                             if (*border_target_win).was_maximized {
                                 (*border_target_win).box_geom.width = (*border_target_win).saved_maximized_width;
@@ -1251,10 +1255,14 @@ unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *m
         }
         
         let mut is_app_surface = false;
+        let mut is_overlay_window = false;
         match result.data {
             SceneNodeDataVal::Window(window) => {
                 if !(*window).is_status_bar() {
                     is_app_surface = true;
+                    if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
+                        is_overlay_window = true;
+                    }
                 }
             }
             SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
@@ -1262,7 +1270,7 @@ unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *m
             }
             _ => {}
         }
-        let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface;
+        let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface && !is_overlay_window;
 
         if !result.surface.is_null() && !should_block_touch {
             ffi::wlr_seat_touch_notify_down(
@@ -1304,10 +1312,14 @@ unsafe extern "C" fn handle_touch_motion(listener: *mut ffi::wl_listener, data: 
         let server = seat.server;
         if let Some(result) = (*server).scene.at(lx, ly) {
             let mut is_app_surface = false;
+            let mut is_overlay_window = false;
             match result.data {
                 SceneNodeDataVal::Window(window) => {
                     if !(*window).is_status_bar() {
                         is_app_surface = true;
+                        if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
+                            is_overlay_window = true;
+                        }
                     }
                 }
                 SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
@@ -1315,7 +1327,7 @@ unsafe extern "C" fn handle_touch_motion(listener: *mut ffi::wl_listener, data: 
                 }
                 _ => {}
             }
-            let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface;
+            let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface && !is_overlay_window;
 
             if !should_block_touch {
                 ffi::wlr_seat_touch_notify_motion(
@@ -1340,11 +1352,15 @@ unsafe extern "C" fn handle_touch_up(listener: *mut ffi::wl_listener, data: *mut
     if let Some((lx, ly)) = cursor.touch_points.remove(&(*event).touch_id) {
         let server = seat.server;
         let mut is_app_surface = false;
+        let mut is_overlay_window = false;
         if let Some(result) = (*server).scene.at(lx, ly) {
             match result.data {
                 SceneNodeDataVal::Window(window) => {
                     if !(*window).is_status_bar() {
                         is_app_surface = true;
+                        if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
+                            is_overlay_window = true;
+                        }
                     }
                 }
                 SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
@@ -1353,7 +1369,7 @@ unsafe extern "C" fn handle_touch_up(listener: *mut ffi::wl_listener, data: *mut
                 _ => {}
             }
         }
-        let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface;
+        let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface && !is_overlay_window;
 
         if !should_block_touch {
             ffi::wlr_seat_touch_notify_up(

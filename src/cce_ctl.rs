@@ -51,8 +51,8 @@ fn usage(name: &str, to_stderr: bool) {
     print("  pbind <mods> <button> <action>");
     print("  retile");
     print("  set-viewport <1-4>");
-    print("  mode <cascade|grid|fullscreen|floating|popup|maximized> <app_id> [title]");
-    print("  viewport-layout <1-4> <cascade|grid|fullscreen|floating|popup|maximized>");
+    print("  mode <cascade|grid|fullscreen|floating|popup|maximized|overlay> <app_id> [title]");
+    print("  viewport-layout <1-4> <cascade|grid|fullscreen|floating|popup|maximized|overlay>");
     print("  pointer-location");
     print("  pointer-move-to <x> <y>");
     print("  pointer-move-by <dx> <dy>");

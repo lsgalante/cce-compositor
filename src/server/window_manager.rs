@@ -693,7 +693,7 @@ impl WindowManager {
         self.keep_status_bar_on_top();
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.layout.pinned_behavior.hash(&mut hasher);
+        self.layout.overlay_behavior.hash(&mut hasher);
         let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*render_list).next;
         while curr != render_list {
@@ -741,7 +741,7 @@ impl WindowManager {
                             } else if (*window).rendering_requested.circular {
                                 ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.top);
                                 ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
-                            } else if (*window).tiling_mode == crate::tiling::TilingMode::Pinned && self.layout.pinned_behavior == "above" {
+                            } else if (*window).tiling_mode == crate::tiling::TilingMode::Overlay && self.layout.overlay_behavior == "above" {
                                 ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.top);
                                 ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                             } else {
@@ -826,6 +826,9 @@ impl WindowManager {
         let app_id = (*win).get_app_id_string();
         if app_id.as_deref() == Some("cce-notification-daemon") || app_id.as_deref() == Some("clear-notification-daemon") {
             return crate::tiling::TilingMode::Popup;
+        }
+        if app_id.as_deref() == Some("cce-cloud") {
+            return crate::tiling::TilingMode::Overlay;
         }
 
 
@@ -982,7 +985,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let camera_center_y = self.desk_pan_y + (viewport_h / 2.0) / self.desk_zoom;
             let _active_tag = Self::get_closest_tag(camera_center_x, camera_center_y);
 
-            let mut pinned_windows: Vec<*mut Window> = Vec::new();
+            let mut overlay_windows: Vec<*mut Window> = Vec::new();
             let mut normal_windows: Vec<*mut Window> = Vec::new();
 
             for &win_ptr in self.windows.iter() {
@@ -1038,8 +1041,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 }
 
                 let is_moving = self.is_window_being_moved(win_ptr);
-                if mode == crate::tiling::TilingMode::Pinned && !is_moving {
-                    pinned_windows.push(win_ptr);
+                if mode == crate::tiling::TilingMode::Overlay && !is_moving {
+                    overlay_windows.push(win_ptr);
                 } else {
                     normal_windows.push(win_ptr);
                 }
@@ -1047,9 +1050,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
             let bw = self.layout.border_width;
 
-            let g = self.layout.pinned_border_gap;
+            let g = self.layout.overlay_border_gap;
             let dec_h = std::cmp::max(bw, 16);
-            for (sp_idx, &win_ptr) in pinned_windows.iter().enumerate() {
+            for (sp_idx, &win_ptr) in overlay_windows.iter().enumerate() {
                 if sp_idx == 0 {
                     let mut sp_x = (*win_ptr).box_geom.x;
                     let mut sp_y = (*win_ptr).box_geom.y;
@@ -1058,13 +1061,13 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
                     if sp_w == 0 || sp_h == 0 {
                         sp_w = if (*win_ptr).wm_scheduled.dimensions_hint.min_width > 32 {
-                            std::cmp::max(self.layout.pinned_width, (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32)
+                            std::cmp::max(self.layout.overlay_width, (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32)
                         } else {
-                            self.layout.pinned_width
+                            self.layout.overlay_width
                         };
                         sp_h = (usable_h - (dec_h + bw) - 2 * g).max(1);
 
-                        sp_x = if self.layout.pinned_position == "right" {
+                        sp_x = if self.layout.overlay_position == "right" {
                             usable_x + usable_w - sp_w - g + bw
                         } else {
                             usable_x + g + bw
@@ -1832,12 +1835,12 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 }
                 self.dirty_windowing();
             }
-            Action::PinnedLeft => {
-                self.layout.pinned_position = "left".to_string();
+            Action::OverlayLeft => {
+                self.layout.overlay_position = "left".to_string();
                 self.dirty_windowing();
             }
-            Action::PinnedRight => {
-                self.layout.pinned_position = "right".to_string();
+            Action::OverlayRight => {
+                self.layout.overlay_position = "right".to_string();
                 self.dirty_windowing();
             }
             Action::Expose => {
@@ -1904,7 +1907,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         }
 
                         let mode = self.get_mode_for_window(win_ptr);
-                        if mode == crate::tiling::TilingMode::Popup || mode == crate::tiling::TilingMode::Pinned {
+                        if mode == crate::tiling::TilingMode::Popup || mode == crate::tiling::TilingMode::Overlay {
                             continue;
                         }
 
@@ -2312,10 +2315,10 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         self.layout.border_g = ((border_color_val >> 8) & 0xFF) * 0x01010101;
                         self.layout.border_b = (border_color_val & 0xFF) * 0x01010101;
                     }
-                    "side_panel_width" | "pinned_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.pinned_width = v; } }
-                    "side_panel_behavior" | "pinned_behavior" => { self.layout.pinned_behavior = val.to_string(); }
-                    "side_panel_position" | "pinned_position" => { self.layout.pinned_position = val.to_string(); }
-                    "side_panel_border_gap" | "pinned_border_gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.pinned_border_gap = v; } }
+                    "side_panel_width" | "pinned_width" | "overlay_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.overlay_width = v; } }
+                    "side_panel_behavior" | "pinned_behavior" | "overlay_behavior" => { self.layout.overlay_behavior = val.to_string(); }
+                    "side_panel_position" | "pinned_position" | "overlay_position" => { self.layout.overlay_position = val.to_string(); }
+                    "side_panel_border_gap" | "pinned_border_gap" | "overlay_border_gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.overlay_border_gap = v; } }
                     _ => return format!("error: unknown layout key: {}\n", key),
                 }
                 self.dirty_windowing();

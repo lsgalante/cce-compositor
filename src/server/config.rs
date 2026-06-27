@@ -32,10 +32,10 @@ pub struct Layout {
     pub grid_gap: i32,
     pub border_blur: bool,
     pub window_blur: bool,
-    pub pinned_behavior: String,
-    pub pinned_width: i32,
-    pub pinned_position: String,
-    pub pinned_border_gap: i32,
+    pub overlay_behavior: String,
+    pub overlay_width: i32,
+    pub overlay_position: String,
+    pub overlay_border_gap: i32,
     pub status_normal_color: String,
     pub desktop_background: String,
     pub transparency_opacity: f32,
@@ -73,10 +73,10 @@ impl Default for Layout {
             grid_gap: 18,
             border_blur: false,
             window_blur: false,
-            pinned_behavior: "inline".to_string(),
-            pinned_width: 360,
-            pinned_position: "left".to_string(),
-            pinned_border_gap: 0,
+            overlay_behavior: "inline".to_string(),
+            overlay_width: 360,
+            overlay_position: "left".to_string(),
+            overlay_border_gap: 0,
             status_normal_color: "#ccccd8".to_string(),
             desktop_background: "#000000".to_string(),
             transparency_opacity: 0.9,
@@ -125,8 +125,8 @@ pub enum Action {
     SetViewport4,
     Expose,
     Minimize,
-    PinnedLeft,
-    PinnedRight,
+    OverlayLeft,
+    OverlayRight,
     ZoomIn,
     ZoomOut,
     ZoomReset,
@@ -340,14 +340,14 @@ pub struct LayoutConfig {
     pub border_blur: bool,
     #[serde(default = "default_window_blur")]
     pub window_blur: bool,
-    #[serde(default = "default_pinned_behavior", alias = "side_panel_behavior")]
-    pub pinned_behavior: String,
-    #[serde(default = "default_pinned_width", alias = "side_panel_width")]
-    pub pinned_width: i64,
-    #[serde(default = "default_pinned_position", alias = "side_panel_position")]
-    pub pinned_position: String,
-    #[serde(default = "default_pinned_border_gap", alias = "side_panel_border_gap")]
-    pub pinned_border_gap: i64,
+    #[serde(default = "default_overlay_behavior", alias = "pinned_behavior", alias = "side_panel_behavior")]
+    pub overlay_behavior: String,
+    #[serde(default = "default_overlay_width", alias = "pinned_width", alias = "side_panel_width")]
+    pub overlay_width: i64,
+    #[serde(default = "default_overlay_position", alias = "pinned_position", alias = "side_panel_position")]
+    pub overlay_position: String,
+    #[serde(default = "default_overlay_border_gap", alias = "pinned_border_gap", alias = "side_panel_border_gap")]
+    pub overlay_border_gap: i64,
     #[serde(default = "default_status_normal_color")]
     pub status_normal_color: String,
     #[serde(default = "default_window_opacity")]
@@ -376,10 +376,10 @@ impl Default for LayoutConfig {
             grid_gap: default_grid_gap(),
             border_blur: default_border_blur(),
             window_blur: default_window_blur(),
-            pinned_behavior: default_pinned_behavior(),
-            pinned_width: default_pinned_width(),
-            pinned_position: default_pinned_position(),
-            pinned_border_gap: default_pinned_border_gap(),
+            overlay_behavior: default_overlay_behavior(),
+            overlay_width: default_overlay_width(),
+            overlay_position: default_overlay_position(),
+            overlay_border_gap: default_overlay_border_gap(),
             status_normal_color: default_status_normal_color(),
             window_opacity: default_window_opacity(),
         }
@@ -405,10 +405,10 @@ fn default_transition_duration() -> i64 { 300 }
 fn default_grid_gap() -> i64 { 18 }
 fn default_border_blur() -> bool { false }
 fn default_window_blur() -> bool { false }
-fn default_pinned_behavior() -> String { "inline".to_string() }
-fn default_pinned_width() -> i64 { 360 }
-fn default_pinned_position() -> String { "left".to_string() }
-fn default_pinned_border_gap() -> i64 { 0 }
+fn default_overlay_behavior() -> String { "inline".to_string() }
+fn default_overlay_width() -> i64 { 360 }
+fn default_overlay_position() -> String { "left".to_string() }
+fn default_overlay_border_gap() -> i64 { 0 }
 fn default_status_normal_color() -> String { "#ccccd8".to_string() }
 fn default_window_opacity() -> bool { true }
 
@@ -483,7 +483,7 @@ pub fn parse_tiling_mode(s: &str) -> TilingMode {
         "grid" => TilingMode::Grid,
         "fullscreen" => TilingMode::Fullscreen,
         "popup" => TilingMode::Popup,
-        "sidepanel" | "side_panel" | "side-panel" | "pinned" => TilingMode::Pinned,
+        "sidepanel" | "side_panel" | "side-panel" | "pinned" | "overlay" => TilingMode::Overlay,
         "status" => TilingMode::Status,
         "maximized" => TilingMode::Maximized,
         _ => TilingMode::Cascade,
@@ -588,10 +588,10 @@ pub fn parse_action(s: &str) -> Action {
         Action::None
     } else if s == "expose" {
         Action::Expose
-    } else if s == "side-panel-left" || s == "pinned-left" {
-        Action::PinnedLeft
-    } else if s == "side-panel-right" || s == "pinned-right" {
-        Action::PinnedRight
+    } else if s == "side-panel-left" || s == "pinned-left" || s == "overlay-left" {
+        Action::OverlayLeft
+    } else if s == "side-panel-right" || s == "pinned-right" || s == "overlay-right" {
+        Action::OverlayRight
     } else if s == "zoom-in" {
         Action::ZoomIn
     } else if s == "zoom-out" {
@@ -750,10 +750,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.grid_gap = config.layout.grid_gap as i32;
     state.layout.border_blur = config.layout.border_blur;
     state.layout.window_blur = config.layout.window_blur;
-    state.layout.pinned_behavior = config.layout.pinned_behavior;
-    state.layout.pinned_width = config.layout.pinned_width as i32;
-    state.layout.pinned_position = config.layout.pinned_position;
-    state.layout.pinned_border_gap = config.layout.pinned_border_gap as i32;
+    state.layout.overlay_behavior = config.layout.overlay_behavior;
+    state.layout.overlay_width = config.layout.overlay_width as i32;
+    state.layout.overlay_position = config.layout.overlay_position;
+    state.layout.overlay_border_gap = config.layout.overlay_border_gap as i32;
     state.layout.status_normal_color = config.layout.status_normal_color.clone();
     state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
     state.layout.window_opacity = config.layout.window_opacity;
@@ -795,7 +795,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         state.keybinds.push(Keybind {
             mods: super_mod,
             keysym: left_sym,
-            action: Action::PinnedLeft,
+            action: Action::OverlayLeft,
             command: None,
         });
     }
@@ -803,7 +803,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         state.keybinds.push(Keybind {
             mods: super_mod,
             keysym: right_sym,
-            action: Action::PinnedRight,
+            action: Action::OverlayRight,
             command: None,
         });
     }
