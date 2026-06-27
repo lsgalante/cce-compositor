@@ -1371,29 +1371,39 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             }
             if let Some(app_id) = (*win_ptr).get_app_id_string() {
                 if app_id == "cce-status-interface" {
-                    let link = &(*win_ptr).node.link;
-                    if !link.prev.is_null() && !link.next.is_null() {
-                        status_bar_windows.push(win_ptr);
-                    }
+                    status_bar_windows.push(win_ptr);
                 }
             }
         }
         for win_ptr in status_bar_windows {
             let node_link = &mut (*win_ptr).node.link as *mut ffi::wl_list as *mut WlList;
             let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-            if (*node_link).next != list_head {
-                crate::server::wl_list_remove(node_link);
-                crate::server::wl_list_insert((*list_head).prev, node_link);
+            if !node_link.is_null() && !list_head.is_null() && (*node_link).next != list_head {
+                if !(*node_link).prev.is_null() && !(*node_link).next.is_null() {
+                    crate::server::wl_list_remove(node_link);
+                }
+                let prev_node = (*list_head).prev;
+                if !prev_node.is_null() && (*prev_node).next == list_head {
+                    crate::server::wl_list_insert(prev_node, node_link);
+                }
             }
         }
     }
 
     pub unsafe fn raise_window(&mut self, window: *mut Window) {
+        if window.is_null() {
+            return;
+        }
         let node_link = &mut (*window).node.link as *mut ffi::wl_list as *mut WlList;
         let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-        if (*node_link).next != list_head {
-            crate::server::wl_list_remove(node_link);
-            crate::server::wl_list_insert((*list_head).prev, node_link);
+        if !node_link.is_null() && !list_head.is_null() && (*node_link).next != list_head {
+            if !(*node_link).prev.is_null() && !(*node_link).next.is_null() {
+                crate::server::wl_list_remove(node_link);
+            }
+            let prev_node = (*list_head).prev;
+            if !prev_node.is_null() && (*prev_node).next == list_head {
+                crate::server::wl_list_insert(prev_node, node_link);
+            }
         }
         self.keep_status_bar_on_top();
     }
