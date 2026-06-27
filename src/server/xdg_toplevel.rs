@@ -792,6 +792,20 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
         _ => ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_NO_PREFERENCE,
     };
     (*window).set_decoration_hint(hint);
+
+    if ffi::river_wlr_xdg_surface_get_initialized(base) {
+        let scheduled_ssd = (*window).configure_scheduled.ssd;
+        let mode = if scheduled_ssd {
+            if (*(*decoration).wlr_decoration).requested_mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE {
+                ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE
+            } else {
+                ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE
+            }
+        } else {
+            ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE
+        };
+        ffi::wlr_xdg_toplevel_decoration_v1_set_mode((*decoration).wlr_decoration, mode);
+    }
 }
 
 impl XdgDecoration {

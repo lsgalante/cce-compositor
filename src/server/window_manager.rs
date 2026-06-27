@@ -366,12 +366,35 @@ impl WindowManager {
     pub unsafe fn spawn_restored_windows(&mut self) {
         log::info!("Spawning restored windows. Total: {}", self.restore_queue.len());
         let restored = self.restore_queue.clone();
-        for w in restored {
-            if !w.cmdline.is_empty() {
-                log::info!("Spawning restored window command: {}", w.cmdline);
-                self.execute_action(&crate::config::Action::Spawn, Some(&w.cmdline));
+        std::thread::spawn(move || {
+            for (i, w) in restored.into_iter().enumerate() {
+                if !w.cmdline.is_empty() {
+                    let delay = 1000 + i as u64 * 500;
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    log::info!("Deferred spawning restored window command: {}", w.cmdline);
+                    let cmd = w.cmdline;
+                    match nix::unistd::fork() {
+                        Ok(nix::unistd::ForkResult::Child) => {
+                            crate::process::cleanup_child();
+                            let env: Vec<std::ffi::CString> = std::env::vars()
+                                .map(|(k, v)| std::ffi::CString::new(format!("{}={}", k, v)).unwrap())
+                                .collect();
+                            let env_ptrs: Vec<&std::ffi::CStr> = env.iter().map(|s| s.as_c_str()).collect();
+                            let sh_c = std::ffi::CString::new("/bin/sh").unwrap();
+                            let c_c = std::ffi::CString::new("-c").unwrap();
+                            let cmd_c = std::ffi::CString::new(cmd).unwrap();
+                            let args = [sh_c.as_c_str(), c_c.as_c_str(), cmd_c.as_c_str()];
+                            let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
+                            std::process::exit(1);
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::error!("failed to fork child process: {}", e);
+                        }
+                    }
+                }
             }
-        }
+        });
     }
 
     pub fn start_ipc(&mut self, display_socket: Option<String>) {
@@ -2097,7 +2120,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         let app_id = (*w).get_app_id_string().unwrap_or_default();
                         let title = (*w).get_title_string().unwrap_or_default();
                         out.push_str(&format!(
-                            "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} minimized={} has_parent={} focused={}\n",
+                            "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} minimized={} has_parent={} focused={} ssd={}\n",
                             (*w).ref_key.index,
                             app_id,
                             title,
@@ -2111,6 +2134,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                             (*w).minimized,
                             (*w).has_parent,
                             w == focused_window,
+                            (*w).wm_requested.ssd,
                         ));
                     }
                 }
