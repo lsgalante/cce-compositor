@@ -267,11 +267,33 @@ impl WindowManager {
             
             let pid = (*w).unreliable_pid();
             let mut cmdline = if pid > 0 {
-                std::fs::read_to_string(format!("/proc/{}/cmdline", pid))
-                    .unwrap_or_default()
-                    .replace('\0', " ")
-                    .trim()
-                    .to_string()
+                let proc_cmdline = std::fs::read(format!("/proc/{}/cmdline", pid)).unwrap_or_default();
+                if !proc_cmdline.is_empty() {
+                    let mut args: Vec<String> = proc_cmdline
+                        .split(|&b| b == 0)
+                        .map(|arg| String::from_utf8_lossy(arg).into_owned())
+                        .collect();
+                    if args.last().map_or(false, |s| s.is_empty()) {
+                        args.pop();
+                    }
+                    if !args.is_empty() && args[0].starts_with("/tmp/.mount_") {
+                        if let Ok(environ_bytes) = std::fs::read(format!("/proc/{}/environ", pid)) {
+                            let appimage_opt = environ_bytes
+                                .split(|&b| b == 0)
+                                .find(|env_var| env_var.starts_with(b"APPIMAGE="))
+                                .map(|env_var| {
+                                    let val_bytes = &env_var[b"APPIMAGE=".len()..];
+                                    String::from_utf8_lossy(val_bytes).into_owned()
+                                });
+                            if let Some(appimage_path) = appimage_opt {
+                                args[0] = appimage_path;
+                            }
+                        }
+                    }
+                    args.join(" ")
+                } else {
+                    String::new()
+                }
             } else {
                 String::new()
             };
@@ -552,8 +574,10 @@ impl WindowManager {
             match (*node).get() {
                 crate::wm_node::WmNodeType::Window(window) => {
                     if (*window).manage_finish() {
-                        if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
-                            *count += 1;
+                        if !(*window).wm_requested.resizing {
+                            if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
+                                *count += 1;
+                            }
                         }
                     }
                 }
