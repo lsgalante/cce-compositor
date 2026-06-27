@@ -1749,7 +1749,8 @@ impl Window {
         ffi::wlr_scene_rect_set_color(self.window_background, bg_color.as_ptr());
         ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden && self.wm_requested.ssd);
 
-        if requested.circular || requested.border.width == 0 || !self.wm_requested.ssd {
+        let is_virtual_border = !self.wm_requested.ssd || requested.border.width == 0;
+        if requested.circular {
             ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);
@@ -1767,54 +1768,64 @@ impl Window {
         let clip_empty = requested.content_clip.width == 0 && requested.content_clip.height == 0;
         if clip_empty || ffi::wlr_box_intersection(&mut intersect, &content, &requested.content_clip) {
             let border = &requested.border;
-            let color: [f32; 4] = [
-                (border.r as f64 / u32::MAX as f64) as f32,
-                (border.g as f64 / u32::MAX as f64) as f32,
-                (border.b as f64 / u32::MAX as f64) as f32,
-                (border.a as f64 / u32::MAX as f64) as f32,
-            ];
+            let border_width = if is_virtual_border { 8 } else { border.width };
+            let color: [f32; 4] = if is_virtual_border {
+                [0.0, 0.0, 0.0, 0.0]
+            } else {
+                [
+                    (border.r as f64 / u32::MAX as f64) as f32,
+                    (border.g as f64 / u32::MAX as f64) as f32,
+                    (border.b as f64 / u32::MAX as f64) as f32,
+                    (border.a as f64 / u32::MAX as f64) as f32,
+                ]
+            };
 
             let mut left = ffi::wlr_box {
-                x: -(border.width as i32),
+                x: -(border_width as i32),
                 y: 0,
-                width: border.width as i32,
+                width: border_width as i32,
                 height: content.height,
             };
             let mut right = ffi::wlr_box {
                 x: content.width,
                 y: 0,
-                width: border.width as i32,
+                width: border_width as i32,
                 height: content.height,
             };
             let mut top = ffi::wlr_box {
                 x: 0,
-                y: -(border.width as i32),
+                y: -(border_width as i32),
                 width: content.width,
-                height: border.width as i32,
+                height: border_width as i32,
             };
             let mut bottom = ffi::wlr_box {
                 x: 0,
                 y: content.height,
                 width: content.width,
-                height: border.width as i32,
+                height: border_width as i32,
             };
 
-            if border.edges.top {
-                left.y -= border.width as i32;
-                left.height += border.width as i32;
-                right.y -= border.width as i32;
-                right.height += border.width as i32;
+            let edge_left = if is_virtual_border { true } else { border.edges.left };
+            let edge_right = if is_virtual_border { true } else { border.edges.right };
+            let edge_top = if is_virtual_border { true } else { border.edges.top };
+            let edge_bottom = if is_virtual_border { true } else { border.edges.bottom };
+
+            if edge_top {
+                left.y -= border_width as i32;
+                left.height += border_width as i32;
+                right.y -= border_width as i32;
+                right.height += border_width as i32;
             }
-            if border.edges.bottom {
-                left.height += border.width as i32;
-                right.height += border.width as i32;
+            if edge_bottom {
+                left.height += border_width as i32;
+                right.height += border_width as i32;
             }
 
             let mut edges = [
-                ("left", &mut left, self.border.left, border.edges.left),
-                ("right", &mut right, self.border.right, border.edges.right),
-                ("top", &mut top, self.border.top, border.edges.top),
-                ("bottom", &mut bottom, self.border.bottom, border.edges.bottom),
+                ("left", &mut left, self.border.left, edge_left),
+                ("right", &mut right, self.border.right, edge_right),
+                ("top", &mut top, self.border.top, edge_top),
+                ("bottom", &mut bottom, self.border.bottom, edge_bottom),
             ];
 
             for (_, edge_box, rect, enabled) in &mut edges {

@@ -1698,7 +1698,16 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
         return BorderZone::None;
     }
     
-    let bw = (*window).rendering_requested.border.width as f64;
+    if (*window).rendering_requested.circular {
+        return BorderZone::None;
+    }
+
+    let is_virtual_border = !(*window).wm_requested.ssd || (*window).rendering_requested.border.width == 0;
+    let bw = if is_virtual_border {
+        8.0
+    } else {
+        (*window).rendering_requested.border.width as f64
+    };
     if bw <= 0.0 {
         return BorderZone::None;
     }
