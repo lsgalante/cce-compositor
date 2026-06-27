@@ -1007,7 +1007,7 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
                     wm.desk_pan_x += (cx - phys_x) * (1.0 / old_zoom - 1.0 / new_zoom);
                     wm.desk_pan_y += (cy - phys_y) * (1.0 / old_zoom - 1.0 / new_zoom);
                     wm.desk_zoom = new_zoom;
-                    wm.mode = if new_zoom < 0.999 { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal };
+                    wm.mode = if (new_zoom - 1.0).abs() > 0.001 { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal };
                     wm.dirty_windowing();
                 }
             }
@@ -1368,6 +1368,47 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
 
     let seat = &mut *cursor.seat;
     seat.handle_activity();
+
+    if (*event).fingers == 3 {
+        let wm = &mut (*seat.server).wm;
+        wm.stop_panning_animation();
+        
+        let dy = (*event).dy;
+        let zoom_factor = 1.005_f64.powf(-dy);
+        let old_zoom = wm.desk_zoom;
+        let new_zoom = (old_zoom * zoom_factor).clamp(0.1, 10.0);
+        
+        if new_zoom != old_zoom {
+            let cx = cursor.x();
+            let cy = cursor.y();
+            let wlr_output = (*(*seat).server).om.output_at(cx, cy);
+            let (phys_x, phys_y) = if !wlr_output.is_null() {
+                let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+                ffi::wlr_output_layout_get_box((*(*seat).server).om.output_layout, wlr_output, &mut output_box);
+                (output_box.x as f64, output_box.y as f64)
+            } else {
+                (0.0, 0.0)
+            };
+            wm.desk_pan_x += (cx - phys_x) * (1.0 / old_zoom - 1.0 / new_zoom);
+            wm.desk_pan_y += (cy - phys_y) * (1.0 / old_zoom - 1.0 / new_zoom);
+            wm.desk_zoom = new_zoom;
+            wm.mode = if (new_zoom - 1.0).abs() > 0.001 { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal };
+            wm.dirty_windowing();
+        }
+        
+        let server = seat.server;
+        let pointer_gestures = (*server).input_manager.pointer_gestures;
+        if !pointer_gestures.is_null() {
+            ffi::wlr_pointer_gestures_v1_send_swipe_update(
+                pointer_gestures,
+                seat.wlr_seat,
+                (*event).time_msec,
+                (*event).dx,
+                (*event).dy,
+            );
+        }
+        return;
+    }
 
     if cursor.gesture_triggered {
         return;

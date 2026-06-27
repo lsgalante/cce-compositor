@@ -224,7 +224,7 @@ impl WindowManager {
                 self.desk_pan_x = state.desk_pan_x;
                 self.desk_pan_y = state.desk_pan_y;
                 self.desk_zoom = state.desk_zoom;
-                self.mode = if state.desk_zoom < 0.999 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
+                self.mode = if (state.desk_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
                 self.global_layout = state.global_layout;
                 self.restore_queue = state.windows;
                 self.has_restored_focused_window = self.restore_queue.iter().any(|w| w.focused);
@@ -688,6 +688,9 @@ impl WindowManager {
                                 ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.fullscreen);
                                 ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                                 found_fullscreen = true;
+                            } else if (*window).tiling_mode == crate::tiling::TilingMode::Popup {
+                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.popups);
+                                ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                             } else if (*window).rendering_requested.circular {
                                 ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.top);
                                 ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
@@ -1657,7 +1660,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 self.desk_pan_x = cx - (viewport_w / 2.0) / new_zoom;
                 self.desk_pan_y = cy - (viewport_h / 2.0) / new_zoom;
                 self.desk_zoom = new_zoom;
-                self.mode = if new_zoom < 0.999 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
+                self.mode = if (new_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
                 self.dirty_windowing();
             }
             Action::PanLeft | Action::PanRight | Action::PanUp | Action::PanDown => {
@@ -1898,7 +1901,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     self.desk_pan_x = cx - (viewport_w / 2.0) / new_zoom;
                     self.desk_pan_y = cy - (viewport_h / 2.0) / new_zoom;
                     self.desk_zoom = new_zoom;
-                    self.mode = if new_zoom < 0.999 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
+                    self.mode = if (new_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
                     self.dirty_windowing();
                     return "ok\n".to_string();
                 }
