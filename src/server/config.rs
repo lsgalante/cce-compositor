@@ -55,11 +55,11 @@ impl Default for Layout {
             gap_bottom: 48,
             cascade_offset: 20,
             bar_height: 24,
-            border_width: 6,
+            border_width: 0,
             fullscreen_border_width: 0,
-            cascade_border_width: 6,
-            grid_border_width: 6,
-            floating_border_width: 6,
+            cascade_border_width: 0,
+            grid_border_width: 0,
+            floating_border_width: 0,
             border_r: 0x3E3E3E3Eu32,
             border_g: 0x3E3E3E3Eu32,
             border_b: 0x3E3E3E3Eu32,
@@ -393,11 +393,11 @@ fn default_gap_right() -> i64 { 48 }
 fn default_gap_bottom() -> i64 { 48 }
 fn default_cascade_offset() -> i64 { 20 }
 fn default_bar_height() -> i64 { 24 }
-fn default_border_width() -> i64 { 6 }
+fn default_border_width() -> i64 { 0 }
 fn default_fullscreen_border_width() -> i64 { 0 }
-fn default_cascade_border_width() -> i64 { 6 }
-fn default_grid_border_width() -> i64 { 6 }
-fn default_floating_border_width() -> i64 { 6 }
+fn default_cascade_border_width() -> i64 { 0 }
+fn default_grid_border_width() -> i64 { 0 }
+fn default_floating_border_width() -> i64 { 0 }
 fn default_border_color() -> String { "#3e3e3e".to_string() }
 fn default_background_color() -> String { "#0a0a0a".to_string() }
 fn default_border_font_size() -> i64 { 11 }

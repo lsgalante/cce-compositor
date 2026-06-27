@@ -261,28 +261,7 @@ pub struct Window {
 
 impl Window {
     pub unsafe fn is_wine(&self) -> bool {
-        match self.impl_type {
-            WindowImpl::Xwayland(xwindow) => {
-                if xwindow.is_null() {
-                    return false;
-                }
-                let class_ptr = (*(*xwindow).xsurface).class;
-                let class = if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") };
-                let title_ptr = (*(*xwindow).xsurface).title;
-                let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
-                
-                let class_lower = class.to_lowercase();
-                let title_lower = title.to_lowercase();
-                class_lower.contains("steam_proton")
-                    || class_lower.contains("steam_app")
-                    || class_lower.contains("wine")
-                    || class_lower.contains("upc.exe")
-                    || class_lower.contains("trackmania")
-                    || title_lower.contains("ubisoft")
-                    || title_lower.contains("trackmania")
-            }
-            _ => false,
-        }
+        false
     }
 
     pub unsafe fn is_fullscreen(&self) -> bool {
@@ -1781,7 +1760,7 @@ impl Window {
         ffi::wlr_scene_rect_set_color(self.window_background, bg_color.as_ptr());
         ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden && self.wm_requested.ssd);
 
-        let is_virtual_border = !self.wm_requested.ssd || requested.border.width == 0;
+        let is_virtual_border = true;
         if requested.circular {
             ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);

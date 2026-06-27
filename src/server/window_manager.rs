@@ -1048,7 +1048,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 }
             }
 
-            let bw = self.layout.border_width;
+            let bw = 0;
 
             let g = self.layout.overlay_border_gap;
             let dec_h = std::cmp::max(bw, 16);
