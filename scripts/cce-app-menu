@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# cce-app-menu — Context menu for CCE application windows
+
+CLEARCTL="/home/lsgalante/.local/bin/cce control"
+CLEAR_CLOUD="/home/lsgalante/.local/bin/clear-cloud"
+
+# Default to empty/none
+x_arg=""
+y_arg=""
+window_index=""
+app_id=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -x|--x-pos)
+            x_arg="-x $2"
+            shift 2
+            ;;
+        -y|--y-pos)
+            y_arg="-y $2"
+            shift 2
+            ;;
+        -i|--window-id)
+            window_index="$2"
+            shift 2
+            ;;
+        -a|--app-id)
+            app_id="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$window_index" || -z "$app_id" ]]; then
+    echo "Usage: cce-app-menu -i <window_index> -a <app_id> [-x <x>] [-y <y>]" >&2
+    exit 1
+fi
+
+# Define the JSON layout for the application context menu
+json_layout='{
+  "pages": [
+    {
+      "title": "'"${app_id}"' Window Options",
+      "justify": "left",
+      "widgets": [
+        { "type": "button", "text": "Maximize", "id": "maximize" },
+        { "type": "button", "text": "Tile (Grid)", "id": "tile_grid" },
+        { "type": "button", "text": "Float", "id": "float" },
+        { "type": "button", "text": "Fullscreen", "id": "fullscreen" },
+        { "type": "button", "text": "Minimize", "id": "minimize" },
+        { "type": "button", "text": "Close Window", "id": "close" }
+      ]
+    }
+  ]
+}'
+
+# Spawn clear-cloud with the json layout and coordinates
+selected=$(echo "$json_layout" | $CLEAR_CLOUD --json $x_arg $y_arg 2>/dev/null)
+
+[[ -z "$selected" ]] && exit 0
+
+# Parse button using python for reliability and robustness
+btn=$(echo "$selected" | python3 -c "import sys, json; print(json.load(sys.stdin).get('button', ''))")
+
+[[ -z "$btn" ]] && exit 0
+
+# First focus the window so the commands apply to it
+$CLEARCTL focus-window "$window_index"
+
+case "$btn" in
+    "maximize")
+        $CLEARCTL mode maximized "$app_id"
+        ;;
+    "tile_grid")
+        $CLEARCTL mode grid "$app_id"
+        ;;
+    "float")
+        $CLEARCTL mode floating "$app_id"
+        ;;
+    "fullscreen")
+        $CLEARCTL mode fullscreen "$app_id"
+        ;;
+    "minimize")
+        $CLEARCTL minimize
+        ;;
+    "close")
+        $CLEARCTL close
+        ;;
+esac

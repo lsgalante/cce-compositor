@@ -49,6 +49,8 @@ pub struct Cursor {
     pub panning_gesture_active: bool,
     pub last_click_time: u32,
     pub last_click_window: *mut crate::window::Window,
+    pub right_click_on_bg: bool,
+    pub right_click_on_border: bool,
 }
 
 impl Default for Cursor {
@@ -95,6 +97,8 @@ impl Default for Cursor {
             panning_gesture_active: false,
             last_click_time: 0,
             last_click_window: std::ptr::null_mut(),
+            right_click_on_bg: false,
+            right_click_on_border: false,
         }
     }
 }
@@ -663,6 +667,30 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         } else {
             0
         };
+
+        if (*event).button == 0x111 && modifiers == 0 {
+            let mut clicked_interactive = false;
+            if let Some(result) = (*server).scene.at(lx, ly) {
+                match result.data {
+                    SceneNodeDataVal::Window(_) | SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                        clicked_interactive = true;
+                    }
+                }
+            }
+            if !clicked_interactive {
+                cursor.right_click_on_bg = true;
+                let x = cursor.x() as i32;
+                let y = cursor.y() as i32;
+                let cmd = format!("/home/lsgalante/.local/bin/cce-desktop-menu -x {} -y {}", x, y);
+                (*server).wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
+
+                seat.focus(Focus::None);
+                (*(*seat).server).wm.dirty_windowing();
+
+                cursor.pressed.insert((*event).button, None);
+                return;
+            }
+        }
         
         let mut matched_pb: Option<crate::config::PointerBind> = None;
         for pb in &(*(*seat).server).wm.pointer_binds {
@@ -774,7 +802,21 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             && (*border_target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
         ) {
             let initial_mode = (*border_target_win).tiling_mode;
-            match get_border_zone(border_target_win, lx, ly) {
+            let zone = get_border_zone(border_target_win, lx, ly);
+            if (*event).button == 0x111 && modifiers == 0 && !matches!(zone, BorderZone::None) {
+                cursor.right_click_on_border = true;
+                let x = cursor.x() as i32;
+                let y = cursor.y() as i32;
+                let index = (*border_target_win).ref_key.index;
+                let app_id = (*border_target_win).get_app_id_string().unwrap_or_else(|| "unknown".to_string());
+                let cmd = format!("/home/lsgalante/.local/bin/cce-app-menu -x {} -y {} -i {} -a {}", x, y, index, app_id);
+                (*server).wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
+
+                cursor.pressed.insert((*event).button, None);
+                return;
+            }
+
+            match zone {
                 BorderZone::Resize(edges) => {
                     if (*event).button == 0x110 { // BTN_LEFT
                         if initial_mode != crate::tiling::TilingMode::Floating {
@@ -1025,6 +1067,16 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         if let Some(binding_opt) = cursor.pressed.remove(&(*event).button) {
             if let Some(binding) = binding_opt {
                 (*binding).released();
+                if cursor.pressed.is_empty() && seat.op.is_some() {
+                    seat.op_release = true;
+                    (*(*seat).server).wm.dirty_windowing();
+                }
+                return;
+            }
+
+            if (*event).button == 0x111 && (cursor.right_click_on_bg || cursor.right_click_on_border) {
+                cursor.right_click_on_bg = false;
+                cursor.right_click_on_border = false;
                 if cursor.pressed.is_empty() && seat.op.is_some() {
                     seat.op_release = true;
                     (*(*seat).server).wm.dirty_windowing();

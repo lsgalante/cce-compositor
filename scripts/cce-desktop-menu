@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# cce-desktop-menu — Context menu for CCE desktop background
+
+CLEARCTL="/home/lsgalante/.local/bin/cce control"
+CLEAR_CLOUD="/home/lsgalante/.local/bin/clear-cloud"
+
+# Default to empty coordinates if not provided
+x_arg=""
+y_arg=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -x|--x-pos)
+            x_arg="-x $2"
+            shift 2
+            ;;
+        -y|--y-pos)
+            y_arg="-y $2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# Define the JSON layout for the desktop context menu
+json_layout='{
+  "pages": [
+    {
+      "title": "Desktop Context Menu",
+      "justify": "left",
+      "widgets": [
+        { "type": "button", "text": "Terminal", "id": "terminal" },
+        { "type": "button", "text": "Applications", "id": "apps" },
+        { "type": "button", "text": "System Settings", "id": "settings" },
+        { "type": "button", "text": "Expose Windows", "id": "expose" },
+        { "type": "button", "text": "Reload Config", "id": "reload" },
+        { "type": "button", "text": "Exit CCE", "id": "exit" }
+      ]
+    }
+  ]
+}'
+
+# Spawn clear-cloud with the json layout and coordinates
+selected=$(echo "$json_layout" | $CLEAR_CLOUD --json $x_arg $y_arg 2>/dev/null)
+
+[[ -z "$selected" ]] && exit 0
+
+# Parse button using python for reliability and robustness
+btn=$(echo "$selected" | python3 -c "import sys, json; print(json.load(sys.stdin).get('button', ''))")
+
+case "$btn" in
+    "terminal")
+        # Run terminal
+        foot &
+        ;;
+    "apps")
+        # Run applications search/list
+        $CLEAR_CLOUD --mode apps &
+        ;;
+    "settings")
+        # Run settings interface
+        /home/lsgalante/.local/bin/cce-system-settings &
+        ;;
+    "expose")
+        $CLEARCTL expose
+        ;;
+    "reload")
+        $CLEARCTL reload
+        ;;
+    "exit")
+        $CLEARCTL exit
+        ;;
+esac

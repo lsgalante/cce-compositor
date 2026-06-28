@@ -364,12 +364,19 @@ impl Output {
             return Err("Failed to create wlr_scene_output");
         }
 
+        let name_raw = ffi::river_wlr_output_get_name(wlr_output);
+        let name = std::ffi::CStr::from_ptr(name_raw).to_string_lossy();
+        let scale_key = format!("scale_{}", name);
+        let output_scale = (*server).wm.display.get(&scale_key)
+            .map(|&s| s as f32)
+            .unwrap_or((*server).wm.output_scale);
+
         let initial = OutputState {
             state: OutputStateValue::DisabledHard,
             x: 0,
             y: 0,
             mode: OutputMode::None,
-            scale: (*server).wm.output_scale,
+            scale: output_scale,
             transform: ffi::wl_output_transform_WL_OUTPUT_TRANSFORM_NORMAL,
             adaptive_sync: ffi::river_wlr_output_get_adaptive_sync_status(wlr_output) == ffi::wlr_output_adaptive_sync_status_WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED,
             auto_layout: true,
@@ -535,13 +542,17 @@ impl Output {
         let (viewport_w, viewport_h) = self.current.dimensions();
         let zoom = wm.desk_zoom;
 
-        // Dynamic spacing based on zoom to avoid rendering too many lines (LOD)
-        let mut grid_spacing = wm.layout.desktop_grid_scale;
-        while grid_spacing * zoom < 40.0 {
-            grid_spacing *= 2.0;
+        // LOD calculations for cells and gaps
+        let mut cell_size = wm.layout.desktop_grid_scale.max(5.0);
+        let mut gap_size = (wm.layout.desktop_line_width as f64).max(0.0);
+        let mut period = cell_size + gap_size;
+
+        while period * zoom < 40.0 {
+            cell_size *= 2.0;
+            gap_size *= 2.0;
+            period = cell_size + gap_size;
         }
 
-        let line_width = wm.layout.desktop_line_width;
         let grid_color: [f32; 4] = wm.layout.desktop_grid_color;
 
         // Check if cached grid parameters match current parameters
@@ -550,8 +561,8 @@ impl Output {
             && self.last_grid_zoom == zoom
             && self.last_grid_pan_x == wm.desk_pan_x
             && self.last_grid_pan_y == wm.desk_pan_y
-            && self.last_grid_spacing == grid_spacing
-            && self.last_grid_line_width == line_width
+            && self.last_grid_spacing == cell_size
+            && self.last_grid_line_width == gap_size as i32
             && self.last_grid_color == grid_color
         {
             return;
@@ -563,11 +574,11 @@ impl Output {
         self.last_grid_zoom = zoom;
         self.last_grid_pan_x = wm.desk_pan_x;
         self.last_grid_pan_y = wm.desk_pan_y;
-        self.last_grid_spacing = grid_spacing;
-        self.last_grid_line_width = line_width;
+        self.last_grid_spacing = cell_size;
+        self.last_grid_line_width = gap_size as i32;
         self.last_grid_color = grid_color;
 
-        // Clear previous grid lines
+        // Clear previous grid rendering
         ffi::river_scene_tree_clear_children(self.grid_tree);
 
         let min_x = wm.desk_pan_x;
@@ -575,44 +586,41 @@ impl Output {
         let min_y = wm.desk_pan_y;
         let max_y = wm.desk_pan_y + (viewport_h as f64) / zoom;
 
-        // Draw vertical lines
-        let mut x_val = (min_x / grid_spacing).ceil() * grid_spacing;
-        while x_val <= max_x {
-            let rel_x = ((x_val - wm.desk_pan_x) * zoom) as i32;
-            let line_rect = ffi::wlr_scene_rect_create(
-                self.grid_tree,
-                line_width, // width of line
-                viewport_h,
-                grid_color.as_ptr(),
-            );
-            if !line_rect.is_null() {
-                ffi::wlr_scene_node_set_position(
-                    line_rect as *mut ffi::wlr_scene_node,
-                    rel_x,
-                    0,
-                );
-            }
-            x_val += grid_spacing;
-        }
+        let min_col = ((min_x - cell_size) / period).floor() as i32;
+        let max_col = (max_x / period).ceil() as i32;
+        let min_row = ((min_y - cell_size) / period).floor() as i32;
+        let max_row = (max_y / period).ceil() as i32;
 
-        // Draw horizontal lines
-        let mut y_val = (min_y / grid_spacing).ceil() * grid_spacing;
-        while y_val <= max_y {
-            let rel_y = ((y_val - wm.desk_pan_y) * zoom) as i32;
-            let line_rect = ffi::wlr_scene_rect_create(
-                self.grid_tree,
-                viewport_w,
-                line_width, // height of line
-                grid_color.as_ptr(),
-            );
-            if !line_rect.is_null() {
-                ffi::wlr_scene_node_set_position(
-                    line_rect as *mut ffi::wlr_scene_node,
-                    0,
-                    rel_y,
-                );
+        for col in min_col..=max_col {
+            let vx = (col as f64) * period;
+            let rel_x = ((vx - wm.desk_pan_x) * zoom) as i32;
+            let rw = (cell_size * zoom) as i32;
+            if rw <= 0 {
+                continue;
             }
-            y_val += grid_spacing;
+
+            for row in min_row..=max_row {
+                let vy = (row as f64) * period;
+                let rel_y = ((vy - wm.desk_pan_y) * zoom) as i32;
+                let rh = (cell_size * zoom) as i32;
+                if rh <= 0 {
+                    continue;
+                }
+
+                let cell_rect = ffi::wlr_scene_rect_create(
+                    self.grid_tree,
+                    rw,
+                    rh,
+                    grid_color.as_ptr(),
+                );
+                if !cell_rect.is_null() {
+                    ffi::wlr_scene_node_set_position(
+                        cell_rect as *mut ffi::wlr_scene_node,
+                        rel_x,
+                        rel_y,
+                    );
+                }
+            }
         }
     }
 }

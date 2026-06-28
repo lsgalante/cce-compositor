@@ -289,6 +289,8 @@ pub struct Config {
     #[serde(default)]
     pub output: Option<OutputConfig>,
     #[serde(default)]
+    pub display: HashMap<String, f64>,
+    #[serde(default)]
     pub device: Vec<InputDeviceConfigRule>,
     #[serde(default)]
     pub input: Option<InputConfig>,
@@ -712,6 +714,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     };
 
     state.output_scale = config.output.as_ref().map(|o| o.scale as f32).unwrap_or(1.0f32);
+    state.display = config.display.clone();
 
     state.layout.gap = config.layout.gap as i32;
     state.layout.gap_top = config.layout.gap_top as i32;
@@ -988,5 +991,18 @@ mod tests {
             assert_eq!(server.wm.layout.background_g, g * 0x01010101);
             assert_eq!(server.wm.layout.background_b, b * 0x01010101);
         }
+    }
+
+    #[test]
+    fn test_display_scale_parsing() {
+        let content = r#"{
+            "display": {
+                "scale_eDP-1": 2.0,
+                "scale_DP-1": 1.5
+            }
+        }"#;
+        let config: Config = serde_json::from_str(content).unwrap();
+        assert_eq!(config.display.get("scale_eDP-1"), Some(&2.0));
+        assert_eq!(config.display.get("scale_DP-1"), Some(&1.5));
     }
 }

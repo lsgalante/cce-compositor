@@ -102,6 +102,7 @@ pub struct WindowManager {
     pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
     pub status_sender: Option<crate::status_server::StatusSender>,
     pub output_scale: f32,
+    pub display: std::collections::HashMap<String, f64>,
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
     pub input_config: crate::config::InputConfig,
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
@@ -122,6 +123,7 @@ impl WindowManager {
         self.scheduled.output_config = std::ptr::null_mut();
         self.sent.output_config = std::ptr::null_mut();
         self.output_scale = 1.0;
+        self.display = std::collections::HashMap::new();
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
         self.mode = WindowManagerMode::Normal;
@@ -166,6 +168,7 @@ impl WindowManager {
         self.shutting_down = false;
         self.layout = crate::config::Layout::default();
         self.output_scale = 1.0;
+        self.display = std::collections::HashMap::new();
         self.has_restored_focused_window = false;
         self.restored_focused_window_mapped = false;
         self.mode_rules = Vec::new();
@@ -2487,6 +2490,26 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let old_pids = std::mem::take(&mut self.startup_pids);
             match crate::config::parse_config(&path, self) {
                 Ok(()) => {
+                    // Update scales of existing outputs from the newly loaded config
+                    let om_outputs = &mut (*self.server).om.outputs as *mut ffi::wl_list;
+                    let mut link = (*om_outputs).next;
+                    while link != om_outputs {
+                        let output = &mut *crate::container_of!(link, crate::output::Output, link);
+                        let wlr_output = output.wlr_output;
+                        if !wlr_output.is_null() {
+                            let name_raw = ffi::river_wlr_output_get_name(wlr_output);
+                            let name = std::ffi::CStr::from_ptr(name_raw).to_string_lossy();
+                            let scale_key = format!("scale_{}", name);
+                            let output_scale = self.display.get(&scale_key)
+                                .map(|&s| s as f32)
+                                .unwrap_or(self.output_scale);
+                            if output.scheduled.scale != output_scale {
+                                output.scheduled.scale = output_scale;
+                            }
+                        }
+                        link = (*link).next;
+                    }
+
                     self.dirty_windowing();
 
                     // Process old PIDs

@@ -305,6 +305,11 @@ impl OutputManager {
                 break;
             }
 
+            if output.sent.scale != output.current.scale {
+                need_modeset = true;
+                break;
+            }
+
             let wlr_adaptive = ffi::river_wlr_output_get_adaptive_sync_status(wlr_output)
                 == ffi::wlr_output_adaptive_sync_status_WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED;
             if output.sent.adaptive_sync != wlr_adaptive {
