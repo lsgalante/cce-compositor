@@ -803,6 +803,11 @@ impl Window {
                     (*(*window).server).wm.focus_next_visible_window(seat);
                 }
             }
+            if let Some(ref op) = (*seat).op {
+                if op.window_ptr == window {
+                    (*seat).op = None;
+                }
+            }
             curr = next;
         }
 

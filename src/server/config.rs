@@ -941,47 +941,30 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         layout.gap_bottom = get_child_arg_i64(node, "gap_bottom", default_gap_bottom());
         layout.cascade_offset = get_child_arg_i64(node, "cascade_offset", default_cascade_offset());
         layout.bar_height = get_child_arg_i64(node, "bar_height", default_bar_height());
-        layout.border_width = get_child_arg_i64(node, "border_width", default_border_width());
-        layout.fullscreen_border_width = get_child_arg_i64(node, "fullscreen_border_width", default_fullscreen_border_width());
-        layout.cascade_border_width = get_child_arg_i64(node, "cascade_border_width", default_cascade_border_width());
-        layout.grid_border_width = get_child_arg_i64(node, "grid_border_width", default_grid_border_width());
-        layout.floating_border_width = get_child_arg_i64(node, "floating_border_width", default_floating_border_width());
-        layout.border_color = get_child_arg_string(node, "border_color", &default_border_color());
-        layout.background_color = get_child_arg_string(node, "background_color", &default_background_color());
-        layout.border_font_size = get_child_arg_i64(node, "border_font_size", default_border_font_size());
-        layout.transition_duration = get_child_arg_i64(node, "transition_duration", default_transition_duration());
         layout.grid_gap = get_child_arg_i64(node, "grid_gap", default_grid_gap());
-        layout.border_blur = get_child_arg_bool(node, "border_blur", default_border_blur());
-        layout.window_blur = get_child_arg_bool(node, "window_blur", default_window_blur());
-        layout.overlay_behavior = get_child_arg_string(node, "overlay_behavior", &default_overlay_behavior());
-        layout.overlay_width = get_child_arg_i64(node, "overlay_width", default_overlay_width());
-        layout.overlay_position = get_child_arg_string(node, "overlay_position", &default_overlay_position());
-        layout.overlay_border_gap = get_child_arg_i64(node, "overlay_border_gap", default_overlay_border_gap());
-        layout.status_normal_color = get_child_arg_string(node, "status_normal_color", &default_status_normal_color());
-        layout.window_opacity = get_child_arg_bool(node, "window_opacity", default_window_opacity());
     }
     
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "style") {
-        layout.border_color = get_nested_prop_string(node, "border", "color", &layout.border_color);
-        layout.border_width = get_nested_prop_i64(node, "border", "width", layout.border_width);
-        layout.border_blur = get_nested_prop_bool(node, "border", "blur", layout.border_blur);
-        layout.border_font_size = get_nested_prop_i64(node, "border", "font_size", layout.border_font_size);
-        layout.fullscreen_border_width = get_nested_prop_i64(node, "border", "fullscreen_border_width", layout.fullscreen_border_width);
-        layout.cascade_border_width = get_nested_prop_i64(node, "border", "cascade_border_width", layout.cascade_border_width);
-        layout.grid_border_width = get_nested_prop_i64(node, "border", "grid_border_width", layout.grid_border_width);
-        layout.floating_border_width = get_nested_prop_i64(node, "border", "floating_border_width", layout.floating_border_width);
+        layout.border_color = get_nested_prop_string(node, "border", "color", &default_border_color());
+        layout.border_width = get_nested_prop_i64(node, "border", "width", default_border_width());
+        layout.border_blur = get_nested_prop_bool(node, "border", "blur", default_border_blur());
+        layout.border_font_size = get_nested_prop_i64(node, "border", "font_size", default_border_font_size());
+        layout.fullscreen_border_width = get_nested_prop_i64(node, "border", "fullscreen_border_width", default_fullscreen_border_width());
+        layout.cascade_border_width = get_nested_prop_i64(node, "border", "cascade_border_width", default_cascade_border_width());
+        layout.grid_border_width = get_nested_prop_i64(node, "border", "grid_border_width", default_grid_border_width());
+        layout.floating_border_width = get_nested_prop_i64(node, "border", "floating_border_width", default_floating_border_width());
         
-        layout.background_color = get_nested_prop_string(node, "background", "color", &layout.background_color);
-        layout.transition_duration = get_nested_prop_i64(node, "window", "transition_duration", layout.transition_duration);
-        layout.window_blur = get_nested_prop_bool(node, "window", "blur", layout.window_blur);
-        layout.window_opacity = get_nested_prop_bool(node, "window", "opacity", layout.window_opacity);
+        layout.background_color = get_nested_prop_string(node, "background", "color", &default_background_color());
+        layout.transition_duration = get_nested_prop_i64(node, "window", "transition_duration", default_transition_duration());
+        layout.window_blur = get_nested_prop_bool(node, "window", "blur", default_window_blur());
+        layout.window_opacity = get_nested_prop_bool(node, "window", "opacity", default_window_opacity());
         
-        layout.overlay_behavior = get_nested_prop_string(node, "overlay", "behavior", &layout.overlay_behavior);
-        layout.overlay_width = get_nested_prop_i64(node, "overlay", "width", layout.overlay_width);
-        layout.overlay_position = get_nested_prop_string(node, "overlay", "position", &layout.overlay_position);
-        layout.overlay_border_gap = get_nested_prop_i64(node, "overlay", "border_gap", layout.overlay_border_gap);
+        layout.overlay_behavior = get_nested_prop_string(node, "overlay", "behavior", &default_overlay_behavior());
+        layout.overlay_width = get_nested_prop_i64(node, "overlay", "width", default_overlay_width());
+        layout.overlay_position = get_nested_prop_string(node, "overlay", "position", &default_overlay_position());
+        layout.overlay_border_gap = get_nested_prop_i64(node, "overlay", "border_gap", default_overlay_border_gap());
         
-        layout.status_normal_color = get_nested_prop_string(node, "status", "normal_color", &layout.status_normal_color);
+        layout.status_normal_color = get_nested_prop_string(node, "status", "normal_color", &default_status_normal_color());
     }
 
     // 2. env
