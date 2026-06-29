@@ -547,7 +547,16 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
             if let crate::seat::Focus::LayerSurface(surface) = (*seat).focused {
                 if surface == (*wlr_layer_surface).surface {
                     (*seat).focus(crate::seat::Focus::None);
-                    (*server).wm.focus_next_visible_window(seat);
+                    let mut is_cce_cloud = false;
+                    if !(*wlr_layer_surface).namespace.is_null() {
+                        let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
+                        if ns == "cce-cloud" {
+                            is_cce_cloud = true;
+                        }
+                    }
+                    if !is_cce_cloud {
+                        (*server).wm.focus_next_visible_window(seat);
+                    }
                 }
             }
             if let LayerShellSeatFocus::NonExclusive(key) = (*seat).layer_shell.scheduled_focus {

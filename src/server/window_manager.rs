@@ -997,7 +997,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 }
 
                 let app_id = (*win_ptr).get_app_id_string();
-                let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
+                let is_status_bar = app_id.as_deref() == Some("cce-status");
                 
                 if is_status_bar {
                     (*win_ptr).tiling_mode = crate::tiling::TilingMode::Status;
@@ -1354,7 +1354,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     }
                 }
                 crate::seat::Focus::None => {
-                    focused_visible = false;
+                    focused_visible = true;
                 }
                 _ => {
                     focused_visible = true;
@@ -1442,7 +1442,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
         for &w in self.focus_history.iter() {
             if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                 let app_id = (*w).get_app_id_string();
-                let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
+                let is_status_bar = app_id.as_deref() == Some("cce-status");
                 if !is_status_bar {
                     next_focus = w;
                     break;
@@ -1453,7 +1453,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             for &w in self.windows.iter() {
                 if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                     let app_id = (*w).get_app_id_string();
-                    let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
+                    let is_status_bar = app_id.as_deref() == Some("cce-status");
                     if !is_status_bar {
                         next_focus = w;
                     }
@@ -1477,7 +1477,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 continue;
             }
             if let Some(app_id) = (*win_ptr).get_app_id_string() {
-                if app_id == "cce-status-interface" {
+                if app_id == "cce-status" {
                     status_bar_windows.push(win_ptr);
                 }
             }
@@ -1629,7 +1629,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
                             if !window.is_null() && !(*window).closed && !(*window).minimized {
                                 let is_status_bar = (*window).get_app_id_string()
-                                    .map_or(false, |aid| aid == "cce-status-interface");
+                                    .map_or(false, |aid| aid == "cce-status");
                                 if !is_status_bar {
                                     visible_windows.push(window);
                                 }
@@ -1899,7 +1899,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         }
 
                         let app_id = (*win_ptr).get_app_id_string();
-                        let is_status_bar = app_id.as_deref() == Some("cce-status-interface");
+                        let is_status_bar = app_id.as_deref() == Some("cce-status");
                         if is_status_bar {
                             continue;
                         }

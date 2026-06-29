@@ -270,7 +270,7 @@ impl Window {
     }
 
     pub unsafe fn is_status_bar(&self) -> bool {
-        self.get_app_id_string().as_deref() == Some("cce-status-interface")
+        self.get_app_id_string().as_deref() == Some("cce-status")
     }
 
 
@@ -630,7 +630,7 @@ impl Window {
             return;
         }
         let app_id_str = self.get_app_id_string().unwrap_or_default();
-        if app_id_str.is_empty() || app_id_str == "cce-status-interface" {
+        if app_id_str.is_empty() || app_id_str == "cce-status" {
             return;
         }
         let title_str = self.get_title_string().unwrap_or_default();
@@ -697,7 +697,7 @@ impl Window {
         let app_id_ptr = self.get_app_id();
         let is_status_bar = if !app_id_ptr.is_null() {
             let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
-            app_id == "cce-status-interface"
+            app_id == "cce-status"
         } else {
             false
         };
@@ -800,6 +800,7 @@ impl Window {
             if let crate::seat::Focus::Window(w) = (*seat).focused {
                 if w == window {
                     (*seat).focus(crate::seat::Focus::None);
+                    (*(*window).server).wm.focus_next_visible_window(seat);
                 }
             }
             curr = next;
@@ -1482,7 +1483,7 @@ impl Window {
 
     pub unsafe fn notify_app_id(&mut self) {
         self.wm_scheduled.dirty_app_id = true;
-        if self.get_app_id_string().as_deref() == Some("cce-status-interface") {
+        if self.get_app_id_string().as_deref() == Some("cce-status") {
             self.tiling_mode = crate::tiling::TilingMode::Status;
         }
         self.try_restore();
@@ -1667,7 +1668,7 @@ impl Window {
             let app_id_ptr = self.get_app_id();
             let is_status_bar = if !app_id_ptr.is_null() {
                 let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
-                app_id == "cce-status-interface"
+                app_id == "cce-status"
             } else {
                 false
             };
