@@ -31,7 +31,7 @@ fn usage(name: &str, to_stderr: bool) {
     print(&format!("usage: {} <command> [args...]", name));
     print("");
     print("commands:");
-    print("  layout <gap|gap_top|gap_left|gap_right|gap_bottom|offset|grid_gap|bar_height|border_width|fullscreen_border_width|border_color> <value>");
+    print("  layout <gap|gap_top|gap_left|gap_right|gap_bottom|offset|grid_gap|bar_height> <value>");
     print("  view <1-4>");
     print("  close");
     print("  minimize");

@@ -2305,19 +2305,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     "gap_bottom" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_bottom = v; } }
                     "offset" | "cascade_offset" => { if let Ok(v) = val.parse::<i32>() { self.layout.cascade_offset = v; } }
                     "grid_gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.grid_gap = v; } }
-                    "bar_height" => { if let Ok(v) = val.parse::<i32>() { self.layout.bar_height = v; } }
-                    "border_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.border_width = v; } }
-                    "fullscreen_border_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.fullscreen_border_width = v; } }
-                    "cascade_border_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.cascade_border_width = v; } }
-                    "grid_border_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.grid_border_width = v; } }
-                    "floating_border_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.floating_border_width = v; } }
                     "transition_duration" => { if let Ok(v) = val.parse::<i32>() { self.layout.transition_duration = v; } }
-                    "border_color" => {
-                        let border_color_val = crate::config::parse_hex_color(val);
-                        self.layout.border_r = ((border_color_val >> 16) & 0xFF) * 0x01010101;
-                        self.layout.border_g = ((border_color_val >> 8) & 0xFF) * 0x01010101;
-                        self.layout.border_b = (border_color_val & 0xFF) * 0x01010101;
-                    }
+                    "bar_height" => { if let Ok(v) = val.parse::<i32>() { self.layout.bar_height = v; } }
+
                     "side_panel_width" | "pinned_width" | "overlay_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.overlay_width = v; } }
                     "side_panel_behavior" | "pinned_behavior" | "overlay_behavior" => { self.layout.overlay_behavior = val.to_string(); }
                     "side_panel_position" | "pinned_position" | "overlay_position" => { self.layout.overlay_position = val.to_string(); }

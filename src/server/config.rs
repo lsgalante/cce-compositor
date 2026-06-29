@@ -325,28 +325,12 @@ pub struct LayoutConfig {
     pub cascade_offset: i64,
     #[serde(default = "default_bar_height")]
     pub bar_height: i64,
-    #[serde(default = "default_border_width")]
-    pub border_width: i64,
-    #[serde(default = "default_fullscreen_border_width")]
-    pub fullscreen_border_width: i64,
-    #[serde(default = "default_cascade_border_width")]
-    pub cascade_border_width: i64,
-    #[serde(default = "default_grid_border_width")]
-    pub grid_border_width: i64,
-    #[serde(default = "default_floating_border_width")]
-    pub floating_border_width: i64,
-    #[serde(default = "default_border_color")]
-    pub border_color: String,
     #[serde(default = "default_background_color")]
     pub background_color: String,
-    #[serde(default = "default_border_font_size")]
-    pub border_font_size: i64,
     #[serde(default = "default_transition_duration")]
     pub transition_duration: i64,
     #[serde(default = "default_grid_gap")]
     pub grid_gap: i64,
-    #[serde(default = "default_border_blur")]
-    pub border_blur: bool,
     #[serde(default = "default_window_blur")]
     pub window_blur: bool,
     #[serde(default = "default_overlay_behavior", alias = "pinned_behavior", alias = "side_panel_behavior")]
@@ -373,17 +357,9 @@ impl Default for LayoutConfig {
             gap_bottom: default_gap_bottom(),
             cascade_offset: default_cascade_offset(),
             bar_height: default_bar_height(),
-            border_width: default_border_width(),
-            fullscreen_border_width: default_fullscreen_border_width(),
-            cascade_border_width: default_cascade_border_width(),
-            grid_border_width: default_grid_border_width(),
-            floating_border_width: default_floating_border_width(),
-            border_color: default_border_color(),
             background_color: default_background_color(),
-            border_font_size: default_border_font_size(),
             transition_duration: default_transition_duration(),
             grid_gap: default_grid_gap(),
-            border_blur: default_border_blur(),
             window_blur: default_window_blur(),
             overlay_behavior: default_overlay_behavior(),
             overlay_width: default_overlay_width(),
@@ -402,17 +378,9 @@ fn default_gap_right() -> i64 { 48 }
 fn default_gap_bottom() -> i64 { 48 }
 fn default_cascade_offset() -> i64 { 20 }
 fn default_bar_height() -> i64 { 24 }
-fn default_border_width() -> i64 { 0 }
-fn default_fullscreen_border_width() -> i64 { 0 }
-fn default_cascade_border_width() -> i64 { 0 }
-fn default_grid_border_width() -> i64 { 0 }
-fn default_floating_border_width() -> i64 { 0 }
-fn default_border_color() -> String { "#3e3e3e".to_string() }
 fn default_background_color() -> String { "#0a0a0a".to_string() }
-fn default_border_font_size() -> i64 { 11 }
 fn default_transition_duration() -> i64 { 300 }
 fn default_grid_gap() -> i64 { 18 }
-fn default_border_blur() -> bool { false }
 fn default_window_blur() -> bool { false }
 fn default_overlay_behavior() -> String { "inline".to_string() }
 fn default_overlay_width() -> i64 { 360 }
@@ -945,15 +913,6 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     }
     
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "style") {
-        layout.border_color = get_nested_prop_string(node, "border", "color", &default_border_color());
-        layout.border_width = get_nested_prop_i64(node, "border", "width", default_border_width());
-        layout.border_blur = get_nested_prop_bool(node, "border", "blur", default_border_blur());
-        layout.border_font_size = get_nested_prop_i64(node, "border", "font_size", default_border_font_size());
-        layout.fullscreen_border_width = get_nested_prop_i64(node, "border", "fullscreen_border_width", default_fullscreen_border_width());
-        layout.cascade_border_width = get_nested_prop_i64(node, "border", "cascade_border_width", default_cascade_border_width());
-        layout.grid_border_width = get_nested_prop_i64(node, "border", "grid_border_width", default_grid_border_width());
-        layout.floating_border_width = get_nested_prop_i64(node, "border", "floating_border_width", default_floating_border_width());
-        
         layout.background_color = get_nested_prop_string(node, "background", "color", &default_background_color());
         layout.transition_duration = get_nested_prop_i64(node, "window", "transition_duration", default_transition_duration());
         layout.window_blur = get_nested_prop_bool(node, "window", "blur", default_window_blur());
@@ -1108,11 +1067,47 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
 
     // 8. surfaces
     let mut surfaces = SurfacesConfig::default();
-    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "surfaces") {
-        surfaces.desktop_background = get_child_arg_string(node, "desktop_background", &default_desktop_background());
-        surfaces.desktop_grid_color = get_child_arg_string(node, "desktop_grid_color", &default_desktop_grid_color());
-        surfaces.desktop_grid_scale = get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale());
-        surfaces.desktop_line_width = get_child_arg_i64(node, "desktop_line_width", default_desktop_line_width());
+    let mut found_nested = false;
+    if let Some(style_node) = doc.nodes().iter().find(|n| n.name().value() == "style") {
+        if let Some(style_children) = style_node.children() {
+            if let Some(surfaces_node) = style_children.nodes().iter().find(|n| n.name().value() == "surfaces") {
+                if let Some(surfaces_children) = surfaces_node.children() {
+                    if let Some(desktop_node) = surfaces_children.nodes().iter().find(|n| n.name().value() == "desktop") {
+                        found_nested = true;
+                        for entry in desktop_node.entries() {
+                            if let Some(id) = entry.name() {
+                                match id.value() {
+                                    "background" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surfaces.desktop_background = val.to_string();
+                                        }
+                                    }
+                                    "grid_color" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surfaces.desktop_grid_color = val.to_string();
+                                        }
+                                    }
+                                    "line_width" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surfaces.desktop_line_width = val;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !found_nested {
+        if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "surfaces") {
+            surfaces.desktop_background = get_child_arg_string(node, "desktop_background", &default_desktop_background());
+            surfaces.desktop_grid_color = get_child_arg_string(node, "desktop_grid_color", &default_desktop_grid_color());
+            surfaces.desktop_grid_scale = get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale());
+            surfaces.desktop_line_width = get_child_arg_i64(node, "desktop_line_width", default_desktop_line_width());
+        }
     }
 
     Ok(Config {
@@ -1151,16 +1146,15 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.gap_bottom = config.layout.gap_bottom as i32;
     state.layout.cascade_offset = config.layout.cascade_offset as i32;
     state.layout.bar_height = config.layout.bar_height as i32;
-    state.layout.border_width = config.layout.border_width as i32;
-    state.layout.fullscreen_border_width = config.layout.fullscreen_border_width as i32;
-    state.layout.cascade_border_width = config.layout.cascade_border_width as i32;
-    state.layout.grid_border_width = config.layout.grid_border_width as i32;
-    state.layout.floating_border_width = config.layout.floating_border_width as i32;
+    state.layout.border_width = 0;
+    state.layout.fullscreen_border_width = 0;
+    state.layout.cascade_border_width = 0;
+    state.layout.grid_border_width = 0;
+    state.layout.floating_border_width = 0;
     
-    let border_color_val = parse_hex_color(&config.layout.border_color);
-    state.layout.border_r = ((border_color_val >> 16) & 0xFF) * 0x01010101;
-    state.layout.border_g = ((border_color_val >> 8) & 0xFF) * 0x01010101;
-    state.layout.border_b = (border_color_val & 0xFF) * 0x01010101;
+    state.layout.border_r = 0x3E3E3E3E;
+    state.layout.border_g = 0x3E3E3E3E;
+    state.layout.border_b = 0x3E3E3E3E;
     state.layout.border_a = 0xFFFFFFFF;
 
     let desktop_background_str = config.surfaces.desktop_background.clone();
@@ -1176,10 +1170,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.desktop_grid_scale = config.surfaces.desktop_grid_scale as f64;
     state.layout.desktop_line_width = config.surfaces.desktop_line_width as i32;
 
-    state.layout.border_font_size = config.layout.border_font_size as i32;
+    state.layout.border_font_size = 11;
     state.layout.transition_duration = config.layout.transition_duration as i32;
     state.layout.grid_gap = config.layout.grid_gap as i32;
-    state.layout.border_blur = config.layout.border_blur;
+    state.layout.border_blur = false;
     state.layout.window_blur = config.layout.window_blur;
     state.layout.overlay_behavior = config.layout.overlay_behavior;
     state.layout.overlay_width = config.layout.overlay_width as i32;
