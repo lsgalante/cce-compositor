@@ -660,9 +660,13 @@ static void enable_blur_iterator(struct wlr_scene_buffer *buffer, int sx, int sy
 		return;
 	}
 	bool enabled = *(bool *)user_data;
-	wlr_scene_buffer_set_backdrop_blur(buffer, enabled);
-	wlr_scene_buffer_set_backdrop_blur_optimized(buffer, enabled);
-	wlr_scene_buffer_set_backdrop_blur_ignore_transparent(buffer, enabled);
+	if (buffer->backdrop_blur != enabled ||
+		buffer->backdrop_blur_optimized != enabled ||
+		buffer->backdrop_blur_ignore_transparent != enabled) {
+		wlr_scene_buffer_set_backdrop_blur(buffer, enabled);
+		wlr_scene_buffer_set_backdrop_blur_optimized(buffer, enabled);
+		wlr_scene_buffer_set_backdrop_blur_ignore_transparent(buffer, enabled);
+	}
 }
 
 void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled) {
@@ -673,11 +677,26 @@ static void set_opacity_iterator(struct wlr_scene_buffer *buffer, int sx, int sy
 	(void)sx;
 	(void)sy;
 	float opacity = *(float *)user_data;
-	wlr_scene_buffer_set_opacity(buffer, opacity);
+	if (buffer->opacity != opacity) {
+		wlr_scene_buffer_set_opacity(buffer, opacity);
+	}
 }
 
 void river_scene_node_set_opacity(struct wlr_scene_node *node, float opacity) {
 	wlr_scene_node_for_each_buffer(node, set_opacity_iterator, &opacity);
+}
+
+static void set_corner_radius_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
+	(void)sx;
+	(void)sy;
+	int radius = *(int *)user_data;
+	if (buffer->corner_radius != radius || buffer->corners != CORNER_LOCATION_ALL) {
+		wlr_scene_buffer_set_corner_radius(buffer, radius, CORNER_LOCATION_ALL);
+	}
+}
+
+void river_scene_node_set_corner_radius(struct wlr_scene_node *node, int radius) {
+	wlr_scene_node_for_each_buffer(node, set_corner_radius_iterator, &radius);
 }
 
 void river_scene_buffer_set_dest_size_if_changed(struct wlr_scene_buffer *scene_buffer, int width, int height) {

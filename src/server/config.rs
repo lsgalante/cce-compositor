@@ -37,7 +37,7 @@ pub struct Layout {
     pub overlay_position: String,
     pub overlay_border_gap: i32,
     pub status_normal_color: String,
-    pub desktop_background: String,
+    pub desktop_background_color: String,
     pub transparency_opacity: f32,
     pub window_opacity: bool,
     pub desktop_grid_color: [f32; 4],
@@ -78,7 +78,7 @@ impl Default for Layout {
             overlay_position: "left".to_string(),
             overlay_border_gap: 0,
             status_normal_color: "#ccccd8".to_string(),
-            desktop_background: "#000000".to_string(),
+            desktop_background_color: "#000000".to_string(),
             transparency_opacity: 0.9,
             window_opacity: true,
             desktop_grid_color: [1.0, 1.0, 1.0, 0.05],
@@ -239,8 +239,8 @@ pub struct TransparencyConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct SurfacesConfig {
-    #[serde(default = "default_desktop_background")]
-    pub desktop_background: String,
+    #[serde(default = "default_desktop_background_color")]
+    pub desktop_background_color: String,
     #[serde(default = "default_desktop_grid_color")]
     pub desktop_grid_color: String,
     #[serde(default = "default_desktop_grid_scale")]
@@ -252,7 +252,7 @@ pub struct SurfacesConfig {
 impl Default for SurfacesConfig {
     fn default() -> Self {
         Self {
-            desktop_background: default_desktop_background(),
+            desktop_background_color: default_desktop_background_color(),
             desktop_grid_color: default_desktop_grid_color(),
             desktop_grid_scale: default_desktop_grid_scale(),
             desktop_line_width: default_desktop_line_width(),
@@ -260,7 +260,7 @@ impl Default for SurfacesConfig {
     }
 }
 
-fn default_desktop_background() -> String {
+fn default_desktop_background_color() -> String {
     "#000000".to_string()
 }
 
@@ -1077,9 +1077,9 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                         for entry in desktop_node.entries() {
                             if let Some(id) = entry.name() {
                                 match id.value() {
-                                    "background" => {
+                                    "background_color" => {
                                         if let Some(val) = entry.value().as_string() {
-                                            surfaces.desktop_background = val.to_string();
+                                            surfaces.desktop_background_color = val.to_string();
                                         }
                                     }
                                     "grid_color" => {
@@ -1103,7 +1103,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     }
     if !found_nested {
         if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "surfaces") {
-            surfaces.desktop_background = get_child_arg_string(node, "desktop_background", &default_desktop_background());
+            surfaces.desktop_background_color = get_child_arg_string(node, "desktop_background_color", &default_desktop_background_color());
             surfaces.desktop_grid_color = get_child_arg_string(node, "desktop_grid_color", &default_desktop_grid_color());
             surfaces.desktop_grid_scale = get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale());
             surfaces.desktop_line_width = get_child_arg_i64(node, "desktop_line_width", default_desktop_line_width());
@@ -1157,8 +1157,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.border_b = 0x3E3E3E3E;
     state.layout.border_a = 0xFFFFFFFF;
 
-    let desktop_background_str = config.surfaces.desktop_background.clone();
-    state.layout.desktop_background = desktop_background_str.clone();
+    let desktop_background_str = config.surfaces.desktop_background_color.clone();
+    state.layout.desktop_background_color = desktop_background_str.clone();
 
     let background_color_val = parse_hex_color(&desktop_background_str);
     state.layout.background_r = ((background_color_val >> 16) & 0xFF) * 0x01010101;

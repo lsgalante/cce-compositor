@@ -2268,8 +2268,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 let key = parts[1];
                 let val = parts[2];
                 match key {
-                    "desktop_background" => {
-                        self.layout.desktop_background = val.to_string();
+                    "desktop_background_color" => {
+                        self.layout.desktop_background_color = val.to_string();
                         let parsed_color = crate::config::parse_hex_color(val);
                         self.layout.background_r = ((parsed_color >> 16) & 0xFF) * 0x01010101;
                         self.layout.background_g = ((parsed_color >> 8) & 0xFF) * 0x01010101;

@@ -261,6 +261,8 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled);
 
 void river_scene_node_set_opacity(struct wlr_scene_node *node, float opacity);
 
+void river_scene_node_set_corner_radius(struct wlr_scene_node *node, int radius);
+
 void river_scene_buffer_set_dest_size_if_changed(struct wlr_scene_buffer *scene_buffer, int width, int height);
 int river_scene_buffer_get_width(struct wlr_scene_buffer *scene_buffer);
 int river_scene_buffer_get_height(struct wlr_scene_buffer *scene_buffer);

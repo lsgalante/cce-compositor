@@ -460,7 +460,7 @@ impl Output {
         let wm = &(*self.server).wm;
         for &window in wm.windows.iter() {
             if !window.is_null() && (*window).scale != 1.0 {
-                (*window).render_finish();
+                (*window).scale_only_render_finish();
             }
         }
 
