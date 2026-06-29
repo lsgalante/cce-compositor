@@ -877,10 +877,61 @@ fn get_prop_f64_opt(node: &kdl::KdlNode, key: &str) -> Option<f64> {
     None
 }
 
+fn get_nested_prop_string(node: &kdl::KdlNode, child_name: &str, prop_name: &str, default: &str) -> String {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                for entry in child.entries() {
+                    if let Some(id) = entry.name() {
+                        if id.value() == prop_name {
+                            return entry.value().as_string().map(|s| s.to_string()).unwrap_or_else(|| default.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    default.to_string()
+}
+
+fn get_nested_prop_i64(node: &kdl::KdlNode, child_name: &str, prop_name: &str, default: i64) -> i64 {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                for entry in child.entries() {
+                    if let Some(id) = entry.name() {
+                        if id.value() == prop_name {
+                            return entry.value().as_i64().unwrap_or(default);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    default
+}
+
+fn get_nested_prop_bool(node: &kdl::KdlNode, child_name: &str, prop_name: &str, default: bool) -> bool {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                for entry in child.entries() {
+                    if let Some(id) = entry.name() {
+                        if id.value() == prop_name {
+                            return entry.value().as_bool().unwrap_or(default);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    default
+}
+
 fn parse_kdl_config(content: &str) -> Result<Config, String> {
     let doc: kdl::KdlDocument = content.parse().map_err(|e| format!("KDL parse error: {}", e))?;
     
-    // 1. layout
+    // 1. layout & style
     let mut layout = LayoutConfig::default();
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "layout") {
         layout.gap = get_child_arg_i64(node, "gap", default_gap());
@@ -908,6 +959,29 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         layout.overlay_border_gap = get_child_arg_i64(node, "overlay_border_gap", default_overlay_border_gap());
         layout.status_normal_color = get_child_arg_string(node, "status_normal_color", &default_status_normal_color());
         layout.window_opacity = get_child_arg_bool(node, "window_opacity", default_window_opacity());
+    }
+    
+    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "style") {
+        layout.border_color = get_nested_prop_string(node, "border", "color", &layout.border_color);
+        layout.border_width = get_nested_prop_i64(node, "border", "width", layout.border_width);
+        layout.border_blur = get_nested_prop_bool(node, "border", "blur", layout.border_blur);
+        layout.border_font_size = get_nested_prop_i64(node, "border", "font_size", layout.border_font_size);
+        layout.fullscreen_border_width = get_nested_prop_i64(node, "border", "fullscreen_border_width", layout.fullscreen_border_width);
+        layout.cascade_border_width = get_nested_prop_i64(node, "border", "cascade_border_width", layout.cascade_border_width);
+        layout.grid_border_width = get_nested_prop_i64(node, "border", "grid_border_width", layout.grid_border_width);
+        layout.floating_border_width = get_nested_prop_i64(node, "border", "floating_border_width", layout.floating_border_width);
+        
+        layout.background_color = get_nested_prop_string(node, "background", "color", &layout.background_color);
+        layout.transition_duration = get_nested_prop_i64(node, "window", "transition_duration", layout.transition_duration);
+        layout.window_blur = get_nested_prop_bool(node, "window", "blur", layout.window_blur);
+        layout.window_opacity = get_nested_prop_bool(node, "window", "opacity", layout.window_opacity);
+        
+        layout.overlay_behavior = get_nested_prop_string(node, "overlay", "behavior", &layout.overlay_behavior);
+        layout.overlay_width = get_nested_prop_i64(node, "overlay", "width", layout.overlay_width);
+        layout.overlay_position = get_nested_prop_string(node, "overlay", "position", &layout.overlay_position);
+        layout.overlay_border_gap = get_nested_prop_i64(node, "overlay", "border_gap", layout.overlay_border_gap);
+        
+        layout.status_normal_color = get_nested_prop_string(node, "status", "normal_color", &layout.status_normal_color);
     }
 
     // 2. env
