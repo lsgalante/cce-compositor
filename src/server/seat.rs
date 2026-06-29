@@ -310,6 +310,13 @@ impl Seat {
             }
         }
 
+        if let Focus::Window(window) = new_focus {
+            if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
+                (*self.server).wm.raise_window(window);
+                (*self.server).wm.dirty_windowing();
+            }
+        }
+
         if self.focused == new_focus {
             return;
         }
@@ -950,6 +957,7 @@ impl Seat {
                 {
                     (*win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*win).mode_locked = true;
+                    (*self.server).wm.raise_window(win);
                 }
                 
                 match op.op_type {

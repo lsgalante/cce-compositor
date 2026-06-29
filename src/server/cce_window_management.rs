@@ -118,6 +118,11 @@ unsafe extern "C" fn toplevel_set_floating(
     if let Some(window) = resolve_window(server, window_key) {
         (*window).tiling_mode = crate::tiling::TilingMode::Floating;
         (*window).mode_locked = true;
+        if let Some(seat) = (*server).wm.first_seat() {
+            if (*seat).focused == crate::seat::Focus::Window(window) {
+                (*server).wm.raise_window(window);
+            }
+        }
         (*server).wm.dirty_windowing();
 
         // Send floating_state(1)

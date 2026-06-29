@@ -1534,6 +1534,11 @@ unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *
     let event = data as *mut ffi::wlr_pointer_swipe_begin_event;
 
     let seat = &mut *cursor.seat;
+    let wm = &(*seat.server).wm;
+    let swipe_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.swipe).unwrap_or(true);
+    if !swipe_enabled {
+        return;
+    }
     seat.handle_activity();
 
     cursor.gesture_dx = 0.0;
@@ -1559,6 +1564,11 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     let event = data as *mut ffi::wlr_pointer_swipe_update_event;
 
     let seat = &mut *cursor.seat;
+    let wm = &(*seat.server).wm;
+    let swipe_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.swipe).unwrap_or(true);
+    if !swipe_enabled {
+        return;
+    }
     seat.handle_activity();
 
     if (*event).fingers == 3 {
@@ -1698,6 +1708,11 @@ unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mu
     let event = data as *mut ffi::wlr_pointer_swipe_end_event;
 
     let seat = &mut *cursor.seat;
+    let wm = &(*seat.server).wm;
+    let swipe_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.swipe).unwrap_or(true);
+    if !swipe_enabled {
+        return;
+    }
     seat.handle_activity();
 
     log::info!("handle_swipe_end: cancelled={}", (*event).cancelled);
@@ -1724,6 +1739,11 @@ unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listener, data: *
     let event = data as *mut ffi::wlr_pointer_pinch_begin_event;
 
     let seat = &mut *cursor.seat;
+    let wm = &(*seat.server).wm;
+    let pinch_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.pinch).unwrap_or(true);
+    if !pinch_enabled {
+        return;
+    }
     seat.handle_activity();
 
     cursor.gesture_scale = 1.0;
@@ -1746,6 +1766,11 @@ unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: 
     let event = data as *mut ffi::wlr_pointer_pinch_update_event;
 
     let seat = &mut *cursor.seat;
+    let wm = &(*seat.server).wm;
+    let pinch_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.pinch).unwrap_or(true);
+    if !pinch_enabled {
+        return;
+    }
     seat.handle_activity();
 
     if cursor.gesture_triggered {
@@ -1815,6 +1840,11 @@ unsafe extern "C" fn handle_pinch_end(listener: *mut ffi::wl_listener, data: *mu
     let event = data as *mut ffi::wlr_pointer_pinch_end_event;
 
     let seat = &mut *cursor.seat;
+    let wm = &(*seat.server).wm;
+    let pinch_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.pinch).unwrap_or(true);
+    if !pinch_enabled {
+        return;
+    }
     seat.handle_activity();
 
     if cursor.gesture_triggered {

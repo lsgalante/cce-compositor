@@ -213,6 +213,12 @@ pub struct InputDeviceConfigRule {
     pub scroll_factor: Option<f64>,
 }
 
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct GesturesConfig {
+    pub swipe: Option<bool>,
+    pub pinch: Option<bool>,
+}
+
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct InputConfig {
     pub tap_to_click: Option<bool>,
@@ -223,6 +229,7 @@ pub struct InputConfig {
     pub dwtp: Option<bool>,
     pub trackpoint_accel_speed: Option<f64>,
     pub trackpoint_accel_profile: Option<String>,
+    pub gestures: Option<GesturesConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
