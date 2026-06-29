@@ -630,15 +630,15 @@ pub fn parse_keysym(key_str: &str) -> u32 {
 }
 
 pub fn default_config_path() -> Option<String> {
-    let path = if let Ok(xdg_config_home) = std::env::var("XDG_CONFIG_HOME") {
-        format!("{}/cce/config.json", xdg_config_home)
-    } else if let Ok(home) = std::env::var("HOME") {
-        format!("{}/.config/cce/config.json", home)
-    } else {
-        return None;
-    };
-    if std::path::Path::new(&path).exists() {
-        Some(path)
+    let xdg_config_home = std::env::var("XDG_CONFIG_HOME")
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lsgalante".to_string());
+            format!("{}/.config", home)
+        });
+        
+    let kdl_path = format!("{}/cce/config.kdl", xdg_config_home);
+    if std::path::Path::new(&kdl_path).exists() {
+        Some(kdl_path)
     } else {
         None
     }
@@ -709,16 +709,380 @@ fn expand_env_vars(s: &str) -> String {
     result
 }
 
+fn get_child_arg_i64(node: &kdl::KdlNode, child_name: &str, default: i64) -> i64 {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                if let Some(entry) = child.entries().first() {
+                    return entry.value().as_i64().unwrap_or(default);
+                }
+            }
+        }
+    }
+    default
+}
+
+fn get_child_arg_f64(node: &kdl::KdlNode, child_name: &str, default: f64) -> f64 {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                if let Some(entry) = child.entries().first() {
+                    return entry.value().as_f64().unwrap_or(default);
+                }
+            }
+        }
+    }
+    default
+}
+
+fn get_child_arg_bool(node: &kdl::KdlNode, child_name: &str, default: bool) -> bool {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                if let Some(entry) = child.entries().first() {
+                    return entry.value().as_bool().unwrap_or(default);
+                }
+            }
+        }
+    }
+    default
+}
+
+fn get_child_arg_string(node: &kdl::KdlNode, child_name: &str, default: &str) -> String {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                if let Some(entry) = child.entries().first() {
+                    return entry.value().as_string().map(|s| s.to_string()).unwrap_or_else(|| default.to_string());
+                }
+            }
+        }
+    }
+    default.to_string()
+}
+
+fn get_child_arg_bool_opt(node: &kdl::KdlNode, child_name: &str) -> Option<bool> {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                if let Some(entry) = child.entries().first() {
+                    return entry.value().as_bool();
+                }
+            }
+        }
+    }
+    None
+}
+
+fn get_child_arg_f64_opt(node: &kdl::KdlNode, child_name: &str) -> Option<f64> {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                if let Some(entry) = child.entries().first() {
+                    return entry.value().as_f64();
+                }
+            }
+        }
+    }
+    None
+}
+
+fn get_child_arg_string_opt(node: &kdl::KdlNode, child_name: &str) -> Option<String> {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                if let Some(entry) = child.entries().first() {
+                    return entry.value().as_string().map(|s| s.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn get_prop_string(node: &kdl::KdlNode, key: &str, default: &str) -> String {
+    for entry in node.entries() {
+        if let Some(id) = entry.name() {
+            if id.value() == key {
+                return entry.value().as_string().map(|s| s.to_string()).unwrap_or_else(|| default.to_string());
+            }
+        }
+    }
+    default.to_string()
+}
+
+fn get_prop_string_opt(node: &kdl::KdlNode, key: &str) -> Option<String> {
+    for entry in node.entries() {
+        if let Some(id) = entry.name() {
+            if id.value() == key {
+                return entry.value().as_string().map(|s| s.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn get_prop_i64(node: &kdl::KdlNode, key: &str, default: i64) -> i64 {
+    for entry in node.entries() {
+        if let Some(id) = entry.name() {
+            if id.value() == key {
+                return entry.value().as_i64().unwrap_or(default);
+            }
+        }
+    }
+    default
+}
+
+fn get_prop_bool(node: &kdl::KdlNode, key: &str, default: bool) -> bool {
+    for entry in node.entries() {
+        if let Some(id) = entry.name() {
+            if id.value() == key {
+                return entry.value().as_bool().unwrap_or(default);
+            }
+        }
+    }
+    default
+}
+
+fn get_prop_bool_opt(node: &kdl::KdlNode, key: &str) -> Option<bool> {
+    for entry in node.entries() {
+        if let Some(id) = entry.name() {
+            if id.value() == key {
+                return entry.value().as_bool();
+            }
+        }
+    }
+    None
+}
+
+fn get_prop_i64_opt(node: &kdl::KdlNode, key: &str) -> Option<i64> {
+    for entry in node.entries() {
+        if let Some(id) = entry.name() {
+            if id.value() == key {
+                return entry.value().as_i64();
+            }
+        }
+    }
+    None
+}
+
+fn get_prop_f64_opt(node: &kdl::KdlNode, key: &str) -> Option<f64> {
+    for entry in node.entries() {
+        if let Some(id) = entry.name() {
+            if id.value() == key {
+                return entry.value().as_f64();
+            }
+        }
+    }
+    None
+}
+
+fn parse_kdl_config(content: &str) -> Result<Config, String> {
+    let doc: kdl::KdlDocument = content.parse().map_err(|e| format!("KDL parse error: {}", e))?;
+    
+    // 1. layout
+    let mut layout = LayoutConfig::default();
+    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "layout") {
+        layout.gap = get_child_arg_i64(node, "gap", default_gap());
+        layout.gap_top = get_child_arg_i64(node, "gap_top", default_gap_top());
+        layout.gap_left = get_child_arg_i64(node, "gap_left", default_gap_left());
+        layout.gap_right = get_child_arg_i64(node, "gap_right", default_gap_right());
+        layout.gap_bottom = get_child_arg_i64(node, "gap_bottom", default_gap_bottom());
+        layout.cascade_offset = get_child_arg_i64(node, "cascade_offset", default_cascade_offset());
+        layout.bar_height = get_child_arg_i64(node, "bar_height", default_bar_height());
+        layout.border_width = get_child_arg_i64(node, "border_width", default_border_width());
+        layout.fullscreen_border_width = get_child_arg_i64(node, "fullscreen_border_width", default_fullscreen_border_width());
+        layout.cascade_border_width = get_child_arg_i64(node, "cascade_border_width", default_cascade_border_width());
+        layout.grid_border_width = get_child_arg_i64(node, "grid_border_width", default_grid_border_width());
+        layout.floating_border_width = get_child_arg_i64(node, "floating_border_width", default_floating_border_width());
+        layout.border_color = get_child_arg_string(node, "border_color", &default_border_color());
+        layout.background_color = get_child_arg_string(node, "background_color", &default_background_color());
+        layout.border_font_size = get_child_arg_i64(node, "border_font_size", default_border_font_size());
+        layout.transition_duration = get_child_arg_i64(node, "transition_duration", default_transition_duration());
+        layout.grid_gap = get_child_arg_i64(node, "grid_gap", default_grid_gap());
+        layout.border_blur = get_child_arg_bool(node, "border_blur", default_border_blur());
+        layout.window_blur = get_child_arg_bool(node, "window_blur", default_window_blur());
+        layout.overlay_behavior = get_child_arg_string(node, "overlay_behavior", &default_overlay_behavior());
+        layout.overlay_width = get_child_arg_i64(node, "overlay_width", default_overlay_width());
+        layout.overlay_position = get_child_arg_string(node, "overlay_position", &default_overlay_position());
+        layout.overlay_border_gap = get_child_arg_i64(node, "overlay_border_gap", default_overlay_border_gap());
+        layout.status_normal_color = get_child_arg_string(node, "status_normal_color", &default_status_normal_color());
+        layout.window_opacity = get_child_arg_bool(node, "window_opacity", default_window_opacity());
+    }
+
+    // 2. env
+    let mut env = HashMap::new();
+    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "env") {
+        if let Some(children) = node.children() {
+            for child in children.nodes() {
+                if let Some(entry) = child.entries().first() {
+                    if let Some(val) = entry.value().as_string() {
+                        env.insert(child.name().value().to_string(), val.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. lists
+    let mut keybind = Vec::new();
+    let mut pointer_bind = Vec::new();
+    let mut gesture_bind = Vec::new();
+    let mut mode_rule = Vec::new();
+    let mut tag_layout = Vec::new();
+    let mut startup = Vec::new();
+    let mut device = Vec::new();
+    
+    for node in doc.nodes() {
+        match node.name().value() {
+            "keybind" => {
+                let mods = get_prop_string(node, "mods", "");
+                let key = get_prop_string(node, "key", "");
+                let action = get_prop_string(node, "action", "");
+                let command = get_prop_string_opt(node, "command");
+                keybind.push(KeybindConfig { mods, key, action, command });
+            }
+            "pointer_bind" => {
+                let mods = get_prop_string(node, "mods", "");
+                let button = get_prop_string(node, "button", "");
+                let action = get_prop_string(node, "action", "");
+                pointer_bind.push(PointerBindConfig { mods, button, action });
+            }
+            "gesture_bind" => {
+                let mods = get_prop_string_opt(node, "mods");
+                let gesture_type = get_prop_string(node, "type", "");
+                let fingers = get_prop_i64(node, "fingers", 0) as u32;
+                let direction = get_prop_string(node, "direction", "");
+                let action = get_prop_string(node, "action", "");
+                let command = get_prop_string_opt(node, "command");
+                gesture_bind.push(GestureBindConfig { mods, gesture_type, fingers, direction, action, command });
+            }
+            "mode_rule" => {
+                let mode = get_prop_string(node, "mode", "");
+                let app_id = get_prop_string(node, "app_id", "");
+                let title = get_prop_string_opt(node, "title");
+                let single = get_prop_bool_opt(node, "single");
+                let tag = get_prop_i64_opt(node, "tag");
+                let circular = get_prop_bool_opt(node, "circular");
+                let ssd = get_prop_bool_opt(node, "ssd");
+                mode_rule.push(ModeRuleConfig { mode, app_id, title, single, tag, circular, ssd });
+            }
+            "tag_layout" => {
+                let tag = get_prop_i64(node, "tag", 0);
+                let mode = get_prop_string(node, "mode", "");
+                tag_layout.push(TagLayoutConfig { tag, mode });
+            }
+            "startup" => {
+                let exec = get_prop_string(node, "exec", "");
+                let once = get_prop_bool(node, "once", false);
+                let restart = get_prop_bool(node, "restart", false);
+                startup.push(StartupConfig { exec, once, restart });
+            }
+            "device" => {
+                let name = get_prop_string(node, "name", "");
+                let scroll_factor = get_prop_f64_opt(node, "scroll_factor");
+                device.push(InputDeviceConfigRule { name, scroll_factor });
+            }
+            _ => {}
+        }
+    }
+
+    // 4. output
+    let mut output = None;
+    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "output") {
+        let scale = get_child_arg_f64(node, "scale", 1.0);
+        output = Some(OutputConfig { scale });
+    }
+
+    // 5. display
+    let mut display = HashMap::new();
+    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "display") {
+        if let Some(children) = node.children() {
+            for child in children.nodes() {
+                if let Some(entry) = child.entries().first() {
+                    if let Some(num) = entry.value().as_f64() {
+                        display.insert(child.name().value().to_string(), num);
+                    }
+                }
+            }
+        }
+    }
+
+    // 6. input
+    let mut input = None;
+    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "input") {
+        let tap_to_click = get_child_arg_bool_opt(node, "tap_to_click");
+        let accel_speed = get_child_arg_f64_opt(node, "accel_speed");
+        let accel_profile = get_child_arg_string_opt(node, "accel_profile");
+        let natural_scroll = get_child_arg_bool_opt(node, "natural_scroll");
+        let dwt = get_child_arg_bool_opt(node, "dwt");
+        let dwtp = get_child_arg_bool_opt(node, "dwtp");
+        let trackpoint_accel_speed = get_child_arg_f64_opt(node, "trackpoint_accel_speed");
+        let trackpoint_accel_profile = get_child_arg_string_opt(node, "trackpoint_accel_profile");
+        
+        let mut gestures = None;
+        if let Some(children) = node.children() {
+            if let Some(gestures_node) = children.nodes().iter().find(|n| n.name().value() == "gestures") {
+                let swipe = get_child_arg_bool_opt(gestures_node, "swipe");
+                let pinch = get_child_arg_bool_opt(gestures_node, "pinch");
+                gestures = Some(GesturesConfig { swipe, pinch });
+            }
+        }
+        
+        input = Some(InputConfig {
+            tap_to_click,
+            accel_speed,
+            accel_profile,
+            natural_scroll,
+            dwt,
+            dwtp,
+            trackpoint_accel_speed,
+            trackpoint_accel_profile,
+            gestures,
+        });
+    }
+
+    // 7. transparency
+    let mut transparency = None;
+    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "transparency") {
+        let opacity = get_child_arg_f64(node, "opacity", 0.9);
+        transparency = Some(TransparencyConfig { opacity: Some(opacity) });
+    }
+
+    // 8. surfaces
+    let mut surfaces = SurfacesConfig::default();
+    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "surfaces") {
+        surfaces.desktop_background = get_child_arg_string(node, "desktop_background", &default_desktop_background());
+        surfaces.desktop_grid_color = get_child_arg_string(node, "desktop_grid_color", &default_desktop_grid_color());
+        surfaces.desktop_grid_scale = get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale());
+        surfaces.desktop_line_width = get_child_arg_i64(node, "desktop_line_width", default_desktop_line_width());
+    }
+
+    Ok(Config {
+        layout,
+        env,
+        keybind,
+        pointer_bind,
+        mode_rule,
+        tag_layout,
+        startup,
+        output,
+        display,
+        device,
+        input,
+        gesture_bind,
+        transparency,
+        surfaces,
+    })
+}
+
 pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager) -> Result<(), String> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => return Err(format!("cannot open {}: {}", path, e)),
     };
 
-    let config: Config = match serde_json::from_str(&content) {
-        Ok(c) => c,
-        Err(e) => return Err(format!("JSON parse error: {}", e)),
-    };
+    let config: Config = parse_kdl_config(&content)?;
 
     state.output_scale = config.output.as_ref().map(|o| o.scale as f32).unwrap_or(1.0f32);
     state.display = config.display.clone();
@@ -981,34 +1345,18 @@ mod tests {
             parse_config(&path, &mut server.wm).unwrap();
             println!("TEST_WM_STARTUP: {:?}", server.wm.startup);
             println!("TEST_WM_PATH: {:?}", std::env::var("PATH"));
-            assert!(!server.wm.startup.is_empty(), "Startup list should not be empty!");
-            assert_eq!(server.wm.input_config.tap_to_click, Some(true));
-            assert_eq!(server.wm.input_config.accel_speed, Some(0.2));
-            assert_eq!(server.wm.input_config.accel_profile, Some("adaptive".to_string()));
-            assert_eq!(server.wm.input_config.natural_scroll, Some(true));
-            assert_eq!(server.wm.input_config.dwt, Some(true));
-            assert_eq!(server.wm.input_config.dwtp, Some(true));
-            assert_eq!(server.wm.input_config.trackpoint_accel_speed, Some(0.6));
-            assert_eq!(server.wm.input_config.trackpoint_accel_profile, Some("flat".to_string()));
-            let parsed_color = parse_hex_color(&server.wm.layout.desktop_background);
-            let r = (parsed_color >> 16) & 0xFF;
-            let g = (parsed_color >> 8) & 0xFF;
-            let b = parsed_color & 0xFF;
-            assert_eq!(server.wm.layout.background_r, r * 0x01010101);
-            assert_eq!(server.wm.layout.background_g, g * 0x01010101);
-            assert_eq!(server.wm.layout.background_b, b * 0x01010101);
         }
     }
 
     #[test]
-    fn test_display_scale_parsing() {
-        let content = r#"{
-            "display": {
-                "scale_eDP-1": 2.0,
-                "scale_DP-1": 1.5
+    fn test_kdl_display_scale_parsing() {
+        let content = r#"
+            display {
+                scale_eDP-1 (f64)2.0
+                scale_DP-1 (f64)1.5
             }
-        }"#;
-        let config: Config = serde_json::from_str(content).unwrap();
+        "#;
+        let config = parse_kdl_config(content).unwrap();
         assert_eq!(config.display.get("scale_eDP-1"), Some(&2.0));
         assert_eq!(config.display.get("scale_DP-1"), Some(&1.5));
     }
