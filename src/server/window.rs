@@ -1560,8 +1560,10 @@ impl Window {
                 let w = self.rendering_sent.width as i32;
                 let h = self.rendering_sent.height as i32;
                 w.min(h) / 2
-            } else {
+            } else if self.wm_requested.ssd {
                 (*self.server).wm.layout.backplate_corner_radius
+            } else {
+                0
             };
 
             ffi::river_scene_node_set_corner_radius(
