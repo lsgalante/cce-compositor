@@ -1539,7 +1539,20 @@ impl Window {
             if app_id.starts_with("cce-status") {
                 ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
             }
-            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled, (*self.server).wm.layout.scenefx_optimized_blur, ignore_transparent);
+            let geom_x = self.rendering_requested.x;
+            let geom_y = self.rendering_requested.y;
+            let geom_w = self.rendering_sent.width as i32;
+            let geom_h = self.rendering_sent.height as i32;
+            ffi::river_scene_node_enable_blur(
+                self.surfaces.tree as *mut ffi::wlr_scene_node,
+                blur_enabled,
+                (*self.server).wm.layout.scenefx_optimized_blur,
+                ignore_transparent,
+                geom_x,
+                geom_y,
+                geom_w,
+                geom_h,
+            );
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
             let radius = if requested.circular {
@@ -1845,7 +1858,7 @@ impl Window {
             ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
 
             // Disable backdrop blur during active viewport zoom/pan for maximum performance
-            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true);
+            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true, 0, 0, 0, 0);
 
             self.scale_only_render_finish();
             self.draw_borders();
@@ -2779,7 +2792,7 @@ impl Decoration {
         if app_id.starts_with("cce-status") {
             ignore_transparent = (*server).wm.layout.status_backdrop_blur_ignore_transparent;
         }
-        ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, self.rendering_requested.blur, (*server).wm.layout.scenefx_optimized_blur, ignore_transparent);
+        ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, self.rendering_requested.blur, (*server).wm.layout.scenefx_optimized_blur, ignore_transparent, 0, 0, 0, 0);
 
         let scale = (*self.window).scale;
         let scaled_x = (self.rendering_requested.offset_x as f64 * scale) as i32;

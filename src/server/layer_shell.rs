@@ -598,6 +598,10 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
             blur_enabled,
             (*server).wm.layout.scenefx_optimized_blur,
             ignore_transparent,
+            0,
+            0,
+            0,
+            0,
         );
     }
 

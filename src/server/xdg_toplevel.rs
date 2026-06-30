@@ -413,11 +413,19 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     if app_id.starts_with("cce-status") {
         ignore_transparent = (*(*window).server).wm.layout.status_backdrop_blur_ignore_transparent;
     }
+    let geom_x = (*window).rendering_requested.x;
+    let geom_y = (*window).rendering_requested.y;
+    let geom_w = (*window).rendering_sent.width as i32;
+    let geom_h = (*window).rendering_sent.height as i32;
     ffi::river_scene_node_enable_blur(
         (*window).surfaces.tree as *mut ffi::wlr_scene_node,
         (*window).rendering_requested.blur,
         (*(*window).server).wm.layout.scenefx_optimized_blur,
         ignore_transparent,
+        geom_x,
+        geom_y,
+        geom_w,
+        geom_h,
     );
 
     let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;

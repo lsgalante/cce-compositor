@@ -670,7 +670,7 @@ static void get_size_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, v
 	if (buffer->dst_height > size[1]) size[1] = buffer->dst_height;
 }
 
-void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, bool optimized, bool ignore_transparent) {
+void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, bool optimized, bool ignore_transparent, int x, int y, int width, int height) {
 	(void)ignore_transparent;
 	if (node->type != WLR_SCENE_NODE_TREE) {
 		return;
@@ -685,11 +685,14 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, boo
 		return;
 	}
 
-	int width = 0, height = 0;
-	int size[2] = {0, 0};
-	wlr_scene_node_for_each_buffer(node, get_size_iterator, size);
-	width = size[0];
-	height = size[1];
+	if (width <= 0 || height <= 0) {
+		int size[2] = {0, 0};
+		wlr_scene_node_for_each_buffer(node, get_size_iterator, size);
+		width = size[0];
+		height = size[1];
+		x = 0;
+		y = 0;
+	}
 
 	if (width <= 0 || height <= 0) {
 		width = 1920; // Fallback defaults
@@ -724,6 +727,10 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, boo
 		} else {
 			wlr_scene_blur_set_size((struct wlr_scene_blur *)blur_node, width, height);
 		}
+	}
+
+	if (blur_node) {
+		wlr_scene_node_set_position(blur_node, x, y);
 	}
 }
 
