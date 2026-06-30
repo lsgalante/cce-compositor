@@ -703,12 +703,9 @@ impl Output {
                                     rel_x + i,
                                     rel_y + i,
                                 );
-                                if cell_corner_radius > 0 {
-                                    let r_inner = (cell_corner_radius - i).max(0);
-                                    if r_inner > 0 {
-                                        ffi::river_scene_rect_set_corner_radius(cell_rect, r_inner);
-                                    }
-                                }
+                                 if cell_corner_radius > 0 {
+                                     ffi::river_scene_rect_set_corner_radius(cell_rect, cell_corner_radius);
+                                 }
                             }
                             i += step;
                         }
@@ -729,12 +726,9 @@ impl Output {
                                     rel_x + inset_scaled,
                                     rel_y + inset_scaled,
                                 );
-                                if cell_corner_radius > 0 {
-                                    let r_inner = (cell_corner_radius - inset_scaled).max(0);
-                                    if r_inner > 0 {
-                                        ffi::river_scene_rect_set_corner_radius(cell_rect, r_inner);
-                                    }
-                                }
+                                 if cell_corner_radius > 0 {
+                                     ffi::river_scene_rect_set_corner_radius(cell_rect, cell_corner_radius);
+                                 }
                             }
                         }
                     }
