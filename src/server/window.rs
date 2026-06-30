@@ -1539,10 +1539,11 @@ impl Window {
             if app_id.starts_with("cce-status") {
                 ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
             }
-            let geom_x = self.rendering_requested.x;
-            let geom_y = self.rendering_requested.y;
-            let geom_w = self.rendering_sent.width as i32;
-            let geom_h = self.rendering_sent.height as i32;
+            let scale = self.scale;
+            let geom_x = (self.rendering_requested.x as f64 * scale) as i32;
+            let geom_y = (self.rendering_requested.y as f64 * scale) as i32;
+            let geom_w = (self.rendering_sent.width as f64 * scale) as i32;
+            let geom_h = (self.rendering_sent.height as f64 * scale) as i32;
             ffi::river_scene_node_enable_blur(
                 self.surfaces.tree as *mut ffi::wlr_scene_node,
                 blur_enabled,
