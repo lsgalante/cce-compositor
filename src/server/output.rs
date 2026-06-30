@@ -652,7 +652,8 @@ impl Output {
                         continue;
                     }
                     let draw_fade = cell_fade_inset > 0 && !draw_low_res;
-                    let cell_rect = get_rect(rw, rh, cell_color.as_ptr(), rel_x, rel_y, cell_corner_radius);
+                    let scaled_corner_radius = (cell_corner_radius as f64 * zoom) as i32;
+                    let cell_rect = get_rect(rw, rh, cell_color.as_ptr(), rel_x, rel_y, scaled_corner_radius);
                     if !cell_rect.is_null() {
                         let inset_scaled = if draw_fade {
                             (cell_fade_inset as f64 * zoom) as i32

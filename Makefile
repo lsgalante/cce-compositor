@@ -7,6 +7,7 @@ install: build
 	mkdir -p ~/.local/bin
 	@if [ -f ../target/release/cce-fx ]; then \
 		install -m 755 ../target/release/cce-fx ~/.local/bin/cce-fx; \
+		ln -sf cce-fx ~/.local/bin/cce; \
 	else \
 		echo "Error: cce-fx binary not found"; exit 1; \
 	fi
