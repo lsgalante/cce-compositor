@@ -325,8 +325,6 @@ pub struct LayoutConfig {
     pub cascade_offset: i64,
     #[serde(default = "default_bar_height")]
     pub bar_height: i64,
-    #[serde(default = "default_background_color")]
-    pub background_color: String,
     #[serde(default = "default_transition_duration")]
     pub transition_duration: i64,
     #[serde(default = "default_grid_gap")]
@@ -357,7 +355,6 @@ impl Default for LayoutConfig {
             gap_bottom: default_gap_bottom(),
             cascade_offset: default_cascade_offset(),
             bar_height: default_bar_height(),
-            background_color: default_background_color(),
             transition_duration: default_transition_duration(),
             grid_gap: default_grid_gap(),
             window_blur: default_window_blur(),
@@ -378,7 +375,6 @@ fn default_gap_right() -> i64 { 48 }
 fn default_gap_bottom() -> i64 { 48 }
 fn default_cascade_offset() -> i64 { 20 }
 fn default_bar_height() -> i64 { 24 }
-fn default_background_color() -> String { "#0a0a0a".to_string() }
 fn default_transition_duration() -> i64 { 300 }
 fn default_grid_gap() -> i64 { 18 }
 fn default_window_blur() -> bool { false }
@@ -913,7 +909,6 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     }
     
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "style") {
-        layout.background_color = get_nested_prop_string(node, "background", "color", &default_background_color());
         layout.transition_duration = get_nested_prop_i64(node, "window", "transition_duration", default_transition_duration());
         layout.window_blur = get_nested_prop_bool(node, "window", "blur", default_window_blur());
         layout.window_opacity = get_nested_prop_bool(node, "window", "opacity", default_window_opacity());
