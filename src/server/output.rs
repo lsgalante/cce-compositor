@@ -636,7 +636,7 @@ impl Output {
                         continue;
                     }
 
-                    let draw_fade = cell_fade_inset > 0 && !draw_low_res;
+                    let draw_fade = cell_fade_inset > 0 && !draw_low_res && zoom >= 0.5;
                     if !draw_fade {
                         let cell_rect = ffi::wlr_scene_rect_create(
                             self.grid_tree,
@@ -658,8 +658,13 @@ impl Output {
                             }
                         }
                     } else {
-                        let step = if draw_low_res { 8 } else { 1 };
                         let inset_scaled = (cell_fade_inset as f64 * zoom) as i32;
+                        // Limit to at most 10 layers per cell to avoid frame drops when finalizing zoom
+                        let step = if draw_low_res {
+                            8
+                        } else {
+                            ((inset_scaled as f32 / 10.0).ceil() as i32).max(2)
+                        };
 
                         // 0. Draw the cell-sized gap color background rect behind the fade layers
                         let cell_bg_rect = ffi::wlr_scene_rect_create(
