@@ -2004,9 +2004,6 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		break;
 	case WLR_SCENE_NODE_RECT:;
 		struct wlr_scene_rect *scene_rect = wlr_scene_rect_from_node(node);
-		if (scene_rect->color[3] == 0.0) {
-			break;
-		}
 		struct fx_corner_radii rect_corners = scene_rect->corners;
 
 		fx_corner_radii_transform(node_transform, &rect_corners);
@@ -2031,6 +2028,8 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 					.a = scene_rect->color[3],
 				},
 				.clip = &render_region,
+				.blend_mode = scene_rect->color[3] == 1.0f ?
+					WLR_RENDER_BLEND_MODE_NONE : WLR_RENDER_BLEND_MODE_PREMULTIPLIED,
 			},
 			.clipped_region = {
 				.area = rect_clipped_region_box,
