@@ -1,3 +1,7 @@
-/subprojects/
+subprojects/*
 build/
 .cache/
+result
+
+!subprojects/tracy.wrap
+!subprojects/packagefiles

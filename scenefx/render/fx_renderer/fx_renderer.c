@@ -21,6 +21,9 @@
 #include "render/fx_renderer/shaders.h"
 #include "render/fx_renderer/fx_renderer.h"
 #include "render/fx_renderer/util.h"
+#include "render/pass.h"
+#include "render/tracy.h"
+#include "scenefx/render/fx_renderer/fx_offscreen_buffers.h"
 #include "scenefx/render/fx_renderer/fx_renderer.h"
 #include "scenefx/render/pass.h"
 #include "util/time.h"
@@ -78,8 +81,30 @@ static int fx_get_drm_fd(struct wlr_renderer *wlr_renderer) {
 	return renderer->drm_fd;
 }
 
+static inline void free_shaders(struct fx_renderer *renderer) {
+	push_fx_debug(renderer);
+	glDeleteProgram(renderer->shaders.quad.program);
+	glDeleteProgram(renderer->shaders.quad_clip.program);
+	glDeleteProgram(renderer->shaders.quad_round.program);
+	glDeleteProgram(renderer->shaders.quad_grad.program);
+	glDeleteProgram(renderer->shaders.quad_grad_round.program);
+	glDeleteProgram(renderer->shaders.tex_rgba.program);
+	glDeleteProgram(renderer->shaders.tex_rgbx.program);
+	glDeleteProgram(renderer->shaders.tex_ext.program);
+	glDeleteProgram(renderer->shaders.tex_effects_rgba.program);
+	glDeleteProgram(renderer->shaders.tex_effects_rgbx.program);
+	glDeleteProgram(renderer->shaders.tex_effects_ext.program);
+	glDeleteProgram(renderer->shaders.box_shadow.program);
+	glDeleteProgram(renderer->shaders.blur1.program);
+	glDeleteProgram(renderer->shaders.blur2.program);
+	glDeleteProgram(renderer->shaders.blur_effects.program);
+	pop_fx_debug(renderer);
+}
+
 static void fx_renderer_destroy(struct wlr_renderer *wlr_renderer) {
 	struct fx_renderer *renderer = fx_get_renderer(wlr_renderer);
+
+	TRACY_GPU_CONTEXT_DESTROY(renderer->tracy_data);
 
 	wlr_egl_make_current(renderer->egl, NULL);
 
@@ -88,17 +113,17 @@ static void fx_renderer_destroy(struct wlr_renderer *wlr_renderer) {
 		fx_texture_destroy(tex);
 	}
 
+	struct fx_offscreen_buffers *fbos, *fbos_tmp;
+	wl_list_for_each_safe(fbos, fbos_tmp, &renderer->offscreen_buffers, link) {
+		fx_offscreen_buffers_destroy(fbos);
+	}
+
 	struct fx_framebuffer *buffer, *buffer_tmp;
 	wl_list_for_each_safe(buffer, buffer_tmp, &renderer->buffers, link) {
 		fx_framebuffer_destroy(buffer);
 	}
 
-	push_fx_debug(renderer);
-	glDeleteProgram(renderer->shaders.quad.program);
-	glDeleteProgram(renderer->shaders.tex_rgba.program);
-	glDeleteProgram(renderer->shaders.tex_rgbx.program);
-	glDeleteProgram(renderer->shaders.tex_ext.program);
-	pop_fx_debug(renderer);
+	free_shaders(renderer);
 
 	if (renderer->exts.KHR_debug) {
 		glDisable(GL_DEBUG_OUTPUT_KHR);
@@ -119,14 +144,36 @@ static void fx_renderer_destroy(struct wlr_renderer *wlr_renderer) {
 
 static struct wlr_render_pass *begin_buffer_pass(struct wlr_renderer *wlr_renderer,
 		struct wlr_buffer *wlr_buffer, const struct wlr_buffer_pass_options *options) {
-	struct fx_gles_render_pass *pass =
-		fx_renderer_begin_buffer_pass(wlr_renderer, wlr_buffer, NULL, &(struct fx_buffer_pass_options) {
-					.base = options,
-					.swapchain = NULL,
-				});
-	if (!pass) {
+	struct fx_renderer *renderer = fx_get_renderer(wlr_renderer);
+
+	struct wlr_egl_context prev_ctx = {0};
+	if (!wlr_egl_make_current(renderer->egl, &prev_ctx)) {
 		return NULL;
 	}
+
+	TRACY_BOTH_ZONES_START(renderer);
+
+	struct fx_render_timer *timer = NULL;
+	if (options->timer) {
+		timer = fx_get_render_timer(options->timer);
+		clock_gettime(CLOCK_MONOTONIC, &timer->cpu_start);
+	}
+
+	struct fx_framebuffer *buffer = fx_framebuffer_get_or_create(renderer, wlr_buffer);
+	if (!buffer) {
+		TRACY_BOTH_ZONES_END_FAIL;
+		return NULL;
+	}
+
+	struct fx_gles_render_pass *pass = fx_begin_buffer_pass(buffer,
+			&prev_ctx, timer, options->signal_timeline, options->signal_point);
+	if (!pass) {
+		TRACY_BOTH_ZONES_END_FAIL;
+		return NULL;
+	}
+
+	TRACY_BOTH_ZONES_END;
+
 	return &pass->base;
 }
 
@@ -308,62 +355,84 @@ struct wlr_renderer *fx_renderer_create(struct wlr_backend *backend) {
 }
 
 static bool link_shaders(struct fx_renderer *renderer) {
-	EGLint client_version;
-	eglQueryContext(renderer->egl->display, renderer->egl->context,
-		EGL_CONTEXT_CLIENT_VERSION, &client_version);
-
 	// quad fragment shader
-	if (!link_quad_program(&renderer->shaders.quad, (GLint) client_version)) {
+	if (!link_quad_program(&renderer->shaders.quad, false)) {
 		wlr_log(WLR_ERROR, "Could not link quad shader");
 		goto error;
 	}
 
+	// quad clip fragment shader
+	if (!link_quad_program(&renderer->shaders.quad_clip, true)) {
+		wlr_log(WLR_ERROR, "Could not link quad clip shader");
+		goto error;
+	}
+
 	// quad fragment shader with gradients
-	if (!link_quad_grad_program(&renderer->shaders.quad_grad, (GLint) client_version, 16)) {
+	if (!link_quad_grad_program(&renderer->shaders.quad_grad, 16)) {
 		wlr_log(WLR_ERROR, "Could not link quad grad shader");
 		goto error;
 	}
 
-	if (!link_quad_grad_round_program(&renderer->shaders.quad_grad_round, (GLint) client_version, 16)) {
+	if (!link_quad_grad_round_program(&renderer->shaders.quad_grad_round, 16)) {
 		wlr_log(WLR_ERROR, "Could not link quad grad round shader");
 		goto error;
 	}
 
-	if (!link_quad_round_program(&renderer->shaders.quad_round, (GLint) client_version)) {
+	if (!link_quad_round_program(&renderer->shaders.quad_round)) {
 		wlr_log(WLR_ERROR, "Could not link quad round shader");
 		goto error;
 	}
 
-	// fragment shaders
-	if (!link_tex_program(&renderer->shaders.tex_rgba, (GLint) client_version, SHADER_SOURCE_TEXTURE_RGBA)) {
+	// Basic fragment shaders
+	if (!link_tex_program(&renderer->shaders.tex_rgba,
+				SHADER_SOURCE_TEXTURE_RGBA, false)) {
 		wlr_log(WLR_ERROR, "Could not link tex_RGBA shader");
 		goto error;
 	}
-	if (!link_tex_program(&renderer->shaders.tex_rgbx, (GLint) client_version, SHADER_SOURCE_TEXTURE_RGBX)) {
+	if (!link_tex_program(&renderer->shaders.tex_rgbx,
+				SHADER_SOURCE_TEXTURE_RGBX, false)) {
 		wlr_log(WLR_ERROR, "Could not link tex_RGBX shader");
 		goto error;
 	}
-	if (!link_tex_program(&renderer->shaders.tex_ext, (GLint) client_version, SHADER_SOURCE_TEXTURE_EXTERNAL)) {
+	if (!link_tex_program(&renderer->shaders.tex_ext,
+				SHADER_SOURCE_TEXTURE_EXTERNAL, false)) {
 		wlr_log(WLR_ERROR, "Could not link tex_EXTERNAL shader");
 		goto error;
 	}
 
+	// Effects fragment shaders
+	if (!link_tex_program(&renderer->shaders.tex_effects_rgba,
+				SHADER_SOURCE_TEXTURE_RGBA, true)) {
+		wlr_log(WLR_ERROR, "Could not link tex_effects_RGBA shader");
+		goto error;
+	}
+	if (!link_tex_program(&renderer->shaders.tex_effects_rgbx,
+				SHADER_SOURCE_TEXTURE_RGBX, true)) {
+		wlr_log(WLR_ERROR, "Could not link tex_effects_RGBX shader");
+		goto error;
+	}
+	if (!link_tex_program(&renderer->shaders.tex_effects_ext,
+				SHADER_SOURCE_TEXTURE_EXTERNAL, true)) {
+		wlr_log(WLR_ERROR, "Could not link tex_effects_EXTERNAL shader");
+		goto error;
+	}
+
 	// box shadow shader
-	if (!link_box_shadow_program(&renderer->shaders.box_shadow, (GLint) client_version)) {
+	if (!link_box_shadow_program(&renderer->shaders.box_shadow)) {
 		wlr_log(WLR_ERROR, "Could not link box shadow shader");
 		goto error;
 	}
 
 	// Blur shaders
-	if (!link_blur1_program(&renderer->shaders.blur1, (GLint) client_version)) {
+	if (!link_blur1_program(&renderer->shaders.blur1)) {
 		wlr_log(WLR_ERROR, "Could not link blur1 shader");
 		goto error;
 	}
-	if (!link_blur2_program(&renderer->shaders.blur2, (GLint) client_version)) {
+	if (!link_blur2_program(&renderer->shaders.blur2)) {
 		wlr_log(WLR_ERROR, "Could not link blur2 shader");
 		goto error;
 	}
-	if (!link_blur_effects_program(&renderer->shaders.blur_effects, (GLint) client_version)) {
+	if (!link_blur_effects_program(&renderer->shaders.blur_effects)) {
 		wlr_log(WLR_ERROR, "Could not link blur_effects shader");
 		goto error;
 	}
@@ -371,18 +440,7 @@ static bool link_shaders(struct fx_renderer *renderer) {
 	return true;
 
 error:
-	glDeleteProgram(renderer->shaders.quad.program);
-	glDeleteProgram(renderer->shaders.quad_round.program);
-	glDeleteProgram(renderer->shaders.quad_grad.program);
-	glDeleteProgram(renderer->shaders.quad_grad_round.program);
-	glDeleteProgram(renderer->shaders.tex_rgba.program);
-	glDeleteProgram(renderer->shaders.tex_rgbx.program);
-	glDeleteProgram(renderer->shaders.tex_ext.program);
-	glDeleteProgram(renderer->shaders.box_shadow.program);
-	glDeleteProgram(renderer->shaders.blur1.program);
-	glDeleteProgram(renderer->shaders.blur2.program);
-	glDeleteProgram(renderer->shaders.blur_effects.program);
-
+	free_shaders(renderer);
 	return false;
 }
 
@@ -406,6 +464,7 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
 
 	wl_list_init(&renderer->buffers);
 	wl_list_init(&renderer->textures);
+	wl_list_init(&renderer->offscreen_buffers);
 
 	renderer->egl = egl;
 	renderer->exts_str = exts_str;
@@ -493,6 +552,9 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
 		} else {
 			load_gl_proc(&renderer->procs.glGetInteger64vEXT, "glGetInteger64v");
 		}
+		TRACY_FN(
+			load_gl_proc(&renderer->procs.glGetQueryivEXT, "glGetQueryivEXT");
+		)
 	}
 
 	if (renderer->exts.KHR_debug) {
@@ -508,6 +570,10 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
 	}
 
 	push_fx_debug(renderer);
+
+	TRACY_FN(
+		renderer->tracy_data = TRACY_GPU_CONTEXT_NEW(renderer);
+	)
 
 	// Link all shaders
 	if (!link_shaders(renderer)) {

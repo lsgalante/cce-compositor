@@ -6,7 +6,6 @@
 #include <time.h>
 #include <scenefx/render/fx_renderer/fx_renderer.h>
 #include <scenefx/types/fx/clipped_region.h>
-#include <scenefx/types/fx/corner_location.h>
 #include <scenefx/types/wlr_scene.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
@@ -68,6 +67,7 @@ struct tinywl_server {
 	struct wlr_seat *seat;
 	struct wl_listener new_input;
 	struct wl_listener request_cursor;
+	struct wl_listener pointer_focus_change;
 	struct wl_listener request_set_selection;
 	struct wl_list keyboards;
 	enum tinywl_cursor_mode cursor_mode;
@@ -107,6 +107,7 @@ struct tinywl_toplevel {
 
 	float opacity;
 	int corner_radius;
+	struct wlr_scene_blur *blur;
 	struct wlr_scene_shadow *shadow;
 	struct wlr_scene_rect *border;
 };
@@ -348,6 +349,18 @@ static void seat_request_cursor(struct wl_listener *listener, void *data) {
 		 * cursor moves between outputs. */
 		wlr_cursor_set_surface(server->cursor, event->surface,
 				event->hotspot_x, event->hotspot_y);
+	}
+}
+
+static void seat_pointer_focus_change(struct wl_listener *listener, void *data) {
+	struct tinywl_server *server = wl_container_of(
+			listener, server, pointer_focus_change);
+	/* This event is raised when the pointer focus is changed, including when the
+	 * client is closed. We set the cursor image to its default if target surface
+	 * is NULL */
+	struct wlr_seat_pointer_focus_change_event *event = data;
+	if (event->new_surface == NULL) {
+		wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
 	}
 }
 
@@ -599,6 +612,7 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 
 	struct wlr_box *geometry = &toplevel->xdg_toplevel->base->geometry;
 	wlr_scene_subsurface_tree_set_clip(&toplevel->xdg_scene_tree->node, geometry);
+	wlr_scene_blur_set_size(toplevel->blur, geometry->width, geometry->height);
 
 	int border_width = geometry->width + (BORDER_THICKNESS * 2);
 	int border_height = geometry->height + (BORDER_THICKNESS * 2);
@@ -608,8 +622,7 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 
 	wlr_scene_rect_set_size(toplevel->border, border_width, border_height);
 	wlr_scene_rect_set_clipped_region(toplevel->border, (struct clipped_region) {
-			.corner_radius = toplevel->corner_radius,
-			.corners = CORNER_LOCATION_ALL,
+			.corners = corner_radii_all(toplevel->corner_radius),
 			.area = { BORDER_THICKNESS, BORDER_THICKNESS, geometry->width, geometry->height }
 	});
 
@@ -618,8 +631,7 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 			border_width + (blur_sigma * 2),
 			border_height + (blur_sigma * 2));
 	wlr_scene_shadow_set_clipped_region(toplevel->shadow, (struct clipped_region) {
-			.corner_radius = toplevel->corner_radius + BORDER_THICKNESS,
-			.corners = CORNER_LOCATION_ALL,
+			.corners = corner_radii_all(toplevel->corner_radius + BORDER_THICKNESS),
 			.area = { blur_sigma, blur_sigma, border_width, border_height }
 	});
 }
@@ -653,8 +665,8 @@ static void output_configure_scene(struct wlr_scene_node *node,
 			wlr_scene_buffer_set_opacity(buffer, toplevel->opacity);
 
 			if (!wlr_subsurface_try_from_wlr_surface(xdg_surface->surface)) {
-				wlr_scene_buffer_set_corner_radius(
-						buffer, toplevel->corner_radius, CORNER_LOCATION_BOTTOM);
+				wlr_scene_buffer_set_corner_radii(
+						buffer, corner_radii_bottom(toplevel->corner_radius));
 			}
 		}
 	} else if (node->type == WLR_SCENE_NODE_TREE) {
@@ -720,7 +732,7 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	struct wlr_output *wlr_output = data;
 
 	/* Configures the output created by the backend to use our allocator
-	 * and our renderer. Must be done once, before commiting the output */
+	 * and our renderer. Must be done once, before committing the output */
 	wlr_output_init_render(wlr_output, server->allocator, server->renderer);
 
 	/* The output may be disabled, switch it on. */
@@ -803,12 +815,9 @@ static void iter_xdg_scene_buffers(struct wlr_scene_buffer *buffer, int sx,
 		wlr_scene_buffer_set_opacity(buffer, toplevel->opacity);
 
 		if (!wlr_subsurface_try_from_wlr_surface(xdg_surface->surface)) {
-			wlr_scene_buffer_set_corner_radius(buffer, toplevel->corner_radius,
-					CORNER_LOCATION_BOTTOM);
+			wlr_scene_buffer_set_corner_radii(buffer, corner_radii_bottom(toplevel->corner_radius));
 
-			wlr_scene_buffer_set_backdrop_blur(buffer, true);
-			wlr_scene_buffer_set_backdrop_blur_optimized(buffer, true);
-			wlr_scene_buffer_set_backdrop_blur_ignore_transparent(buffer, true);
+			wlr_scene_blur_set_transparency_mask_source(toplevel->blur, buffer);
 		}
 	}
 }
@@ -958,10 +967,13 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
 	toplevel->opacity = 1;
 	toplevel->corner_radius = 20;
 
+	toplevel->blur = wlr_scene_blur_create(toplevel->scene_tree, 0, 0);
+	wlr_scene_blur_set_should_only_blur_bottom_layer(toplevel->blur, true);
+
 	toplevel->border = wlr_scene_rect_create(toplevel->scene_tree, 0, 0,
 			(float[4]){ 1.0f, 0.f, 0.f, 1.0f });
-	wlr_scene_rect_set_corner_radius(toplevel->border,
-			toplevel->corner_radius + BORDER_THICKNESS, CORNER_LOCATION_BOTTOM);
+	wlr_scene_rect_set_corner_radii(toplevel->border,
+			corner_radii_bottom(toplevel->corner_radius + BORDER_THICKNESS));
 	wlr_scene_node_set_position(&toplevel->border->node, -BORDER_THICKNESS, -BORDER_THICKNESS);
 
 	float blur_sigma = 20.0f;
@@ -974,6 +986,8 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
 	wlr_scene_node_lower_to_bottom(&toplevel->border->node);
 	// Lower the shadow below the border
 	wlr_scene_node_lower_to_bottom(&toplevel->shadow->node);
+	// Lower the blur below the shadow
+	wlr_scene_node_lower_to_bottom(&toplevel->blur->node);
 
 	/* Listen to the various events it can emit */
 	toplevel->map.notify = xdg_toplevel_map;
@@ -1066,7 +1080,7 @@ int main(int argc, char *argv[]) {
 
 	struct tinywl_server server = {0};
 	/* The Wayland display is managed by libwayland. It handles accepting
-	 * clients from the Unix socket, manging Wayland globals, and so on. */
+	 * clients from the Unix socket, managing Wayland globals, and so on. */
 	server.wl_display = wl_display_create();
 	/* The backend is a wlroots feature which abstracts the underlying input and
 	 * output hardware. The autocreate option will choose the most suitable
@@ -1144,8 +1158,7 @@ int main(int argc, char *argv[]) {
 	struct wlr_scene_rect *rect = wlr_scene_rect_create(server.layers.toplevel_layer,
 			200, 200, top_rect_color);
 	wlr_scene_rect_set_clipped_region(rect, (struct clipped_region) {
-			.corner_radius = 12,
-			.corners = CORNER_LOCATION_TOP,
+			.corners = {12, 12, 0, 0},
 			.area = {
 				.x = 50,
 				.y = 50,
@@ -1215,6 +1228,9 @@ int main(int argc, char *argv[]) {
 	server.request_cursor.notify = seat_request_cursor;
 	wl_signal_add(&server.seat->events.request_set_cursor,
 			&server.request_cursor);
+	server.pointer_focus_change.notify = seat_pointer_focus_change;
+	wl_signal_add(&server.seat->pointer_state.events.focus_change,
+			&server.pointer_focus_change);
 	server.request_set_selection.notify = seat_request_set_selection;
 	wl_signal_add(&server.seat->events.request_set_selection,
 			&server.request_set_selection);
@@ -1266,6 +1282,7 @@ int main(int argc, char *argv[]) {
 
 	wl_list_remove(&server.new_input.link);
 	wl_list_remove(&server.request_cursor.link);
+	wl_list_remove(&server.pointer_focus_change.link);
 	wl_list_remove(&server.request_set_selection.link);
 
 	wl_list_remove(&server.new_output.link);

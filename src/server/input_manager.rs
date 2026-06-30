@@ -87,12 +87,12 @@ impl InputManager {
         // Connect new_text_input listener
         let new_text_input_ptr = &mut self.new_text_input as *mut ffi::wl_listener as *mut WlListener;
         (*new_text_input_ptr).notify = Some(handle_new_text_input);
-        wl_signal_add(&mut (*self.text_input_manager).events.text_input, &mut self.new_text_input);
+        wl_signal_add(&mut (*self.text_input_manager).events.new_text_input, &mut self.new_text_input);
 
         // Connect new_input_method listener
         let new_input_method_ptr = &mut self.new_input_method as *mut ffi::wl_listener as *mut WlListener;
         (*new_input_method_ptr).notify = Some(handle_new_input_method);
-        wl_signal_add(&mut (*self.input_method_manager).events.input_method, &mut self.new_input_method);
+        wl_signal_add(&mut (*self.input_method_manager).events.new_input_method, &mut self.new_input_method);
 
         // Connect new_virtual_pointer listener
         let new_virtual_pointer_ptr = &mut self.new_virtual_pointer_listener as *mut ffi::wl_listener as *mut WlListener;

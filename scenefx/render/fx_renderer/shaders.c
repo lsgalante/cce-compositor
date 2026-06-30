@@ -2,37 +2,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <wlr/util/log.h>
+#include <scenefx/types/fx/clipped_region.h>
 
 #include "render/fx_renderer/shaders.h"
 
 // shaders
 #include "GLES2/gl2.h"
-// gles3
-#include "common_vert_gles3_src.h"
-#include "gradient_frag_gles3_src.h"
-#include "corner_alpha_frag_gles3_src.h"
-#include "quad_frag_gles3_src.h"
-#include "quad_grad_frag_gles3_src.h"
-#include "quad_round_frag_gles3_src.h"
-#include "quad_grad_round_frag_gles3_src.h"
-#include "tex_frag_gles3_src.h"
-#include "box_shadow_frag_gles3_src.h"
-#include "blur1_frag_gles3_src.h"
-#include "blur2_frag_gles3_src.h"
-#include "blur_effects_frag_gles3_src.h"
-// gles2
-#include "common_vert_gles2_src.h"
-#include "gradient_frag_gles2_src.h"
-#include "corner_alpha_frag_gles2_src.h"
-#include "quad_frag_gles2_src.h"
-#include "quad_grad_frag_gles2_src.h"
-#include "quad_round_frag_gles2_src.h"
-#include "quad_grad_round_frag_gles2_src.h"
-#include "tex_frag_gles2_src.h"
-#include "box_shadow_frag_gles2_src.h"
-#include "blur1_frag_gles2_src.h"
-#include "blur2_frag_gles2_src.h"
-#include "blur_effects_frag_gles2_src.h"
+#include "common_vert_src.h"
+#include "gradient_frag_src.h"
+#include "corner_alpha_frag_src.h"
+#include "quad_frag_src.h"
+#include "quad_grad_frag_src.h"
+#include "quad_round_frag_src.h"
+#include "quad_grad_round_frag_src.h"
+#include "tex_frag_src.h"
+#include "box_shadow_frag_src.h"
+#include "blur1_frag_src.h"
+#include "blur2_frag_src.h"
+#include "blur_effects_frag_src.h"
 
 GLuint compile_shader(GLuint type, const GLchar *src) {
 	GLuint shader = glCreateShader(type);
@@ -50,9 +37,8 @@ GLuint compile_shader(GLuint type, const GLchar *src) {
 	return shader;
 }
 
-GLuint link_program(const GLchar *frag_src, GLint client_version) {
-	const GLchar *vert_src = client_version > 2 ? common_vert_gles3_src : common_vert_gles2_src;
-	GLuint vert = compile_shader(GL_VERTEX_SHADER, vert_src);
+GLuint link_program(const GLchar *frag_src) {
+	GLuint vert = compile_shader(GL_VERTEX_SHADER, common_vert_src);
 	if (!vert) {
 		goto error;
 	}
@@ -115,20 +101,25 @@ void load_gl_proc(void *proc_ptr, const char *name) {
 	*(void **)proc_ptr = proc;
 }
 
+void uniform_corner_radii_set(const struct shader_corner_radii *uniform,
+		const struct fx_corner_fradii *corners) {
+	glUniform1f(uniform->top_left, corners->top_left);
+	glUniform1f(uniform->top_right, corners->top_right);
+	glUniform1f(uniform->bottom_left, corners->bottom_left);
+	glUniform1f(uniform->bottom_right, corners->bottom_right);
+}
 // Shaders
 
-bool link_quad_program(struct quad_shader *shader, GLint client_version) {
-	GLchar quad_src[4096];
-	if (client_version > 2) {
-		snprintf(quad_src, sizeof(quad_src), "%s\n%s", quad_frag_gles3_src,
-			corner_alpha_frag_gles3_src);
-	} else {
-		snprintf(quad_src, sizeof(quad_src), "%s\n%s", quad_frag_gles2_src,
-			corner_alpha_frag_gles2_src);
-	}
+bool link_quad_program(struct quad_shader *shader, bool clip) {
+	GLchar quad_src_part[2048];
+	GLchar quad_src[8192];
+	snprintf(quad_src_part, sizeof(quad_src_part),
+		quad_frag_src, clip);
+	snprintf(quad_src, sizeof(quad_src),
+		"%s\n%s\n", quad_src_part, clip ? corner_alpha_frag_src : "");
 
 	GLuint prog;
-	shader->program = prog = link_program(quad_src, client_version);
+	shader->program = prog = link_program(quad_src);
 	if (!shader->program) {
 		return false;
 	}
@@ -136,33 +127,30 @@ bool link_quad_program(struct quad_shader *shader, GLint client_version) {
 	shader->proj = glGetUniformLocation(prog, "proj");
 	shader->color = glGetUniformLocation(prog, "color");
 	shader->pos_attrib = glGetAttribLocation(prog, "pos");
-	shader->clip_size = glGetUniformLocation(prog, "clip_size");
-	shader->clip_position = glGetUniformLocation(prog, "clip_position");
-	shader->clip_radius_top_left = glGetUniformLocation(prog, "clip_radius_top_left");
-	shader->clip_radius_top_right = glGetUniformLocation(prog, "clip_radius_top_right");
-	shader->clip_radius_bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
-	shader->clip_radius_bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
+
+	if (!clip) {
+		return true;
+	}
+	shader->effects.clip_size = glGetUniformLocation(prog, "clip_size");
+	shader->effects.clip_position = glGetUniformLocation(prog, "clip_position");
+	shader->effects.clip_radius.top_left = glGetUniformLocation(prog, "clip_radius_top_left");
+	shader->effects.clip_radius.top_right = glGetUniformLocation(prog, "clip_radius_top_right");
+	shader->effects.clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
+	shader->effects.clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
 
 	return true;
 }
 
-bool link_quad_grad_program(struct quad_grad_shader *shader, GLint client_version, int max_len) {
+bool link_quad_grad_program(struct quad_grad_shader *shader, int max_len) {
 	GLchar quad_src_part[2048];
 	GLchar quad_src[4096];
-	if (client_version > 2) {
-		snprintf(quad_src_part, sizeof(quad_src_part),
-			quad_grad_frag_gles3_src, max_len);
-		snprintf(quad_src, sizeof(quad_src),
-			"%s\n%s", quad_src_part, gradient_frag_gles3_src);
-	} else {
-		snprintf(quad_src_part, sizeof(quad_src_part),
-			quad_grad_frag_gles2_src, max_len);
-		snprintf(quad_src, sizeof(quad_src),
-			"%s\n%s", quad_src_part, gradient_frag_gles2_src);
-	}
+	snprintf(quad_src_part, sizeof(quad_src_part),
+		quad_grad_frag_src, max_len);
+	snprintf(quad_src, sizeof(quad_src),
+		"%s\n%s", quad_src_part, gradient_frag_src);
 
 	GLuint prog;
-	shader->program = prog = link_program(quad_src, client_version);
+	shader->program = prog = link_program(quad_src);
 	if (!shader->program) {
 		return false;
 	}
@@ -183,18 +171,13 @@ bool link_quad_grad_program(struct quad_grad_shader *shader, GLint client_versio
 	return true;
 }
 
-bool link_quad_round_program(struct quad_round_shader *shader, GLint client_version) {
+bool link_quad_round_program(struct quad_round_shader *shader) {
 	GLchar quad_src[8192];
-	if (client_version > 2) {
-		snprintf(quad_src, sizeof(quad_src), "%s\n%s", quad_round_frag_gles3_src,
-			corner_alpha_frag_gles3_src);
-	} else {
-		snprintf(quad_src, sizeof(quad_src), "%s\n%s", quad_round_frag_gles2_src,
-			corner_alpha_frag_gles2_src);
-	}
+	snprintf(quad_src, sizeof(quad_src), "%s\n%s", quad_round_frag_src,
+		corner_alpha_frag_src);
 
 	GLuint prog;
-	shader->program = prog = link_program(quad_src, client_version);
+	shader->program = prog = link_program(quad_src);
 	if (!shader->program) {
 		return false;
 	}
@@ -204,39 +187,32 @@ bool link_quad_round_program(struct quad_round_shader *shader, GLint client_vers
 	shader->pos_attrib = glGetAttribLocation(prog, "pos");
 	shader->size = glGetUniformLocation(prog, "size");
 	shader->position = glGetUniformLocation(prog, "position");
-	shader->radius_top_left = glGetUniformLocation(prog, "radius_top_left");
-	shader->radius_top_right = glGetUniformLocation(prog, "radius_top_right");
-	shader->radius_bottom_left = glGetUniformLocation(prog, "radius_bottom_left");
-	shader->radius_bottom_right = glGetUniformLocation(prog, "radius_bottom_right");
+	shader->radius.top_left = glGetUniformLocation(prog, "radius_top_left");
+	shader->radius.top_right = glGetUniformLocation(prog, "radius_top_right");
+	shader->radius.bottom_left = glGetUniformLocation(prog, "radius_bottom_left");
+	shader->radius.bottom_right = glGetUniformLocation(prog, "radius_bottom_right");
 
 	shader->clip_size = glGetUniformLocation(prog, "clip_size");
 	shader->clip_position = glGetUniformLocation(prog, "clip_position");
-	shader->clip_radius_top_left = glGetUniformLocation(prog, "clip_radius_top_left");
-	shader->clip_radius_top_right = glGetUniformLocation(prog, "clip_radius_top_right");
-	shader->clip_radius_bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
-	shader->clip_radius_bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
+	shader->clip_radius.top_left = glGetUniformLocation(prog, "clip_radius_top_left");
+	shader->clip_radius.top_right = glGetUniformLocation(prog, "clip_radius_top_right");
+	shader->clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
+	shader->clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
 	shader->fade_inset = glGetUniformLocation(prog, "fade_inset");
 
 	return true;
 }
 
-bool link_quad_grad_round_program(struct quad_grad_round_shader *shader, GLint client_version, int max_len) {
+bool link_quad_grad_round_program(struct quad_grad_round_shader *shader, int max_len) {
 	GLchar quad_src_part[2048];
 	GLchar quad_src[8192];
-	if (client_version > 2) {
-		snprintf(quad_src_part, sizeof(quad_src_part),
-			quad_grad_round_frag_gles3_src, max_len);
-		snprintf(quad_src, sizeof(quad_src),
-			"%s\n%s\n%s", quad_src_part, gradient_frag_gles3_src, corner_alpha_frag_gles3_src);
-	} else {
-		snprintf(quad_src_part, sizeof(quad_src_part),
-			quad_grad_round_frag_gles2_src, max_len);
-		snprintf(quad_src, sizeof(quad_src),
-			"%s\n%s\n%s", quad_src_part, gradient_frag_gles2_src, corner_alpha_frag_gles2_src);
-	}
+	snprintf(quad_src_part, sizeof(quad_src_part),
+		quad_grad_round_frag_src, max_len);
+	snprintf(quad_src, sizeof(quad_src),
+		"%s\n%s\n%s", quad_src_part, gradient_frag_src, corner_alpha_frag_src);
 
 	GLuint prog;
-	shader->program = prog = link_program(quad_src, client_version);
+	shader->program = prog = link_program(quad_src);
 	if (!shader->program) {
 		return false;
 	}
@@ -246,10 +222,10 @@ bool link_quad_grad_round_program(struct quad_grad_round_shader *shader, GLint c
 	shader->pos_attrib = glGetAttribLocation(prog, "pos");
 	shader->size = glGetUniformLocation(prog, "size");
 	shader->position = glGetUniformLocation(prog, "position");
-	shader->radius_top_left = glGetUniformLocation(prog, "radius_top_left");
-	shader->radius_top_right = glGetUniformLocation(prog, "radius_top_right");
-	shader->radius_bottom_left = glGetUniformLocation(prog, "radius_bottom_left");
-	shader->radius_bottom_right = glGetUniformLocation(prog, "radius_bottom_right");
+	shader->radius.top_left = glGetUniformLocation(prog, "radius_top_left");
+	shader->radius.top_right = glGetUniformLocation(prog, "radius_top_right");
+	shader->radius.bottom_left = glGetUniformLocation(prog, "radius_bottom_left");
+	shader->radius.bottom_right = glGetUniformLocation(prog, "radius_bottom_right");
 
 	shader->grad_size = glGetUniformLocation(prog, "grad_size");
 	shader->colors = glGetUniformLocation(prog, "colors");
@@ -265,23 +241,17 @@ bool link_quad_grad_round_program(struct quad_grad_round_shader *shader, GLint c
 	return true;
 }
 
-bool link_tex_program(struct tex_shader *shader, GLint client_version, enum fx_tex_shader_source source) {
-	GLchar frag_src_part[2048];
-	GLchar frag_src[4096];
-	if (client_version > 2) {
-		snprintf(frag_src_part, sizeof(frag_src_part),
-			tex_frag_gles3_src, source);
-		snprintf(frag_src, sizeof(frag_src),
-			"%s\n%s\n", frag_src_part, corner_alpha_frag_gles3_src);
-	} else {
-		snprintf(frag_src_part, sizeof(frag_src_part),
-			tex_frag_gles2_src, source);
-		snprintf(frag_src, sizeof(frag_src),
-			"%s\n%s\n", frag_src_part, corner_alpha_frag_gles2_src);
-	}
+bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source source,
+		bool effects) {
+	GLchar frag_src_part[4096];
+	GLchar frag_src[8192];
+	snprintf(frag_src_part, sizeof(frag_src_part),
+		tex_frag_src, source, effects);
+	snprintf(frag_src, sizeof(frag_src),
+		"%s\n%s\n", frag_src_part, effects ? corner_alpha_frag_src : "");
 
 	GLuint prog;
-	shader->program = prog = link_program(frag_src, client_version);
+	shader->program = prog = link_program(frag_src);
 	if (!shader->program) {
 		return false;
 	}
@@ -291,29 +261,36 @@ bool link_tex_program(struct tex_shader *shader, GLint client_version, enum fx_t
 	shader->alpha = glGetUniformLocation(prog, "alpha");
 	shader->pos_attrib = glGetAttribLocation(prog, "pos");
 	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
-	shader->size = glGetUniformLocation(prog, "size");
-	shader->position = glGetUniformLocation(prog, "position");
-	shader->radius_top_left = glGetUniformLocation(prog, "radius_top_left");
-	shader->radius_top_right = glGetUniformLocation(prog, "radius_top_right");
-	shader->radius_bottom_left = glGetUniformLocation(prog, "radius_bottom_left");
-	shader->radius_bottom_right = glGetUniformLocation(prog, "radius_bottom_right");
+
 	shader->discard_transparent = glGetUniformLocation(prog, "discard_transparent");
+
+	if (!effects) {
+		return true;
+	}
+	shader->effects.size = glGetUniformLocation(prog, "size");
+	shader->effects.position = glGetUniformLocation(prog, "position");
+	shader->effects.radius.top_left = glGetUniformLocation(prog, "radius_top_left");
+	shader->effects.radius.top_right = glGetUniformLocation(prog, "radius_top_right");
+	shader->effects.radius.bottom_left = glGetUniformLocation(prog, "radius_bottom_left");
+	shader->effects.radius.bottom_right = glGetUniformLocation(prog, "radius_bottom_right");
+
+	shader->effects.clip_size = glGetUniformLocation(prog, "clip_size");
+	shader->effects.clip_position = glGetUniformLocation(prog, "clip_position");
+	shader->effects.clip_radius.top_left = glGetUniformLocation(prog, "clip_radius_top_left");
+	shader->effects.clip_radius.top_right = glGetUniformLocation(prog, "clip_radius_top_right");
+	shader->effects.clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
+	shader->effects.clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
 
 	return true;
 }
 
-bool link_box_shadow_program(struct box_shadow_shader *shader, GLint client_version) {
+bool link_box_shadow_program(struct box_shadow_shader *shader) {
 	GLchar shadow_src[8192];
-	if (client_version > 2) {
-		snprintf(shadow_src, sizeof(shadow_src), "%s\n%s", box_shadow_frag_gles3_src,
-			corner_alpha_frag_gles3_src);
-	} else {
-		snprintf(shadow_src, sizeof(shadow_src), "%s\n%s", box_shadow_frag_gles2_src,
-			corner_alpha_frag_gles2_src);
-	}
+	snprintf(shadow_src, sizeof(shadow_src), "%s\n%s", box_shadow_frag_src,
+		corner_alpha_frag_src);
 
 	GLuint prog;
-	shader->program = prog = link_program(shadow_src, client_version);
+	shader->program = prog = link_program(shadow_src);
 	if (!shader->program) {
 		return false;
 	}
@@ -326,18 +303,17 @@ bool link_box_shadow_program(struct box_shadow_shader *shader, GLint client_vers
 	shader->corner_radius = glGetUniformLocation(prog, "corner_radius");
 	shader->clip_position = glGetUniformLocation(prog, "clip_position");
 	shader->clip_size = glGetUniformLocation(prog, "clip_size");
-	shader->clip_radius_top_left = glGetUniformLocation(prog, "clip_radius_top_left");
-	shader->clip_radius_top_right = glGetUniformLocation(prog, "clip_radius_top_right");
-	shader->clip_radius_bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
-	shader->clip_radius_bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
+	shader->clip_radius.top_left = glGetUniformLocation(prog, "clip_radius_top_left");
+	shader->clip_radius.top_right = glGetUniformLocation(prog, "clip_radius_top_right");
+	shader->clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
+	shader->clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
 
 	return true;
 }
 
-bool link_blur1_program(struct blur_shader *shader, GLint client_version) {
+bool link_blur1_program(struct blur_shader *shader) {
 	GLuint prog;
-	shader->program = prog = client_version > 2 ? link_program(blur1_frag_gles3_src, client_version)
-		: link_program(blur1_frag_gles2_src, client_version);
+	shader->program = prog = link_program(blur1_frag_src);
 	if (!shader->program) {
 		return false;
 	}
@@ -351,10 +327,9 @@ bool link_blur1_program(struct blur_shader *shader, GLint client_version) {
 	return true;
 }
 
-bool link_blur2_program(struct blur_shader *shader, GLint client_version) {
+bool link_blur2_program(struct blur_shader *shader) {
 	GLuint prog;
-	shader->program = prog = client_version > 2 ? link_program(blur2_frag_gles3_src, client_version)
-		: link_program(blur2_frag_gles2_src, client_version);
+	shader->program = prog = link_program(blur2_frag_src);
 	if (!shader->program) {
 		return false;
 	}
@@ -368,10 +343,9 @@ bool link_blur2_program(struct blur_shader *shader, GLint client_version) {
 	return true;
 }
 
-bool link_blur_effects_program(struct blur_effects_shader *shader, GLint client_version) {
+bool link_blur_effects_program(struct blur_effects_shader *shader) {
 	GLuint prog;
-	shader->program = prog = client_version > 2 ? link_program(blur_effects_frag_gles3_src, client_version)
-		: link_program(blur_effects_frag_gles2_src, client_version);
+	shader->program = prog = link_program(blur_effects_frag_src);
 	if (!shader->program) {
 		return false;
 	}

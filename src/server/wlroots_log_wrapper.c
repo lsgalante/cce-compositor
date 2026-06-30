@@ -652,35 +652,79 @@ void river_wlr_keyboard_init(struct wlr_keyboard *keyboard,
 	wlr_keyboard_init(keyboard, &impl, name);
 }
 
-struct river_blur_data {
-	bool enabled;
-	bool optimized;
-	bool ignore_transparent;
-};
+static struct wlr_scene_node *find_blur_node(struct wlr_scene_tree *tree) {
+	struct wlr_scene_node *child;
+	wl_list_for_each(child, &tree->children, link) {
+		if (child->type == WLR_SCENE_NODE_BLUR || child->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
+			return child;
+		}
+	}
+	return NULL;
+}
 
-static void enable_blur_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
+static void get_size_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
 	(void)sx;
 	(void)sy;
-	struct wlr_scene_surface *scene_surface = wlr_scene_surface_try_from_buffer(buffer);
-	if (!scene_surface) {
-		return;
-	}
-	struct river_blur_data *data = (struct river_blur_data *)user_data;
-	bool enabled = data->enabled;
-	bool optimized = data->optimized && enabled;
-	bool ignore_transparent = data->ignore_transparent && enabled;
-	if (buffer->backdrop_blur != enabled ||
-		buffer->backdrop_blur_optimized != optimized ||
-		buffer->backdrop_blur_ignore_transparent != ignore_transparent) {
-		wlr_scene_buffer_set_backdrop_blur(buffer, enabled);
-		wlr_scene_buffer_set_backdrop_blur_optimized(buffer, optimized);
-		wlr_scene_buffer_set_backdrop_blur_ignore_transparent(buffer, ignore_transparent);
-	}
+	int *size = (int *)user_data;
+	if (buffer->dst_width > size[0]) size[0] = buffer->dst_width;
+	if (buffer->dst_height > size[1]) size[1] = buffer->dst_height;
 }
 
 void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, bool optimized, bool ignore_transparent) {
-	struct river_blur_data data = { .enabled = enabled, .optimized = optimized, .ignore_transparent = ignore_transparent };
-	wlr_scene_node_for_each_buffer(node, enable_blur_iterator, &data);
+	(void)ignore_transparent;
+	if (node->type != WLR_SCENE_NODE_TREE) {
+		return;
+	}
+	struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
+	struct wlr_scene_node *blur_node = find_blur_node(tree);
+
+	if (!enabled) {
+		if (blur_node) {
+			wlr_scene_node_destroy(blur_node);
+		}
+		return;
+	}
+
+	int width = 0, height = 0;
+	int size[2] = {0, 0};
+	wlr_scene_node_for_each_buffer(node, get_size_iterator, size);
+	width = size[0];
+	height = size[1];
+
+	if (width <= 0 || height <= 0) {
+		width = 1920; // Fallback defaults
+		height = 1080;
+	}
+
+	enum wlr_scene_node_type expected_type = optimized ? WLR_SCENE_NODE_OPTIMIZED_BLUR : WLR_SCENE_NODE_BLUR;
+	if (blur_node && blur_node->type != expected_type) {
+		wlr_scene_node_destroy(blur_node);
+		blur_node = NULL;
+	}
+
+	if (!blur_node) {
+		if (optimized) {
+			struct wlr_scene_optimized_blur *opt_blur = wlr_scene_optimized_blur_create(tree, width, height);
+			if (opt_blur) {
+				blur_node = &opt_blur->node;
+			}
+		} else {
+			struct wlr_scene_blur *std_blur = wlr_scene_blur_create(tree, width, height);
+			if (std_blur) {
+				wlr_scene_blur_set_should_only_blur_bottom_layer(std_blur, true);
+				blur_node = &std_blur->node;
+			}
+		}
+		if (blur_node) {
+			wlr_scene_node_lower_to_bottom(blur_node);
+		}
+	} else {
+		if (optimized) {
+			wlr_scene_optimized_blur_set_size((struct wlr_scene_optimized_blur *)blur_node, width, height);
+		} else {
+			wlr_scene_blur_set_size((struct wlr_scene_blur *)blur_node, width, height);
+		}
+	}
 }
 
 static void set_opacity_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
@@ -700,13 +744,18 @@ static void set_corner_radius_iterator(struct wlr_scene_buffer *buffer, int sx, 
 	(void)sx;
 	(void)sy;
 	int radius = *(int *)user_data;
-	if (buffer->corner_radius != radius || buffer->corners != CORNER_LOCATION_ALL) {
-		wlr_scene_buffer_set_corner_radius(buffer, radius, CORNER_LOCATION_ALL);
-	}
+	wlr_scene_buffer_set_corner_radius(buffer, radius);
 }
 
 void river_scene_node_set_corner_radius(struct wlr_scene_node *node, int radius) {
 	wlr_scene_node_for_each_buffer(node, set_corner_radius_iterator, &radius);
+	if (node->type == WLR_SCENE_NODE_TREE) {
+		struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
+		struct wlr_scene_node *blur_node = find_blur_node(tree);
+		if (blur_node && blur_node->type == WLR_SCENE_NODE_BLUR) {
+			wlr_scene_blur_set_corner_radius((struct wlr_scene_blur *)blur_node, radius);
+		}
+	}
 }
 
 void river_scene_buffer_set_dest_size_if_changed(struct wlr_scene_buffer *scene_buffer, int width, int height) {
@@ -728,7 +777,7 @@ void river_scene_rect_set_size_if_changed(struct wlr_scene_rect *rect, int width
 }
 
 void river_scene_rect_set_corner_radius(struct wlr_scene_rect *rect, int radius) {
-	wlr_scene_rect_set_corner_radius(rect, radius, CORNER_LOCATION_ALL);
+	wlr_scene_rect_set_corner_radius(rect, radius);
 }
 
 int river_scene_buffer_get_width(struct wlr_scene_buffer *scene_buffer) {

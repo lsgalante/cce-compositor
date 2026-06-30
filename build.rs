@@ -31,16 +31,17 @@ fn main() {
     let scenefx_include_paths = vec![scenefx_inc1, scenefx_inc2, scenefx_inc3];
 
     println!("cargo:rustc-link-search=native={}/scenefx/build", manifest_dir);
-    println!("cargo:rustc-link-lib=static=scenefx-0.4");
+    println!("cargo:rustc-link-lib=static=scenefx-0.5");
     println!("cargo:rustc-link-lib=dylib=GLESv2");
     println!("cargo:rustc-link-lib=dylib=EGL");
     println!("cargo:rustc-link-lib=dylib=drm");
     println!("cargo:rustc-link-lib=dylib=gbm");
+    println!("cargo:rustc-link-lib=dylib=lcms2");
 
     let wlroots = pkg_config::Config::new()
-        .atleast_version("0.19.0")
-        .probe("wlroots-0.19")
-        .expect("wlroots-0.19 is required");
+        .atleast_version("0.20.0")
+        .probe("wlroots-0.20")
+        .expect("wlroots-0.20 is required");
 
     let wl_server = pkg_config::probe_library("wayland-server")
         .expect("wayland-server is required");

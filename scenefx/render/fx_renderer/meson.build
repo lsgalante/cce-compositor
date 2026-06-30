@@ -7,11 +7,12 @@ endif
 
 scenefx_files += files(
 	'util.c',
+	'tracy.c',
 	'shaders.c',
 	'pixel_format.c',
 	'fx_pass.c',
 	'fx_framebuffer.c',
-	'fx_effect_framebuffers.c',
+	'fx_offscreen_buffers.c',
 	'fx_texture.c',
 	'fx_renderer.c',
 )
@@ -35,12 +36,12 @@ if 'gles2' in renderers or 'auto' in renderers
 	gbm = dependency('gbm', required: 'gles2' in renderers)
 	glesv2 = dependency('glesv2', required: 'gles2' in renderers)
 
-	glslang = find_program('glslang', 'glslangValidator', native: true, required: false, disabler: true)
-
 	if egl.found() and gbm.found() and glesv2.found()
 		scenefx_deps += [egl, gbm, glesv2]
+		features += {'gles2-renderer': true}
+		internal_features += {'egl': true}
 	endif
-	subdir('gles3')
-	subdir('gles2')
-endif
 
+	subdir('shaders')
+
+endif

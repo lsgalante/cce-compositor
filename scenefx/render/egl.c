@@ -156,7 +156,7 @@ static void init_dmabuf_formats(struct wlr_egl *egl) {
 		}
 
 		if (modifiers_len == 0) {
-			// Asume the linear layout is supported if the driver doesn't
+			// Assume the linear layout is supported if the driver doesn't
 			// explicitly say otherwise
 			wlr_drm_format_set_add(&egl->dmabuf_texture_formats, fmt,
 				DRM_FORMAT_MOD_LINEAR);
@@ -260,7 +260,8 @@ static struct wlr_egl *egl_create(void) {
 	return egl;
 }
 
-static bool egl_init_display(struct wlr_egl *egl, EGLDisplay display) {
+static bool egl_init_display(struct wlr_egl *egl, EGLDisplay display,
+		bool allow_software) {
 	egl->display = display;
 
 	EGLint major, minor;
@@ -326,9 +327,8 @@ static bool egl_init_display(struct wlr_egl *egl, EGLDisplay display) {
 
 		// The only way a non-DRM device is selected is when the user
 		// explicitly picks software rendering
-		if (check_egl_ext(device_exts_str, "EGL_MESA_device_software") &&
-				egl->exts.EXT_device_drm) {
-			if (env_parse_bool("WLR_RENDERER_ALLOW_SOFTWARE")) {
+		if (check_egl_ext(device_exts_str, "EGL_MESA_device_software")) {
+			if (allow_software || env_parse_bool("WLR_RENDERER_ALLOW_SOFTWARE")) {
 				wlr_log(WLR_INFO, "Using software rendering");
 			} else {
 				wlr_log(WLR_ERROR, "Software rendering detected, please use "
@@ -382,7 +382,7 @@ static bool egl_init_display(struct wlr_egl *egl, EGLDisplay display) {
 }
 
 static bool egl_init(struct wlr_egl *egl, EGLenum platform,
-		void *remote_display) {
+		void *remote_display, bool allow_software) {
 	EGLint display_attribs[3] = {0};
 	size_t display_attribs_len = 0;
 
@@ -401,7 +401,7 @@ static bool egl_init(struct wlr_egl *egl, EGLenum platform,
 		return false;
 	}
 
-	if (!egl_init_display(egl, display)) {
+	if (!egl_init_display(egl, display, allow_software)) {
 		if (egl->exts.KHR_display_reference) {
 			eglTerminate(display);
 		}
@@ -411,10 +411,8 @@ static bool egl_init(struct wlr_egl *egl, EGLenum platform,
 	size_t atti = 0;
 	EGLint attribs[7];
 
-	// Try with gles3 first to check if the graphics drivers support it.
-	// If it fails, it will fallback to gles2
 	attribs[atti++] = EGL_CONTEXT_CLIENT_VERSION;
-	attribs[atti++] = 3;
+	attribs[atti++] = 2;
 
 	// Request a high priority context if possible
 	// TODO: only do this if we're running as the DRM master
@@ -435,24 +433,13 @@ static bool egl_init(struct wlr_egl *egl, EGLenum platform,
 	attribs[atti++] = EGL_NONE;
 	assert(atti <= sizeof(attribs)/sizeof(attribs[0]));
 
-	// Attempt to create a context with gles3
 	egl->context = eglCreateContext(egl->display, EGL_NO_CONFIG_KHR,
 		EGL_NO_CONTEXT, attribs);
 	if (egl->context != EGL_NO_CONTEXT) {
-		wlr_log(WLR_DEBUG, "Created EGL context using OpenGL ES 3.0");
+		wlr_log(WLR_DEBUG, "Created EGL context using OpenGL ES 2.0");
 	} else {
-		wlr_log(WLR_INFO, "Failed to create EGL context using OpenGL ES 3.0");
-
-		// Retry with gles2
-		attribs[1] = 2;
-		egl->context = eglCreateContext(egl->display, EGL_NO_CONFIG_KHR,
-			EGL_NO_CONTEXT, attribs);
-		if (egl->context != EGL_NO_CONTEXT) {
-			wlr_log(WLR_DEBUG, "Created EGL context using OpenGL ES 2.0");
-		} else {
-			wlr_log(WLR_ERROR, "Failed to create EGL context using OpenGL ES 2.0");
-			return false;
-		}
+		wlr_log(WLR_ERROR, "Failed to create EGL context using OpenGL ES 2.0");
+		return false;
 	}
 
 	if (request_high_priority) {
@@ -572,6 +559,8 @@ static int open_render_node(int drm_fd) {
 }
 
 struct wlr_egl *wlr_egl_create_with_drm_fd(int drm_fd) {
+	bool allow_software = drm_fd < 0;
+
 	struct wlr_egl *egl = egl_create();
 	if (egl == NULL) {
 		wlr_log(WLR_ERROR, "Failed to create EGL context");
@@ -585,7 +574,7 @@ struct wlr_egl *wlr_egl_create_with_drm_fd(int drm_fd) {
 		 */
 		EGLDeviceEXT egl_device = get_egl_device_from_drm_fd(egl, drm_fd);
 		if (egl_device != EGL_NO_DEVICE_EXT) {
-			if (egl_init(egl, EGL_PLATFORM_DEVICE_EXT, egl_device)) {
+			if (egl_init(egl, EGL_PLATFORM_DEVICE_EXT, egl_device, allow_software)) {
 				wlr_log(WLR_DEBUG, "Using EGL_PLATFORM_DEVICE_EXT");
 				return egl;
 			}
@@ -610,7 +599,7 @@ struct wlr_egl *wlr_egl_create_with_drm_fd(int drm_fd) {
 			goto error;
 		}
 
-		if (egl_init(egl, EGL_PLATFORM_GBM_KHR, egl->gbm_device)) {
+		if (egl_init(egl, EGL_PLATFORM_GBM_KHR, egl->gbm_device, allow_software)) {
 			wlr_log(WLR_DEBUG, "Using EGL_PLATFORM_GBM_KHR");
 			return egl;
 		}
@@ -649,7 +638,7 @@ struct wlr_egl *wlr_egl_create_with_context(EGLDisplay display,
 		return NULL;
 	}
 
-	if (!egl_init_display(egl, display)) {
+	if (!egl_init_display(egl, display, true)) {
 		free(egl);
 		return NULL;
 	}

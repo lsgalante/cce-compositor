@@ -1,11 +1,13 @@
 // Writeup: https://madebyevan.com/shaders/fast-rounded-rectangle-shadows/
 
-#version 300 es
-
+#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
+#else
+precision mediump float;
+#endif
 
-in vec4 v_color;
-in vec2 v_texcoord;
+varying vec4 v_color;
+varying vec2 v_texcoord;
 
 uniform vec2 position;
 uniform vec2 size;
@@ -17,8 +19,6 @@ uniform float clip_radius_top_left;
 uniform float clip_radius_top_right;
 uniform float clip_radius_bottom_left;
 uniform float clip_radius_bottom_right;
-
-out vec4 fragColor;
 
 float gaussian(float x, float sigma) {
     const float pi = 3.141592653589793;
@@ -66,12 +66,8 @@ float roundedBoxShadow(vec2 lower, vec2 upper, vec2 point, float sigma, float co
     return value;
 }
 
-// per-pixel "random" number between 0 and 1
-float random() {
-    return fract(sin(dot(vec2(12.9898, 78.233), gl_FragCoord.xy)) * 43758.5453);
-}
-
-float corner_alpha(vec2 size, vec2 position, float round_tl, float round_tr, float round_bl, float round_br);
+float corner_alpha(vec2 size, vec2 position, bool is_cutout,
+        float radius_tl, float radius_tr, float radius_bl, float radius_br);
 
 void main() {
     float shadow_alpha = v_color.a * roundedBoxShadow(
@@ -79,18 +75,17 @@ void main() {
             position + size - blur_sigma,
             gl_FragCoord.xy, blur_sigma * 0.5,
             corner_radius);
-    // dither the alpha to break up color bands
-    shadow_alpha += (random() - 0.5) / 128.0;
 
     // Clipping
     float clip_corner_alpha = corner_alpha(
         clip_size - 1.5,
         clip_position + 0.75,
+        true,
         clip_radius_top_left,
         clip_radius_top_right,
         clip_radius_bottom_left,
         clip_radius_bottom_right
     );
 
-    fragColor = vec4(v_color.rgb, shadow_alpha) * clip_corner_alpha;
+    gl_FragColor = vec4(v_color.rgb, shadow_alpha) * clip_corner_alpha;
 }

@@ -13,6 +13,7 @@
 #include <wlr/util/box.h>
 
 #include "render/fx_renderer/shaders.h"
+#include "render/tracy.h"
 
 struct fx_framebuffer;
 
@@ -49,9 +50,12 @@ struct fx_framebuffer {
 	struct wlr_addon addon;
 };
 
-/** Should only be used with custom fbs */
+/**
+ * Should only be used with custom fbs.
+ * Note: Does not bind back to the default Framebuffer!
+ */
 void fx_framebuffer_get_or_create_custom(struct fx_renderer *fx_renderer,
-		struct wlr_output *output, struct wlr_swapchain *swapchain,
+		struct wlr_allocator *allocator, int width, int height, bool has_alpha,
 		struct fx_framebuffer **fx_buffer, bool *failed);
 
 struct fx_framebuffer *fx_framebuffer_get_or_create(struct fx_renderer *renderer,
@@ -59,6 +63,10 @@ struct fx_framebuffer *fx_framebuffer_get_or_create(struct fx_renderer *renderer
 
 void fx_framebuffer_bind(struct fx_framebuffer *buffer);
 
+/**
+ * Destroy the fx_framebuffer.
+ * Note: Doesn't drop the wlr_buffer, so should only be used internally.
+ */
 void fx_framebuffer_destroy(struct fx_framebuffer *buffer);
 
 ///
@@ -172,16 +180,25 @@ struct fx_renderer {
 		PFNGLGETQUERYOBJECTIVEXTPROC glGetQueryObjectivEXT;
 		PFNGLGETQUERYOBJECTUI64VEXTPROC glGetQueryObjectui64vEXT;
 		PFNGLGETINTEGER64VEXTPROC glGetInteger64vEXT;
+		TRACY_FN(
+			PFNGLGETQUERYIVEXTPROC glGetQueryivEXT;
+		)
 	} procs;
 
 	struct {
 		struct quad_shader quad;
+		struct quad_shader quad_clip;
 		struct quad_grad_shader quad_grad;
 		struct quad_round_shader quad_round;
 		struct quad_grad_round_shader quad_grad_round;
+
 		struct tex_shader tex_rgba;
 		struct tex_shader tex_rgbx;
 		struct tex_shader tex_ext;
+		struct tex_shader tex_effects_rgba;
+		struct tex_shader tex_effects_rgbx;
+		struct tex_shader tex_effects_ext;
+
 		struct box_shadow_shader box_shadow;
 		struct blur_shader blur1;
 		struct blur_shader blur2;
@@ -190,10 +207,11 @@ struct fx_renderer {
 
 	struct wl_list buffers; // fx_framebuffer.link
 	struct wl_list textures; // fx_texture.link
+	struct wl_list offscreen_buffers; // fx_offscreen_buffers.link
 
-	// Set to true when 'wlr_renderer_begin_buffer_pass' is called instead of
-	// our custom 'fx_renderer_begin_buffer_pass' function
-	bool basic_renderer;
+	TRACY_FN(
+		struct tracy_data *tracy_data;
+	)
 };
 
 #endif

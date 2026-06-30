@@ -793,8 +793,19 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
     (*window).set_decoration_hint(hint);
 
     if ffi::river_wlr_xdg_surface_get_initialized(base) {
-        let mode = ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+        let mut mode = (*(*decoration).wlr_decoration).requested_mode;
+        if mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_NONE {
+            let server = (*window).server;
+            let rule_ssd = (*server).wm.get_rule_for_window(window).and_then(|r| r.ssd);
+            if let Some(true) = rule_ssd {
+                mode = ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+            } else {
+                mode = ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
+            }
+        }
         ffi::wlr_xdg_toplevel_decoration_v1_set_mode((*decoration).wlr_decoration, mode);
+        (*window).wm_requested.ssd = mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+        (*(*window).server).wm.dirty_windowing();
     }
 }
 

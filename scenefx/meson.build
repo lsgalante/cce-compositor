@@ -1,7 +1,7 @@
 project(
 	'scenefx',
 	'c',
-	version: '0.4.1',
+	version: '0.5.0',
 	license: 'MIT',
 	meson_version: '>=1.3',
 	default_options: [
@@ -66,8 +66,17 @@ else
 	)
 endif
 
+features = {
+	'gles2-renderer': true,
+	'color-management': false,
+}
+internal_features = {
+	'egl': false,
+	'tracy': false,
+}
+
 wayland_kwargs = {
-	'version': '>=1.23.1',
+	'version': '>=1.24.0',
 	'fallback': 'wayland',
 	'default_options': [
 		'tests=false',
@@ -79,8 +88,8 @@ wayland_server = dependency('wayland-server',
 )
 
 wlroots_options = [ 'examples=false' ]
-wlroots_version = ['>=0.19.0', '<0.20.0']
-wlroots = dependency('wlroots-0.19',
+wlroots_version = ['>=0.20.0', '<0.21.0']
+wlroots = dependency('wlroots-0.20',
 	version: wlroots_version,
 	default_options: wlroots_options,
 	required: false,
@@ -96,14 +105,23 @@ endif
 
 
 drm = dependency('libdrm',
-	version: '>=2.4.122',
+	version: '>=2.4.129',
 	fallback: 'libdrm',
 	default_options: [
 		'auto_features=disabled',
 		'tests=false',
 	],
 )
-xkbcommon = dependency('xkbcommon')
+xkbcommon = dependency('xkbcommon',
+	version: '>=1.8.0',
+	fallback: 'libxkbcommon',
+	default_options: [
+		'enable-tools=false',
+		'enable-x11=false',
+		'enable-docs=false',
+		'enable-xkbregistry=false',
+	],
+)
 pixman = dependency('pixman-1',
 	version: '>=0.43.0',
 	fallback: 'pixman',
@@ -122,6 +140,34 @@ scenefx_deps = [
 	math,
 	rt,
 ]
+
+# Tracy
+if get_option('tracy_enable')
+	internal_features += { 'tracy': true }
+
+	if get_option('buildtype') != 'debugoptimized'
+		warning('Profiling builds should set --buildtype=debugoptimized')
+	endif
+
+	tracy_options = [
+		'default_library=static',
+		'werror=false',
+		'warning_level=0',
+	]
+	tracy_proj = subproject(
+		'tracy',
+		required: true,
+		default_options: tracy_options
+	)
+	scenefx_deps += tracy_proj.get_variable('tracy_dep')
+	add_project_arguments(
+		[
+			'-DTRACY_ENABLE',
+			'-DTRACY_ON_DEMAND',
+		],
+		language: 'c',
+	)
+endif
 
 subdir('protocol')
 subdir('render')
@@ -148,6 +194,8 @@ scenefx = declare_dependency(
 )
 
 meson.override_dependency(versioned_name, scenefx)
+
+summary(features + internal_features, bool_yn: true)
 
 if get_option('examples')
 	subdir('examples')

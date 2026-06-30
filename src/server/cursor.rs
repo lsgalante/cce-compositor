@@ -391,12 +391,10 @@ impl Cursor {
                 if !wlr_xcursor.is_null() && (*wlr_xcursor).image_count > 0 {
                     let image = *(*wlr_xcursor).images;
                     if !image.is_null() {
+                        let buffer = ffi::wlr_xcursor_image_get_buffer(image);
                         ffi::wlr_xwayland_set_cursor(
                             (*(*self.seat).server).xwayland,
-                            (*image).buffer,
-                            (*image).width * 4,
-                            (*image).width,
-                            (*image).height,
+                            buffer,
                             (*image).hotspot_x as i32,
                             (*image).hotspot_y as i32,
                         );
