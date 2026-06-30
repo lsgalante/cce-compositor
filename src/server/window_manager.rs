@@ -737,40 +737,49 @@ impl WindowManager {
                             ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.hidden_tree);
                             ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, (*self.server).scene.hidden_tree);
                         } else {
-                            ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, (*self.server).scene.layers.popups);
-                            if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
-                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.background);
-                                ffi::wlr_scene_node_lower_to_bottom((*window).tree as *mut _);
+                            let layer = if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
+                                (*self.server).scene.layers.background
                             } else if rendered_fullscreen(window) {
-                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.fullscreen);
-                                ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
-                                found_fullscreen = true;
+                                (*self.server).scene.layers.fullscreen
                             } else if (*window).tiling_mode == crate::tiling::TilingMode::Popup {
-                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.popups);
-                                ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                                (*self.server).scene.layers.popups
                             } else if (*window).rendering_requested.circular {
-                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.top);
-                                ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                                (*self.server).scene.layers.top
                             } else if (*window).tiling_mode == crate::tiling::TilingMode::Overlay && self.layout.overlay_behavior == "above" {
-                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.top);
-                                ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                                (*self.server).scene.layers.top
                             } else {
-                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.wm);
+                                (*self.server).scene.layers.wm
+                            };
+
+                            ffi::wlr_scene_node_reparent((*window).tree as *mut _, layer);
+                            if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
+                                ffi::wlr_scene_node_lower_to_bottom((*window).tree as *mut _);
+                            } else {
                                 ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                             }
+                            if rendered_fullscreen(window) {
+                                found_fullscreen = true;
+                            }
+
+                            ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, layer);
+                            ffi::wlr_scene_node_place_above((*window).popup_tree as *mut _, (*window).tree as *mut _);
                         }
                     }
                 }
                 crate::wm_node::WmNodeType::ShellSurface(shell_surface) => {
                     (*shell_surface).render_finish();
                     if reorder {
-                        ffi::wlr_scene_node_reparent((*shell_surface).popup_tree as *mut _, (*self.server).scene.layers.popups);
-                        if found_fullscreen {
-                            ffi::wlr_scene_node_reparent((*shell_surface).tree as *mut _, (*self.server).scene.layers.fullscreen);
+                        let layer = if found_fullscreen {
+                            (*self.server).scene.layers.fullscreen
                         } else {
-                            ffi::wlr_scene_node_reparent((*shell_surface).tree as *mut _, (*self.server).scene.layers.wm);
-                        }
+                            (*self.server).scene.layers.wm
+                        };
+
+                        ffi::wlr_scene_node_reparent((*shell_surface).tree as *mut _, layer);
                         ffi::wlr_scene_node_raise_to_top((*shell_surface).tree as *mut _);
+
+                        ffi::wlr_scene_node_reparent((*shell_surface).popup_tree as *mut _, layer);
+                        ffi::wlr_scene_node_place_above((*shell_surface).popup_tree as *mut _, (*shell_surface).tree as *mut _);
                     }
                 }
             }
