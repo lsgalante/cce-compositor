@@ -1274,6 +1274,15 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     (*win_ptr).rendering_requested.y = final_y;
                     (*win_ptr).scale = self.desk_zoom;
 
+                    // Offscreen check
+                    let scaled_w = fw * self.desk_zoom;
+                    let scaled_h = fh * self.desk_zoom;
+                    let is_offscreen = (final_x as f64 + scaled_w + 50.0) < phys_x as f64
+                        || (final_x as f64 - 50.0) > (phys_x as f64 + viewport_w)
+                        || (final_y as f64 + scaled_h + 50.0) < phys_y as f64
+                        || (final_y as f64 - 50.0) > (phys_y as f64 + viewport_h);
+                    (*win_ptr).rendering_requested.hidden = is_offscreen;
+
                     (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
                         width: fw as u32,
                         height: fh as u32,
@@ -1309,6 +1318,15 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     (*win_ptr).rendering_requested.x = final_x;
                     (*win_ptr).rendering_requested.y = final_y;
                     (*win_ptr).scale = self.desk_zoom;
+
+                    // Offscreen check
+                    let scaled_w = fw as f64 * self.desk_zoom;
+                    let scaled_h = fh as f64 * self.desk_zoom;
+                    let is_offscreen = (final_x as f64 + scaled_w + 50.0) < phys_x as f64
+                        || (final_x as f64 - 50.0) > (phys_x as f64 + viewport_w)
+                        || (final_y as f64 + scaled_h + 50.0) < phys_y as f64
+                        || (final_y as f64 - 50.0) > (phys_y as f64 + viewport_h);
+                    (*win_ptr).rendering_requested.hidden = is_offscreen;
 
                     (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
                         width: fw as u32,
