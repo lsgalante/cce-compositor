@@ -222,6 +222,7 @@ pub struct Window {
     pub circular: bool,
     pub blur: bool,
     pub scale: f64,
+    pub last_applied_scale: f64,
     pub virtual_x: f64,
     pub virtual_y: f64,
     pub resize_start_vx: f64,
@@ -373,6 +374,7 @@ impl Window {
             circular: false,
             blur: false,
             scale: 1.0,
+            last_applied_scale: 1.0,
             virtual_x: unsafe { (*server).wm.desk_pan_x + 100.0 },
             virtual_y: unsafe { (*server).wm.desk_pan_y + 100.0 },
             resize_start_vx: 0.0,
@@ -1623,6 +1625,7 @@ impl Window {
                 Some(set_expose_scale_iterator),
                 &scale_data_popup as *const ScaleData as *mut std::ffi::c_void,
             );
+            self.last_applied_scale = self.scale;
         }
 
         self.box_geom.width = self.rendering_sent.width as i32;
@@ -1735,8 +1738,15 @@ impl Window {
 
     pub unsafe fn scale_only_render_finish(&mut self) {
         if self.scale == 1.0 {
+            self.last_applied_scale = 1.0;
             return;
         }
+
+        if self.scale == self.last_applied_scale {
+            return;
+        }
+
+        self.last_applied_scale = self.scale;
 
         struct ScaleData {
             scale: f64,
