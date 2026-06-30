@@ -3464,13 +3464,13 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 		}
 	}
 
-	wlr_output_add_software_cursors_to_render_pass(output, render_pass, &render_data.damage);
-
 	if (should_compensate_blur) {
 		// Render the saved pixels over the blur artifacts
 		fx_render_pass_read_to_buffer(fx_pass, &fx_pass->blur_padding_region,
 				fx_pass->buffer, fx_pass->fx_offscreen_buffers->blur_saved_pixels_buffer);
 	}
+
+	wlr_output_add_software_cursors_to_render_pass(output, render_pass, &render_data.damage);
 
 	pixman_region32_fini(&render_data.damage);
 
