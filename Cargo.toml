@@ -29,10 +29,6 @@ cc = "1.0"
 name = "cce-fx"
 path = "src/bin/cce.rs"
 
-[[bin]]
-name = "cce-wallpaper"
-path = "src/bin/wallpaper.rs"
-
 [profile.release]
 debug = true
 
