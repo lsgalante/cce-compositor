@@ -399,6 +399,7 @@ static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
 }
 
 struct scene_update_data {
+	struct wlr_scene_node *updated_node;
 	pixman_region32_t *visible;
 	const pixman_region32_t *update_region;
 	struct wlr_box update_box;
@@ -680,12 +681,70 @@ static void restack_xwayland_surface(struct wlr_scene_node *node,
 }
 #endif
 
+static bool scene_node_is_below(struct wlr_scene_node *a, struct wlr_scene_node *b) {
+	if (a == b) {
+		return false;
+	}
+
+	struct wlr_scene_node *chain_a[64];
+	struct wlr_scene_node *chain_b[64];
+	int len_a = 0;
+	int len_b = 0;
+
+	struct wlr_scene_node *curr = a;
+	while (curr && len_a < 64) {
+		chain_a[len_a++] = curr;
+		curr = curr->parent ? &curr->parent->node : NULL;
+	}
+
+	curr = b;
+	while (curr && len_b < 64) {
+		chain_b[len_b++] = curr;
+		curr = curr->parent ? &curr->parent->node : NULL;
+	}
+
+	int idx_a = len_a - 1;
+	int idx_b = len_b - 1;
+
+	if (chain_a[idx_a] != chain_b[idx_b]) {
+		return false;
+	}
+
+	while (idx_a >= 0 && idx_b >= 0 && chain_a[idx_a] == chain_b[idx_b]) {
+		idx_a--;
+		idx_b--;
+	}
+
+	if (idx_a < 0) {
+		return true;
+	}
+	if (idx_b < 0) {
+		return false;
+	}
+
+	struct wlr_scene_tree *lca = wlr_scene_tree_from_node(chain_a[idx_a + 1]);
+	struct wlr_scene_node *child;
+	wl_list_for_each(child, &lca->children, link) {
+		if (child == chain_a[idx_a]) {
+			return true;
+		}
+		if (child == chain_b[idx_b]) {
+			return false;
+		}
+	}
+
+	return false;
+}
+
 static bool scene_node_update_iterator(struct wlr_scene_node *node,
 		int lx, int ly, void *_data) {
 	struct scene_update_data *data = _data;
 
 	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
 		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
+		if (data->updated_node && scene_node_is_below(data->updated_node, node)) {
+			scene_blur->dirty = true;
+		}
 		if (scene_blur->dirty) {
 			// Restore the visible region back to default, without any opaque
 			// regions. This ensures that all nodes below are fully re-rendered
@@ -760,6 +819,7 @@ static void scene_node_bounds(struct wlr_scene_node *node,
 }
 
 static void scene_update_region(struct wlr_scene *scene,
+		struct wlr_scene_node *updated_node,
 		const pixman_region32_t *update_region) {
 	pixman_region32_t visible;
 	pixman_region32_init(&visible);
@@ -767,6 +827,7 @@ static void scene_update_region(struct wlr_scene *scene,
 
 	struct pixman_box32 *region_box = pixman_region32_extents(update_region);
 	struct scene_update_data data = {
+		.updated_node = updated_node,
 		.visible = &visible,
 		.update_region = update_region,
 		.update_box = {
@@ -842,7 +903,7 @@ static void scene_node_update(struct wlr_scene_node *node,
 		if (damage) {
 			scene_node_cleanup_when_disabled(node, scene->restack_xwayland_surfaces, &scene->outputs);
 
-			scene_update_region(scene, damage);
+			scene_update_region(scene, node, damage);
 			scene_damage_outputs(scene, damage);
 			pixman_region32_fini(damage);
 		}
@@ -862,7 +923,7 @@ static void scene_node_update(struct wlr_scene_node *node,
 	pixman_region32_copy(&update_region, damage);
 	scene_node_bounds(node, x, y, &update_region);
 
-	scene_update_region(scene, &update_region);
+	scene_update_region(scene, node, &update_region);
 	pixman_region32_fini(&update_region);
 
 	scene_node_visibility(node, damage);
@@ -1552,7 +1613,7 @@ void wlr_scene_buffer_set_opaque_region(struct wlr_scene_buffer *scene_buffer,
 	pixman_region32_t update_region;
 	pixman_region32_init(&update_region);
 	scene_node_bounds(&scene_buffer->node, x, y, &update_region);
-	scene_update_region(scene_node_get_root(&scene_buffer->node), &update_region);
+	scene_update_region(scene_node_get_root(&scene_buffer->node), &scene_buffer->node, &update_region);
 	pixman_region32_fini(&update_region);
 }
 
