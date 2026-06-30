@@ -1148,7 +1148,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         b,
                         a,
                     };
-                    (*win_ptr).rendering_requested.blur = self.layout.window_blur && (*win_ptr).wm_requested.ssd;
+                    (*win_ptr).rendering_requested.blur = self.layout.window_blur;
                     (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
                         if !self.layout.window_opacity { 1.0f32 } else { 0.85f32 }
                     };
@@ -1377,7 +1377,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     b,
                     a,
                 };
-                (*win_ptr).rendering_requested.blur = self.layout.window_blur && (*win_ptr).wm_requested.ssd;
+                (*win_ptr).rendering_requested.blur = self.layout.window_blur;
                 (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
                     if !self.layout.window_opacity { 1.0f32 } else { 0.90f32 }
                 };
