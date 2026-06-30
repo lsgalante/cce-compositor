@@ -32,6 +32,7 @@ pub struct Layout {
     pub grid_gap: i32,
     pub border_blur: bool,
     pub window_blur: bool,
+    pub backplate_corner_radius: i32,
     pub overlay_behavior: String,
     pub overlay_width: i32,
     pub overlay_position: String,
@@ -77,6 +78,7 @@ impl Default for Layout {
             grid_gap: 18,
             border_blur: false,
             window_blur: false,
+            backplate_corner_radius: 12,
             overlay_behavior: "inline".to_string(),
             overlay_width: 360,
             overlay_position: "left".to_string(),
@@ -1264,6 +1266,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.grid_gap = config.layout.grid_gap as i32;
     state.layout.border_blur = false;
     state.layout.window_blur = config.surfaces.backplate_blur > 0.001;
+    state.layout.backplate_corner_radius = config.surfaces.backplate_corner_radius as i32;
     state.layout.overlay_behavior = config.layout.overlay_behavior;
     state.layout.overlay_width = config.layout.overlay_width as i32;
     state.layout.overlay_position = config.layout.overlay_position;

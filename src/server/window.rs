@@ -1531,13 +1531,7 @@ impl Window {
         ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
 
         if enabled {
-            let mut blur_enabled = requested.blur;
-            if !self.wm_requested.ssd {
-                let (dec_w, dec_h) = self.get_decorations_size();
-                if dec_w > 0 || dec_h > 0 {
-                    blur_enabled = false;
-                }
-            }
+            let blur_enabled = requested.blur;
             let app_id = self.get_app_id_string().unwrap_or_default();
             let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
             if app_id.starts_with("cce-status") {
@@ -1551,7 +1545,7 @@ impl Window {
                 let h = self.rendering_sent.height as i32;
                 w.min(h) / 2
             } else {
-                0
+                (*self.server).wm.layout.backplate_corner_radius
             };
 
             ffi::river_scene_node_set_corner_radius(
