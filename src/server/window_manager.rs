@@ -1017,7 +1017,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     (*win_ptr).scale = 1.0;
                     ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
                     (*win_ptr).rendering_requested.hidden = false;
-                    (*win_ptr).rendering_requested.blur = self.layout.window_blur;
+                    (*win_ptr).rendering_requested.blur = self.layout.status_background_blur > 0.001;
                     continue;
                 }
 
