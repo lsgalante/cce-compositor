@@ -1,8 +1,4 @@
-#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
-#else
-precision mediump float;
-#endif
 
 varying vec4 v_color;
 varying vec2 v_texcoord;
@@ -22,21 +18,38 @@ uniform float clip_radius_top_right;
 uniform float clip_radius_bottom_left;
 uniform float clip_radius_bottom_right;
 
+float get_dist(vec2 q, float radius);
 float corner_alpha(vec2 size, vec2 position, bool is_cutout,
-		float radius_tl, float radius_tr, float radius_bl, float radius_br);
-float corner_dist(vec2 size, vec2 position,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br);
 
 void main() {
-	float quad_corner_alpha = corner_alpha(
-		size - 1.0,
-		position + 0.5,
-		false,
-		radius_top_left,
-		radius_top_right,
-		radius_bottom_left,
-		radius_bottom_right
+	vec2 relative_pos = (gl_FragCoord.xy - (position + 0.5));
+	relative_pos.y = size.y - relative_pos.y;
+
+	// Bounding box check
+	/* if (relative_pos.x < -0.5 || relative_pos.y < -0.5
+			|| relative_pos.x > size.x - 0.5 || relative_pos.y > size.y - 0.5) {
+		discard;
+	} */
+
+	float r_tl = radius_top_left > 0.0 ? radius_top_left + fade_inset : 0.0;
+	float r_tr = radius_top_right > 0.0 ? radius_top_right + fade_inset : 0.0;
+	float r_bl = radius_bottom_left > 0.0 ? radius_bottom_left + fade_inset : 0.0;
+	float r_br = radius_bottom_right > 0.0 ? radius_bottom_right + fade_inset : 0.0;
+
+	// Calculate corner distance
+	vec2 top_left = abs(relative_pos - (size - 1.0)) - (size - 1.0) + r_tl;
+	vec2 top_right = abs(relative_pos - vec2(0.0, size.y - 1.0)) - (size - 1.0) + r_tr;
+	vec2 bottom_left = abs(relative_pos - vec2(size.x - 1.0, 0.0)) - (size - 1.0) + r_bl;
+	vec2 bottom_right = abs(relative_pos) - (size - 1.0) + r_br;
+
+	float dist = max(
+		max(get_dist(top_left, r_tl), get_dist(top_right, r_tr)),
+		max(get_dist(bottom_left, r_bl), get_dist(bottom_right, r_br))
 	);
+
+	float result = smoothstep(-0.5, 0.5, dist);
+	float quad_corner_alpha = 1.0 - result;
 
 	// Clipping
 	float clip_corner_alpha = corner_alpha(
@@ -51,19 +64,7 @@ void main() {
 
 	vec4 final_color = v_color;
 	if (fade_inset > 0.0) {
-		float r_tl = radius_top_left > 0.0 ? radius_top_left + fade_inset : 0.0;
-		float r_tr = radius_top_right > 0.0 ? radius_top_right + fade_inset : 0.0;
-		float r_bl = radius_bottom_left > 0.0 ? radius_bottom_left + fade_inset : 0.0;
-		float r_br = radius_bottom_right > 0.0 ? radius_bottom_right + fade_inset : 0.0;
-		float d = corner_dist(
-			size - 1.0,
-			position + 0.5,
-			r_tl,
-			r_tr,
-			r_bl,
-			r_br
-		);
-		float inside_dist = -d;
+		float inside_dist = 0.5 - dist;
 		float fade_factor = clamp(inside_dist / fade_inset, 0.0, 1.0);
 		final_color *= fade_factor;
 	}

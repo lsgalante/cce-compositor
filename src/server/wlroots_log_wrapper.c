@@ -655,7 +655,17 @@ void river_wlr_keyboard_init(struct wlr_keyboard *keyboard,
 static struct wlr_scene_node *find_blur_node(struct wlr_scene_tree *tree) {
 	struct wlr_scene_node *child;
 	wl_list_for_each(child, &tree->children, link) {
-		if (child->type == WLR_SCENE_NODE_BLUR || child->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
+		if (child->type == WLR_SCENE_NODE_BLUR) {
+			return child;
+		}
+	}
+	return NULL;
+}
+
+static struct wlr_scene_node *find_optimized_blur_node(struct wlr_scene_tree *tree) {
+	struct wlr_scene_node *child;
+	wl_list_for_each(child, &tree->children, link) {
+		if (child->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
 			return child;
 		}
 	}
@@ -676,11 +686,15 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, boo
 		return;
 	}
 	struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
-	struct wlr_scene_node *blur_node = find_blur_node(tree);
+	struct wlr_scene_node *opt_blur_node = find_optimized_blur_node(tree);
+	struct wlr_scene_node *std_blur_node = find_blur_node(tree);
 
 	if (!enabled) {
-		if (blur_node) {
-			wlr_scene_node_destroy(blur_node);
+		if (opt_blur_node) {
+			wlr_scene_node_destroy(opt_blur_node);
+		}
+		if (std_blur_node) {
+			wlr_scene_node_destroy(std_blur_node);
 		}
 		return;
 	}
@@ -695,42 +709,55 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, boo
 	}
 
 	if (width <= 0 || height <= 0) {
-		width = 1920; // Fallback defaults
-		height = 1080;
+		if (opt_blur_node) {
+			wlr_scene_node_destroy(opt_blur_node);
+		}
+		if (std_blur_node) {
+			wlr_scene_node_destroy(std_blur_node);
+		}
+		return;
 	}
 
-	enum wlr_scene_node_type expected_type = optimized ? WLR_SCENE_NODE_OPTIMIZED_BLUR : WLR_SCENE_NODE_BLUR;
-	if (blur_node && blur_node->type != expected_type) {
-		wlr_scene_node_destroy(blur_node);
-		blur_node = NULL;
-	}
-
-	if (!blur_node) {
-		if (optimized) {
+	if (optimized) {
+		if (!opt_blur_node) {
 			struct wlr_scene_optimized_blur *opt_blur = wlr_scene_optimized_blur_create(tree, width, height);
 			if (opt_blur) {
-				blur_node = &opt_blur->node;
+				opt_blur_node = &opt_blur->node;
 			}
 		} else {
-			struct wlr_scene_blur *std_blur = wlr_scene_blur_create(tree, width, height);
-			if (std_blur) {
-				wlr_scene_blur_set_should_only_blur_bottom_layer(std_blur, true);
-				blur_node = &std_blur->node;
-			}
+			wlr_scene_optimized_blur_set_size((struct wlr_scene_optimized_blur *)opt_blur_node, width, height);
 		}
-		if (blur_node) {
-			wlr_scene_node_lower_to_bottom(blur_node);
+		if (opt_blur_node) {
+			wlr_scene_node_set_position(opt_blur_node, x, y);
 		}
 	} else {
-		if (optimized) {
-			wlr_scene_optimized_blur_set_size((struct wlr_scene_optimized_blur *)blur_node, width, height);
-		} else {
-			wlr_scene_blur_set_size((struct wlr_scene_blur *)blur_node, width, height);
+		if (opt_blur_node) {
+			wlr_scene_node_destroy(opt_blur_node);
+			opt_blur_node = NULL;
 		}
 	}
 
-	if (blur_node) {
-		wlr_scene_node_set_position(blur_node, x, y);
+	if (!std_blur_node) {
+		struct wlr_scene_blur *std_blur = wlr_scene_blur_create(tree, width, height);
+		if (std_blur) {
+			std_blur_node = &std_blur->node;
+			wlr_scene_blur_set_should_only_blur_bottom_layer(std_blur, optimized);
+		}
+	} else {
+		wlr_scene_blur_set_should_only_blur_bottom_layer((struct wlr_scene_blur *)std_blur_node, optimized);
+		wlr_scene_blur_set_size((struct wlr_scene_blur *)std_blur_node, width, height);
+	}
+
+	if (std_blur_node) {
+		wlr_scene_node_set_position(std_blur_node, x, y);
+	}
+
+	// Ensure correct stack order (from back to front): opt_blur_node -> std_blur_node -> window content
+	if (std_blur_node) {
+		wlr_scene_node_lower_to_bottom(std_blur_node);
+	}
+	if (opt_blur_node) {
+		wlr_scene_node_lower_to_bottom(opt_blur_node);
 	}
 }
 

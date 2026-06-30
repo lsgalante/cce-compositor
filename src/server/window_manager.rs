@@ -265,7 +265,7 @@ impl WindowManager {
             if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                 continue;
             }
-            if (*w).is_status_bar() {
+            if (*w).is_status_bar() || (*w).is_wallpaper() {
                 continue;
             }
             
@@ -738,7 +738,10 @@ impl WindowManager {
                             ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, (*self.server).scene.hidden_tree);
                         } else {
                             ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, (*self.server).scene.layers.popups);
-                            if rendered_fullscreen(window) {
+                            if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
+                                ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.background);
+                                ffi::wlr_scene_node_lower_to_bottom((*window).tree as *mut _);
+                            } else if rendered_fullscreen(window) {
                                 ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.layers.fullscreen);
                                 ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                                 found_fullscreen = true;
@@ -953,6 +956,13 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             return;
         }
 
+        let has_wallpaper = self.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).get_app_id_string().as_deref() == Some("cce-wallpaper"));
+        for &output in &active_outputs {
+            if !(*output).background_rect.is_null() {
+                ffi::wlr_scene_node_set_enabled((*output).background_rect as *mut ffi::wlr_scene_node, !has_wallpaper);
+            }
+        }
+
         let mut focused_window: *mut Window = std::ptr::null_mut();
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr_seat = (*seats_list).next;
@@ -1002,20 +1012,31 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
                 let app_id = (*win_ptr).get_app_id_string();
                 let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
+                let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
                 
-                if is_status_bar {
+                if is_wallpaper {
                     (*win_ptr).tiling_mode = crate::tiling::TilingMode::Status;
-                    let bar_h = self.layout.bar_height as u32;
-                    (*win_ptr).rendering_requested.x = wlr_box.x;
-                    (*win_ptr).rendering_requested.y = wlr_box.y;
+                    (*win_ptr).wm_requested.tiled = 0;
+                    (*win_ptr).wm_requested.ssd = false;
+                    (*win_ptr).scale = 1.0;
+                    ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
+                    (*win_ptr).rendering_requested.hidden = false;
+                    (*win_ptr).rendering_requested.blur = false;
+                    (*win_ptr).rendering_requested.x = phys_x;
+                    (*win_ptr).rendering_requested.y = phys_y;
                     (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                        width: wlr_box.width as u32,
-                        height: bar_h,
+                        width: phys_w as u32,
+                        height: phys_h as u32,
                     });
                     (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                        width: wlr_box.width as u32,
-                        height: bar_h,
+                        width: phys_w as u32,
+                        height: phys_h as u32,
                     };
+                    continue;
+                }
+
+                if is_status_bar {
+                    (*win_ptr).tiling_mode = crate::tiling::TilingMode::Status;
                     (*win_ptr).wm_requested.tiled = 0;
                     (*win_ptr).wm_requested.ssd = false;
                     (*win_ptr).scale = 1.0;
@@ -1361,6 +1382,101 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     if !self.layout.window_opacity { 1.0f32 } else { 0.90f32 }
                 };
             }
+
+            // Position status bar windows on this output
+            let mut left_status = Vec::new();
+            let mut right_status = Vec::new();
+            let mut full_status = Vec::new();
+
+            for &win_ptr in self.windows.iter() {
+                if win_ptr.is_null() || (*win_ptr).closed {
+                    continue;
+                }
+                if matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
+                    continue;
+                }
+                if let Some(app_id) = (*win_ptr).get_app_id_string() {
+                    if app_id.starts_with("cce-status-left-") {
+                        left_status.push(win_ptr);
+                    } else if app_id.starts_with("cce-status-right-") {
+                        right_status.push(win_ptr);
+                    } else if app_id.starts_with("cce-status") {
+                        full_status.push(win_ptr);
+                    }
+                }
+            }
+
+            const LEFT_ORDER: &[&str] = &["viewport", "window"];
+            const RIGHT_ORDER: &[&str] = &["tray", "cpu", "memory", "brightness", "volume", "battery", "clock"];
+
+            left_status.sort_by_key(|&w| unsafe {
+                let app_id = (*w).get_app_id_string().unwrap_or_default();
+                let name = app_id.trim_start_matches("cce-status-left-");
+                LEFT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
+            });
+
+            right_status.sort_by_key(|&w| unsafe {
+                let app_id = (*w).get_app_id_string().unwrap_or_default();
+                let name = app_id.trim_start_matches("cce-status-right-");
+                RIGHT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
+            });
+
+            let bar_h = self.layout.bar_height as u32;
+            let spacing = 12;
+            let margin = 12;
+
+            // Layout Left status windows
+            let mut cur_left_x = wlr_box.x + margin;
+            for win_ptr in left_status {
+                let w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
+                let app_id = (*win_ptr).get_app_id_string().unwrap_or_default();
+                log::info!("[ArrangeStatus] Left module app_id={} x={} y={} w={}", app_id, cur_left_x, wlr_box.y, w);
+                (*win_ptr).rendering_requested.x = cur_left_x;
+                (*win_ptr).rendering_requested.y = wlr_box.y;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                    width: w,
+                    height: bar_h,
+                });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                    width: w,
+                    height: bar_h,
+                };
+                cur_left_x += w as i32 + spacing;
+            }
+
+            // Layout Right status windows (right-to-left)
+            let mut cur_right_x = wlr_box.x + wlr_box.width - margin;
+            for win_ptr in right_status.into_iter().rev() {
+                let w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
+                let x = cur_right_x - w as i32;
+                let app_id = (*win_ptr).get_app_id_string().unwrap_or_default();
+                log::info!("[ArrangeStatus] Right module app_id={} x={} y={} w={}", app_id, x, wlr_box.y, w);
+                (*win_ptr).rendering_requested.x = x;
+                (*win_ptr).rendering_requested.y = wlr_box.y;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                    width: w,
+                    height: bar_h,
+                });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                    width: w,
+                    height: bar_h,
+                };
+                cur_right_x = x - spacing;
+            }
+
+            // Layout Full/Legacy status windows
+            for win_ptr in full_status {
+                (*win_ptr).rendering_requested.x = wlr_box.x;
+                (*win_ptr).rendering_requested.y = wlr_box.y;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                    width: wlr_box.width as u32,
+                    height: bar_h,
+                });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                    width: wlr_box.width as u32,
+                    height: bar_h,
+                };
+            }
         }
         // If the focused window is no longer visible, refocus
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
@@ -1526,7 +1642,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                 let app_id = (*w).get_app_id_string();
                 let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
-                if !is_status_bar {
+                let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
+                if !is_status_bar && !is_wallpaper {
                     next_focus = w;
                     break;
                 }
@@ -1537,7 +1654,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                     let app_id = (*w).get_app_id_string();
                     let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
-                    if !is_status_bar {
+                    let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
+                    if !is_status_bar && !is_wallpaper {
                         next_focus = w;
                     }
                 }
@@ -1995,7 +2113,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
                         let app_id = (*win_ptr).get_app_id_string();
                         let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
-                        if is_status_bar {
+                        let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
+                        if is_status_bar || is_wallpaper {
                             continue;
                         }
 
@@ -2414,6 +2533,14 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         if let Ok(v) = val.parse::<i64>() {
                             self.layout.desktop_cell_fade_inset = v;
                         }
+                    }
+                    "desktop_enable_solid_color" => {
+                        if let Ok(v) = val.parse::<bool>() {
+                            self.layout.desktop_enable_solid_color = v;
+                        }
+                    }
+                    "desktop_solid_color" => {
+                        self.layout.desktop_solid_color = crate::config::parse_hex_color_rgba(val);
                     }
                     "gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap = v; } }
                     "gap_top" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_top = v; } }

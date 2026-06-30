@@ -234,6 +234,9 @@ impl OutputManager {
                                 output.sent.x,
                                 output.sent.y,
                             );
+                            if (*server).wm.layout.desktop_enable_solid_color {
+                                ffi::wlr_scene_node_set_enabled(output.grid_tree as *mut ffi::wlr_scene_node, false);
+                            }
                         }
                     }
                     OutputStateValue::DisabledHard => {

@@ -414,17 +414,15 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         ignore_transparent = (*(*window).server).wm.layout.status_backdrop_blur_ignore_transparent;
     }
     let scale = (*window).scale;
-    let geom_x = ((*window).rendering_requested.x as f64 * scale) as i32;
-    let geom_y = ((*window).rendering_requested.y as f64 * scale) as i32;
     let geom_w = ((*window).rendering_sent.width as f64 * scale) as i32;
     let geom_h = ((*window).rendering_sent.height as f64 * scale) as i32;
     ffi::river_scene_node_enable_blur(
-        (*window).surfaces.tree as *mut ffi::wlr_scene_node,
+        (*window).tree as *mut ffi::wlr_scene_node,
         (*window).rendering_requested.blur,
         (*(*window).server).wm.layout.scenefx_optimized_blur,
         ignore_transparent,
-        geom_x,
-        geom_y,
+        0,
+        0,
         geom_w,
         geom_h,
     );
@@ -454,7 +452,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         return;
     }
 
-    if (*window).state != crate::window::WindowState::Mapped {
+    if (*window).state != crate::window::WindowState::Mapped && (*window).state != crate::window::WindowState::Ready {
         return;
     }
 
@@ -472,10 +470,15 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
                     "client initiated size change: {}x{} -> {}x{}",
                     old_geometry.width, old_geometry.height, new_geometry.width, new_geometry.height
                 );
-                if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) {
+                let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
+                                (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+                if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status {
                     (*window).set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
                     (*window).configure_sent.width = Some(new_geometry.width as u32);
                     (*window).configure_sent.height = Some(new_geometry.height as u32);
+                    if is_status {
+                        (*(*window).server).wm.dirty_windowing();
+                    }
                 } else {
                     (*window).render_finish();
                 }
@@ -493,6 +496,15 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
 
             (*window).rendering_scheduled.width = new_geometry.width as u32;
             (*window).rendering_scheduled.height = new_geometry.height as u32;
+
+            let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
+                            (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+            if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status {
+                (*window).set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
+                if is_status {
+                    (*(*window).server).wm.dirty_windowing();
+                }
+            }
 
             let (dec_w, dec_h) = (*window).get_decorations_size();
             if dec_w != (*window).last_decor_w || dec_h != (*window).last_decor_h {

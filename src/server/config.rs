@@ -47,6 +47,8 @@ pub struct Layout {
     pub desktop_gap_width: i32,
     pub desktop_cell_corner_radius: i32,
     pub desktop_cell_fade_inset: i64,
+    pub desktop_enable_solid_color: bool,
+    pub desktop_solid_color: [f32; 4],
     pub scenefx_optimized_blur: bool,
     pub status_backdrop_blur_ignore_transparent: bool,
     pub window_backdrop_blur_ignore_transparent: bool,
@@ -90,11 +92,13 @@ impl Default for Layout {
             desktop_gap_color: "#000000".to_string(),
             transparency_opacity: 0.9,
             window_opacity: true,
-            desktop_cell_color: [1.0, 1.0, 1.0, 0.05],
+            desktop_cell_color: [0.05, 0.05, 0.05, 0.05],
             desktop_grid_scale: 100.0,
             desktop_gap_width: 1,
             desktop_cell_corner_radius: 0,
             desktop_cell_fade_inset: 0,
+            desktop_enable_solid_color: false,
+            desktop_solid_color: [0.0, 0.0, 0.0, 1.0],
             scenefx_optimized_blur: true,
             status_backdrop_blur_ignore_transparent: true,
             window_backdrop_blur_ignore_transparent: true,
@@ -281,6 +285,10 @@ pub struct SurfacesConfig {
     pub desktop_cell_corner_radius: i64,
     #[serde(default = "default_desktop_cell_fade_inset")]
     pub desktop_cell_fade_inset: i64,
+    #[serde(default = "default_desktop_enable_solid_color")]
+    pub desktop_enable_solid_color: bool,
+    #[serde(default = "default_desktop_solid_color")]
+    pub desktop_solid_color: String,
     #[serde(default = "default_backplate_color")]
     pub backplate_color: String,
     #[serde(default = "default_backplate_blur")]
@@ -298,11 +306,13 @@ impl Default for SurfacesConfig {
             desktop_gap_width: default_desktop_gap_width(),
             desktop_cell_corner_radius: default_desktop_cell_corner_radius(),
             desktop_cell_fade_inset: default_desktop_cell_fade_inset(),
+            desktop_enable_solid_color: default_desktop_enable_solid_color(),
+            desktop_solid_color: default_desktop_solid_color(),
             backplate_color: default_backplate_color(),
             backplate_blur: default_backplate_blur(),
             backplate_corner_radius: default_backplate_corner_radius(),
         }
-    }
+     }
 }
 
 fn default_desktop_gap_color() -> String {
@@ -327,6 +337,14 @@ fn default_desktop_cell_corner_radius() -> i64 {
 
 fn default_desktop_cell_fade_inset() -> i64 {
     0
+}
+
+fn default_desktop_enable_solid_color() -> bool {
+    false
+}
+
+fn default_desktop_solid_color() -> String {
+    "#000000".to_string()
 }
 
 fn default_backplate_color() -> String {
@@ -502,11 +520,12 @@ pub fn parse_hex_color_rgba(hex_str: &str) -> [f32; 4] {
             u8::from_str_radix(&hex[4..6], 16),
             u8::from_str_radix(&hex[6..8], 16),
         ) {
+            let alpha = a as f32 / 255.0;
             return [
-                r as f32 / 255.0,
-                g as f32 / 255.0,
-                b as f32 / 255.0,
-                a as f32 / 255.0,
+                (r as f32 / 255.0) * alpha,
+                (g as f32 / 255.0) * alpha,
+                (b as f32 / 255.0) * alpha,
+                alpha,
             ];
         }
     } else if hex.len() == 6 {
@@ -523,7 +542,7 @@ pub fn parse_hex_color_rgba(hex_str: &str) -> [f32; 4] {
             ];
         }
     }
-    [1.0, 1.0, 1.0, 0.05] // fallback default (5% white)
+    [0.05, 0.05, 0.05, 0.05] // fallback default (5% white)
 }
 
 pub fn parse_tiling_mode(s: &str) -> TilingMode {
@@ -1212,6 +1231,16 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surfaces.desktop_cell_fade_inset = val;
                                         }
                                     }
+                                    "enable_solid_color" => {
+                                        if let Some(val) = entry.value().as_bool() {
+                                            surfaces.desktop_enable_solid_color = val;
+                                        }
+                                    }
+                                    "solid_color" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surfaces.desktop_solid_color = val.to_string();
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1254,6 +1283,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surfaces.desktop_gap_width = get_child_arg_i64(node, "desktop_gap_width", default_desktop_gap_width());
             surfaces.desktop_cell_corner_radius = get_child_arg_i64(node, "desktop_cell_corner_radius", default_desktop_cell_corner_radius());
             surfaces.desktop_cell_fade_inset = get_child_arg_i64(node, "desktop_cell_fade_inset", default_desktop_cell_fade_inset());
+            surfaces.desktop_enable_solid_color = get_child_arg_bool(node, "desktop_enable_solid_color", default_desktop_enable_solid_color());
+            surfaces.desktop_solid_color = get_child_arg_string(node, "desktop_solid_color", &default_desktop_solid_color());
             surfaces.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
             surfaces.backplate_blur = get_child_arg_f64(node, "backplate_blur", default_backplate_blur());
             surfaces.backplate_corner_radius = get_child_arg_i64(node, "backplate_corner_radius", default_backplate_corner_radius());
@@ -1321,6 +1352,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.desktop_gap_width = config.surfaces.desktop_gap_width as i32;
     state.layout.desktop_cell_corner_radius = config.surfaces.desktop_cell_corner_radius as i32;
     state.layout.desktop_cell_fade_inset = config.surfaces.desktop_cell_fade_inset;
+    state.layout.desktop_enable_solid_color = config.surfaces.desktop_enable_solid_color;
+    state.layout.desktop_solid_color = parse_hex_color_rgba(&config.surfaces.desktop_solid_color);
 
     state.layout.border_font_size = 11;
     state.layout.transition_duration = config.layout.transition_duration as i32;
@@ -1555,6 +1588,7 @@ mod tests {
             assert_eq!(server.wm.layout.desktop_gap_color, "#a5cfc2");
             assert_eq!(server.wm.layout.desktop_gap_width, 24);
             assert_eq!(server.wm.layout.desktop_cell_corner_radius, 8);
+            assert_eq!(server.wm.layout.desktop_enable_solid_color, true);
             println!("TEST_WM_STARTUP: {:?}", server.wm.startup);
             println!("TEST_WM_PATH: {:?}", std::env::var("PATH"));
         }

@@ -690,7 +690,7 @@ void fx_render_pass_add_rounded_rect(struct fx_gles_render_pass *pass,
 
 	struct fx_corner_fradii corners = fx_options->corners;
 	uniform_corner_radii_set(&shader.radius, &corners);
-	glUniform1f(shader.fade_inset, fx_options->fade_inset);
+	glUniform1f(shader.fade_inset, (float)fx_options->fade_inset / 1000.0f);
 
 	render(&box, &clip_region, renderer->shaders.quad_round.pos_attrib);
 	pixman_region32_fini(&clip_region);
@@ -805,7 +805,7 @@ void fx_render_pass_add_box_shadow(struct fx_gles_render_pass *pass,
 	// blending will practically always be needed (unless we have a madman
 	// who uses opaque shadows with zero sigma), so just enable it
 	setup_blending(WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
 
 	glUseProgram(renderer->shaders.box_shadow.program);
 
@@ -825,7 +825,7 @@ void fx_render_pass_add_box_shadow(struct fx_gles_render_pass *pass,
 	render(&box, &clip_region, renderer->shaders.box_shadow.pos_attrib);
 	pixman_region32_fini(&clip_region);
 
-	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+	glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
 
 	pop_fx_debug(renderer);
 	TRACY_BOTH_ZONES_END;
@@ -1260,6 +1260,11 @@ void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
 		goto done;
 	}
 
+	float saved_projection_matrix[9];
+	memcpy(saved_projection_matrix, pass->projection_matrix, sizeof(saved_projection_matrix));
+	matrix_projection(pass->projection_matrix, dst_buffer->buffer->width, dst_buffer->buffer->height,
+			WL_OUTPUT_TRANSFORM_NORMAL);
+
 	// Draw onto the dst_buffer
 	fx_framebuffer_bind(dst_buffer);
 	wlr_render_pass_add_texture(&pass->base, &(struct wlr_render_texture_options) {
@@ -1281,6 +1286,8 @@ void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
 		},
 	});
 	wlr_texture_destroy(src_tex);
+
+	memcpy(pass->projection_matrix, saved_projection_matrix, sizeof(saved_projection_matrix));
 
 	// Bind back to the main WLR buffer
 	fx_framebuffer_bind(pass->buffer);
@@ -1350,7 +1357,7 @@ struct fx_gles_render_pass *fx_begin_buffer_pass(struct fx_framebuffer *buffer,
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
 	glViewport(0, 0, wlr_buffer->width, wlr_buffer->height);
-	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+	glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
 	glDisable(GL_SCISSOR_TEST);
 
 	pop_fx_debug(renderer);

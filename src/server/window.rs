@@ -274,6 +274,10 @@ impl Window {
         self.get_app_id_string().as_deref().map_or(false, |id| id.starts_with("cce-status"))
     }
 
+    pub unsafe fn is_wallpaper(&self) -> bool {
+        self.get_app_id_string().as_deref() == Some("cce-wallpaper")
+    }
+
 
     pub unsafe fn create(impl_type: WindowImpl, server: *mut Server) -> Result<*mut Self, &'static str> {
         let hidden_tree = (*server).scene.hidden_tree;
@@ -632,7 +636,7 @@ impl Window {
             return;
         }
         let app_id_str = self.get_app_id_string().unwrap_or_default();
-        if app_id_str.is_empty() || app_id_str.starts_with("cce-status") {
+        if app_id_str.is_empty() || app_id_str.starts_with("cce-status") || app_id_str == "cce-wallpaper" {
             return;
         }
         let title_str = self.get_title_string().unwrap_or_default();
@@ -697,14 +701,14 @@ impl Window {
         }
 
         let app_id_ptr = self.get_app_id();
-        let is_status_bar = if !app_id_ptr.is_null() {
+        let (is_status_bar, is_wallpaper) = if !app_id_ptr.is_null() {
             let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
-            app_id.starts_with("cce-status")
+            (app_id.starts_with("cce-status"), app_id.as_ref() == "cce-wallpaper")
         } else {
-            false
+            (false, false)
         };
 
-        if is_status_bar {
+        if is_status_bar || is_wallpaper {
             self.tiling_mode = crate::tiling::TilingMode::Status;
         } else {
             let mut should_focus = true;
@@ -1490,7 +1494,8 @@ impl Window {
 
     pub unsafe fn notify_app_id(&mut self) {
         self.wm_scheduled.dirty_app_id = true;
-        if self.get_app_id_string().as_deref().map_or(false, |id| id.starts_with("cce-status")) {
+        let app_id_str = self.get_app_id_string();
+        if app_id_str.as_deref().map_or(false, |id| id.starts_with("cce-status") || id == "cce-wallpaper") {
             self.tiling_mode = crate::tiling::TilingMode::Status;
         }
         self.try_restore();
@@ -1539,24 +1544,23 @@ impl Window {
             if app_id.starts_with("cce-status") {
                 ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
             }
-            let scale = self.scale;
-            let geom_x = (self.rendering_requested.x as f64 * scale) as i32;
-            let geom_y = (self.rendering_requested.y as f64 * scale) as i32;
-            let geom_w = (self.rendering_sent.width as f64 * scale) as i32;
-            let geom_h = (self.rendering_sent.height as f64 * scale) as i32;
+            let width = (self.rendering_sent.width as f64 * self.scale) as i32;
+            let height = (self.rendering_sent.height as f64 * self.scale) as i32;
             ffi::river_scene_node_enable_blur(
-                self.surfaces.tree as *mut ffi::wlr_scene_node,
+                self.tree as *mut ffi::wlr_scene_node,
                 blur_enabled,
                 (*self.server).wm.layout.scenefx_optimized_blur,
                 ignore_transparent,
-                geom_x,
-                geom_y,
-                geom_w,
-                geom_h,
+                0,
+                0,
+                width,
+                height,
             );
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
-            let radius = if requested.circular {
+            let radius = if self.is_fullscreen() {
+                0
+            } else if requested.circular {
                 let w = self.rendering_sent.width as i32;
                 let h = self.rendering_sent.height as i32;
                 w.min(h) / 2
@@ -1568,6 +1572,10 @@ impl Window {
 
             ffi::river_scene_node_set_corner_radius(
                 self.surfaces.tree as *mut ffi::wlr_scene_node,
+                radius,
+            );
+            ffi::river_scene_rect_set_corner_radius(
+                self.window_background,
                 radius,
             );
 
@@ -1674,14 +1682,14 @@ impl Window {
             self.box_geom.y = (*output).sent.y;
 
             let app_id_ptr = self.get_app_id();
-            let is_status_bar = if !app_id_ptr.is_null() {
+            let (is_status_bar, is_wallpaper) = if !app_id_ptr.is_null() {
                 let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
-                app_id.starts_with("cce-status")
+                (app_id.starts_with("cce-status"), app_id.as_ref() == "cce-wallpaper")
             } else {
-                false
+                (false, false)
             };
 
-            ffi::wlr_scene_node_set_enabled(self.fullscreen_background as *mut ffi::wlr_scene_node, !is_status_bar);
+            ffi::wlr_scene_node_set_enabled(self.fullscreen_background as *mut ffi::wlr_scene_node, !is_status_bar && !is_wallpaper);
             let (width, height) = (*output).sent.dimensions();
             ffi::wlr_scene_rect_set_size(self.fullscreen_background, width as i32, height as i32);
             clip = ffi::wlr_box { x: 0, y: 0, width: width as i32, height: height as i32 };
@@ -1861,7 +1869,7 @@ impl Window {
             ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
 
             // Disable backdrop blur during active viewport zoom/pan for maximum performance
-            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true, 0, 0, 0, 0);
+            ffi::river_scene_node_enable_blur(self.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true, 0, 0, 0, 0);
 
             self.scale_only_render_finish();
             self.draw_borders();

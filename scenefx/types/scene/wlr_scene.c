@@ -40,6 +40,13 @@
 #define DMABUF_FEEDBACK_DEBOUNCE_FRAMES  30
 #define HIGHLIGHT_DAMAGE_FADEOUT_TIME   250
 
+#define CURSOR_HISTORY_SIZE 16
+static struct {
+	int x, y, w, h;
+	bool valid;
+} g_cursor_history[CURSOR_HISTORY_SIZE];
+static int g_cursor_history_index = 0;
+
 struct wlr_scene_tree *wlr_scene_tree_from_node(struct wlr_scene_node *node) {
 	assert(node->type == WLR_SCENE_NODE_TREE);
 	struct wlr_scene_tree *tree = wl_container_of(node, tree, node);
@@ -2028,7 +2035,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 					.a = scene_rect->color[3],
 				},
 				.clip = &render_region,
-				.blend_mode = scene_rect->color[3] == 1.0f ?
+				.blend_mode = (scene_rect->color[3] == 1.0f && fx_corner_radii_is_empty(&rect_corners) && scene_rect->fade_inset == 0) ?
 					WLR_RENDER_BLEND_MODE_NONE : WLR_RENDER_BLEND_MODE_PREMULTIPLIED,
 			},
 			.clipped_region = {
@@ -2175,8 +2182,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
 		// Re-render the optimized blur buffer when needed. Retry rendering
 		// until there's a visible blur_node.
-		if (fx_pass->has_blur && is_scene_blur_enabled(&scene->blur_data)
-				&& scene_blur->dirty) {
+		if (fx_pass->has_blur && is_scene_blur_enabled(&scene->blur_data)) {
 			const float opacity = 1.0f;
 			enum wl_output_transform transform =
 				wlr_output_transform_invert(data->transform);
@@ -3350,7 +3356,7 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 
 			if (apply_blur_region(node, &blur_data, &render_data, state,
 						&original_damage, &blur_padding_region)) {
-				should_compensate_blur = true;
+				should_compensate_blur = false;
 				fx_pass->has_blur = true;
 			}
 		}
@@ -3369,6 +3375,42 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 					&render_data.damage, &fx_pass->blur_padding_region);
 			pixman_region32_intersect_rect(&render_data.damage, &render_data.damage,
 					0, 0, output->width, output->height);
+
+			// Add current software cursors to the history
+			struct wlr_output_cursor *cursor;
+			wl_list_for_each(cursor, &output->cursors, link) {
+				if (!cursor->enabled || !cursor->visible) {
+					continue;
+				}
+				double scale = output->scale;
+				int cx = (cursor->x - cursor->hotspot_x) * scale;
+				int cy = (cursor->y - cursor->hotspot_y) * scale;
+				int cw = cursor->width;
+				int ch = cursor->height;
+
+				g_cursor_history[g_cursor_history_index].x = cx;
+				g_cursor_history[g_cursor_history_index].y = cy;
+				g_cursor_history[g_cursor_history_index].w = cw;
+				g_cursor_history[g_cursor_history_index].h = ch;
+				g_cursor_history[g_cursor_history_index].valid = true;
+				g_cursor_history_index = (g_cursor_history_index + 1) % CURSOR_HISTORY_SIZE;
+			}
+
+			// Subtract all historical cursor regions from the blur padding region
+			for (int i = 0; i < CURSOR_HISTORY_SIZE; i++) {
+				if (!g_cursor_history[i].valid) {
+					continue;
+				}
+				pixman_region32_t cursor_reg;
+				pixman_region32_init_rect(&cursor_reg,
+						g_cursor_history[i].x - 16,
+						g_cursor_history[i].y - 16,
+						g_cursor_history[i].w + 32,
+						g_cursor_history[i].h + 32);
+				pixman_region32_subtract(&fx_pass->blur_padding_region,
+						&fx_pass->blur_padding_region, &cursor_reg);
+				pixman_region32_fini(&cursor_reg);
+			}
 
 			// Copy the surrounding content where the blur would display artifacts
 			// and draw it above the artifacts. Otherwise The old rendered

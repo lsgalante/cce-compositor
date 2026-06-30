@@ -14,9 +14,10 @@ float corner_alpha(vec2 size, vec2 position, bool is_cutout,
 	}
 
 	vec2 relative_pos = (gl_FragCoord.xy - position);
+	relative_pos.y = size.y - relative_pos.y;
 
-	if (relative_pos.x < 0.0 || relative_pos.y < 0.0
-			|| relative_pos.x > size.x || relative_pos.y > size.y) {
+	if (relative_pos.x < -0.5 || relative_pos.y < -0.5
+			|| relative_pos.x > size.x + 0.5 || relative_pos.y > size.y + 0.5) {
 		if (is_cutout) {
 			return 1.0;
 		}
@@ -59,6 +60,7 @@ float corner_alpha(vec2 size, vec2 position, bool is_cutout,
 float corner_dist(vec2 size, vec2 position,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br) {
 	vec2 relative_pos = (gl_FragCoord.xy - position);
+	relative_pos.y = size.y - relative_pos.y;
 
 	vec2 top_left = abs(relative_pos - size) - size + radius_tl;
 	vec2 top_right = abs(relative_pos - vec2(0, size.y)) - size + radius_tr;

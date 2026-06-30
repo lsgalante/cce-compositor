@@ -468,10 +468,12 @@ impl Cursor {
             let mut is_window = false;
             match result.data {
                 SceneNodeDataVal::Window(window) => {
-                    if !(*window).is_status_bar() {
+                    if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                         is_window = true;
                     }
-                    if (*window).tiling_mode != crate::tiling::TilingMode::Popup
+                    if !(*window).is_status_bar()
+                        && !(*window).is_wallpaper()
+                        && (*window).tiling_mode != crate::tiling::TilingMode::Popup
                         && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
                         && (*window).tiling_mode != crate::tiling::TilingMode::Status
                         && (*server).wm.mode == crate::window_manager::WindowManagerMode::Normal
@@ -587,7 +589,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
     if let Some(result) = (*server).scene.at(lx, ly) {
         match result.data {
             SceneNodeDataVal::Window(window) => {
-                if !(*window).is_status_bar() {
+                if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                     is_app_surface = true;
                     if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
                         is_overlay_window = true;
@@ -629,7 +631,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 }
             }
 
-            if !clicked_win.is_null() && !(*clicked_win).is_status_bar() {
+            if !clicked_win.is_null() && !(*clicked_win).is_status_bar() && !(*clicked_win).is_wallpaper() {
                 (*server).wm.stop_panning_animation();
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
@@ -670,7 +672,12 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             let mut clicked_interactive = false;
             if let Some(result) = (*server).scene.at(lx, ly) {
                 match result.data {
-                    SceneNodeDataVal::Window(_) | SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                    SceneNodeDataVal::Window(window) => {
+                        if !(*window).is_wallpaper() {
+                            clicked_interactive = true;
+                        }
+                    }
+                    SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                         clicked_interactive = true;
                     }
                 }
@@ -709,7 +716,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 }
             }
             
-            if !target_win.is_null() && !(*target_win).is_status_bar() {
+            if !target_win.is_null() && !(*target_win).is_status_bar() && !(*target_win).is_wallpaper() {
                 if (*target_win).tiling_mode != crate::tiling::TilingMode::Floating
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Popup
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
@@ -795,7 +802,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             }
         }
 
-        if !border_target_win.is_null() && !(*border_target_win).is_status_bar() && (
+        if !border_target_win.is_null() && !(*border_target_win).is_status_bar() && !(*border_target_win).is_wallpaper() && (
             (*border_target_win).tiling_mode != crate::tiling::TilingMode::Popup
             && (*border_target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
         ) {
@@ -978,7 +985,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             match result.data {
                 SceneNodeDataVal::Window(window) => {
                     clicked_something = true;
-                    if !(*window).is_status_bar() {
+                    if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                         if !seat.object.is_null() {
                             if !(*window).object.is_null() {
                                 ffi::wl_resource_post_event(seat.object, 4, (*window).object);
@@ -1020,7 +1027,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     (*win_ptr).mode_locked = op.start_mode_locked;
                     
                     let server = seat.server;
-                    if !(*win_ptr).closed && !(*win_ptr).is_status_bar() {
+                    if !(*win_ptr).closed && !(*win_ptr).is_status_bar() && !(*win_ptr).is_wallpaper() {
                         let mut viewport_w = 1920.0;
                         let mut viewport_h = 1080.0;
                         let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
@@ -1360,7 +1367,7 @@ unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *m
         let mut is_overlay_window = false;
         match result.data {
             SceneNodeDataVal::Window(window) => {
-                if !(*window).is_status_bar() {
+                if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                     is_app_surface = true;
                     if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
                         is_overlay_window = true;
@@ -1429,7 +1436,7 @@ unsafe extern "C" fn handle_touch_motion(listener: *mut ffi::wl_listener, data: 
             let mut is_overlay_window = false;
             match result.data {
                 SceneNodeDataVal::Window(window) => {
-                    if !(*window).is_status_bar() {
+                    if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                         is_app_surface = true;
                         if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
                             is_overlay_window = true;
@@ -1482,7 +1489,7 @@ unsafe extern "C" fn handle_touch_up(listener: *mut ffi::wl_listener, data: *mut
         if let Some(result) = (*server).scene.at(lx, ly) {
             match result.data {
                 SceneNodeDataVal::Window(window) => {
-                    if !(*window).is_status_bar() {
+                    if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                         is_app_surface = true;
                         if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
                             is_overlay_window = true;
@@ -1682,7 +1689,7 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
                     hovered_win = window;
                 }
             }
-            if !hovered_win.is_null() && !(*hovered_win).is_status_bar() {
+            if !hovered_win.is_null() && !(*hovered_win).is_status_bar() && !(*hovered_win).is_wallpaper() {
                 seat.focus(Focus::Window(hovered_win));
                 if !seat.object.is_null() && !(*hovered_win).object.is_null() {
                     ffi::wl_resource_post_event(seat.object, 4, (*hovered_win).object);
