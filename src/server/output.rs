@@ -650,7 +650,7 @@ impl Output {
                             }
                         }
                     } else {
-                        let step = 4;
+                        let step = 1;
                         let inset_scaled = (cell_fade_inset as f64 * zoom) as i32;
 
                         // 0. Draw the cell-sized gap color background rect behind the fade layers
