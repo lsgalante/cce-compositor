@@ -636,7 +636,8 @@ impl Output {
                         continue;
                     }
 
-                    if cell_fade_inset <= 0 {
+                    let draw_fade = cell_fade_inset > 0 && !draw_low_res;
+                    if !draw_fade {
                         let cell_rect = ffi::wlr_scene_rect_create(
                             self.grid_tree,
                             rw,

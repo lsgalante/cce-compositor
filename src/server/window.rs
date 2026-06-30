@@ -1844,6 +1844,9 @@ impl Window {
             ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
             ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
 
+            // Disable backdrop blur during active viewport zoom/pan for maximum performance
+            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true);
+
             self.scale_only_render_finish();
             self.draw_borders();
         }

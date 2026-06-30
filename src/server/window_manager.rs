@@ -113,6 +113,10 @@ pub struct WindowManager {
     pub animation_timer: *mut ffi::wl_event_source,
     pub has_restored_focused_window: bool,
     pub restored_focused_window_mapped: bool,
+    pub last_viewport_zoom: f64,
+    pub last_viewport_pan_x: f64,
+    pub last_viewport_pan_y: f64,
+    pub viewport_is_active: bool,
 }
 
 impl WindowManager {
@@ -1389,14 +1393,39 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
     }
 
     pub unsafe fn update_viewport_local(&mut self) {
+        let zoom_changed = self.desk_zoom != self.last_viewport_zoom;
+        let pan_changed = self.desk_pan_x != self.last_viewport_pan_x || self.desk_pan_y != self.last_viewport_pan_y;
+        let active = zoom_changed || pan_changed;
+
+        self.last_viewport_zoom = self.desk_zoom;
+        self.last_viewport_pan_x = self.desk_pan_x;
+        self.last_viewport_pan_y = self.desk_pan_y;
+
+        let was_active = self.viewport_is_active;
+        self.viewport_is_active = active;
+
         self.arrange_views();
         // Clear rendering dirty flag so we don't trigger the idle callback's IPC handshake
         self.rendering_scheduled.dirty = false;
         self.remove_dirty_idle();
 
-        for &window in self.windows.iter() {
-            if !window.is_null() {
-                (*window).render_viewport_update();
+        if active {
+            for &window in self.windows.iter() {
+                if !window.is_null() {
+                    (*window).render_viewport_update();
+                }
+            }
+        } else if was_active {
+            for &window in self.windows.iter() {
+                if !window.is_null() {
+                    (*window).render_finish();
+                }
+            }
+        } else {
+            for &window in self.windows.iter() {
+                if !window.is_null() {
+                    (*window).render_viewport_update();
+                }
             }
         }
 
