@@ -261,6 +261,12 @@ pub struct SurfacesConfig {
     pub desktop_grid_scale: i64,
     #[serde(default = "default_desktop_line_width")]
     pub desktop_line_width: i64,
+    #[serde(default = "default_backplate_color")]
+    pub backplate_color: String,
+    #[serde(default = "default_backplate_blur")]
+    pub backplate_blur: f64,
+    #[serde(default = "default_backplate_corner_radius")]
+    pub backplate_corner_radius: i64,
 }
 
 impl Default for SurfacesConfig {
@@ -270,6 +276,9 @@ impl Default for SurfacesConfig {
             desktop_grid_color: default_desktop_grid_color(),
             desktop_grid_scale: default_desktop_grid_scale(),
             desktop_line_width: default_desktop_line_width(),
+            backplate_color: default_backplate_color(),
+            backplate_blur: default_backplate_blur(),
+            backplate_corner_radius: default_backplate_corner_radius(),
         }
     }
 }
@@ -288,6 +297,18 @@ fn default_desktop_grid_scale() -> i64 {
 
 fn default_desktop_line_width() -> i64 {
     1
+}
+
+fn default_backplate_color() -> String {
+    "#151520e6".to_string()
+}
+
+fn default_backplate_blur() -> f64 {
+    0.8
+}
+
+fn default_backplate_corner_radius() -> i64 {
+    12
 }
 
 
@@ -953,8 +974,6 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "style") {
         layout.transition_duration = get_nested_prop_i64(node, "window", "transition_duration", default_transition_duration());
-        layout.window_blur = get_nested_prop_bool(node, "window", "blur", default_window_blur());
-        layout.window_opacity = get_nested_prop_bool(node, "window", "opacity", default_window_opacity());
         layout.window_backdrop_blur_ignore_transparent = get_nested_prop_bool(node, "window", "backdrop_blur_ignore_transparent", default_window_backdrop_blur_ignore_transparent());
         
         layout.overlay_behavior = get_nested_prop_string(node, "overlay", "behavior", &default_overlay_behavior());
@@ -1139,6 +1158,31 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                             }
                         }
                     }
+                    if let Some(backplate_node) = surfaces_children.nodes().iter().find(|n| n.name().value() == "backplate") {
+                        found_nested = true;
+                        for entry in backplate_node.entries() {
+                            if let Some(id) = entry.name() {
+                                match id.value() {
+                                    "color" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surfaces.backplate_color = val.to_string();
+                                        }
+                                    }
+                                    "blur" => {
+                                        if let Some(val) = entry.value().as_f64() {
+                                            surfaces.backplate_blur = val;
+                                        }
+                                    }
+                                    "corner_radius" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surfaces.backplate_corner_radius = val;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1149,6 +1193,9 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surfaces.desktop_grid_color = get_child_arg_string(node, "desktop_grid_color", &default_desktop_grid_color());
             surfaces.desktop_grid_scale = get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale());
             surfaces.desktop_line_width = get_child_arg_i64(node, "desktop_line_width", default_desktop_line_width());
+            surfaces.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
+            surfaces.backplate_blur = get_child_arg_f64(node, "backplate_blur", default_backplate_blur());
+            surfaces.backplate_corner_radius = get_child_arg_i64(node, "backplate_corner_radius", default_backplate_corner_radius());
         }
     }
 
@@ -1216,7 +1263,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.transition_duration = config.layout.transition_duration as i32;
     state.layout.grid_gap = config.layout.grid_gap as i32;
     state.layout.border_blur = false;
-    state.layout.window_blur = config.layout.window_blur;
+    state.layout.window_blur = config.surfaces.backplate_blur > 0.001;
     state.layout.overlay_behavior = config.layout.overlay_behavior;
     state.layout.overlay_width = config.layout.overlay_width as i32;
     state.layout.overlay_position = config.layout.overlay_position;
@@ -1224,7 +1271,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.status_normal_color = config.layout.status_normal_color.clone();
     state.layout.status_background_blur = config.layout.status_background_blur as f32;
     state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
-    state.layout.window_opacity = config.layout.window_opacity;
+    let backplate_rgba = parse_hex_color_rgba(&config.surfaces.backplate_color);
+    state.layout.window_opacity = backplate_rgba[3] < 0.999;
     state.layout.scenefx_optimized_blur = config.output.as_ref().map(|o| o.scenefx_optimized_blur).unwrap_or(true);
     state.layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
     state.layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
