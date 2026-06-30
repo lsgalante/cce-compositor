@@ -166,6 +166,7 @@ pub struct Output {
     pub last_grid_cell_corner_radius: i32,
     pub last_grid_cell_fade_inset: i64,
     pub last_grid_gap_color: String,
+    pub grid_is_low_res: bool,
 
     pub destroy: ffi::wl_listener,
     pub request_state: ffi::wl_listener,
@@ -413,6 +414,7 @@ impl Output {
             last_grid_cell_corner_radius: 0,
             last_grid_cell_fade_inset: 0,
             last_grid_gap_color: String::new(),
+            grid_is_low_res: false,
             destroy: std::mem::zeroed(),
             request_state: std::mem::zeroed(),
             frame: std::mem::zeroed(),
@@ -574,9 +576,13 @@ impl Output {
             || self.last_grid_cell_fade_inset != cell_fade_inset
             || self.last_grid_gap_color != gap_color;
 
+        let force_high_res = !structure_changed && self.grid_is_low_res;
+
         let period_pixels = period * zoom;
 
-        if structure_changed {
+        if structure_changed || force_high_res {
+            let draw_low_res = self.last_grid_zoom != zoom;
+
             // Cache current parameters (excluding pan coordinates)
             self.last_grid_viewport_w = viewport_w;
             self.last_grid_viewport_h = viewport_h;
@@ -587,6 +593,7 @@ impl Output {
             self.last_grid_cell_corner_radius = cell_corner_radius;
             self.last_grid_cell_fade_inset = cell_fade_inset;
             self.last_grid_gap_color = gap_color;
+            self.grid_is_low_res = draw_low_res;
 
             // Clear previous grid rendering
             ffi::river_scene_tree_clear_children(self.grid_tree);
@@ -650,7 +657,7 @@ impl Output {
                             }
                         }
                     } else {
-                        let step = 1;
+                        let step = if draw_low_res { 8 } else { 1 };
                         let inset_scaled = (cell_fade_inset as f64 * zoom) as i32;
 
                         // 0. Draw the cell-sized gap color background rect behind the fade layers
