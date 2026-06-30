@@ -56,7 +56,7 @@ impl LibinputDevice {
         }
 
         // Tap to click
-        if let Some(tap) = config.tap_to_click {
+        if let Some(tap) = config.touchpad.as_ref().and_then(|t| t.tap_to_click) {
             if ffi::libinput_device_config_tap_get_finger_count(handle) > 0 {
                 let state = if tap { 1 } else { 0 };
                 ffi::libinput_device_config_tap_set_enabled(handle, state);
@@ -64,7 +64,7 @@ impl LibinputDevice {
         }
 
         // Natural scroll
-        if let Some(natural) = config.natural_scroll {
+        if let Some(natural) = config.touchpad.as_ref().and_then(|t| t.natural_scroll) {
             if ffi::libinput_device_config_scroll_has_natural_scroll(handle) != 0 {
                 let state = if natural { 1 } else { 0 };
                 ffi::libinput_device_config_scroll_set_natural_scroll_enabled(handle, state);
@@ -72,7 +72,7 @@ impl LibinputDevice {
         }
 
         // Dwt (Disable while typing)
-        if let Some(dwt) = config.dwt {
+        if let Some(dwt) = config.touchpad.as_ref().and_then(|t| t.dwt) {
             if ffi::libinput_device_config_dwt_is_available(handle) != 0 {
                 let state = if dwt { 1 } else { 0 };
                 ffi::libinput_device_config_dwt_set_enabled(handle, state);
@@ -80,7 +80,7 @@ impl LibinputDevice {
         }
 
         // Dwtp (Disable while trackpointing)
-        if let Some(dwtp) = config.dwtp {
+        if let Some(dwtp) = config.touchpad.as_ref().and_then(|t| t.dwtp) {
             if ffi::libinput_device_config_dwtp_is_available(handle) != 0 {
                 let state = if dwtp { 1 } else { 0 };
                 ffi::libinput_device_config_dwtp_set_enabled(handle, state);
@@ -98,7 +98,7 @@ impl LibinputDevice {
 
         // Acceleration Speed
         let speed = if is_trackpoint {
-            config.trackpoint_accel_speed.or(config.accel_speed)
+            config.trackpoint.as_ref().and_then(|t| t.accel_speed).or(config.accel_speed)
         } else {
             config.accel_speed
         };
@@ -110,7 +110,7 @@ impl LibinputDevice {
 
         // Acceleration Profile
         let profile_str = if is_trackpoint {
-            config.trackpoint_accel_profile.as_ref().or(config.accel_profile.as_ref())
+            config.trackpoint.as_ref().and_then(|t| t.accel_profile.as_ref()).or(config.accel_profile.as_ref())
         } else {
             config.accel_profile.as_ref()
         };

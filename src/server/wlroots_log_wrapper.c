@@ -727,6 +727,10 @@ void river_scene_rect_set_size_if_changed(struct wlr_scene_rect *rect, int width
 	}
 }
 
+void river_scene_rect_set_corner_radius(struct wlr_scene_rect *rect, int radius) {
+	wlr_scene_rect_set_corner_radius(rect, radius, CORNER_LOCATION_ALL);
+}
+
 int river_scene_buffer_get_width(struct wlr_scene_buffer *scene_buffer) {
 	if (scene_buffer->buffer) {
 		return scene_buffer->buffer->width;

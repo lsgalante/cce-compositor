@@ -1055,7 +1055,11 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         }
 
                         (*server).wm.stop_panning_animation();
-                        (*server).wm.dirty_windowing();
+                        if matches!((*server).wm.state, crate::window_manager::WindowManagerState::Idle) {
+                            (*server).wm.update_viewport_local();
+                        } else {
+                            (*server).wm.dirty_windowing();
+                        }
                     }
                 }
             }
@@ -1152,7 +1156,11 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
                     wm.desk_pan_y += (cy - phys_y) * (1.0 / old_zoom - 1.0 / new_zoom);
                     wm.desk_zoom = new_zoom;
                     wm.mode = if (new_zoom - 1.0).abs() > 0.001 { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal };
-                    wm.dirty_windowing();
+                    if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
+                        wm.update_viewport_local();
+                    } else {
+                        wm.dirty_windowing();
+                    }
                 }
             }
         }
@@ -1202,7 +1210,11 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
             }
             _ => {}
         }
-        wm.dirty_windowing();
+        if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
+            wm.update_viewport_local();
+        } else {
+            wm.dirty_windowing();
+        }
         return;
     }
 
@@ -1535,7 +1547,7 @@ unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *
 
     let seat = &mut *cursor.seat;
     let wm = &(*seat.server).wm;
-    let swipe_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.swipe).unwrap_or(true);
+    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true);
     if !swipe_enabled {
         return;
     }
@@ -1565,7 +1577,7 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
 
     let seat = &mut *cursor.seat;
     let wm = &(*seat.server).wm;
-    let swipe_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.swipe).unwrap_or(true);
+    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true);
     if !swipe_enabled {
         return;
     }
@@ -1595,7 +1607,11 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
             wm.desk_pan_y += (cy - phys_y) * (1.0 / old_zoom - 1.0 / new_zoom);
             wm.desk_zoom = new_zoom;
             wm.mode = if (new_zoom - 1.0).abs() > 0.001 { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal };
-            wm.dirty_windowing();
+            if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
+                wm.update_viewport_local();
+            } else {
+                wm.dirty_windowing();
+            }
         }
         
         let server = seat.server;
@@ -1709,7 +1725,7 @@ unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mu
 
     let seat = &mut *cursor.seat;
     let wm = &(*seat.server).wm;
-    let swipe_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.swipe).unwrap_or(true);
+    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true);
     if !swipe_enabled {
         return;
     }
@@ -1740,7 +1756,7 @@ unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listener, data: *
 
     let seat = &mut *cursor.seat;
     let wm = &(*seat.server).wm;
-    let pinch_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.pinch).unwrap_or(true);
+    let pinch_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
     if !pinch_enabled {
         return;
     }
@@ -1767,7 +1783,7 @@ unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: 
 
     let seat = &mut *cursor.seat;
     let wm = &(*seat.server).wm;
-    let pinch_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.pinch).unwrap_or(true);
+    let pinch_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
     if !pinch_enabled {
         return;
     }
@@ -1841,7 +1857,7 @@ unsafe extern "C" fn handle_pinch_end(listener: *mut ffi::wl_listener, data: *mu
 
     let seat = &mut *cursor.seat;
     let wm = &(*seat.server).wm;
-    let pinch_enabled = wm.input_config.gestures.as_ref().and_then(|g| g.pinch).unwrap_or(true);
+    let pinch_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
     if !pinch_enabled {
         return;
     }

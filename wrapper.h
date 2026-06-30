@@ -271,4 +271,6 @@ void river_scene_node_set_position_if_changed(struct wlr_scene_node *node, int x
 
 void river_scene_rect_set_size_if_changed(struct wlr_scene_rect *rect, int width, int height);
 
+void river_scene_rect_set_corner_radius(struct wlr_scene_rect *rect, int radius);
+
 #endif // WRAPPER_H

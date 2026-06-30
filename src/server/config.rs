@@ -39,12 +39,14 @@ pub struct Layout {
     pub overlay_border_gap: i32,
     pub status_normal_color: String,
     pub status_background_blur: f32,
-    pub desktop_background_color: String,
+    pub desktop_gap_color: String,
     pub transparency_opacity: f32,
     pub window_opacity: bool,
-    pub desktop_grid_color: [f32; 4],
+    pub desktop_cell_color: [f32; 4],
     pub desktop_grid_scale: f64,
-    pub desktop_line_width: i32,
+    pub desktop_gap_width: i32,
+    pub desktop_cell_corner_radius: i32,
+    pub desktop_cell_fade_inset: i64,
     pub scenefx_optimized_blur: bool,
     pub status_backdrop_blur_ignore_transparent: bool,
     pub window_backdrop_blur_ignore_transparent: bool,
@@ -85,12 +87,14 @@ impl Default for Layout {
             overlay_border_gap: 0,
             status_normal_color: "#ccccd8".to_string(),
             status_background_blur: 0.8,
-            desktop_background_color: "#000000".to_string(),
+            desktop_gap_color: "#000000".to_string(),
             transparency_opacity: 0.9,
             window_opacity: true,
-            desktop_grid_color: [1.0, 1.0, 1.0, 0.05],
+            desktop_cell_color: [1.0, 1.0, 1.0, 0.05],
             desktop_grid_scale: 100.0,
-            desktop_line_width: 1,
+            desktop_gap_width: 1,
+            desktop_cell_corner_radius: 0,
+            desktop_cell_fade_inset: 0,
             scenefx_optimized_blur: true,
             status_backdrop_blur_ignore_transparent: true,
             window_backdrop_blur_ignore_transparent: true,
@@ -235,17 +239,27 @@ pub struct GesturesConfig {
     pub pinch: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct InputConfig {
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub struct TouchpadConfig {
     pub tap_to_click: Option<bool>,
-    pub accel_speed: Option<f64>,
-    pub accel_profile: Option<String>,
     pub natural_scroll: Option<bool>,
     pub dwt: Option<bool>,
     pub dwtp: Option<bool>,
-    pub trackpoint_accel_speed: Option<f64>,
-    pub trackpoint_accel_profile: Option<String>,
     pub gestures: Option<GesturesConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub struct TrackpointConfig {
+    pub accel_speed: Option<f64>,
+    pub accel_profile: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct InputConfig {
+    pub accel_speed: Option<f64>,
+    pub accel_profile: Option<String>,
+    pub touchpad: Option<TouchpadConfig>,
+    pub trackpoint: Option<TrackpointConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -255,14 +269,18 @@ pub struct TransparencyConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct SurfacesConfig {
-    #[serde(default = "default_desktop_background_color")]
-    pub desktop_background_color: String,
-    #[serde(default = "default_desktop_grid_color")]
-    pub desktop_grid_color: String,
+    #[serde(default = "default_desktop_gap_color")]
+    pub desktop_gap_color: String,
+    #[serde(default = "default_desktop_cell_color")]
+    pub desktop_cell_color: String,
     #[serde(default = "default_desktop_grid_scale")]
     pub desktop_grid_scale: i64,
-    #[serde(default = "default_desktop_line_width")]
-    pub desktop_line_width: i64,
+    #[serde(default = "default_desktop_gap_width")]
+    pub desktop_gap_width: i64,
+    #[serde(default = "default_desktop_cell_corner_radius")]
+    pub desktop_cell_corner_radius: i64,
+    #[serde(default = "default_desktop_cell_fade_inset")]
+    pub desktop_cell_fade_inset: i64,
     #[serde(default = "default_backplate_color")]
     pub backplate_color: String,
     #[serde(default = "default_backplate_blur")]
@@ -274,10 +292,12 @@ pub struct SurfacesConfig {
 impl Default for SurfacesConfig {
     fn default() -> Self {
         Self {
-            desktop_background_color: default_desktop_background_color(),
-            desktop_grid_color: default_desktop_grid_color(),
+            desktop_gap_color: default_desktop_gap_color(),
+            desktop_cell_color: default_desktop_cell_color(),
             desktop_grid_scale: default_desktop_grid_scale(),
-            desktop_line_width: default_desktop_line_width(),
+            desktop_gap_width: default_desktop_gap_width(),
+            desktop_cell_corner_radius: default_desktop_cell_corner_radius(),
+            desktop_cell_fade_inset: default_desktop_cell_fade_inset(),
             backplate_color: default_backplate_color(),
             backplate_blur: default_backplate_blur(),
             backplate_corner_radius: default_backplate_corner_radius(),
@@ -285,11 +305,11 @@ impl Default for SurfacesConfig {
     }
 }
 
-fn default_desktop_background_color() -> String {
+fn default_desktop_gap_color() -> String {
     "#000000".to_string()
 }
 
-fn default_desktop_grid_color() -> String {
+fn default_desktop_cell_color() -> String {
     "#ffffff0d".to_string()
 }
 
@@ -297,8 +317,16 @@ fn default_desktop_grid_scale() -> i64 {
     100
 }
 
-fn default_desktop_line_width() -> i64 {
+fn default_desktop_gap_width() -> i64 {
     1
+}
+
+fn default_desktop_cell_corner_radius() -> i64 {
+    0
+}
+
+fn default_desktop_cell_fade_inset() -> i64 {
+    0
 }
 
 fn default_backplate_color() -> String {
@@ -320,8 +348,8 @@ pub struct Config {
     pub layout: LayoutConfig,
     #[serde(default)]
     pub env: HashMap<String, String>,
-    #[serde(default)]
-    pub keybind: Vec<KeybindConfig>,
+    #[serde(default, rename = "key_bindings")]
+    pub key_bindings: Vec<KeybindConfig>,
     #[serde(default)]
     pub pointer_bind: Vec<PointerBindConfig>,
     #[serde(default)]
@@ -1003,7 +1031,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     }
 
     // 3. lists
-    let mut keybind = Vec::new();
+    let mut key_bindings = Vec::new();
     let mut pointer_bind = Vec::new();
     let mut gesture_bind = Vec::new();
     let mut mode_rule = Vec::new();
@@ -1013,12 +1041,12 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     
     for node in doc.nodes() {
         match node.name().value() {
-            "keybind" => {
+            "key_bindings" => {
                 let mods = get_prop_string(node, "mods", "");
                 let key = get_prop_string(node, "key", "");
                 let action = get_prop_string(node, "action", "");
                 let command = get_prop_string_opt(node, "command");
-                keybind.push(KeybindConfig { mods, key, action, command });
+                key_bindings.push(KeybindConfig { mods, key, action, command });
             }
             "pointer_bind" => {
                 let mods = get_prop_string(node, "mods", "");
@@ -1067,20 +1095,20 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
 
     // 4. output
     let mut output = None;
+    let mut display = HashMap::new();
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "output") {
         let scale = get_child_arg_f64(node, "scale", 1.0);
         let scenefx_optimized_blur = get_child_arg_bool(node, "scenefx_optimized_blur", true);
         output = Some(OutputConfig { scale, scenefx_optimized_blur });
-    }
 
-    // 5. display
-    let mut display = HashMap::new();
-    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "display") {
         if let Some(children) = node.children() {
             for child in children.nodes() {
-                if let Some(entry) = child.entries().first() {
-                    if let Some(num) = entry.value().as_f64() {
-                        display.insert(child.name().value().to_string(), num);
+                let name = child.name().value();
+                if name.starts_with("scale_") {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(num) = entry.value().as_f64() {
+                            display.insert(name.to_string(), num);
+                        }
                     }
                 }
             }
@@ -1090,34 +1118,53 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     // 6. input
     let mut input = None;
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "input") {
-        let tap_to_click = get_child_arg_bool_opt(node, "tap_to_click");
         let accel_speed = get_child_arg_f64_opt(node, "accel_speed");
         let accel_profile = get_child_arg_string_opt(node, "accel_profile");
-        let natural_scroll = get_child_arg_bool_opt(node, "natural_scroll");
-        let dwt = get_child_arg_bool_opt(node, "dwt");
-        let dwtp = get_child_arg_bool_opt(node, "dwtp");
-        let trackpoint_accel_speed = get_child_arg_f64_opt(node, "trackpoint_accel_speed");
-        let trackpoint_accel_profile = get_child_arg_string_opt(node, "trackpoint_accel_profile");
-        
-        let mut gestures = None;
+
+        let mut touchpad = None;
         if let Some(children) = node.children() {
-            if let Some(gestures_node) = children.nodes().iter().find(|n| n.name().value() == "gestures") {
-                let swipe = get_child_arg_bool_opt(gestures_node, "swipe");
-                let pinch = get_child_arg_bool_opt(gestures_node, "pinch");
-                gestures = Some(GesturesConfig { swipe, pinch });
+            if let Some(tp_node) = children.nodes().iter().find(|n| n.name().value() == "touchpad") {
+                let tap_to_click = get_child_arg_bool_opt(tp_node, "tap_to_click");
+                let natural_scroll = get_child_arg_bool_opt(tp_node, "natural_scroll");
+                let dwt = get_child_arg_bool_opt(tp_node, "dwt");
+                let dwtp = get_child_arg_bool_opt(tp_node, "dwtp");
+
+                let mut gestures = None;
+                if let Some(tp_children) = tp_node.children() {
+                    if let Some(gestures_node) = tp_children.nodes().iter().find(|n| n.name().value() == "gestures") {
+                        let swipe = get_child_arg_bool_opt(gestures_node, "swipe");
+                        let pinch = get_child_arg_bool_opt(gestures_node, "pinch");
+                        gestures = Some(GesturesConfig { swipe, pinch });
+                    }
+                }
+
+                touchpad = Some(TouchpadConfig {
+                    tap_to_click,
+                    natural_scroll,
+                    dwt,
+                    dwtp,
+                    gestures,
+                });
             }
         }
-        
+
+        let mut trackpoint = None;
+        if let Some(children) = node.children() {
+            if let Some(tp_node) = children.nodes().iter().find(|n| n.name().value() == "trackpoint") {
+                let accel_speed = get_child_arg_f64_opt(tp_node, "accel_speed");
+                let accel_profile = get_child_arg_string_opt(tp_node, "accel_profile");
+                trackpoint = Some(TrackpointConfig {
+                    accel_speed,
+                    accel_profile,
+                });
+            }
+        }
+
         input = Some(InputConfig {
-            tap_to_click,
             accel_speed,
             accel_profile,
-            natural_scroll,
-            dwt,
-            dwtp,
-            trackpoint_accel_speed,
-            trackpoint_accel_profile,
-            gestures,
+            touchpad,
+            trackpoint,
         });
     }
 
@@ -1140,19 +1187,29 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                         for entry in desktop_node.entries() {
                             if let Some(id) = entry.name() {
                                 match id.value() {
-                                    "background_color" => {
+                                    "gap_color" => {
                                         if let Some(val) = entry.value().as_string() {
-                                            surfaces.desktop_background_color = val.to_string();
+                                            surfaces.desktop_gap_color = val.to_string();
                                         }
                                     }
-                                    "grid_color" => {
+                                    "cell_color" => {
                                         if let Some(val) = entry.value().as_string() {
-                                            surfaces.desktop_grid_color = val.to_string();
+                                            surfaces.desktop_cell_color = val.to_string();
                                         }
                                     }
-                                    "line_width" => {
+                                    "gap_width" => {
                                         if let Some(val) = entry.value().as_i64() {
-                                            surfaces.desktop_line_width = val;
+                                            surfaces.desktop_gap_width = val;
+                                        }
+                                    }
+                                    "cell_corner_radius" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surfaces.desktop_cell_corner_radius = val;
+                                        }
+                                    }
+                                    "cell_fade_inset" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surfaces.desktop_cell_fade_inset = val;
                                         }
                                     }
                                     _ => {}
@@ -1191,10 +1248,12 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     }
     if !found_nested {
         if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "surfaces") {
-            surfaces.desktop_background_color = get_child_arg_string(node, "desktop_background_color", &default_desktop_background_color());
-            surfaces.desktop_grid_color = get_child_arg_string(node, "desktop_grid_color", &default_desktop_grid_color());
+            surfaces.desktop_gap_color = get_child_arg_string(node, "desktop_gap_color", &default_desktop_gap_color());
+            surfaces.desktop_cell_color = get_child_arg_string(node, "desktop_cell_color", &default_desktop_cell_color());
             surfaces.desktop_grid_scale = get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale());
-            surfaces.desktop_line_width = get_child_arg_i64(node, "desktop_line_width", default_desktop_line_width());
+            surfaces.desktop_gap_width = get_child_arg_i64(node, "desktop_gap_width", default_desktop_gap_width());
+            surfaces.desktop_cell_corner_radius = get_child_arg_i64(node, "desktop_cell_corner_radius", default_desktop_cell_corner_radius());
+            surfaces.desktop_cell_fade_inset = get_child_arg_i64(node, "desktop_cell_fade_inset", default_desktop_cell_fade_inset());
             surfaces.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
             surfaces.backplate_blur = get_child_arg_f64(node, "backplate_blur", default_backplate_blur());
             surfaces.backplate_corner_radius = get_child_arg_i64(node, "backplate_corner_radius", default_backplate_corner_radius());
@@ -1204,7 +1263,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     Ok(Config {
         layout,
         env,
-        keybind,
+        key_bindings,
         pointer_bind,
         mode_rule,
         tag_layout,
@@ -1248,8 +1307,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.border_b = 0x3E3E3E3E;
     state.layout.border_a = 0xFFFFFFFF;
 
-    let desktop_background_str = config.surfaces.desktop_background_color.clone();
-    state.layout.desktop_background_color = desktop_background_str.clone();
+    let desktop_background_str = config.surfaces.desktop_gap_color.clone();
+    state.layout.desktop_gap_color = desktop_background_str.clone();
 
     let background_color_val = parse_hex_color(&desktop_background_str);
     state.layout.background_r = ((background_color_val >> 16) & 0xFF) * 0x01010101;
@@ -1257,9 +1316,11 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.background_b = (background_color_val & 0xFF) * 0x01010101;
     state.layout.background_a = 0xFFFFFFFF;
 
-    state.layout.desktop_grid_color = parse_hex_color_rgba(&config.surfaces.desktop_grid_color);
+    state.layout.desktop_cell_color = parse_hex_color_rgba(&config.surfaces.desktop_cell_color);
     state.layout.desktop_grid_scale = config.surfaces.desktop_grid_scale as f64;
-    state.layout.desktop_line_width = config.surfaces.desktop_line_width as i32;
+    state.layout.desktop_gap_width = config.surfaces.desktop_gap_width as i32;
+    state.layout.desktop_cell_corner_radius = config.surfaces.desktop_cell_corner_radius as i32;
+    state.layout.desktop_cell_fade_inset = config.surfaces.desktop_cell_fade_inset;
 
     state.layout.border_font_size = 11;
     state.layout.transition_duration = config.layout.transition_duration as i32;
@@ -1293,7 +1354,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     }
 
     state.keybinds.clear();
-    for kb in &config.keybind {
+    for kb in &config.key_bindings {
         let mods = parse_modifiers(&kb.mods);
         let keysym = parse_keysym(&kb.key);
         let action = parse_action(&kb.action);
@@ -1491,15 +1552,24 @@ mod tests {
         if let Some(path) = default_config_path() {
             let mut server = crate::server::Server::default();
             parse_config(&path, &mut server.wm).unwrap();
+            assert_eq!(server.wm.layout.desktop_gap_color, "#a5cfc2");
+            assert_eq!(server.wm.layout.desktop_gap_width, 24);
+            assert_eq!(server.wm.layout.desktop_cell_corner_radius, 8);
             println!("TEST_WM_STARTUP: {:?}", server.wm.startup);
             println!("TEST_WM_PATH: {:?}", std::env::var("PATH"));
         }
     }
 
     #[test]
+    fn test_parse_rgba() {
+        let color = parse_hex_color_rgba("#a5cfc2");
+        assert_eq!(color, [165.0/255.0, 207.0/255.0, 194.0/255.0, 1.0]);
+    }
+
+    #[test]
     fn test_kdl_display_scale_parsing() {
         let content = r#"
-            display {
+            output {
                 scale_eDP-1 (f64)2.0
                 scale_DP-1 (f64)1.5
             }

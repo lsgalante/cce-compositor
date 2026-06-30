@@ -1370,6 +1370,42 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
         self.rendering_scheduled.dirty = true;
     }
 
+    pub unsafe fn update_viewport_local(&mut self) {
+        self.arrange_views();
+        // Clear rendering dirty flag so we don't trigger the idle callback's IPC handshake
+        self.rendering_scheduled.dirty = false;
+        self.remove_dirty_idle();
+
+        for &window in self.windows.iter() {
+            if !window.is_null() {
+                (*window).render_finish();
+            }
+        }
+
+        // Commit outputs or schedule frame updates
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*outputs_list).next;
+        while curr != outputs_list {
+            let next = (*curr).next;
+            let output = crate::container_of!(curr, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                ffi::wlr_output_schedule_frame((*output).wlr_output);
+            }
+            curr = next;
+        }
+
+        // Re-evaluate cursor focus/hover since windows have moved relative to pointers
+        let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+        let mut curr_seat = (*seats).next;
+        while curr_seat != seats {
+            let next_seat = (*curr_seat).next;
+            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+            (*seat).cursor.update_hovered();
+            curr_seat = next_seat;
+        }
+    }
+
+
     pub unsafe fn focused_window(&self) -> *mut crate::window::Window {
         let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
         let mut curr_seat = (*seats_list).next;
@@ -1836,7 +1872,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     Action::PanDown => self.desk_pan_y += step,
                     _ => {}
                 }
-                self.dirty_windowing();
+                if matches!(self.state, WindowManagerState::Idle) {
+                    self.update_viewport_local();
+                } else {
+                    self.dirty_windowing();
+                }
             }
             Action::OverlayLeft => {
                 self.layout.overlay_position = "left".to_string();
@@ -1875,7 +1915,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                                 self.desk_pan_x = center_x - viewport_w / 2.0;
                                 self.desk_pan_y = center_y - viewport_h / 2.0;
                                 self.stop_panning_animation();
-                                self.dirty_windowing();
+                                if matches!(self.state, WindowManagerState::Idle) {
+                                    self.update_viewport_local();
+                                } else {
+                                    self.dirty_windowing();
+                                }
                                 return;
                             }
                         }
@@ -1885,7 +1929,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     self.desk_pan_x = 0.0;
                     self.desk_pan_y = 0.0;
                     self.stop_panning_animation();
-                    self.dirty_windowing();
+                    if matches!(self.state, WindowManagerState::Idle) {
+                        self.update_viewport_local();
+                    } else {
+                        self.dirty_windowing();
+                    }
                 } else {
                     let mut min_vx = f64::MAX;
                     let mut max_vx = f64::MIN;
@@ -1961,7 +2009,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         self.mode = WindowManagerMode::Overview;
                         self.desk_pan_x = center_x - (viewport_w / 2.0) / new_zoom;
                         self.desk_pan_y = center_y - (viewport_h / 2.0) / new_zoom;
-                        self.dirty_windowing();
+                        if matches!(self.state, WindowManagerState::Idle) {
+                            self.update_viewport_local();
+                        } else {
+                            self.dirty_windowing();
+                        }
                     }
                 }
             }
@@ -2020,7 +2072,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 if let (Ok(dx), Ok(dy)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
                     self.desk_pan_x += dx;
                     self.desk_pan_y += dy;
-                    self.dirty_windowing();
+                    if matches!(self.state, WindowManagerState::Idle) {
+                        self.update_viewport_local();
+                    } else {
+                        self.dirty_windowing();
+                    }
                     return "ok\n".to_string();
                 }
                 "error: invalid dx or dy\n".to_string()
@@ -2030,7 +2086,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 if let (Ok(x), Ok(y)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
                     self.desk_pan_x = x;
                     self.desk_pan_y = y;
-                    self.dirty_windowing();
+                    if matches!(self.state, WindowManagerState::Idle) {
+                        self.update_viewport_local();
+                    } else {
+                        self.dirty_windowing();
+                    }
                     return "ok\n".to_string();
                 }
                 "error: invalid x or y\n".to_string()
@@ -2268,8 +2328,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 let key = parts[1];
                 let val = parts[2];
                 match key {
-                    "desktop_background_color" => {
-                        self.layout.desktop_background_color = val.to_string();
+                    "desktop_gap_color" => {
+                        self.layout.desktop_gap_color = val.to_string();
                         let parsed_color = crate::config::parse_hex_color(val);
                         self.layout.background_r = ((parsed_color >> 16) & 0xFF) * 0x01010101;
                         self.layout.background_g = ((parsed_color >> 8) & 0xFF) * 0x01010101;
@@ -2285,17 +2345,27 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                             }
                         }
                     }
-                    "desktop_grid_color" => {
-                        self.layout.desktop_grid_color = crate::config::parse_hex_color_rgba(val);
+                    "desktop_cell_color" => {
+                        self.layout.desktop_cell_color = crate::config::parse_hex_color_rgba(val);
                     }
                     "desktop_grid_scale" => {
                         if let Ok(v) = val.parse::<f64>() {
                             self.layout.desktop_grid_scale = v;
                         }
                     }
-                    "desktop_line_width" => {
+                    "desktop_gap_width" => {
                         if let Ok(v) = val.parse::<i32>() {
-                            self.layout.desktop_line_width = v;
+                            self.layout.desktop_gap_width = v;
+                        }
+                    }
+                    "desktop_cell_corner_radius" => {
+                        if let Ok(v) = val.parse::<i32>() {
+                            self.layout.desktop_cell_corner_radius = v;
+                        }
+                    }
+                    "desktop_cell_fade_inset" => {
+                        if let Ok(v) = val.parse::<i64>() {
+                            self.layout.desktop_cell_fade_inset = v;
                         }
                     }
                     "gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap = v; } }
@@ -2856,7 +2926,11 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
         }
     }
     
-    (*wm).dirty_windowing();
+    if matches!((*wm).state, WindowManagerState::Idle) {
+        (*wm).update_viewport_local();
+    } else {
+        (*wm).dirty_windowing();
+    }
     
     if !done {
         if !(*wm).animation_timer.is_null() {
