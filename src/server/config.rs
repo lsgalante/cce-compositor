@@ -44,6 +44,7 @@ pub struct Layout {
     pub desktop_grid_color: [f32; 4],
     pub desktop_grid_scale: f64,
     pub desktop_line_width: i32,
+    pub scenefx_optimized_blur: bool,
 }
 
 impl Default for Layout {
@@ -86,6 +87,7 @@ impl Default for Layout {
             desktop_grid_color: [1.0, 1.0, 1.0, 0.05],
             desktop_grid_scale: 100.0,
             desktop_line_width: 1,
+            scenefx_optimized_blur: true,
         }
     }
 }
@@ -203,10 +205,16 @@ pub struct GestureBind {
 pub struct OutputConfig {
     #[serde(default = "default_scale")]
     pub scale: f64,
+    #[serde(default = "default_scenefx_optimized_blur")]
+    pub scenefx_optimized_blur: bool,
 }
 
 fn default_scale() -> f64 {
     1.0
+}
+
+fn default_scenefx_optimized_blur() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -1026,7 +1034,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     let mut output = None;
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "output") {
         let scale = get_child_arg_f64(node, "scale", 1.0);
-        output = Some(OutputConfig { scale });
+        let scenefx_optimized_blur = get_child_arg_bool(node, "scenefx_optimized_blur", true);
+        output = Some(OutputConfig { scale, scenefx_optimized_blur });
     }
 
     // 5. display
@@ -1202,6 +1211,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.status_background_blur = config.layout.status_background_blur as f32;
     state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
     state.layout.window_opacity = config.layout.window_opacity;
+    state.layout.scenefx_optimized_blur = config.output.as_ref().map(|o| o.scenefx_optimized_blur).unwrap_or(true);
 
     for (key, val) in &config.env {
         let expanded = expand_env_vars(val);

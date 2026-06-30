@@ -411,6 +411,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     ffi::river_scene_node_enable_blur(
         (*window).surfaces.tree as *mut ffi::wlr_scene_node,
         (*window).rendering_requested.blur,
+        (*(*window).server).wm.layout.scenefx_optimized_blur,
     );
 
     let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;

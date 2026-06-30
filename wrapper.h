@@ -257,7 +257,7 @@ struct wlr_seat_client *river_wlr_drag_get_seat_client(struct wlr_drag *drag);
 
 void river_wlr_keyboard_init(struct wlr_keyboard *keyboard, void (*led_update)(struct wlr_keyboard *keyboard, uint32_t leds), const char *name);
 
-void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled);
+void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, bool optimized);
 
 void river_scene_node_set_opacity(struct wlr_scene_node *node, float opacity);
 

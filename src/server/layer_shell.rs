@@ -594,6 +594,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
         ffi::river_scene_node_enable_blur(
             (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
             blur_enabled,
+            (*server).wm.layout.scenefx_optimized_blur,
         );
     }
 

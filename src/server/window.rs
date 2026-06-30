@@ -1538,7 +1538,7 @@ impl Window {
                     blur_enabled = false;
                 }
             }
-            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled);
+            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled, (*self.server).wm.layout.scenefx_optimized_blur);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
             let radius = if requested.circular {
@@ -2743,7 +2743,8 @@ impl Decoration {
 
         self.surfaces.drop_saved();
 
-        ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, self.rendering_requested.blur);
+        let server = (*self.window).server;
+        ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, self.rendering_requested.blur, (*server).wm.layout.scenefx_optimized_blur);
 
         let scale = (*self.window).scale;
         let scaled_x = (self.rendering_requested.offset_x as f64 * scale) as i32;
