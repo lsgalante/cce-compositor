@@ -1,5 +1,5 @@
 [package]
-name = "cce"
+name = "cce-fx"
 version = "0.1.0"
 edition = "2021"
 
@@ -26,8 +26,12 @@ pkg-config = "0.3"
 cc = "1.0"
 
 [[bin]]
-name = "cce"
+name = "cce-fx"
 path = "src/bin/cce.rs"
+
+[[bin]]
+name = "cce-wallpaper"
+path = "src/bin/wallpaper.rs"
 
 [profile.release]
 debug = true

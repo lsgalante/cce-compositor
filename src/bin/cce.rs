@@ -11,17 +11,17 @@ fn main() {
             "control" => {
                 let mut control_args = vec!["cce-ctl".to_string()];
                 control_args.extend(args.iter().skip(2).cloned());
-                cce::run_cce_ctl(control_args);
+                cce_fx::run_cce_ctl(control_args);
             }
             "--help" | "-h" | "help" => {
                 print_help();
             }
             _ => {
-                cce::run_server();
+                cce_fx::run_server();
             }
         }
     } else {
-        cce::run_server();
+        cce_fx::run_server();
     }
 }
 

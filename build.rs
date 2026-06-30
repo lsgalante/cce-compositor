@@ -8,11 +8,34 @@ fn main() {
     println!("cargo:rerun-if-changed=protocol/river-layer-shell-v1.xml");
     println!("cargo:rerun-if-changed=protocol/river-input-management-v1.xml");
 
-    // Probe system libraries
-    let scenefx = pkg_config::Config::new()
-        .atleast_version("0.4.0")
-        .probe("scenefx-0.4")
-        .expect("scenefx-0.4 is required");
+    // Build local scenefx
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    if !std::path::Path::new("scenefx/build").exists() {
+        let status = std::process::Command::new("meson")
+            .args(&["setup", "build", "--buildtype=release", "--default-library=static"])
+            .current_dir("scenefx")
+            .status()
+            .expect("Failed to run meson setup");
+        assert!(status.success(), "meson setup failed");
+    }
+    let status = std::process::Command::new("meson")
+        .args(&["compile", "-C", "build"])
+        .current_dir("scenefx")
+        .status()
+        .expect("Failed to run meson compile");
+    assert!(status.success(), "meson compile failed");
+
+    let scenefx_inc1 = PathBuf::from(&manifest_dir).join("scenefx/include");
+    let scenefx_inc2 = PathBuf::from(&manifest_dir).join("scenefx/build/include");
+    let scenefx_inc3 = PathBuf::from(&manifest_dir).join("scenefx/build/protocol");
+    let scenefx_include_paths = vec![scenefx_inc1, scenefx_inc2, scenefx_inc3];
+
+    println!("cargo:rustc-link-search=native={}/scenefx/build", manifest_dir);
+    println!("cargo:rustc-link-lib=static=scenefx-0.4");
+    println!("cargo:rustc-link-lib=dylib=GLESv2");
+    println!("cargo:rustc-link-lib=dylib=EGL");
+    println!("cargo:rustc-link-lib=dylib=drm");
+    println!("cargo:rustc-link-lib=dylib=gbm");
 
     let wlroots = pkg_config::Config::new()
         .atleast_version("0.19.0")
@@ -133,7 +156,7 @@ fn main() {
     }
 
     // Add include paths for scenefx, wlroots, and wayland-server
-    for path in &scenefx.include_paths {
+    for path in &scenefx_include_paths {
         build.include(path);
     }
     for path in &wlroots.include_paths {
@@ -154,7 +177,7 @@ fn main() {
 
     // Pass include paths to bindgen clang argument parser
     let mut include_paths = vec![out_dir.clone()];
-    include_paths.extend(scenefx.include_paths.clone());
+    include_paths.extend(scenefx_include_paths.clone());
     include_paths.extend(wlroots.include_paths.clone());
     include_paths.extend(wl_server.include_paths.clone());
     include_paths.extend(xkb.include_paths.clone());

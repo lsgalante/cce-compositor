@@ -3,3 +3,4 @@
 .gemini/
 *.log
 check_errors.txt
+/scenefx/build/

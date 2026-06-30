@@ -651,44 +651,15 @@ impl Output {
                     if rh <= 0 {
                         continue;
                     }
-
                     let draw_fade = cell_fade_inset > 0 && !draw_low_res;
-                    if !draw_fade {
-                        let _cell_rect = get_rect(rw, rh, cell_color.as_ptr(), rel_x, rel_y, cell_corner_radius);
-                    } else {
-                        let step = if draw_low_res { 8 } else { 1 };
-                        let inset_scaled = (cell_fade_inset as f64 * zoom) as i32;
-
-                        // 0. Draw the cell-sized gap color background rect behind the fade layers
-                        let _cell_bg_rect = get_rect(rw, rh, gap_color_arr.as_ptr(), rel_x, rel_y, cell_corner_radius);
-
-                        // 1. Draw the fade layers
-                        let mut i = step;
-                        while i < inset_scaled {
-                            let rect_w = rw - 2 * i;
-                            let rect_h = rh - 2 * i;
-                            if rect_w <= 0 || rect_h <= 0 {
-                                break;
-                            }
-                            let progress = i as f32 / inset_scaled as f32;
-                            let alpha = cell_color[3] * progress;
-                            let layer_color = [
-                                cell_color[0] * alpha,
-                                cell_color[1] * alpha,
-                                cell_color[2] * alpha,
-                                alpha,
-                            ];
-
-                            let _cell_rect = get_rect(rect_w, rect_h, layer_color.as_ptr(), rel_x + i, rel_y + i, cell_corner_radius);
-                            i += step;
-                        }
-
-                        // 2. Draw the fully opaque core
-                        let core_w = rw - 2 * inset_scaled;
-                        let core_h = rh - 2 * inset_scaled;
-                        if core_w > 0 && core_h > 0 {
-                            let _cell_rect = get_rect(core_w, core_h, cell_color.as_ptr(), rel_x + inset_scaled, rel_y + inset_scaled, cell_corner_radius);
-                        }
+                    let cell_rect = get_rect(rw, rh, cell_color.as_ptr(), rel_x, rel_y, cell_corner_radius);
+                    if !cell_rect.is_null() {
+                        let inset_scaled = if draw_fade {
+                            (cell_fade_inset as f64 * zoom) as i32
+                        } else {
+                            0
+                        };
+                        ffi::wlr_scene_rect_set_fade_inset(cell_rect, inset_scaled);
                     }
                 }
             }
