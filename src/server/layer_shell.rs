@@ -583,9 +583,17 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
     let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
 
     if (*wlr_layer_surface).current.layer != ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND {
+        let server = (*layer_surface).server;
+        let mut blur_enabled = true;
+        if !(*wlr_layer_surface).namespace.is_null() {
+            let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
+            if ns == "cce-status" {
+                blur_enabled = (*server).wm.layout.status_background_blur > 0.001;
+            }
+        }
         ffi::river_scene_node_enable_blur(
             (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-            true,
+            blur_enabled,
         );
     }
 

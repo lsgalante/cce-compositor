@@ -37,6 +37,7 @@ pub struct Layout {
     pub overlay_position: String,
     pub overlay_border_gap: i32,
     pub status_normal_color: String,
+    pub status_background_blur: f32,
     pub desktop_background_color: String,
     pub transparency_opacity: f32,
     pub window_opacity: bool,
@@ -78,6 +79,7 @@ impl Default for Layout {
             overlay_position: "left".to_string(),
             overlay_border_gap: 0,
             status_normal_color: "#ccccd8".to_string(),
+            status_background_blur: 0.8,
             desktop_background_color: "#000000".to_string(),
             transparency_opacity: 0.9,
             window_opacity: true,
@@ -341,6 +343,8 @@ pub struct LayoutConfig {
     pub overlay_border_gap: i64,
     #[serde(default = "default_status_normal_color")]
     pub status_normal_color: String,
+    #[serde(default = "default_status_background_blur")]
+    pub status_background_blur: f64,
     #[serde(default = "default_window_opacity")]
     pub window_opacity: bool,
 }
@@ -363,6 +367,7 @@ impl Default for LayoutConfig {
             overlay_position: default_overlay_position(),
             overlay_border_gap: default_overlay_border_gap(),
             status_normal_color: default_status_normal_color(),
+            status_background_blur: default_status_background_blur(),
             window_opacity: default_window_opacity(),
         }
     }
@@ -383,6 +388,7 @@ fn default_overlay_width() -> i64 { 360 }
 fn default_overlay_position() -> String { "left".to_string() }
 fn default_overlay_border_gap() -> i64 { 0 }
 fn default_status_normal_color() -> String { "#ccccd8".to_string() }
+fn default_status_background_blur() -> f64 { 0.8 }
 fn default_window_opacity() -> bool { true }
 
 #[derive(Debug, Deserialize)]
@@ -892,6 +898,23 @@ fn get_nested_prop_bool(node: &kdl::KdlNode, child_name: &str, prop_name: &str, 
     default
 }
 
+fn get_nested_prop_f64(node: &kdl::KdlNode, child_name: &str, prop_name: &str, default: f64) -> f64 {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                for entry in child.entries() {
+                    if let Some(id) = entry.name() {
+                        if id.value() == prop_name {
+                            return entry.value().as_f64().unwrap_or(default);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    default
+}
+
 fn parse_kdl_config(content: &str) -> Result<Config, String> {
     let doc: kdl::KdlDocument = content.parse().map_err(|e| format!("KDL parse error: {}", e))?;
     
@@ -919,6 +942,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         layout.overlay_border_gap = get_nested_prop_i64(node, "overlay", "border_gap", default_overlay_border_gap());
         
         layout.status_normal_color = get_nested_prop_string(node, "status", "normal_color", &default_status_normal_color());
+        layout.status_background_blur = get_nested_prop_f64(node, "status", "background_blur", default_status_background_blur());
     }
 
     // 2. env
@@ -1175,6 +1199,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.overlay_position = config.layout.overlay_position;
     state.layout.overlay_border_gap = config.layout.overlay_border_gap as i32;
     state.layout.status_normal_color = config.layout.status_normal_color.clone();
+    state.layout.status_background_blur = config.layout.status_background_blur as f32;
     state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
     state.layout.window_opacity = config.layout.window_opacity;
 
