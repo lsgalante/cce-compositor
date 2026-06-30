@@ -167,6 +167,7 @@ pub struct Output {
     pub last_grid_cell_fade_inset: i64,
     pub last_grid_gap_color: String,
     pub grid_is_low_res: bool,
+    pub grid_rect_pool: Vec<*mut ffi::wlr_scene_rect>,
 
     pub destroy: ffi::wl_listener,
     pub request_state: ffi::wl_listener,
@@ -241,6 +242,7 @@ impl Output {
             self.layer_shell.make_inert();
             self.object = std::ptr::null_mut();
             self.sent_wl_output = false;
+            self.grid_rect_pool.clear();
         }
     }
 
@@ -326,6 +328,7 @@ impl Output {
                         ffi::wlr_scene_node_destroy(self.grid_tree as *mut ffi::wlr_scene_node);
                         self.grid_tree = std::ptr::null_mut();
                     }
+                    self.grid_rect_pool.clear();
 
                     // remove output from windows fullscreen hint
                     for &window in (*self.server).wm.windows.iter() {
@@ -415,6 +418,7 @@ impl Output {
             last_grid_cell_fade_inset: 0,
             last_grid_gap_color: String::new(),
             grid_is_low_res: false,
+            grid_rect_pool: Vec::new(),
             destroy: std::mem::zeroed(),
             request_state: std::mem::zeroed(),
             frame: std::mem::zeroed(),
@@ -595,28 +599,40 @@ impl Output {
             self.last_grid_gap_color = gap_color;
             self.grid_is_low_res = draw_low_res;
 
-            // Clear previous grid rendering
-            ffi::river_scene_tree_clear_children(self.grid_tree);
             ffi::wlr_scene_node_raise_to_top(self.grid_tree as *mut ffi::wlr_scene_node);
+
+            let grid_tree = self.grid_tree;
+            let pool = &mut self.grid_rect_pool;
+            let mut pool_idx = 0;
+
+            let mut get_rect = |w: i32, h: i32, color: *const f32, x: i32, y: i32, r: i32| -> *mut ffi::wlr_scene_rect {
+                let rect = if pool_idx < pool.len() {
+                    let node = pool[pool_idx];
+                    ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, true);
+                    ffi::wlr_scene_rect_set_size(node, w, h);
+                    ffi::wlr_scene_rect_set_color(node, color);
+                    node
+                } else {
+                    let node = ffi::wlr_scene_rect_create(grid_tree, w, h, color);
+                    if !node.is_null() {
+                        pool.push(node);
+                    }
+                    node
+                };
+                if !rect.is_null() {
+                    ffi::wlr_scene_node_set_position(rect as *mut ffi::wlr_scene_node, x, y);
+                    ffi::river_scene_rect_set_corner_radius(rect, r);
+                }
+                pool_idx += 1;
+                rect
+            };
 
             // Draw the base level background rect (gap color)
             // Sized larger to allow shifting by up to one period
             let bg_w = viewport_w + period_pixels.ceil() as i32;
             let bg_h = viewport_h + period_pixels.ceil() as i32;
             let gap_color_arr = crate::config::parse_hex_color_rgba(&self.last_grid_gap_color);
-            let bg_rect = ffi::wlr_scene_rect_create(
-                self.grid_tree,
-                bg_w,
-                bg_h,
-                gap_color_arr.as_ptr(),
-            );
-            if !bg_rect.is_null() {
-                ffi::wlr_scene_node_set_position(
-                    bg_rect as *mut ffi::wlr_scene_node,
-                    0,
-                    0,
-                );
-            }
+            let _bg_rect = get_rect(bg_w, bg_h, gap_color_arr.as_ptr(), 0, 0, 0);
 
             // Determine grid range needed to cover viewport + shifting buffer
             let cols = (viewport_w as f64 / period_pixels).ceil() as i32 + 1;
@@ -636,56 +652,15 @@ impl Output {
                         continue;
                     }
 
-                    let draw_fade = cell_fade_inset > 0 && !draw_low_res && zoom >= 0.5;
+                    let draw_fade = cell_fade_inset > 0 && !draw_low_res;
                     if !draw_fade {
-                        let cell_rect = ffi::wlr_scene_rect_create(
-                            self.grid_tree,
-                            rw,
-                            rh,
-                            cell_color.as_ptr(),
-                        );
-                        if !cell_rect.is_null() {
-                            ffi::wlr_scene_node_set_position(
-                                cell_rect as *mut ffi::wlr_scene_node,
-                                rel_x,
-                                rel_y,
-                            );
-                            if cell_corner_radius > 0 {
-                                ffi::river_scene_rect_set_corner_radius(
-                                    cell_rect,
-                                    cell_corner_radius,
-                                );
-                            }
-                        }
+                        let _cell_rect = get_rect(rw, rh, cell_color.as_ptr(), rel_x, rel_y, cell_corner_radius);
                     } else {
+                        let step = if draw_low_res { 8 } else { 1 };
                         let inset_scaled = (cell_fade_inset as f64 * zoom) as i32;
-                        // Limit to at most 10 layers per cell to avoid frame drops when finalizing zoom
-                        let step = if draw_low_res {
-                            8
-                        } else {
-                            ((inset_scaled as f32 / 10.0).ceil() as i32).max(2)
-                        };
 
                         // 0. Draw the cell-sized gap color background rect behind the fade layers
-                        let cell_bg_rect = ffi::wlr_scene_rect_create(
-                            self.grid_tree,
-                            rw,
-                            rh,
-                            gap_color_arr.as_ptr(),
-                        );
-                        if !cell_bg_rect.is_null() {
-                            ffi::wlr_scene_node_set_position(
-                                cell_bg_rect as *mut ffi::wlr_scene_node,
-                                rel_x,
-                                rel_y,
-                            );
-                            if cell_corner_radius > 0 {
-                                ffi::river_scene_rect_set_corner_radius(
-                                    cell_bg_rect,
-                                    cell_corner_radius,
-                                );
-                            }
-                        }
+                        let _cell_bg_rect = get_rect(rw, rh, gap_color_arr.as_ptr(), rel_x, rel_y, cell_corner_radius);
 
                         // 1. Draw the fade layers
                         let mut i = step;
@@ -704,22 +679,7 @@ impl Output {
                                 alpha,
                             ];
 
-                            let cell_rect = ffi::wlr_scene_rect_create(
-                                self.grid_tree,
-                                rect_w,
-                                rect_h,
-                                layer_color.as_ptr(),
-                            );
-                            if !cell_rect.is_null() {
-                                ffi::wlr_scene_node_set_position(
-                                    cell_rect as *mut ffi::wlr_scene_node,
-                                    rel_x + i,
-                                    rel_y + i,
-                                );
-                                 if cell_corner_radius > 0 {
-                                     ffi::river_scene_rect_set_corner_radius(cell_rect, cell_corner_radius);
-                                 }
-                            }
+                            let _cell_rect = get_rect(rect_w, rect_h, layer_color.as_ptr(), rel_x + i, rel_y + i, cell_corner_radius);
                             i += step;
                         }
 
@@ -727,25 +687,15 @@ impl Output {
                         let core_w = rw - 2 * inset_scaled;
                         let core_h = rh - 2 * inset_scaled;
                         if core_w > 0 && core_h > 0 {
-                            let cell_rect = ffi::wlr_scene_rect_create(
-                                self.grid_tree,
-                                core_w,
-                                core_h,
-                                cell_color.as_ptr(),
-                            );
-                            if !cell_rect.is_null() {
-                                ffi::wlr_scene_node_set_position(
-                                    cell_rect as *mut ffi::wlr_scene_node,
-                                    rel_x + inset_scaled,
-                                    rel_y + inset_scaled,
-                                );
-                                 if cell_corner_radius > 0 {
-                                     ffi::river_scene_rect_set_corner_radius(cell_rect, cell_corner_radius);
-                                 }
-                            }
+                            let _cell_rect = get_rect(core_w, core_h, cell_color.as_ptr(), rel_x + inset_scaled, rel_y + inset_scaled, cell_corner_radius);
                         }
                     }
                 }
+            }
+
+            // Disable any remaining rects in the pool
+            for i in pool_idx..pool.len() {
+                ffi::wlr_scene_node_set_enabled(pool[i] as *mut ffi::wlr_scene_node, false);
             }
         }
 
