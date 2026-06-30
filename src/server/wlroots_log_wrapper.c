@@ -655,6 +655,7 @@ void river_wlr_keyboard_init(struct wlr_keyboard *keyboard,
 struct river_blur_data {
 	bool enabled;
 	bool optimized;
+	bool ignore_transparent;
 };
 
 static void enable_blur_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
@@ -667,17 +668,18 @@ static void enable_blur_iterator(struct wlr_scene_buffer *buffer, int sx, int sy
 	struct river_blur_data *data = (struct river_blur_data *)user_data;
 	bool enabled = data->enabled;
 	bool optimized = data->optimized && enabled;
+	bool ignore_transparent = data->ignore_transparent && enabled;
 	if (buffer->backdrop_blur != enabled ||
 		buffer->backdrop_blur_optimized != optimized ||
-		buffer->backdrop_blur_ignore_transparent != enabled) {
+		buffer->backdrop_blur_ignore_transparent != ignore_transparent) {
 		wlr_scene_buffer_set_backdrop_blur(buffer, enabled);
 		wlr_scene_buffer_set_backdrop_blur_optimized(buffer, optimized);
-		wlr_scene_buffer_set_backdrop_blur_ignore_transparent(buffer, enabled);
+		wlr_scene_buffer_set_backdrop_blur_ignore_transparent(buffer, ignore_transparent);
 	}
 }
 
-void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, bool optimized) {
-	struct river_blur_data data = { .enabled = enabled, .optimized = optimized };
+void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, bool optimized, bool ignore_transparent) {
+	struct river_blur_data data = { .enabled = enabled, .optimized = optimized, .ignore_transparent = ignore_transparent };
 	wlr_scene_node_for_each_buffer(node, enable_blur_iterator, &data);
 }
 

@@ -45,6 +45,8 @@ pub struct Layout {
     pub desktop_grid_scale: f64,
     pub desktop_line_width: i32,
     pub scenefx_optimized_blur: bool,
+    pub status_backdrop_blur_ignore_transparent: bool,
+    pub window_backdrop_blur_ignore_transparent: bool,
 }
 
 impl Default for Layout {
@@ -88,6 +90,8 @@ impl Default for Layout {
             desktop_grid_scale: 100.0,
             desktop_line_width: 1,
             scenefx_optimized_blur: true,
+            status_backdrop_blur_ignore_transparent: true,
+            window_backdrop_blur_ignore_transparent: true,
         }
     }
 }
@@ -355,6 +359,10 @@ pub struct LayoutConfig {
     pub status_background_blur: f64,
     #[serde(default = "default_window_opacity")]
     pub window_opacity: bool,
+    #[serde(default = "default_status_backdrop_blur_ignore_transparent")]
+    pub status_backdrop_blur_ignore_transparent: bool,
+    #[serde(default = "default_window_backdrop_blur_ignore_transparent")]
+    pub window_backdrop_blur_ignore_transparent: bool,
 }
 
 impl Default for LayoutConfig {
@@ -377,6 +385,8 @@ impl Default for LayoutConfig {
             status_normal_color: default_status_normal_color(),
             status_background_blur: default_status_background_blur(),
             window_opacity: default_window_opacity(),
+            status_backdrop_blur_ignore_transparent: default_status_backdrop_blur_ignore_transparent(),
+            window_backdrop_blur_ignore_transparent: default_window_backdrop_blur_ignore_transparent(),
         }
     }
 }
@@ -398,6 +408,8 @@ fn default_overlay_border_gap() -> i64 { 0 }
 fn default_status_normal_color() -> String { "#ccccd8".to_string() }
 fn default_status_background_blur() -> f64 { 0.8 }
 fn default_window_opacity() -> bool { true }
+fn default_status_backdrop_blur_ignore_transparent() -> bool { true }
+fn default_window_backdrop_blur_ignore_transparent() -> bool { true }
 
 #[derive(Debug, Deserialize)]
 pub struct ModeRuleConfig {
@@ -943,6 +955,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         layout.transition_duration = get_nested_prop_i64(node, "window", "transition_duration", default_transition_duration());
         layout.window_blur = get_nested_prop_bool(node, "window", "blur", default_window_blur());
         layout.window_opacity = get_nested_prop_bool(node, "window", "opacity", default_window_opacity());
+        layout.window_backdrop_blur_ignore_transparent = get_nested_prop_bool(node, "window", "backdrop_blur_ignore_transparent", default_window_backdrop_blur_ignore_transparent());
         
         layout.overlay_behavior = get_nested_prop_string(node, "overlay", "behavior", &default_overlay_behavior());
         layout.overlay_width = get_nested_prop_i64(node, "overlay", "width", default_overlay_width());
@@ -951,6 +964,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         
         layout.status_normal_color = get_nested_prop_string(node, "status", "normal_color", &default_status_normal_color());
         layout.status_background_blur = get_nested_prop_f64(node, "status", "background_blur", default_status_background_blur());
+        layout.status_backdrop_blur_ignore_transparent = get_nested_prop_bool(node, "status", "backdrop_blur_ignore_transparent", default_status_backdrop_blur_ignore_transparent());
     }
 
     // 2. env
@@ -1212,6 +1226,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
     state.layout.window_opacity = config.layout.window_opacity;
     state.layout.scenefx_optimized_blur = config.output.as_ref().map(|o| o.scenefx_optimized_blur).unwrap_or(true);
+    state.layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
+    state.layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
 
     for (key, val) in &config.env {
         let expanded = expand_env_vars(val);

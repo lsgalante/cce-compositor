@@ -1538,7 +1538,12 @@ impl Window {
                     blur_enabled = false;
                 }
             }
-            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled, (*self.server).wm.layout.scenefx_optimized_blur);
+            let app_id = self.get_app_id_string().unwrap_or_default();
+            let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
+            if app_id.starts_with("cce-status") {
+                ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
+            }
+            ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled, (*self.server).wm.layout.scenefx_optimized_blur, ignore_transparent);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
             let radius = if requested.circular {
@@ -2744,7 +2749,12 @@ impl Decoration {
         self.surfaces.drop_saved();
 
         let server = (*self.window).server;
-        ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, self.rendering_requested.blur, (*server).wm.layout.scenefx_optimized_blur);
+        let app_id = (*self.window).get_app_id_string().unwrap_or_default();
+        let mut ignore_transparent = (*server).wm.layout.window_backdrop_blur_ignore_transparent;
+        if app_id.starts_with("cce-status") {
+            ignore_transparent = (*server).wm.layout.status_backdrop_blur_ignore_transparent;
+        }
+        ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, self.rendering_requested.blur, (*server).wm.layout.scenefx_optimized_blur, ignore_transparent);
 
         let scale = (*self.window).scale;
         let scaled_x = (self.rendering_requested.offset_x as f64 * scale) as i32;

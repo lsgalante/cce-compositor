@@ -408,10 +408,16 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let window = (*toplevel).window;
     let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
 
+    let app_id = (*window).get_app_id_string().unwrap_or_default();
+    let mut ignore_transparent = (*(*window).server).wm.layout.window_backdrop_blur_ignore_transparent;
+    if app_id.starts_with("cce-status") {
+        ignore_transparent = (*(*window).server).wm.layout.status_backdrop_blur_ignore_transparent;
+    }
     ffi::river_scene_node_enable_blur(
         (*window).surfaces.tree as *mut ffi::wlr_scene_node,
         (*window).rendering_requested.blur,
         (*(*window).server).wm.layout.scenefx_optimized_blur,
+        ignore_transparent,
     );
 
     let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;
