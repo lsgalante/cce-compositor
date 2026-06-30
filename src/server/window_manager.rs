@@ -1396,7 +1396,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
         for &window in self.windows.iter() {
             if !window.is_null() {
-                (*window).render_finish();
+                (*window).render_viewport_update();
             }
         }
 

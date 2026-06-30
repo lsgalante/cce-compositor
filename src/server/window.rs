@@ -1831,6 +1831,24 @@ impl Window {
         }
     }
 
+    pub unsafe fn render_viewport_update(&mut self) {
+        let requested = &self.rendering_requested;
+        let enabled = !requested.hidden && (matches!(self.state, WindowState::Mapped) || matches!(self.state, WindowState::Closing));
+
+        ffi::wlr_scene_node_set_enabled(self.tree as *mut ffi::wlr_scene_node, enabled);
+        ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
+
+        if enabled {
+            self.box_geom.x = requested.x;
+            self.box_geom.y = requested.y;
+            ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
+            ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
+
+            self.scale_only_render_finish();
+            self.draw_borders();
+        }
+    }
+
     pub unsafe fn draw_borders(&mut self) {
         let requested = &self.rendering_requested;
 
