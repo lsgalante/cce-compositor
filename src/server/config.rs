@@ -285,8 +285,8 @@ pub struct SurfaceConfig {
     pub desktop_cell_corner_radius: i64,
     #[serde(default = "default_desktop_cell_fade_inset")]
     pub desktop_cell_fade_inset: i64,
-    #[serde(default = "default_desktop_enable_solid_color")]
-    pub desktop_enable_solid_color: bool,
+    #[serde(default = "default_desktop_mode")]
+    pub desktop_mode: String,
     #[serde(default = "default_desktop_solid_color")]
     pub desktop_solid_color: String,
     #[serde(default = "default_backplate_color")]
@@ -306,7 +306,7 @@ impl Default for SurfaceConfig {
             desktop_gap_width: default_desktop_gap_width(),
             desktop_cell_corner_radius: default_desktop_cell_corner_radius(),
             desktop_cell_fade_inset: default_desktop_cell_fade_inset(),
-            desktop_enable_solid_color: default_desktop_enable_solid_color(),
+            desktop_mode: default_desktop_mode(),
             desktop_solid_color: default_desktop_solid_color(),
             backplate_color: default_backplate_color(),
             backplate_blur: default_backplate_blur(),
@@ -339,8 +339,8 @@ fn default_desktop_cell_fade_inset() -> i64 {
     0
 }
 
-fn default_desktop_enable_solid_color() -> bool {
-    false
+fn default_desktop_mode() -> String {
+    "solid".to_string()
 }
 
 fn default_desktop_solid_color() -> String {
@@ -711,7 +711,21 @@ fn get_child_arg_f64(node: &kdl::KdlNode, child_name: &str, default: f64) -> f64
         for child in children.nodes() {
             if child.name().value() == child_name {
                 if let Some(entry) = child.entries().first() {
-                    return entry.value().as_f64().unwrap_or(default);
+                    let mut val = entry.value().as_f64().unwrap_or(default);
+                    if let Some(ty) = entry.ty() {
+                        let ty_str = ty.value();
+                        if ty_str.starts_with("f64:") {
+                            let range_str = ty_str.trim_start_matches("f64:");
+                            if let Some(dash_idx) = range_str.find('-') {
+                                let min_str = &range_str[..dash_idx].trim();
+                                let max_str = &range_str[dash_idx + 1..].trim();
+                                if let (Ok(min_f), Ok(max_f)) = (min_str.parse::<f64>(), max_str.parse::<f64>()) {
+                                    val = val.clamp(min_f, max_f);
+                                }
+                            }
+                        }
+                    }
+                    return val;
                 }
             }
         }
@@ -763,7 +777,21 @@ fn get_child_arg_f64_opt(node: &kdl::KdlNode, child_name: &str) -> Option<f64> {
         for child in children.nodes() {
             if child.name().value() == child_name {
                 if let Some(entry) = child.entries().first() {
-                    return entry.value().as_f64();
+                    let mut val = entry.value().as_f64()?;
+                    if let Some(ty) = entry.ty() {
+                        let ty_str = ty.value();
+                        if ty_str.starts_with("f64:") {
+                            let range_str = ty_str.trim_start_matches("f64:");
+                            if let Some(dash_idx) = range_str.find('-') {
+                                let min_str = &range_str[..dash_idx].trim();
+                                let max_str = &range_str[dash_idx + 1..].trim();
+                                if let (Ok(min_f), Ok(max_f)) = (min_str.parse::<f64>(), max_str.parse::<f64>()) {
+                                    val = val.clamp(min_f, max_f);
+                                }
+                            }
+                        }
+                    }
+                    return Some(val);
                 }
             }
         }
@@ -854,7 +882,21 @@ fn get_prop_f64_opt(node: &kdl::KdlNode, key: &str) -> Option<f64> {
     for entry in node.entries() {
         if let Some(id) = entry.name() {
             if id.value() == key {
-                return entry.value().as_f64();
+                let mut val = entry.value().as_f64()?;
+                if let Some(ty) = entry.ty() {
+                    let ty_str = ty.value();
+                    if ty_str.starts_with("f64:") {
+                        let range_str = ty_str.trim_start_matches("f64:");
+                        if let Some(dash_idx) = range_str.find('-') {
+                            let min_str = &range_str[..dash_idx].trim();
+                            let max_str = &range_str[dash_idx + 1..].trim();
+                            if let (Ok(min_f), Ok(max_f)) = (min_str.parse::<f64>(), max_str.parse::<f64>()) {
+                                val = val.clamp(min_f, max_f);
+                            }
+                        }
+                    }
+                }
+                return Some(val);
             }
         }
     }
@@ -919,7 +961,21 @@ fn get_nested_prop_f64(node: &kdl::KdlNode, child_name: &str, prop_name: &str, d
                 for entry in child.entries() {
                     if let Some(id) = entry.name() {
                         if id.value() == prop_name {
-                            return entry.value().as_f64().unwrap_or(default);
+                            let mut val = entry.value().as_f64().unwrap_or(default);
+                            if let Some(ty) = entry.ty() {
+                                let ty_str = ty.value();
+                                if ty_str.starts_with("f64:") {
+                                    let range_str = ty_str.trim_start_matches("f64:");
+                                    if let Some(dash_idx) = range_str.find('-') {
+                                        let min_str = &range_str[..dash_idx].trim();
+                                        let max_str = &range_str[dash_idx + 1..].trim();
+                                        if let (Ok(min_f), Ok(max_f)) = (min_str.parse::<f64>(), max_str.parse::<f64>()) {
+                                            val = val.clamp(min_f, max_f);
+                                        }
+                                    }
+                                }
+                            }
+                            return val;
                         }
                     }
                 }
@@ -1195,9 +1251,9 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.desktop_cell_fade_inset = val;
                                         }
                                     }
-                                    "enable_solid_color" => {
-                                        if let Some(val) = entry.value().as_bool() {
-                                            surface.desktop_enable_solid_color = val;
+                                    "mode" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surface.desktop_mode = val.to_string();
                                         }
                                     }
                                     "solid_color" => {
@@ -1221,7 +1277,20 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                         }
                                     }
                                     "blur" => {
-                                        if let Some(val) = entry.value().as_f64() {
+                                        if let Some(mut val) = entry.value().as_f64() {
+                                            if let Some(ty) = entry.ty() {
+                                                let ty_str = ty.value();
+                                                if ty_str.starts_with("f64:") {
+                                                    let range_str = ty_str.trim_start_matches("f64:");
+                                                    if let Some(dash_idx) = range_str.find('-') {
+                                                        let min_str = &range_str[..dash_idx].trim();
+                                                        let max_str = &range_str[dash_idx + 1..].trim();
+                                                        if let (Ok(min_f), Ok(max_f)) = (min_str.parse::<f64>(), max_str.parse::<f64>()) {
+                                                            val = val.clamp(min_f, max_f);
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             surface.backplate_blur = val;
                                         }
                                     }
@@ -1247,7 +1316,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.desktop_gap_width = get_child_arg_i64(node, "desktop_gap_width", default_desktop_gap_width());
             surface.desktop_cell_corner_radius = get_child_arg_i64(node, "desktop_cell_corner_radius", default_desktop_cell_corner_radius());
             surface.desktop_cell_fade_inset = get_child_arg_i64(node, "desktop_cell_fade_inset", default_desktop_cell_fade_inset());
-            surface.desktop_enable_solid_color = get_child_arg_bool(node, "desktop_enable_solid_color", default_desktop_enable_solid_color());
+            surface.desktop_mode = get_child_arg_string(node, "desktop_mode", &default_desktop_mode());
             surface.desktop_solid_color = get_child_arg_string(node, "desktop_solid_color", &default_desktop_solid_color());
             surface.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
             surface.backplate_blur = get_child_arg_f64(node, "backplate_blur", default_backplate_blur());
@@ -1304,7 +1373,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
 
     state.layout.desktop_gap_color = config.surface.desktop_gap_color.clone();
 
-    let desktop_background_str = if config.surface.desktop_enable_solid_color {
+    let enable_solid = config.surface.desktop_mode == "solid";
+    let desktop_background_str = if enable_solid {
         config.surface.desktop_solid_color.clone()
     } else {
         config.surface.desktop_gap_color.clone()
@@ -1321,7 +1391,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.desktop_gap_width = config.surface.desktop_gap_width as i32;
     state.layout.desktop_cell_corner_radius = config.surface.desktop_cell_corner_radius as i32;
     state.layout.desktop_cell_fade_inset = config.surface.desktop_cell_fade_inset;
-    state.layout.desktop_enable_solid_color = config.surface.desktop_enable_solid_color;
+    state.layout.desktop_enable_solid_color = enable_solid;
     state.layout.desktop_solid_color = parse_hex_color_rgba(&config.surface.desktop_solid_color);
 
     state.layout.border_font_size = 11;
@@ -1358,12 +1428,21 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.keybinds.clear();
     let mut seen = std::collections::HashSet::new();
     for kb in &config.key_bindings {
-        let mods = parse_modifiers(&kb.mods);
-        let keysym = parse_keysym(&kb.key);
+        let (mods_str, key_str) = if kb.mods.is_empty() {
+            if let Some(last_plus) = kb.key.rfind('+') {
+                (kb.key[..last_plus].to_string(), kb.key[last_plus+1..].to_string())
+            } else {
+                ("".to_string(), kb.key.clone())
+            }
+        } else {
+            (kb.mods.clone(), kb.key.clone())
+        };
+        let mods = parse_modifiers(&mods_str);
+        let keysym = parse_keysym(&key_str);
         
         let binding_key = (mods, keysym);
         if !seen.insert(binding_key) {
-            eprintln!("[WARNING] Keybinding conflict: multiple actions mapped to mods={:?}, key={:?}", kb.mods, kb.key);
+            eprintln!("[WARNING] Keybinding conflict: multiple actions mapped to mods={:?}, key={:?}", mods_str, key_str);
         }
 
         let action = parse_action(&kb.action);
