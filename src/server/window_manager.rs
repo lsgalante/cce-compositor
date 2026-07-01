@@ -697,6 +697,20 @@ impl WindowManager {
             }
         }
 
+        let has_wallpaper = self.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).get_app_id_string().as_deref() == Some("cce-wallpaper"));
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        while curr_out != outputs_list {
+            let next_out = (*curr_out).next;
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                if !(*output).background_rect.is_null() {
+                    ffi::wlr_scene_node_set_enabled((*output).background_rect as *mut ffi::wlr_scene_node, !has_wallpaper);
+                }
+            }
+            curr_out = next_out;
+        }
+
         self.keep_status_bar_on_top();
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -723,6 +737,18 @@ impl WindowManager {
         let new_order_hash = hasher.finish();
         let reorder = self.rendering_requested.order_hash != new_order_hash;
         self.rendering_requested.order_hash = new_order_hash;
+        log::info!("[render_finish_loop] START - render_list={:p}", render_list);
+        let mut debug_curr = (*render_list).next;
+        let mut debug_idx = 0;
+        while debug_curr != render_list {
+            let node = crate::container_of!(debug_curr, crate::wm_node::WmNode, link);
+            if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
+                let app_id = (*window).get_app_id_string().unwrap_or_default();
+                log::info!("[render_finish_loop] List[{}] = app_id={} state={:?}", debug_idx, app_id, (*window).state);
+            }
+            debug_curr = (*debug_curr).next;
+            debug_idx += 1;
+        }
 
         let mut found_fullscreen = false;
         curr = (*render_list).next;
@@ -1420,13 +1446,13 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
             left_status.sort_by_key(|&w| unsafe {
                 let app_id = (*w).get_app_id_string().unwrap_or_default();
-                let name = app_id.trim_start_matches("cce-status-left-");
+                let name = app_id.strip_prefix("cce-status-left-").unwrap_or(&app_id);
                 LEFT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
             });
 
             right_status.sort_by_key(|&w| unsafe {
                 let app_id = (*w).get_app_id_string().unwrap_or_default();
-                let name = app_id.trim_start_matches("cce-status-right-");
+                let name = app_id.strip_prefix("cce-status-right-").unwrap_or(&app_id);
                 RIGHT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
             });
 
@@ -1456,10 +1482,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             // Layout Right status windows (right-to-left)
             let mut cur_right_x = wlr_box.x + wlr_box.width - margin;
             for win_ptr in right_status.into_iter().rev() {
-                let w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
+                let actual_w = (*win_ptr).box_geom.width;
+                let w = if actual_w > 0 { actual_w as u32 } else { 100 };
                 let x = cur_right_x - w as i32;
                 let app_id = (*win_ptr).get_app_id_string().unwrap_or_default();
-                log::info!("[ArrangeStatus] Right module app_id={} x={} y={} w={}", app_id, x, wlr_box.y, w);
+                log::info!("[ArrangeStatus] Right module app_id={} actual_box_w={} x={} y={} w={}", app_id, actual_w, x, wlr_box.y, w);
                 (*win_ptr).rendering_requested.x = x;
                 (*win_ptr).rendering_requested.y = wlr_box.y;
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
@@ -1683,25 +1710,26 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             if win_ptr.is_null() || (*win_ptr).closed {
                 continue;
             }
-            if !matches!((*win_ptr).state, crate::window::WindowState::Mapped) {
-                continue;
-            }
             if let Some(app_id) = (*win_ptr).get_app_id_string() {
                 if app_id.starts_with("cce-status") {
-                    status_bar_windows.push(win_ptr);
+                    if matches!((*win_ptr).state, crate::window::WindowState::Mapped) {
+                        status_bar_windows.push(win_ptr);
+                    }
                 }
             }
         }
         for win_ptr in status_bar_windows {
             let node_link = &mut (*win_ptr).node.link as *mut ffi::wl_list as *mut WlList;
             let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-            if !node_link.is_null() && !list_head.is_null() && (*node_link).next != list_head {
-                if !(*node_link).prev.is_null() && !(*node_link).next.is_null() {
-                    crate::server::wl_list_remove(node_link);
-                }
-                let prev_node = (*list_head).prev;
-                if !prev_node.is_null() && (*prev_node).next == list_head {
-                    crate::server::wl_list_insert(prev_node, node_link);
+            if !node_link.is_null() && !list_head.is_null() {
+                if (*node_link).next != list_head {
+                    if (*win_ptr).is_linked() {
+                        crate::server::wl_list_remove_and_reinit(node_link);
+                    }
+                    let last = (*list_head).prev;
+                    if !last.is_null() {
+                        crate::server::wl_list_insert(last, node_link);
+                    }
                 }
             }
         }
@@ -1713,13 +1741,15 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
         }
         let node_link = &mut (*window).node.link as *mut ffi::wl_list as *mut WlList;
         let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-        if !node_link.is_null() && !list_head.is_null() && (*node_link).next != list_head {
-            if !(*node_link).prev.is_null() && !(*node_link).next.is_null() {
-                crate::server::wl_list_remove(node_link);
-            }
-            let prev_node = (*list_head).prev;
-            if !prev_node.is_null() && (*prev_node).next == list_head {
-                crate::server::wl_list_insert(prev_node, node_link);
+        if !node_link.is_null() && !list_head.is_null() {
+            if (*node_link).next != list_head {
+                if (*window).is_linked() {
+                    crate::server::wl_list_remove_and_reinit(node_link);
+                }
+                let last = (*list_head).prev;
+                if !last.is_null() {
+                    crate::server::wl_list_insert(last, node_link);
+                }
             }
         }
         self.keep_status_bar_on_top();
@@ -2278,6 +2308,34 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 self.execute_action(&crate::config::Action::ZoomOut, None);
                 "ok\n".to_string()
             }
+            "zoom-reset" => {
+                self.execute_action(&crate::config::Action::ZoomReset, None);
+                "ok\n".to_string()
+            }
+            "pan-left" => {
+                self.execute_action(&crate::config::Action::PanLeft, None);
+                "ok\n".to_string()
+            }
+            "pan-right" => {
+                self.execute_action(&crate::config::Action::PanRight, None);
+                "ok\n".to_string()
+            }
+            "pan-up" => {
+                self.execute_action(&crate::config::Action::PanUp, None);
+                "ok\n".to_string()
+            }
+            "pan-down" => {
+                self.execute_action(&crate::config::Action::PanDown, None);
+                "ok\n".to_string()
+            }
+            "overlay-left" => {
+                self.execute_action(&crate::config::Action::OverlayLeft, None);
+                "ok\n".to_string()
+            }
+            "overlay-right" => {
+                self.execute_action(&crate::config::Action::OverlayRight, None);
+                "ok\n".to_string()
+            }
             "set-zoom" => {
                 if parts.len() < 2 { return "error: missing zoom factor\n".to_string(); }
                 if let Ok(factor) = parts[1].parse::<f64>() {
@@ -2378,6 +2436,22 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             }
             "focus-next" => {
                 self.execute_action(&crate::config::Action::FocusNext, None);
+                "ok\n".to_string()
+            }
+            "focus-prev" => {
+                self.execute_action(&crate::config::Action::FocusPrev, None);
+                "ok\n".to_string()
+            }
+            "fullscreen" => {
+                self.execute_action(&crate::config::Action::Fullscreen, None);
+                "ok\n".to_string()
+            }
+            "mode-next" => {
+                self.execute_action(&crate::config::Action::ModeNext, None);
+                "ok\n".to_string()
+            }
+            "mode-next-shared" => {
+                self.execute_action(&crate::config::Action::ModeNextShared, None);
                 "ok\n".to_string()
             }
             "focus-window" => {

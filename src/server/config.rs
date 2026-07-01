@@ -588,93 +588,17 @@ pub fn parse_button(s: &str) -> u32 {
 }
 
 pub fn parse_action(s: &str) -> Action {
-    if s == "close" {
-        Action::Close
-    } else if s == "exit" {
-        Action::Exit
-    } else if s == "reload" {
-        Action::Reload
-    } else if s == "focus-next" {
-        Action::FocusNext
-    } else if s == "focus-prev" {
-        Action::FocusPrev
-    } else if s == "move" {
-        Action::Move
-    } else if s == "resize" {
-        Action::Resize
-    } else if s == "layout-next" {
-        Action::LayoutNext
-    } else if s == "mode-next" {
-        Action::ModeNext
-    } else if s == "mode-next-shared" {
-        Action::ModeNextShared
-    } else if s == "fullscreen" {
-        Action::Fullscreen
-    } else if s == "minimize" {
-        Action::Minimize
-    } else if s.starts_with("spawn")
-        && (s.len() == 5 || s.as_bytes()[5] == b' ' || s.as_bytes()[5] == b'-')
+    let trimmed = s.trim();
+    if trimmed.starts_with("spawn")
+        && (trimmed.len() == 5 || trimmed.as_bytes()[5] == b' ' || trimmed.as_bytes()[5] == b'-')
     {
         Action::Spawn
-    } else if s.starts_with("view") {
-        let rest = &s[4..];
-        let tag_str = rest
-            .strip_prefix('-')
-            .or_else(|| rest.strip_prefix(' '))
-            .unwrap_or(rest);
-        if let Ok(tag) = tag_str.parse::<i32>() {
-            if tag >= 1 && tag <= 4 {
-                return match tag {
-                    1 => Action::View1,
-                    2 => Action::View2,
-                    3 => Action::View3,
-                    4 => Action::View4,
-                    _ => Action::None,
-                };
-            }
-        }
-        Action::None
-    } else if s == "toggle" {
+    } else if trimmed == "toggle" {
         Action::Toggle
-    } else if s.starts_with("set-viewport") || s.starts_with("set-tag") {
-        let is_viewport = s.starts_with("set-viewport");
-        let rest = if is_viewport { &s[12..] } else { &s[7..] };
-        let tag_str = rest
-            .strip_prefix('-')
-            .or_else(|| rest.strip_prefix(' '))
-            .unwrap_or(rest);
-        if let Ok(tag) = tag_str.parse::<i32>() {
-            if tag >= 1 && tag <= 4 {
-                return match tag {
-                    1 => Action::SetViewport1,
-                    2 => Action::SetViewport2,
-                    3 => Action::SetViewport3,
-                    4 => Action::SetViewport4,
-                    _ => Action::None,
-                };
-            }
-        }
-        Action::None
-    } else if s == "expose" {
-        Action::Expose
-    } else if s == "side-panel-left" || s == "pinned-left" || s == "overlay-left" {
-        Action::OverlayLeft
-    } else if s == "side-panel-right" || s == "pinned-right" || s == "overlay-right" {
-        Action::OverlayRight
-    } else if s == "zoom-in" {
-        Action::ZoomIn
-    } else if s == "zoom-out" {
-        Action::ZoomOut
-    } else if s == "zoom-reset" {
-        Action::ZoomReset
-    } else if s == "pan-left" {
-        Action::PanLeft
-    } else if s == "pan-right" {
-        Action::PanRight
-    } else if s == "pan-up" {
-        Action::PanUp
-    } else if s == "pan-down" {
-        Action::PanDown
+    } else if trimmed == "move" {
+        Action::Move
+    } else if trimmed == "resize" {
+        Action::Resize
     } else {
         Action::None
     }
