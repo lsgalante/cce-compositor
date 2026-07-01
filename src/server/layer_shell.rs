@@ -584,24 +584,38 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
 
     if (*wlr_layer_surface).current.layer != ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND {
         let server = (*layer_surface).server;
-        let mut blur_enabled = true;
+        let mut blur_enabled = (*server).wm.layout.window_blur;
         let mut ignore_transparent = (*server).wm.layout.window_backdrop_blur_ignore_transparent;
+        let mut is_status = false;
         if !(*wlr_layer_surface).namespace.is_null() {
             let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
             if ns == "cce-status" {
                 blur_enabled = (*server).wm.layout.status_background_blur > 0.001;
                 ignore_transparent = (*server).wm.layout.status_backdrop_blur_ignore_transparent;
+                is_status = true;
             }
         }
+        let use_optimized = if is_status { false } else { (*server).wm.layout.scenefx_optimized_blur };
+        let wlr_surface = (*wlr_layer_surface).surface;
+        let geom_w = if !wlr_surface.is_null() {
+            ffi::river_wlr_surface_get_width(wlr_surface)
+        } else {
+            (*wlr_layer_surface).current.actual_width as i32
+        };
+        let geom_h = if !wlr_surface.is_null() {
+            ffi::river_wlr_surface_get_height(wlr_surface)
+        } else {
+            (*wlr_layer_surface).current.actual_height as i32
+        };
         ffi::river_scene_node_enable_blur(
             (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
             blur_enabled,
-            (*server).wm.layout.scenefx_optimized_blur,
+            use_optimized,
             ignore_transparent,
             0,
             0,
-            0,
-            0,
+            geom_w,
+            geom_h,
         );
     }
 

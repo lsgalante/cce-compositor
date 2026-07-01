@@ -194,8 +194,12 @@ pub unsafe fn wl_list_insert(list: *mut WlList, elm: *mut WlList) {
 pub unsafe fn wl_list_remove(elm: *mut WlList) {
     (*(*elm).next).prev = (*elm).prev;
     (*(*elm).prev).next = (*elm).next;
-    (*elm).next = std::ptr::null_mut();
-    (*elm).prev = std::ptr::null_mut();
+}
+
+pub unsafe fn wl_list_remove_and_reinit(elm: *mut WlList) {
+    wl_list_remove(elm);
+    (*elm).prev = elm;
+    (*elm).next = elm;
 }
 
 pub unsafe fn wl_signal_add(signal: *mut ffi::wl_signal, listener: *mut ffi::wl_listener) {
@@ -805,6 +809,10 @@ impl Server {
             // 5. Destroy wlroots core hardware interfaces
             log::info!("[deinit] destroying backend");
             ffi::wlr_backend_destroy(self.backend);
+            if !self.session.is_null() {
+                log::info!("[deinit] destroying session");
+                ffi::wlr_session_destroy(self.session);
+            }
             log::info!("[deinit] destroying renderer");
             ffi::wlr_renderer_destroy(self.renderer);
             log::info!("[deinit] destroying allocator");

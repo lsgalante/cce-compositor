@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_insert, wl_list_remove, WlListener, wl_signal_add};
+use crate::server::{Server, WlList, wl_list_insert, wl_list_remove, wl_list_remove_and_reinit, WlListener, wl_signal_add};
 use crate::wm_node::WmNode;
 use crate::xdg_toplevel::ConfigureState;
 
@@ -276,6 +276,16 @@ impl Window {
 
     pub unsafe fn is_wallpaper(&self) -> bool {
         self.get_app_id_string().as_deref() == Some("cce-wallpaper")
+    }
+
+    pub unsafe fn is_linked(&self) -> bool {
+        let prev = self.node.link.prev;
+        let next = self.node.link.next;
+        if prev.is_null() || next.is_null() {
+            return false;
+        }
+        let self_ptr = &self.node.link as *const ffi::wl_list as *mut ffi::wl_list;
+        prev != self_ptr
     }
 
 
@@ -743,18 +753,20 @@ impl Window {
     pub unsafe fn set_closing(&mut self) {
         if self.state != WindowState::Closing {
             self.state = WindowState::Closing;
-            wl_list_remove(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
-            self.node.link.prev = &mut self.node.link;
-            self.node.link.next = &mut self.node.link;
+            if self.is_linked() {
+                wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
+            }
         }
     }
 
     pub unsafe fn unmap(&mut self) {
         log::debug!("window '{:?}' unmapped", self.get_title());
+        if self.state != WindowState::Mapped {
+            return;
+        }
         wl_listener_remove_safe(&mut self.commit);
         self.surfaces.save();
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
-        assert_eq!(self.state, WindowState::Mapped);
         self.set_closing();
         (*self.server).wm.dirty_windowing();
 
@@ -973,18 +985,20 @@ impl Window {
                     blur: false,
                 };
 
-                wl_list_remove(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
-                self.node.link.prev = &mut self.node.link;
-                self.node.link.next = &mut self.node.link;
+                if self.is_linked() {
+                    wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
+                }
 
                 self.make_inert();
             }
             WindowState::Ready | WindowState::Initialized | WindowState::Mapped => {
                 let wm_v1 = (*self.server).wm.object;
                 if wm_v1.is_null() {
-                    let is_linked = self.node.link.prev as *const _ != &self.node.link as *const _;
+                    let is_linked = self.is_linked();
                     if !is_linked {
-                        wl_list_remove(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
+                        if !self.node.link.prev.is_null() && !self.node.link.next.is_null() {
+                            wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
+                        }
                         let rendering_list = &mut (*self.server).wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
                         wl_list_insert((*rendering_list).prev, &mut self.node.link as *mut ffi::wl_list as *mut WlList);
 
@@ -1041,8 +1055,16 @@ impl Window {
                     
                     // Send window to manager
                     ffi::wl_resource_post_event(wm_v1, ffi::ZCCE_WINDOW_MANAGER_V1_WINDOW, res); // zcce_window_manager_v1.window
+                    res
+                } else {
+                    self.object
+                };
 
-                    wl_list_remove(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
+                let is_linked = self.is_linked();
+                if !is_linked {
+                    if !self.node.link.prev.is_null() && !self.node.link.next.is_null() {
+                        wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
+                    }
                     let rendering_list = &mut (*self.server).wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
                     wl_list_insert((*rendering_list).prev, &mut self.node.link as *mut ffi::wl_list as *mut WlList);
 
@@ -1076,10 +1098,6 @@ impl Window {
                             }
                         }
                     }
-
-                    res
-                } else {
-                    self.object
                 };
 
                 if new_resource {
@@ -1541,15 +1559,32 @@ impl Window {
             let blur_enabled = requested.blur;
             let app_id = self.get_app_id_string().unwrap_or_default();
             let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
-            if app_id.starts_with("cce-status") {
+            let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
+                            app_id.starts_with("cce-status");
+            if is_status {
                 ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
             }
-            let width = (self.rendering_sent.width as f64 * self.scale) as i32;
-            let height = (self.rendering_sent.height as f64 * self.scale) as i32;
+            let use_optimized = if is_status { false } else { (*self.server).wm.layout.scenefx_optimized_blur };
+            let toplevel_w = match self.impl_type {
+                WindowImpl::Toplevel(toplevel) => {
+                    if toplevel.is_null() { 0 } else { (*toplevel).geometry.width }
+                }
+                _ => 0,
+            };
+            let toplevel_h = match self.impl_type {
+                WindowImpl::Toplevel(toplevel) => {
+                    if toplevel.is_null() { 0 } else { (*toplevel).geometry.height }
+                }
+                _ => 0,
+            };
+            let actual_w = if self.rendering_sent.width > 0 { self.rendering_sent.width } else { toplevel_w as u32 };
+            let actual_h = if self.rendering_sent.height > 0 { self.rendering_sent.height } else { toplevel_h as u32 };
+            let width = (actual_w as f64 * self.scale) as i32;
+            let height = (actual_h as f64 * self.scale) as i32;
             ffi::river_scene_node_enable_blur(
                 self.tree as *mut ffi::wlr_scene_node,
                 blur_enabled,
-                (*self.server).wm.layout.scenefx_optimized_blur,
+                use_optimized,
                 ignore_transparent,
                 0,
                 0,
@@ -1652,8 +1687,12 @@ impl Window {
             self.last_applied_scale = self.scale;
         }
 
-        self.box_geom.width = self.rendering_sent.width as i32;
-        self.box_geom.height = self.rendering_sent.height as i32;
+        if self.rendering_sent.width > 0 {
+            self.box_geom.width = self.rendering_sent.width as i32;
+        }
+        if self.rendering_sent.height > 0 {
+            self.box_geom.height = self.rendering_sent.height as i32;
+        }
 
         let mut clip = requested.clip;
         let mut content_clip = requested.content_clip;
@@ -3113,5 +3152,9 @@ unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
 
 unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let window = crate::container_of!(listener, Window, commit);
+    let was_status = (*window).is_status_bar();
     (*window).render_finish();
+    if was_status {
+        (*(*window).server).wm.dirty_windowing();
+    }
 }

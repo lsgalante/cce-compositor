@@ -361,6 +361,19 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
         log::error!("Window map failed: {}", e);
         let client = ffi::wl_resource_get_client((*(*toplevel).wlr_toplevel).resource);
         ffi::wl_client_post_no_memory(client);
+        return;
+    }
+
+    let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
+    let mut new_geometry = std::mem::zeroed();
+    ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
+    (*toplevel).geometry = new_geometry;
+    let is_status = (*(*toplevel).window).tiling_mode == crate::tiling::TilingMode::Status || 
+                    (*(*toplevel).window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+    if is_status {
+        (*(*toplevel).window).box_geom.width = new_geometry.width;
+        (*(*toplevel).window).box_geom.height = new_geometry.height;
+        (*(*(*toplevel).window).server).wm.dirty_windowing();
     }
 }
 
@@ -401,12 +414,36 @@ unsafe extern "C" fn handle_ack_configure(
         }
         _ => {}
     }
+
+    let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
+    let mut new_geometry = std::mem::zeroed();
+    ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
+    (*toplevel).geometry = new_geometry;
+
+    let is_status = (*(*toplevel).window).tiling_mode == crate::tiling::TilingMode::Status || 
+                    (*(*toplevel).window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+    if is_status {
+        (*(*toplevel).window).box_geom.width = new_geometry.width;
+        (*(*toplevel).window).box_geom.height = new_geometry.height;
+        (*(*(*toplevel).window).server).wm.dirty_windowing();
+    }
 }
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, commit);
     let window = (*toplevel).window;
     let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
+    let surface = ffi::river_wlr_xdg_surface_get_surface(base);
+    let committed_w = ffi::river_wlr_surface_get_width(surface);
+    let committed_h = ffi::river_wlr_surface_get_height(surface);
+    if committed_w > 0 && committed_h > 0 {
+        (*toplevel).geometry.width = committed_w;
+        (*toplevel).geometry.height = committed_h;
+    } else {
+        let mut new_geometry = std::mem::zeroed();
+        ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
+        (*toplevel).geometry = new_geometry;
+    }
 
     let app_id = (*window).get_app_id_string().unwrap_or_default();
     let mut ignore_transparent = (*(*window).server).wm.layout.window_backdrop_blur_ignore_transparent;
@@ -414,12 +451,17 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         ignore_transparent = (*(*window).server).wm.layout.status_backdrop_blur_ignore_transparent;
     }
     let scale = (*window).scale;
-    let geom_w = ((*window).rendering_sent.width as f64 * scale) as i32;
-    let geom_h = ((*window).rendering_sent.height as f64 * scale) as i32;
+    let actual_w = if (*window).rendering_sent.width > 0 { (*window).rendering_sent.width } else { (*toplevel).geometry.width as u32 };
+    let actual_h = if (*window).rendering_sent.height > 0 { (*window).rendering_sent.height } else { (*toplevel).geometry.height as u32 };
+    let geom_w = (actual_w as f64 * scale) as i32;
+    let geom_h = (actual_h as f64 * scale) as i32;
+    let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
+                    app_id.starts_with("cce-status");
+    let use_optimized = if is_status { false } else { (*(*window).server).wm.layout.scenefx_optimized_blur };
     ffi::river_scene_node_enable_blur(
         (*window).tree as *mut ffi::wlr_scene_node,
         (*window).rendering_requested.blur,
-        (*(*window).server).wm.layout.scenefx_optimized_blur,
+        use_optimized,
         ignore_transparent,
         0,
         0,
@@ -448,6 +490,17 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     if ffi::river_wlr_xdg_surface_get_initial_commit(base) {
         assert!((*window).state != crate::window::WindowState::Ready);
         (*window).state = crate::window::WindowState::Ready;
+        let mut new_geometry = std::mem::zeroed();
+        ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
+        (*toplevel).geometry = new_geometry;
+
+        let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
+                        (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+        if is_status {
+            (*window).box_geom.width = new_geometry.width;
+            (*window).box_geom.height = new_geometry.height;
+        }
+
         (*(*window).server).wm.dirty_windowing();
         return;
     }
@@ -477,6 +530,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
                     (*window).configure_sent.width = Some(new_geometry.width as u32);
                     (*window).configure_sent.height = Some(new_geometry.height as u32);
                     if is_status {
+                        (*window).box_geom.width = new_geometry.width;
+                        (*window).box_geom.height = new_geometry.height;
                         (*(*window).server).wm.dirty_windowing();
                     }
                 } else {
@@ -502,6 +557,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status {
                 (*window).set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
                 if is_status {
+                    (*window).box_geom.width = new_geometry.width;
+                    (*window).box_geom.height = new_geometry.height;
                     (*(*window).server).wm.dirty_windowing();
                 }
             }

@@ -1048,6 +1048,34 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         }
     }
 
+    if key_bindings.is_empty() {
+        if let Some(input_node) = doc.nodes().iter().find(|n| n.name().value() == "input") {
+            if let Some(children) = input_node.children() {
+                for child_node in children.nodes() {
+                    if child_node.name().value() == "key_bindings" {
+                        if let Some(bind_children) = child_node.children() {
+                            for child in bind_children.nodes() {
+                                if child.name().value() == "bind" {
+                                    let mods = get_prop_string(child, "mods", "");
+                                    let key = get_prop_string(child, "key", "");
+                                    let action = get_prop_string(child, "action", "");
+                                    let command = get_prop_string_opt(child, "command");
+                                    key_bindings.push(KeybindConfig { mods, key, action, command });
+                                }
+                            }
+                        } else {
+                            let mods = get_prop_string(child_node, "mods", "");
+                            let key = get_prop_string(child_node, "key", "");
+                            let action = get_prop_string(child_node, "action", "");
+                            let command = get_prop_string_opt(child_node, "command");
+                            key_bindings.push(KeybindConfig { mods, key, action, command });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 4. output
     let mut output = None;
     let mut display = HashMap::new();

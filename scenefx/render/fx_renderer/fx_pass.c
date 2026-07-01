@@ -1112,6 +1112,11 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 	TRACY_BOTH_ZONES_START(renderer);
 	push_fx_debug(renderer);
 
+	wlr_log(WLR_INFO, "[scenefx] add_blur dst_box: %dx%d at (%d, %d), optimized: %d strength: %f",
+			tex_options->base.dst_box.width, tex_options->base.dst_box.height,
+			tex_options->base.dst_box.x, tex_options->base.dst_box.y,
+			fx_options->use_optimized_blur, fx_options->blur_strength);
+
 	const bool has_strength = fx_options->blur_strength < 1.0;
 	struct fx_framebuffer *buffer = pass->fx_offscreen_buffers->optimized_blur_buffer;
 	TRACY_ZONE_TEXT_f("Use Optimized Blur: %d", fx_options->use_optimized_blur);
@@ -1216,6 +1221,9 @@ bool fx_render_pass_add_optimized_blur(struct fx_gles_render_pass *pass,
 	TRACY_ZONE_TEXT_f("\tSaturation: %f", fx_options->blur_data->saturation);
 	push_fx_debug(renderer);
 
+	wlr_log(WLR_INFO, "[scenefx] add_optimized_blur dst_box: %dx%d at (%d, %d)",
+			dst_box.width, dst_box.height, dst_box.x, dst_box.y);
+
 	pixman_region32_t clip;
 	pixman_region32_init_rect(&clip,
 			dst_box.x, dst_box.y, dst_box.width, dst_box.height);
@@ -1260,11 +1268,6 @@ void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
 		goto done;
 	}
 
-	float saved_projection_matrix[9];
-	memcpy(saved_projection_matrix, pass->projection_matrix, sizeof(saved_projection_matrix));
-	matrix_projection(pass->projection_matrix, dst_buffer->buffer->width, dst_buffer->buffer->height,
-			WL_OUTPUT_TRANSFORM_NORMAL);
-
 	// Draw onto the dst_buffer
 	fx_framebuffer_bind(dst_buffer);
 	wlr_render_pass_add_texture(&pass->base, &(struct wlr_render_texture_options) {
@@ -1286,8 +1289,6 @@ void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
 		},
 	});
 	wlr_texture_destroy(src_tex);
-
-	memcpy(pass->projection_matrix, saved_projection_matrix, sizeof(saved_projection_matrix));
 
 	// Bind back to the main WLR buffer
 	fx_framebuffer_bind(pass->buffer);

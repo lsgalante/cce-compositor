@@ -680,8 +680,16 @@ static void get_size_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, v
 	if (buffer->dst_height > size[1]) size[1] = buffer->dst_height;
 }
 
+static void find_buffer_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
+	(void)sx;
+	(void)sy;
+	struct wlr_scene_buffer **result = (struct wlr_scene_buffer **)user_data;
+	if (*result == NULL) {
+		*result = buffer;
+	}
+}
+
 void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, bool optimized, bool ignore_transparent, int x, int y, int width, int height) {
-	(void)ignore_transparent;
 	if (node->type != WLR_SCENE_NODE_TREE) {
 		return;
 	}
@@ -750,6 +758,11 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, boo
 
 	if (std_blur_node) {
 		wlr_scene_node_set_position(std_blur_node, x, y);
+		struct wlr_scene_buffer *source_buffer = NULL;
+		if (ignore_transparent) {
+			wlr_scene_node_for_each_buffer(node, find_buffer_iterator, &source_buffer);
+		}
+		wlr_scene_blur_set_transparency_mask_source((struct wlr_scene_blur *)std_blur_node, source_buffer);
 	}
 
 	// Ensure correct stack order (from back to front): opt_blur_node -> std_blur_node -> window content
@@ -772,6 +785,13 @@ static void set_opacity_iterator(struct wlr_scene_buffer *buffer, int sx, int sy
 
 void river_scene_node_set_opacity(struct wlr_scene_node *node, float opacity) {
 	wlr_scene_node_for_each_buffer(node, set_opacity_iterator, &opacity);
+	if (node->type == WLR_SCENE_NODE_TREE) {
+		struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
+		struct wlr_scene_node *blur_node = find_blur_node(tree);
+		if (blur_node && blur_node->type == WLR_SCENE_NODE_BLUR) {
+			wlr_scene_blur_set_alpha((struct wlr_scene_blur *)blur_node, opacity);
+		}
+	}
 }
 
 static void set_corner_radius_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {

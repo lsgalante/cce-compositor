@@ -752,6 +752,11 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     wl_listener_remove(&mut (*output).frame);
     wl_listener_remove(&mut (*output).present);
 
+    if !(*output).scene_output.is_null() {
+        ffi::wlr_scene_output_destroy((*output).scene_output);
+        (*output).scene_output = std::ptr::null_mut();
+    }
+
     if !(*output).background_rect.is_null() {
         ffi::wlr_scene_node_destroy((*output).background_rect as *mut ffi::wlr_scene_node);
         (*output).background_rect = std::ptr::null_mut();
@@ -767,7 +772,6 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     }
 
     (*output).wlr_output = std::ptr::null_mut();
-    (*output).scene_output = std::ptr::null_mut();
     (*output).scheduled.mode = OutputMode::None;
     (*output).sent.mode = OutputMode::None;
     (*output).current.mode = OutputMode::None;
