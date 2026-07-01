@@ -388,7 +388,7 @@ pub struct Config {
     pub gesture_bind: Vec<GestureBindConfig>,
     #[serde(default)]
     pub transparency: Option<TransparencyConfig>,
-    #[serde(default, alias = "surfaces")]
+    #[serde(default)]
     pub surface: SurfaceConfig,
 }
 
@@ -1061,11 +1061,23 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     for node in doc.nodes() {
         match node.name().value() {
             "key_bindings" => {
-                let mods = get_prop_string(node, "mods", "");
-                let key = get_prop_string(node, "key", "");
-                let action = get_prop_string(node, "action", "");
-                let command = get_prop_string_opt(node, "command");
-                key_bindings.push(KeybindConfig { mods, key, action, command });
+                if let Some(children) = node.children() {
+                    for child in children.nodes() {
+                        if child.name().value() == "bind" {
+                            let mods = get_prop_string(child, "mods", "");
+                            let key = get_prop_string(child, "key", "");
+                            let action = get_prop_string(child, "action", "");
+                            let command = get_prop_string_opt(child, "command");
+                            key_bindings.push(KeybindConfig { mods, key, action, command });
+                        }
+                    }
+                } else {
+                    let mods = get_prop_string(node, "mods", "");
+                    let key = get_prop_string(node, "key", "");
+                    let action = get_prop_string(node, "action", "");
+                    let command = get_prop_string_opt(node, "command");
+                    key_bindings.push(KeybindConfig { mods, key, action, command });
+                }
             }
             "pointer_bind" => {
                 let mods = get_prop_string(node, "mods", "");
@@ -1199,7 +1211,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     let mut found_nested = false;
     if let Some(style_node) = doc.nodes().iter().find(|n| n.name().value() == "style") {
         if let Some(style_children) = style_node.children() {
-            if let Some(surface_node) = style_children.nodes().iter().find(|n| n.name().value() == "surface" || n.name().value() == "surfaces") {
+            if let Some(surface_node) = style_children.nodes().iter().find(|n| n.name().value() == "surface") {
                 if let Some(surface_children) = surface_node.children() {
                     if let Some(desktop_node) = surface_children.nodes().iter().find(|n| n.name().value() == "desktop") {
                         found_nested = true;
@@ -1276,7 +1288,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         }
     }
     if !found_nested {
-        if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "surface" || n.name().value() == "surfaces") {
+        if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "surface") {
             surface.desktop_gap_color = get_child_arg_string(node, "desktop_gap_color", &default_desktop_gap_color());
             surface.desktop_cell_color = get_child_arg_string(node, "desktop_cell_color", &default_desktop_cell_color());
             surface.desktop_grid_scale = get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale());
@@ -1392,11 +1404,35 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     }
 
     state.keybinds.clear();
+    let mut seen = std::collections::HashSet::new();
     for kb in &config.key_bindings {
         let mods = parse_modifiers(&kb.mods);
         let keysym = parse_keysym(&kb.key);
+        
+        let binding_key = (mods, keysym);
+        if !seen.insert(binding_key) {
+            eprintln!("[WARNING] Keybinding conflict: multiple actions mapped to mods={:?}, key={:?}", kb.mods, kb.key);
+        }
+
         let action = parse_action(&kb.action);
         let command = if action == Action::Spawn || action == Action::Toggle {
+            if let Some(ref cmd_str) = kb.command {
+                let cmd_exe = cmd_str.split_whitespace().next().unwrap_or("");
+                if !cmd_exe.is_empty() {
+                    let mut found = false;
+                    if let Ok(path_var) = std::env::var("PATH") {
+                        for path_dir in std::env::split_paths(&path_var) {
+                            if path_dir.join(cmd_exe).is_file() {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !found {
+                        eprintln!("[WARNING] Configured keybinding command not found in PATH: {}", cmd_exe);
+                    }
+                }
+            }
             kb.command.clone()
         } else {
             None
