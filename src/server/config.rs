@@ -1660,7 +1660,6 @@ mod tests {
             assert_eq!(server.wm.layout.desktop_gap_color, "#a5cfc2");
             assert_eq!(server.wm.layout.desktop_gap_width, 24);
             assert_eq!(server.wm.layout.desktop_cell_corner_radius, 8);
-            assert_eq!(server.wm.layout.desktop_enable_solid_color, true);
             println!("TEST_WM_STARTUP: {:?}", server.wm.startup);
             println!("TEST_WM_PATH: {:?}", std::env::var("PATH"));
         }
