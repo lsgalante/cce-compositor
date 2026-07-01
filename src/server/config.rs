@@ -272,7 +272,7 @@ pub struct TransparencyConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct SurfacesConfig {
+pub struct SurfaceConfig {
     #[serde(default = "default_desktop_gap_color")]
     pub desktop_gap_color: String,
     #[serde(default = "default_desktop_cell_color")]
@@ -297,7 +297,7 @@ pub struct SurfacesConfig {
     pub backplate_corner_radius: i64,
 }
 
-impl Default for SurfacesConfig {
+impl Default for SurfaceConfig {
     fn default() -> Self {
         Self {
             desktop_gap_color: default_desktop_gap_color(),
@@ -388,8 +388,8 @@ pub struct Config {
     pub gesture_bind: Vec<GestureBindConfig>,
     #[serde(default)]
     pub transparency: Option<TransparencyConfig>,
-    #[serde(default)]
-    pub surfaces: SurfacesConfig,
+    #[serde(default, alias = "surfaces")]
+    pub surface: SurfaceConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1194,51 +1194,51 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         transparency = Some(TransparencyConfig { opacity: Some(opacity) });
     }
 
-    // 8. surfaces
-    let mut surfaces = SurfacesConfig::default();
+    // 8. surface
+    let mut surface = SurfaceConfig::default();
     let mut found_nested = false;
     if let Some(style_node) = doc.nodes().iter().find(|n| n.name().value() == "style") {
         if let Some(style_children) = style_node.children() {
-            if let Some(surfaces_node) = style_children.nodes().iter().find(|n| n.name().value() == "surfaces") {
-                if let Some(surfaces_children) = surfaces_node.children() {
-                    if let Some(desktop_node) = surfaces_children.nodes().iter().find(|n| n.name().value() == "desktop") {
+            if let Some(surface_node) = style_children.nodes().iter().find(|n| n.name().value() == "surface" || n.name().value() == "surfaces") {
+                if let Some(surface_children) = surface_node.children() {
+                    if let Some(desktop_node) = surface_children.nodes().iter().find(|n| n.name().value() == "desktop") {
                         found_nested = true;
                         for entry in desktop_node.entries() {
                             if let Some(id) = entry.name() {
                                 match id.value() {
                                     "gap_color" => {
                                         if let Some(val) = entry.value().as_string() {
-                                            surfaces.desktop_gap_color = val.to_string();
+                                            surface.desktop_gap_color = val.to_string();
                                         }
                                     }
                                     "cell_color" => {
                                         if let Some(val) = entry.value().as_string() {
-                                            surfaces.desktop_cell_color = val.to_string();
+                                            surface.desktop_cell_color = val.to_string();
                                         }
                                     }
                                     "gap_width" => {
                                         if let Some(val) = entry.value().as_i64() {
-                                            surfaces.desktop_gap_width = val;
+                                            surface.desktop_gap_width = val;
                                         }
                                     }
                                     "cell_corner_radius" => {
                                         if let Some(val) = entry.value().as_i64() {
-                                            surfaces.desktop_cell_corner_radius = val;
+                                            surface.desktop_cell_corner_radius = val;
                                         }
                                     }
                                     "cell_fade_inset" => {
                                         if let Some(val) = entry.value().as_i64() {
-                                            surfaces.desktop_cell_fade_inset = val;
+                                            surface.desktop_cell_fade_inset = val;
                                         }
                                     }
                                     "enable_solid_color" => {
                                         if let Some(val) = entry.value().as_bool() {
-                                            surfaces.desktop_enable_solid_color = val;
+                                            surface.desktop_enable_solid_color = val;
                                         }
                                     }
                                     "solid_color" => {
                                         if let Some(val) = entry.value().as_string() {
-                                            surfaces.desktop_solid_color = val.to_string();
+                                            surface.desktop_solid_color = val.to_string();
                                         }
                                     }
                                     _ => {}
@@ -1246,24 +1246,24 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                             }
                         }
                     }
-                    if let Some(backplate_node) = surfaces_children.nodes().iter().find(|n| n.name().value() == "backplate") {
+                    if let Some(backplate_node) = surface_children.nodes().iter().find(|n| n.name().value() == "backplate") {
                         found_nested = true;
                         for entry in backplate_node.entries() {
                             if let Some(id) = entry.name() {
                                 match id.value() {
                                     "color" => {
                                         if let Some(val) = entry.value().as_string() {
-                                            surfaces.backplate_color = val.to_string();
+                                            surface.backplate_color = val.to_string();
                                         }
                                     }
                                     "blur" => {
                                         if let Some(val) = entry.value().as_f64() {
-                                            surfaces.backplate_blur = val;
+                                            surface.backplate_blur = val;
                                         }
                                     }
                                     "corner_radius" => {
                                         if let Some(val) = entry.value().as_i64() {
-                                            surfaces.backplate_corner_radius = val;
+                                            surface.backplate_corner_radius = val;
                                         }
                                     }
                                     _ => {}
@@ -1276,18 +1276,18 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         }
     }
     if !found_nested {
-        if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "surfaces") {
-            surfaces.desktop_gap_color = get_child_arg_string(node, "desktop_gap_color", &default_desktop_gap_color());
-            surfaces.desktop_cell_color = get_child_arg_string(node, "desktop_cell_color", &default_desktop_cell_color());
-            surfaces.desktop_grid_scale = get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale());
-            surfaces.desktop_gap_width = get_child_arg_i64(node, "desktop_gap_width", default_desktop_gap_width());
-            surfaces.desktop_cell_corner_radius = get_child_arg_i64(node, "desktop_cell_corner_radius", default_desktop_cell_corner_radius());
-            surfaces.desktop_cell_fade_inset = get_child_arg_i64(node, "desktop_cell_fade_inset", default_desktop_cell_fade_inset());
-            surfaces.desktop_enable_solid_color = get_child_arg_bool(node, "desktop_enable_solid_color", default_desktop_enable_solid_color());
-            surfaces.desktop_solid_color = get_child_arg_string(node, "desktop_solid_color", &default_desktop_solid_color());
-            surfaces.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
-            surfaces.backplate_blur = get_child_arg_f64(node, "backplate_blur", default_backplate_blur());
-            surfaces.backplate_corner_radius = get_child_arg_i64(node, "backplate_corner_radius", default_backplate_corner_radius());
+        if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "surface" || n.name().value() == "surfaces") {
+            surface.desktop_gap_color = get_child_arg_string(node, "desktop_gap_color", &default_desktop_gap_color());
+            surface.desktop_cell_color = get_child_arg_string(node, "desktop_cell_color", &default_desktop_cell_color());
+            surface.desktop_grid_scale = get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale());
+            surface.desktop_gap_width = get_child_arg_i64(node, "desktop_gap_width", default_desktop_gap_width());
+            surface.desktop_cell_corner_radius = get_child_arg_i64(node, "desktop_cell_corner_radius", default_desktop_cell_corner_radius());
+            surface.desktop_cell_fade_inset = get_child_arg_i64(node, "desktop_cell_fade_inset", default_desktop_cell_fade_inset());
+            surface.desktop_enable_solid_color = get_child_arg_bool(node, "desktop_enable_solid_color", default_desktop_enable_solid_color());
+            surface.desktop_solid_color = get_child_arg_string(node, "desktop_solid_color", &default_desktop_solid_color());
+            surface.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
+            surface.backplate_blur = get_child_arg_f64(node, "backplate_blur", default_backplate_blur());
+            surface.backplate_corner_radius = get_child_arg_i64(node, "backplate_corner_radius", default_backplate_corner_radius());
         }
     }
 
@@ -1305,7 +1305,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         input,
         gesture_bind,
         transparency,
-        surfaces,
+        surface,
     })
 }
 
@@ -1338,8 +1338,13 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.border_b = 0x3E3E3E3E;
     state.layout.border_a = 0xFFFFFFFF;
 
-    let desktop_background_str = config.surfaces.desktop_gap_color.clone();
-    state.layout.desktop_gap_color = desktop_background_str.clone();
+    state.layout.desktop_gap_color = config.surface.desktop_gap_color.clone();
+
+    let desktop_background_str = if config.surface.desktop_enable_solid_color {
+        config.surface.desktop_solid_color.clone()
+    } else {
+        config.surface.desktop_gap_color.clone()
+    };
 
     let background_color_val = parse_hex_color(&desktop_background_str);
     state.layout.background_r = ((background_color_val >> 16) & 0xFF) * 0x01010101;
@@ -1347,20 +1352,20 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.background_b = (background_color_val & 0xFF) * 0x01010101;
     state.layout.background_a = 0xFFFFFFFF;
 
-    state.layout.desktop_cell_color = parse_hex_color_rgba(&config.surfaces.desktop_cell_color);
-    state.layout.desktop_grid_scale = config.surfaces.desktop_grid_scale as f64;
-    state.layout.desktop_gap_width = config.surfaces.desktop_gap_width as i32;
-    state.layout.desktop_cell_corner_radius = config.surfaces.desktop_cell_corner_radius as i32;
-    state.layout.desktop_cell_fade_inset = config.surfaces.desktop_cell_fade_inset;
-    state.layout.desktop_enable_solid_color = config.surfaces.desktop_enable_solid_color;
-    state.layout.desktop_solid_color = parse_hex_color_rgba(&config.surfaces.desktop_solid_color);
+    state.layout.desktop_cell_color = parse_hex_color_rgba(&config.surface.desktop_cell_color);
+    state.layout.desktop_grid_scale = config.surface.desktop_grid_scale as f64;
+    state.layout.desktop_gap_width = config.surface.desktop_gap_width as i32;
+    state.layout.desktop_cell_corner_radius = config.surface.desktop_cell_corner_radius as i32;
+    state.layout.desktop_cell_fade_inset = config.surface.desktop_cell_fade_inset;
+    state.layout.desktop_enable_solid_color = config.surface.desktop_enable_solid_color;
+    state.layout.desktop_solid_color = parse_hex_color_rgba(&config.surface.desktop_solid_color);
 
     state.layout.border_font_size = 11;
     state.layout.transition_duration = config.layout.transition_duration as i32;
     state.layout.grid_gap = config.layout.grid_gap as i32;
     state.layout.border_blur = false;
-    state.layout.window_blur = config.surfaces.backplate_blur > 0.001;
-    state.layout.backplate_corner_radius = config.surfaces.backplate_corner_radius as i32;
+    state.layout.window_blur = config.surface.backplate_blur > 0.001;
+    state.layout.backplate_corner_radius = config.surface.backplate_corner_radius as i32;
     state.layout.overlay_behavior = config.layout.overlay_behavior;
     state.layout.overlay_width = config.layout.overlay_width as i32;
     state.layout.overlay_position = config.layout.overlay_position;
@@ -1368,7 +1373,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.status_normal_color = config.layout.status_normal_color.clone();
     state.layout.status_background_blur = config.layout.status_background_blur as f32;
     state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
-    let backplate_rgba = parse_hex_color_rgba(&config.surfaces.backplate_color);
+    let backplate_rgba = parse_hex_color_rgba(&config.surface.backplate_color);
     state.layout.window_opacity = backplate_rgba[3] < 0.999;
     state.layout.scenefx_optimized_blur = config.output.as_ref().map(|o| o.scenefx_optimized_blur).unwrap_or(true);
     state.layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
