@@ -655,7 +655,7 @@ impl Output {
             let mut pool_idx = 0;
 
             // Helper closure to manage/reuse the pool of wlr_scene_rect elements.
-            let mut get_rect = |w: i32, h: i32, color_ptr: *const f32, x: i32, y: i32, corner_r: i32| -> *mut ffi::wlr_scene_rect {
+            let mut get_rect = |w: i32, h: i32, color_ptr: *const f32, x: i32, y: i32, corner_r: i32, fade_i: i32| -> *mut ffi::wlr_scene_rect {
                 let rect = if pool_idx < pool.len() {
                     let node = pool[pool_idx];
                     ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, true);
@@ -673,7 +673,7 @@ impl Output {
                 if !rect.is_null() {
                     ffi::wlr_scene_node_set_position(rect as *mut ffi::wlr_scene_node, x, y);
                     ffi::river_scene_rect_set_corner_radius(rect, corner_r);
-                    ffi::wlr_scene_rect_set_fade_inset(rect, 0);
+                    ffi::wlr_scene_rect_set_fade_inset(rect, fade_i);
                 }
                 pool_idx += 1;
                 rect
@@ -681,7 +681,7 @@ impl Output {
 
             // 1. Draw base/background rect using the gap color.
             // Sized exactly to the viewport (since the grid tree is static).
-            get_rect(viewport_w, viewport_h, self.last_grid_gap_color_rgba.as_ptr(), 0, 0, 0);
+            get_rect(viewport_w, viewport_h, self.last_grid_gap_color_rgba.as_ptr(), 0, 0, 0, 0);
 
             // 2. Draw grid cells.
             let min_col = (wm.desk_pan_x / period).floor() as i32 - 1;
@@ -708,10 +708,7 @@ impl Output {
                             let rh = y2 - y1;
 
                             if rh > 0 {
-                                let cell_rect = get_rect(rw, rh, cell_color.as_ptr(), x1, y1, scaled_corner_radius);
-                                if !cell_rect.is_null() && inset_scaled > 0 {
-                                    ffi::wlr_scene_rect_set_fade_inset(cell_rect, inset_scaled);
-                                }
+                                get_rect(rw, rh, cell_color.as_ptr(), x1, y1, scaled_corner_radius, inset_scaled);
                             }
                         }
                     }
