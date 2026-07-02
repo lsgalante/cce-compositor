@@ -334,7 +334,7 @@ static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
 
 	if (node->type == WLR_SCENE_NODE_RECT) {
 		struct wlr_scene_rect *scene_rect = wlr_scene_rect_from_node(node);
-		if (scene_rect->color[3] != 1) {
+		if (scene_rect->color[3] != 1 || scene_rect->fade_inset > 0) {
 			return;
 		}
 
@@ -2681,6 +2681,7 @@ static bool scene_rect_is_black_opaque(struct wlr_scene_rect *scene_rect) {
 		scene_rect->color[1] == 0.f &&
 		scene_rect->color[2] == 0.f &&
 		scene_rect->color[3] == 1.f &&
+		scene_rect->fade_inset == 0 &&
 		fx_corner_radii_is_empty(&scene_rect->corners) &&
 		fx_corner_radii_is_empty(&scene_rect->clipped_region.corners) &&
 		wlr_box_empty(&scene_rect->clipped_region.area);
