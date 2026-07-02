@@ -961,6 +961,7 @@ void wlr_scene_rect_set_size(struct wlr_scene_rect *rect, int width, int height)
 
 	assert(width >= 0 && height >= 0);
 
+	scene_node_update(&rect->node, NULL);
 	rect->width = width;
 	rect->height = height;
 	scene_node_update(&rect->node, NULL);
@@ -1640,6 +1641,7 @@ void wlr_scene_buffer_set_dest_size(struct wlr_scene_buffer *scene_buffer,
 	}
 
 	assert(width >= 0 && height >= 0);
+	scene_node_update(&scene_buffer->node, NULL);
 	scene_buffer->dst_width = width;
 	scene_buffer->dst_height = height;
 	scene_node_update(&scene_buffer->node, NULL);
@@ -1651,6 +1653,7 @@ void wlr_scene_buffer_set_transform(struct wlr_scene_buffer *scene_buffer,
 		return;
 	}
 
+	scene_node_update(&scene_buffer->node, NULL);
 	scene_buffer->transform = transform;
 	scene_node_update(&scene_buffer->node, NULL);
 }
@@ -1824,6 +1827,7 @@ void wlr_scene_node_set_position(struct wlr_scene_node *node, int x, int y) {
 		return;
 	}
 
+	scene_node_update(node, NULL);
 	node->x = x;
 	node->y = y;
 	scene_node_update(node, NULL);
