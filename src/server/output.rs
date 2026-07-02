@@ -620,24 +620,26 @@ impl Output {
             || self.last_grid_cell_fade_inset != cell_fade_inset
             || &self.last_grid_gap_color != gap_color;
 
-        let pan_changed = self.last_grid_pan_x != wm.desk_pan_x
-            || self.last_grid_pan_y != wm.desk_pan_y;
-
         if structure_changed {
             self.grid_force_redraw_frames = 3;
         }
 
-        // Keep root grid tree node static at physical output position.
+        // Modulo shift calculations for virtual grid infinite scrolling.
+        let shift_x = -((wm.desk_pan_x * zoom).rem_euclid(period_pixels));
+        let shift_y = -((wm.desk_pan_y * zoom).rem_euclid(period_pixels));
+
+        let dest_x = self.sent.x + shift_x.round() as i32;
+        let dest_y = self.sent.y + shift_y.round() as i32;
+
+        // Apply shift translation to root grid tree node.
         ffi::river_scene_node_set_position_if_changed(
             self.grid_tree as *mut ffi::wlr_scene_node,
-            self.sent.x,
-            self.sent.y,
+            dest_x,
+            dest_y,
         );
 
-        if self.grid_force_redraw_frames > 0 || pan_changed {
-            if self.grid_force_redraw_frames > 0 {
-                self.grid_force_redraw_frames -= 1;
-            }
+        if self.grid_force_redraw_frames > 0 {
+            self.grid_force_redraw_frames -= 1;
 
             self.last_grid_viewport_w = viewport_w;
             self.last_grid_viewport_h = viewport_h;
@@ -681,36 +683,27 @@ impl Output {
             };
 
             // 1. Draw base/background rect using the gap color.
-            // Sized exactly to the viewport (since the grid tree is static).
-            get_rect(viewport_w, viewport_h, self.last_grid_gap_color_rgba.as_ptr(), 0, 0, 0, 0);
+            // Sized larger by one period to prevent flickering at edges during pan shifts.
+            let bg_w = viewport_w + period_pixels.ceil() as i32;
+            let bg_h = viewport_h + period_pixels.ceil() as i32;
+            get_rect(bg_w, bg_h, self.last_grid_gap_color_rgba.as_ptr(), 0, 0, 0, 0);
 
             // 2. Draw grid cells.
-            let min_col = (wm.desk_pan_x / period).floor() as i32 - 1;
-            let max_col = (((viewport_w as f64 / zoom) + wm.desk_pan_x) / period).ceil() as i32 + 1;
-            let min_row = (wm.desk_pan_y / period).floor() as i32 - 1;
-            let max_row = (((viewport_h as f64 / zoom) + wm.desk_pan_y) / period).ceil() as i32 + 1;
+            let cols = (viewport_w as f64 / period_pixels).ceil() as i32 + 1;
+            let rows = (viewport_h as f64 / period_pixels).ceil() as i32 + 1;
 
-            let col_range = max_col.saturating_sub(min_col);
-            let row_range = max_row.saturating_sub(min_row);
-
-            if density_fade > 0.0 && col_range > 0 && row_range > 0 && col_range <= 1000 && row_range <= 1000 && col_range * row_range <= 20000 {
+            if density_fade > 0.0 && cols > 0 && rows > 0 && cols <= 1000 && rows <= 1000 && cols * rows <= 20000 {
+                let rw = (cell_size * zoom).round() as i32;
+                let rh = (cell_size * zoom).round() as i32;
                 let scaled_corner_radius = (cell_corner_radius as f64 * zoom).round() as i32;
                 let inset_scaled = (cell_fade_inset as f64 * zoom * 1000.0).round() as i32;
 
-                for col in min_col..=max_col {
-                    let x1 = (((col as f64 * period) - wm.desk_pan_x) * zoom).round() as i32;
-                    let x2 = (((col as f64 * period) + cell_size - wm.desk_pan_x) * zoom).round() as i32;
-                    let rw = x2 - x1;
-
-                    if rw > 0 {
-                        for row in min_row..=max_row {
-                            let y1 = (((row as f64 * period) - wm.desk_pan_y) * zoom).round() as i32;
-                            let y2 = (((row as f64 * period) + cell_size - wm.desk_pan_y) * zoom).round() as i32;
-                            let rh = y2 - y1;
-
-                            if rh > 0 {
-                                get_rect(rw, rh, cell_color.as_ptr(), x1, y1, scaled_corner_radius, inset_scaled);
-                            }
+                if rw > 0 && rh > 0 {
+                    for col in 0..=cols {
+                        let rel_x = (col as f64 * period_pixels).round() as i32;
+                        for row in 0..=rows {
+                            let rel_y = (row as f64 * period_pixels).round() as i32;
+                            get_rect(rw, rh, cell_color.as_ptr(), rel_x, rel_y, scaled_corner_radius, inset_scaled);
                         }
                     }
                 }
