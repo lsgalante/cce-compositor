@@ -165,7 +165,6 @@ pub struct WlrXwayland {
     pub own_server: bool,
     pub xwm: *mut std::ffi::c_void,
     pub shell_v1: *mut std::ffi::c_void,
-    pub cursor: *mut std::ffi::c_void,
     pub display_name: *const std::os::raw::c_char,
     pub wl_display: *mut ffi::wl_display,
     pub compositor: *mut ffi::wlr_compositor,

@@ -1560,11 +1560,11 @@ impl Window {
         ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
 
         if enabled {
-            let blur_enabled = requested.blur;
             let app_id = self.get_app_id_string().unwrap_or_default();
-            let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
             let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                             app_id.starts_with("cce-status");
+            let blur_enabled = requested.blur && (self.wm_requested.ssd || is_status);
+            let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
             if is_status {
                 ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
             }
@@ -2843,10 +2843,13 @@ impl Decoration {
         let server = (*self.window).server;
         let app_id = (*self.window).get_app_id_string().unwrap_or_default();
         let mut ignore_transparent = (*server).wm.layout.window_backdrop_blur_ignore_transparent;
-        if app_id.starts_with("cce-status") {
+        let is_status = (*self.window).tiling_mode == crate::tiling::TilingMode::Status ||
+                        app_id.starts_with("cce-status");
+        if is_status {
             ignore_transparent = (*server).wm.layout.status_backdrop_blur_ignore_transparent;
         }
-        ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, self.rendering_requested.blur, (*server).wm.layout.scenefx_optimized_blur, ignore_transparent, 0, 0, 0, 0);
+        let blur_enabled = self.rendering_requested.blur && ((*self.window).wm_requested.ssd || is_status);
+        ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled, (*server).wm.layout.scenefx_optimized_blur, ignore_transparent, 0, 0, 0, 0);
 
         let scale = (*self.window).scale;
         let scaled_x = (self.rendering_requested.offset_x as f64 * scale) as i32;

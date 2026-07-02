@@ -433,17 +433,9 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let toplevel = crate::container_of!(listener, XdgToplevel, commit);
     let window = (*toplevel).window;
     let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
-    let surface = ffi::river_wlr_xdg_surface_get_surface(base);
-    let committed_w = ffi::river_wlr_surface_get_width(surface);
-    let committed_h = ffi::river_wlr_surface_get_height(surface);
-    if committed_w > 0 && committed_h > 0 {
-        (*toplevel).geometry.width = committed_w;
-        (*toplevel).geometry.height = committed_h;
-    } else {
-        let mut new_geometry = std::mem::zeroed();
-        ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
-        (*toplevel).geometry = new_geometry;
-    }
+    let mut new_geometry = std::mem::zeroed();
+    ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
+    (*toplevel).geometry = new_geometry;
 
     let app_id = (*window).get_app_id_string().unwrap_or_default();
     let mut ignore_transparent = (*(*window).server).wm.layout.window_backdrop_blur_ignore_transparent;
@@ -458,9 +450,10 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
                     app_id.starts_with("cce-status");
     let use_optimized = if is_status { false } else { (*(*window).server).wm.layout.scenefx_optimized_blur };
+    let blur_enabled = (*window).rendering_requested.blur && ((*window).wm_requested.ssd || is_status);
     ffi::river_scene_node_enable_blur(
         (*window).tree as *mut ffi::wlr_scene_node,
-        (*window).rendering_requested.blur,
+        blur_enabled,
         use_optimized,
         ignore_transparent,
         0,

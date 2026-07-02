@@ -815,6 +815,8 @@ impl WindowManager {
                                 (*self.server).scene.layers.fullscreen
                             } else if (*window).tiling_mode == crate::tiling::TilingMode::Popup {
                                 (*self.server).scene.layers.popups
+                            } else if (*window).tiling_mode == crate::tiling::TilingMode::Status {
+                                (*self.server).scene.layers.top
                             } else if (*window).rendering_requested.circular {
                                 (*self.server).scene.layers.top
                             } else if (*window).tiling_mode == crate::tiling::TilingMode::Overlay && self.layout.overlay_behavior == "above" {
