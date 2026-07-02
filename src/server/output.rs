@@ -709,10 +709,17 @@ impl Output {
                     "smoothstep" => 1,
                     "quadratic" => 2,
                     "cosine" => 3,
+                    "gaussian" => 4,
                     _ => 0, // "linear"
                 };
-                let inset_scaled = if cell_fade_inset > 0 {
-                    ((cell_fade_inset as f64 * zoom * 100.0).round() as i32) * 10 + fade_mode
+                
+                // Cap the active fade inset at 45% of the cell size to prevent cells from completely blurring out at high zoom out levels
+                let max_inset = (rw as f64 * 0.45).floor() as i32;
+                let inset_pixels = (cell_fade_inset as f64 * zoom).round() as i32;
+                let active_inset = inset_pixels.min(max_inset).max(0);
+
+                let inset_scaled = if active_inset > 0 {
+                    (active_inset * 1000) + fade_mode
                 } else {
                     0
                 };

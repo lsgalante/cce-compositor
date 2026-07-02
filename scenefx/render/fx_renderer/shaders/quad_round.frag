@@ -83,9 +83,15 @@ void main() {
 		} else if (fade_mode == 3) {
 			factor_x = 0.5 - 0.5 * cos(factor_x * 3.14159265);
 			factor_y = 0.5 - 0.5 * cos(factor_y * 3.14159265);
+		} else if (fade_mode == 4) {
+			float x = 1.0 - factor_x;
+			factor_x = clamp((exp(-3.0 * x * x) - 0.049) / 0.951, 0.0, 1.0);
+			float y = 1.0 - factor_y;
+			factor_y = clamp((exp(-3.0 * y * y) - 0.049) / 0.951, 0.0, 1.0);
 		}
 
-		final_color *= factor_x * factor_y;
+		float combined_factor = factor_x * factor_y;
+		final_color *= pow(combined_factor, 2.2);
 	}
 
 	gl_FragColor = final_color * quad_corner_alpha * clip_corner_alpha;
