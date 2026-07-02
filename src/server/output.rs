@@ -588,22 +588,23 @@ impl Output {
             wm.desk_zoom
         };
 
-        // Calculate Level of Detail (LOD) grid spacing.
-        // As the user zooms out, we scale up spacing to prevent grid density from becoming too high.
-        let mut cell_size = wm.layout.desktop_grid_scale.max(5.0);
-        let mut gap_size = (wm.layout.desktop_gap_width as f64).max(0.0);
-        let mut period = cell_size + gap_size;
+        let cell_size = wm.layout.desktop_grid_scale.max(5.0);
+        let gap_size = (wm.layout.desktop_gap_width as f64).max(0.0);
+        let period = cell_size + gap_size;
 
-        const MIN_PERIOD_PIXELS: f64 = 40.0;
-        let mut iterations = 0;
-        while period * zoom < MIN_PERIOD_PIXELS && iterations < 20 {
-            cell_size *= 2.0;
-            gap_size *= 2.0;
-            period = cell_size + gap_size;
-            iterations += 1;
-        }
+        // Smoothly fade out grid cells when they get too small (period * zoom < 30px)
+        // to prevent extreme visual noise, layout popping, and massive CPU allocation stutters when zooming.
+        let period_pixels = period * zoom;
+        let density_fade = if period_pixels < 15.0 {
+            0.0
+        } else if period_pixels < 30.0 {
+            (period_pixels - 15.0) / 15.0
+        } else {
+            1.0
+        };
 
-        let cell_color: [f32; 4] = wm.layout.desktop_cell_color;
+        let mut cell_color: [f32; 4] = wm.layout.desktop_cell_color;
+        cell_color[3] *= density_fade as f32;
         let cell_corner_radius = wm.layout.desktop_cell_corner_radius;
         let cell_fade_inset = wm.layout.desktop_cell_fade_inset;
         let gap_color = &wm.layout.desktop_gap_color;
@@ -692,7 +693,7 @@ impl Output {
             let col_range = max_col.saturating_sub(min_col);
             let row_range = max_row.saturating_sub(min_row);
 
-            if col_range > 0 && row_range > 0 && col_range <= 1000 && row_range <= 1000 && col_range * row_range <= 20000 {
+            if density_fade > 0.0 && col_range > 0 && row_range > 0 && col_range <= 1000 && row_range <= 1000 && col_range * row_range <= 20000 {
                 let scaled_corner_radius = (cell_corner_radius as f64 * zoom).round() as i32;
                 let inset_scaled = (cell_fade_inset as f64 * zoom * 1000.0).round() as i32;
 
