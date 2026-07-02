@@ -10,6 +10,7 @@ uniform float radius_top_right;
 uniform float radius_bottom_left;
 uniform float radius_bottom_right;
 uniform float fade_inset;
+uniform int fade_mode;
 
 uniform vec2 clip_size;
 uniform vec2 clip_position;
@@ -65,7 +66,15 @@ void main() {
 	vec4 final_color = v_color;
 	if (fade_inset > 0.0) {
 		float inside_dist = 0.5 - dist;
-		float fade_factor = clamp(inside_dist / fade_inset, 0.0, 1.0);
+		float factor = clamp(inside_dist / fade_inset, 0.0, 1.0);
+		float fade_factor = factor;
+		if (fade_mode == 1) {
+			fade_factor = smoothstep(0.0, 1.0, factor);
+		} else if (fade_mode == 2) {
+			fade_factor = factor * factor;
+		} else if (fade_mode == 3) {
+			fade_factor = 0.5 - 0.5 * cos(factor * 3.14159265);
+		}
 		final_color *= fade_factor;
 	}
 

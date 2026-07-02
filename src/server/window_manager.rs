@@ -2663,6 +2663,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                             self.layout.desktop_cell_fade_inset = v;
                         }
                     }
+                    "desktop_grid_fade_mode" => {
+                        self.layout.desktop_grid_fade_mode = val.to_string();
+                    }
                     "desktop_enable_solid_color" => {
                         if let Ok(v) = val.parse::<bool>() {
                             self.layout.desktop_enable_solid_color = v;

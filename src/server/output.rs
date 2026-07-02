@@ -165,6 +165,7 @@ pub struct Output {
     pub last_grid_cell_color: [f32; 4],
     pub last_grid_cell_corner_radius: i32,
     pub last_grid_cell_fade_inset: i64,
+    pub last_grid_fade_mode: String,
     pub last_grid_gap_color: String,
     pub last_grid_gap_color_rgba: [f32; 4],
     pub grid_is_low_res: bool,
@@ -419,6 +420,7 @@ impl Output {
             last_grid_cell_color: [0.0, 0.0, 0.0, 0.0],
             last_grid_cell_corner_radius: 0,
             last_grid_cell_fade_inset: 0,
+            last_grid_fade_mode: String::new(),
             last_grid_gap_color: String::new(),
             last_grid_gap_color_rgba: [0.0, 0.0, 0.0, 0.0],
             grid_is_low_res: false,
@@ -607,6 +609,7 @@ impl Output {
         cell_color[3] *= density_fade as f32;
         let cell_corner_radius = wm.layout.desktop_cell_corner_radius;
         let cell_fade_inset = wm.layout.desktop_cell_fade_inset;
+        let fade_mode_str = &wm.layout.desktop_grid_fade_mode;
         let gap_color = &wm.layout.desktop_gap_color;
 
         // Detect layout or viewport changes to request a redraw.
@@ -618,6 +621,7 @@ impl Output {
             || self.last_grid_cell_color != cell_color
             || self.last_grid_cell_corner_radius != cell_corner_radius
             || self.last_grid_cell_fade_inset != cell_fade_inset
+            || &self.last_grid_fade_mode != fade_mode_str
             || &self.last_grid_gap_color != gap_color;
 
         if structure_changed {
@@ -653,6 +657,7 @@ impl Output {
             self.last_grid_cell_color = cell_color;
             self.last_grid_cell_corner_radius = cell_corner_radius;
             self.last_grid_cell_fade_inset = cell_fade_inset;
+            self.last_grid_fade_mode = fade_mode_str.clone();
             self.last_grid_gap_color = gap_color.clone();
             self.last_grid_gap_color_rgba = crate::config::parse_hex_color_rgba(&self.last_grid_gap_color);
             self.grid_is_low_res = self.last_grid_zoom != zoom;
@@ -700,7 +705,17 @@ impl Output {
                 let rw = (cell_size * zoom).round() as i32;
                 let rh = (cell_size * zoom).round() as i32;
                 let scaled_corner_radius = (cell_corner_radius as f64 * zoom).round() as i32;
-                let inset_scaled = (cell_fade_inset as f64 * zoom * 1000.0).round() as i32;
+                let fade_mode = match fade_mode_str.as_str() {
+                    "smoothstep" => 1,
+                    "quadratic" => 2,
+                    "cosine" => 3,
+                    _ => 0, // "linear"
+                };
+                let inset_scaled = if cell_fade_inset > 0 {
+                    ((cell_fade_inset as f64 * zoom * 100.0).round() as i32) * 10 + fade_mode
+                } else {
+                    0
+                };
 
                 if rw > 0 && rh > 0 {
                     for col in 0..=cols {

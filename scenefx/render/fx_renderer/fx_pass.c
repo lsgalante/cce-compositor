@@ -690,7 +690,10 @@ void fx_render_pass_add_rounded_rect(struct fx_gles_render_pass *pass,
 
 	struct fx_corner_fradii corners = fx_options->corners;
 	uniform_corner_radii_set(&shader.radius, &corners);
-	glUniform1f(shader.fade_inset, (float)fx_options->fade_inset / 1000.0f);
+	int fade_mode = fx_options->fade_inset % 10;
+	float fade_inset = (float)(fx_options->fade_inset / 10) / 100.0f;
+	glUniform1f(shader.fade_inset, fade_inset);
+	glUniform1i(shader.fade_mode, fade_mode);
 
 	render(&box, &clip_region, renderer->shaders.quad_round.pos_attrib);
 	pixman_region32_fini(&clip_region);

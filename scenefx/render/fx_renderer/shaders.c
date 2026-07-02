@@ -199,6 +199,7 @@ bool link_quad_round_program(struct quad_round_shader *shader) {
 	shader->clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
 	shader->clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
 	shader->fade_inset = glGetUniformLocation(prog, "fade_inset");
+	shader->fade_mode = glGetUniformLocation(prog, "fade_mode");
 
 	return true;
 }

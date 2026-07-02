@@ -80,6 +80,7 @@ struct quad_round_shader {
 	GLint clip_position;
 	struct shader_corner_radii clip_radius;
 	GLint fade_inset;
+	GLint fade_mode;
 };
 
 bool link_quad_round_program(struct quad_round_shader *shader);

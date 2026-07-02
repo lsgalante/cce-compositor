@@ -47,6 +47,7 @@ pub struct Layout {
     pub desktop_gap_width: i32,
     pub desktop_cell_corner_radius: i32,
     pub desktop_cell_fade_inset: i64,
+    pub desktop_grid_fade_mode: String,
     pub desktop_enable_solid_color: bool,
     pub desktop_solid_color: [f32; 4],
     pub scenefx_optimized_blur: bool,
@@ -97,6 +98,7 @@ impl Default for Layout {
             desktop_gap_width: 1,
             desktop_cell_corner_radius: 0,
             desktop_cell_fade_inset: 0,
+            desktop_grid_fade_mode: "linear".to_string(),
             desktop_enable_solid_color: false,
             desktop_solid_color: [0.0, 0.0, 0.0, 1.0],
             scenefx_optimized_blur: true,
@@ -287,6 +289,8 @@ pub struct SurfaceConfig {
     pub desktop_cell_fade_inset: i64,
     #[serde(default = "default_desktop_mode")]
     pub desktop_mode: String,
+    #[serde(default = "default_desktop_grid_fade_mode")]
+    pub desktop_grid_fade_mode: String,
     #[serde(default = "default_desktop_solid_color")]
     pub desktop_solid_color: String,
     #[serde(default = "default_backplate_color")]
@@ -307,6 +311,7 @@ impl Default for SurfaceConfig {
             desktop_cell_corner_radius: default_desktop_cell_corner_radius(),
             desktop_cell_fade_inset: default_desktop_cell_fade_inset(),
             desktop_mode: default_desktop_mode(),
+            desktop_grid_fade_mode: default_desktop_grid_fade_mode(),
             desktop_solid_color: default_desktop_solid_color(),
             backplate_color: default_backplate_color(),
             backplate_blur: default_backplate_blur(),
@@ -341,6 +346,10 @@ fn default_desktop_cell_fade_inset() -> i64 {
 
 fn default_desktop_mode() -> String {
     "solid".to_string()
+}
+
+fn default_desktop_grid_fade_mode() -> String {
+    "linear".to_string()
 }
 
 fn default_desktop_solid_color() -> String {
@@ -1251,6 +1260,11 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.desktop_cell_fade_inset = val;
                                         }
                                     }
+                                    "grid_fade_mode" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surface.desktop_grid_fade_mode = val.to_string();
+                                        }
+                                    }
                                     "mode" => {
                                         if let Some(val) = entry.value().as_string() {
                                             surface.desktop_mode = val.to_string();
@@ -1321,6 +1335,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.desktop_gap_width = get_child_arg_i64(node, "desktop_gap_width", default_desktop_gap_width());
             surface.desktop_cell_corner_radius = get_child_arg_i64(node, "desktop_cell_corner_radius", default_desktop_cell_corner_radius());
             surface.desktop_cell_fade_inset = get_child_arg_i64(node, "desktop_cell_fade_inset", default_desktop_cell_fade_inset());
+            surface.desktop_grid_fade_mode = get_child_arg_string(node, "grid_fade_mode", &default_desktop_grid_fade_mode());
             surface.desktop_mode = get_child_arg_string(node, "desktop_mode", &default_desktop_mode());
             surface.desktop_solid_color = get_child_arg_string(node, "desktop_solid_color", &default_desktop_solid_color());
             surface.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
@@ -1396,6 +1411,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.desktop_gap_width = config.surface.desktop_gap_width as i32;
     state.layout.desktop_cell_corner_radius = config.surface.desktop_cell_corner_radius as i32;
     state.layout.desktop_cell_fade_inset = config.surface.desktop_cell_fade_inset;
+    state.layout.desktop_grid_fade_mode = config.surface.desktop_grid_fade_mode.clone();
     state.layout.desktop_enable_solid_color = enable_solid;
     state.layout.desktop_solid_color = parse_hex_color_rgba(&config.surface.desktop_solid_color);
 
