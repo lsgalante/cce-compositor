@@ -2,6 +2,16 @@ use std::env;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    let program_name = args.get(0)
+        .and_then(|s| std::path::Path::new(s).file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    if program_name == "cce-ctl" {
+        cce_fx::run_cce_ctl(args);
+        return;
+    }
+
     if args.len() > 1 {
         match args[1].as_str() {
             "client" => {

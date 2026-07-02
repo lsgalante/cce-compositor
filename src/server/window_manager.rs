@@ -70,6 +70,8 @@ pub struct SavedState {
     pub desk_zoom: f64,
     pub global_layout: crate::tiling::TilingMode,
     pub windows: Vec<SavedWindowState>,
+    #[serde(default)]
+    pub last_window_states: Vec<SavedWindowState>,
 }
 
 pub struct WindowManager {
@@ -107,6 +109,7 @@ pub struct WindowManager {
     pub input_config: crate::config::InputConfig,
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
     pub restore_queue: Vec<SavedWindowState>,
+    pub last_window_states: Vec<SavedWindowState>,
     pub shutting_down: bool,
     pub target_desk_pan_x: Option<f64>,
     pub target_desk_pan_y: Option<f64>,
@@ -169,6 +172,7 @@ impl WindowManager {
         self.mode = WindowManagerMode::Normal;
         self.global_layout = crate::tiling::TilingMode::Cascade;
         self.restore_queue = Vec::new();
+        self.last_window_states = Vec::new();
         self.shutting_down = false;
         self.layout = crate::config::Layout::default();
         self.output_scale = 1.0;
@@ -234,6 +238,7 @@ impl WindowManager {
                 self.mode = if (state.desk_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
                 self.global_layout = state.global_layout;
                 self.restore_queue = state.windows;
+                self.last_window_states = state.last_window_states;
                 self.has_restored_focused_window = self.restore_queue.iter().any(|w| w.focused);
                 self.restored_focused_window_mapped = false;
                 log::info!(
@@ -249,7 +254,7 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn save_state(&self) {
+    pub unsafe fn save_state(&mut self) {
         if self.shutting_down {
             return;
         }
@@ -261,6 +266,8 @@ impl WindowManager {
         
         let focused_win = self.focused_window();
         let mut saved_wins = Vec::new();
+        let mut last_states = self.last_window_states.clone();
+
         for &w in self.windows.iter() {
             if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                 continue;
@@ -270,6 +277,9 @@ impl WindowManager {
             }
             
             let app_id = (*w).get_app_id_string().unwrap_or_default();
+            if app_id.is_empty() {
+                continue;
+            }
             let title = (*w).get_title_string().unwrap_or_default();
             
             let pid = (*w).unreliable_pid();
@@ -310,9 +320,9 @@ impl WindowManager {
 
             let is_focused = w == focused_win;
 
-            saved_wins.push(SavedWindowState {
-                app_id,
-                title,
+            let win_state = SavedWindowState {
+                app_id: app_id.clone(),
+                title: title.clone(),
                 tiling_mode: (*w).tiling_mode,
                 minimized: (*w).minimized,
                 virtual_x: (*w).virtual_x,
@@ -322,8 +332,17 @@ impl WindowManager {
                 height: (*w).box_geom.height as u32,
                 cmdline,
                 focused: is_focused,
-            });
+            };
+
+            saved_wins.push(win_state.clone());
+
+            if let Some(pos) = last_states.iter().position(|s| s.app_id == app_id) {
+                last_states[pos] = win_state;
+            } else {
+                last_states.push(win_state);
+            }
         }
+        self.last_window_states = last_states;
         
         let state = SavedState {
             desk_pan_x: self.desk_pan_x,
@@ -331,6 +350,7 @@ impl WindowManager {
             desk_zoom: self.desk_zoom,
             global_layout: self.global_layout,
             windows: saved_wins,
+            last_window_states: self.last_window_states.clone(),
         };
         
         if let Ok(json_str) = serde_json::to_string_pretty(&state) {
@@ -366,6 +386,32 @@ impl WindowManager {
         // Third pass: app_id only match
         if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id) {
             return Some(self.restore_queue.remove(pos));
+        }
+        None
+    }
+
+    pub unsafe fn match_last_window_state(&self, app_id: &str, title: &str) -> Option<SavedWindowState> {
+        if app_id.is_empty() {
+            return None;
+        }
+        // First pass: Exact match (app_id AND title)
+        if let Some(w) = self.last_window_states.iter().find(|w| w.app_id == app_id && w.title == title) {
+            return Some(w.clone());
+        }
+        // Second pass: Fuzzy title match
+        if let Some(w) = self.last_window_states.iter().find(|w| {
+            if w.app_id != app_id {
+                return false;
+            }
+            let t1 = title.trim_end_matches('*');
+            let t2 = w.title.trim_end_matches('*');
+            t1 == t2 || t1.starts_with(t2) || t2.starts_with(t1)
+        }) {
+            return Some(w.clone());
+        }
+        // Third pass: app_id only match
+        if let Some(w) = self.last_window_states.iter().find(|w| w.app_id == app_id) {
+            return Some(w.clone());
         }
         None
     }
@@ -3195,4 +3241,57 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
         }
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[allow(invalid_value)]
+    fn test_last_window_state_matching() {
+        let mut wm = unsafe { std::mem::MaybeUninit::<WindowManager>::zeroed().assume_init() };
+        unsafe {
+            std::ptr::write(&mut wm.last_window_states, Vec::new());
+        }
+        
+        wm.last_window_states.push(SavedWindowState {
+            app_id: "test-app".to_string(),
+            title: "My App Window".to_string(),
+            tiling_mode: crate::tiling::TilingMode::Floating,
+            minimized: false,
+            virtual_x: 100.0,
+            virtual_y: 200.0,
+            scale: 1.0,
+            width: 800,
+            height: 600,
+            cmdline: "test-app".to_string(),
+            focused: false,
+        });
+
+        unsafe {
+            // Test exact match
+            let matched = wm.match_last_window_state("test-app", "My App Window");
+            assert!(matched.is_some());
+            let m = matched.unwrap();
+            assert_eq!(m.app_id, "test-app");
+            assert_eq!(m.virtual_x, 100.0);
+            assert_eq!(m.virtual_y, 200.0);
+
+            // Test fuzzy title match
+            let matched_fuzzy = wm.match_last_window_state("test-app", "My App Window*");
+            assert!(matched_fuzzy.is_some());
+
+            // Test app_id only match
+            let matched_appid = wm.match_last_window_state("test-app", "Different Title");
+            assert!(matched_appid.is_some());
+            assert_eq!(matched_appid.unwrap().width, 800);
+
+            // Test no match
+            let no_match = wm.match_last_window_state("other-app", "My App Window");
+            assert!(no_match.is_none());
+        }
+
+        std::mem::forget(wm);
+    }
 }

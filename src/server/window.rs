@@ -650,7 +650,11 @@ impl Window {
             return;
         }
         let title_str = self.get_title_string().unwrap_or_default();
-        if let Some(saved) = (*self.server).wm.match_and_remove_restore_state(&app_id_str, &title_str) {
+        let mut saved_opt = (*self.server).wm.match_and_remove_restore_state(&app_id_str, &title_str);
+        if saved_opt.is_none() {
+            saved_opt = (*self.server).wm.match_last_window_state(&app_id_str, &title_str);
+        }
+        if let Some(saved) = saved_opt {
             log::info!("Restoring saved state for window: app_id={}, title={}. Position: ({}, {}), Size: {}x{}", app_id_str, title_str, saved.virtual_x, saved.virtual_y, saved.width, saved.height);
             self.tiling_mode = saved.tiling_mode;
             self.minimized = saved.minimized;

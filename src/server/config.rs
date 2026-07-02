@@ -1261,6 +1261,11 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.desktop_solid_color = val.to_string();
                                         }
                                     }
+                                    "grid_cell_size" | "desktop_grid_scale" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.desktop_grid_scale = val;
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1312,7 +1317,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "surface") {
             surface.desktop_gap_color = get_child_arg_string(node, "desktop_gap_color", &default_desktop_gap_color());
             surface.desktop_cell_color = get_child_arg_string(node, "desktop_cell_color", &default_desktop_cell_color());
-            surface.desktop_grid_scale = get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale());
+            surface.desktop_grid_scale = get_child_arg_i64(node, "grid_cell_size", get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale()));
             surface.desktop_gap_width = get_child_arg_i64(node, "desktop_gap_width", default_desktop_gap_width());
             surface.desktop_cell_corner_radius = get_child_arg_i64(node, "desktop_cell_corner_radius", default_desktop_cell_corner_radius());
             surface.desktop_cell_fade_inset = get_child_arg_i64(node, "desktop_cell_fade_inset", default_desktop_cell_fade_inset());

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # cce-app-menu — Context menu for CCE application windows
 
-CLEARCTL="/home/lsgalante/.local/bin/cce control"
-CLEAR_CLOUD="/home/lsgalante/.local/bin/clear-cloud"
+CCE_CTL="/home/lsgalante/.local/bin/cce-ctl"
+CLEAR_CLOUD="/home/lsgalante/.local/bin/cce-cloud"
 
 # Default to empty/none
 x_arg=""
@@ -57,7 +57,7 @@ json_layout='{
   ]
 }'
 
-# Spawn clear-cloud with the json layout and coordinates
+# Spawn cce-cloud with the json layout and coordinates
 selected=$(echo "$json_layout" | $CLEAR_CLOUD --json $x_arg $y_arg 2>/dev/null)
 
 [[ -z "$selected" ]] && exit 0
@@ -68,25 +68,25 @@ btn=$(echo "$selected" | python3 -c "import sys, json; print(json.load(sys.stdin
 [[ -z "$btn" ]] && exit 0
 
 # First focus the window so the commands apply to it
-$CLEARCTL focus-window "$window_index"
+$CCE_CTL focus-window "$window_index"
 
 case "$btn" in
     "maximize")
-        $CLEARCTL mode maximized "$app_id"
+        $CCE_CTL mode maximized "$app_id"
         ;;
     "tile_grid")
-        $CLEARCTL mode grid "$app_id"
+        $CCE_CTL mode grid "$app_id"
         ;;
     "float")
-        $CLEARCTL mode floating "$app_id"
+        $CCE_CTL mode floating "$app_id"
         ;;
     "fullscreen")
-        $CLEARCTL mode fullscreen "$app_id"
+        $CCE_CTL mode fullscreen "$app_id"
         ;;
     "minimize")
-        $CLEARCTL minimize
+        $CCE_CTL minimize
         ;;
     "close")
-        $CLEARCTL close
+        $CCE_CTL close
         ;;
 esac

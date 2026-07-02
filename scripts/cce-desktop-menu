@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # cce-desktop-menu — Context menu for CCE desktop background
 
-CLEARCTL="/home/lsgalante/.local/bin/cce control"
-CLEAR_CLOUD="/home/lsgalante/.local/bin/clear-cloud"
+CCE_CTL="/home/lsgalante/.local/bin/cce-ctl"
+CLEAR_CLOUD="/home/lsgalante/.local/bin/cce-cloud"
 
 # Default to empty coordinates if not provided
 x_arg=""
@@ -44,7 +44,7 @@ json_layout='{
   ]
 }'
 
-# Spawn clear-cloud with the json layout and coordinates
+# Spawn cce-cloud with the json layout and coordinates
 selected=$(echo "$json_layout" | $CLEAR_CLOUD --json $x_arg $y_arg 2>/dev/null)
 
 [[ -z "$selected" ]] && exit 0
@@ -74,12 +74,12 @@ case "$btn" in
         /home/lsgalante/.local/bin/cce-system-settings &
         ;;
     "expose")
-        $CLEARCTL expose
+        $CCE_CTL expose
         ;;
     "reload")
-        $CLEARCTL reload
+        $CCE_CTL reload
         ;;
     "exit")
-        $CLEARCTL exit
+        $CCE_CTL exit
         ;;
 esac
