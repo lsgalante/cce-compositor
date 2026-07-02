@@ -248,6 +248,7 @@ impl OutputManager {
                         if !output.grid_tree.is_null() {
                             ffi::wlr_scene_node_destroy(output.grid_tree as *mut ffi::wlr_scene_node);
                             output.grid_tree = std::ptr::null_mut();
+                            output.grid_rect_pool.clear();
                         }
                     }
                     OutputStateValue::Destroying => unreachable!(),
