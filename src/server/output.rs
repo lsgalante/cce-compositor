@@ -688,13 +688,13 @@ impl Output {
 
             // 1. Draw base/background rect using the gap color.
             // Sized larger by one period to prevent flickering at edges during pan shifts.
-            let bg_w = viewport_w + period_pixels.ceil() as i32;
-            let bg_h = viewport_h + period_pixels.ceil() as i32;
+            let bg_w = viewport_w + period_pixels_i;
+            let bg_h = viewport_h + period_pixels_i;
             get_rect(bg_w, bg_h, self.last_grid_gap_color_rgba.as_ptr(), 0, 0, 0, 0);
 
             // 2. Draw grid cells.
-            let cols = (viewport_w as f64 / period_pixels).ceil() as i32 + 1;
-            let rows = (viewport_h as f64 / period_pixels).ceil() as i32 + 1;
+            let cols = (viewport_w as f64 / period_pixels_i as f64).ceil() as i32 + 1;
+            let rows = (viewport_h as f64 / period_pixels_i as f64).ceil() as i32 + 1;
 
             if density_fade > 0.0 && cols > 0 && rows > 0 && cols <= 1000 && rows <= 1000 && cols * rows <= 20000 {
                 let rw = (cell_size * zoom).round() as i32;
@@ -704,9 +704,9 @@ impl Output {
 
                 if rw > 0 && rh > 0 {
                     for col in 0..=cols {
-                        let rel_x = (col as f64 * period_pixels).round() as i32;
+                        let rel_x = col * period_pixels_i;
                         for row in 0..=rows {
-                            let rel_y = (row as f64 * period_pixels).round() as i32;
+                            let rel_y = row * period_pixels_i;
                             get_rect(rw, rh, cell_color.as_ptr(), rel_x, rel_y, scaled_corner_radius, inset_scaled);
                         }
                     }
