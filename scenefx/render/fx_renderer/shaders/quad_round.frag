@@ -65,17 +65,27 @@ void main() {
 
 	vec4 final_color = v_color;
 	if (fade_inset > 0.0) {
-		float inside_dist = 0.5 - dist;
-		float factor = clamp(inside_dist / fade_inset, 0.0, 1.0);
-		float fade_factor = factor;
+		// Calculate distance to closest vertical and horizontal edges
+		float dist_x = min(relative_pos.x + 0.5, size.x - 0.5 - relative_pos.x);
+		float dist_y = min(relative_pos.y + 0.5, size.y - 0.5 - relative_pos.y);
+
+		// Clamp to [0, fade_inset] and normalize
+		float factor_x = clamp(dist_x / fade_inset, 0.0, 1.0);
+		float factor_y = clamp(dist_y / fade_inset, 0.0, 1.0);
+
+		// Apply fade mode to components individually for best S-curve transition
 		if (fade_mode == 1) {
-			fade_factor = smoothstep(0.0, 1.0, factor);
+			factor_x = smoothstep(0.0, 1.0, factor_x);
+			factor_y = smoothstep(0.0, 1.0, factor_y);
 		} else if (fade_mode == 2) {
-			fade_factor = factor * factor;
+			factor_x = factor_x * factor_x;
+			factor_y = factor_y * factor_y;
 		} else if (fade_mode == 3) {
-			fade_factor = 0.5 - 0.5 * cos(factor * 3.14159265);
+			factor_x = 0.5 - 0.5 * cos(factor_x * 3.14159265);
+			factor_y = 0.5 - 0.5 * cos(factor_y * 3.14159265);
 		}
-		final_color *= fade_factor;
+
+		final_color *= factor_x * factor_y;
 	}
 
 	gl_FragColor = final_color * quad_corner_alpha * clip_corner_alpha;
