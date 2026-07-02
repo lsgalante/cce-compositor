@@ -625,18 +625,22 @@ impl Output {
         }
 
         // Modulo shift calculations for virtual grid infinite scrolling.
-        let shift_x = -((wm.desk_pan_x * zoom).rem_euclid(period_pixels));
-        let shift_y = -((wm.desk_pan_y * zoom).rem_euclid(period_pixels));
+        // Use .floor() to match window coordinates truncation direction.
+        let origin_x = ((-wm.desk_pan_x) * zoom).floor() as i32;
+        let origin_y = ((-wm.desk_pan_y) * zoom).floor() as i32;
 
-        let dest_x = self.sent.x + shift_x.round() as i32;
-        let dest_y = self.sent.y + shift_y.round() as i32;
+        let period_pixels_i = period_pixels.round() as i32;
+        if period_pixels_i > 0 {
+            let dest_x = self.sent.x + origin_x.rem_euclid(period_pixels_i) - period_pixels_i;
+            let dest_y = self.sent.y + origin_y.rem_euclid(period_pixels_i) - period_pixels_i;
 
-        // Apply shift translation to root grid tree node.
-        ffi::river_scene_node_set_position_if_changed(
-            self.grid_tree as *mut ffi::wlr_scene_node,
-            dest_x,
-            dest_y,
-        );
+            // Apply shift translation to root grid tree node.
+            ffi::river_scene_node_set_position_if_changed(
+                self.grid_tree as *mut ffi::wlr_scene_node,
+                dest_x,
+                dest_y,
+            );
+        }
 
         if self.grid_force_redraw_frames > 0 {
             self.grid_force_redraw_frames -= 1;
