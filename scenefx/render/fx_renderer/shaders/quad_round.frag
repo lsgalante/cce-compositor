@@ -32,10 +32,10 @@ void main() {
 		discard;
 	} */
 
-	float r_tl = radius_top_left > 0.0 ? radius_top_left + fade_inset : 0.0;
-	float r_tr = radius_top_right > 0.0 ? radius_top_right + fade_inset : 0.0;
-	float r_bl = radius_bottom_left > 0.0 ? radius_bottom_left + fade_inset : 0.0;
-	float r_br = radius_bottom_right > 0.0 ? radius_bottom_right + fade_inset : 0.0;
+	float r_tl = radius_top_left;
+	float r_tr = radius_top_right;
+	float r_bl = radius_bottom_left;
+	float r_br = radius_bottom_right;
 
 	// Calculate corner distance
 	vec2 top_left = abs(relative_pos - (size - 1.0)) - (size - 1.0) + r_tl;
