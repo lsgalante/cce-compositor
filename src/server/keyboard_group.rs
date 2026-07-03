@@ -452,7 +452,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
                     let wlr_layer_surface = crate::ffi::wlr_layer_surface_v1_try_from_wlr_surface(focused_layer);
                     if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
                         let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-                        ns == "cce-cloud"
+                        ns.starts_with("cce-cloud")
                     } else {
                         false
                     }

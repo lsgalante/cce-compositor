@@ -304,6 +304,7 @@ pub struct LayerSurface {
     pub unmap: ffi::wl_listener,
     pub commit: ffi::wl_listener,
     pub new_popup: ffi::wl_listener,
+    pub parent_offset_applied: bool,
 }
 
 impl LayerSurface {
@@ -336,6 +337,7 @@ impl LayerSurface {
             unmap: std::mem::zeroed(),
             commit: std::mem::zeroed(),
             new_popup: std::mem::zeroed(),
+            parent_offset_applied: false,
         }));
 
         let key = (*server).layer_shell.surfaces.put(layer_surface);
@@ -550,7 +552,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                     let mut is_cce_cloud = false;
                     if !(*wlr_layer_surface).namespace.is_null() {
                         let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-                        if ns == "cce-cloud" {
+                        if ns.starts_with("cce-cloud") {
                             is_cce_cloud = true;
                         }
                     }
@@ -636,6 +638,54 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
     }
 
     let server = (*layer_surface).server;
+
+    // Position offset for cce-cloud sub-modules
+    if !(*layer_surface).parent_offset_applied {
+        if !(*wlr_layer_surface).namespace.is_null() {
+            let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
+            if ns.starts_with("cce-cloud:") {
+                let parent_app_id = &ns["cce-cloud:".len()..];
+                let mut parent_x = None;
+                let mut parent_y = None;
+                let mut parent_w = 0;
+                for &win_ptr in (*server).wm.windows.iter() {
+                    if win_ptr.is_null() || (*win_ptr).closed {
+                        continue;
+                    }
+                    if let Some(win_app_id) = (*win_ptr).get_app_id_string() {
+                        if win_app_id == parent_app_id {
+                            parent_x = Some((*win_ptr).rendering_requested.x);
+                            parent_y = Some((*win_ptr).rendering_requested.y);
+                            parent_w = (*win_ptr).box_geom.width;
+                            break;
+                        }
+                    }
+                }
+
+                if let (Some(px), Some(py)) = (parent_x, parent_y) {
+                    let wlr_box = (*output).sent.box_layout();
+                    let output_x = wlr_box.x;
+                    let output_y = wlr_box.y;
+                    let output_w = wlr_box.width;
+
+                    let relative_parent_x = px - output_x;
+                    let relative_parent_y = py - output_y;
+
+                    let anchor = (*wlr_layer_surface).current.anchor;
+                    let is_align_right = (anchor & ffi::zwlr_layer_surface_v1_anchor_ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) != 0;
+
+                    if is_align_right {
+                        (*wlr_layer_surface).current.margin.right = (output_w - relative_parent_x - parent_w) + (*wlr_layer_surface).current.margin.right;
+                    } else {
+                        (*wlr_layer_surface).current.margin.left = relative_parent_x + (*wlr_layer_surface).current.margin.left;
+                    }
+                    (*wlr_layer_surface).current.margin.top = relative_parent_y + (*wlr_layer_surface).current.margin.top;
+
+                    (*layer_surface).parent_offset_applied = true;
+                }
+            }
+        }
+    }
 
     // Check if layer was changed
     if (*wlr_layer_surface).current.committed & ffi::wlr_layer_surface_v1_state_field_WLR_LAYER_SURFACE_V1_STATE_LAYER != 0 {

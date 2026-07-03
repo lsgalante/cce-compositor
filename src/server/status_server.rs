@@ -252,7 +252,7 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
             let wlr_layer_surface = crate::ffi::wlr_layer_surface_v1_try_from_wlr_surface(focused_layer);
             if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
                 let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-                if ns == "cce-cloud" {
+                if ns.starts_with("cce-cloud") {
                     is_cce_cloud = true;
                 }
             }

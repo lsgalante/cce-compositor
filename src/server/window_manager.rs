@@ -1003,7 +1003,7 @@ impl WindowManager {
         if app_id.as_deref() == Some("cce-notifier") || app_id.as_deref() == Some("cce-notification-daemon") || app_id.as_deref() == Some("clear-notification-daemon") {
             return crate::tiling::TilingMode::Popup;
         }
-        if app_id.as_deref() == Some("cce-cloud") {
+        if app_id.as_deref().map_or(false, |id| id.starts_with("cce-cloud")) {
             return crate::tiling::TilingMode::Overlay;
         }
 
