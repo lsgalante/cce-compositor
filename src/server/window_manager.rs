@@ -2855,6 +2855,24 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     "error: invalid x or y\n".to_string()
                 }
             }
+            "keypress" | "key-press" => {
+                if parts.len() < 2 { return "error: usage: keypress <keycode>\n".to_string(); }
+                if let Ok(keycode) = parts[1].parse::<u32>() {
+                    let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+                    let mut curr_seat = (*seats_list).next;
+                    while curr_seat != seats_list {
+                        let next_seat = (*curr_seat).next;
+                        let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+                        let time = crate::util::msec_timestamp();
+                        ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
+                        ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time + 1, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);
+                        curr_seat = next_seat;
+                    }
+                    "ok\n".to_string()
+                } else {
+                    "error: invalid keycode\n".to_string()
+                }
+            }
             _ => format!("error: unknown command: {}\n", action),
         }
     }
