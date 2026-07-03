@@ -1069,9 +1069,12 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 let win = op.window_ptr;
                 let mut closest_edge = crate::window::StatusEdge::Top;
                 let mut min_dist = f64::MAX;
+                let app_id = (*win).get_app_id_string().unwrap_or_default();
+                log::info!("[StatusRelease] Released status window: app_id={}, lx={}, ly={}", app_id, lx, ly);
                 
                 let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
                 let mut curr_out = (*outputs_list).next;
+                let mut found_out = false;
                 while curr_out != outputs_list {
                     let output = crate::container_of!(curr_out, crate::output::Output, link);
                     if (*output).sent.state == crate::output::OutputStateValue::Enabled {
@@ -1081,22 +1084,55 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         let ow = wlr_box.width as f64;
                         let oh = wlr_box.height as f64;
                         
+                        log::info!("[StatusRelease] Checking output: box_geom=({}, {}, {}, {})", ox, oy, ow, oh);
                         if lx >= ox && lx <= ox + ow && ly >= oy && ly <= oy + oh {
+                            found_out = true;
                             let dt = ly - oy;
                             let db = (oy + oh) - ly;
                             let dl = lx - ox;
                             let dr = (ox + ow) - lx;
                             
-                            if dt < min_dist { min_dist = dt; closest_edge = crate::window::StatusEdge::Top; }
-                            if db < min_dist { min_dist = db; closest_edge = crate::window::StatusEdge::Bottom; }
-                            if dl < min_dist { min_dist = dl; closest_edge = crate::window::StatusEdge::Left; }
-                            if dr < min_dist { min_dist = dr; closest_edge = crate::window::StatusEdge::Right; }
+                            log::info!("[StatusRelease] Distances: top={}, bottom={}, left={}, right={}", dt, db, dl, dr);
+                            enum EdgeBasic { Top, Bottom, Left, Right }
+                            let mut edge = EdgeBasic::Top;
+                            if dt < min_dist { min_dist = dt; edge = EdgeBasic::Top; }
+                            if db < min_dist { min_dist = db; edge = EdgeBasic::Bottom; }
+                            if dl < min_dist { min_dist = dl; edge = EdgeBasic::Left; }
+                            if dr < min_dist { min_dist = dr; edge = EdgeBasic::Right; }
+
+                            match edge {
+                                EdgeBasic::Top => {
+                                    if lx < ox + ow / 3.0 {
+                                        closest_edge = crate::window::StatusEdge::TopLeft;
+                                    } else if lx > ox + 2.0 * ow / 3.0 {
+                                        closest_edge = crate::window::StatusEdge::TopRight;
+                                    } else {
+                                        closest_edge = crate::window::StatusEdge::TopCenter;
+                                    }
+                                }
+                                EdgeBasic::Bottom => {
+                                    if lx < ox + ow / 3.0 {
+                                        closest_edge = crate::window::StatusEdge::BottomLeft;
+                                    } else if lx > ox + 2.0 * ow / 3.0 {
+                                        closest_edge = crate::window::StatusEdge::BottomRight;
+                                    } else {
+                                        closest_edge = crate::window::StatusEdge::BottomCenter;
+                                    }
+                                }
+                                EdgeBasic::Left => {
+                                    closest_edge = crate::window::StatusEdge::Left;
+                                }
+                                EdgeBasic::Right => {
+                                    closest_edge = crate::window::StatusEdge::Right;
+                                }
+                            }
                             break;
                         }
                     }
                     curr_out = (*curr_out).next;
                 }
                 
+                log::info!("[StatusRelease] Snapping app_id={} closest_edge={:?}, found_out={}", app_id, closest_edge, found_out);
                 (*win).status_edge = closest_edge;
                 seat.op_end();
                 cursor.pressed.remove(&(*event).button);

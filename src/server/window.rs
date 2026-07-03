@@ -265,6 +265,12 @@ pub struct Window {
 pub enum StatusEdge {
     Top,
     Bottom,
+    TopLeft,
+    TopCenter,
+    TopRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
     Left,
     Right,
 }

@@ -1172,18 +1172,49 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let mut has_left = false;
             let mut has_right = false;
 
+            let resolve_edge = |win_ptr: *mut Window| {
+                let edge = (*win_ptr).status_edge;
+                if edge == crate::window::StatusEdge::Top {
+                    if let Some(app_id) = (*win_ptr).get_app_id_string() {
+                        if app_id.contains("viewport") {
+                            crate::window::StatusEdge::TopLeft
+                        } else if app_id.contains("window") {
+                            crate::window::StatusEdge::TopCenter
+                        } else {
+                            crate::window::StatusEdge::TopRight
+                        }
+                    } else {
+                        crate::window::StatusEdge::TopLeft
+                    }
+                } else if edge == crate::window::StatusEdge::Bottom {
+                    if let Some(app_id) = (*win_ptr).get_app_id_string() {
+                        if app_id.contains("viewport") {
+                            crate::window::StatusEdge::BottomLeft
+                        } else if app_id.contains("window") {
+                            crate::window::StatusEdge::BottomCenter
+                        } else {
+                            crate::window::StatusEdge::BottomRight
+                        }
+                    } else {
+                        crate::window::StatusEdge::BottomLeft
+                    }
+                } else {
+                    edge
+                }
+            };
+
             for &win_ptr in self.windows.iter() {
                 if win_ptr.is_null() || (*win_ptr).closed {
                     continue;
                 }
                 if (*win_ptr).is_status_bar() {
-                    match (*win_ptr).status_edge {
-                        crate::window::StatusEdge::Top => {
+                    match resolve_edge(win_ptr) {
+                        crate::window::StatusEdge::Top | crate::window::StatusEdge::TopLeft | crate::window::StatusEdge::TopCenter | crate::window::StatusEdge::TopRight => {
                             if !self.status_hide_mode {
                                 has_top = true;
                             }
                         }
-                        crate::window::StatusEdge::Bottom => {
+                        crate::window::StatusEdge::Bottom | crate::window::StatusEdge::BottomLeft | crate::window::StatusEdge::BottomCenter | crate::window::StatusEdge::BottomRight => {
                             has_bottom = true;
                         }
                         crate::window::StatusEdge::Left => {
@@ -1601,10 +1632,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let bar_h = self.layout.bar_height as u32;
             let spacing = 12;
             let margin = 12;
-
             let mut top_left = Vec::new();
+            let mut top_center = Vec::new();
             let mut top_right = Vec::new();
             let mut bottom_left = Vec::new();
+            let mut bottom_center = Vec::new();
             let mut bottom_right = Vec::new();
             let mut left_side = Vec::new();
             let mut right_side = Vec::new();
@@ -1637,22 +1669,25 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                             continue;
                         }
 
-                        match (*win_ptr).status_edge {
-                            crate::window::StatusEdge::Top => {
-                                if app_id.starts_with("cce-status-left-") {
-                                    top_left.push(win_ptr);
-                                } else if app_id.starts_with("cce-status-right-") {
-                                    top_right.push(win_ptr);
-                                } else {
-                                    full_top.push(win_ptr);
-                                }
+                        let edge = resolve_edge(win_ptr);
+                        match edge {
+                            crate::window::StatusEdge::TopLeft => {
+                                top_left.push(win_ptr);
                             }
-                            crate::window::StatusEdge::Bottom => {
-                                if app_id.starts_with("cce-status-left-") {
-                                    bottom_left.push(win_ptr);
-                                } else {
-                                    bottom_right.push(win_ptr);
-                                }
+                            crate::window::StatusEdge::TopCenter => {
+                                top_center.push(win_ptr);
+                            }
+                            crate::window::StatusEdge::TopRight => {
+                                top_right.push(win_ptr);
+                            }
+                            crate::window::StatusEdge::BottomLeft => {
+                                bottom_left.push(win_ptr);
+                            }
+                            crate::window::StatusEdge::BottomCenter => {
+                                bottom_center.push(win_ptr);
+                            }
+                            crate::window::StatusEdge::BottomRight => {
+                                bottom_right.push(win_ptr);
                             }
                             crate::window::StatusEdge::Left => {
                                 left_side.push(win_ptr);
@@ -1660,10 +1695,16 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                             crate::window::StatusEdge::Right => {
                                 right_side.push(win_ptr);
                             }
+                            _ => {
+                                full_top.push(win_ptr);
+                            }
                         }
+                        log::info!("[ArrangeStatus] app_id={} status_edge={:?}", app_id, (*win_ptr).status_edge);
                     }
                 }
             }
+
+            log::info!("[ArrangeStatus] top_left_len={}, top_center_len={}, top_right_len={}, left_side_len={}", top_left.len(), top_center.len(), top_right.len(), left_side.len());
 
             const LEFT_ORDER: &[&str] = &["viewport", "window"];
             const RIGHT_ORDER: &[&str] = &["tray", "cpu", "memory", "brightness", "volume", "battery", "clock"];
@@ -1685,8 +1726,10 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             };
 
             sort_left(&mut top_left);
+            sort_left(&mut top_center);
             sort_right(&mut top_right);
             sort_left(&mut bottom_left);
+            sort_left(&mut bottom_center);
             sort_right(&mut bottom_right);
 
             // 1. Top Edge
@@ -1705,14 +1748,17 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             }
             let top_right_boundary = wlr_box.x + wlr_box.width - margin - top_right_width_needed;
 
+            // 1a. Left Group (TopLeft / nw)
             let mut cur_left_x = wlr_box.x + margin;
-            for win_ptr in top_left {
+            for &win_ptr in &top_left {
                 let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
                 let mut w = if prev_len > 0 { prev_len as u32 } else { 100 };
                 let max_allowed_w = top_right_boundary - cur_left_x - spacing;
                 if w as i32 > max_allowed_w {
                     w = std::cmp::max(max_allowed_w, 20) as u32;
                 }
+                let app_id = (*win_ptr).get_app_id_string().unwrap_or_default();
+                log::info!("[TopLeftLayout] app_id={} x={}, w={}", app_id, cur_left_x, w);
                 (*win_ptr).rendering_requested.x = cur_left_x;
                 (*win_ptr).rendering_requested.y = status_y_top;
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
@@ -1720,6 +1766,36 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 cur_left_x += w as i32 + spacing;
             }
 
+            // 1b. Center Group (TopCenter / n)
+            let mut top_center_width_needed = 0;
+            for &win_ptr in &top_center {
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
+                top_center_width_needed += w as i32 + spacing;
+            }
+            if top_center_width_needed > 0 {
+                top_center_width_needed -= spacing;
+            }
+            let center_start_x = wlr_box.x + (wlr_box.width - top_center_width_needed) / 2;
+            let mut cur_center_x = std::cmp::max(center_start_x, cur_left_x + spacing);
+
+            for &win_ptr in &top_center {
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let mut w = if prev_len > 0 { prev_len as u32 } else { 100 };
+                let max_allowed_w = top_right_boundary - cur_center_x - spacing;
+                if w as i32 > max_allowed_w {
+                    w = std::cmp::max(max_allowed_w, 20) as u32;
+                }
+                let app_id = (*win_ptr).get_app_id_string().unwrap_or_default();
+                log::info!("[TopCenterLayout] app_id={} x={}, w={}", app_id, cur_center_x, w);
+                (*win_ptr).rendering_requested.x = cur_center_x;
+                (*win_ptr).rendering_requested.y = status_y_top;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
+                cur_center_x += w as i32 + spacing;
+            }
+
+            // 1c. Right Group (TopRight / ne)
             let mut cur_right_x = wlr_box.x + wlr_box.width - margin;
             for win_ptr in top_right.into_iter().rev() {
                 let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
@@ -1750,8 +1826,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             }
             let bottom_right_boundary = wlr_box.x + wlr_box.width - margin - bottom_right_width_needed;
 
+            // 2a. Left Group (BottomLeft / sw)
             let mut cur_left_x = wlr_box.x + margin;
-            for win_ptr in bottom_left {
+            for &win_ptr in &bottom_left {
                 let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
                 let mut w = if prev_len > 0 { prev_len as u32 } else { 100 };
                 let max_allowed_w = bottom_right_boundary - cur_left_x - spacing;
@@ -1765,6 +1842,34 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 cur_left_x += w as i32 + spacing;
             }
 
+            // 2b. Center Group (BottomCenter / s)
+            let mut bottom_center_width_needed = 0;
+            for &win_ptr in &bottom_center {
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
+                bottom_center_width_needed += w as i32 + spacing;
+            }
+            if bottom_center_width_needed > 0 {
+                bottom_center_width_needed -= spacing;
+            }
+            let center_start_x = wlr_box.x + (wlr_box.width - bottom_center_width_needed) / 2;
+            let mut cur_center_x = std::cmp::max(center_start_x, cur_left_x + spacing);
+
+            for &win_ptr in &bottom_center {
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let mut w = if prev_len > 0 { prev_len as u32 } else { 100 };
+                let max_allowed_w = bottom_right_boundary - cur_center_x - spacing;
+                if w as i32 > max_allowed_w {
+                    w = std::cmp::max(max_allowed_w, 20) as u32;
+                }
+                (*win_ptr).rendering_requested.x = cur_center_x;
+                (*win_ptr).rendering_requested.y = status_y_bottom;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
+                cur_center_x += w as i32 + spacing;
+            }
+
+            // 2c. Right Group (BottomRight / se)
             let mut cur_right_x = wlr_box.x + wlr_box.width - margin;
             for win_ptr in bottom_right.into_iter().rev() {
                 let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
