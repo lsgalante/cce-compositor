@@ -240,7 +240,7 @@ impl OutputManager {
                         }
 
                         if output.adjust_tree.is_null() {
-                            output.adjust_tree = ffi::wlr_scene_tree_create((*server).scene.layers.overlay);
+                            output.adjust_tree = ffi::wlr_scene_tree_create((*server).scene.layers.top);
                         }
                         if !output.adjust_tree.is_null() {
                             ffi::wlr_scene_node_set_position(

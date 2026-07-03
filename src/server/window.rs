@@ -263,8 +263,7 @@ pub struct Window {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusEdge {
-    Top,
-    Bottom,
+    Unspecified,
     TopLeft,
     TopCenter,
     TopRight,
@@ -482,7 +481,7 @@ impl Window {
             foreign_toplevel_handle: std::ptr::null_mut(),
             wlr_toplevel_handle: std::ptr::null_mut(),
             csd_buffer_size_bug: false,
-            status_edge: StatusEdge::Top,
+            status_edge: StatusEdge::Unspecified,
         });
 
         ffi::wl_list_init(&mut window.decorations_below);
@@ -740,6 +739,50 @@ impl Window {
 
         if is_status_bar || is_wallpaper {
             self.tiling_mode = crate::tiling::TilingMode::Status;
+            if is_status_bar && self.status_edge == StatusEdge::Unspecified {
+                let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
+                let name = if let Some(stripped) = app_id.strip_prefix("cce-status-left-") {
+                    stripped
+                } else if let Some(stripped) = app_id.strip_prefix("cce-status-right-") {
+                    stripped
+                } else {
+                    &app_id
+                };
+                let mut loaded_edge = None;
+                if let Ok(content) = std::fs::read_to_string(cce_ui::config::get_config_path()) {
+                    let val = cce_ui::config::parse_kdl_to_json(&content);
+                    if let Some(layout_obj) = val.get("layout") {
+                        if let Some(status_bar_obj) = layout_obj.get("status_bar") {
+                            if let Some(edge_val) = status_bar_obj.get(name) {
+                                if let Some(edge_str) = edge_val.as_str() {
+                                    loaded_edge = match edge_str.to_lowercase().as_str() {
+                                        "left" => Some(StatusEdge::Left),
+                                        "right" => Some(StatusEdge::Right),
+                                        "top-left" => Some(StatusEdge::TopLeft),
+                                        "top-center" => Some(StatusEdge::TopCenter),
+                                        "top-right" => Some(StatusEdge::TopRight),
+                                        "bottom-left" => Some(StatusEdge::BottomLeft),
+                                        "bottom-center" => Some(StatusEdge::BottomCenter),
+                                        "bottom-right" => Some(StatusEdge::BottomRight),
+                                        _ => None,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+                self.status_edge = if let Some(edge) = loaded_edge {
+                    edge
+                } else {
+                    if app_id.contains("viewport") {
+                        StatusEdge::TopLeft
+                    } else if app_id.contains("window") {
+                        StatusEdge::TopCenter
+                    } else {
+                        StatusEdge::TopRight
+                    }
+                };
+            }
         } else {
             let mut should_focus = true;
             if self.restored {

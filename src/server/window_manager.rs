@@ -1175,30 +1175,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
             let resolve_edge = |win_ptr: *mut Window| {
                 let edge = (*win_ptr).status_edge;
-                if edge == crate::window::StatusEdge::Top {
-                    if let Some(app_id) = (*win_ptr).get_app_id_string() {
-                        if app_id.contains("viewport") {
-                            crate::window::StatusEdge::TopLeft
-                        } else if app_id.contains("window") {
-                            crate::window::StatusEdge::TopCenter
-                        } else {
-                            crate::window::StatusEdge::TopRight
-                        }
-                    } else {
-                        crate::window::StatusEdge::TopLeft
-                    }
-                } else if edge == crate::window::StatusEdge::Bottom {
-                    if let Some(app_id) = (*win_ptr).get_app_id_string() {
-                        if app_id.contains("viewport") {
-                            crate::window::StatusEdge::BottomLeft
-                        } else if app_id.contains("window") {
-                            crate::window::StatusEdge::BottomCenter
-                        } else {
-                            crate::window::StatusEdge::BottomRight
-                        }
-                    } else {
-                        crate::window::StatusEdge::BottomLeft
-                    }
+                if edge == crate::window::StatusEdge::Unspecified {
+                    crate::window::StatusEdge::TopLeft
                 } else {
                     edge
                 }
@@ -1210,12 +1188,12 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 }
                 if (*win_ptr).is_status_bar() {
                     match resolve_edge(win_ptr) {
-                        crate::window::StatusEdge::Top | crate::window::StatusEdge::TopLeft | crate::window::StatusEdge::TopCenter | crate::window::StatusEdge::TopRight => {
+                        crate::window::StatusEdge::Unspecified | crate::window::StatusEdge::TopLeft | crate::window::StatusEdge::TopCenter | crate::window::StatusEdge::TopRight => {
                             if !self.status_hide_mode {
                                 has_top = true;
                             }
                         }
-                        crate::window::StatusEdge::Bottom | crate::window::StatusEdge::BottomLeft | crate::window::StatusEdge::BottomCenter | crate::window::StatusEdge::BottomRight => {
+                        crate::window::StatusEdge::BottomLeft | crate::window::StatusEdge::BottomCenter | crate::window::StatusEdge::BottomRight => {
                             has_bottom = true;
                         }
                         crate::window::StatusEdge::Left => {
@@ -1884,7 +1862,17 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             }
 
             // 3. Left Edge (Vertical stacking)
-            let mut cur_left_y = wlr_box.y + margin;
+            let mut left_total_height = 0;
+            for &win_ptr in &left_side {
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let actual_h = if prev_len > 0 { prev_len as u32 } else { 100 };
+                left_total_height += actual_h as i32;
+            }
+            if !left_side.is_empty() {
+                left_total_height += (left_side.len() as i32 - 1) * spacing;
+            }
+            let mut cur_left_y = wlr_box.y + (wlr_box.height - left_total_height) / 2;
+
             for win_ptr in left_side {
                 let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
                 let actual_h = if prev_len > 0 { prev_len as u32 } else { 100 };
@@ -1896,7 +1884,17 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             }
 
             // 4. Right Edge (Vertical stacking)
-            let mut cur_right_y = wlr_box.y + margin;
+            let mut right_total_height = 0;
+            for &win_ptr in &right_side {
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let actual_h = if prev_len > 0 { prev_len as u32 } else { 100 };
+                right_total_height += actual_h as i32;
+            }
+            if !right_side.is_empty() {
+                right_total_height += (right_side.len() as i32 - 1) * spacing;
+            }
+            let mut cur_right_y = wlr_box.y + (wlr_box.height - right_total_height) / 2;
+
             for win_ptr in right_side {
                 let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
                 let actual_h = if prev_len > 0 { prev_len as u32 } else { 100 };
@@ -1905,6 +1903,15 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: bar_h, height: actual_h });
                 (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: bar_h, height: actual_h };
                 cur_right_y += actual_h as i32 + spacing;
+            }
+
+            // Force configure for all status bar windows on this output so they receive the new geometry immediately
+            for &win_ptr in self.windows.iter() {
+                if !win_ptr.is_null() && !(*win_ptr).closed && (*win_ptr).is_status_bar() {
+                    if (*win_ptr).wm_requested.dimensions.is_some() {
+                        (*win_ptr).manage_finish();
+                    }
+                }
             }
         }
         // If the focused window is no longer visible, refocus

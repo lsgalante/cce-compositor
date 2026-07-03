@@ -585,7 +585,7 @@ impl Output {
 
         // Enable the overlay tree.
         ffi::wlr_scene_node_set_enabled(self.adjust_tree as *mut ffi::wlr_scene_node, true);
-        ffi::wlr_scene_node_raise_to_top(self.adjust_tree as *mut ffi::wlr_scene_node);
+        ffi::wlr_scene_node_lower_to_bottom(self.adjust_tree as *mut ffi::wlr_scene_node);
 
         let (viewport_w, viewport_h) = self.current.dimensions();
         let w = viewport_w;

@@ -1067,14 +1067,16 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
 
             if (*(*seat).server).wm.adjust_position_mode && !op.window_ptr.is_null() && (*op.window_ptr).is_status_bar() && (*event).button == 0x110 {
                 let win = op.window_ptr;
-                let mut closest_edge = crate::window::StatusEdge::Top;
+                let mut closest_edge = crate::window::StatusEdge::TopLeft;
                 let mut min_dist = f64::MAX;
                 let app_id = (*win).get_app_id_string().unwrap_or_default();
                 log::info!("[StatusRelease] Released status window: app_id={}, lx={}, ly={}", app_id, lx, ly);
                 
                 let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
                 let mut curr_out = (*outputs_list).next;
-                let mut found_out = false;
+                let mut best_output: *mut crate::output::Output = std::ptr::null_mut();
+                let mut min_output_dist = f64::MAX;
+                
                 while curr_out != outputs_list {
                     let output = crate::container_of!(curr_out, crate::output::Output, link);
                     if (*output).sent.state == crate::output::OutputStateValue::Enabled {
@@ -1084,56 +1086,145 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         let ow = wlr_box.width as f64;
                         let oh = wlr_box.height as f64;
                         
-                        log::info!("[StatusRelease] Checking output: box_geom=({}, {}, {}, {})", ox, oy, ow, oh);
-                        if lx >= ox && lx <= ox + ow && ly >= oy && ly <= oy + oh {
-                            found_out = true;
-                            let dt = ly - oy;
-                            let db = (oy + oh) - ly;
-                            let dl = lx - ox;
-                            let dr = (ox + ow) - lx;
-                            
-                            log::info!("[StatusRelease] Distances: top={}, bottom={}, left={}, right={}", dt, db, dl, dr);
-                            enum EdgeBasic { Top, Bottom, Left, Right }
-                            let mut edge = EdgeBasic::Top;
-                            if dt < min_dist { min_dist = dt; edge = EdgeBasic::Top; }
-                            if db < min_dist { min_dist = db; edge = EdgeBasic::Bottom; }
-                            if dl < min_dist { min_dist = dl; edge = EdgeBasic::Left; }
-                            if dr < min_dist { min_dist = dr; edge = EdgeBasic::Right; }
-
-                            match edge {
-                                EdgeBasic::Top => {
-                                    if lx < ox + ow / 3.0 {
-                                        closest_edge = crate::window::StatusEdge::TopLeft;
-                                    } else if lx > ox + 2.0 * ow / 3.0 {
-                                        closest_edge = crate::window::StatusEdge::TopRight;
-                                    } else {
-                                        closest_edge = crate::window::StatusEdge::TopCenter;
-                                    }
-                                }
-                                EdgeBasic::Bottom => {
-                                    if lx < ox + ow / 3.0 {
-                                        closest_edge = crate::window::StatusEdge::BottomLeft;
-                                    } else if lx > ox + 2.0 * ow / 3.0 {
-                                        closest_edge = crate::window::StatusEdge::BottomRight;
-                                    } else {
-                                        closest_edge = crate::window::StatusEdge::BottomCenter;
-                                    }
-                                }
-                                EdgeBasic::Left => {
-                                    closest_edge = crate::window::StatusEdge::Left;
-                                }
-                                EdgeBasic::Right => {
-                                    closest_edge = crate::window::StatusEdge::Right;
-                                }
-                            }
-                            break;
+                        let clamp = |val: f64, min: f64, max: f64| {
+                            if val < min { min } else if val > max { max } else { val }
+                        };
+                        let cx = clamp(lx, ox, ox + ow);
+                        let cy = clamp(ly, oy, oy + oh);
+                        let dx = lx - cx;
+                        let dy = ly - cy;
+                        let dist = dx * dx + dy * dy;
+                        if dist < min_output_dist {
+                            min_output_dist = dist;
+                            best_output = output;
                         }
                     }
                     curr_out = (*curr_out).next;
                 }
+
+                let mut found_out = false;
+                if !best_output.is_null() {
+                    found_out = true;
+                    let wlr_box = (*best_output).sent.box_layout();
+                    let ox = wlr_box.x as f64;
+                    let oy = wlr_box.y as f64;
+                    let ow = wlr_box.width as f64;
+                    let oh = wlr_box.height as f64;
+
+                    log::info!("[StatusRelease] Checking best output: box_geom=({}, {}, {}, {})", ox, oy, ow, oh);
+                    
+                    let dt = ly - oy;
+                    let db = (oy + oh) - ly;
+                    let dl = lx - ox;
+                    let dr = (ox + ow) - lx;
+                    
+                    log::info!("[StatusRelease] Distances: top={}, bottom={}, left={}, right={}", dt, db, dl, dr);
+                    enum EdgeBasic { Top, Bottom, Left, Right }
+                    let mut edge = EdgeBasic::Top;
+                    if dt < min_dist { min_dist = dt; edge = EdgeBasic::Top; }
+                    if db < min_dist { min_dist = db; edge = EdgeBasic::Bottom; }
+                    if dl < min_dist { min_dist = dl; edge = EdgeBasic::Left; }
+                    if dr < min_dist { min_dist = dr; edge = EdgeBasic::Right; }
+
+                    let corner_threshold = 120.0;
+                    let is_near_top = ly < oy + corner_threshold;
+                    let is_near_bottom = ly > oy + oh - corner_threshold;
+                    let is_near_left = lx < ox + corner_threshold;
+                    let is_near_right = lx > ox + ow - corner_threshold;
+
+                    let semicircle_centers = [
+                        (crate::window::StatusEdge::TopLeft, ox + 60.0, oy + 0.0),
+                        (crate::window::StatusEdge::TopCenter, ox + ow / 2.0, oy + 0.0),
+                        (crate::window::StatusEdge::TopRight, ox + ow - 60.0, oy + 0.0),
+                        (crate::window::StatusEdge::BottomLeft, ox + 60.0, oy + oh),
+                        (crate::window::StatusEdge::BottomCenter, ox + ow / 2.0, oy + oh),
+                        (crate::window::StatusEdge::BottomRight, ox + ow - 60.0, oy + oh),
+                        (crate::window::StatusEdge::Left, ox + 0.0, oy + oh / 2.0),
+                        (crate::window::StatusEdge::Right, ox + ow, oy + oh / 2.0),
+                    ];
+
+                    let mut snapped_to_semicircle = false;
+                    for (edge_type, cx, cy) in semicircle_centers {
+                        let dx = lx - cx;
+                        let dy = ly - cy;
+                        if dx * dx + dy * dy <= 60.0 * 60.0 {
+                            closest_edge = edge_type;
+                            snapped_to_semicircle = true;
+                            break;
+                        }
+                    }
+
+                    if !snapped_to_semicircle {
+                        match edge {
+                            EdgeBasic::Top => {
+                                if is_near_left {
+                                    closest_edge = crate::window::StatusEdge::TopLeft;
+                                } else if is_near_right {
+                                    closest_edge = crate::window::StatusEdge::TopRight;
+                                } else {
+                                    closest_edge = crate::window::StatusEdge::TopCenter;
+                                }
+                            }
+                            EdgeBasic::Bottom => {
+                                if is_near_left {
+                                    closest_edge = crate::window::StatusEdge::BottomLeft;
+                                } else if is_near_right {
+                                    closest_edge = crate::window::StatusEdge::BottomRight;
+                                } else {
+                                    closest_edge = crate::window::StatusEdge::BottomCenter;
+                                }
+                            }
+                            EdgeBasic::Left => {
+                                if is_near_top {
+                                    closest_edge = crate::window::StatusEdge::TopLeft;
+                                } else if is_near_bottom {
+                                    closest_edge = crate::window::StatusEdge::BottomLeft;
+                                } else {
+                                    closest_edge = crate::window::StatusEdge::Left;
+                                }
+                            }
+                            EdgeBasic::Right => {
+                                if is_near_top {
+                                    closest_edge = crate::window::StatusEdge::TopRight;
+                                } else if is_near_bottom {
+                                    closest_edge = crate::window::StatusEdge::BottomRight;
+                                } else {
+                                    closest_edge = crate::window::StatusEdge::Right;
+                                }
+                            }
+                        }
+                    }
+                }
                 
                 log::info!("[StatusRelease] Snapping app_id={} closest_edge={:?}, found_out={}", app_id, closest_edge, found_out);
                 (*win).status_edge = closest_edge;
+                
+                let name = if let Some(stripped) = app_id.strip_prefix("cce-status-left-") {
+                    stripped
+                } else if let Some(stripped) = app_id.strip_prefix("cce-status-right-") {
+                    stripped
+                } else {
+                    &app_id
+                };
+                let edge_str = match closest_edge {
+                    crate::window::StatusEdge::Left => "left",
+                    crate::window::StatusEdge::Right => "right",
+                    crate::window::StatusEdge::TopLeft => "top-left",
+                    crate::window::StatusEdge::TopCenter => "top-center",
+                    crate::window::StatusEdge::TopRight => "top-right",
+                    crate::window::StatusEdge::BottomLeft => "bottom-left",
+                    crate::window::StatusEdge::BottomCenter => "bottom-center",
+                    crate::window::StatusEdge::BottomRight => "bottom-right",
+                    _ => "top-left",
+                };
+                let key_path = format!("layout.status_bar.{}", name);
+                cce_ui::config::write_config_value(
+                    &cce_ui::config::get_config_path().to_string_lossy(),
+                    &key_path,
+                    &format!("\"{}\"", edge_str),
+                    "layout"
+                );
+
                 seat.op_end();
                 cursor.pressed.remove(&(*event).button);
                 (*server).wm.dirty_windowing();
