@@ -53,6 +53,7 @@ pub struct Layout {
     pub scenefx_optimized_blur: bool,
     pub status_backdrop_blur_ignore_transparent: bool,
     pub window_backdrop_blur_ignore_transparent: bool,
+    pub status_module_hide_mode_preview: i64,
 }
 
 impl Default for Layout {
@@ -104,6 +105,7 @@ impl Default for Layout {
             scenefx_optimized_blur: true,
             status_backdrop_blur_ignore_transparent: true,
             window_backdrop_blur_ignore_transparent: true,
+            status_module_hide_mode_preview: 4,
         }
     }
 }
@@ -441,6 +443,8 @@ pub struct LayoutConfig {
     pub status_backdrop_blur_ignore_transparent: bool,
     #[serde(default = "default_window_backdrop_blur_ignore_transparent")]
     pub window_backdrop_blur_ignore_transparent: bool,
+    #[serde(default = "default_status_module_hide_mode_preview")]
+    pub status_module_hide_mode_preview: i64,
 }
 
 impl Default for LayoutConfig {
@@ -465,6 +469,7 @@ impl Default for LayoutConfig {
             window_opacity: default_window_opacity(),
             status_backdrop_blur_ignore_transparent: default_status_backdrop_blur_ignore_transparent(),
             window_backdrop_blur_ignore_transparent: default_window_backdrop_blur_ignore_transparent(),
+            status_module_hide_mode_preview: default_status_module_hide_mode_preview(),
         }
     }
 }
@@ -487,6 +492,8 @@ fn default_status_normal_color() -> String { "#ccccd8".to_string() }
 fn default_status_background_blur() -> f64 { 0.8 }
 fn default_window_opacity() -> bool { true }
 fn default_status_backdrop_blur_ignore_transparent() -> bool { true }
+
+fn default_status_module_hide_mode_preview() -> i64 { 4 }
 fn default_window_backdrop_blur_ignore_transparent() -> bool { true }
 
 #[derive(Debug, Deserialize)]
@@ -1022,6 +1029,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         layout.status_normal_color = get_nested_prop_string(node, "status", "normal_color", &default_status_normal_color());
         layout.status_background_blur = get_nested_prop_f64(node, "status", "background_blur", default_status_background_blur());
         layout.status_backdrop_blur_ignore_transparent = get_nested_prop_bool(node, "status", "backdrop_blur_ignore_transparent", default_status_backdrop_blur_ignore_transparent());
+        layout.status_module_hide_mode_preview = get_nested_prop_i64(node, "status", "module_hide_mode_preview", default_status_module_hide_mode_preview());
     }
 
     // 2. env
@@ -1446,6 +1454,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.scenefx_optimized_blur = config.output.as_ref().map(|o| o.scenefx_optimized_blur).unwrap_or(true);
     state.layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
     state.layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
+    state.layout.status_module_hide_mode_preview = config.layout.status_module_hide_mode_preview;
 
     for (key, val) in &config.env {
         let expanded = expand_env_vars(val);

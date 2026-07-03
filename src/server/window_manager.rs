@@ -108,6 +108,7 @@ pub struct WindowManager {
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
     pub input_config: crate::config::InputConfig,
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
+    pub status_hide_mode: bool,
     pub restore_queue: Vec<SavedWindowState>,
     pub last_window_states: Vec<SavedWindowState>,
     pub shutting_down: bool,
@@ -193,6 +194,7 @@ impl WindowManager {
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
         self.last_status_update = std::cell::RefCell::new(None);
+        self.status_hide_mode = false;
 
         ffi::wl_list_init(&mut self.sent.outputs);
         ffi::wl_list_init(&mut self.sent.seats);
@@ -1591,14 +1593,21 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let spacing = 12;
             let margin = 12;
 
+            let status_y = if self.status_hide_mode {
+                let preview = self.layout.status_module_hide_mode_preview as i32;
+                wlr_box.y - (bar_h as i32 - preview)
+            } else {
+                wlr_box.y
+            };
+
             // Layout Left status windows
             let mut cur_left_x = wlr_box.x + margin;
             for win_ptr in left_status {
                 let w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
                 let app_id = (*win_ptr).get_app_id_string().unwrap_or_default();
-                log::info!("[ArrangeStatus] Left module app_id={} x={} y={} w={}", app_id, cur_left_x, wlr_box.y, w);
+                log::info!("[ArrangeStatus] Left module app_id={} x={} y={} w={}", app_id, cur_left_x, status_y, w);
                 (*win_ptr).rendering_requested.x = cur_left_x;
-                (*win_ptr).rendering_requested.y = wlr_box.y;
+                (*win_ptr).rendering_requested.y = status_y;
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
                     width: w,
                     height: bar_h,
@@ -1617,9 +1626,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 let w = if actual_w > 0 { actual_w as u32 } else { 100 };
                 let x = cur_right_x - w as i32;
                 let app_id = (*win_ptr).get_app_id_string().unwrap_or_default();
-                log::info!("[ArrangeStatus] Right module app_id={} actual_box_w={} x={} y={} w={}", app_id, actual_w, x, wlr_box.y, w);
+                log::info!("[ArrangeStatus] Right module app_id={} actual_box_w={} x={} y={} w={}", app_id, actual_w, x, status_y, w);
                 (*win_ptr).rendering_requested.x = x;
-                (*win_ptr).rendering_requested.y = wlr_box.y;
+                (*win_ptr).rendering_requested.y = status_y;
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
                     width: w,
                     height: bar_h,
@@ -1634,7 +1643,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             // Layout Full/Legacy status windows
             for win_ptr in full_status {
                 (*win_ptr).rendering_requested.x = wlr_box.x;
-                (*win_ptr).rendering_requested.y = wlr_box.y;
+                (*win_ptr).rendering_requested.y = status_y;
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
                     width: wlr_box.width as u32,
                     height: bar_h,
@@ -2369,6 +2378,20 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             self.stop_panning_animation();
         }
         match action {
+            "status-hide-mode" => {
+                let enable = if parts.len() >= 2 {
+                    match parts[1] {
+                        "true" | "on" | "enable" | "1" => true,
+                        "false" | "off" | "disable" | "0" => false,
+                        _ => !self.status_hide_mode,
+                    }
+                } else {
+                    !self.status_hide_mode
+                };
+                self.status_hide_mode = enable;
+                self.dirty_windowing();
+                return format!("ok {}\n", enable);
+            }
             "view" => {
                 if parts.len() < 2 { return "error: missing tag\n".to_string(); }
                 if let Ok(tag) = parts[1].parse::<i32>() {

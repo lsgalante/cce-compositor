@@ -648,6 +648,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                 let mut parent_x = None;
                 let mut parent_y = None;
                 let mut parent_w = 0;
+
                 for &win_ptr in (*server).wm.windows.iter() {
                     if win_ptr.is_null() || (*win_ptr).closed {
                         continue;
@@ -663,25 +664,43 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                 }
 
                 if let (Some(px), Some(py)) = (parent_x, parent_y) {
-                    let wlr_box = (*output).sent.box_layout();
-                    let output_x = wlr_box.x;
-                    let output_y = wlr_box.y;
-                    let output_w = wlr_box.width;
+                    let wlr_output = (*wlr_layer_surface).output;
+                    if !wlr_output.is_null() {
+                        let mut output_x = 0;
+                        let mut output_y = 0;
+                        let mut output_w = 0;
+                        let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                        let mut curr_out = (*outputs_list).next;
+                        while curr_out != outputs_list {
+                            let output = crate::container_of!(curr_out, crate::output::Output, link);
+                            if (*output).wlr_output == wlr_output {
+                                let wlr_box = (*output).sent.box_layout();
+                                output_x = wlr_box.x;
+                                output_y = wlr_box.y;
+                                output_w = wlr_box.width;
+                                break;
+                            }
+                            curr_out = (*curr_out).next;
+                        }
 
-                    let relative_parent_x = px - output_x;
-                    let relative_parent_y = py - output_y;
+                        let relative_parent_x = px - output_x;
+                        let relative_parent_y = py - output_y;
 
-                    let anchor = (*wlr_layer_surface).current.anchor;
-                    let is_align_right = (anchor & ffi::zwlr_layer_surface_v1_anchor_ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) != 0;
+                        let anchor = (*wlr_layer_surface).current.anchor;
+                        let is_align_right = (anchor & ffi::zwlr_layer_surface_v1_anchor_ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) != 0;
 
-                    if is_align_right {
-                        (*wlr_layer_surface).current.margin.right = (output_w - relative_parent_x - parent_w) + (*wlr_layer_surface).current.margin.right;
-                    } else {
-                        (*wlr_layer_surface).current.margin.left = relative_parent_x + (*wlr_layer_surface).current.margin.left;
+                        if is_align_right {
+                            (*wlr_layer_surface).pending.margin.right = (output_w - relative_parent_x - parent_w) + (*wlr_layer_surface).pending.margin.right;
+                            (*wlr_layer_surface).current.margin.right = (*wlr_layer_surface).pending.margin.right;
+                        } else {
+                            (*wlr_layer_surface).pending.margin.left = relative_parent_x + (*wlr_layer_surface).pending.margin.left;
+                            (*wlr_layer_surface).current.margin.left = (*wlr_layer_surface).pending.margin.left;
+                        }
+                        (*wlr_layer_surface).pending.margin.top = relative_parent_y + (*wlr_layer_surface).pending.margin.top;
+                        (*wlr_layer_surface).current.margin.top = (*wlr_layer_surface).pending.margin.top;
+
+                        (*layer_surface).parent_offset_applied = true;
                     }
-                    (*wlr_layer_surface).current.margin.top = relative_parent_y + (*wlr_layer_surface).current.margin.top;
-
-                    (*layer_surface).parent_offset_applied = true;
                 }
             }
         }
