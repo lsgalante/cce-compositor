@@ -1166,6 +1166,51 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 usable_h = non_ex.height;
             }
 
+            let bar_h = self.layout.bar_height as i32;
+            let mut has_top = false;
+            let mut has_bottom = false;
+            let mut has_left = false;
+            let mut has_right = false;
+
+            for &win_ptr in self.windows.iter() {
+                if win_ptr.is_null() || (*win_ptr).closed {
+                    continue;
+                }
+                if (*win_ptr).is_status_bar() {
+                    match (*win_ptr).status_edge {
+                        crate::window::StatusEdge::Top => {
+                            if !self.status_hide_mode {
+                                has_top = true;
+                            }
+                        }
+                        crate::window::StatusEdge::Bottom => {
+                            has_bottom = true;
+                        }
+                        crate::window::StatusEdge::Left => {
+                            has_left = true;
+                        }
+                        crate::window::StatusEdge::Right => {
+                            has_right = true;
+                        }
+                    }
+                }
+            }
+
+            if has_top {
+                usable_y += bar_h;
+                usable_h -= bar_h;
+            }
+            if has_bottom {
+                usable_h -= bar_h;
+            }
+            if has_left {
+                usable_x += bar_h;
+                usable_w -= bar_h;
+            }
+            if has_right {
+                usable_w -= bar_h;
+            }
+
             let viewport_w = wlr_box.width as f64;
             let viewport_h = wlr_box.height as f64;
             let camera_center_x = self.desk_pan_x + (viewport_w / 2.0) / self.desk_zoom;
