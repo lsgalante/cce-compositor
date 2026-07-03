@@ -221,14 +221,8 @@ pub struct GestureBind {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct OutputConfig {
-    #[serde(default = "default_scale")]
-    pub scale: f64,
     #[serde(default = "default_scenefx_optimized_blur")]
     pub scenefx_optimized_blur: bool,
-}
-
-fn default_scale() -> f64 {
-    1.0
 }
 
 fn default_scenefx_optimized_blur() -> bool {
@@ -239,6 +233,11 @@ fn default_scenefx_optimized_blur() -> bool {
 pub struct InputDeviceConfigRule {
     pub name: String,
     pub scroll_factor: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct WindowManagerConfig {
+    pub close_window: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
@@ -401,6 +400,8 @@ pub struct Config {
     pub transparency: Option<TransparencyConfig>,
     #[serde(default)]
     pub surface: SurfaceConfig,
+    #[serde(default)]
+    pub window_manager: Option<WindowManagerConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1153,17 +1154,18 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     let mut output = None;
     let mut display = HashMap::new();
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "output") {
-        let scale = get_child_arg_f64(node, "scale", 1.0);
         let scenefx_optimized_blur = get_child_arg_bool(node, "scenefx_optimized_blur", true);
-        output = Some(OutputConfig { scale, scenefx_optimized_blur });
+        output = Some(OutputConfig { scenefx_optimized_blur });
 
         if let Some(children) = node.children() {
             for child in children.nodes() {
                 let name = child.name().value();
-                if name.starts_with("scale_") {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(num) = entry.value().as_f64() {
-                            display.insert(name.to_string(), num);
+                if let Some(display_children) = child.children() {
+                    if let Some(scale_node) = display_children.nodes().iter().find(|n| n.name().value() == "scale") {
+                        if let Some(entry) = scale_node.entries().first() {
+                            if let Some(num) = entry.value().as_f64() {
+                                display.insert(format!("scale_{}", name), num);
+                            }
                         }
                     }
                 }
@@ -1352,6 +1354,13 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         }
     }
 
+    // window manager
+    let mut window_manager = None;
+    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "window manager" || n.name().value() == "window_manager") {
+        let close_window = get_child_arg_string_opt(node, "close_window");
+        window_manager = Some(WindowManagerConfig { close_window });
+    }
+
     Ok(Config {
         layout,
         env,
@@ -1367,6 +1376,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         gesture_bind,
         transparency,
         surface,
+        window_manager,
     })
 }
 
@@ -1391,7 +1401,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         }
     }
 
-    state.output_scale = config.output.as_ref().map(|o| o.scale as f32).unwrap_or(1.0f32);
+    state.output_scale = 1.0f32;
     state.display = config.display.clone();
 
     state.layout.gap = config.layout.gap as i32;
@@ -1517,6 +1527,24 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             action,
             command,
         });
+    }
+
+    if let Some(ref wm_config) = config.window_manager {
+        if let Some(ref close_win_str) = wm_config.close_window {
+            let (mods_str, key_str) = if let Some(last_plus) = close_win_str.rfind('+') {
+                (close_win_str[..last_plus].to_string(), close_win_str[last_plus+1..].to_string())
+            } else {
+                ("".to_string(), close_win_str.clone())
+            };
+            let mods = parse_modifiers(&mods_str);
+            let keysym = parse_keysym(&key_str);
+            state.keybinds.push(Keybind {
+                mods,
+                keysym,
+                action: Action::Close,
+                command: None,
+            });
+        }
     }
 
     let super_mod = parse_modifiers("super");
@@ -1718,12 +1746,28 @@ mod tests {
     fn test_kdl_display_scale_parsing() {
         let content = r#"
             output {
-                scale_eDP-1 (f64)2.0
-                scale_DP-1 (f64)1.5
+                eDP-1 {
+                    scale (f64)2.0
+                }
+                DP-1 {
+                    scale (f64)1.5
+                }
             }
         "#;
         let config = parse_kdl_config(content).unwrap();
         assert_eq!(config.display.get("scale_eDP-1"), Some(&2.0));
         assert_eq!(config.display.get("scale_DP-1"), Some(&1.5));
+    }
+
+    #[test]
+    fn test_kdl_window_manager_parsing() {
+        let content = r#"
+            "window manager" {
+                close_window (keybind)"super+q"
+            }
+        "#;
+        let config = parse_kdl_config(content).unwrap();
+        assert!(config.window_manager.is_some());
+        assert_eq!(config.window_manager.unwrap().close_window, Some("super+q".to_string()));
     }
 }
