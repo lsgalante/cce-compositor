@@ -962,38 +962,47 @@ impl Seat {
                 
                 match op.op_type {
                     PointerOpType::Move => {
-                        let scale = (*(*self.server).wm.server).wm.desk_zoom;
-                        let pan_x = (*(*self.server).wm.server).wm.desk_pan_x;
-                        let pan_y = (*(*self.server).wm.server).wm.desk_pan_y;
-                        let virtual_dx = dx as f64 / scale;
-                        let virtual_dy = dy as f64 / scale;
-                        
-                        let vx = op.start_win_virtual_x + virtual_dx;
-                        let vy = op.start_win_virtual_y + virtual_dy;
-                        (*win).virtual_x = vx;
-                        (*win).virtual_y = vy;
+                        if (*win).is_status_bar() {
+                            let final_x = op.start_win_x + dx;
+                            let final_y = op.start_win_y + dy;
+                            (*win).rendering_requested.x = final_x;
+                            (*win).rendering_requested.y = final_y;
+                            (*win).box_geom.x = final_x;
+                            (*win).box_geom.y = final_y;
+                        } else {
+                            let scale = (*(*self.server).wm.server).wm.desk_zoom;
+                            let pan_x = (*(*self.server).wm.server).wm.desk_pan_x;
+                            let pan_y = (*(*self.server).wm.server).wm.desk_pan_y;
+                            let virtual_dx = dx as f64 / scale;
+                            let virtual_dy = dy as f64 / scale;
+                            
+                            let vx = op.start_win_virtual_x + virtual_dx;
+                            let vy = op.start_win_virtual_y + virtual_dy;
+                            (*win).virtual_x = vx;
+                            (*win).virtual_y = vy;
 
-                        let mut out_x = 0;
-                        let mut out_y = 0;
-                        let outputs_list = &mut (*(*self.server).wm.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                        let mut curr_out = (*outputs_list).next;
-                        while curr_out != outputs_list {
-                            let output = crate::container_of!(curr_out, crate::output::Output, link);
-                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                                let wlr_box = (*output).sent.box_layout();
-                                out_x = wlr_box.x;
-                                out_y = wlr_box.y;
-                                break;
+                            let mut out_x = 0;
+                            let mut out_y = 0;
+                            let outputs_list = &mut (*(*self.server).wm.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                            let mut curr_out = (*outputs_list).next;
+                            while curr_out != outputs_list {
+                                let output = crate::container_of!(curr_out, crate::output::Output, link);
+                                if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                                    let wlr_box = (*output).sent.box_layout();
+                                    out_x = wlr_box.x;
+                                    out_y = wlr_box.y;
+                                    break;
+                                }
+                                curr_out = (*curr_out).next;
                             }
-                            curr_out = (*curr_out).next;
-                        }
 
-                        let final_x = out_x + ((vx - pan_x) * scale) as i32;
-                        let final_y = out_y + ((vy - pan_y) * scale) as i32;
-                        (*win).rendering_requested.x = final_x;
-                        (*win).rendering_requested.y = final_y;
-                        (*win).box_geom.x = final_x;
-                        (*win).box_geom.y = final_y;
+                            let final_x = out_x + ((vx - pan_x) * scale) as i32;
+                            let final_y = out_y + ((vy - pan_y) * scale) as i32;
+                            (*win).rendering_requested.x = final_x;
+                            (*win).rendering_requested.y = final_y;
+                            (*win).box_geom.x = final_x;
+                            (*win).box_geom.y = final_y;
+                        }
                     }
                     PointerOpType::Resize { edges } => {
                         let scale = (*(*self.server).wm.server).wm.desk_zoom;
