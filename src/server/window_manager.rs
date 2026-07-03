@@ -109,6 +109,7 @@ pub struct WindowManager {
     pub input_config: crate::config::InputConfig,
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
     pub status_hide_mode: bool,
+    pub adjust_position_mode: bool,
     pub restore_queue: Vec<SavedWindowState>,
     pub last_window_states: Vec<SavedWindowState>,
     pub shutting_down: bool,
@@ -195,6 +196,7 @@ impl WindowManager {
         self.input_config = crate::config::InputConfig::default();
         self.last_status_update = std::cell::RefCell::new(None);
         self.status_hide_mode = false;
+        self.adjust_position_mode = false;
 
         ffi::wl_list_init(&mut self.sent.outputs);
         ffi::wl_list_init(&mut self.sent.seats);
@@ -1545,16 +1547,23 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     b,
                     a,
                 };
-                (*win_ptr).rendering_requested.blur = self.layout.window_blur;
+(*win_ptr).rendering_requested.blur = self.layout.window_blur;
                 (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
                     if !self.layout.window_opacity { 1.0f32 } else { 0.90f32 }
                 };
             }
-
             // Position status bar windows on this output
-            let mut left_status = Vec::new();
-            let mut right_status = Vec::new();
-            let mut full_status = Vec::new();
+            let bar_h = self.layout.bar_height as u32;
+            let spacing = 12;
+            let margin = 12;
+
+            let mut top_left = Vec::new();
+            let mut top_right = Vec::new();
+            let mut bottom_left = Vec::new();
+            let mut bottom_right = Vec::new();
+            let mut left_side = Vec::new();
+            let mut right_side = Vec::new();
+            let mut full_top = Vec::new();
 
             for &win_ptr in self.windows.iter() {
                 if win_ptr.is_null() || (*win_ptr).closed {
@@ -1564,12 +1573,49 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     continue;
                 }
                 if let Some(app_id) = (*win_ptr).get_app_id_string() {
-                    if app_id.starts_with("cce-status-left-") {
-                        left_status.push(win_ptr);
-                    } else if app_id.starts_with("cce-status-right-") {
-                        right_status.push(win_ptr);
-                    } else if app_id.starts_with("cce-status") {
-                        full_status.push(win_ptr);
+                    if app_id.starts_with("cce-status") {
+                        // Skip if currently being dragged interactively
+                        let mut is_being_dragged = false;
+                        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+                        let mut curr_seat = (*seats_list).next;
+                        while curr_seat != seats_list {
+                            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+                            if let Some(ref op) = (*seat).op {
+                                if op.window_ptr == win_ptr && matches!(op.op_type, crate::seat::PointerOpType::Move) {
+                                    is_being_dragged = true;
+                                    break;
+                                }
+                            }
+                            curr_seat = (*curr_seat).next;
+                        }
+                        if is_being_dragged {
+                            continue;
+                        }
+
+                        match (*win_ptr).status_edge {
+                            crate::window::StatusEdge::Top => {
+                                if app_id.starts_with("cce-status-left-") {
+                                    top_left.push(win_ptr);
+                                } else if app_id.starts_with("cce-status-right-") {
+                                    top_right.push(win_ptr);
+                                } else {
+                                    full_top.push(win_ptr);
+                                }
+                            }
+                            crate::window::StatusEdge::Bottom => {
+                                if app_id.starts_with("cce-status-left-") {
+                                    bottom_left.push(win_ptr);
+                                } else {
+                                    bottom_right.push(win_ptr);
+                                }
+                            }
+                            crate::window::StatusEdge::Left => {
+                                left_side.push(win_ptr);
+                            }
+                            crate::window::StatusEdge::Right => {
+                                right_side.push(win_ptr);
+                            }
+                        }
                     }
                 }
             }
@@ -1577,81 +1623,108 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             const LEFT_ORDER: &[&str] = &["viewport", "window"];
             const RIGHT_ORDER: &[&str] = &["tray", "cpu", "memory", "brightness", "volume", "battery", "clock"];
 
-            left_status.sort_by_key(|&w| unsafe {
-                let app_id = (*w).get_app_id_string().unwrap_or_default();
-                let name = app_id.strip_prefix("cce-status-left-").unwrap_or(&app_id);
-                LEFT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
-            });
+            let sort_left = |w_list: &mut Vec<*mut Window>| {
+                w_list.sort_by_key(|&w| unsafe {
+                    let app_id = (*w).get_app_id_string().unwrap_or_default();
+                    let name = app_id.strip_prefix("cce-status-left-").unwrap_or(&app_id);
+                    LEFT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
+                });
+            };
 
-            right_status.sort_by_key(|&w| unsafe {
-                let app_id = (*w).get_app_id_string().unwrap_or_default();
-                let name = app_id.strip_prefix("cce-status-right-").unwrap_or(&app_id);
-                RIGHT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
-            });
+            let sort_right = |w_list: &mut Vec<*mut Window>| {
+                w_list.sort_by_key(|&w| unsafe {
+                    let app_id = (*w).get_app_id_string().unwrap_or_default();
+                    let name = app_id.strip_prefix("cce-status-right-").unwrap_or(&app_id);
+                    RIGHT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
+                });
+            };
 
-            let bar_h = self.layout.bar_height as u32;
-            let spacing = 12;
-            let margin = 12;
+            sort_left(&mut top_left);
+            sort_right(&mut top_right);
+            sort_left(&mut bottom_left);
+            sort_right(&mut bottom_right);
 
-            let status_y = if self.status_hide_mode {
+            // 1. Top Edge
+            let status_y_top = if self.status_hide_mode {
                 let preview = self.layout.status_module_hide_mode_preview as i32;
                 wlr_box.y - (bar_h as i32 - preview)
             } else {
                 wlr_box.y
             };
 
-            // Layout Left status windows
             let mut cur_left_x = wlr_box.x + margin;
-            for win_ptr in left_status {
+            for win_ptr in top_left {
                 let w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
-                let app_id = (*win_ptr).get_app_id_string().unwrap_or_default();
-                log::info!("[ArrangeStatus] Left module app_id={} x={} y={} w={}", app_id, cur_left_x, status_y, w);
                 (*win_ptr).rendering_requested.x = cur_left_x;
-                (*win_ptr).rendering_requested.y = status_y;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                    width: w,
-                    height: bar_h,
-                });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                    width: w,
-                    height: bar_h,
-                };
+                (*win_ptr).rendering_requested.y = status_y_top;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
                 cur_left_x += w as i32 + spacing;
             }
 
-            // Layout Right status windows (right-to-left)
             let mut cur_right_x = wlr_box.x + wlr_box.width - margin;
-            for win_ptr in right_status.into_iter().rev() {
+            for win_ptr in top_right.into_iter().rev() {
                 let actual_w = (*win_ptr).box_geom.width;
                 let w = if actual_w > 0 { actual_w as u32 } else { 100 };
                 let x = cur_right_x - w as i32;
-                let app_id = (*win_ptr).get_app_id_string().unwrap_or_default();
-                log::info!("[ArrangeStatus] Right module app_id={} actual_box_w={} x={} y={} w={}", app_id, actual_w, x, status_y, w);
                 (*win_ptr).rendering_requested.x = x;
-                (*win_ptr).rendering_requested.y = status_y;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                    width: w,
-                    height: bar_h,
-                });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                    width: w,
-                    height: bar_h,
-                };
+                (*win_ptr).rendering_requested.y = status_y_top;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
                 cur_right_x = x - spacing;
             }
 
-            // Layout Full/Legacy status windows
-            for win_ptr in full_status {
+            for win_ptr in full_top {
                 (*win_ptr).rendering_requested.x = wlr_box.x;
-                (*win_ptr).rendering_requested.y = status_y;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                    width: wlr_box.width as u32,
-                    height: bar_h,
-                });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                    width: wlr_box.width as u32,
-                    height: bar_h,
-                };
+                (*win_ptr).rendering_requested.y = status_y_top;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: wlr_box.width as u32, height: bar_h });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: wlr_box.width as u32, height: bar_h };
+            }
+
+            // 2. Bottom Edge
+            let status_y_bottom = wlr_box.y + wlr_box.height - bar_h as i32;
+            let mut cur_left_x = wlr_box.x + margin;
+            for win_ptr in bottom_left {
+                let w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
+                (*win_ptr).rendering_requested.x = cur_left_x;
+                (*win_ptr).rendering_requested.y = status_y_bottom;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
+                cur_left_x += w as i32 + spacing;
+            }
+
+            let mut cur_right_x = wlr_box.x + wlr_box.width - margin;
+            for win_ptr in bottom_right.into_iter().rev() {
+                let actual_w = (*win_ptr).box_geom.width;
+                let w = if actual_w > 0 { actual_w as u32 } else { 100 };
+                let x = cur_right_x - w as i32;
+                (*win_ptr).rendering_requested.x = x;
+                (*win_ptr).rendering_requested.y = status_y_bottom;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
+                cur_right_x = x - spacing;
+            }
+
+            // 3. Left Edge (Vertical stacking)
+            let mut cur_left_y = wlr_box.y + margin;
+            for win_ptr in left_side {
+                let actual_h = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
+                (*win_ptr).rendering_requested.x = wlr_box.x;
+                (*win_ptr).rendering_requested.y = cur_left_y;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: bar_h, height: actual_h });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: bar_h, height: actual_h };
+                cur_left_y += actual_h as i32 + spacing;
+            }
+
+            // 4. Right Edge (Vertical stacking)
+            let mut cur_right_y = wlr_box.y + margin;
+            for win_ptr in right_side {
+                let actual_h = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
+                (*win_ptr).rendering_requested.x = wlr_box.x + wlr_box.width - bar_h as i32;
+                (*win_ptr).rendering_requested.y = cur_right_y;
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: bar_h, height: actual_h });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: bar_h, height: actual_h };
+                cur_right_y += actual_h as i32 + spacing;
             }
         }
         // If the focused window is no longer visible, refocus
@@ -2389,6 +2462,20 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     !self.status_hide_mode
                 };
                 self.status_hide_mode = enable;
+                self.dirty_windowing();
+                return format!("ok {}\n", enable);
+            }
+            "adjust-position-mode" => {
+                let enable = if parts.len() >= 2 {
+                    match parts[1] {
+                        "true" | "on" | "enable" | "1" => true,
+                        "false" | "off" | "disable" | "0" => false,
+                        _ => !self.adjust_position_mode,
+                    }
+                } else {
+                    !self.adjust_position_mode
+                };
+                self.adjust_position_mode = enable;
                 self.dirty_windowing();
                 return format!("ok {}\n", enable);
             }

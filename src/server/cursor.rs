@@ -624,6 +624,45 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             return;
         }
 
+        if (*event).button == 0x110 && (*(*seat).server).wm.adjust_position_mode {
+            let mut clicked_status: *mut crate::window::Window = std::ptr::null_mut();
+            if let Some(result) = (*server).scene.at(lx, ly) {
+                if let SceneNodeDataVal::Window(window) = result.data {
+                    if (*window).is_status_bar() {
+                        clicked_status = window;
+                    }
+                }
+            }
+            if !clicked_status.is_null() {
+                (*server).wm.stop_panning_animation();
+                let cursor_x = (*cursor.wlr_cursor).x;
+                let cursor_y = (*cursor.wlr_cursor).y;
+                seat.op = Some(crate::seat::SeatOp {
+                    sent_release: false,
+                    input: crate::seat::SeatOpInput::Pointer,
+                    start_x: cursor_x as i32,
+                    start_y: cursor_y as i32,
+                    x: cursor_x as i32,
+                    y: cursor_y as i32,
+                    window_ptr: clicked_status,
+                    op_type: crate::seat::PointerOpType::Move,
+                    start_win_x: (*clicked_status).box_geom.x,
+                    start_win_y: (*clicked_status).box_geom.y,
+                    start_win_w: (*clicked_status).box_geom.width as u32,
+                    start_win_h: (*clicked_status).box_geom.height as u32,
+                    start_win_virtual_x: (*clicked_status).virtual_x,
+                    start_win_virtual_y: (*clicked_status).virtual_y,
+                    start_tiling_mode: (*clicked_status).tiling_mode,
+                    start_mode_locked: (*clicked_status).mode_locked,
+                    started_in_overview: false,
+                });
+                cursor.op_start_pointer();
+                cursor.pressed.insert((*event).button, None);
+                cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
+                return;
+            }
+        }
+
         // --- ZOOMED OUT CLICK HANDLING ---
         if (*event).button == 0x110 && (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
             let mut clicked_win: *mut crate::window::Window = std::ptr::null_mut();
@@ -1025,6 +1064,45 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             seat.op_update(cursor_x as i32, cursor_y as i32);
             
             let op = seat.op.unwrap();
+
+            if (*(*seat).server).wm.adjust_position_mode && !op.window_ptr.is_null() && (*op.window_ptr).is_status_bar() && (*event).button == 0x110 {
+                let win = op.window_ptr;
+                let mut closest_edge = crate::window::StatusEdge::Top;
+                let mut min_dist = f64::MAX;
+                
+                let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                let mut curr_out = (*outputs_list).next;
+                while curr_out != outputs_list {
+                    let output = crate::container_of!(curr_out, crate::output::Output, link);
+                    if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                        let wlr_box = (*output).sent.box_layout();
+                        let ox = wlr_box.x as f64;
+                        let oy = wlr_box.y as f64;
+                        let ow = wlr_box.width as f64;
+                        let oh = wlr_box.height as f64;
+                        
+                        if lx >= ox && lx <= ox + ow && ly >= oy && ly <= oy + oh {
+                            let dt = ly - oy;
+                            let db = (oy + oh) - ly;
+                            let dl = lx - ox;
+                            let dr = (ox + ow) - lx;
+                            
+                            if dt < min_dist { min_dist = dt; closest_edge = crate::window::StatusEdge::Top; }
+                            if db < min_dist { min_dist = db; closest_edge = crate::window::StatusEdge::Bottom; }
+                            if dl < min_dist { min_dist = dl; closest_edge = crate::window::StatusEdge::Left; }
+                            if dr < min_dist { min_dist = dr; closest_edge = crate::window::StatusEdge::Right; }
+                            break;
+                        }
+                    }
+                    curr_out = (*curr_out).next;
+                }
+                
+                (*win).status_edge = closest_edge;
+                seat.op_end();
+                cursor.pressed.remove(&(*event).button);
+                (*server).wm.dirty_windowing();
+                return;
+            }
             if op.started_in_overview && (*event).button == 0x110 {
                 let moved = (cursor_x as i32 - op.start_x).abs() > 5 || (cursor_y as i32 - op.start_y).abs() > 5;
                 if !moved && !op.window_ptr.is_null() {

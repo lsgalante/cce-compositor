@@ -258,6 +258,15 @@ pub struct Window {
     pub foreign_toplevel_handle: *mut ffi::wlr_ext_foreign_toplevel_handle_v1,
     pub wlr_toplevel_handle: *mut ffi::wlr_foreign_toplevel_handle_v1,
     pub csd_buffer_size_bug: bool,
+    pub status_edge: StatusEdge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
 }
 
 impl Window {
@@ -467,6 +476,7 @@ impl Window {
             foreign_toplevel_handle: std::ptr::null_mut(),
             wlr_toplevel_handle: std::ptr::null_mut(),
             csd_buffer_size_bug: false,
+            status_edge: StatusEdge::Top,
         });
 
         ffi::wl_list_init(&mut window.decorations_below);
