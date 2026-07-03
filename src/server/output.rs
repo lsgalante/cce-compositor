@@ -142,6 +142,9 @@ pub struct Output {
     pub scene_output: *mut ffi::wlr_scene_output,
     pub background_rect: *mut ffi::wlr_scene_rect,
     pub grid_tree: *mut ffi::wlr_scene_tree,
+    pub adjust_tree: *mut ffi::wlr_scene_tree,
+    pub adjust_rects: Vec<*mut ffi::wlr_scene_rect>,
+    pub last_adjust_mode: bool,
     pub object: *mut ffi::wl_resource, // zcce_output_v1 resource
     pub layer_shell: LayerShellOutput,
     pub lock_render_state: LockRenderState,
@@ -334,6 +337,12 @@ impl Output {
                     }
                     self.grid_rect_pool.clear();
 
+                    if !self.adjust_tree.is_null() {
+                        ffi::wlr_scene_node_destroy(self.adjust_tree as *mut ffi::wlr_scene_node);
+                        self.adjust_tree = std::ptr::null_mut();
+                    }
+                    self.adjust_rects.clear();
+
                     // remove output from windows fullscreen hint
                     for &window in (*self.server).wm.windows.iter() {
                         if let crate::window::FullscreenRequest::Fullscreen(out) = (*window).wm_scheduled.fullscreen_requested {
@@ -399,6 +408,9 @@ impl Output {
             scene_output,
             background_rect: std::ptr::null_mut(),
             grid_tree: std::ptr::null_mut(),
+            adjust_tree: std::ptr::null_mut(),
+            adjust_rects: Vec::new(),
+            last_adjust_mode: false,
             object: std::ptr::null_mut(),
             layer_shell: LayerShellOutput::default(),
             lock_render_state: LockRenderState::Blanked,
@@ -474,6 +486,7 @@ impl Output {
     pub unsafe fn render_and_commit(&mut self) -> Result<(), &'static str> {
         // Update grid node positions and parameters first, which marks the scene output as damaged if changed
         self.draw_grid();
+        self.draw_adjust_overlay();
 
         if !ffi::wlr_scene_output_needs_frame(self.scene_output) {
             return Ok(());
@@ -551,6 +564,82 @@ impl Output {
                 (wm.layout.background_a as f64 / u32::MAX as f64) as f32,
             ];
             ffi::wlr_scene_rect_set_color(self.background_rect, color.as_ptr());
+        }
+    }
+
+    pub unsafe fn draw_adjust_overlay(&mut self) {
+        if self.adjust_tree.is_null() {
+            return;
+        }
+
+        let wm = &(*self.server).wm;
+        if wm.adjust_position_mode != self.last_adjust_mode {
+            self.last_adjust_mode = wm.adjust_position_mode;
+            ffi::wlr_output_schedule_frame(self.wlr_output);
+        }
+
+        if !wm.adjust_position_mode {
+            ffi::wlr_scene_node_set_enabled(self.adjust_tree as *mut ffi::wlr_scene_node, false);
+            return;
+        }
+
+        // Enable the overlay tree.
+        ffi::wlr_scene_node_set_enabled(self.adjust_tree as *mut ffi::wlr_scene_node, true);
+        ffi::wlr_scene_node_raise_to_top(self.adjust_tree as *mut ffi::wlr_scene_node);
+
+        let (viewport_w, viewport_h) = self.current.dimensions();
+        let w = viewport_w;
+        let h = viewport_h;
+
+        // Semicircles size: 120 x 120 (so radius = 60).
+        let targets = [
+            // TopLeft (nw): x = 0, y = -60
+            (0, -60),
+            // TopCenter (n): x = w/2 - 60, y = -60
+            (w / 2 - 60, -60),
+            // TopRight (ne): x = w - 120, y = -60
+            (w - 120, -60),
+            // BottomLeft (sw): x = 0, y = h - 60
+            (0, h - 60),
+            // BottomCenter (s): x = w/2 - 60, y = h - 60
+            (w / 2 - 60, h - 60),
+            // BottomRight (se): x = w - 120, y = h - 60
+            (w - 120, h - 60),
+            // Left (w): x = -60, y = h/2 - 60
+            (-60, h / 2 - 60),
+            // Right (e): x = w - 60, y = h/2 - 60
+            (w - 60, h / 2 - 60),
+        ];
+
+        let color: [f32; 4] = [0.4, 0.6, 0.9, 0.5];
+        let color_ptr = color.as_ptr();
+
+        for (idx, &(tx, ty)) in targets.iter().enumerate() {
+            let rect = if idx < self.adjust_rects.len() {
+                let node = self.adjust_rects[idx];
+                ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, true);
+                ffi::wlr_scene_rect_set_size(node, 120, 120);
+                ffi::wlr_scene_rect_set_color(node, color_ptr);
+                node
+            } else {
+                let node = ffi::wlr_scene_rect_create(self.adjust_tree, 120, 120, color_ptr);
+                if !node.is_null() {
+                    self.adjust_rects.push(node);
+                    // Make it circular!
+                    ffi::river_scene_rect_set_corner_radius(node, 60);
+                }
+                node
+            };
+
+            if !rect.is_null() {
+                ffi::wlr_scene_node_set_position(rect as *mut ffi::wlr_scene_node, tx, ty);
+            }
+        }
+
+        // Disable any extra rects in the pool if we somehow have more
+        for idx in targets.len()..self.adjust_rects.len() {
+            let node = self.adjust_rects[idx];
+            ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, false);
         }
     }
 
@@ -771,6 +860,12 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
         ffi::wlr_scene_node_destroy((*output).grid_tree as *mut ffi::wlr_scene_node);
         (*output).grid_tree = std::ptr::null_mut();
     }
+
+    if !(*output).adjust_tree.is_null() {
+        ffi::wlr_scene_node_destroy((*output).adjust_tree as *mut ffi::wlr_scene_node);
+        (*output).adjust_tree = std::ptr::null_mut();
+    }
+    (*output).adjust_rects.clear();
 
     if !(*output).wlr_output.is_null() {
         ffi::river_wlr_output_set_data((*output).wlr_output, std::ptr::null_mut());

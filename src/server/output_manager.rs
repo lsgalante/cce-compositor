@@ -238,6 +238,17 @@ impl OutputManager {
                                 ffi::wlr_scene_node_set_enabled(output.grid_tree as *mut ffi::wlr_scene_node, false);
                             }
                         }
+
+                        if output.adjust_tree.is_null() {
+                            output.adjust_tree = ffi::wlr_scene_tree_create((*server).scene.layers.overlay);
+                        }
+                        if !output.adjust_tree.is_null() {
+                            ffi::wlr_scene_node_set_position(
+                                output.adjust_tree as *mut ffi::wlr_scene_node,
+                                output.sent.x,
+                                output.sent.y,
+                            );
+                        }
                     }
                     OutputStateValue::DisabledHard => {
                         ffi::wlr_output_layout_remove(self.output_layout, wlr_output);
@@ -249,6 +260,11 @@ impl OutputManager {
                             ffi::wlr_scene_node_destroy(output.grid_tree as *mut ffi::wlr_scene_node);
                             output.grid_tree = std::ptr::null_mut();
                             output.grid_rect_pool.clear();
+                        }
+                        if !output.adjust_tree.is_null() {
+                            ffi::wlr_scene_node_destroy(output.adjust_tree as *mut ffi::wlr_scene_node);
+                            output.adjust_tree = std::ptr::null_mut();
+                            output.adjust_rects.clear();
                         }
                     }
                     OutputStateValue::Destroying => unreachable!(),
