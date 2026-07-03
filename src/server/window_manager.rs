@@ -1697,10 +1697,22 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 wlr_box.y
             };
 
+            let mut top_right_width_needed = 0;
+            for &win_ptr in &top_right {
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
+                top_right_width_needed += w as i32 + spacing;
+            }
+            let top_right_boundary = wlr_box.x + wlr_box.width - margin - top_right_width_needed;
+
             let mut cur_left_x = wlr_box.x + margin;
             for win_ptr in top_left {
                 let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
+                let mut w = if prev_len > 0 { prev_len as u32 } else { 100 };
+                let max_allowed_w = top_right_boundary - cur_left_x - spacing;
+                if w as i32 > max_allowed_w {
+                    w = std::cmp::max(max_allowed_w, 20) as u32;
+                }
                 (*win_ptr).rendering_requested.x = cur_left_x;
                 (*win_ptr).rendering_requested.y = status_y_top;
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
@@ -1729,10 +1741,23 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
             // 2. Bottom Edge
             let status_y_bottom = wlr_box.y + wlr_box.height - bar_h as i32;
+
+            let mut bottom_right_width_needed = 0;
+            for &win_ptr in &bottom_right {
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
+                bottom_right_width_needed += w as i32 + spacing;
+            }
+            let bottom_right_boundary = wlr_box.x + wlr_box.width - margin - bottom_right_width_needed;
+
             let mut cur_left_x = wlr_box.x + margin;
             for win_ptr in bottom_left {
                 let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
+                let mut w = if prev_len > 0 { prev_len as u32 } else { 100 };
+                let max_allowed_w = bottom_right_boundary - cur_left_x - spacing;
+                if w as i32 > max_allowed_w {
+                    w = std::cmp::max(max_allowed_w, 20) as u32;
+                }
                 (*win_ptr).rendering_requested.x = cur_left_x;
                 (*win_ptr).rendering_requested.y = status_y_bottom;
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
