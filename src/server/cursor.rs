@@ -51,6 +51,7 @@ pub struct Cursor {
     pub last_click_window: *mut crate::window::Window,
     pub right_click_on_bg: bool,
     pub right_click_on_border: bool,
+    pub left_click_on_bg_in_overview: bool,
 }
 
 impl Default for Cursor {
@@ -99,6 +100,7 @@ impl Default for Cursor {
             last_click_window: std::ptr::null_mut(),
             right_click_on_bg: false,
             right_click_on_border: false,
+            left_click_on_bg_in_overview: false,
         }
     }
 }
@@ -658,6 +660,11 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 cursor.pressed.insert((*event).button, None);
                 cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
                 return;
+            } else {
+                cursor.left_click_on_bg_in_overview = true;
+                (*server).wm.execute_action(&crate::config::Action::Expose, None);
+                cursor.pressed.insert((*event).button, None);
+                return;
             }
         }
 
@@ -1076,6 +1083,15 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         if let Some(binding_opt) = cursor.pressed.remove(&(*event).button) {
             if let Some(binding) = binding_opt {
                 (*binding).released();
+                if cursor.pressed.is_empty() && seat.op.is_some() {
+                    seat.op_release = true;
+                    (*(*seat).server).wm.dirty_windowing();
+                }
+                return;
+            }
+
+            if (*event).button == 0x110 && cursor.left_click_on_bg_in_overview {
+                cursor.left_click_on_bg_in_overview = false;
                 if cursor.pressed.is_empty() && seat.op.is_some() {
                     seat.op_release = true;
                     (*(*seat).server).wm.dirty_windowing();
