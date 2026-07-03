@@ -856,6 +856,7 @@ impl Window {
 
         (*(*window).server).wm.remove_from_history(window);
         (*(*window).server).wm.windows.remove((*window).ref_key);
+        (*(*window).server).wm.check_clean_exit_progress();
 
         let _ = Box::from_raw(window);
     }
@@ -1563,7 +1564,8 @@ impl Window {
             let app_id = self.get_app_id_string().unwrap_or_default();
             let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                             app_id.starts_with("cce-status");
-            let blur_enabled = requested.blur;
+            let is_cce_app = app_id.starts_with("cce-");
+            let blur_enabled = requested.blur && (self.wm_requested.ssd || is_cce_app || is_status);
             let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
             if is_status {
                 ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
@@ -2848,7 +2850,8 @@ impl Decoration {
         if is_status {
             ignore_transparent = (*server).wm.layout.status_backdrop_blur_ignore_transparent;
         }
-        let blur_enabled = self.rendering_requested.blur;
+        let is_cce_app = app_id.starts_with("cce-");
+        let blur_enabled = self.rendering_requested.blur && ((*self.window).wm_requested.ssd || is_cce_app || is_status);
         ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled, (*server).wm.layout.scenefx_optimized_blur, ignore_transparent, 0, 0, 0, 0);
 
         let scale = (*self.window).scale;

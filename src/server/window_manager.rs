@@ -120,6 +120,8 @@ pub struct WindowManager {
     pub last_viewport_pan_x: f64,
     pub last_viewport_pan_y: f64,
     pub viewport_is_active: bool,
+    pub clean_exit_in_progress: bool,
+    pub clean_exit_timer: *mut ffi::wl_event_source,
 }
 
 impl WindowManager {
@@ -205,9 +207,18 @@ impl WindowManager {
         self.ipc_rx = None;
         self.ipc_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_ipc_timer), self as *mut WindowManager as *mut _);
         if self.ipc_timer.is_null() {
+            ffi::wl_event_source_remove(self.timeout);
             return Err("Failed to create IPC timer event source");
         }
         ffi::wl_event_source_timer_update(self.ipc_timer, 10);
+
+        self.clean_exit_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_clean_exit_timeout), self as *mut WindowManager as *mut _);
+        if self.clean_exit_timer.is_null() {
+            ffi::wl_event_source_remove(self.timeout);
+            ffi::wl_event_source_remove(self.ipc_timer);
+            return Err("Failed to create clean exit timer event source");
+        }
+        self.clean_exit_in_progress = false;
 
         self.global = ffi::wl_global_create(
             (*server).wl_server,
@@ -364,6 +375,72 @@ impl WindowManager {
         }
     }
 
+    pub unsafe fn start_clean_exit(&mut self) {
+        if self.clean_exit_in_progress {
+            return;
+        }
+        log::info!("Starting clean exit process...");
+        self.clean_exit_in_progress = true;
+
+        // Save state before closing windows
+        self.save_state();
+
+        // Get list of windows we need to wait for to close cleanly
+        let mut normal_windows = Vec::new();
+        for &w in self.windows.iter() {
+            if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
+                continue;
+            }
+            if (*w).is_status_bar() || (*w).is_wallpaper() {
+                continue;
+            }
+            normal_windows.push(w);
+        }
+
+        if normal_windows.is_empty() {
+            log::info!("No active windows to close. Exiting immediately.");
+            ffi::wl_display_terminate((*self.server).wl_server);
+            return;
+        }
+
+        log::info!("Sending close request to {} windows...", normal_windows.len());
+        for &w in &normal_windows {
+            log::info!("Closing window: {:?}", (*w).get_title_string());
+            (*w).close();
+        }
+
+        // Set a clean exit timer fallback to 2.0 seconds (2000 ms)
+        ffi::wl_event_source_timer_update(self.clean_exit_timer, 2000);
+    }
+
+    pub unsafe fn check_clean_exit_progress(&mut self) {
+        if !self.clean_exit_in_progress {
+            return;
+        }
+
+        let mut normal_windows_count = 0;
+        for &w in self.windows.iter() {
+            if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
+                continue;
+            }
+            if (*w).is_status_bar() || (*w).is_wallpaper() {
+                continue;
+            }
+            normal_windows_count += 1;
+        }
+
+        if normal_windows_count == 0 {
+            log::info!("All windows closed cleanly. Exiting display server.");
+            if !self.clean_exit_timer.is_null() {
+                ffi::wl_event_source_remove(self.clean_exit_timer);
+                self.clean_exit_timer = std::ptr::null_mut();
+            }
+            ffi::wl_display_terminate((*self.server).wl_server);
+        } else {
+            log::info!("Clean exit: waiting for {} remaining windows to close...", normal_windows_count);
+        }
+    }
+
     pub unsafe fn match_and_remove_restore_state(&mut self, app_id: &str, title: &str) -> Option<SavedWindowState> {
         if app_id.is_empty() {
             return None;
@@ -465,6 +542,10 @@ impl WindowManager {
         if !self.timeout.is_null() {
             ffi::wl_event_source_remove(self.timeout);
             self.timeout = std::ptr::null_mut();
+        }
+        if !self.clean_exit_timer.is_null() {
+            ffi::wl_event_source_remove(self.clean_exit_timer);
+            self.clean_exit_timer = std::ptr::null_mut();
         }
         if !self.animation_timer.is_null() {
             ffi::wl_event_source_remove(self.animation_timer);
@@ -1973,7 +2054,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             }
             Action::Exit => {
                 log::info!("monolithic execute_action: Exit requested");
-                ffi::wl_display_terminate((*self.server).wl_server);
+                self.start_clean_exit();
             }
             Action::Fullscreen => {
                 if let Some(seat) = self.first_seat() {
@@ -2962,6 +3043,16 @@ unsafe extern "C" fn dirty_idle_callback(data: *mut std::ffi::c_void) {
             (*wm).render_start();
         }
     }
+}
+
+unsafe extern "C" fn handle_clean_exit_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = data as *mut WindowManager;
+    if wm.is_null() {
+        return 0;
+    }
+    log::info!("Clean exit timeout reached. Forcing display termination.");
+    ffi::wl_display_terminate((*(*wm).server).wl_server);
+    0
 }
 
 unsafe extern "C" fn handle_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {

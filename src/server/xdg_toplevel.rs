@@ -450,7 +450,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
                     app_id.starts_with("cce-status");
     let use_optimized = if is_status { false } else { (*(*window).server).wm.layout.scenefx_optimized_blur };
-    let blur_enabled = (*window).rendering_requested.blur;
+    let is_cce_app = app_id.starts_with("cce-");
+    let blur_enabled = (*window).rendering_requested.blur && ((*window).wm_requested.ssd || is_cce_app || is_status);
     ffi::river_scene_node_enable_blur(
         (*window).tree as *mut ffi::wlr_scene_node,
         blur_enabled,
