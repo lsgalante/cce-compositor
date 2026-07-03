@@ -197,6 +197,7 @@ impl WindowManager {
         self.last_status_update = std::cell::RefCell::new(None);
         self.status_hide_mode = false;
         self.adjust_position_mode = false;
+        let _ = std::fs::remove_file("/tmp/cce-status-adjust-mode");
 
         ffi::wl_list_init(&mut self.sent.outputs);
         ffi::wl_list_init(&mut self.sent.seats);
@@ -2655,6 +2656,11 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     !self.adjust_position_mode
                 };
                 self.adjust_position_mode = enable;
+                if enable {
+                    let _ = std::fs::File::create("/tmp/cce-status-adjust-mode");
+                } else {
+                    let _ = std::fs::remove_file("/tmp/cce-status-adjust-mode");
+                }
                 self.dirty_windowing();
                 return format!("ok {}\n", enable);
             }

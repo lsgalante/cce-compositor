@@ -206,6 +206,7 @@ pub fn run_server() {
     }
     impl Drop for ServerGuard {
         fn drop(&mut self) {
+            let _ = std::fs::remove_file("/tmp/cce-status-adjust-mode");
             if let Some(pid) = self.init_pid {
                 log::info!("sending SIGTERM to child process group {}", pid);
                 let _ = nix::sys::signal::kill(
