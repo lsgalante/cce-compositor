@@ -1371,11 +1371,14 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     let mut config: Config = parse_kdl_config(&content)?;
 
     let path_buf = std::path::Path::new(path);
-    let keybinds_path = path_buf.parent().unwrap_or_else(|| std::path::Path::new(".")).join("keybinds.kdl");
-    if keybinds_path.exists() {
-        if let Ok(keybinds_content) = fs::read_to_string(&keybinds_path) {
-            if let Ok(keybinds_config) = parse_kdl_config(&keybinds_content) {
-                config.key_bindings.extend(keybinds_config.key_bindings);
+    let input_path = path_buf.parent().unwrap_or_else(|| std::path::Path::new(".")).join("input.kdl");
+    if input_path.exists() {
+        if let Ok(input_content) = fs::read_to_string(&input_path) {
+            if let Ok(input_config) = parse_kdl_config(&input_content) {
+                config.key_bindings.extend(input_config.key_bindings);
+                if input_config.input.is_some() {
+                    config.input = input_config.input;
+                }
             }
         }
     }
