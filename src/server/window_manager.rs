@@ -380,10 +380,12 @@ impl WindowManager {
             return;
         }
         log::info!("Starting clean exit process...");
-        self.clean_exit_in_progress = true;
 
-        // Save state before closing windows
+        // Save state before closing windows and setting exit flags
         self.save_state();
+
+        self.clean_exit_in_progress = true;
+        self.shutting_down = true;
 
         // Get list of windows we need to wait for to close cleanly
         let mut normal_windows = Vec::new();
