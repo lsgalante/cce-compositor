@@ -969,6 +969,85 @@ impl Seat {
                             (*win).rendering_requested.y = final_y;
                             (*win).box_geom.x = final_x;
                             (*win).box_geom.y = final_y;
+
+                            // Dynamically update orientation during drag
+                            let lx = x as f64;
+                            let ly = y as f64;
+                            let mut closest_edge = crate::window::StatusEdge::Top;
+                            let mut min_dist = f64::MAX;
+
+                            let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                            let mut curr_out = (*outputs_list).next;
+                            let mut found_out = false;
+                            while curr_out != outputs_list {
+                                let output = crate::container_of!(curr_out, crate::output::Output, link);
+                                if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                                    let wlr_box = (*output).sent.box_layout();
+                                    let ox = wlr_box.x as f64;
+                                    let oy = wlr_box.y as f64;
+                                    let ow = wlr_box.width as f64;
+                                    let oh = wlr_box.height as f64;
+
+                                    if lx >= ox && lx <= ox + ow && ly >= oy && ly <= oy + oh {
+                                        found_out = true;
+                                        let dt = ly - oy;
+                                        let db = (oy + oh) - ly;
+                                        let dl = lx - ox;
+                                        let dr = (ox + ow) - lx;
+
+                                        enum EdgeBasic { Top, Bottom, Left, Right }
+                                        let mut edge = EdgeBasic::Top;
+                                        if dt < min_dist { min_dist = dt; edge = EdgeBasic::Top; }
+                                        if db < min_dist { min_dist = db; edge = EdgeBasic::Bottom; }
+                                        if dl < min_dist { min_dist = dl; edge = EdgeBasic::Left; }
+                                        if dr < min_dist { min_dist = dr; edge = EdgeBasic::Right; }
+
+                                        match edge {
+                                            EdgeBasic::Top => {
+                                                if lx < ox + ow / 3.0 {
+                                                    closest_edge = crate::window::StatusEdge::TopLeft;
+                                                } else if lx > ox + 2.0 * ow / 3.0 {
+                                                    closest_edge = crate::window::StatusEdge::TopRight;
+                                                } else {
+                                                    closest_edge = crate::window::StatusEdge::TopCenter;
+                                                }
+                                            }
+                                            EdgeBasic::Bottom => {
+                                                if lx < ox + ow / 3.0 {
+                                                    closest_edge = crate::window::StatusEdge::BottomLeft;
+                                                } else if lx > ox + 2.0 * ow / 3.0 {
+                                                    closest_edge = crate::window::StatusEdge::BottomRight;
+                                                } else {
+                                                    closest_edge = crate::window::StatusEdge::BottomCenter;
+                                                }
+                                            }
+                                            EdgeBasic::Left => {
+                                                closest_edge = crate::window::StatusEdge::Left;
+                                            }
+                                            EdgeBasic::Right => {
+                                                closest_edge = crate::window::StatusEdge::Right;
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                                curr_out = (*curr_out).next;
+                            }
+
+                            if found_out {
+                                let bar_h = (*self.server).wm.layout.bar_height as u32;
+                                let original_length = std::cmp::max((*win).box_geom.width, (*win).box_geom.height) as u32;
+                                let (target_w, target_h) = match closest_edge {
+                                    crate::window::StatusEdge::Left | crate::window::StatusEdge::Right => (bar_h, original_length),
+                                    _ => (original_length, bar_h),
+                                };
+
+                                if (*win).box_geom.width as u32 != target_w || (*win).box_geom.height as u32 != target_h {
+                                    (*win).wm_requested.dimensions = Some(crate::window::Dimensions { width: target_w, height: target_h });
+                                    (*win).wm_requested.bounds = crate::window::Dimensions { width: target_w, height: target_h };
+                                    (*self.server).wm.dirty_windowing();
+                                }
+                            }
                         } else {
                             let scale = (*(*self.server).wm.server).wm.desk_zoom;
                             let pan_x = (*(*self.server).wm.server).wm.desk_pan_x;
