@@ -1654,7 +1654,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
             let mut cur_left_x = wlr_box.x + margin;
             for win_ptr in top_left {
-                let w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
                 (*win_ptr).rendering_requested.x = cur_left_x;
                 (*win_ptr).rendering_requested.y = status_y_top;
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
@@ -1664,8 +1665,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
             let mut cur_right_x = wlr_box.x + wlr_box.width - margin;
             for win_ptr in top_right.into_iter().rev() {
-                let actual_w = (*win_ptr).box_geom.width;
-                let w = if actual_w > 0 { actual_w as u32 } else { 100 };
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
                 let x = cur_right_x - w as i32;
                 (*win_ptr).rendering_requested.x = x;
                 (*win_ptr).rendering_requested.y = status_y_top;
@@ -1685,7 +1686,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let status_y_bottom = wlr_box.y + wlr_box.height - bar_h as i32;
             let mut cur_left_x = wlr_box.x + margin;
             for win_ptr in bottom_left {
-                let w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
                 (*win_ptr).rendering_requested.x = cur_left_x;
                 (*win_ptr).rendering_requested.y = status_y_bottom;
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
@@ -1695,8 +1697,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
             let mut cur_right_x = wlr_box.x + wlr_box.width - margin;
             for win_ptr in bottom_right.into_iter().rev() {
-                let actual_w = (*win_ptr).box_geom.width;
-                let w = if actual_w > 0 { actual_w as u32 } else { 100 };
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
                 let x = cur_right_x - w as i32;
                 (*win_ptr).rendering_requested.x = x;
                 (*win_ptr).rendering_requested.y = status_y_bottom;
@@ -1708,7 +1710,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             // 3. Left Edge (Vertical stacking)
             let mut cur_left_y = wlr_box.y + margin;
             for win_ptr in left_side {
-                let actual_h = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let actual_h = if prev_len > 0 { prev_len as u32 } else { 100 };
                 (*win_ptr).rendering_requested.x = wlr_box.x;
                 (*win_ptr).rendering_requested.y = cur_left_y;
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: bar_h, height: actual_h });
@@ -1719,7 +1722,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             // 4. Right Edge (Vertical stacking)
             let mut cur_right_y = wlr_box.y + margin;
             for win_ptr in right_side {
-                let actual_h = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as u32 } else { 100 };
+                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
+                let actual_h = if prev_len > 0 { prev_len as u32 } else { 100 };
                 (*win_ptr).rendering_requested.x = wlr_box.x + wlr_box.width - bar_h as i32;
                 (*win_ptr).rendering_requested.y = cur_right_y;
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: bar_h, height: actual_h });
