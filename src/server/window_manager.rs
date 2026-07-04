@@ -1307,10 +1307,14 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let dec_h = std::cmp::max(bw, 16);
             for (sp_idx, &win_ptr) in overlay_windows.iter().enumerate() {
                 if sp_idx == 0 {
+                    let app_id = (*win_ptr).get_app_id_string();
+                    let is_cce_cloud = app_id.as_deref().map_or(false, |id| id.starts_with("cce-cloud"));
+
                     let mut sp_x = (*win_ptr).box_geom.x;
                     let mut sp_y = (*win_ptr).box_geom.y;
                     let mut sp_w = (*win_ptr).box_geom.width as i32;
                     let mut sp_h = (*win_ptr).box_geom.height as i32;
+
 
                     if sp_w == 0 || sp_h == 0 {
                         sp_w = if (*win_ptr).wm_scheduled.dimensions_hint.min_width > 32 {
@@ -1331,11 +1335,20 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         (*win_ptr).box_geom.y = sp_y;
                         (*win_ptr).box_geom.width = sp_w;
                         (*win_ptr).box_geom.height = sp_h;
+                    } else if is_cce_cloud {
+                        if let Some(pos) = self.layout.cloud_position_default {
+                            sp_x = usable_x + pos[0];
+                            sp_y = usable_y + pos[1];
+                            (*win_ptr).box_geom.x = sp_x;
+                            (*win_ptr).box_geom.y = sp_y;
+                        }
                     }
 
                     (*win_ptr).rendering_requested.x = sp_x;
                     (*win_ptr).rendering_requested.y = sp_y;
                     (*win_ptr).scale = 1.0;
+
+
 
                     let vx = self.desk_pan_x + (sp_x - phys_x) as f64 / self.desk_zoom;
                     let vy = self.desk_pan_y + (sp_y - phys_y) as f64 / self.desk_zoom;
@@ -1461,12 +1474,20 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     } else {
                         100
                     };
-                    let fx = usable_x + usable_w - fw - self.layout.gap_right;
-                    let fy = usable_y + self.layout.gap_top;
+                    let app_id = (*win_ptr).get_app_id_string();
+                    let is_cce_cloud = app_id.as_deref().map_or(false, |id| id.starts_with("cce-cloud"));
+
+                    let (fx, fy) = if is_cce_cloud && self.layout.cloud_position_default.is_some() {
+                        let pos = self.layout.cloud_position_default.unwrap();
+                        (usable_x + pos[0], usable_y + pos[1])
+                    } else {
+                        (usable_x + usable_w - fw - self.layout.gap_right, usable_y + self.layout.gap_top)
+                    };
 
                     (*win_ptr).rendering_requested.x = fx;
                     (*win_ptr).rendering_requested.y = fy;
                     (*win_ptr).scale = 1.0;
+
                     (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
                         width: fw as u32,
                         height: fh as u32,

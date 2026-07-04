@@ -54,6 +54,7 @@ pub struct Layout {
     pub status_backdrop_blur_ignore_transparent: bool,
     pub window_backdrop_blur_ignore_transparent: bool,
     pub status_module_hide_mode_preview: i64,
+    pub cloud_position_default: Option<[i32; 2]>,
 }
 
 impl Default for Layout {
@@ -106,6 +107,7 @@ impl Default for Layout {
             status_backdrop_blur_ignore_transparent: true,
             window_backdrop_blur_ignore_transparent: true,
             status_module_hide_mode_preview: 4,
+            cloud_position_default: None,
         }
     }
 }
@@ -300,6 +302,8 @@ pub struct SurfaceConfig {
     pub backplate_blur: f64,
     #[serde(default = "default_backplate_corner_radius")]
     pub backplate_corner_radius: i64,
+    #[serde(default = "default_cloud_position_default")]
+    pub cloud_position_default: Option<[i32; 2]>,
 }
 
 impl Default for SurfaceConfig {
@@ -317,11 +321,17 @@ impl Default for SurfaceConfig {
             backplate_color: default_backplate_color(),
             backplate_blur: default_backplate_blur(),
             backplate_corner_radius: default_backplate_corner_radius(),
+            cloud_position_default: default_cloud_position_default(),
         }
      }
 }
 
+fn default_cloud_position_default() -> Option<[i32; 2]> {
+    None
+}
+
 fn default_desktop_gap_color() -> String {
+
     "#000000".to_string()
 }
 
@@ -815,6 +825,26 @@ fn get_child_arg_f64_opt(node: &kdl::KdlNode, child_name: &str) -> Option<f64> {
     }
     None
 }
+
+fn get_child_arg_vec2i_opt(node: &kdl::KdlNode, child_name: &str) -> Option<[i32; 2]> {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                let entries = child.entries();
+                if entries.len() >= 2 {
+                    let has_tag = entries.first().and_then(|e| e.ty()).map_or(false, |t| t.value() == "vec2i");
+                    if has_tag {
+                        let x = entries[0].value().as_i64()? as i32;
+                        let y = entries[1].value().as_i64()? as i32;
+                        return Some([x, y]);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 
 fn get_child_arg_string_opt(node: &kdl::KdlNode, child_name: &str) -> Option<String> {
     if let Some(children) = node.children() {
@@ -1411,6 +1441,12 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                             }
                         }
                     }
+                    if let Some(cloud_node) = surface_children.nodes().iter().find(|n| n.name().value() == "cloud") {
+                        found_nested = true;
+                        if let Some(pos) = get_child_arg_vec2i_opt(cloud_node, "position_default") {
+                            surface.cloud_position_default = Some(pos);
+                        }
+                    }
                 }
             }
         }
@@ -1429,6 +1465,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
             surface.backplate_blur = get_child_arg_f64(node, "backplate_blur", default_backplate_blur());
             surface.backplate_corner_radius = get_child_arg_i64(node, "backplate_corner_radius", default_backplate_corner_radius());
+            surface.cloud_position_default = get_child_arg_vec2i_opt(node, "cloud_position_default");
         }
     }
 
@@ -1543,6 +1580,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
     state.layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
     state.layout.status_module_hide_mode_preview = config.layout.status_module_hide_mode_preview;
+    state.layout.cloud_position_default = config.surface.cloud_position_default;
 
     for (key, val) in &config.env {
         let expanded = expand_env_vars(val);
