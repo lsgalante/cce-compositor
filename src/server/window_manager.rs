@@ -2554,19 +2554,50 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     if let Some(seat) = self.first_seat() {
                         let lx = (*seat).cursor.x();
                         let ly = (*seat).cursor.y();
-                        let vx = self.desk_pan_x + (lx - phys_x) / self.desk_zoom;
-                        let vy = self.desk_pan_y + (ly - phys_y) / self.desk_zoom;
-                        self.desk_zoom = 1.0;
-                        self.mode = WindowManagerMode::Normal;
-                        self.desk_pan_x = vx - viewport_w / 2.0;
-                        self.desk_pan_y = vy - viewport_h / 2.0;
-                        self.stop_panning_animation();
-                        if matches!(self.state, WindowManagerState::Idle) {
-                            self.update_viewport_local();
-                        } else {
-                            self.dirty_windowing();
+
+                        let mut hovered_win: *mut crate::window::Window = std::ptr::null_mut();
+                        if let Some(result) = (*self.server).scene.at(lx, ly) {
+                            if let crate::scene_node_data::SceneNodeDataVal::Window(window) = result.data {
+                                hovered_win = window;
+                            }
                         }
-                        return;
+
+                        if !hovered_win.is_null() && !(*hovered_win).is_status_bar() && !(*hovered_win).is_wallpaper() {
+                            (*seat).focus(crate::seat::Focus::Window(hovered_win));
+                            if !(*seat).object.is_null() && !(*hovered_win).object.is_null() {
+                                ffi::wl_resource_post_event((*seat).object, 4, (*hovered_win).object);
+                            }
+
+                            let win_w = if (*hovered_win).box_geom.width > 0 { (*hovered_win).box_geom.width as f64 } else { 800.0 };
+                            let win_h = if (*hovered_win).box_geom.height > 0 { (*hovered_win).box_geom.height as f64 } else { 600.0 };
+                            let center_x = (*hovered_win).virtual_x + win_w / 2.0;
+                            let center_y = (*hovered_win).virtual_y + win_h / 2.0;
+                            self.desk_zoom = 1.0;
+                            self.mode = WindowManagerMode::Normal;
+                            self.desk_pan_x = center_x - viewport_w / 2.0;
+                            self.desk_pan_y = center_y - viewport_h / 2.0;
+                            self.stop_panning_animation();
+                            if matches!(self.state, WindowManagerState::Idle) {
+                                self.update_viewport_local();
+                            } else {
+                                self.dirty_windowing();
+                            }
+                            return;
+                        } else {
+                            let vx = self.desk_pan_x + (lx - phys_x) / self.desk_zoom;
+                            let vy = self.desk_pan_y + (ly - phys_y) / self.desk_zoom;
+                            self.desk_zoom = 1.0;
+                            self.mode = WindowManagerMode::Normal;
+                            self.desk_pan_x = vx - viewport_w / 2.0;
+                            self.desk_pan_y = vy - viewport_h / 2.0;
+                            self.stop_panning_animation();
+                            if matches!(self.state, WindowManagerState::Idle) {
+                                self.update_viewport_local();
+                            } else {
+                                self.dirty_windowing();
+                            }
+                            return;
+                        }
                     }
 
                     self.desk_zoom = 1.0;
