@@ -1160,14 +1160,92 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         if let Some(children) = node.children() {
             for child in children.nodes() {
                 let name = child.name().value();
+                let mut parsed_scale = None;
+                if let Some(entry) = child.entries().iter().find(|e| e.name().map(|n| n.value()) == Some("scale")) {
+                    if let Some(num) = entry.value().as_f64() {
+                        parsed_scale = Some(num);
+                    }
+                }
+                let mut parsed_interval = None;
+                if let Some(entry) = child.entries().iter().find(|e| e.name().map(|n| n.value()) == Some("brightness_interval")) {
+                    if let Some(num) = entry.value().as_i64() {
+                        parsed_interval = Some(num);
+                    }
+                }
+                let mut parsed_up = None;
+                if let Some(entry) = child.entries().iter().find(|e| e.name().map(|n| n.value()) == Some("brightness_up")) {
+                    if let Some(key_val) = entry.value().as_string() {
+                        parsed_up = Some(key_val.to_string());
+                    }
+                }
+                let mut parsed_down = None;
+                if let Some(entry) = child.entries().iter().find(|e| e.name().map(|n| n.value()) == Some("brightness_down")) {
+                    if let Some(key_val) = entry.value().as_string() {
+                        parsed_down = Some(key_val.to_string());
+                    }
+                }
+
                 if let Some(display_children) = child.children() {
-                    if let Some(scale_node) = display_children.nodes().iter().find(|n| n.name().value() == "scale") {
-                        if let Some(entry) = scale_node.entries().first() {
-                            if let Some(num) = entry.value().as_f64() {
-                                display.insert(format!("scale_{}", name), num);
+                    if parsed_scale.is_none() {
+                        if let Some(scale_node) = display_children.nodes().iter().find(|n| n.name().value() == "scale") {
+                            if let Some(entry) = scale_node.entries().first() {
+                                if let Some(num) = entry.value().as_f64() {
+                                    parsed_scale = Some(num);
+                                }
                             }
                         }
                     }
+                    if parsed_interval.is_none() {
+                        if let Some(interval_node) = display_children.nodes().iter().find(|n| n.name().value() == "brightness_interval") {
+                            if let Some(entry) = interval_node.entries().first() {
+                                if let Some(num) = entry.value().as_i64() {
+                                    parsed_interval = Some(num);
+                                }
+                            }
+                        }
+                    }
+                    if parsed_up.is_none() {
+                        if let Some(up_node) = display_children.nodes().iter().find(|n| n.name().value() == "brightness_up") {
+                            if let Some(entry) = up_node.entries().first() {
+                                if let Some(key_val) = entry.value().as_string() {
+                                    parsed_up = Some(key_val.to_string());
+                                }
+                            }
+                        }
+                    }
+                    if parsed_down.is_none() {
+                        if let Some(down_node) = display_children.nodes().iter().find(|n| n.name().value() == "brightness_down") {
+                            if let Some(entry) = down_node.entries().first() {
+                                if let Some(key_val) = entry.value().as_string() {
+                                    parsed_down = Some(key_val.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some(num) = parsed_scale {
+                    display.insert(format!("scale_{}", name), num);
+                }
+                let interval = parsed_interval.unwrap_or(10);
+                if parsed_interval.is_some() {
+                    display.insert(format!("brightness_interval_{}", name), interval as f64);
+                }
+                if let Some(key_val) = parsed_up {
+                    key_bindings.push(KeybindConfig {
+                        mods: "".to_string(),
+                        key: key_val,
+                        action: "spawn".to_string(),
+                        command: Some(format!("brightnessctl set {}%+", interval)),
+                    });
+                }
+                if let Some(key_val) = parsed_down {
+                    key_bindings.push(KeybindConfig {
+                        mods: "".to_string(),
+                        key: key_val,
+                        action: "spawn".to_string(),
+                        command: Some(format!("brightnessctl set {}%-", interval)),
+                    });
                 }
             }
         }
@@ -1748,6 +1826,9 @@ mod tests {
             output {
                 eDP-1 {
                     scale (f64)2.0
+                    brightness_up (keybind)"XF86MonBrightnessUp"
+                    brightness_down (keybind)"XF86MonBrightnessDown"
+                    brightness_interval (i64)10
                 }
                 DP-1 {
                     scale (f64)1.5
@@ -1757,6 +1838,15 @@ mod tests {
         let config = parse_kdl_config(content).unwrap();
         assert_eq!(config.display.get("scale_eDP-1"), Some(&2.0));
         assert_eq!(config.display.get("scale_DP-1"), Some(&1.5));
+        assert_eq!(config.display.get("brightness_interval_eDP-1"), Some(&10.0));
+
+        let up_bind = config.key_bindings.iter().find(|kb| kb.key == "XF86MonBrightnessUp").unwrap();
+        assert_eq!(up_bind.action, "spawn");
+        assert_eq!(up_bind.command, Some("brightnessctl set 10%+".to_string()));
+
+        let down_bind = config.key_bindings.iter().find(|kb| kb.key == "XF86MonBrightnessDown").unwrap();
+        assert_eq!(down_bind.action, "spawn");
+        assert_eq!(down_bind.command, Some("brightnessctl set 10%-".to_string()));
     }
 
     #[test]
