@@ -1972,8 +1972,48 @@ impl Window {
             ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
             ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
 
-            // Disable backdrop blur during active viewport zoom/pan for maximum performance
-            ffi::river_scene_node_enable_blur(self.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true, 0, 0, 0, 0);
+            // Disable backdrop blur during active viewport zoom/pan for maximum performance,
+            // EXCEPT for the data editor window (app_id: "cce-data-editor") which we want to keep blurred.
+            let app_id = self.get_app_id_string().unwrap_or_default();
+            if app_id.starts_with("cce-data-editor") {
+                let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
+                                app_id.starts_with("cce-status");
+                let is_cce_app = app_id.starts_with("cce-");
+                let blur_enabled = requested.blur && (self.wm_requested.ssd || is_cce_app || is_status);
+                let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
+                if is_status {
+                    ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
+                }
+                let use_optimized = if is_status { false } else { (*self.server).wm.layout.scenefx_optimized_blur };
+                let toplevel_w = match self.impl_type {
+                    WindowImpl::Toplevel(toplevel) => {
+                        if toplevel.is_null() { 0 } else { (*toplevel).geometry.width }
+                    }
+                    _ => 0,
+                };
+                let toplevel_h = match self.impl_type {
+                    WindowImpl::Toplevel(toplevel) => {
+                        if toplevel.is_null() { 0 } else { (*toplevel).geometry.height }
+                    }
+                    _ => 0,
+                };
+                let actual_w = if self.rendering_sent.width > 0 { self.rendering_sent.width } else { toplevel_w as u32 };
+                let actual_h = if self.rendering_sent.height > 0 { self.rendering_sent.height } else { toplevel_h as u32 };
+                let width = (actual_w as f64 * self.scale) as i32;
+                let height = (actual_h as f64 * self.scale) as i32;
+                ffi::river_scene_node_enable_blur(
+                    self.tree as *mut ffi::wlr_scene_node,
+                    blur_enabled,
+                    use_optimized,
+                    ignore_transparent,
+                    0,
+                    0,
+                    width,
+                    height,
+                );
+            } else {
+                ffi::river_scene_node_enable_blur(self.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true, 0, 0, 0, 0);
+            }
 
             self.scale_only_render_finish();
             self.draw_borders();
