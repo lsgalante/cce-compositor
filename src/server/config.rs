@@ -241,6 +241,7 @@ pub struct InputDeviceConfigRule {
 pub struct WindowManagerConfig {
     pub close_window: Option<String>,
     pub toggle_fullscreen: Option<String>,
+    pub toggle_overview: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
@@ -1475,7 +1476,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "window manager" || n.name().value() == "window_manager") {
         let close_window = get_child_arg_string_opt(node, "close_window");
         let toggle_fullscreen = get_child_arg_string_opt(node, "toggle_fullscreen");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen });
+        let toggle_overview = get_child_arg_string_opt(node, "toggle_overview");
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview });
     }
 
     Ok(Config {
@@ -1677,6 +1679,29 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
                 action: Action::Fullscreen,
                 command: None,
             });
+        }
+        if let Some(ref toggle_ov_str) = wm_config.toggle_overview {
+            let normalized = toggle_ov_str.to_lowercase().replace('-', "_");
+            let gesture_type = if normalized.starts_with("swipe") {
+                Some("swipe")
+            } else if normalized.starts_with("pinch") {
+                Some("pinch")
+            } else {
+                None
+            };
+            if let Some(g_type) = gesture_type {
+                let direction = normalized.trim_start_matches(g_type).trim_start_matches('_').to_string();
+                for fingers in [3, 4] {
+                    state.gesture_binds.push(GestureBind {
+                        mods: 0,
+                        gesture_type: g_type.to_string(),
+                        fingers,
+                        direction: direction.clone(),
+                        action: Action::Expose,
+                        command: None,
+                    });
+                }
+            }
         }
     }
 
@@ -1907,9 +1932,10 @@ mod tests {
     #[test]
     fn test_kdl_window_manager_parsing() {
         let content = r#"
-            "window manager" {
+            "window_manager" {
                 close_window (keybind)"super+q"
                 toggle_fullscreen (keybind)"super+f"
+                toggle_overview ("menu:swipe_up,swipe_down,swipe_left,swipe_right,pinch_in,pinch_out")"swipe_up"
             }
         "#;
         let config = parse_kdl_config(content).unwrap();
@@ -1917,5 +1943,6 @@ mod tests {
         let wm = config.window_manager.unwrap();
         assert_eq!(wm.close_window, Some("super+q".to_string()));
         assert_eq!(wm.toggle_fullscreen, Some("super+f".to_string()));
+        assert_eq!(wm.toggle_overview, Some("swipe_up".to_string()));
     }
 }
