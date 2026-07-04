@@ -240,6 +240,7 @@ pub struct InputDeviceConfigRule {
 #[derive(Debug, Deserialize, Clone)]
 pub struct WindowManagerConfig {
     pub close_window: Option<String>,
+    pub toggle_fullscreen: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
@@ -1473,7 +1474,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     let mut window_manager = None;
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "window manager" || n.name().value() == "window_manager") {
         let close_window = get_child_arg_string_opt(node, "close_window");
-        window_manager = Some(WindowManagerConfig { close_window });
+        let toggle_fullscreen = get_child_arg_string_opt(node, "toggle_fullscreen");
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen });
     }
 
     Ok(Config {
@@ -1658,6 +1660,21 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
                 mods,
                 keysym,
                 action: Action::Close,
+                command: None,
+            });
+        }
+        if let Some(ref toggle_fs_str) = wm_config.toggle_fullscreen {
+            let (mods_str, key_str) = if let Some(last_plus) = toggle_fs_str.rfind('+') {
+                (toggle_fs_str[..last_plus].to_string(), toggle_fs_str[last_plus+1..].to_string())
+            } else {
+                ("".to_string(), toggle_fs_str.clone())
+            };
+            let mods = parse_modifiers(&mods_str);
+            let keysym = parse_keysym(&key_str);
+            state.keybinds.push(Keybind {
+                mods,
+                keysym,
+                action: Action::Fullscreen,
                 command: None,
             });
         }
@@ -1892,10 +1909,13 @@ mod tests {
         let content = r#"
             "window manager" {
                 close_window (keybind)"super+q"
+                toggle_fullscreen (keybind)"super+f"
             }
         "#;
         let config = parse_kdl_config(content).unwrap();
         assert!(config.window_manager.is_some());
-        assert_eq!(config.window_manager.unwrap().close_window, Some("super+q".to_string()));
+        let wm = config.window_manager.unwrap();
+        assert_eq!(wm.close_window, Some("super+q".to_string()));
+        assert_eq!(wm.toggle_fullscreen, Some("super+f".to_string()));
     }
 }
