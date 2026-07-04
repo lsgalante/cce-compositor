@@ -1680,29 +1680,6 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
                 command: None,
             });
         }
-        if let Some(ref toggle_ov_str) = wm_config.toggle_overview {
-            let normalized = toggle_ov_str.to_lowercase().replace('-', "_");
-            let gesture_type = if normalized.starts_with("swipe") {
-                Some("swipe")
-            } else if normalized.starts_with("pinch") {
-                Some("pinch")
-            } else {
-                None
-            };
-            if let Some(g_type) = gesture_type {
-                let direction = normalized.trim_start_matches(g_type).trim_start_matches('_').to_string();
-                for fingers in [3, 4] {
-                    state.gesture_binds.push(GestureBind {
-                        mods: 0,
-                        gesture_type: g_type.to_string(),
-                        fingers,
-                        direction: direction.clone(),
-                        action: Action::Expose,
-                        command: None,
-                    });
-                }
-            }
-        }
     }
 
     let super_mod = parse_modifiers("super");
@@ -1829,6 +1806,32 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             action,
             command,
         });
+    }
+
+    if let Some(ref wm_config) = config.window_manager {
+        if let Some(ref toggle_ov_str) = wm_config.toggle_overview {
+            let normalized = toggle_ov_str.to_lowercase().replace('-', "_");
+            let gesture_type = if normalized.starts_with("swipe") {
+                Some("swipe")
+            } else if normalized.starts_with("pinch") {
+                Some("pinch")
+            } else {
+                None
+            };
+            if let Some(g_type) = gesture_type {
+                let direction = normalized.trim_start_matches(g_type).trim_start_matches('_').to_string();
+                for fingers in [3, 4] {
+                    state.gesture_binds.push(GestureBind {
+                        mods: 0,
+                        gesture_type: g_type.to_string(),
+                        fingers,
+                        direction: direction.clone(),
+                        action: Action::Expose,
+                        command: None,
+                    });
+                }
+            }
+        }
     }
 
     state.mode_rules.clear();
