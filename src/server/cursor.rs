@@ -1829,7 +1829,7 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
 
     let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
     let modifiers = if !wlr_keyboard.is_null() {
-        ffi::wlr_keyboard_get_modifiers(wlr_keyboard)
+        ffi::wlr_keyboard_get_modifiers(wlr_keyboard) & 0x4d
     } else {
         0
     };
@@ -1980,7 +1980,7 @@ unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: 
 
     let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
     let modifiers = if !wlr_keyboard.is_null() {
-        ffi::wlr_keyboard_get_modifiers(wlr_keyboard)
+        ffi::wlr_keyboard_get_modifiers(wlr_keyboard) & 0x4d
     } else {
         0
     };
