@@ -2515,40 +2515,60 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 if self.mode == WindowManagerMode::Overview {
                     let mut viewport_w = 1920.0;
                     let mut viewport_h = 1080.0;
-                    let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                    let mut curr_out = (*outputs_list).next;
-                    while curr_out != outputs_list {
-                        let output = crate::container_of!(curr_out, crate::output::Output, link);
-                        if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                            let wlr_box = (*output).sent.box_layout();
-                            viewport_w = wlr_box.width as f64;
-                            viewport_h = wlr_box.height as f64;
-                            break;
+                    let mut phys_x = 0.0;
+                    let mut phys_y = 0.0;
+                    let mut output_found = false;
+
+                    if let Some(seat) = self.first_seat() {
+                        let lx = (*seat).cursor.x();
+                        let ly = (*seat).cursor.y();
+                        let wlr_output = (*self.server).om.output_at(lx, ly);
+                        if !wlr_output.is_null() {
+                            let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+                            ffi::wlr_output_layout_get_box((*self.server).om.output_layout, wlr_output, &mut output_box);
+                            viewport_w = output_box.width as f64;
+                            viewport_h = output_box.height as f64;
+                            phys_x = output_box.x as f64;
+                            phys_y = output_box.y as f64;
+                            output_found = true;
                         }
-                        curr_out = (*curr_out).next;
+                    }
+
+                    if !output_found {
+                        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                        let mut curr_out = (*outputs_list).next;
+                        while curr_out != outputs_list {
+                            let output = crate::container_of!(curr_out, crate::output::Output, link);
+                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                                let wlr_box = (*output).sent.box_layout();
+                                viewport_w = wlr_box.width as f64;
+                                viewport_h = wlr_box.height as f64;
+                                phys_x = wlr_box.x as f64;
+                                phys_y = wlr_box.y as f64;
+                                break;
+                            }
+                            curr_out = (*curr_out).next;
+                        }
                     }
 
                     if let Some(seat) = self.first_seat() {
-                        if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                            if self.window_is_valid(fw) {
-                                let win_w = if (*fw).box_geom.width > 0 { (*fw).box_geom.width as f64 } else { 800.0 };
-                                let win_h = if (*fw).box_geom.height > 0 { (*fw).box_geom.height as f64 } else { 600.0 };
-                                let center_x = (*fw).virtual_x + win_w / 2.0;
-                                let center_y = (*fw).virtual_y + win_h / 2.0;
-                                self.desk_zoom = 1.0;
-                                self.mode = WindowManagerMode::Normal;
-                                self.desk_pan_x = center_x - viewport_w / 2.0;
-                                self.desk_pan_y = center_y - viewport_h / 2.0;
-                                self.stop_panning_animation();
-                                if matches!(self.state, WindowManagerState::Idle) {
-                                    self.update_viewport_local();
-                                } else {
-                                    self.dirty_windowing();
-                                }
-                                return;
-                            }
+                        let lx = (*seat).cursor.x();
+                        let ly = (*seat).cursor.y();
+                        let vx = self.desk_pan_x + (lx - phys_x) / self.desk_zoom;
+                        let vy = self.desk_pan_y + (ly - phys_y) / self.desk_zoom;
+                        self.desk_zoom = 1.0;
+                        self.mode = WindowManagerMode::Normal;
+                        self.desk_pan_x = vx - viewport_w / 2.0;
+                        self.desk_pan_y = vy - viewport_h / 2.0;
+                        self.stop_panning_animation();
+                        if matches!(self.state, WindowManagerState::Idle) {
+                            self.update_viewport_local();
+                        } else {
+                            self.dirty_windowing();
                         }
+                        return;
                     }
+
                     self.desk_zoom = 1.0;
                     self.mode = WindowManagerMode::Normal;
                     self.desk_pan_x = 0.0;
