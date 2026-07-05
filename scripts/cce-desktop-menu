@@ -35,7 +35,7 @@ json_layout='{
         { "type": "button", "text": "Files", "id": "files" },
         { "type": "button", "text": "Data Editor", "id": "data_editor" },
         { "type": "button", "text": "Applications", "id": "apps" },
-        { "type": "button", "text": "Settings", "id": "settings" },
+        { "type": "button", "text": "System Settings", "id": "settings" },
         { "type": "button", "text": "Expose Windows", "id": "expose" },
         { "type": "button", "text": "Reload Config", "id": "reload" },
         { "type": "button", "text": "Logout", "id": "exit" }
