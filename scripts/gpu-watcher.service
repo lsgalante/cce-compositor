@@ -1,0 +1,11 @@
+[Unit]
+Description=NVIDIA GPU Wedge and Xid Error Watcher
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/gpu-watcher
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
