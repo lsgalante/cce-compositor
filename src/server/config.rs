@@ -1,4 +1,4 @@
-// TOML config parsing for monolithic cce server
+// KDL config parsing for monolithic cce server
  
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -645,7 +645,7 @@ pub fn parse_keysym(key_str: &str) -> u32 {
 pub fn default_config_path() -> Option<String> {
     let xdg_config_home = std::env::var("XDG_CONFIG_HOME")
         .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lsgalante".to_string());
+            let home = std::env::var("HOME").unwrap_or_default();
             format!("{}/.config", home)
         });
         
