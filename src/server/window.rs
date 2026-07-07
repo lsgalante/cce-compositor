@@ -741,15 +741,60 @@ impl Window {
             self.tiling_mode = crate::tiling::TilingMode::Status;
             if is_status_bar && self.status_edge == StatusEdge::Unspecified {
                 let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
-                let name = if let Some(stripped) = app_id.strip_prefix("cce-status-left-") {
+                let name = if let Some(stripped) = app_id.strip_prefix("cce-status-interface-left-").or_else(|| app_id.strip_prefix("cce-status-left-")) {
                     stripped
-                } else if let Some(stripped) = app_id.strip_prefix("cce-status-right-") {
+                } else if let Some(stripped) = app_id.strip_prefix("cce-status-interface-right-").or_else(|| app_id.strip_prefix("cce-status-right-")) {
                     stripped
                 } else {
                     &app_id
                 };
                 let mut loaded_edge = None;
-                if let Ok(content) = std::fs::read_to_string(cce_ui::config::get_config_path()) {
+                if name == "light_source" {
+                    let mut light_pos = 2.356194490192345_f32; // Default 135 deg in rad
+                    if let Ok(content) = std::fs::read_to_string(cce_ui::config::get_config_path()) {
+                        let val = cce_ui::config::parse_kdl_to_json(&content);
+                        if let Some(wm_obj) = val.get("window_manager") {
+                            if let Some(pos_val) = wm_obj.get("light_source_position") {
+                                if let Some(f) = pos_val.as_f64() {
+                                    light_pos = f as f32;
+                                } else if let Some(i) = pos_val.as_i64() {
+                                    let deg = i as f32;
+                                    if deg > 2.0 * std::f32::consts::PI {
+                                        light_pos = deg.to_radians();
+                                    } else {
+                                        light_pos = deg;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    let two_pi = 2.0 * std::f32::consts::PI;
+                    let mut angle = light_pos % two_pi;
+                    if angle < 0.0 {
+                        angle += two_pi;
+                    }
+                    
+                    let pi = std::f32::consts::PI;
+                    let edge = if angle < pi / 8.0 || angle >= 15.0 * pi / 8.0 {
+                        StatusEdge::Right
+                    } else if angle < 3.0 * pi / 8.0 {
+                        StatusEdge::TopRight
+                    } else if angle < 5.0 * pi / 8.0 {
+                        StatusEdge::TopCenter
+                    } else if angle < 7.0 * pi / 8.0 {
+                        StatusEdge::TopLeft
+                    } else if angle < 9.0 * pi / 8.0 {
+                        StatusEdge::Left
+                    } else if angle < 11.0 * pi / 8.0 {
+                        StatusEdge::BottomLeft
+                    } else if angle < 13.0 * pi / 8.0 {
+                        StatusEdge::BottomCenter
+                    } else {
+                        StatusEdge::BottomRight
+                    };
+                    loaded_edge = Some(edge);
+                } else if let Ok(content) = std::fs::read_to_string(cce_ui::config::get_config_path()) {
                     let val = cce_ui::config::parse_kdl_to_json(&content);
                     if let Some(layout_obj) = val.get("layout") {
                         if let Some(status_bar_obj) = layout_obj.get("status_bar") {
@@ -1664,7 +1709,7 @@ impl Window {
                 let w = self.rendering_sent.width as i32;
                 let h = self.rendering_sent.height as i32;
                 w.min(h) / 2
-            } else if self.wm_requested.ssd {
+            } else if self.wm_requested.ssd || is_cce_app {
                 (*self.server).wm.layout.backplate_corner_radius
             } else {
                 0

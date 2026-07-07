@@ -591,7 +591,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
         let mut is_status = false;
         if !(*wlr_layer_surface).namespace.is_null() {
             let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-            if ns == "cce-status" {
+            if ns == "cce-status" || ns == "cce-status-interface" {
                 blur_enabled = (*server).wm.layout.status_background_blur > 0.001;
                 ignore_transparent = (*server).wm.layout.status_backdrop_blur_ignore_transparent;
                 is_status = true;

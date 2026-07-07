@@ -197,7 +197,7 @@ impl WindowManager {
         self.last_status_update = std::cell::RefCell::new(None);
         self.status_hide_mode = false;
         self.adjust_position_mode = false;
-        let _ = std::fs::remove_file("/tmp/cce-status-adjust-mode");
+        let _ = std::fs::remove_file("/tmp/cce-status-interface-adjust-mode");
 
         ffi::wl_list_init(&mut self.sent.outputs);
         ffi::wl_list_init(&mut self.sent.seats);
@@ -1712,7 +1712,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let sort_left = |w_list: &mut Vec<*mut Window>| {
                 w_list.sort_by_key(|&w| unsafe {
                     let app_id = (*w).get_app_id_string().unwrap_or_default();
-                    let name = app_id.strip_prefix("cce-status-left-").unwrap_or(&app_id);
+                    let name = app_id.strip_prefix("cce-status-interface-left-")
+                        .or_else(|| app_id.strip_prefix("cce-status-left-"))
+                        .unwrap_or(&app_id);
                     LEFT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
                 });
             };
@@ -1720,7 +1722,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let sort_right = |w_list: &mut Vec<*mut Window>| {
                 w_list.sort_by_key(|&w| unsafe {
                     let app_id = (*w).get_app_id_string().unwrap_or_default();
-                    let name = app_id.strip_prefix("cce-status-right-").unwrap_or(&app_id);
+                    let name = app_id.strip_prefix("cce-status-interface-right-")
+                        .or_else(|| app_id.strip_prefix("cce-status-right-"))
+                        .unwrap_or(&app_id);
                     RIGHT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
                 });
             };
@@ -2736,9 +2740,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 };
                 self.adjust_position_mode = enable;
                 if enable {
-                    let _ = std::fs::File::create("/tmp/cce-status-adjust-mode");
+                    let _ = std::fs::File::create("/tmp/cce-status-interface-adjust-mode");
                 } else {
-                    let _ = std::fs::remove_file("/tmp/cce-status-adjust-mode");
+                    let _ = std::fs::remove_file("/tmp/cce-status-interface-adjust-mode");
                 }
                 self.dirty_windowing();
                 return format!("ok {}\n", enable);
@@ -3292,7 +3296,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
     }
 
     pub unsafe fn spawn_startup_program(&mut self, prog: crate::config::StartupConfig) {
-        log::info!("spawning TOML startup program: {}", prog.exec);
+        log::info!("spawning startup program: {}", prog.exec);
         let cmd = prog.exec.clone();
         match nix::unistd::fork() {
             Ok(nix::unistd::ForkResult::Child) => {

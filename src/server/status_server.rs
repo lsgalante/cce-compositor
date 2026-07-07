@@ -67,9 +67,9 @@ impl StatusSender {
 
 pub fn get_status_socket_path(display_socket: Option<&str>) -> String {
     if let Some(display) = display_socket {
-        format!("/tmp/cce-status-{}.sock", display)
+        format!("/tmp/cce-status-interface-{}.sock", display)
     } else {
-        "/tmp/cce-status.sock".to_string()
+        "/tmp/cce-status-interface.sock".to_string()
     }
 }
 
