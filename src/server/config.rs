@@ -131,6 +131,7 @@ pub enum Action {
     Close,
     FocusNext,
     FocusPrev,
+    WindowSwitcher,
     Move,
     Resize,
     Exit,
@@ -242,6 +243,7 @@ pub struct WindowManagerConfig {
     pub close_window: Option<String>,
     pub toggle_fullscreen: Option<String>,
     pub toggle_overview: Option<String>,
+    pub window_switcher: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
@@ -1477,7 +1479,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let close_window = get_child_arg_string_opt(node, "close_window");
         let toggle_fullscreen = get_child_arg_string_opt(node, "toggle_fullscreen");
         let toggle_overview = get_child_arg_string_opt(node, "toggle_overview");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview });
+        let window_switcher = get_child_arg_string_opt(node, "window_switcher");
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher });
     }
 
     Ok(Config {
@@ -1677,6 +1680,21 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
                 mods,
                 keysym,
                 action: Action::Fullscreen,
+                command: None,
+            });
+        }
+        if let Some(ref switcher_str) = wm_config.window_switcher {
+            let (mods_str, key_str) = if let Some(last_plus) = switcher_str.rfind('+') {
+                (switcher_str[..last_plus].to_string(), switcher_str[last_plus+1..].to_string())
+            } else {
+                ("".to_string(), switcher_str.clone())
+            };
+            let mods = parse_modifiers(&mods_str);
+            let keysym = parse_keysym(&key_str);
+            state.keybinds.push(Keybind {
+                mods,
+                keysym,
+                action: Action::WindowSwitcher,
                 command: None,
             });
         }

@@ -2129,6 +2129,95 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
         }
     }
 
+    /// True for windows that should appear in the window switcher: mapped,
+    /// non-closed, and not one of the desktop-shell surfaces (status bar,
+    /// wallpaper, or the switcher's own cce-cloud overlay).
+    unsafe fn is_switchable_window(&self, w: *mut Window) -> bool {
+        if w.is_null() || (*w).closed {
+            return false;
+        }
+        if !matches!((*w).state, crate::window::WindowState::Mapped) {
+            return false;
+        }
+        match (*w).get_app_id_string().as_deref() {
+            Some(id) if id.starts_with("cce-status") => false,
+            Some("cce-wallpaper") | Some("cce-cloud") => false,
+            _ => true,
+        }
+    }
+
+    /// Open the alt-tab window switcher: spawn a `cce-cloud --switcher` overlay,
+    /// feed it the currently switchable windows in most-recently-used order, and
+    /// hand off to a background thread that focuses whatever the user commits to.
+    ///
+    /// cce-cloud is a `Layer::Overlay` surface with exclusive keyboard focus, so
+    /// once it is up it drives the interaction itself (Tab cycles, Super release
+    /// commits, Escape cancels) and prints the chosen entry to stdout. We only
+    /// build the list and map the committed entry back to a window id.
+    pub unsafe fn launch_window_switcher(&mut self) {
+        // Most-recently-used order (focus_history is MRU-front). The focused
+        // window lands first, so cce-cloud auto-selects index 1 — the previously
+        // focused window — which is the classic alt-tab default.
+        let mut ordered: Vec<*mut Window> = Vec::new();
+        for &w in self.focus_history.iter() {
+            if self.is_switchable_window(w) && !ordered.contains(&w) {
+                ordered.push(w);
+            }
+        }
+        for &w in self.windows.iter() {
+            if self.is_switchable_window(w) && !ordered.contains(&w) {
+                ordered.push(w);
+            }
+        }
+        if ordered.is_empty() {
+            return;
+        }
+
+        // cce-cloud echoes the committed entry back verbatim, so keep the mapping
+        // from display string to window id to resolve the selection.
+        let mut items: Vec<(String, String)> = Vec::new();
+        let mut input = String::new();
+        for &w in &ordered {
+            let id = (*w).ref_key.index.to_string();
+            let app_id = (*w).get_app_id_string().unwrap_or_default();
+            let title = (*w).get_title_string().unwrap_or_default();
+            let display = if title.is_empty() {
+                app_id.clone()
+            } else {
+                format!("{} ({})", title, app_id)
+            };
+            input.push_str(&display);
+            input.push('\n');
+            items.push((id, display));
+        }
+
+        // Position near the top-centre of the enabled output. Passing explicit
+        // -x/-y keeps cce-cloud a layer-shell overlay (omitting both would make
+        // it an XDG toplevel, which would not grab keyboard the same way).
+        let (mut vp_w, mut origin_x, mut origin_y) = (1920.0_f64, 0i32, 0i32);
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                let wlr_box = (*output).sent.box_layout();
+                vp_w = wlr_box.width as f64;
+                origin_x = wlr_box.x;
+                origin_y = wlr_box.y;
+                break;
+            }
+            curr_out = (*curr_out).next;
+        }
+        // cce-cloud's default logical width is 600; centre it horizontally.
+        let x_pos = origin_x + (((vp_w - 600.0) / 2.0).max(0.0)) as i32;
+        let y_pos = origin_y + 80;
+
+        let display_env = std::env::var("WAYLAND_DISPLAY").ok();
+        std::thread::spawn(move || {
+            run_window_switcher(input, items, x_pos, y_pos, display_env);
+        });
+    }
+
     pub unsafe fn keep_status_bar_on_top(&mut self) {
         let mut status_bar_windows = Vec::new();
         for &win_ptr in self.windows.iter() {
@@ -2330,6 +2419,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         self.dirty_windowing();
                     }
                 }
+            }
+            Action::WindowSwitcher => {
+                self.launch_window_switcher();
             }
             Action::Reload => {
                 log::info!("monolithic execute_action: Reload requested");
@@ -2994,6 +3086,10 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 self.execute_action(&crate::config::Action::FocusPrev, None);
                 "ok\n".to_string()
             }
+            "window-switcher" => {
+                self.execute_action(&crate::config::Action::WindowSwitcher, None);
+                "ok\n".to_string()
+            }
             "fullscreen" => {
                 self.execute_action(&crate::config::Action::Fullscreen, None);
                 "ok\n".to_string()
@@ -3497,6 +3593,86 @@ unsafe extern "C" fn handle_ipc_timer(data: *mut std::ffi::c_void) -> std::os::r
 
 unsafe fn rendered_fullscreen(window: *mut Window) -> bool {
     (*window).is_fullscreen() && !(*window).rendering_requested.hidden
+}
+
+/// Prefer the installed `~/.local/bin/cce-cloud`, falling back to PATH lookup.
+fn cce_cloud_cmd() -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let path = format!("{}/.local/bin/cce-cloud", home);
+        if std::path::Path::new(&path).exists() {
+            return path;
+        }
+    }
+    "cce-cloud".to_string()
+}
+
+/// Body of the window switcher, run on a detached thread. Spawns cce-cloud in
+/// switcher mode, pipes it the item list, waits for the committed selection on
+/// stdout, and asks the compositor to focus it via the control socket (so the
+/// actual focus change happens on the main thread through the IPC dispatcher).
+fn run_window_switcher(
+    input: String,
+    items: Vec<(String, String)>,
+    x_pos: i32,
+    y_pos: i32,
+    display_env: Option<String>,
+) {
+    use std::io::{Read, Write};
+
+    let mut child = match std::process::Command::new(cce_cloud_cmd())
+        .args([
+            "--switcher",
+            "-p",
+            "Windows:",
+            "-x",
+            &x_pos.to_string(),
+            "-y",
+            &y_pos.to_string(),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("window switcher: failed to spawn cce-cloud: {}", e);
+            return;
+        }
+    };
+
+    // Write the item list, then drop stdin so cce-cloud sees EOF on the feed.
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(input.as_bytes());
+        let _ = stdin.flush();
+    }
+
+    let mut selected = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut selected);
+    }
+    let _ = child.wait();
+
+    let selected = selected.trim();
+    if selected.is_empty() {
+        return; // cancelled (Escape) or empty selection
+    }
+
+    let id = match items.iter().find(|(_, display)| display == selected) {
+        Some((id, _)) => id.clone(),
+        None => return,
+    };
+
+    let sock = match display_env {
+        Some(d) => format!("/tmp/cce-{}.sock", d),
+        None => "/tmp/cce.sock".to_string(),
+    };
+    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&sock) {
+        let _ = stream.write_all(format!("focus-window {}\n", id).as_bytes());
+        let _ = stream.flush();
+        let mut resp = String::new();
+        let _ = stream.read_to_string(&mut resp);
+    }
 }
 
 unsafe extern "C" fn dirty_idle_callback(data: *mut std::ffi::c_void) {
