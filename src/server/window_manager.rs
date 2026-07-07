@@ -2702,6 +2702,49 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
         }
     }
 
+    /// Resolve a window by a query string: an exact numeric window id first,
+    /// otherwise a case-insensitive app_id match (exact beats substring).
+    /// Returns null if nothing mapped matches. Shared by focus-window /
+    /// center-window.
+    pub unsafe fn find_window_by_query(&self, query: &str) -> *mut Window {
+        let query = query.to_lowercase();
+
+        if let Ok(id) = query.parse::<u32>() {
+            for &w in self.windows.iter() {
+                if !w.is_null() && !(*w).closed
+                    && matches!((*w).state, crate::window::WindowState::Mapped)
+                    && (*w).ref_key.index == id
+                {
+                    return w;
+                }
+            }
+        }
+
+        let mut best_target: *mut Window = std::ptr::null_mut();
+        let mut best_score = 0;
+        for &w in self.windows.iter() {
+            if !w.is_null() && !(*w).closed
+                && matches!((*w).state, crate::window::WindowState::Mapped)
+            {
+                if let Some(aid) = (*w).get_app_id_string() {
+                    let aid_lower = aid.to_lowercase();
+                    let score = if aid_lower == query {
+                        100
+                    } else if aid_lower.contains(&query) {
+                        50
+                    } else {
+                        0
+                    };
+                    if score > best_score {
+                        best_score = score;
+                        best_target = w;
+                    }
+                }
+            }
+        }
+        best_target
+    }
+
     pub unsafe fn process_ipc_command(&mut self, cmd: &str) -> String {
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
@@ -2965,45 +3008,8 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             }
             "focus-window" => {
                 if parts.len() < 2 { return "error: missing app_id/id\n".to_string(); }
-                let query = parts[1..].join(" ").to_lowercase();
                 if let Some(seat) = self.first_seat() {
-                    let mut best_target: *mut Window = std::ptr::null_mut();
-                    let mut best_score = 0;
-
-                    // Try to match by numerical window index first
-                    if let Ok(id) = query.parse::<u32>() {
-                        for &w in self.windows.iter() {
-                            if !w.is_null() && !(*w).closed && matches!((*w).state, crate::window::WindowState::Mapped) && (*w).ref_key.index == id {
-                                best_target = w;
-                                break;
-                            }
-                        }
-                    }
-
-                    // Fallback to matching by app_id
-                    if best_target.is_null() {
-                        for &w in self.windows.iter() {
-                            if !w.is_null() && !(*w).closed && matches!((*w).state, crate::window::WindowState::Mapped) {
-                                let aid = (*w).get_app_id_string();
-                                
-                                let mut score = 0;
-                                if let Some(ref aid_str) = aid {
-                                    let aid_lower = aid_str.to_lowercase();
-                                    if aid_lower == query {
-                                        score = score.max(100);
-                                    } else if aid_lower.contains(&query) {
-                                        score = score.max(50);
-                                    }
-                                }
-
-                                if score > best_score {
-                                    best_score = score;
-                                    best_target = w;
-                                }
-                            }
-                        }
-                    }
-
+                    let best_target = self.find_window_by_query(&parts[1..].join(" "));
                     if !best_target.is_null() {
                         if (*best_target).minimized {
                             (*best_target).minimized = false;
@@ -3018,6 +3024,74 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 } else {
                     "error: no seat found\n".to_string()
                 }
+            }
+            "center-window" | "bring-window" => {
+                // Pan the desktop so the target window (given app_id/id, or the
+                // focused window if omitted) is centered in the output, then focus
+                // and raise it. Replies with the window's resulting on-screen box so
+                // the caller can screenshot it directly (grim -g "X,Y WxH").
+                let target: *mut Window = if parts.len() >= 2 {
+                    self.find_window_by_query(&parts[1..].join(" "))
+                } else if let Some(seat) = self.first_seat() {
+                    match (*seat).focused {
+                        crate::seat::Focus::Window(w) => w,
+                        _ => std::ptr::null_mut(),
+                    }
+                } else {
+                    std::ptr::null_mut()
+                };
+
+                if target.is_null() {
+                    return "error: window not found\n".to_string();
+                }
+                if (*target).minimized {
+                    (*target).minimized = false;
+                }
+
+                // Enabled output's origin + size (fall back to 1920x1080 @ 0,0).
+                let (mut vp_w, mut vp_h) = (1920.0_f64, 1080.0_f64);
+                let (mut phys_x, mut phys_y) = (0i32, 0i32);
+                let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                let mut curr_out = (*outputs_list).next;
+                while curr_out != outputs_list {
+                    let output = crate::container_of!(curr_out, crate::output::Output, link);
+                    if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                        let wlr_box = (*output).sent.box_layout();
+                        vp_w = wlr_box.width as f64;
+                        vp_h = wlr_box.height as f64;
+                        phys_x = wlr_box.x;
+                        phys_y = wlr_box.y;
+                        break;
+                    }
+                    curr_out = (*curr_out).next;
+                }
+
+                let w = if (*target).box_geom.width > 0 { (*target).box_geom.width as f64 } else { 800.0 };
+                let h = if (*target).box_geom.height > 0 { (*target).box_geom.height as f64 } else { 600.0 };
+
+                // Center the window's virtual center in the viewport. Sets desk_pan
+                // directly (no animation) so the reply geometry is immediately valid.
+                let center_x = (*target).virtual_x + w / 2.0;
+                let center_y = (*target).virtual_y + h / 2.0;
+                self.desk_pan_x = center_x - (vp_w / 2.0) / self.desk_zoom;
+                self.desk_pan_y = center_y - (vp_h / 2.0) / self.desk_zoom;
+
+                if let Some(seat) = self.first_seat() {
+                    (*seat).focus(crate::seat::Focus::Window(target));
+                }
+                self.raise_window(target);
+                self.dirty_windowing();
+
+                // screen = output_origin + (virtual - desk_pan) * zoom
+                let screen_x = phys_x as f64 + ((*target).virtual_x - self.desk_pan_x) * self.desk_zoom;
+                let screen_y = phys_y as f64 + ((*target).virtual_y - self.desk_pan_y) * self.desk_zoom;
+                format!(
+                    "ok x={} y={} w={} h={}\n",
+                    screen_x.round() as i32,
+                    screen_y.round() as i32,
+                    (w * self.desk_zoom).round() as i32,
+                    (h * self.desk_zoom).round() as i32,
+                )
             }
             "exit" => {
                 self.execute_action(&crate::config::Action::Exit, None);
