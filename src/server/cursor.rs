@@ -1065,6 +1065,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             
             let op = seat.op.unwrap();
 
+            #[allow(unused_assignments)]
             if (*(*seat).server).wm.adjust_position_mode && !op.window_ptr.is_null() && (*op.window_ptr).is_status_bar() && (*event).button == 0x110 {
                 let win = op.window_ptr;
                 let mut closest_edge = crate::window::StatusEdge::TopLeft;
@@ -1199,9 +1200,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 log::info!("[StatusRelease] Snapping app_id={} closest_edge={:?}, found_out={}", app_id, closest_edge, found_out);
                 (*win).status_edge = closest_edge;
                 
-                let name = if let Some(stripped) = app_id.strip_prefix("cce-status-left-") {
+                let name = if let Some(stripped) = app_id.strip_prefix("cce-status-interface-left-").or_else(|| app_id.strip_prefix("cce-status-left-")) {
                     stripped
-                } else if let Some(stripped) = app_id.strip_prefix("cce-status-right-") {
+                } else if let Some(stripped) = app_id.strip_prefix("cce-status-interface-right-").or_else(|| app_id.strip_prefix("cce-status-right-")) {
                     stripped
                 } else {
                     &app_id

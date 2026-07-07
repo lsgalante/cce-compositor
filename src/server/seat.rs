@@ -962,6 +962,7 @@ impl Seat {
                 
                 match op.op_type {
                     PointerOpType::Move => {
+                        #[allow(unused_assignments)]
                         if (*win).is_status_bar() {
                             let final_x = op.start_win_x + dx;
                             let final_y = op.start_win_y + dy;
