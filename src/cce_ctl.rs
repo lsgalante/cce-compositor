@@ -69,15 +69,15 @@ fn usage(name: &str, to_stderr: bool) {
     print("  mode <cascade|grid|fullscreen|floating|popup|maximized|overlay> <app_id> [title]");
     print("  viewport-layout <1-4> <cascade|grid|fullscreen|floating|popup|maximized|overlay>");
     print("  pointer-location");
-    print("  pointer-move-to <x> <y>");
+    print("  pointer-move-to <x> <y>            (layout pixels)");
     print("  pointer-move-by <dx> <dy>");
-    print("  pointer-scroll <dx> <dy>");
-    print("  pointer-click <button>");
-    print("  pointer-press <button>");
-    print("  pointer-release <button>");
-    print("  keypress <key>");
-    print("  key-press <key>");
-    print("  key-release <key>");
+    print("  pointer-scroll <dy> [dx]           (positive dy scrolls down; 15 = one notch)");
+    print("  pointer-click [button]             (left|right|middle|back|forward or evdev code)");
+    print("  pointer-press [button]             (held until pointer-release — drives drags)");
+    print("  pointer-release [button]");
+    print("  keypress <keycode>                 (evdev code; press+release to the focused client)");
+    print("  key-down <keycode>");
+    print("  key-up <keycode>");
 }
  
 pub fn run_cce_ctl(args: Vec<String>) {

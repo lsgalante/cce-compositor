@@ -3384,23 +3384,86 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     format!("error: unknown input command: {}\n", key)
                 }
             }
+            // ── Synthetic pointer input (`ccectl pointer-*`): full wlrctl replacement
+            // plus held buttons. Injection runs through the real cursor handlers
+            // (`Cursor::inject_*`), so grabs/ops/focus behave exactly as with hardware.
             "pointer-move-to" => {
                 if parts.len() < 3 { return "error: usage: pointer-move-to <x> <y>\n".to_string(); }
                 if let (Ok(x), Ok(y)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                    self.for_each_cursor(|cursor| cursor.inject_motion_to(x, y));
+                    "ok\n".to_string()
+                } else {
+                    "error: invalid x or y\n".to_string()
+                }
+            }
+            "pointer-move-by" => {
+                if parts.len() < 3 { return "error: usage: pointer-move-by <dx> <dy>\n".to_string(); }
+                if let (Ok(dx), Ok(dy)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                    self.for_each_cursor(|cursor| cursor.inject_motion_by(dx, dy));
+                    "ok\n".to_string()
+                } else {
+                    "error: invalid dx or dy\n".to_string()
+                }
+            }
+            "pointer-press" | "pointer-release" | "pointer-click" => {
+                let button = match Self::parse_pointer_button(parts.get(1).copied()) {
+                    Some(b) => b,
+                    None => return "error: unknown button (left|right|middle|back|forward or an evdev code)\n".to_string(),
+                };
+                match action {
+                    "pointer-press" => self.for_each_cursor(|cursor| cursor.inject_button(button, true)),
+                    "pointer-release" => self.for_each_cursor(|cursor| cursor.inject_button(button, false)),
+                    _ => self.for_each_cursor(|cursor| {
+                        cursor.inject_button(button, true);
+                        cursor.inject_button(button, false);
+                    }),
+                }
+                "ok\n".to_string()
+            }
+            "pointer-scroll" => {
+                if parts.len() < 2 { return "error: usage: pointer-scroll <dy> [dx]\n".to_string(); }
+                let dy = parts[1].parse::<f64>();
+                let dx = parts.get(2).map(|v| v.parse::<f64>()).unwrap_or(Ok(0.0));
+                if let (Ok(dy), Ok(dx)) = (dy, dx) {
+                    self.for_each_cursor(|cursor| cursor.inject_scroll(dy, dx));
+                    "ok\n".to_string()
+                } else {
+                    "error: invalid dy or dx\n".to_string()
+                }
+            }
+            "pointer-location" => {
+                let mut reply = "error: no seat\n".to_string();
+                let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+                let curr_seat = (*seats_list).next;
+                if curr_seat != seats_list {
+                    let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+                    let cursor = &(*seat).cursor;
+                    reply = format!("x={} y={}\n", cursor.x(), cursor.y());
+                }
+                reply
+            }
+            // One-direction key events (held modifiers/keys); `keycode` is the evdev
+            // code. Like `keypress`, this notifies the focused client directly — it does
+            // not run compositor keybindings or update xkb modifier state.
+            "key-down" | "key-up" => {
+                if parts.len() < 2 { return "error: usage: key-down|key-up <keycode>\n".to_string(); }
+                if let Ok(keycode) = parts[1].parse::<u32>() {
+                    let state = if action == "key-down" {
+                        ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
+                    } else {
+                        ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
+                    };
                     let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
                     let mut curr_seat = (*seats_list).next;
                     while curr_seat != seats_list {
                         let next_seat = (*curr_seat).next;
                         let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
-                        let cursor = &mut (*seat).cursor;
-                        ffi::wlr_cursor_warp_absolute(cursor.wlr_cursor, std::ptr::null_mut(), x, y);
-                        cursor.update_hovered();
-                        cursor.passthrough(crate::util::msec_timestamp());
+                        ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, crate::util::msec_timestamp(), keycode, state);
                         curr_seat = next_seat;
                     }
                     "ok\n".to_string()
                 } else {
-                    "error: invalid x or y\n".to_string()
+                    "error: invalid keycode\n".to_string()
                 }
             }
             "keypress" | "key-press" => {
@@ -3422,6 +3485,32 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 }
             }
             _ => format!("error: unknown command: {}\n", action),
+        }
+    }
+
+    /// Run `f` on every seat's cursor (the synthetic-input commands act on all seats,
+    /// like the pre-existing pointer-move-to loop did).
+    unsafe fn for_each_cursor(&mut self, mut f: impl FnMut(&mut crate::cursor::Cursor)) {
+        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+        let mut curr_seat = (*seats_list).next;
+        while curr_seat != seats_list {
+            let next_seat = (*curr_seat).next;
+            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+            f(&mut (*seat).cursor);
+            curr_seat = next_seat;
+        }
+    }
+
+    /// Button-name/evdev-code parsing for the pointer commands; a missing argument
+    /// means the left button, like wlrctl.
+    fn parse_pointer_button(arg: Option<&str>) -> Option<u32> {
+        match arg {
+            None | Some("left") => Some(0x110),
+            Some("right") => Some(0x111),
+            Some("middle") => Some(0x112),
+            Some("back") | Some("side") => Some(0x113),
+            Some("forward") | Some("extra") => Some(0x114),
+            Some(other) => other.parse::<u32>().ok(),
         }
     }
 

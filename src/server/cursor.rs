@@ -525,6 +525,99 @@ impl Cursor {
             b"default\0".as_ptr() as *const _,
         );
     }
+
+    // ── Synthetic pointer injection (`ccectl pointer-*`) ─────────────────────────
+    // Each call builds the event a real device would deliver and runs it through the
+    // REAL handler (via its listener — the same entry wlroots invokes), so compositor
+    // policy — window ops, overview gating, grabs, focus, pointer constraints — treats
+    // injected input exactly like hardware. Every handler null-checks `event.pointer`,
+    // so a device-less event is safe. Buttons and axes finish with a frame, like a
+    // real device batch. Press and release are separate entry points on purpose: a
+    // held drag is press → any number of moves → release.
+
+    /// Warp to layout coordinates and run the motion tail (hover, drag icons, and
+    /// op-update-or-passthrough, mirroring `handle_motion`). `wlr_cursor_warp` takes
+    /// layout pixels — `wlr_cursor_warp_absolute` is 0..1-normalized, which is the
+    /// bug the old `pointer-move-to` had.
+    pub unsafe fn inject_motion_to(&mut self, x: f64, y: f64) {
+        ffi::wlr_cursor_warp(self.wlr_cursor, std::ptr::null_mut(), x, y);
+        self.update_hovered();
+        self.update_drag_icons();
+        let seat = &mut *self.seat;
+        if seat.op.is_some() {
+            let lx = (*self.wlr_cursor).x as i32;
+            let ly = (*self.wlr_cursor).y as i32;
+            seat.op_update(lx, ly);
+            return;
+        }
+        self.passthrough(crate::util::msec_timestamp());
+        // Real devices terminate every motion batch with a frame; sctk-based clients
+        // queue pointer events until they see one.
+        handle_frame(&mut self.frame_listener as *mut ffi::wl_listener, std::ptr::null_mut());
+    }
+
+    pub unsafe fn inject_motion_by(&mut self, dx: f64, dy: f64) {
+        let mut ev = ffi::wlr_pointer_motion_event {
+            pointer: std::ptr::null_mut(),
+            time_msec: crate::util::msec_timestamp(),
+            delta_x: dx,
+            delta_y: dy,
+            unaccel_dx: dx,
+            unaccel_dy: dy,
+        };
+        handle_motion(
+            &mut self.motion_listener as *mut ffi::wl_listener,
+            &mut ev as *mut ffi::wlr_pointer_motion_event as *mut std::ffi::c_void,
+        );
+        handle_frame(&mut self.frame_listener as *mut ffi::wl_listener, std::ptr::null_mut());
+    }
+
+    pub unsafe fn inject_button(&mut self, button: u32, pressed: bool) {
+        let state = if pressed {
+            ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED
+        } else {
+            ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED
+        };
+        let mut ev = ffi::wlr_pointer_button_event {
+            pointer: std::ptr::null_mut(),
+            time_msec: crate::util::msec_timestamp(),
+            button,
+            state,
+        };
+        handle_button(
+            &mut self.button_listener as *mut ffi::wl_listener,
+            &mut ev as *mut ffi::wlr_pointer_button_event as *mut std::ffi::c_void,
+        );
+        handle_frame(&mut self.frame_listener as *mut ffi::wl_listener, std::ptr::null_mut());
+    }
+
+    /// Wheel scroll; positive `dy` scrolls down (content up), matching a real wheel.
+    /// One notch is 15 delta units / 120 `value120` steps (the libinput convention).
+    pub unsafe fn inject_scroll(&mut self, dy: f64, dx: f64) {
+        let time = crate::util::msec_timestamp();
+        for (delta, orientation) in [
+            (dy, ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL),
+            (dx, ffi::wl_pointer_axis_WL_POINTER_AXIS_HORIZONTAL_SCROLL),
+        ] {
+            if delta == 0.0 {
+                continue;
+            }
+            let mut ev = ffi::wlr_pointer_axis_event {
+                pointer: std::ptr::null_mut(),
+                time_msec: time,
+                source: ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_WHEEL,
+                orientation,
+                relative_direction: ffi::wl_pointer_axis_relative_direction_WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL,
+                delta,
+                delta_discrete: ((delta / 15.0) * 120.0) as i32,
+            };
+            handle_axis(
+                &mut self.axis_listener as *mut ffi::wl_listener,
+                &mut ev as *mut ffi::wlr_pointer_axis_event as *mut std::ffi::c_void,
+            );
+        }
+        handle_frame(&mut self.frame_listener as *mut ffi::wl_listener, std::ptr::null_mut());
+    }
 }
 
 unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
