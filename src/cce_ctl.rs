@@ -76,8 +76,9 @@ fn usage(name: &str, to_stderr: bool) {
     print("  pointer-press [button]             (held until pointer-release — drives drags)");
     print("  pointer-release [button]");
     print("  keypress <keycode>                 (evdev code; press+release to the focused client)");
-    print("  key-down <keycode>");
-    print("  key-up <keycode>");
+    print("  key-down <keycode>                 (modifier codes — ctrl 29/97, shift 42/54,");
+    print("  key-up <keycode>                    alt 56/100, super 125/126 — update client");
+    print("                                      xkb state, so e.g. 29+36 lands as ctrl+j)");
 }
  
 pub fn run_cce_ctl(args: Vec<String>) {

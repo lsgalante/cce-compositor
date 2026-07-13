@@ -110,6 +110,10 @@ pub struct WindowManager {
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
     pub status_hide_mode: bool,
     pub adjust_position_mode: bool,
+    /// xkb modifier mask currently held via injected `key-down` (see the ipc handler):
+    /// OR'd over the device state on every synthetic modifiers notify so clients see
+    /// ctrl/shift/alt/super combos from injection like they would from hardware.
+    pub injected_key_mods: u32,
     pub restore_queue: Vec<SavedWindowState>,
     pub last_window_states: Vec<SavedWindowState>,
     pub shutting_down: bool,
@@ -197,6 +201,7 @@ impl WindowManager {
         self.last_status_update = std::cell::RefCell::new(None);
         self.status_hide_mode = false;
         self.adjust_position_mode = false;
+        self.injected_key_mods = 0;
         let _ = std::fs::remove_file("/tmp/cce-status-interface-adjust-mode");
 
         ffi::wl_list_init(&mut self.sent.outputs);
@@ -3443,15 +3448,28 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 reply
             }
             // One-direction key events (held modifiers/keys); `keycode` is the evdev
-            // code. Like `keypress`, this notifies the focused client directly — it does
-            // not run compositor keybindings or update xkb modifier state.
+            // code. Like `keypress`, this notifies the focused client directly and does
+            // not run compositor keybindings. Modifier keycodes additionally update an
+            // injected xkb mask and push a modifiers event, so the focused client's xkb
+            // state tracks ctrl/shift/alt/super combos exactly as it would from
+            // hardware (`wlr_seat_keyboard_notify_key` alone never changes modifier
+            // state — that lives on the keyboard device, which injection bypasses).
             "key-down" | "key-up" => {
                 if parts.len() < 2 { return "error: usage: key-down|key-up <keycode>\n".to_string(); }
                 if let Ok(keycode) = parts[1].parse::<u32>() {
-                    let state = if action == "key-down" {
+                    let pressed = action == "key-down";
+                    let state = if pressed {
                         ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
                     } else {
                         ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
+                    };
+                    // evdev → real xkb modifier name (left/right pairs).
+                    let mod_name: Option<&[u8]> = match keycode {
+                        42 | 54 => Some(b"Shift\0"),
+                        29 | 97 => Some(b"Control\0"),
+                        56 | 100 => Some(b"Mod1\0"),
+                        125 | 126 => Some(b"Mod4\0"),
+                        _ => None,
                     };
                     let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
                     let mut curr_seat = (*seats_list).next;
@@ -3459,6 +3477,25 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                         let next_seat = (*curr_seat).next;
                         let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, crate::util::msec_timestamp(), keycode, state);
+                        if let Some(name) = mod_name {
+                            let kb = ffi::river_wlr_seat_get_keyboard((*seat).wlr_seat);
+                            if !kb.is_null() && !(*kb).keymap.is_null() {
+                                let idx = ffi::xkb_keymap_mod_get_index((*kb).keymap, name.as_ptr() as *const _);
+                                if idx != ffi::XKB_MOD_INVALID {
+                                    let mask = 1u32 << idx;
+                                    if pressed {
+                                        self.injected_key_mods |= mask;
+                                    } else {
+                                        self.injected_key_mods &= !mask;
+                                    }
+                                    // Injected mask OR'd over the device's live state, so a
+                                    // real keyboard keeps working mid-injection.
+                                    let mut mods = (*kb).modifiers;
+                                    mods.depressed |= self.injected_key_mods;
+                                    ffi::wlr_seat_keyboard_notify_modifiers((*seat).wlr_seat, &mut mods);
+                                }
+                            }
+                        }
                         curr_seat = next_seat;
                     }
                     "ok\n".to_string()
