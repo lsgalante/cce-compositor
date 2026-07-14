@@ -2869,6 +2869,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 return format!("ok {}\n", enable);
             }
             "adjust-position-mode" => {
+                if parts.get(1).copied() == Some("query") {
+                    return format!("ok {}\n", self.adjust_position_mode);
+                }
                 let enable = if parts.len() >= 2 {
                     match parts[1] {
                         "true" | "on" | "enable" | "1" => true,
@@ -3211,6 +3214,9 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                 "ok\n".to_string()
             }
             "windows" => {
+                // `windows --json` emits one JSON object per line; titles and
+                // app_ids are then properly escaped, unlike the text format.
+                let as_json = parts.get(1).copied() == Some("--json");
                 let mut focused_window: *mut Window = std::ptr::null_mut();
                 let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
                 let mut curr_seat = (*seats_list).next;
@@ -3229,23 +3235,43 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                         let app_id = (*w).get_app_id_string().unwrap_or_default();
                         let title = (*w).get_title_string().unwrap_or_default();
-                        out.push_str(&format!(
-                            "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} minimized={} has_parent={} focused={} ssd={}\n",
-                            (*w).ref_key.index,
-                            app_id,
-                            title,
-                            (*w).tiling_mode.as_str(),
-                            (*w).box_geom.x,
-                            (*w).box_geom.y,
-                            (*w).box_geom.width,
-                            (*w).box_geom.height,
-                            (*w).virtual_x,
-                            (*w).virtual_y,
-                            (*w).minimized,
-                            (*w).has_parent,
-                            w == focused_window,
-                            (*w).wm_requested.ssd,
-                        ));
+                        if as_json {
+                            out.push_str(&serde_json::json!({
+                                "id": (*w).ref_key.index,
+                                "app_id": app_id,
+                                "title": title,
+                                "mode": (*w).tiling_mode.as_str(),
+                                "x": (*w).box_geom.x,
+                                "y": (*w).box_geom.y,
+                                "w": (*w).box_geom.width,
+                                "h": (*w).box_geom.height,
+                                "vx": (*w).virtual_x,
+                                "vy": (*w).virtual_y,
+                                "minimized": (*w).minimized,
+                                "has_parent": (*w).has_parent,
+                                "focused": w == focused_window,
+                                "ssd": (*w).wm_requested.ssd,
+                            }).to_string());
+                            out.push('\n');
+                        } else {
+                            out.push_str(&format!(
+                                "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} minimized={} has_parent={} focused={} ssd={}\n",
+                                (*w).ref_key.index,
+                                app_id,
+                                title,
+                                (*w).tiling_mode.as_str(),
+                                (*w).box_geom.x,
+                                (*w).box_geom.y,
+                                (*w).box_geom.width,
+                                (*w).box_geom.height,
+                                (*w).virtual_x,
+                                (*w).virtual_y,
+                                (*w).minimized,
+                                (*w).has_parent,
+                                w == focused_window,
+                                (*w).wm_requested.ssd,
+                            ));
+                        }
                     }
                 }
                 out

@@ -53,7 +53,9 @@ fn usage(name: &str, to_stderr: bool) {
     print("  focus-window <app_id>");
     print("  center-window [<app_id>]   # pan focused/named window on-screen; replies x= y= w= h=");
     print("  expose");
-    print("  windows");
+    print("  windows [--json]           # list windows; --json emits one JSON object per line");
+    print("  status-hide-mode [true|false]");
+    print("  adjust-position-mode [true|false|query]");
     print("  exit");
     print("  restart");
     print("  reload");
