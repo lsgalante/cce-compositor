@@ -3422,7 +3422,7 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 
 			if (apply_blur_region(node, &blur_data, &render_data, state,
 						&original_damage, &blur_padding_region)) {
-				should_compensate_blur = false;
+				should_compensate_blur = true;
 				fx_pass->has_blur = true;
 			}
 		}
