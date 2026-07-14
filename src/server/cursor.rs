@@ -717,7 +717,13 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             return;
         }
 
-        if (*event).button == 0x110 && (*(*seat).server).wm.adjust_position_mode {
+        // Status-bar segments are dragged either in adjust-position mode or
+        // directly with super+left-drag (0x40 = WLR_MODIFIER_LOGO).
+        let super_held = {
+            let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+            !wlr_keyboard.is_null() && (ffi::wlr_keyboard_get_modifiers(wlr_keyboard) & 0x40) != 0
+        };
+        if (*event).button == 0x110 && ((*(*seat).server).wm.adjust_position_mode || super_held) {
             let mut clicked_status: *mut crate::window::Window = std::ptr::null_mut();
             if let Some(result) = (*server).scene.at(lx, ly) {
                 if let SceneNodeDataVal::Window(window) = result.data {
@@ -1159,7 +1165,11 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             let op = seat.op.unwrap();
 
             #[allow(unused_assignments)]
-            if (*(*seat).server).wm.adjust_position_mode && !op.window_ptr.is_null() && (*op.window_ptr).is_status_bar() && (*event).button == 0x110 {
+            if !op.window_ptr.is_null()
+                && (*op.window_ptr).is_status_bar()
+                && op.op_type == crate::seat::PointerOpType::Move
+                && (*event).button == 0x110
+            {
                 let win = op.window_ptr;
                 let mut closest_edge = crate::window::StatusEdge::TopLeft;
                 let mut min_dist = f64::MAX;
