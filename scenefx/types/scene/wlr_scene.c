@@ -3378,6 +3378,52 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 	bool should_compensate_blur = false;
 	if (fx_render_pass_init_offscreen_buffers(render_pass, output)
 			&& pixman_region32_not_empty(&render_data.damage)) {
+		// Software cursors are baked into the reused buffer, so their recent
+		// footprints must be treated as damage before the blur compensation
+		// geometry is computed: inside the damage they get re-blurred with
+		// full sampling context, and the padding restore (which excludes
+		// damage) can never paste a stale cursor back. The live cursor is
+		// redrawn on top afterwards since
+		// wlr_output_add_software_cursors_to_render_pass() clips to this
+		// damage.
+		if (is_scene_blur_enabled(&scene_output->scene->blur_data)) {
+			struct wlr_output_cursor *cursor;
+			wl_list_for_each(cursor, &output->cursors, link) {
+				if (!cursor->enabled || !cursor->visible) {
+					continue;
+				}
+				double scale = output->scale;
+				g_cursor_history[g_cursor_history_index].x =
+					(cursor->x - cursor->hotspot_x) * scale;
+				g_cursor_history[g_cursor_history_index].y =
+					(cursor->y - cursor->hotspot_y) * scale;
+				g_cursor_history[g_cursor_history_index].w = cursor->width;
+				g_cursor_history[g_cursor_history_index].h = cursor->height;
+				g_cursor_history[g_cursor_history_index].valid = true;
+				g_cursor_history_index =
+					(g_cursor_history_index + 1) % CURSOR_HISTORY_SIZE;
+			}
+
+			for (int i = 0; i < CURSOR_HISTORY_SIZE; i++) {
+				if (!g_cursor_history[i].valid) {
+					continue;
+				}
+				pixman_region32_union_rect(&render_data.damage, &render_data.damage,
+						g_cursor_history[i].x - 16,
+						g_cursor_history[i].y - 16,
+						g_cursor_history[i].w + 32,
+						g_cursor_history[i].h + 32);
+				pixman_region32_union_rect(&state->damage, &state->damage,
+						g_cursor_history[i].x - 16,
+						g_cursor_history[i].y - 16,
+						g_cursor_history[i].w + 32,
+						g_cursor_history[i].h + 32);
+				state->committed |= WLR_OUTPUT_STATE_DAMAGE;
+			}
+			pixman_region32_intersect_rect(&render_data.damage, &render_data.damage,
+					0, 0, output->width, output->height);
+		}
+
 		// Blur artifact prevention
 		// Note: Supports individual blur node blur_data
 		pixman_region32_t original_damage;
@@ -3441,42 +3487,6 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 					&render_data.damage, &fx_pass->blur_padding_region);
 			pixman_region32_intersect_rect(&render_data.damage, &render_data.damage,
 					0, 0, output->width, output->height);
-
-			// Add current software cursors to the history
-			struct wlr_output_cursor *cursor;
-			wl_list_for_each(cursor, &output->cursors, link) {
-				if (!cursor->enabled || !cursor->visible) {
-					continue;
-				}
-				double scale = output->scale;
-				int cx = (cursor->x - cursor->hotspot_x) * scale;
-				int cy = (cursor->y - cursor->hotspot_y) * scale;
-				int cw = cursor->width;
-				int ch = cursor->height;
-
-				g_cursor_history[g_cursor_history_index].x = cx;
-				g_cursor_history[g_cursor_history_index].y = cy;
-				g_cursor_history[g_cursor_history_index].w = cw;
-				g_cursor_history[g_cursor_history_index].h = ch;
-				g_cursor_history[g_cursor_history_index].valid = true;
-				g_cursor_history_index = (g_cursor_history_index + 1) % CURSOR_HISTORY_SIZE;
-			}
-
-			// Subtract all historical cursor regions from the blur padding region
-			for (int i = 0; i < CURSOR_HISTORY_SIZE; i++) {
-				if (!g_cursor_history[i].valid) {
-					continue;
-				}
-				pixman_region32_t cursor_reg;
-				pixman_region32_init_rect(&cursor_reg,
-						g_cursor_history[i].x - 16,
-						g_cursor_history[i].y - 16,
-						g_cursor_history[i].w + 32,
-						g_cursor_history[i].h + 32);
-				pixman_region32_subtract(&fx_pass->blur_padding_region,
-						&fx_pass->blur_padding_region, &cursor_reg);
-				pixman_region32_fini(&cursor_reg);
-			}
 
 			// Copy the surrounding content where the blur would display artifacts
 			// and draw it above the artifacts. Otherwise The old rendered
