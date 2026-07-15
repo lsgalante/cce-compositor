@@ -1858,11 +1858,30 @@ impl Window {
             self.last_applied_scale = self.scale;
         }
 
-        if self.rendering_sent.width > 0 {
-            self.box_geom.width = self.rendering_sent.width as i32;
+        // During an interactive resize, size the box from the client's
+        // CURRENT committed geometry instead of the render-start snapshot
+        // (rendering_sent): commits land between render_start and
+        // render_finish, and the anchored position (rendering_requested.x,
+        // updated by the commit handler) always tracks the newest commit.
+        // Pairing it with the older snapshot size clips the surface short
+        // and makes the anchored edge bounce every cycle.
+        let mut resize_synced = false;
+        if self.resize_edges.is_some() {
+            if let WindowImpl::Toplevel(toplevel) = self.impl_type {
+                if !toplevel.is_null() {
+                    self.box_geom.width = (*toplevel).geometry.width;
+                    self.box_geom.height = (*toplevel).geometry.height;
+                    resize_synced = true;
+                }
+            }
         }
-        if self.rendering_sent.height > 0 {
-            self.box_geom.height = self.rendering_sent.height as i32;
+        if !resize_synced {
+            if self.rendering_sent.width > 0 {
+                self.box_geom.width = self.rendering_sent.width as i32;
+            }
+            if self.rendering_sent.height > 0 {
+                self.box_geom.height = self.rendering_sent.height as i32;
+            }
         }
 
         let mut clip = requested.clip;
