@@ -59,6 +59,10 @@ pub struct Layout {
     pub desktop_grid_fade_mode: String,
     pub desktop_enable_solid_color: bool,
     pub desktop_solid_color: [f32; 4],
+    /// Magnetic grid snap for interactive move/resize.
+    pub desktop_snap: bool,
+    /// Snap radius in virtual units.
+    pub desktop_snap_threshold: f64,
     pub scenefx_optimized_blur: bool,
     pub status_backdrop_blur_ignore_transparent: bool,
     pub window_backdrop_blur_ignore_transparent: bool,
@@ -114,6 +118,8 @@ impl Default for Layout {
             desktop_grid_fade_mode: "linear".to_string(),
             desktop_enable_solid_color: false,
             desktop_solid_color: [0.0, 0.0, 0.0, 1.0],
+            desktop_snap: true,
+            desktop_snap_threshold: 24.0,
             scenefx_optimized_blur: true,
             status_backdrop_blur_ignore_transparent: true,
             window_backdrop_blur_ignore_transparent: true,
@@ -275,6 +281,10 @@ pub struct SurfaceConfig {
     pub desktop_grid_fade_mode: String,
     #[serde(default = "default_desktop_solid_color")]
     pub desktop_solid_color: String,
+    #[serde(default = "default_desktop_snap")]
+    pub desktop_snap: bool,
+    #[serde(default = "default_desktop_snap_threshold")]
+    pub desktop_snap_threshold: i64,
     #[serde(default = "default_backplate_color")]
     pub backplate_color: String,
     #[serde(default = "default_backplate_blur")]
@@ -314,6 +324,8 @@ impl Default for SurfaceConfig {
             desktop_mode: default_desktop_mode(),
             desktop_grid_fade_mode: default_desktop_grid_fade_mode(),
             desktop_solid_color: default_desktop_solid_color(),
+            desktop_snap: default_desktop_snap(),
+            desktop_snap_threshold: default_desktop_snap_threshold(),
             backplate_color: default_backplate_color(),
             backplate_blur: default_backplate_blur(),
             backplate_corner_radius: default_backplate_corner_radius(),
@@ -368,6 +380,14 @@ fn default_desktop_grid_fade_mode() -> String {
 
 fn default_desktop_solid_color() -> String {
     "#000000".to_string()
+}
+
+fn default_desktop_snap() -> bool {
+    true
+}
+
+fn default_desktop_snap_threshold() -> i64 {
+    24
 }
 
 fn default_backplate_color() -> String {
@@ -1431,6 +1451,16 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.desktop_grid_scale = val;
                                         }
                                     }
+                                    "snap" => {
+                                        if let Some(val) = entry.value().as_bool() {
+                                            surface.desktop_snap = val;
+                                        }
+                                    }
+                                    "snap_threshold" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.desktop_snap_threshold = val;
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1540,6 +1570,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.desktop_grid_fade_mode = get_child_arg_string(node, "grid_fade_mode", &default_desktop_grid_fade_mode());
             surface.desktop_mode = get_child_arg_string(node, "desktop_mode", &default_desktop_mode());
             surface.desktop_solid_color = get_child_arg_string(node, "desktop_solid_color", &default_desktop_solid_color());
+            surface.desktop_snap = get_child_arg_bool(node, "desktop_snap", default_desktop_snap());
+            surface.desktop_snap_threshold = get_child_arg_i64(node, "desktop_snap_threshold", default_desktop_snap_threshold());
             surface.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
             surface.backplate_blur = get_child_arg_f64(node, "backplate_blur", default_backplate_blur());
             surface.backplate_corner_radius = get_child_arg_i64(node, "backplate_corner_radius", default_backplate_corner_radius());
@@ -1654,6 +1686,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
 
     state.layout.desktop_cell_color = parse_hex_color_rgba(&config.surface.desktop_cell_color);
     state.layout.desktop_grid_scale = config.surface.desktop_grid_scale as f64;
+    state.layout.desktop_snap = config.surface.desktop_snap;
+    state.layout.desktop_snap_threshold = config.surface.desktop_snap_threshold.max(0) as f64;
     state.layout.desktop_gap_width = config.surface.desktop_gap_width as i32;
     state.layout.desktop_cell_corner_radius = config.surface.desktop_cell_corner_radius as i32;
     state.layout.desktop_cell_fade_inset = config.surface.desktop_cell_fade_inset;

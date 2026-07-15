@@ -943,7 +943,19 @@ impl Seat {
         found
     }
 
+    /// Snap parameters for interactive ops, from the current layout config.
+    /// A zero threshold (snap disabled) makes every snap function a no-op.
+    unsafe fn snap_params(&self) -> crate::policy::snap::SnapParams {
+        let layout = &(*self.server).wm.layout;
+        crate::policy::snap::SnapParams {
+            grid_scale: layout.desktop_grid_scale,
+            threshold: if layout.desktop_snap { layout.desktop_snap_threshold } else { 0.0 },
+            border_width: layout.border_width as f64,
+        }
+    }
+
     pub unsafe fn op_update(&mut self, x: i32, y: i32) {
+        let sp = self.snap_params();
         if let Some(ref mut op) = self.op {
             op.x = x;
             op.y = y;
@@ -1121,6 +1133,13 @@ impl Seat {
                             
                             let vx = op.start_win_virtual_x + virtual_dx;
                             let vy = op.start_win_virtual_y + virtual_dy;
+                            let (vx, vy) = crate::policy::snap::snap_move(
+                                vx,
+                                vy,
+                                (*win).box_geom.width as f64,
+                                (*win).box_geom.height as f64,
+                                &sp,
+                            );
                             (*win).virtual_x = vx;
                             (*win).virtual_y = vy;
 
@@ -1175,18 +1194,30 @@ impl Seat {
                             (*win).resize_edges = Some(edges);
                         }
 
+                        // Magnetic grid snap pulls the dragged edge onto grid
+                        // lines; the anchored edge is untouched.
                         if edges.left {
-                            let w = std::cmp::max(50, (op.start_win_w as f64 - virtual_dx) as i32) as u32;
-                            new_w = w;
+                            let left = crate::policy::snap::snap_low_edge(op.start_win_virtual_x + virtual_dx, &sp);
+                            let anchor_right = op.start_win_virtual_x + op.start_win_w as f64;
+                            new_w = std::cmp::max(50, (anchor_right - left) as i32) as u32;
                         } else if edges.right {
-                            new_w = std::cmp::max(50, (op.start_win_w as f64 + virtual_dx) as i32) as u32;
+                            let right = crate::policy::snap::snap_high_edge(
+                                op.start_win_virtual_x + op.start_win_w as f64 + virtual_dx,
+                                &sp,
+                            );
+                            new_w = std::cmp::max(50, (right - op.start_win_virtual_x) as i32) as u32;
                         }
 
                         if edges.top {
-                            let h = std::cmp::max(50, (op.start_win_h as f64 - virtual_dy) as i32) as u32;
-                            new_h = h;
+                            let top = crate::policy::snap::snap_low_edge(op.start_win_virtual_y + virtual_dy, &sp);
+                            let anchor_bottom = op.start_win_virtual_y + op.start_win_h as f64;
+                            new_h = std::cmp::max(50, (anchor_bottom - top) as i32) as u32;
                         } else if edges.bottom {
-                            new_h = std::cmp::max(50, (op.start_win_h as f64 + virtual_dy) as i32) as u32;
+                            let bottom = crate::policy::snap::snap_high_edge(
+                                op.start_win_virtual_y + op.start_win_h as f64 + virtual_dy,
+                                &sp,
+                            );
+                            new_h = std::cmp::max(50, (bottom - op.start_win_virtual_y) as i32) as u32;
                         }
 
                         (*win).virtual_x = vx;
