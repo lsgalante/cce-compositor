@@ -70,6 +70,20 @@ pub struct Layout {
     pub cloud_position_default: Option<[i32; 2]>,
 }
 
+impl Layout {
+    /// Snap parameters for interactive ops. A zero threshold (snap
+    /// disabled) makes every snap function a no-op.
+    pub fn snap_params(&self) -> crate::policy::snap::SnapParams {
+        crate::policy::snap::SnapParams {
+            cell_size: self.desktop_grid_scale,
+            gap_width: self.desktop_gap_width as f64,
+            cell_inset: self.desktop_cell_fade_inset as f64,
+            threshold: if self.desktop_snap { self.desktop_snap_threshold } else { 0.0 },
+            border_width: self.border_width as f64,
+        }
+    }
+}
+
 impl Default for Layout {
     fn default() -> Self {
         Layout {

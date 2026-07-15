@@ -944,16 +944,8 @@ impl Seat {
     }
 
     /// Snap parameters for interactive ops, from the current layout config.
-    /// A zero threshold (snap disabled) makes every snap function a no-op.
     unsafe fn snap_params(&self) -> crate::policy::snap::SnapParams {
-        let layout = &(*self.server).wm.layout;
-        crate::policy::snap::SnapParams {
-            cell_size: layout.desktop_grid_scale,
-            gap_width: layout.desktop_gap_width as f64,
-            cell_inset: layout.desktop_cell_fade_inset as f64,
-            threshold: if layout.desktop_snap { layout.desktop_snap_threshold } else { 0.0 },
-            border_width: layout.border_width as f64,
-        }
+        (*self.server).wm.layout.snap_params()
     }
 
     pub unsafe fn op_update(&mut self, x: i32, y: i32) {
@@ -1196,31 +1188,19 @@ impl Seat {
                             (*win).resize_edges = Some(edges);
                         }
 
-                        // Magnetic grid snap pulls the dragged edge onto grid
-                        // lines; the anchored edge is untouched.
-                        if edges.left {
-                            let left = crate::policy::snap::snap_low_edge(op.start_win_virtual_x + virtual_dx, &sp);
-                            let anchor_right = op.start_win_virtual_x + op.start_win_w as f64;
-                            new_w = std::cmp::max(50, (anchor_right - left) as i32) as u32;
-                        } else if edges.right {
-                            let right = crate::policy::snap::snap_high_edge(
-                                op.start_win_virtual_x + op.start_win_w as f64 + virtual_dx,
-                                &sp,
-                            );
-                            new_w = std::cmp::max(50, (right - op.start_win_virtual_x) as i32) as u32;
-                        }
-
-                        if edges.top {
-                            let top = crate::policy::snap::snap_low_edge(op.start_win_virtual_y + virtual_dy, &sp);
-                            let anchor_bottom = op.start_win_virtual_y + op.start_win_h as f64;
-                            new_h = std::cmp::max(50, (anchor_bottom - top) as i32) as u32;
-                        } else if edges.bottom {
-                            let bottom = crate::policy::snap::snap_high_edge(
-                                op.start_win_virtual_y + op.start_win_h as f64 + virtual_dy,
-                                &sp,
-                            );
-                            new_h = std::cmp::max(50, (bottom - op.start_win_virtual_y) as i32) as u32;
-                        }
+                        // Magnetic grid snap pulls the dragged edge onto the
+                        // visible cell edges; the anchored edge is untouched.
+                        // Must match get_active_resize_dimensions, which
+                        // recomputes this for the arrange snapshot — both go
+                        // through snap::resize_axis.
+                        new_w = crate::policy::snap::resize_axis(
+                            op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
+                            edges.left, edges.right, 50.0, &sp,
+                        ) as u32;
+                        new_h = crate::policy::snap::resize_axis(
+                            op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
+                            edges.top, edges.bottom, 50.0, &sp,
+                        ) as u32;
 
                         (*win).virtual_x = vx;
                         (*win).virtual_y = vy;

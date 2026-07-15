@@ -1030,20 +1030,18 @@ impl WindowManager {
                         let dy = op.y - op.start_y;
                         let virtual_dx = dx as f64 / scale;
                         let virtual_dy = dy as f64 / scale;
-                        let mut new_w = op.start_win_w;
-                        let mut new_h = op.start_win_h;
-
-                        if edges.left {
-                            new_w = std::cmp::max(50, (op.start_win_w as f64 - virtual_dx) as i32) as u32;
-                        } else if edges.right {
-                            new_w = std::cmp::max(50, (op.start_win_w as f64 + virtual_dx) as i32) as u32;
-                        }
-
-                        if edges.top {
-                            new_h = std::cmp::max(50, (op.start_win_h as f64 - virtual_dy) as i32) as u32;
-                        } else if edges.bottom {
-                            new_h = std::cmp::max(50, (op.start_win_h as f64 + virtual_dy) as i32) as u32;
-                        }
+                        // Same math (and snapping) as the seat op's Resize
+                        // arm — this recomputation feeds the arrange
+                        // snapshot and must not diverge from it.
+                        let sp = self.layout.snap_params();
+                        let new_w = crate::policy::snap::resize_axis(
+                            op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
+                            edges.left, edges.right, 50.0, &sp,
+                        ) as u32;
+                        let new_h = crate::policy::snap::resize_axis(
+                            op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
+                            edges.top, edges.bottom, 50.0, &sp,
+                        ) as u32;
                         return Some((new_w, new_h));
                     }
                 }
