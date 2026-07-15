@@ -89,11 +89,54 @@ impl Border {
     }
 }
 
+/// One of the 8 interactive border zones. Each draws as its own visual
+/// element (corners as two-rect Ls) and highlights independently on hover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BorderElement {
+    Top,
+    Bottom,
+    Left,
+    Right,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+/// Length of a corner zone, measured from the outer corner along each band.
+/// Shared by the visual segments (draw_borders) and the pointer zones
+/// (cursor.rs get_border_zone) so they always agree.
+pub fn border_corner_len(bw: f64) -> f64 {
+    (2.0 * bw).max(16.0)
+}
+
+/// Visual gap between border segments, so the 8 zones read as separate
+/// elements. Zones and hit-testing stay continuous across the gaps.
+pub const BORDER_SEGMENT_GAP: i32 = 4;
+
+// Indices into BorderRects.segments: 4 edge bars + 2 L-arm rects per corner.
+const SEG_TOP: usize = 0;
+const SEG_BOTTOM: usize = 1;
+const SEG_LEFT: usize = 2;
+const SEG_RIGHT: usize = 3;
+const SEG_TL_H: usize = 4;
+const SEG_TL_V: usize = 5;
+const SEG_TR_H: usize = 6;
+const SEG_TR_V: usize = 7;
+const SEG_BL_H: usize = 8;
+const SEG_BL_V: usize = 9;
+const SEG_BR_H: usize = 10;
+const SEG_BR_V: usize = 11;
+
 pub struct BorderRects {
+    /// Invisible full-band rects kept as scene hit-test catchers, so the
+    /// pointer never falls through the visual gaps between segments.
     pub left: *mut ffi::wlr_scene_rect,
     pub right: *mut ffi::wlr_scene_rect,
     pub top: *mut ffi::wlr_scene_rect,
     pub bottom: *mut ffi::wlr_scene_rect,
+    /// The visible zone segments, indexed by the SEG_* constants.
+    pub segments: [*mut ffi::wlr_scene_rect; 12],
 }
 
 pub struct ShowWindowMenuRequest {
@@ -208,9 +251,9 @@ pub struct Window {
     pub decorations_below_tree: *mut ffi::wlr_scene_tree,
     pub surfaces: crate::scene::SaveableSurfaces,
     pub border: BorderRects,
-    /// Pointer is over the border grab surface (set by cursor.rs); the
-    /// border draws in `hover_color` while set.
-    pub border_hovered: bool,
+    /// The border zone the pointer is over (set by cursor.rs); that segment
+    /// draws in `hover_color` while set.
+    pub hovered_border_element: Option<BorderElement>,
     pub decorations_above: ffi::wl_list,
     pub decorations_above_tree: *mut ffi::wlr_scene_tree,
     pub popup_tree: *mut ffi::wlr_scene_tree,
@@ -362,6 +405,10 @@ impl Window {
         let border_right = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
         let border_top = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
         let border_bottom = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
+        let mut border_segments = [std::ptr::null_mut(); 12];
+        for seg in border_segments.iter_mut() {
+            *seg = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
+        }
 
         let decorations_above_tree = ffi::wlr_scene_tree_create(tree);
 
@@ -383,8 +430,9 @@ impl Window {
                 right: border_right,
                 top: border_top,
                 bottom: border_bottom,
+                segments: border_segments,
             },
-            border_hovered: false,
+            hovered_border_element: None,
             decorations_above: std::mem::zeroed(),
             decorations_above_tree,
             popup_tree,
@@ -2089,14 +2137,21 @@ impl Window {
         ffi::river_scene_rect_set_corner_radius(self.window_background, (border.corner_radius as f64 * self.scale) as i32);
         ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden && self.wm_requested.ssd);
 
-        // Zero configured width keeps the legacy invisible rects; cursor.rs
-        // treats the same case as a "virtual" 8px resize zone.
+        // The border draws as 8 zone segments (4 edge bars + 4 two-rect L
+        // corners) with BORDER_SEGMENT_GAP between them; the hovered zone
+        // draws in hover_color. Underneath, the 4 full-band rects stay
+        // enabled but transparent as scene hit-test catchers, so the pointer
+        // never falls through the gaps (and width 0 keeps the legacy
+        // invisible 8px virtual resize zones).
         let is_virtual_border = border.width == 0;
         if requested.circular {
             ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.bottom as *mut ffi::wlr_scene_node, false);
+            for &seg in self.border.segments.iter() {
+                ffi::wlr_scene_node_set_enabled(seg as *mut ffi::wlr_scene_node, false);
+            }
             return;
         }
         let content = ffi::wlr_box {
@@ -2110,140 +2165,94 @@ impl Window {
         let clip_empty = requested.content_clip.width == 0 && requested.content_clip.height == 0;
         if clip_empty || ffi::wlr_box_intersection(&mut intersect, &content, &requested.content_clip) {
             let border = &requested.border;
-            let border_width = if is_virtual_border { 8 } else { border.width };
-            // Hover highlights only real SSD borders; virtual rects stay
-            // invisible. The backplate keeps the base color either way.
-            let color: [f32; 4] = if is_virtual_border {
-                [0.0, 0.0, 0.0, 0.0]
-            } else if self.border_hovered && self.wm_requested.ssd {
-                border.hover_color
-            } else {
-                border_color
-            };
+            let band = if is_virtual_border { 8 } else { border.width as i32 };
+            let transparent = [0.0f32; 4];
 
-            if !is_virtual_border && border.corner_radius > 0 {
-                self.draw_rounded_border_frame(&content, border_width as i32, border.corner_radius, &color);
-                return;
-            }
-            // Coming back from the rounded path: the top rect doubles as the
-            // frame there and keeps rounded/clipped state otherwise.
+            // The rounded-frame path used to leave radius/clip state on the
+            // top band rect; keep it reset.
             ffi::river_scene_rect_set_corner_radius(self.border.top, 0);
             ffi::wlr_scene_rect_set_clipped_region(self.border.top, ffi::clipped_region_get_default());
 
-            let mut left = ffi::wlr_box {
-                x: -(border_width as i32),
-                y: 0,
-                width: border_width as i32,
-                height: content.height,
-            };
-            let mut right = ffi::wlr_box {
-                x: content.width,
-                y: 0,
-                width: border_width as i32,
-                height: content.height,
-            };
-            let mut top = ffi::wlr_box {
-                x: 0,
-                y: -(border_width as i32),
-                width: content.width,
-                height: border_width as i32,
-            };
-            let mut bottom = ffi::wlr_box {
-                x: 0,
-                y: content.height,
-                width: content.width,
-                height: border_width as i32,
-            };
-
-            let edge_left = if is_virtual_border { true } else { border.edges.left };
-            let edge_right = if is_virtual_border { true } else { border.edges.right };
-            let edge_top = if is_virtual_border { true } else { border.edges.top };
-            let edge_bottom = if is_virtual_border { true } else { border.edges.bottom };
-
-            if edge_top {
-                left.y -= border_width as i32;
-                left.height += border_width as i32;
-                right.y -= border_width as i32;
-                right.height += border_width as i32;
-            }
-            if edge_bottom {
-                left.height += border_width as i32;
-                right.height += border_width as i32;
-            }
-
-            let mut edges = [
-                ("left", &mut left, self.border.left, edge_left),
-                ("right", &mut right, self.border.right, edge_right),
-                ("top", &mut top, self.border.top, edge_top),
-                ("bottom", &mut bottom, self.border.bottom, edge_bottom),
-            ];
-
-            for (_, edge_box, rect, enabled) in &mut edges {
-                if requested.clip.width != 0 || requested.clip.height != 0 {
+            let apply = |rect: *mut ffi::wlr_scene_rect, bx: ffi::wlr_box, color: &[f32; 4], enabled: bool| {
+                let mut bx = bx;
+                if enabled && (requested.clip.width != 0 || requested.clip.height != 0) {
                     let mut clip_intersect = std::mem::zeroed();
-                    ffi::wlr_box_intersection(&mut clip_intersect, *edge_box, &requested.clip);
-                    **edge_box = clip_intersect;
+                    ffi::wlr_box_intersection(&mut clip_intersect, &bx, &requested.clip);
+                    bx = clip_intersect;
                 }
-                ffi::wlr_scene_node_set_enabled(*rect as *mut ffi::wlr_scene_node, *enabled);
-                let scaled_x = ((*edge_box).x as f64 * self.scale) as i32;
-                let scaled_y = ((*edge_box).y as f64 * self.scale) as i32;
-                let scaled_w = ((*edge_box).width as f64 * self.scale) as i32;
-                let scaled_h = ((*edge_box).height as f64 * self.scale) as i32;
-                ffi::river_scene_node_set_position_if_changed(*rect as *mut ffi::wlr_scene_node, scaled_x, scaled_y);
-                ffi::river_scene_rect_set_size_if_changed(*rect, scaled_w, scaled_h);
-                ffi::wlr_scene_rect_set_color(*rect, color.as_ptr());
+                let enabled = enabled && bx.width > 0 && bx.height > 0;
+                ffi::wlr_scene_node_set_enabled(rect as *mut ffi::wlr_scene_node, enabled);
+                if !enabled {
+                    return;
+                }
+                ffi::river_scene_node_set_position_if_changed(
+                    rect as *mut ffi::wlr_scene_node,
+                    (bx.x as f64 * self.scale) as i32,
+                    (bx.y as f64 * self.scale) as i32,
+                );
+                ffi::river_scene_rect_set_size_if_changed(
+                    rect,
+                    (bx.width as f64 * self.scale) as i32,
+                    (bx.height as f64 * self.scale) as i32,
+                );
+                ffi::wlr_scene_rect_set_color(rect, color.as_ptr());
+            };
+
+            // Full-band hit catchers: sides span the corners vertically.
+            let b = ffi::wlr_box { x: -band, y: -band, width: band, height: content.height + 2 * band };
+            apply(self.border.left, b, &transparent, true);
+            let b = ffi::wlr_box { x: content.width, y: -band, width: band, height: content.height + 2 * band };
+            apply(self.border.right, b, &transparent, true);
+            let b = ffi::wlr_box { x: 0, y: -band, width: content.width, height: band };
+            apply(self.border.top, b, &transparent, true);
+            let b = ffi::wlr_box { x: 0, y: content.height, width: content.width, height: band };
+            apply(self.border.bottom, b, &transparent, true);
+
+            if is_virtual_border {
+                for &seg in self.border.segments.iter() {
+                    ffi::wlr_scene_node_set_enabled(seg as *mut ffi::wlr_scene_node, false);
+                }
+                return;
+            }
+
+            let bw = border.width as i32;
+            let cl = border_corner_len(bw as f64) as i32;
+            let g = BORDER_SEGMENT_GAP;
+            let arm = cl - bw;
+            // Edge bars span between the corner zones, inset by the gap.
+            let bar_x = cl - bw + g;
+            let bar_w = content.width + 2 * bw - 2 * cl - 2 * g;
+            let bar_y = cl - bw + g;
+            let bar_h = content.height + 2 * bw - 2 * cl - 2 * g;
+
+            let color_for = |elem: BorderElement| -> [f32; 4] {
+                if self.hovered_border_element == Some(elem) {
+                    border.hover_color
+                } else {
+                    border_color
+                }
+            };
+            let e = &border.edges;
+            use BorderElement::*;
+
+            let segs: [(usize, ffi::wlr_box, BorderElement, bool); 12] = [
+                (SEG_TOP, ffi::wlr_box { x: bar_x, y: -bw, width: bar_w, height: bw }, Top, e.top),
+                (SEG_BOTTOM, ffi::wlr_box { x: bar_x, y: content.height, width: bar_w, height: bw }, Bottom, e.bottom),
+                (SEG_LEFT, ffi::wlr_box { x: -bw, y: bar_y, width: bw, height: bar_h }, Left, e.left),
+                (SEG_RIGHT, ffi::wlr_box { x: content.width, y: bar_y, width: bw, height: bar_h }, Right, e.right),
+                (SEG_TL_H, ffi::wlr_box { x: -bw, y: -bw, width: cl, height: bw }, TopLeft, e.top && e.left),
+                (SEG_TL_V, ffi::wlr_box { x: -bw, y: 0, width: bw, height: arm }, TopLeft, e.top && e.left),
+                (SEG_TR_H, ffi::wlr_box { x: content.width + bw - cl, y: -bw, width: cl, height: bw }, TopRight, e.top && e.right),
+                (SEG_TR_V, ffi::wlr_box { x: content.width, y: 0, width: bw, height: arm }, TopRight, e.top && e.right),
+                (SEG_BL_H, ffi::wlr_box { x: -bw, y: content.height, width: cl, height: bw }, BottomLeft, e.bottom && e.left),
+                (SEG_BL_V, ffi::wlr_box { x: -bw, y: content.height - arm, width: bw, height: arm }, BottomLeft, e.bottom && e.left),
+                (SEG_BR_H, ffi::wlr_box { x: content.width + bw - cl, y: content.height, width: cl, height: bw }, BottomRight, e.bottom && e.right),
+                (SEG_BR_V, ffi::wlr_box { x: content.width, y: content.height - arm, width: bw, height: arm }, BottomRight, e.bottom && e.right),
+            ];
+            for (idx, bx, elem, enabled) in segs {
+                apply(self.border.segments[idx], bx, &color_for(elem), enabled);
             }
         }
-    }
-
-    /// Rounded border: a single frame rect (the `top` border node) covering
-    /// content plus border on all edges, with the content area clipped out.
-    /// Per-edge selection doesn't apply here — a rounded frame is all-edges.
-    unsafe fn draw_rounded_border_frame(&mut self, content: &ffi::wlr_box, width: i32, corner_radius: i32, color: &[f32; 4]) {
-        let requested = &self.rendering_requested;
-
-        let mut frame = ffi::wlr_box {
-            x: -width,
-            y: -width,
-            width: content.width + 2 * width,
-            height: content.height + 2 * width,
-        };
-        if requested.clip.width != 0 || requested.clip.height != 0 {
-            let mut clip_intersect = std::mem::zeroed();
-            ffi::wlr_box_intersection(&mut clip_intersect, &frame, &requested.clip);
-            frame = clip_intersect;
-        }
-
-        let scale = self.scale;
-        let s = |v: i32| (v as f64 * scale) as i32;
-        let radius_u16 = |v: i32| (v as f64 * scale).round().clamp(0.0, u16::MAX as f64) as u16;
-
-        let rect = self.border.top;
-        ffi::river_scene_node_set_position_if_changed(rect as *mut ffi::wlr_scene_node, s(frame.x), s(frame.y));
-        ffi::river_scene_rect_set_size_if_changed(rect, s(frame.width), s(frame.height));
-        ffi::wlr_scene_rect_set_color(rect, color.as_ptr());
-        ffi::river_scene_rect_set_corner_radius(rect, s(corner_radius + width));
-        // Clipped region is node-relative: the content box, shifted by
-        // wherever clipping moved the frame's origin.
-        ffi::wlr_scene_rect_set_clipped_region(rect, ffi::clipped_region {
-            area: ffi::wlr_box {
-                x: s(-frame.x),
-                y: s(-frame.y),
-                width: s(content.width),
-                height: s(content.height),
-            },
-            corners: ffi::fx_corner_radii {
-                top_left: radius_u16(corner_radius),
-                top_right: radius_u16(corner_radius),
-                bottom_right: radius_u16(corner_radius),
-                bottom_left: radius_u16(corner_radius),
-            },
-        });
-
-        ffi::wlr_scene_node_set_enabled(rect as *mut ffi::wlr_scene_node, true);
-        ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
-        ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
-        ffi::wlr_scene_node_set_enabled(self.border.bottom as *mut ffi::wlr_scene_node, false);
     }
 
     #[allow(unused_assignments)]
