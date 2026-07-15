@@ -57,11 +57,12 @@ pub struct Rect {
     pub height: i32,
 }
 
+/// Premultiplied-alpha RGBA, 0.0–1.0 per channel (scenefx convention).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rgba(pub [f32; 4]);
 
 /// Server-side decoration for one window: borders now, titlebars later.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DecorationSpec {
     pub border_width: i32,
     pub border_color: Rgba,

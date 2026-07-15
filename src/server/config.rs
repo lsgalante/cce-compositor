@@ -19,10 +19,9 @@ pub struct Layout {
     pub cascade_border_width: i32,
     pub grid_border_width: i32,
     pub floating_border_width: i32,
-    pub border_r: u32,
-    pub border_g: u32,
-    pub border_b: u32,
-    pub border_a: u32,
+    /// Premultiplied-alpha RGBA, 0.0–1.0 per channel (scenefx convention).
+    pub border_color: [f32; 4],
+    pub border_corner_radius: i32,
     pub background_r: u32,
     pub background_g: u32,
     pub background_b: u32,
@@ -72,10 +71,8 @@ impl Default for Layout {
             cascade_border_width: 0,
             grid_border_width: 0,
             floating_border_width: 0,
-            border_r: 0x3E3E3E3Eu32,
-            border_g: 0x3E3E3E3Eu32,
-            border_b: 0x3E3E3E3Eu32,
-            border_a: 0xFFFFFFFFu32,
+            border_color: [62.0 / 255.0, 62.0 / 255.0, 62.0 / 255.0, 1.0],
+            border_corner_radius: 0,
             background_r: 0x1C1C1C1Cu32,
             background_g: 0x20202020u32,
             background_b: 0x20202020u32,
@@ -306,6 +303,12 @@ pub struct SurfaceConfig {
     pub backplate_blur: f64,
     #[serde(default = "default_backplate_corner_radius")]
     pub backplate_corner_radius: i64,
+    #[serde(default = "default_border_width")]
+    pub border_width: i64,
+    #[serde(default = "default_border_color")]
+    pub border_color: String,
+    #[serde(default = "default_border_corner_radius")]
+    pub border_corner_radius: i64,
     #[serde(default = "default_cloud_position_default")]
     pub cloud_position_default: Option<[i32; 2]>,
 }
@@ -325,6 +328,9 @@ impl Default for SurfaceConfig {
             backplate_color: default_backplate_color(),
             backplate_blur: default_backplate_blur(),
             backplate_corner_radius: default_backplate_corner_radius(),
+            border_width: default_border_width(),
+            border_color: default_border_color(),
+            border_corner_radius: default_border_corner_radius(),
             cloud_position_default: default_cloud_position_default(),
         }
      }
@@ -381,6 +387,18 @@ fn default_backplate_blur() -> f64 {
 
 fn default_backplate_corner_radius() -> i64 {
     12
+}
+
+fn default_border_width() -> i64 {
+    0
+}
+
+fn default_border_color() -> String {
+    "#3e3e3e".to_string()
+}
+
+fn default_border_corner_radius() -> i64 {
+    0
 }
 
 
@@ -1445,6 +1463,31 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                             }
                         }
                     }
+                    if let Some(border_node) = surface_children.nodes().iter().find(|n| n.name().value() == "border") {
+                        found_nested = true;
+                        for entry in border_node.entries() {
+                            if let Some(id) = entry.name() {
+                                match id.value() {
+                                    "width" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.border_width = val;
+                                        }
+                                    }
+                                    "color" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surface.border_color = val.to_string();
+                                        }
+                                    }
+                                    "corner_radius" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.border_corner_radius = val;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
                     if let Some(cloud_node) = surface_children.nodes().iter().find(|n| n.name().value() == "cloud") {
                         found_nested = true;
                         if let Some(pos) = get_child_arg_vec2i_opt(cloud_node, "position_default") {
@@ -1469,6 +1512,9 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
             surface.backplate_blur = get_child_arg_f64(node, "backplate_blur", default_backplate_blur());
             surface.backplate_corner_radius = get_child_arg_i64(node, "backplate_corner_radius", default_backplate_corner_radius());
+            surface.border_width = get_child_arg_i64(node, "border_width", default_border_width());
+            surface.border_color = get_child_arg_string(node, "border_color", &default_border_color());
+            surface.border_corner_radius = get_child_arg_i64(node, "border_corner_radius", default_border_corner_radius());
             surface.cloud_position_default = get_child_arg_vec2i_opt(node, "cloud_position_default");
         }
     }
@@ -1533,16 +1579,14 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.gap_bottom = config.layout.gap_bottom as i32;
     state.layout.cascade_offset = config.layout.cascade_offset as i32;
     state.layout.bar_height = config.layout.bar_height as i32;
-    state.layout.border_width = 0;
+    state.layout.border_width = config.surface.border_width as i32;
     state.layout.fullscreen_border_width = 0;
     state.layout.cascade_border_width = 0;
     state.layout.grid_border_width = 0;
     state.layout.floating_border_width = 0;
-    
-    state.layout.border_r = 0x3E3E3E3E;
-    state.layout.border_g = 0x3E3E3E3E;
-    state.layout.border_b = 0x3E3E3E3E;
-    state.layout.border_a = 0xFFFFFFFF;
+
+    state.layout.border_color = parse_hex_color_rgba(&config.surface.border_color);
+    state.layout.border_corner_radius = config.surface.border_corner_radius as i32;
 
     state.layout.desktop_gap_color = config.surface.desktop_gap_color.clone();
 
@@ -1965,5 +2009,25 @@ mod tests {
         assert_eq!(wm.close_window, Some("super+q".to_string()));
         assert_eq!(wm.toggle_fullscreen, Some("super+f".to_string()));
         assert_eq!(wm.toggle_overview, Some("swipe_up".to_string()));
+    }
+
+    #[test]
+    fn test_kdl_surface_border_parsing() {
+        let content = r##"
+            style {
+                surface {
+                    border width=2 color="#ff8800" corner_radius=10
+                }
+            }
+        "##;
+        let config = parse_kdl_config(content).unwrap();
+        assert_eq!(config.surface.border_width, 2);
+        assert_eq!(config.surface.border_color, "#ff8800");
+        assert_eq!(config.surface.border_corner_radius, 10);
+
+        // Defaults keep borders off.
+        let config = parse_kdl_config("").unwrap();
+        assert_eq!(config.surface.border_width, 0);
+        assert_eq!(config.surface.border_corner_radius, 0);
     }
 }

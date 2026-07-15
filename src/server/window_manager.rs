@@ -1185,7 +1185,11 @@ impl WindowManager {
             status_blur: self.layout.status_background_blur > 0.001,
             window_blur: self.layout.window_blur,
             opacity_enabled: self.layout.window_opacity,
-            border_color: (self.layout.border_r, self.layout.border_g, self.layout.border_b, self.layout.border_a),
+            decoration: crate::policy::api::DecorationSpec {
+                border_width: self.layout.border_width,
+                border_color: crate::policy::api::Rgba(self.layout.border_color),
+                corner_radius: self.layout.border_corner_radius,
+            },
             overlay: crate::policy::arrange::OverlayParams {
                 overlay_width: self.layout.overlay_width,
                 border_gap: self.layout.overlay_border_gap,
@@ -1248,14 +1252,12 @@ impl WindowManager {
                 (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width, height });
                 (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width, height };
             }
-            if let Some(border) = wp.border {
+            if let Some(dec) = wp.decoration {
                 (*win_ptr).rendering_requested.border = crate::window::Border {
                     edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
-                    width: border.width,
-                    r: border.color.0,
-                    g: border.color.1,
-                    b: border.color.2,
-                    a: border.color.3,
+                    width: dec.border_width.max(0) as u32,
+                    color: dec.border_color.0,
+                    corner_radius: dec.corner_radius.max(0),
                 };
             }
             if let Some(blur) = wp.blur {

@@ -6,7 +6,7 @@
 // call — the future `Policy::arrange` entry point — composed from the
 // per-section functions below it.
 
-use super::api::{Rect, WindowRole};
+use super::api::{DecorationSpec, Rect, WindowRole};
 use super::tiling::TilingMode;
 
 /// Which screen edge/region a status-bar window docks to.
@@ -770,18 +770,13 @@ pub struct ArrangeParams {
     pub window_blur: bool,
     /// `layout.window_opacity` — unfocused windows dim when set.
     pub opacity_enabled: bool,
-    pub border_color: (u32, u32, u32, u32),
+    /// The configured server-side decoration, applied to every placed window.
+    pub decoration: DecorationSpec,
     pub overlay: OverlayParams,
     pub normal: NormalParams,
     pub pan_x: f64,
     pub pan_y: f64,
     pub zoom: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BorderPlan {
-    pub width: u32,
-    pub color: (u32, u32, u32, u32),
 }
 
 /// Write instructions for one window. `None` leaves the field untouched, so
@@ -804,7 +799,7 @@ pub struct WindowPlan {
     pub box_geom: Option<Rect>,
     pub virtual_pos: Option<(f64, f64)>,
     pub blur: Option<bool>,
-    pub border: Option<BorderPlan>,
+    pub decoration: Option<DecorationSpec>,
     pub opacity: Option<f32>,
     pub was_maximized: Option<bool>,
     /// Maximized-enter save: (restore size, restore virtual position).
@@ -843,7 +838,6 @@ pub fn arrange(
     let mut plan: Vec<WindowPlan> = vec![WindowPlan::default(); windows.len()];
 
     let has_wallpaper = state.iter().any(|w| w.role == WindowRole::Background);
-    let default_border = BorderPlan { width: BW as u32, color: p.border_color };
 
     for out in outputs {
         let phys = out.layout_box;
@@ -947,7 +941,7 @@ pub fn arrange(
                 wp.virtual_pos = Some(placement.virtual_pos);
                 wp.size = Some(placement.size);
                 wp.tiled = Some(1 | 2 | 4 | 8);
-                wp.border = Some(default_border);
+                wp.decoration = Some(p.decoration);
                 wp.blur = Some(p.window_blur);
                 wp.opacity = Some(window_opacity(
                     state[i].is_focused,
@@ -1041,7 +1035,7 @@ pub fn arrange(
             if placement.tiled_all_edges {
                 wp.tiled = Some(1 | 2 | 4 | 8);
             }
-            wp.border = Some(default_border);
+            wp.decoration = Some(p.decoration);
             wp.blur = Some(p.window_blur);
             wp.opacity = Some(window_opacity(is_focused, p.opacity_enabled, NORMAL_UNFOCUSED_OPACITY));
         }
@@ -1412,7 +1406,11 @@ mod tests {
             status_blur: true,
             window_blur: true,
             opacity_enabled: true,
-            border_color: (10, 20, 30, 40),
+            decoration: DecorationSpec {
+                border_width: 0,
+                border_color: crate::policy::api::Rgba([0.1, 0.2, 0.3, 0.4]),
+                corner_radius: 0,
+            },
             overlay: OverlayParams {
                 overlay_width: 400,
                 border_gap: 8,
@@ -1473,7 +1471,7 @@ mod tests {
         assert_eq!(wp.size, Some((640, 480)));
         assert_eq!(wp.hidden, Some(false));
         assert_eq!(wp.tiled, None);
-        assert_eq!(wp.border, Some(BorderPlan { width: 0, color: (10, 20, 30, 40) }));
+        assert_eq!(wp.decoration, Some(arrange_params().decoration));
         assert_eq!(wp.blur, Some(true));
         assert_eq!(wp.opacity, Some(NORMAL_UNFOCUSED_OPACITY));
     }

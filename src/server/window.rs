@@ -72,14 +72,19 @@ impl Edges {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Border {
     pub edges: Edges,
     pub width: u32,
-    pub r: u32,
-    pub g: u32,
-    pub b: u32,
-    pub a: u32,
+    /// Premultiplied-alpha RGBA, 0.0–1.0 per channel (scenefx convention).
+    pub color: [f32; 4],
+    pub corner_radius: i32,
+}
+
+impl Border {
+    pub fn none() -> Self {
+        Self { edges: Edges::new(), width: 0, color: [0.0; 4], corner_radius: 0 }
+    }
 }
 
 pub struct BorderRects {
@@ -459,7 +464,7 @@ impl Window {
                 x: 0,
                 y: 0,
                 hidden: false,
-                border: Border { edges: Edges::new(), width: 0, r: 0, g: 0, b: 0, a: 0 },
+                border: Border::none(),
                 clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                 content_clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                 opacity: 1.0f32,
@@ -1086,7 +1091,7 @@ impl Window {
                     x: 0,
                     y: 0,
                     hidden: false,
-                    border: Border { edges: Edges::new(), width: 0, r: 0, g: 0, b: 0, a: 0 },
+                    border: Border::none(),
                     clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                     content_clip: ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 },
                     opacity: 1.0f32,
@@ -2069,20 +2074,18 @@ impl Window {
         let requested = &self.rendering_requested;
 
         let border = &requested.border;
-        let bg_color: [f32; 4] = [
-            (border.r as f64 / u32::MAX as f64) as f32,
-            (border.g as f64 / u32::MAX as f64) as f32,
-            (border.b as f64 / u32::MAX as f64) as f32,
-            (border.a as f64 / u32::MAX as f64) as f32,
-        ];
+        let border_color = border.color;
         ffi::river_scene_node_set_position_if_changed(self.window_background as *mut ffi::wlr_scene_node, 0, 0);
         let bg_width = (self.box_geom.width as f64 * self.scale) as i32;
         let bg_height = (self.box_geom.height as f64 * self.scale) as i32;
         ffi::river_scene_rect_set_size_if_changed(self.window_background, bg_width, bg_height);
-        ffi::wlr_scene_rect_set_color(self.window_background, bg_color.as_ptr());
+        ffi::wlr_scene_rect_set_color(self.window_background, border_color.as_ptr());
+        ffi::river_scene_rect_set_corner_radius(self.window_background, (border.corner_radius as f64 * self.scale) as i32);
         ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden && self.wm_requested.ssd);
 
-        let is_virtual_border = true;
+        // Zero configured width keeps the legacy invisible rects; cursor.rs
+        // treats the same case as a "virtual" 8px resize zone.
+        let is_virtual_border = border.width == 0;
         if requested.circular {
             ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
@@ -2105,13 +2108,17 @@ impl Window {
             let color: [f32; 4] = if is_virtual_border {
                 [0.0, 0.0, 0.0, 0.0]
             } else {
-                [
-                    (border.r as f64 / u32::MAX as f64) as f32,
-                    (border.g as f64 / u32::MAX as f64) as f32,
-                    (border.b as f64 / u32::MAX as f64) as f32,
-                    (border.a as f64 / u32::MAX as f64) as f32,
-                ]
+                border_color
             };
+
+            if !is_virtual_border && border.corner_radius > 0 {
+                self.draw_rounded_border_frame(&content, border_width as i32, border.corner_radius, &color);
+                return;
+            }
+            // Coming back from the rounded path: the top rect doubles as the
+            // frame there and keeps rounded/clipped state otherwise.
+            ffi::river_scene_rect_set_corner_radius(self.border.top, 0);
+            ffi::wlr_scene_rect_set_clipped_region(self.border.top, ffi::clipped_region_get_default());
 
             let mut left = ffi::wlr_box {
                 x: -(border_width as i32),
@@ -2177,6 +2184,56 @@ impl Window {
                 ffi::wlr_scene_rect_set_color(*rect, color.as_ptr());
             }
         }
+    }
+
+    /// Rounded border: a single frame rect (the `top` border node) covering
+    /// content plus border on all edges, with the content area clipped out.
+    /// Per-edge selection doesn't apply here — a rounded frame is all-edges.
+    unsafe fn draw_rounded_border_frame(&mut self, content: &ffi::wlr_box, width: i32, corner_radius: i32, color: &[f32; 4]) {
+        let requested = &self.rendering_requested;
+
+        let mut frame = ffi::wlr_box {
+            x: -width,
+            y: -width,
+            width: content.width + 2 * width,
+            height: content.height + 2 * width,
+        };
+        if requested.clip.width != 0 || requested.clip.height != 0 {
+            let mut clip_intersect = std::mem::zeroed();
+            ffi::wlr_box_intersection(&mut clip_intersect, &frame, &requested.clip);
+            frame = clip_intersect;
+        }
+
+        let scale = self.scale;
+        let s = |v: i32| (v as f64 * scale) as i32;
+        let radius_u16 = |v: i32| (v as f64 * scale).round().clamp(0.0, u16::MAX as f64) as u16;
+
+        let rect = self.border.top;
+        ffi::river_scene_node_set_position_if_changed(rect as *mut ffi::wlr_scene_node, s(frame.x), s(frame.y));
+        ffi::river_scene_rect_set_size_if_changed(rect, s(frame.width), s(frame.height));
+        ffi::wlr_scene_rect_set_color(rect, color.as_ptr());
+        ffi::river_scene_rect_set_corner_radius(rect, s(corner_radius + width));
+        // Clipped region is node-relative: the content box, shifted by
+        // wherever clipping moved the frame's origin.
+        ffi::wlr_scene_rect_set_clipped_region(rect, ffi::clipped_region {
+            area: ffi::wlr_box {
+                x: s(-frame.x),
+                y: s(-frame.y),
+                width: s(content.width),
+                height: s(content.height),
+            },
+            corners: ffi::fx_corner_radii {
+                top_left: radius_u16(corner_radius),
+                top_right: radius_u16(corner_radius),
+                bottom_right: radius_u16(corner_radius),
+                bottom_left: radius_u16(corner_radius),
+            },
+        });
+
+        ffi::wlr_scene_node_set_enabled(rect as *mut ffi::wlr_scene_node, true);
+        ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
+        ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
+        ffi::wlr_scene_node_set_enabled(self.border.bottom as *mut ffi::wlr_scene_node, false);
     }
 
     #[allow(unused_assignments)]
@@ -2408,13 +2465,18 @@ unsafe extern "C" fn window_set_borders(
         );
         return;
     }
+    let alpha = (a as f64 / u32::MAX as f64) as f32;
     (*window).rendering_requested.border = Border {
         edges: Edges::from_u32(edges),
         width: width as u32,
-        r,
-        g,
-        b,
-        a,
+        // Protocol channels are straight alpha; scene colors are premultiplied.
+        color: [
+            (r as f64 / u32::MAX as f64) as f32 * alpha,
+            (g as f64 / u32::MAX as f64) as f32 * alpha,
+            (b as f64 / u32::MAX as f64) as f32 * alpha,
+            alpha,
+        ],
+        corner_radius: 0,
     };
 }
 
