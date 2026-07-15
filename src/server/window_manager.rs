@@ -1204,6 +1204,8 @@ impl WindowManager {
                 border_width: self.layout.border_width,
                 cloud_position_default: self.layout.cloud_position_default,
                 desktop_grid_scale: self.layout.desktop_grid_scale,
+                desktop_gap_width: self.layout.desktop_gap_width as f64,
+                desktop_cell_inset: self.layout.desktop_cell_fade_inset as f64,
             },
             pan_x: self.desk_pan_x,
             pan_y: self.desk_pan_y,
