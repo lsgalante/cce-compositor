@@ -14,8 +14,13 @@ protocol XML files you'll see throughout `src/server/` and `protocol/`.
 This crate lives inside a larger Cargo workspace (the workspace root is the **parent**
 directory `../Cargo.toml`, which lists ~20 `cce-*` sibling apps). This crate is the
 compositor; the siblings (`cce-status-interface`, `cce-system-settings`, etc.) are
-clients that talk to it over its sockets. The only intra-workspace dependency is
-`cce-ui` (`../cce-ui`).
+clients that talk to it over its sockets. Intra-workspace dependencies: `cce-ui`
+(`../cce-ui`, config helpers) and **`cce-window-manager`** (`../cce-window-manager`,
+its own repo) — the pure-Rust window-management **policy layer** (arrange pass,
+`TilingMode`, saved state, the `Policy`/`Compositor` trait boundary, slotmap). It was
+extracted from this crate's `src/server/policy/`; `src/lib.rs` re-exports it as
+`crate::policy` / `crate::tiling` / `crate::slotmap`, so mechanism code keeps using
+the historical paths.
 
 > Note: `README.md` is stale — it describes an old split `cce-server`/`cce-client`
 > architecture. The real architecture is monolithic (a single `cce-fx` server binary
@@ -55,8 +60,9 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Tests are sparse (unit tests in `slotmap.rs`, `config.rs`, `window_manager.rs`).
-The library crate name is `cce_fx` (underscored).
+Tests are sparse (unit tests in `config.rs`, `window_manager.rs`; the arrange/slotmap
+tests live in the sibling `cce-window-manager` crate — run them with
+`cargo test -p cce-window-manager`). The library crate name is `cce_fx` (underscored).
 
 ```sh
 cargo test --lib                  # all library tests
@@ -106,8 +112,9 @@ treats them as opaque.
   thread.
 - **`window.rs`** (~3300 lines) — per-window model and rendering (borders, blur,
   viewport transforms).
-- **`tiling.rs`** — `TilingMode` enum: `Floating`, `Cascade`, `Grid`, `Fullscreen`,
-  `Popup`, `Overlay`, `Maximized`. Modes apply per-window and per-viewport.
+- **`crate::tiling`** (from `cce-window-manager`) — `TilingMode` enum: `Floating`,
+  `Cascade`, `Grid`, `Fullscreen`, `Popup`, `Overlay`, `Maximized`. Modes apply
+  per-window and per-viewport.
 - Input stack: `input_manager.rs`, `seat.rs`, `cursor.rs`, `keyboard*.rs`,
   `xkb_*.rs`, `libinput_*.rs`, `pointer_*.rs`, `tablet*.rs`, `text_input.rs`,
   `input_relay.rs`/`input_popup.rs` (IME).

@@ -11,8 +11,7 @@ pub mod server;
 pub mod process;
 #[path = "server/util.rs"]
 pub mod util;
-#[path = "server/slotmap.rs"]
-pub mod slotmap;
+pub use cce_window_manager::slotmap;
 #[path = "server/window_manager.rs"]
 pub mod window_manager;
 #[path = "server/xkb_bindings.rs"]
@@ -21,9 +20,11 @@ pub mod xkb_bindings;
 pub mod layer_shell;
 #[path = "server/scene.rs"]
 pub mod scene;
-#[path = "server/policy/mod.rs"]
-pub mod policy;
-pub use policy::tiling;
+// The window-management policy layer lives in the sibling crate
+// `cce-window-manager` (pure Rust, no FFI). The aliases keep the historical
+// `crate::policy::…` / `crate::tiling` / `crate::slotmap` paths working.
+pub use cce_window_manager as policy;
+pub use cce_window_manager::tiling;
 #[path = "server/config.rs"]
 pub mod config;
 #[path = "server/ipc_server.rs"]

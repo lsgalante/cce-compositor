@@ -123,43 +123,7 @@ pub struct ModeRule {
     pub ssd: Option<bool>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Action {
-    None,
-    Spawn,
-    Toggle,
-    Close,
-    FocusNext,
-    FocusPrev,
-    WindowSwitcher,
-    Move,
-    Resize,
-    Exit,
-    Reload,
-    Fullscreen,
-    LayoutNext,
-    ModeNext,
-    ModeNextShared,
-    View1,
-    View2,
-    View3,
-    View4,
-    SetViewport1,
-    SetViewport2,
-    SetViewport3,
-    SetViewport4,
-    Expose,
-    Minimize,
-    OverlayLeft,
-    OverlayRight,
-    ZoomIn,
-    ZoomOut,
-    ZoomReset,
-    PanLeft,
-    PanRight,
-    PanUp,
-    PanDown,
-}
+pub use cce_window_manager::api::Action;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct KeybindConfig {
