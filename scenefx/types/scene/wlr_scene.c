@@ -1371,7 +1371,10 @@ struct wlr_scene_optimized_blur *wlr_scene_optimized_blur_create(
 
 	scene_blur->width = width;
 	scene_blur->height = height;
-	scene_blur->dirty = false;
+	// Start dirty so the first render pass bakes the cache; scene_entry_render
+	// only re-bakes when dirty (re-baking on undamaged frames samples stale
+	// pass->buffer content, ghosting whatever was composited above the node).
+	scene_blur->dirty = true;
 
 	scene_node_update(&scene_blur->node, NULL);
 
@@ -2246,8 +2249,14 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:;
 		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
 		// Re-render the optimized blur buffer when needed. Retry rendering
-		// until there's a visible blur_node.
-		if (fx_pass->has_blur && is_scene_blur_enabled(&scene->blur_data)) {
+		// until there's a visible blur_node. The dirty gate is load-bearing:
+		// mark_dirty damages the node's whole box, so pass->buffer holds fresh
+		// below-node content when the re-bake samples it. Without the gate the
+		// re-bake fires on frames whose damage only grazes the box and blurs
+		// stale pass->buffer pixels — including this very surface composited
+		// above — baking ghosts into the shared cache.
+		if (fx_pass->has_blur && is_scene_blur_enabled(&scene->blur_data)
+				&& scene_blur->dirty) {
 			const float opacity = 1.0f;
 			enum wl_output_transform transform =
 				wlr_output_transform_invert(data->transform);
