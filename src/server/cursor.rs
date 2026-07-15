@@ -2298,7 +2298,7 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
         // moves the window, everything else resizes. Corner squares of
         // `corner_len` (measured from the outer corners along the band)
         // resize on both adjacent edges, so the top corners still resize.
-        let corner_len = crate::window::border_corner_len(bw);
+        let corner_len = crate::window::border_corner_len(bw, (*(*window).server).wm.layout.border_corner_length);
 
         let dist_left = rx + bw;
         let dist_right = (content_w + bw) - rx;

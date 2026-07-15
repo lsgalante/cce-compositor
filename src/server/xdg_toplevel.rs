@@ -645,6 +645,17 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         (*window).box_geom.x = final_x;
         (*window).box_geom.y = final_y;
 
+        // Apply the compensating position (and the borders) to the scene in
+        // this same commit: the resized buffer is already part of the scene,
+        // and waiting for the next render pass lets a frame composite the
+        // new size at the old position — visible as jitter on the anchored
+        // edges during left/top resizes.
+        ffi::river_scene_node_set_position_if_changed((*window).tree as *mut ffi::wlr_scene_node, final_x, final_y);
+        ffi::river_scene_node_set_position_if_changed((*window).popup_tree as *mut ffi::wlr_scene_node, final_x, final_y);
+        (*window).box_geom.width = geometry.width;
+        (*window).box_geom.height = geometry.height;
+        (*window).draw_borders();
+
         if !resize_active {
             (*window).resize_edges = None;
         }

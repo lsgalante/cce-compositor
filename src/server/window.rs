@@ -105,14 +105,16 @@ pub enum BorderElement {
 
 /// Length of a corner zone, measured from the outer corner along each band.
 /// Shared by the visual segments (draw_borders) and the pointer zones
-/// (cursor.rs get_border_zone) so they always agree.
-pub fn border_corner_len(bw: f64) -> f64 {
-    (2.0 * bw).max(16.0)
+/// (cursor.rs get_border_zone) so they always agree. `configured` comes from
+/// `border { corner_length= }`; 0 picks the auto formula. Never shorter than
+/// the band width, so a corner is at least its diagonal square.
+pub fn border_corner_len(bw: f64, configured: i32) -> f64 {
+    if configured > 0 {
+        (configured as f64).max(bw)
+    } else {
+        (2.0 * bw).max(16.0)
+    }
 }
-
-/// Visual gap between border segments, so the 8 zones read as separate
-/// elements. Zones and hit-testing stay continuous across the gaps.
-pub const BORDER_SEGMENT_GAP: i32 = 4;
 
 // Indices into BorderRects.segments: 4 edge bars + 2 L-arm rects per corner.
 const SEG_TOP: usize = 0;
@@ -2216,8 +2218,9 @@ impl Window {
             }
 
             let bw = border.width as i32;
-            let cl = border_corner_len(bw as f64) as i32;
-            let g = BORDER_SEGMENT_GAP;
+            let layout = &(*self.server).wm.layout;
+            let cl = border_corner_len(bw as f64, layout.border_corner_length) as i32;
+            let g = layout.border_segment_gap;
             let arm = cl - bw;
             // Edge bars span between the corner zones, inset by the gap.
             let bar_x = cl - bw + g;

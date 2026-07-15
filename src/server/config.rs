@@ -27,6 +27,11 @@ pub struct Layout {
     /// defaults to a lightened `border_color_focused`.
     pub border_color_hover: [f32; 4],
     pub border_corner_radius: i32,
+    /// Visual gap between the 8 border zone segments.
+    pub border_segment_gap: i32,
+    /// Corner zone length measured from the outer corner along each band;
+    /// 0 = auto (max(2 * width, 16)).
+    pub border_corner_length: i32,
     pub background_r: u32,
     pub background_g: u32,
     pub background_b: u32,
@@ -80,6 +85,8 @@ impl Default for Layout {
             border_color_focused: [62.0 / 255.0, 62.0 / 255.0, 62.0 / 255.0, 1.0],
             border_color_hover: lighten_premultiplied([62.0 / 255.0, 62.0 / 255.0, 62.0 / 255.0, 1.0], HOVER_LIGHTEN),
             border_corner_radius: 0,
+            border_segment_gap: 4,
+            border_corner_length: 0,
             background_r: 0x1C1C1C1Cu32,
             background_g: 0x20202020u32,
             background_b: 0x20202020u32,
@@ -286,6 +293,11 @@ pub struct SurfaceConfig {
     pub border_color_hover: Option<String>,
     #[serde(default = "default_border_corner_radius")]
     pub border_corner_radius: i64,
+    #[serde(default = "default_border_segment_gap")]
+    pub border_segment_gap: i64,
+    /// 0 = auto (max(2 * width, 16)).
+    #[serde(default)]
+    pub border_corner_length: i64,
     #[serde(default = "default_cloud_position_default")]
     pub cloud_position_default: Option<[i32; 2]>,
 }
@@ -310,6 +322,8 @@ impl Default for SurfaceConfig {
             border_color_focused: None,
             border_color_hover: None,
             border_corner_radius: default_border_corner_radius(),
+            border_segment_gap: default_border_segment_gap(),
+            border_corner_length: 0,
             cloud_position_default: default_cloud_position_default(),
         }
      }
@@ -378,6 +392,10 @@ fn default_border_color() -> String {
 
 fn default_border_corner_radius() -> i64 {
     0
+}
+
+fn default_border_segment_gap() -> i64 {
+    4
 }
 
 /// How far the default hover color moves toward white.
@@ -1486,6 +1504,16 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.border_corner_radius = val;
                                         }
                                     }
+                                    "segment_gap" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.border_segment_gap = val;
+                                        }
+                                    }
+                                    "corner_length" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.border_corner_length = val;
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1520,6 +1548,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.border_color_focused = get_child_arg_string_opt(node, "border_color_focused");
             surface.border_color_hover = get_child_arg_string_opt(node, "border_color_hover");
             surface.border_corner_radius = get_child_arg_i64(node, "border_corner_radius", default_border_corner_radius());
+            surface.border_segment_gap = get_child_arg_i64(node, "border_segment_gap", default_border_segment_gap());
+            surface.border_corner_length = get_child_arg_i64(node, "border_corner_length", 0);
             surface.cloud_position_default = get_child_arg_vec2i_opt(node, "cloud_position_default");
         }
     }
@@ -1604,6 +1634,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         .map(parse_hex_color_rgba)
         .unwrap_or_else(|| lighten_premultiplied(state.layout.border_color_focused, HOVER_LIGHTEN));
     state.layout.border_corner_radius = config.surface.border_corner_radius as i32;
+    state.layout.border_segment_gap = config.surface.border_segment_gap.max(0) as i32;
+    state.layout.border_corner_length = config.surface.border_corner_length.max(0) as i32;
 
     state.layout.desktop_gap_color = config.surface.desktop_gap_color.clone();
 
@@ -2033,7 +2065,7 @@ mod tests {
         let content = r##"
             style {
                 surface {
-                    border width=2 color="#ff8800" color_focused="#00ff88" color_hover="#88ffcc" corner_radius=10
+                    border width=2 color="#ff8800" color_focused="#00ff88" color_hover="#88ffcc" corner_radius=10 segment_gap=6 corner_length=24
                 }
             }
         "##;
@@ -2043,6 +2075,8 @@ mod tests {
         assert_eq!(config.surface.border_color_focused, Some("#00ff88".to_string()));
         assert_eq!(config.surface.border_color_hover, Some("#88ffcc".to_string()));
         assert_eq!(config.surface.border_corner_radius, 10);
+        assert_eq!(config.surface.border_segment_gap, 6);
+        assert_eq!(config.surface.border_corner_length, 24);
 
         // Defaults keep borders off; the focused color falls back to `color`
         // and the hover color to a lightened focused color.
@@ -2051,5 +2085,7 @@ mod tests {
         assert_eq!(config.surface.border_corner_radius, 0);
         assert_eq!(config.surface.border_color_focused, None);
         assert_eq!(config.surface.border_color_hover, None);
+        assert_eq!(config.surface.border_segment_gap, 4);
+        assert_eq!(config.surface.border_corner_length, 0);
     }
 }
