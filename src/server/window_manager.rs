@@ -2676,14 +2676,6 @@ impl WindowManager {
                     "desktop_grid_fade_mode" => {
                         self.layout.desktop_grid_fade_mode = val.to_string();
                     }
-                    "desktop_enable_solid_color" => {
-                        if let Ok(v) = val.parse::<bool>() {
-                            self.layout.desktop_enable_solid_color = v;
-                        }
-                    }
-                    "desktop_solid_color" => {
-                        self.layout.desktop_solid_color = crate::config::parse_hex_color_rgba(val);
-                    }
                     "gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap = v; } }
                     "gap_top" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_top = v; } }
                     "gap_left" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_left = v; } }

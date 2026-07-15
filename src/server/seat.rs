@@ -1167,9 +1167,6 @@ impl Seat {
                         let virtual_dx = dx as f64 / scale;
                         let virtual_dy = dy as f64 / scale;
 
-                        let mut new_w = op.start_win_w;
-                        let mut new_h = op.start_win_h;
-                        
                         let mut vx = op.start_win_virtual_x;
                         let mut vy = op.start_win_virtual_y;
 
@@ -1193,11 +1190,11 @@ impl Seat {
                         // Must match get_active_resize_dimensions, which
                         // recomputes this for the arrange snapshot — both go
                         // through snap::resize_axis.
-                        new_w = crate::policy::snap::resize_axis(
+                        let new_w = crate::policy::snap::resize_axis(
                             op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
                             edges.left, edges.right, 50.0, &sp,
                         ) as u32;
-                        new_h = crate::policy::snap::resize_axis(
+                        let new_h = crate::policy::snap::resize_axis(
                             op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
                             edges.top, edges.bottom, 50.0, &sp,
                         ) as u32;

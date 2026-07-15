@@ -172,7 +172,6 @@ pub struct Output {
     pub last_grid_gap_color: String,
     pub last_grid_gap_color_rgba: [f32; 4],
     pub grid_is_low_res: bool,
-    pub last_grid_enable_solid_color: bool,
     pub grid_rect_pool: Vec<*mut ffi::wlr_scene_rect>,
     pub grid_force_redraw_frames: u8,
 
@@ -436,7 +435,6 @@ impl Output {
             last_grid_gap_color: String::new(),
             last_grid_gap_color_rgba: [0.0, 0.0, 0.0, 0.0],
             grid_is_low_res: false,
-            last_grid_enable_solid_color: false,
             grid_rect_pool: Vec::new(),
             grid_force_redraw_frames: 0,
             destroy: std::mem::zeroed(),
@@ -649,28 +647,12 @@ impl Output {
         }
 
         let wm = &(*self.server).wm;
-        
-        // If solid mode is active, disable the grid tree and pool to save resources.
-        if wm.layout.desktop_enable_solid_color {
-            ffi::wlr_scene_node_set_enabled(self.grid_tree as *mut ffi::wlr_scene_node, false);
-            for &rect in &self.grid_rect_pool {
-                ffi::wlr_scene_node_set_enabled(rect as *mut ffi::wlr_scene_node, false);
-            }
-            self.last_grid_enable_solid_color = true;
-            return;
-        }
 
         // Enable the grid tree.
         ffi::wlr_scene_node_set_enabled(self.grid_tree as *mut ffi::wlr_scene_node, true);
 
         // Keep the grid tree at the top of the background layer to prevent wallpaper windows from overlapping it
         ffi::wlr_scene_node_raise_to_top(self.grid_tree as *mut ffi::wlr_scene_node);
-
-        // Force redrawing if switching back from solid color mode.
-        if self.last_grid_enable_solid_color {
-            self.last_grid_enable_solid_color = false;
-            self.grid_force_redraw_frames = 3;
-        }
 
         let (viewport_w, viewport_h) = self.current.dimensions();
         let zoom = if wm.desk_zoom.is_nan() || wm.desk_zoom <= 0.0 {
