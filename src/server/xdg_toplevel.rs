@@ -645,16 +645,24 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         (*window).box_geom.x = final_x;
         (*window).box_geom.y = final_y;
 
-        // Apply the compensating position (and the borders) to the scene in
-        // this same commit: the resized buffer is already part of the scene,
-        // and waiting for the next render pass lets a frame composite the
-        // new size at the old position — visible as jitter on the anchored
-        // edges during left/top resizes.
-        ffi::river_scene_node_set_position_if_changed((*window).tree as *mut ffi::wlr_scene_node, final_x, final_y);
-        ffi::river_scene_node_set_position_if_changed((*window).popup_tree as *mut ffi::wlr_scene_node, final_x, final_y);
-        (*window).box_geom.width = geometry.width;
-        (*window).box_geom.height = geometry.height;
-        (*window).draw_borders();
+        // Keep the displayed buffer and the compensating position atomic.
+        // Live buffer (no configure in flight): the commit is already on
+        // screen, so move the scene tree in the same commit — waiting for
+        // the next render pass lets a frame composite the new size at the
+        // old position, jittering the anchored edges. Frozen buffer (saved
+        // for an in-flight configure): moving the tree now would shift the
+        // OLD-size buffer instead, so leave the position to the render pass
+        // (which restores the new buffer and applies it together) and make
+        // sure that pass runs promptly.
+        if !(*window).surfaces.saved {
+            ffi::river_scene_node_set_position_if_changed((*window).tree as *mut ffi::wlr_scene_node, final_x, final_y);
+            ffi::river_scene_node_set_position_if_changed((*window).popup_tree as *mut ffi::wlr_scene_node, final_x, final_y);
+            (*window).box_geom.width = geometry.width;
+            (*window).box_geom.height = geometry.height;
+            (*window).draw_borders();
+        } else {
+            (*server).wm.dirty_rendering();
+        }
 
         if !resize_active {
             (*window).resize_edges = None;
