@@ -21,8 +21,9 @@ pub mod xkb_bindings;
 pub mod layer_shell;
 #[path = "server/scene.rs"]
 pub mod scene;
-#[path = "server/tiling.rs"]
-pub mod tiling;
+#[path = "server/policy/mod.rs"]
+pub mod policy;
+pub use policy::tiling;
 #[path = "server/config.rs"]
 pub mod config;
 #[path = "server/ipc_server.rs"]

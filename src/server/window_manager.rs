@@ -47,32 +47,7 @@ pub struct WindowManagerRenderingRequested {
     pub order_hash: u64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct SavedWindowState {
-    pub app_id: String,
-    pub title: String,
-    pub tiling_mode: crate::tiling::TilingMode,
-    pub minimized: bool,
-    pub virtual_x: f64,
-    pub virtual_y: f64,
-    pub scale: f64,
-    pub width: u32,
-    pub height: u32,
-    pub cmdline: String,
-    #[serde(default)]
-    pub focused: bool,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct SavedState {
-    pub desk_pan_x: f64,
-    pub desk_pan_y: f64,
-    pub desk_zoom: f64,
-    pub global_layout: crate::tiling::TilingMode,
-    pub windows: Vec<SavedWindowState>,
-    #[serde(default)]
-    pub last_window_states: Vec<SavedWindowState>,
-}
+pub use crate::policy::state::{SavedState, SavedWindowState};
 
 pub struct WindowManager {
     pub server: *mut Server,
@@ -844,7 +819,7 @@ impl WindowManager {
             }
         }
 
-        let has_wallpaper = self.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).get_app_id_string().as_deref() == Some("cce-wallpaper"));
+        let has_wallpaper = self.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_wallpaper());
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr_out = (*outputs_list).next;
         while curr_out != outputs_list {
@@ -1140,7 +1115,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             return;
         }
 
-        let has_wallpaper = self.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).get_app_id_string().as_deref() == Some("cce-wallpaper"));
+        let has_wallpaper = self.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_wallpaper());
         for &output in &active_outputs {
             if !(*output).background_rect.is_null() {
                 ffi::wlr_scene_node_set_enabled((*output).background_rect as *mut ffi::wlr_scene_node, !has_wallpaper);
@@ -1167,73 +1142,23 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             let phys_w = wlr_box.width;
             let phys_h = wlr_box.height;
 
-            let mut usable_x = phys_x;
-            let mut usable_y = phys_y;
-            let mut usable_w = phys_w;
-            let mut usable_h = phys_h;
-
             let non_ex = (*output).layer_shell.scheduled.non_exclusive_area;
-            if non_ex.width > 0 && non_ex.height > 0 {
-                usable_x = phys_x + non_ex.x;
-                usable_y = phys_y + non_ex.y;
-                usable_w = non_ex.width;
-                usable_h = non_ex.height;
-            }
-
-            let bar_h = self.layout.bar_height as i32;
-            let mut has_top = false;
-            let mut has_bottom = false;
-            let mut has_left = false;
-            let mut has_right = false;
-
-            let resolve_edge = |win_ptr: *mut Window| {
-                let edge = (*win_ptr).status_edge;
-                if edge == crate::window::StatusEdge::Unspecified {
-                    crate::window::StatusEdge::TopLeft
-                } else {
-                    edge
-                }
-            };
-
+            let mut status_edges: Vec<crate::window::StatusEdge> = Vec::new();
             for &win_ptr in self.windows.iter() {
                 if win_ptr.is_null() || (*win_ptr).closed {
                     continue;
                 }
                 if (*win_ptr).is_status_bar() {
-                    match resolve_edge(win_ptr) {
-                        crate::window::StatusEdge::Unspecified | crate::window::StatusEdge::TopLeft | crate::window::StatusEdge::TopCenter | crate::window::StatusEdge::TopRight => {
-                            if !self.status_hide_mode {
-                                has_top = true;
-                            }
-                        }
-                        crate::window::StatusEdge::BottomLeft | crate::window::StatusEdge::BottomCenter | crate::window::StatusEdge::BottomRight => {
-                            has_bottom = true;
-                        }
-                        crate::window::StatusEdge::Left => {
-                            has_left = true;
-                        }
-                        crate::window::StatusEdge::Right => {
-                            has_right = true;
-                        }
-                    }
+                    status_edges.push((*win_ptr).status_edge);
                 }
             }
-
-            if has_top {
-                usable_y += bar_h;
-                usable_h -= bar_h;
-            }
-            if has_bottom {
-                usable_h -= bar_h;
-            }
-            if has_left {
-                usable_x += bar_h;
-                usable_w -= bar_h;
-            }
-            if has_right {
-                usable_w -= bar_h;
-            }
-
+            let usable = crate::policy::arrange::compute_usable_area(
+                crate::policy::api::Rect { x: phys_x, y: phys_y, width: phys_w, height: phys_h },
+                crate::policy::api::Rect { x: non_ex.x, y: non_ex.y, width: non_ex.width, height: non_ex.height },
+                self.layout.bar_height as i32,
+                self.status_hide_mode,
+                &status_edges,
+            );
             let viewport_w = wlr_box.width as f64;
             let viewport_h = wlr_box.height as f64;
             let camera_center_x = self.desk_pan_x + (viewport_w / 2.0) / self.desk_zoom;
@@ -1248,161 +1173,151 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                     continue;
                 }
 
-                let app_id = (*win_ptr).get_app_id_string();
-                let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
-                let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
-                
-                if is_wallpaper {
-                    (*win_ptr).tiling_mode = crate::tiling::TilingMode::Status;
-                    (*win_ptr).wm_requested.tiled = 0;
-                    (*win_ptr).wm_requested.ssd = false;
-                    (*win_ptr).scale = 1.0;
-                    ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
-                    (*win_ptr).rendering_requested.hidden = false;
-                    (*win_ptr).rendering_requested.blur = false;
-                    (*win_ptr).rendering_requested.x = phys_x;
-                    (*win_ptr).rendering_requested.y = phys_y;
-                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                        width: phys_w as u32,
-                        height: phys_h as u32,
-                    });
-                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                        width: phys_w as u32,
-                        height: phys_h as u32,
-                    };
-                    continue;
-                }
-
-                if is_status_bar {
-                    (*win_ptr).tiling_mode = crate::tiling::TilingMode::Status;
-                    (*win_ptr).wm_requested.tiled = 0;
-                    (*win_ptr).wm_requested.ssd = false;
-                    (*win_ptr).scale = 1.0;
-                    ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
-                    (*win_ptr).rendering_requested.hidden = false;
-                    (*win_ptr).rendering_requested.blur = self.layout.status_background_blur > 0.001;
-                    continue;
-                }
-
-                let visible = !(*win_ptr).minimized
-                    && !matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
-                if !visible {
-                    ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, false);
-                    (*win_ptr).rendering_requested.hidden = true;
-                    continue;
-                }
-
-                ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
-                (*win_ptr).rendering_requested.hidden = false;
-
                 let mode = self.get_mode_for_window(win_ptr);
-                (*win_ptr).tiling_mode = mode;
+                let class = crate::policy::arrange::classify_window(
+                    (*win_ptr).role(),
+                    (*win_ptr).minimized,
+                    matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init),
+                    mode,
+                    self.is_window_being_moved(win_ptr),
+                );
 
-                if !(*win_ptr).mode_locked {
-                    if let Some(rule) = self.get_rule_for_window(win_ptr) {
-                        if let Some(rule_ssd) = rule.ssd {
-                            (*win_ptr).wm_requested.ssd = rule_ssd;
+                match class {
+                    crate::policy::arrange::WindowClass::Background => {
+                        (*win_ptr).tiling_mode = crate::tiling::TilingMode::Status;
+                        (*win_ptr).wm_requested.tiled = 0;
+                        (*win_ptr).wm_requested.ssd = false;
+                        (*win_ptr).scale = 1.0;
+                        ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
+                        (*win_ptr).rendering_requested.hidden = false;
+                        (*win_ptr).rendering_requested.blur = false;
+                        (*win_ptr).rendering_requested.x = phys_x;
+                        (*win_ptr).rendering_requested.y = phys_y;
+                        (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                            width: phys_w as u32,
+                            height: phys_h as u32,
+                        });
+                        (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                            width: phys_w as u32,
+                            height: phys_h as u32,
+                        };
+                    }
+                    crate::policy::arrange::WindowClass::StatusBar => {
+                        (*win_ptr).tiling_mode = crate::tiling::TilingMode::Status;
+                        (*win_ptr).wm_requested.tiled = 0;
+                        (*win_ptr).wm_requested.ssd = false;
+                        (*win_ptr).scale = 1.0;
+                        ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
+                        (*win_ptr).rendering_requested.hidden = false;
+                        (*win_ptr).rendering_requested.blur = self.layout.status_background_blur > 0.001;
+                    }
+                    crate::policy::arrange::WindowClass::Hidden => {
+                        ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, false);
+                        (*win_ptr).rendering_requested.hidden = true;
+                    }
+                    crate::policy::arrange::WindowClass::Overlay | crate::policy::arrange::WindowClass::Normal => {
+                        ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
+                        (*win_ptr).rendering_requested.hidden = false;
+
+                        (*win_ptr).tiling_mode = mode;
+
+                        if !(*win_ptr).mode_locked {
+                            if let Some(rule) = self.get_rule_for_window(win_ptr) {
+                                if let Some(rule_ssd) = rule.ssd {
+                                    (*win_ptr).wm_requested.ssd = rule_ssd;
+                                }
+                            }
+                        }
+
+                        if class == crate::policy::arrange::WindowClass::Overlay {
+                            overlay_windows.push(win_ptr);
+                        } else {
+                            normal_windows.push(win_ptr);
                         }
                     }
-                }
-
-                let is_moving = self.is_window_being_moved(win_ptr);
-                if mode == crate::tiling::TilingMode::Overlay && !is_moving {
-                    overlay_windows.push(win_ptr);
-                } else {
-                    normal_windows.push(win_ptr);
                 }
             }
 
             let bw = 0;
 
-            let g = self.layout.overlay_border_gap;
-            let dec_h = std::cmp::max(bw, 16);
+            let overlay_params = crate::policy::arrange::OverlayParams {
+                overlay_width: self.layout.overlay_width,
+                border_gap: self.layout.overlay_border_gap,
+                position_right: self.layout.overlay_position == "right",
+                cloud_position_default: self.layout.cloud_position_default,
+            };
+            let normal_params = crate::policy::arrange::NormalParams {
+                gap_right: self.layout.gap_right,
+                gap_top: self.layout.gap_top,
+                cloud_position_default: self.layout.cloud_position_default,
+                desktop_grid_scale: self.layout.desktop_grid_scale,
+            };
+            let ctx = crate::policy::arrange::PlacementCtx {
+                phys: crate::policy::api::Rect { x: phys_x, y: phys_y, width: phys_w, height: phys_h },
+                usable,
+                pan_x: self.desk_pan_x,
+                pan_y: self.desk_pan_y,
+                zoom: self.desk_zoom,
+            };
+
             for (sp_idx, &win_ptr) in overlay_windows.iter().enumerate() {
                 if sp_idx == 0 {
                     let app_id = (*win_ptr).get_app_id_string();
                     let is_cce_cloud = app_id.as_deref().map_or(false, |id| id.starts_with("cce-cloud"));
 
-                    let mut sp_x = (*win_ptr).box_geom.x;
-                    let mut sp_y = (*win_ptr).box_geom.y;
-                    let mut sp_w = (*win_ptr).box_geom.width as i32;
-                    let mut sp_h = (*win_ptr).box_geom.height as i32;
+                    let placement = crate::policy::arrange::place_overlay_window(
+                        &crate::policy::arrange::OverlaySnapshot {
+                            box_geom: crate::policy::api::Rect {
+                                x: (*win_ptr).box_geom.x,
+                                y: (*win_ptr).box_geom.y,
+                                width: (*win_ptr).box_geom.width,
+                                height: (*win_ptr).box_geom.height,
+                            },
+                            min_width: (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32,
+                            is_cloud: is_cce_cloud,
+                            ssd: (*win_ptr).wm_requested.ssd,
+                            decorations_size: (*win_ptr).get_decorations_size(),
+                        },
+                        &overlay_params,
+                        &ctx,
+                    );
 
-
-                    if sp_w == 0 || sp_h == 0 {
-                        sp_w = if (*win_ptr).wm_scheduled.dimensions_hint.min_width > 32 {
-                            std::cmp::max(self.layout.overlay_width, (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32)
-                        } else {
-                            self.layout.overlay_width
-                        };
-                        sp_h = (usable_h - (dec_h + bw) - 2 * g).max(1);
-
-                        sp_x = if self.layout.overlay_position == "right" {
-                            usable_x + usable_w - sp_w - g + bw
-                        } else {
-                            usable_x + g + bw
-                        };
-                        sp_y = usable_y + dec_h + g;
-
-                        (*win_ptr).box_geom.x = sp_x;
-                        (*win_ptr).box_geom.y = sp_y;
-                        (*win_ptr).box_geom.width = sp_w;
-                        (*win_ptr).box_geom.height = sp_h;
-                    } else if is_cce_cloud {
-                        if let Some(pos) = self.layout.cloud_position_default {
-                            sp_x = usable_x + pos[0];
-                            sp_y = usable_y + pos[1];
-                            (*win_ptr).box_geom.x = sp_x;
-                            (*win_ptr).box_geom.y = sp_y;
-                        }
+                    if let Some(bg) = placement.box_geom_write {
+                        (*win_ptr).box_geom.x = bg.x;
+                        (*win_ptr).box_geom.y = bg.y;
+                        (*win_ptr).box_geom.width = bg.width;
+                        (*win_ptr).box_geom.height = bg.height;
                     }
-
-                    (*win_ptr).rendering_requested.x = sp_x;
-                    (*win_ptr).rendering_requested.y = sp_y;
+                    (*win_ptr).rendering_requested.x = placement.pos.0;
+                    (*win_ptr).rendering_requested.y = placement.pos.1;
                     (*win_ptr).scale = 1.0;
-
-
-
-                    let vx = self.desk_pan_x + (sp_x - phys_x) as f64 / self.desk_zoom;
-                    let vy = self.desk_pan_y + (sp_y - phys_y) as f64 / self.desk_zoom;
-                    (*win_ptr).virtual_x = vx;
-                    (*win_ptr).virtual_y = vy;
-                    
-                    let mut sp_target_w = sp_w;
-                    let mut sp_target_h = sp_h;
-                    if !(*win_ptr).wm_requested.ssd {
-                        let (dec_w, dec_h) = (*win_ptr).get_decorations_size();
-                        sp_target_w = (sp_w - dec_w).max(1);
-                        sp_target_h = (sp_h - dec_h).max(1);
-                    }
+                    (*win_ptr).virtual_x = placement.virtual_pos.0;
+                    (*win_ptr).virtual_y = placement.virtual_pos.1;
                     (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                        width: sp_target_w as u32,
-                        height: sp_target_h as u32,
+                        width: placement.size.0,
+                        height: placement.size.1,
                     });
                     (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                        width: sp_target_w as u32,
-                        height: sp_target_h as u32,
+                        width: placement.size.0,
+                        height: placement.size.1,
                     };
                     (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
 
                     let is_focused = win_ptr == focused_window;
-                    let r = self.layout.border_r;
-                    let g_color = self.layout.border_g;
-                    let b = self.layout.border_b;
-                    let a = self.layout.border_a;
-
                     (*win_ptr).rendering_requested.border = crate::window::Border {
                         edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
                         width: bw as u32,
-                        r,
-                        g: g_color,
-                        b,
-                        a,
+                        r: self.layout.border_r,
+                        g: self.layout.border_g,
+                        b: self.layout.border_b,
+                        a: self.layout.border_a,
                     };
                     (*win_ptr).rendering_requested.blur = self.layout.window_blur;
-                    (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
-                        if !self.layout.window_opacity { 1.0f32 } else { 0.85f32 }
-                    };
+                    (*win_ptr).rendering_requested.opacity = crate::policy::arrange::window_opacity(
+                        is_focused,
+                        self.layout.window_opacity,
+                        crate::policy::arrange::OVERLAY_UNFOCUSED_OPACITY,
+                    );
                 } else {
                     normal_windows.push(win_ptr);
                 }
@@ -1410,58 +1325,51 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
             // Manage entering/exiting Maximized state for normal windows
             for &win_ptr in &normal_windows {
-                let mode = (*win_ptr).tiling_mode;
-                if mode == crate::tiling::TilingMode::Maximized && !(*win_ptr).was_maximized {
-                    // Entering Maximized mode
-                    let mut w = (*win_ptr).box_geom.width;
-                    let mut h = (*win_ptr).box_geom.height;
-                    if w <= 0 {
-                        w = if (*win_ptr).wm_scheduled.dimensions_hint.min_width > 32 {
-                            (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32
-                        } else {
-                            800
-                        };
-                    }
-                    if h <= 0 {
-                        h = if (*win_ptr).wm_scheduled.dimensions_hint.min_height > 32 {
-                            (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32
-                        } else {
-                            600
-                        };
-                    }
-                    (*win_ptr).saved_maximized_width = w;
-                    (*win_ptr).saved_maximized_height = h;
-                    (*win_ptr).saved_maximized_virtual_x = (*win_ptr).virtual_x;
-                    (*win_ptr).saved_maximized_virtual_y = (*win_ptr).virtual_y;
-                    (*win_ptr).was_maximized = true;
-                    log::info!("[Maximized] Saved window {:?} geometry: {}x{} at ({}, {})", 
-                        (*win_ptr).get_title_string().as_deref().unwrap_or(""), 
-                        (*win_ptr).saved_maximized_width, (*win_ptr).saved_maximized_height, 
-                        (*win_ptr).saved_maximized_virtual_x, (*win_ptr).saved_maximized_virtual_y
-                    );
-                } else if mode != crate::tiling::TilingMode::Maximized && (*win_ptr).was_maximized {
-                    // Exiting Maximized mode
-                    if (*win_ptr).saved_maximized_width > 0 && (*win_ptr).saved_maximized_height > 0 {
-                        (*win_ptr).box_geom.width = (*win_ptr).saved_maximized_width;
-                        (*win_ptr).box_geom.height = (*win_ptr).saved_maximized_height;
-                        (*win_ptr).virtual_x = (*win_ptr).saved_maximized_virtual_x;
-                        (*win_ptr).virtual_y = (*win_ptr).saved_maximized_virtual_y;
-                        (*win_ptr).was_maximized = false;
-                        
-                        (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                            width: (*win_ptr).saved_maximized_width as u32,
-                            height: (*win_ptr).saved_maximized_height as u32,
-                        });
-                        (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                            width: (*win_ptr).saved_maximized_width as u32,
-                            height: (*win_ptr).saved_maximized_height as u32,
-                        };
-                        log::info!("[Maximized] Restored window {:?} geometry: {}x{} at ({}, {})", 
+                let transition = crate::policy::arrange::maximized_transition(
+                    (*win_ptr).tiling_mode == crate::tiling::TilingMode::Maximized,
+                    (*win_ptr).was_maximized,
+                    ((*win_ptr).box_geom.width, (*win_ptr).box_geom.height),
+                    (
+                        (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32,
+                        (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32,
+                    ),
+                    ((*win_ptr).saved_maximized_width, (*win_ptr).saved_maximized_height),
+                    ((*win_ptr).saved_maximized_virtual_x, (*win_ptr).saved_maximized_virtual_y),
+                );
+                match transition {
+                    Some(crate::policy::arrange::MaximizedTransition::Enter { width, height }) => {
+                        (*win_ptr).saved_maximized_width = width;
+                        (*win_ptr).saved_maximized_height = height;
+                        (*win_ptr).saved_maximized_virtual_x = (*win_ptr).virtual_x;
+                        (*win_ptr).saved_maximized_virtual_y = (*win_ptr).virtual_y;
+                        (*win_ptr).was_maximized = true;
+                        log::info!("[Maximized] Saved window {:?} geometry: {}x{} at ({}, {})", 
                             (*win_ptr).get_title_string().as_deref().unwrap_or(""), 
-                            (*win_ptr).saved_maximized_width, (*win_ptr).saved_maximized_height, 
+                            width, height, 
                             (*win_ptr).saved_maximized_virtual_x, (*win_ptr).saved_maximized_virtual_y
                         );
                     }
+                    Some(crate::policy::arrange::MaximizedTransition::Exit { width, height, virtual_x, virtual_y }) => {
+                        (*win_ptr).box_geom.width = width;
+                        (*win_ptr).box_geom.height = height;
+                        (*win_ptr).virtual_x = virtual_x;
+                        (*win_ptr).virtual_y = virtual_y;
+                        (*win_ptr).was_maximized = false;
+
+                        (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                            width: width as u32,
+                            height: height as u32,
+                        });
+                        (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                            width: width as u32,
+                            height: height as u32,
+                        };
+                        log::info!("[Maximized] Restored window {:?} geometry: {}x{} at ({}, {})", 
+                            (*win_ptr).get_title_string().as_deref().unwrap_or(""), 
+                            width, height, virtual_x, virtual_y
+                        );
+                    }
+                    None => {}
                 }
             }
 
@@ -1469,191 +1377,75 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             for &win_ptr in &normal_windows {
                 let mode = (*win_ptr).tiling_mode;
                 let is_focused = win_ptr == focused_window;
+                let app_id = (*win_ptr).get_app_id_string();
+                let is_cce_cloud = app_id.as_deref().map_or(false, |id| id.starts_with("cce-cloud"));
 
-                if mode == crate::tiling::TilingMode::Popup {
-                    let hint_min_w = (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32;
-                    let hint_min_h = (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32;
-                    let fw = if (*win_ptr).box_geom.width > 0 {
-                        (*win_ptr).box_geom.width as i32
-                    } else if hint_min_w > 32 {
-                        hint_min_w
-                    } else {
-                        360
-                    };
-                    let fh = if (*win_ptr).box_geom.height > 0 {
-                        (*win_ptr).box_geom.height as i32
-                    } else if hint_min_h > 32 {
-                        hint_min_h
-                    } else {
-                        100
-                    };
-                    let app_id = (*win_ptr).get_app_id_string();
-                    let is_cce_cloud = app_id.as_deref().map_or(false, |id| id.starts_with("cce-cloud"));
+                let placement = crate::policy::arrange::place_normal_window(
+                    &crate::policy::arrange::NormalSnapshot {
+                        mode,
+                        box_geom: crate::policy::api::Rect {
+                            x: (*win_ptr).box_geom.x,
+                            y: (*win_ptr).box_geom.y,
+                            width: (*win_ptr).box_geom.width,
+                            height: (*win_ptr).box_geom.height,
+                        },
+                        min_size: (
+                            (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32,
+                            (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32,
+                        ),
+                        virtual_pos: ((*win_ptr).virtual_x, (*win_ptr).virtual_y),
+                        active_resize: self.get_active_resize_dimensions(win_ptr),
+                        is_cloud: is_cce_cloud,
+                        saved_maximized_size: ((*win_ptr).saved_maximized_width, (*win_ptr).saved_maximized_height),
+                        saved_maximized_virtual: ((*win_ptr).saved_maximized_virtual_x, (*win_ptr).saved_maximized_virtual_y),
+                    },
+                    &normal_params,
+                    &ctx,
+                );
 
-                    let (fx, fy) = if is_cce_cloud && self.layout.cloud_position_default.is_some() {
-                        let pos = self.layout.cloud_position_default.unwrap();
-                        (usable_x + pos[0], usable_y + pos[1])
-                    } else {
-                        (usable_x + usable_w - fw - self.layout.gap_right, usable_y + self.layout.gap_top)
-                    };
-
-                    (*win_ptr).rendering_requested.x = fx;
-                    (*win_ptr).rendering_requested.y = fy;
-                    (*win_ptr).scale = 1.0;
-
-                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                        width: fw as u32,
-                        height: fh as u32,
-                    });
-                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                        width: fw as u32,
-                        height: fh as u32,
-                    };
-                } else if mode == crate::tiling::TilingMode::Fullscreen {
-                    (*win_ptr).rendering_requested.x = phys_x;
-                    (*win_ptr).rendering_requested.y = phys_y;
-                    (*win_ptr).scale = 1.0;
-                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                        width: phys_w as u32,
-                        height: phys_h as u32,
-                    });
-                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                        width: phys_w as u32,
-                        height: phys_h as u32,
-                    };
+                (*win_ptr).rendering_requested.x = placement.pos.0;
+                (*win_ptr).rendering_requested.y = placement.pos.1;
+                (*win_ptr).scale = placement.scale;
+                if let Some((vx, vy)) = placement.virtual_write {
+                    (*win_ptr).virtual_x = vx;
+                    (*win_ptr).virtual_y = vy;
+                }
+                if let Some(hidden) = placement.hidden {
+                    (*win_ptr).rendering_requested.hidden = hidden;
+                }
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
+                    width: placement.size.0,
+                    height: placement.size.1,
+                });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
+                    width: placement.size.0,
+                    height: placement.size.1,
+                };
+                if placement.tiled_all_edges {
                     (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
-                } else if mode == crate::tiling::TilingMode::Maximized {
-                    // Maximized mode: Resizes to fully fill all cells of the desktop grid it is fully/partially inside of.
-                    let scale = self.layout.desktop_grid_scale;
-                    
-                    // Use saved maximized geometry for cell calculation
-                    let x1 = (*win_ptr).saved_maximized_virtual_x;
-                    let y1 = (*win_ptr).saved_maximized_virtual_y;
-                    let w = (*win_ptr).saved_maximized_width as f64;
-                    let h = (*win_ptr).saved_maximized_height as f64;
-                    let x2 = x1 + w;
-                    let y2 = y1 + h;
-                    
-                    let col_min = (x1 / scale).floor() as i32;
-                    let col_max = ((x2 / scale).ceil() as i32 - 1).max(col_min);
-                    let row_min = (y1 / scale).floor() as i32;
-                    let row_max = ((y2 / scale).ceil() as i32 - 1).max(row_min);
-                    
-                    let snapped_x1 = col_min as f64 * scale;
-                    let snapped_x2 = (col_max + 1) as f64 * scale;
-                    let snapped_y1 = row_min as f64 * scale;
-                    let snapped_y2 = (row_max + 1) as f64 * scale;
-                    
-                    let fw = snapped_x2 - snapped_x1;
-                    let fh = snapped_y2 - snapped_y1;
-                    
-                    // Update current virtual position for rendering
-                    (*win_ptr).virtual_x = snapped_x1;
-                    (*win_ptr).virtual_y = snapped_y1;
-                    
-                    let final_x = phys_x + (((*win_ptr).virtual_x - self.desk_pan_x) * self.desk_zoom) as i32;
-                    let final_y = phys_y + (((*win_ptr).virtual_y - self.desk_pan_y) * self.desk_zoom) as i32;
-
-                    (*win_ptr).rendering_requested.x = final_x;
-                    (*win_ptr).rendering_requested.y = final_y;
-                    (*win_ptr).scale = self.desk_zoom;
-
-                    // Offscreen check
-                    let scaled_w = fw * self.desk_zoom;
-                    let scaled_h = fh * self.desk_zoom;
-                    let is_offscreen = (final_x as f64 + scaled_w + 50.0) < phys_x as f64
-                        || (final_x as f64 - 50.0) > (phys_x as f64 + viewport_w)
-                        || (final_y as f64 + scaled_h + 50.0) < phys_y as f64
-                        || (final_y as f64 - 50.0) > (phys_y as f64 + viewport_h);
-                    (*win_ptr).rendering_requested.hidden = is_offscreen;
-
-                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                        width: fw as u32,
-                        height: fh as u32,
-                    });
-                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                        width: fw as u32,
-                        height: fh as u32,
-                    };
-                } else {
-                    // Regular pannable window on the virtual surface
-                    let fw = if let Some(resize_size) = self.get_active_resize_dimensions(win_ptr) {
-                        resize_size.0 as i32
-                    } else if (*win_ptr).box_geom.width > 0 {
-                        (*win_ptr).box_geom.width as i32
-                    } else if (*win_ptr).wm_scheduled.dimensions_hint.min_width > 32 {
-                        (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32
-                    } else {
-                        800
-                    };
-                    let fh = if let Some(resize_size) = self.get_active_resize_dimensions(win_ptr) {
-                        resize_size.1 as i32
-                    } else if (*win_ptr).box_geom.height > 0 {
-                        (*win_ptr).box_geom.height as i32
-                    } else if (*win_ptr).wm_scheduled.dimensions_hint.min_height > 32 {
-                        (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32
-                    } else {
-                        600
-                    };
-
-                    let final_x = phys_x + (((*win_ptr).virtual_x - self.desk_pan_x) * self.desk_zoom) as i32;
-                    let final_y = phys_y + (((*win_ptr).virtual_y - self.desk_pan_y) * self.desk_zoom) as i32;
-
-                    (*win_ptr).rendering_requested.x = final_x;
-                    (*win_ptr).rendering_requested.y = final_y;
-                    (*win_ptr).scale = self.desk_zoom;
-
-                    // Offscreen check
-                    let scaled_w = fw as f64 * self.desk_zoom;
-                    let scaled_h = fh as f64 * self.desk_zoom;
-                    let is_offscreen = (final_x as f64 + scaled_w + 50.0) < phys_x as f64
-                        || (final_x as f64 - 50.0) > (phys_x as f64 + viewport_w)
-                        || (final_y as f64 + scaled_h + 50.0) < phys_y as f64
-                        || (final_y as f64 - 50.0) > (phys_y as f64 + viewport_h);
-                    (*win_ptr).rendering_requested.hidden = is_offscreen;
-
-                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                        width: fw as u32,
-                        height: fh as u32,
-                    });
-                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                        width: fw as u32,
-                        height: fh as u32,
-                    };
                 }
 
                 // Apply borders, opacity, and blur to normal windows
-                let r = self.layout.border_r;
-                let g_val = self.layout.border_g;
-                let b = self.layout.border_b;
-                let a = self.layout.border_a;
-
                 (*win_ptr).rendering_requested.border = crate::window::Border {
                     edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
                     width: bw as u32,
-                    r,
-                    g: g_val,
-                    b,
-                    a,
+                    r: self.layout.border_r,
+                    g: self.layout.border_g,
+                    b: self.layout.border_b,
+                    a: self.layout.border_a,
                 };
-(*win_ptr).rendering_requested.blur = self.layout.window_blur;
-                (*win_ptr).rendering_requested.opacity = if is_focused { 1.0f32 } else {
-                    if !self.layout.window_opacity { 1.0f32 } else { 0.90f32 }
-                };
+                (*win_ptr).rendering_requested.blur = self.layout.window_blur;
+                (*win_ptr).rendering_requested.opacity = crate::policy::arrange::window_opacity(
+                    is_focused,
+                    self.layout.window_opacity,
+                    crate::policy::arrange::NORMAL_UNFOCUSED_OPACITY,
+                );
             }
-            // Position status bar windows on this output
-            let bar_h = self.layout.bar_height as u32;
-            let spacing = 12;
-            let margin = 12;
-            let mut top_left = Vec::new();
-            let mut top_center = Vec::new();
-            let mut top_right = Vec::new();
-            let mut bottom_left = Vec::new();
-            let mut bottom_center = Vec::new();
-            let mut bottom_right = Vec::new();
-            let mut left_side = Vec::new();
-            let mut right_side = Vec::new();
-            let mut full_top = Vec::new();
+            // Position status bar windows on this output.
+            // Snapshot the bars (excluding any being interactively dragged),
+            // lay them out in policy code, then apply the placements.
+            let mut status_items: Vec<crate::policy::arrange::StatusBarItem> = Vec::new();
+            let mut status_wins: Vec<*mut Window> = Vec::new();
 
             for &win_ptr in self.windows.iter() {
                 if win_ptr.is_null() || (*win_ptr).closed {
@@ -1682,265 +1474,39 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
                             continue;
                         }
 
-                        let edge = resolve_edge(win_ptr);
-                        match edge {
-                            crate::window::StatusEdge::TopLeft => {
-                                top_left.push(win_ptr);
-                            }
-                            crate::window::StatusEdge::TopCenter => {
-                                top_center.push(win_ptr);
-                            }
-                            crate::window::StatusEdge::TopRight => {
-                                top_right.push(win_ptr);
-                            }
-                            crate::window::StatusEdge::BottomLeft => {
-                                bottom_left.push(win_ptr);
-                            }
-                            crate::window::StatusEdge::BottomCenter => {
-                                bottom_center.push(win_ptr);
-                            }
-                            crate::window::StatusEdge::BottomRight => {
-                                bottom_right.push(win_ptr);
-                            }
-                            crate::window::StatusEdge::Left => {
-                                left_side.push(win_ptr);
-                            }
-                            crate::window::StatusEdge::Right => {
-                                right_side.push(win_ptr);
-                            }
-                            _ => {
-                                full_top.push(win_ptr);
-                            }
-                        }
                         log::info!("[ArrangeStatus] app_id={} status_edge={:?}", app_id, (*win_ptr).status_edge);
+                        status_items.push(crate::policy::arrange::StatusBarItem {
+                            app_id,
+                            edge: (*win_ptr).status_edge,
+                            prev_len: std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height),
+                        });
+                        status_wins.push(win_ptr);
                     }
                 }
             }
 
-            log::info!("[ArrangeStatus] top_left_len={}, top_center_len={}, top_right_len={}, left_side_len={}", top_left.len(), top_center.len(), top_right.len(), left_side.len());
+            let placements = crate::policy::arrange::layout_status_bars(
+                &status_items,
+                &crate::policy::arrange::StatusBarLayoutParams {
+                    output: crate::policy::api::Rect {
+                        x: wlr_box.x,
+                        y: wlr_box.y,
+                        width: wlr_box.width,
+                        height: wlr_box.height,
+                    },
+                    bar_height: self.layout.bar_height as u32,
+                    hide_mode: self.status_hide_mode,
+                    hide_mode_preview: self.layout.status_module_hide_mode_preview as i32,
+                },
+            );
 
-            const LEFT_ORDER: &[&str] = &["viewport", "window"];
-            const RIGHT_ORDER: &[&str] = &["tray", "cpu", "memory", "brightness", "volume", "battery", "clock"];
-
-            let sort_left = |w_list: &mut Vec<*mut Window>| {
-                w_list.sort_by_key(|&w| unsafe {
-                    let app_id = (*w).get_app_id_string().unwrap_or_default();
-                    let name = app_id.strip_prefix("cce-status-interface-left-")
-                        .or_else(|| app_id.strip_prefix("cce-status-left-"))
-                        .unwrap_or(&app_id);
-                    LEFT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
-                });
-            };
-
-            let sort_right = |w_list: &mut Vec<*mut Window>| {
-                w_list.sort_by_key(|&w| unsafe {
-                    let app_id = (*w).get_app_id_string().unwrap_or_default();
-                    let name = app_id.strip_prefix("cce-status-interface-right-")
-                        .or_else(|| app_id.strip_prefix("cce-status-right-"))
-                        .unwrap_or(&app_id);
-                    RIGHT_ORDER.iter().position(|&m| m == name).unwrap_or(99)
-                });
-            };
-
-            sort_left(&mut top_left);
-            sort_left(&mut top_center);
-            sort_right(&mut top_right);
-            sort_left(&mut bottom_left);
-            sort_left(&mut bottom_center);
-            sort_right(&mut bottom_right);
-
-            // 1. Top Edge
-            let status_y_top = if self.status_hide_mode {
-                let preview = self.layout.status_module_hide_mode_preview as i32;
-                wlr_box.y - (bar_h as i32 - preview)
-            } else {
-                wlr_box.y
-            };
-
-            let mut top_right_width_needed = 0;
-            for &win_ptr in &top_right {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
-                top_right_width_needed += w as i32 + spacing;
-            }
-            let top_right_boundary = wlr_box.x + wlr_box.width - margin - top_right_width_needed;
-
-            // 1a. Left Group (TopLeft / nw)
-            let mut cur_left_x = wlr_box.x + margin;
-            for &win_ptr in &top_left {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let mut w = if prev_len > 0 { prev_len as u32 } else { 100 };
-                let max_allowed_w = top_right_boundary - cur_left_x - spacing;
-                if w as i32 > max_allowed_w {
-                    w = std::cmp::max(max_allowed_w, 20) as u32;
+            for (&win_ptr, placement) in status_wins.iter().zip(placements.iter()) {
+                if let Some(pl) = placement {
+                    (*win_ptr).rendering_requested.x = pl.x;
+                    (*win_ptr).rendering_requested.y = pl.y;
+                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: pl.width, height: pl.height });
+                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: pl.width, height: pl.height };
                 }
-                let app_id = (*win_ptr).get_app_id_string().unwrap_or_default();
-                log::info!("[TopLeftLayout] app_id={} x={}, w={}", app_id, cur_left_x, w);
-                (*win_ptr).rendering_requested.x = cur_left_x;
-                (*win_ptr).rendering_requested.y = status_y_top;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
-                cur_left_x += w as i32 + spacing;
-            }
-
-            // 1b. Center Group (TopCenter / n)
-            let mut top_center_width_needed = 0;
-            for &win_ptr in &top_center {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
-                top_center_width_needed += w as i32 + spacing;
-            }
-            if top_center_width_needed > 0 {
-                top_center_width_needed -= spacing;
-            }
-            let center_start_x = wlr_box.x + (wlr_box.width - top_center_width_needed) / 2;
-            let mut cur_center_x = std::cmp::max(center_start_x, cur_left_x + spacing);
-
-            for &win_ptr in &top_center {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let mut w = if prev_len > 0 { prev_len as u32 } else { 100 };
-                let max_allowed_w = top_right_boundary - cur_center_x - spacing;
-                if w as i32 > max_allowed_w {
-                    w = std::cmp::max(max_allowed_w, 20) as u32;
-                }
-                let app_id = (*win_ptr).get_app_id_string().unwrap_or_default();
-                log::info!("[TopCenterLayout] app_id={} x={}, w={}", app_id, cur_center_x, w);
-                (*win_ptr).rendering_requested.x = cur_center_x;
-                (*win_ptr).rendering_requested.y = status_y_top;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
-                cur_center_x += w as i32 + spacing;
-            }
-
-            // 1c. Right Group (TopRight / ne)
-            let mut cur_right_x = wlr_box.x + wlr_box.width - margin;
-            for win_ptr in top_right.into_iter().rev() {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
-                let x = cur_right_x - w as i32;
-                (*win_ptr).rendering_requested.x = x;
-                (*win_ptr).rendering_requested.y = status_y_top;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
-                cur_right_x = x - spacing;
-            }
-
-            for win_ptr in full_top {
-                (*win_ptr).rendering_requested.x = wlr_box.x;
-                (*win_ptr).rendering_requested.y = status_y_top;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: wlr_box.width as u32, height: bar_h });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: wlr_box.width as u32, height: bar_h };
-            }
-
-            // 2. Bottom Edge
-            let status_y_bottom = wlr_box.y + wlr_box.height - bar_h as i32;
-
-            let mut bottom_right_width_needed = 0;
-            for &win_ptr in &bottom_right {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
-                bottom_right_width_needed += w as i32 + spacing;
-            }
-            let bottom_right_boundary = wlr_box.x + wlr_box.width - margin - bottom_right_width_needed;
-
-            // 2a. Left Group (BottomLeft / sw)
-            let mut cur_left_x = wlr_box.x + margin;
-            for &win_ptr in &bottom_left {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let mut w = if prev_len > 0 { prev_len as u32 } else { 100 };
-                let max_allowed_w = bottom_right_boundary - cur_left_x - spacing;
-                if w as i32 > max_allowed_w {
-                    w = std::cmp::max(max_allowed_w, 20) as u32;
-                }
-                (*win_ptr).rendering_requested.x = cur_left_x;
-                (*win_ptr).rendering_requested.y = status_y_bottom;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
-                cur_left_x += w as i32 + spacing;
-            }
-
-            // 2b. Center Group (BottomCenter / s)
-            let mut bottom_center_width_needed = 0;
-            for &win_ptr in &bottom_center {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
-                bottom_center_width_needed += w as i32 + spacing;
-            }
-            if bottom_center_width_needed > 0 {
-                bottom_center_width_needed -= spacing;
-            }
-            let center_start_x = wlr_box.x + (wlr_box.width - bottom_center_width_needed) / 2;
-            let mut cur_center_x = std::cmp::max(center_start_x, cur_left_x + spacing);
-
-            for &win_ptr in &bottom_center {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let mut w = if prev_len > 0 { prev_len as u32 } else { 100 };
-                let max_allowed_w = bottom_right_boundary - cur_center_x - spacing;
-                if w as i32 > max_allowed_w {
-                    w = std::cmp::max(max_allowed_w, 20) as u32;
-                }
-                (*win_ptr).rendering_requested.x = cur_center_x;
-                (*win_ptr).rendering_requested.y = status_y_bottom;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
-                cur_center_x += w as i32 + spacing;
-            }
-
-            // 2c. Right Group (BottomRight / se)
-            let mut cur_right_x = wlr_box.x + wlr_box.width - margin;
-            for win_ptr in bottom_right.into_iter().rev() {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let w = if prev_len > 0 { prev_len as u32 } else { 100 };
-                let x = cur_right_x - w as i32;
-                (*win_ptr).rendering_requested.x = x;
-                (*win_ptr).rendering_requested.y = status_y_bottom;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: w, height: bar_h });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: w, height: bar_h };
-                cur_right_x = x - spacing;
-            }
-
-            // 3. Left Edge (Vertical stacking)
-            let mut left_total_height = 0;
-            for &win_ptr in &left_side {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let actual_h = if prev_len > 0 { prev_len as u32 } else { 100 };
-                left_total_height += actual_h as i32;
-            }
-            if !left_side.is_empty() {
-                left_total_height += (left_side.len() as i32 - 1) * spacing;
-            }
-            let mut cur_left_y = wlr_box.y + (wlr_box.height - left_total_height) / 2;
-
-            for win_ptr in left_side {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let actual_h = if prev_len > 0 { prev_len as u32 } else { 100 };
-                (*win_ptr).rendering_requested.x = wlr_box.x;
-                (*win_ptr).rendering_requested.y = cur_left_y;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: bar_h, height: actual_h });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: bar_h, height: actual_h };
-                cur_left_y += actual_h as i32 + spacing;
-            }
-
-            // 4. Right Edge (Vertical stacking)
-            let mut right_total_height = 0;
-            for &win_ptr in &right_side {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let actual_h = if prev_len > 0 { prev_len as u32 } else { 100 };
-                right_total_height += actual_h as i32;
-            }
-            if !right_side.is_empty() {
-                right_total_height += (right_side.len() as i32 - 1) * spacing;
-            }
-            let mut cur_right_y = wlr_box.y + (wlr_box.height - right_total_height) / 2;
-
-            for win_ptr in right_side {
-                let prev_len = std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height);
-                let actual_h = if prev_len > 0 { prev_len as u32 } else { 100 };
-                (*win_ptr).rendering_requested.x = wlr_box.x + wlr_box.width - bar_h as i32;
-                (*win_ptr).rendering_requested.y = cur_right_y;
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: bar_h, height: actual_h });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: bar_h, height: actual_h };
-                cur_right_y += actual_h as i32 + spacing;
             }
 
             // Force configure for all status bar windows on this output so they receive the new geometry immediately

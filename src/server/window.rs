@@ -261,18 +261,7 @@ pub struct Window {
     pub status_edge: StatusEdge,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StatusEdge {
-    Unspecified,
-    TopLeft,
-    TopCenter,
-    TopRight,
-    BottomLeft,
-    BottomCenter,
-    BottomRight,
-    Left,
-    Right,
-}
+pub use crate::policy::arrange::StatusEdge;
 
 impl Window {
     pub unsafe fn is_wine(&self) -> bool {
@@ -284,12 +273,16 @@ impl Window {
             || !self.wm_requested.fullscreen.is_null()
     }
 
+    pub unsafe fn role(&self) -> crate::policy::api::WindowRole {
+        crate::policy::api::WindowRole::from_app_id(self.get_app_id_string().as_deref())
+    }
+
     pub unsafe fn is_status_bar(&self) -> bool {
-        self.get_app_id_string().as_deref().map_or(false, |id| id.starts_with("cce-status"))
+        self.role() == crate::policy::api::WindowRole::StatusBar
     }
 
     pub unsafe fn is_wallpaper(&self) -> bool {
-        self.get_app_id_string().as_deref() == Some("cce-wallpaper")
+        self.role() == crate::policy::api::WindowRole::Background
     }
 
     pub unsafe fn is_linked(&self) -> bool {
