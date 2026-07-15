@@ -948,7 +948,9 @@ impl Seat {
     unsafe fn snap_params(&self) -> crate::policy::snap::SnapParams {
         let layout = &(*self.server).wm.layout;
         crate::policy::snap::SnapParams {
-            grid_scale: layout.desktop_grid_scale,
+            cell_size: layout.desktop_grid_scale,
+            gap_width: layout.desktop_gap_width as f64,
+            cell_inset: layout.desktop_cell_fade_inset as f64,
             threshold: if layout.desktop_snap { layout.desktop_snap_threshold } else { 0.0 },
             border_width: layout.border_width as f64,
         }
