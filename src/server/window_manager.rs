@@ -296,9 +296,15 @@ impl WindowManager {
             if (*w).is_status_bar() || (*w).is_wallpaper() {
                 continue;
             }
-            
+
             let app_id = (*w).get_app_id_string().unwrap_or_default();
             if app_id.is_empty() {
+                continue;
+            }
+            // cce-cloud surfaces are transient popups owned by the daemon, so
+            // their cmdline is `cce-cloud --daemon` — restoring one would spawn
+            // a duplicate daemon that steals the socket from cce-cloud.service.
+            if app_id == "cce-cloud" {
                 continue;
             }
             let title = (*w).get_title_string().unwrap_or_default();
@@ -363,8 +369,10 @@ impl WindowManager {
                 last_states.push(win_state);
             }
         }
+        // Scrub entries persisted before the cce-cloud exclusion above.
+        last_states.retain(|s| s.app_id != "cce-cloud");
         self.last_window_states = last_states;
-        
+
         let state = SavedState {
             desk_pan_x: self.desk_pan_x,
             desk_pan_y: self.desk_pan_y,
