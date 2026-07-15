@@ -49,6 +49,10 @@ pub struct Cursor {
     pub panning_gesture_active: bool,
     pub last_click_time: u32,
     pub last_click_window: *mut crate::window::Window,
+    /// Window whose border currently draws highlighted, kept to un-highlight
+    /// on hover transitions. May dangle after a close — validate against
+    /// `wm.windows` before dereferencing.
+    pub hovered_border_window: *mut crate::window::Window,
     pub right_click_on_bg: bool,
     pub right_click_on_border: bool,
     pub left_click_on_bg_in_overview: bool,
@@ -98,6 +102,7 @@ impl Default for Cursor {
             panning_gesture_active: false,
             last_click_time: 0,
             last_click_window: std::ptr::null_mut(),
+            hovered_border_window: std::ptr::null_mut(),
             right_click_on_bg: false,
             right_click_on_border: false,
             left_click_on_bg_in_overview: false,
@@ -448,6 +453,29 @@ impl Cursor {
         }
     }
 
+    /// Move the border hover highlight to `target` (null to clear): flips the
+    /// `border_hovered` flag on the old and new windows and repaints their
+    /// borders. The stored pointer may refer to a closed window, so it is
+    /// only dereferenced after checking it is still in `wm.windows`.
+    pub unsafe fn set_border_hover(&mut self, target: *mut crate::window::Window) {
+        if self.hovered_border_window == target {
+            return;
+        }
+        let old = self.hovered_border_window;
+        if !old.is_null() {
+            let wm = &(*(*self.seat).server).wm;
+            if wm.windows.iter().any(|&w| w == old) && !(*old).closed {
+                (*old).border_hovered = false;
+                (*old).draw_borders();
+            }
+        }
+        self.hovered_border_window = target;
+        if !target.is_null() {
+            (*target).border_hovered = true;
+            (*target).draw_borders();
+        }
+    }
+
     pub unsafe fn passthrough(&mut self, time_msec: u32) {
         let lx = self.x();
         let ly = self.y();
@@ -457,11 +485,13 @@ impl Cursor {
             let lock_state = (*server).lock_manager.state;
             if lock_state != crate::lock_manager::LockState::Unlocked {
                 if !matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
+                    self.set_border_hover(std::ptr::null_mut());
                     self.clear_focus();
                     return;
                 }
             } else {
                 if matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
+                    self.set_border_hover(std::ptr::null_mut());
                     self.clear_focus();
                     return;
                 }
@@ -482,12 +512,14 @@ impl Cursor {
                     {
                         match get_border_zone(window, lx, ly) {
                             BorderZone::Resize(edges) => {
+                                self.set_border_hover(window);
                                 ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
                                 let cursor_name = get_resize_cursor_name(edges);
                                 self.set_xcursor(cursor_name.as_ptr() as *const _);
                                 return;
                             }
                             BorderZone::Move => {
+                                self.set_border_hover(window);
                                 ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
                                 self.set_xcursor(b"grab\0".as_ptr() as *const _);
                                 return;
@@ -501,6 +533,7 @@ impl Cursor {
                 }
                 _ => {}
             }
+            self.set_border_hover(std::ptr::null_mut());
 
             if is_window && (*server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
                 self.clear_focus();
@@ -514,6 +547,7 @@ impl Cursor {
             }
         }
 
+        self.set_border_hover(std::ptr::null_mut());
         self.clear_focus();
     }
 
@@ -2249,25 +2283,43 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     }
 
     if rx >= -bw && rx < content_w + bw && ry >= -bw && ry < content_h + bw {
-        let threshold = if bw <= 3.0 { bw / 2.0 } else { 3.0 };
+        // The border band splits by direction, not by depth: the top edge
+        // moves the window, everything else resizes. Corner squares of
+        // `corner_len` (measured from the outer corners along the band)
+        // resize on both adjacent edges, so the top corners still resize.
+        let corner_len = (2.0 * bw).max(16.0);
 
         let dist_left = rx + bw;
         let dist_right = (content_w + bw) - rx;
         let dist_top = ry + bw;
         let dist_bottom = (content_h + bw) - ry;
 
-        let min_dist = dist_left.min(dist_right).min(dist_top).min(dist_bottom);
+        let near_left = dist_left < corner_len && dist_left <= dist_right;
+        let near_right = dist_right < corner_len && dist_right < dist_left;
+        let near_top = dist_top < corner_len && dist_top <= dist_bottom;
+        let near_bottom = dist_bottom < corner_len && dist_bottom < dist_top;
 
-        if min_dist >= 0.0 && min_dist < threshold {
-            let delta = threshold + 1.0;
-            let left = dist_left < delta;
-            let right = dist_right < delta;
-            let top = dist_top < delta;
-            let bottom = dist_bottom < delta;
+        if (near_left || near_right) && (near_top || near_bottom) {
+            return BorderZone::Resize(crate::window::Edges {
+                top: near_top,
+                bottom: near_bottom,
+                left: near_left,
+                right: near_right,
+            });
+        }
 
-            return BorderZone::Resize(crate::window::Edges { top, bottom, left, right });
-        } else {
+        if ry < 0.0 {
             return BorderZone::Move;
+        }
+
+        let edges = crate::window::Edges {
+            top: false,
+            bottom: ry >= content_h,
+            left: rx < 0.0,
+            right: rx >= content_w,
+        };
+        if edges.bottom || edges.left || edges.right {
+            return BorderZone::Resize(edges);
         }
     }
 

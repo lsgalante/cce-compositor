@@ -23,6 +23,9 @@ pub struct Layout {
     pub border_color: [f32; 4],
     /// Border color for the focused window; defaults to `border_color`.
     pub border_color_focused: [f32; 4],
+    /// Border color while the pointer hovers the border (the grab surface);
+    /// defaults to a lightened `border_color_focused`.
+    pub border_color_hover: [f32; 4],
     pub border_corner_radius: i32,
     pub background_r: u32,
     pub background_g: u32,
@@ -75,6 +78,7 @@ impl Default for Layout {
             floating_border_width: 0,
             border_color: [62.0 / 255.0, 62.0 / 255.0, 62.0 / 255.0, 1.0],
             border_color_focused: [62.0 / 255.0, 62.0 / 255.0, 62.0 / 255.0, 1.0],
+            border_color_hover: lighten_premultiplied([62.0 / 255.0, 62.0 / 255.0, 62.0 / 255.0, 1.0], HOVER_LIGHTEN),
             border_corner_radius: 0,
             background_r: 0x1C1C1C1Cu32,
             background_g: 0x20202020u32,
@@ -277,6 +281,9 @@ pub struct SurfaceConfig {
     /// `None` falls back to `border_color`.
     #[serde(default)]
     pub border_color_focused: Option<String>,
+    /// `None` falls back to a lightened `border_color_focused`.
+    #[serde(default)]
+    pub border_color_hover: Option<String>,
     #[serde(default = "default_border_corner_radius")]
     pub border_corner_radius: i64,
     #[serde(default = "default_cloud_position_default")]
@@ -301,6 +308,7 @@ impl Default for SurfaceConfig {
             border_width: default_border_width(),
             border_color: default_border_color(),
             border_color_focused: None,
+            border_color_hover: None,
             border_corner_radius: default_border_corner_radius(),
             cloud_position_default: default_cloud_position_default(),
         }
@@ -370,6 +378,20 @@ fn default_border_color() -> String {
 
 fn default_border_corner_radius() -> i64 {
     0
+}
+
+/// How far the default hover color moves toward white.
+const HOVER_LIGHTEN: f32 = 0.35;
+
+/// Mix a premultiplied-alpha color toward white (which is `[a, a, a, a]` in
+/// premultiplied space), keeping the alpha.
+pub fn lighten_premultiplied(c: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        c[0] + (c[3] - c[0]) * t,
+        c[1] + (c[3] - c[1]) * t,
+        c[2] + (c[3] - c[2]) * t,
+        c[3],
+    ]
 }
 
 
@@ -1454,6 +1476,11 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.border_color_focused = Some(val.to_string());
                                         }
                                     }
+                                    "color_hover" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surface.border_color_hover = Some(val.to_string());
+                                        }
+                                    }
                                     "corner_radius" => {
                                         if let Some(val) = entry.value().as_i64() {
                                             surface.border_corner_radius = val;
@@ -1491,6 +1518,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.border_width = get_child_arg_i64(node, "border_width", default_border_width());
             surface.border_color = get_child_arg_string(node, "border_color", &default_border_color());
             surface.border_color_focused = get_child_arg_string_opt(node, "border_color_focused");
+            surface.border_color_hover = get_child_arg_string_opt(node, "border_color_hover");
             surface.border_corner_radius = get_child_arg_i64(node, "border_corner_radius", default_border_corner_radius());
             surface.cloud_position_default = get_child_arg_vec2i_opt(node, "cloud_position_default");
         }
@@ -1569,6 +1597,12 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         .as_deref()
         .map(parse_hex_color_rgba)
         .unwrap_or(state.layout.border_color);
+    state.layout.border_color_hover = config
+        .surface
+        .border_color_hover
+        .as_deref()
+        .map(parse_hex_color_rgba)
+        .unwrap_or_else(|| lighten_premultiplied(state.layout.border_color_focused, HOVER_LIGHTEN));
     state.layout.border_corner_radius = config.surface.border_corner_radius as i32;
 
     state.layout.desktop_gap_color = config.surface.desktop_gap_color.clone();
@@ -1999,7 +2033,7 @@ mod tests {
         let content = r##"
             style {
                 surface {
-                    border width=2 color="#ff8800" color_focused="#00ff88" corner_radius=10
+                    border width=2 color="#ff8800" color_focused="#00ff88" color_hover="#88ffcc" corner_radius=10
                 }
             }
         "##;
@@ -2007,12 +2041,15 @@ mod tests {
         assert_eq!(config.surface.border_width, 2);
         assert_eq!(config.surface.border_color, "#ff8800");
         assert_eq!(config.surface.border_color_focused, Some("#00ff88".to_string()));
+        assert_eq!(config.surface.border_color_hover, Some("#88ffcc".to_string()));
         assert_eq!(config.surface.border_corner_radius, 10);
 
-        // Defaults keep borders off; the focused color falls back to `color`.
+        // Defaults keep borders off; the focused color falls back to `color`
+        // and the hover color to a lightened focused color.
         let config = parse_kdl_config("").unwrap();
         assert_eq!(config.surface.border_width, 0);
         assert_eq!(config.surface.border_corner_radius, 0);
         assert_eq!(config.surface.border_color_focused, None);
+        assert_eq!(config.surface.border_color_hover, None);
     }
 }

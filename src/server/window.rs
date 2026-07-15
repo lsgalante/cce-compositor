@@ -78,12 +78,14 @@ pub struct Border {
     pub width: u32,
     /// Premultiplied-alpha RGBA, 0.0–1.0 per channel (scenefx convention).
     pub color: [f32; 4],
+    /// Color while the pointer hovers the border (the grab surface).
+    pub hover_color: [f32; 4],
     pub corner_radius: i32,
 }
 
 impl Border {
     pub fn none() -> Self {
-        Self { edges: Edges::new(), width: 0, color: [0.0; 4], corner_radius: 0 }
+        Self { edges: Edges::new(), width: 0, color: [0.0; 4], hover_color: [0.0; 4], corner_radius: 0 }
     }
 }
 
@@ -206,6 +208,9 @@ pub struct Window {
     pub decorations_below_tree: *mut ffi::wlr_scene_tree,
     pub surfaces: crate::scene::SaveableSurfaces,
     pub border: BorderRects,
+    /// Pointer is over the border grab surface (set by cursor.rs); the
+    /// border draws in `hover_color` while set.
+    pub border_hovered: bool,
     pub decorations_above: ffi::wl_list,
     pub decorations_above_tree: *mut ffi::wlr_scene_tree,
     pub popup_tree: *mut ffi::wlr_scene_tree,
@@ -379,6 +384,7 @@ impl Window {
                 top: border_top,
                 bottom: border_bottom,
             },
+            border_hovered: false,
             decorations_above: std::mem::zeroed(),
             decorations_above_tree,
             popup_tree,
@@ -2105,8 +2111,12 @@ impl Window {
         if clip_empty || ffi::wlr_box_intersection(&mut intersect, &content, &requested.content_clip) {
             let border = &requested.border;
             let border_width = if is_virtual_border { 8 } else { border.width };
+            // Hover highlights only real SSD borders; virtual rects stay
+            // invisible. The backplate keeps the base color either way.
             let color: [f32; 4] = if is_virtual_border {
                 [0.0, 0.0, 0.0, 0.0]
+            } else if self.border_hovered && self.wm_requested.ssd {
+                border.hover_color
             } else {
                 border_color
             };
@@ -2466,16 +2476,19 @@ unsafe extern "C" fn window_set_borders(
         return;
     }
     let alpha = (a as f64 / u32::MAX as f64) as f32;
+    // Protocol channels are straight alpha; scene colors are premultiplied.
+    let color = [
+        (r as f64 / u32::MAX as f64) as f32 * alpha,
+        (g as f64 / u32::MAX as f64) as f32 * alpha,
+        (b as f64 / u32::MAX as f64) as f32 * alpha,
+        alpha,
+    ];
     (*window).rendering_requested.border = Border {
         edges: Edges::from_u32(edges),
         width: width as u32,
-        // Protocol channels are straight alpha; scene colors are premultiplied.
-        color: [
-            (r as f64 / u32::MAX as f64) as f32 * alpha,
-            (g as f64 / u32::MAX as f64) as f32 * alpha,
-            (b as f64 / u32::MAX as f64) as f32 * alpha,
-            alpha,
-        ],
+        color,
+        // Protocol-set borders don't participate in hover highlighting.
+        hover_color: color,
         corner_radius: 0,
     };
 }

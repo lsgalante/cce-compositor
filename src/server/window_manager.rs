@@ -1260,6 +1260,7 @@ impl WindowManager {
                     edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
                     width: dec.border_width.max(0) as u32,
                     color: dec.border_color.0,
+                    hover_color: self.layout.border_color_hover,
                     corner_radius: dec.corner_radius.max(0),
                 };
             }
