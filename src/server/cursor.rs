@@ -3,7 +3,7 @@ use crate::seat::{Seat, Focus};
 use crate::server::{WlListener, wl_listener_remove, wl_signal_add, WlList};
 use crate::scene_node_data::SceneNodeDataVal;
 use crate::drag_icon::DragIcon;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct Cursor {
     pub seat: *mut Seat,
@@ -24,6 +24,11 @@ pub struct Cursor {
 
     pub touch_points: HashMap<i32, (f64, f64)>,
     pub pressed: HashMap<u32, Option<*mut crate::pointer_binding::PointerBinding>>,
+    /// Buttons whose PRESS was forwarded to the focused client. The paired
+    /// release must reach the client no matter what the compositor is doing
+    /// by then (seat op, overview, …) — an orphaned press wedges client-side
+    /// input state (widget routers keep a grab armed forever).
+    pub notified_pressed: HashSet<u32>,
 
     pub touch_down_listener: ffi::wl_listener,
     pub touch_motion_listener: ffi::wl_listener,
@@ -79,6 +84,7 @@ impl Default for Cursor {
 
             touch_points: HashMap::new(),
             pressed: HashMap::new(),
+            notified_pressed: HashSet::new(),
 
             touch_down_listener: unsafe { std::mem::zeroed() },
             touch_motion_listener: unsafe { std::mem::zeroed() },
@@ -1162,6 +1168,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 (*event).button,
                 (*event).state,
             );
+            cursor.notified_pressed.insert((*event).button);
         }
 
         // If pressed, update focus to window under cursor
@@ -1200,6 +1207,17 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         }
     } else {
         assert_eq!((*event).state, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED);
+        // Pair the release for the client BEFORE any compositor-side
+        // consumption below: if the press was forwarded, the release always
+        // is too, or the client is left with an orphaned press.
+        if cursor.notified_pressed.remove(&(*event).button) {
+            ffi::wlr_seat_pointer_notify_button(
+                seat.wlr_seat,
+                (*event).time_msec,
+                (*event).button,
+                (*event).state,
+            );
+        }
         if seat.op.is_some() {
             let cursor_x = (*cursor.wlr_cursor).x;
             let cursor_y = (*cursor.wlr_cursor).y;
@@ -1461,15 +1479,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 return;
             }
 
-            if !should_block_button {
-                ffi::wlr_seat_pointer_notify_button(
-                    seat.wlr_seat,
-                    (*event).time_msec,
-                    (*event).button,
-                    (*event).state,
-                );
-            }
-
+            // The client-facing release (when the press was forwarded) is
+            // already paired at the top of the release path.
             if cursor.pressed.is_empty() && seat.op.is_some() {
                 seat.op_release = true;
                 (*(*seat).server).wm.dirty_windowing();
