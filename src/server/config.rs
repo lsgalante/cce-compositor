@@ -21,6 +21,8 @@ pub struct Layout {
     pub floating_border_width: i32,
     /// Premultiplied-alpha RGBA, 0.0–1.0 per channel (scenefx convention).
     pub border_color: [f32; 4],
+    /// Border color for the focused window; defaults to `border_color`.
+    pub border_color_focused: [f32; 4],
     pub border_corner_radius: i32,
     pub background_r: u32,
     pub background_g: u32,
@@ -72,6 +74,7 @@ impl Default for Layout {
             grid_border_width: 0,
             floating_border_width: 0,
             border_color: [62.0 / 255.0, 62.0 / 255.0, 62.0 / 255.0, 1.0],
+            border_color_focused: [62.0 / 255.0, 62.0 / 255.0, 62.0 / 255.0, 1.0],
             border_corner_radius: 0,
             background_r: 0x1C1C1C1Cu32,
             background_g: 0x20202020u32,
@@ -307,6 +310,9 @@ pub struct SurfaceConfig {
     pub border_width: i64,
     #[serde(default = "default_border_color")]
     pub border_color: String,
+    /// `None` falls back to `border_color`.
+    #[serde(default)]
+    pub border_color_focused: Option<String>,
     #[serde(default = "default_border_corner_radius")]
     pub border_corner_radius: i64,
     #[serde(default = "default_cloud_position_default")]
@@ -330,6 +336,7 @@ impl Default for SurfaceConfig {
             backplate_corner_radius: default_backplate_corner_radius(),
             border_width: default_border_width(),
             border_color: default_border_color(),
+            border_color_focused: None,
             border_corner_radius: default_border_corner_radius(),
             cloud_position_default: default_cloud_position_default(),
         }
@@ -1478,6 +1485,11 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.border_color = val.to_string();
                                         }
                                     }
+                                    "color_focused" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surface.border_color_focused = Some(val.to_string());
+                                        }
+                                    }
                                     "corner_radius" => {
                                         if let Some(val) = entry.value().as_i64() {
                                             surface.border_corner_radius = val;
@@ -1514,6 +1526,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.backplate_corner_radius = get_child_arg_i64(node, "backplate_corner_radius", default_backplate_corner_radius());
             surface.border_width = get_child_arg_i64(node, "border_width", default_border_width());
             surface.border_color = get_child_arg_string(node, "border_color", &default_border_color());
+            surface.border_color_focused = get_child_arg_string_opt(node, "border_color_focused");
             surface.border_corner_radius = get_child_arg_i64(node, "border_corner_radius", default_border_corner_radius());
             surface.cloud_position_default = get_child_arg_vec2i_opt(node, "cloud_position_default");
         }
@@ -1586,6 +1599,12 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.floating_border_width = 0;
 
     state.layout.border_color = parse_hex_color_rgba(&config.surface.border_color);
+    state.layout.border_color_focused = config
+        .surface
+        .border_color_focused
+        .as_deref()
+        .map(parse_hex_color_rgba)
+        .unwrap_or(state.layout.border_color);
     state.layout.border_corner_radius = config.surface.border_corner_radius as i32;
 
     state.layout.desktop_gap_color = config.surface.desktop_gap_color.clone();
@@ -2016,18 +2035,20 @@ mod tests {
         let content = r##"
             style {
                 surface {
-                    border width=2 color="#ff8800" corner_radius=10
+                    border width=2 color="#ff8800" color_focused="#00ff88" corner_radius=10
                 }
             }
         "##;
         let config = parse_kdl_config(content).unwrap();
         assert_eq!(config.surface.border_width, 2);
         assert_eq!(config.surface.border_color, "#ff8800");
+        assert_eq!(config.surface.border_color_focused, Some("#00ff88".to_string()));
         assert_eq!(config.surface.border_corner_radius, 10);
 
-        // Defaults keep borders off.
+        // Defaults keep borders off; the focused color falls back to `color`.
         let config = parse_kdl_config("").unwrap();
         assert_eq!(config.surface.border_width, 0);
         assert_eq!(config.surface.border_corner_radius, 0);
+        assert_eq!(config.surface.border_color_focused, None);
     }
 }

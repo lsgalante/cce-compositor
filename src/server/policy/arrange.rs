@@ -151,9 +151,6 @@ pub fn classify_window(
     }
 }
 
-/// Legacy border width, baked into the overlay geometry formulas.
-const BW: i32 = 0;
-
 /// Overlay windows keep 16px clear above for decorations.
 const OVERLAY_DEC_H: i32 = 16;
 
@@ -206,6 +203,8 @@ pub struct OverlaySnapshot {
 pub struct OverlayParams {
     pub overlay_width: i32,
     pub border_gap: i32,
+    /// Server-side border width; the fresh overlay slot is border-inclusive.
+    pub border_width: i32,
     pub position_right: bool,
     pub cloud_position_default: Option<[i32; 2]>,
 }
@@ -221,12 +220,17 @@ pub struct OverlayPlacement {
 /// Place the primary overlay window: fresh windows get the configured overlay
 /// slot (left or right edge, full usable height); cloud windows snap to their
 /// configured default position; anything else keeps its stored geometry.
+///
+/// The fresh slot is border-inclusive: since borders draw outside the content
+/// box, the content is inset by the border width so slot + border stays inside
+/// the configured gaps. Stored geometry is treated like a floating window (the
+/// border extends beyond it).
 pub fn place_overlay_window(
     snap: &OverlaySnapshot,
     p: &OverlayParams,
     ctx: &PlacementCtx,
 ) -> OverlayPlacement {
-    let bw = BW;
+    let bw = p.border_width.max(0);
     let g = p.border_gap;
     let dec_h = std::cmp::max(bw, OVERLAY_DEC_H);
 
@@ -242,14 +246,14 @@ pub fn place_overlay_window(
         } else {
             p.overlay_width
         };
-        sp_h = (ctx.usable.height - (dec_h + bw) - 2 * g).max(1);
+        sp_h = (ctx.usable.height - dec_h - 2 * g - 2 * bw).max(1);
 
         sp_x = if p.position_right {
-            ctx.usable.x + ctx.usable.width - sp_w - g + bw
+            ctx.usable.x + ctx.usable.width - sp_w - g - bw
         } else {
             ctx.usable.x + g + bw
         };
-        sp_y = ctx.usable.y + dec_h + g;
+        sp_y = ctx.usable.y + dec_h + g + bw;
 
         box_geom_write = Some(Rect { x: sp_x, y: sp_y, width: sp_w, height: sp_h });
     } else if snap.is_cloud {
@@ -338,6 +342,9 @@ pub struct NormalSnapshot {
 pub struct NormalParams {
     pub gap_right: i32,
     pub gap_top: i32,
+    /// Server-side border width; docked and grid-snapped placements are
+    /// border-inclusive.
+    pub border_width: i32,
     pub cloud_position_default: Option<[i32; 2]>,
     pub desktop_grid_scale: f64,
 }
@@ -381,11 +388,15 @@ pub fn place_normal_window(
                 100
             };
 
+            // The dock slot is border-inclusive: inset so the border stays
+            // within the configured gaps. Explicit cloud positions are taken
+            // as content positions verbatim.
+            let bw = p.border_width.max(0);
             let (fx, fy) = if snap.is_cloud && p.cloud_position_default.is_some() {
                 let pos = p.cloud_position_default.unwrap();
                 (ctx.usable.x + pos[0], ctx.usable.y + pos[1])
             } else {
-                (ctx.usable.x + ctx.usable.width - fw - p.gap_right, ctx.usable.y + p.gap_top)
+                (ctx.usable.x + ctx.usable.width - fw - p.gap_right - bw, ctx.usable.y + p.gap_top + bw)
             };
 
             NormalPlacement {
@@ -427,10 +438,16 @@ pub fn place_normal_window(
             let snapped_y1 = row_min as f64 * scale;
             let snapped_y2 = (row_max + 1) as f64 * scale;
 
-            let fw = snapped_x2 - snapped_x1;
-            let fh = snapped_y2 - snapped_y1;
+            // The snapped cell span is border-inclusive: the content is inset
+            // so the border stays inside the covered cells. Idempotent across
+            // frames because it re-derives from the saved geometry.
+            let bw = p.border_width.max(0) as f64;
+            let content_x = snapped_x1 + bw;
+            let content_y = snapped_y1 + bw;
+            let fw = (snapped_x2 - snapped_x1 - 2.0 * bw).max(1.0);
+            let fh = (snapped_y2 - snapped_y1 - 2.0 * bw).max(1.0);
 
-            let (final_x, final_y) = ctx.virtual_to_screen(snapped_x1, snapped_y1);
+            let (final_x, final_y) = ctx.virtual_to_screen(content_x, content_y);
 
             NormalPlacement {
                 pos: (final_x, final_y),
@@ -438,7 +455,7 @@ pub fn place_normal_window(
                 size: (fw as u32, fh as u32),
                 tiled_all_edges: false,
                 hidden: Some(ctx.is_offscreen(final_x, final_y, fw * ctx.zoom, fh * ctx.zoom)),
-                virtual_write: Some((snapped_x1, snapped_y1)),
+                virtual_write: Some((content_x, content_y)),
             }
         }
         _ => {
@@ -772,6 +789,9 @@ pub struct ArrangeParams {
     pub opacity_enabled: bool,
     /// The configured server-side decoration, applied to every placed window.
     pub decoration: DecorationSpec,
+    /// Border color for the focused window (falls back to the unfocused
+    /// color in config when unset).
+    pub border_color_focused: crate::policy::api::Rgba,
     pub overlay: OverlayParams,
     pub normal: NormalParams,
     pub pan_x: f64,
@@ -816,6 +836,26 @@ pub struct ArrangePlan {
 
 fn is_cloud_app(app_id: Option<&str>) -> bool {
     app_id.map_or(false, |id| id.starts_with("cce-cloud"))
+}
+
+/// The decoration one placed window gets: the configured spec with the
+/// focused border color swapped in, and no border at all when fullscreen.
+fn decoration_for(p: &ArrangeParams, is_focused: bool, mode: TilingMode) -> DecorationSpec {
+    if mode == TilingMode::Fullscreen {
+        return DecorationSpec {
+            border_width: 0,
+            corner_radius: 0,
+            ..p.decoration
+        };
+    }
+    DecorationSpec {
+        border_color: if is_focused {
+            p.border_color_focused
+        } else {
+            p.decoration.border_color
+        },
+        ..p.decoration
+    }
 }
 
 /// The whole arrange pass as one pure function: classify every window, place
@@ -941,7 +981,7 @@ pub fn arrange(
                 wp.virtual_pos = Some(placement.virtual_pos);
                 wp.size = Some(placement.size);
                 wp.tiled = Some(1 | 2 | 4 | 8);
-                wp.decoration = Some(p.decoration);
+                wp.decoration = Some(decoration_for(p, state[i].is_focused, state[i].mode));
                 wp.blur = Some(p.window_blur);
                 wp.opacity = Some(window_opacity(
                     state[i].is_focused,
@@ -1002,6 +1042,7 @@ pub fn arrange(
         // Arrange normal windows on the virtual surface.
         for &i in &normal_windows {
             let w = &state[i];
+            let mode = w.mode;
             let placement = place_normal_window(
                 &NormalSnapshot {
                     mode: w.mode,
@@ -1035,7 +1076,7 @@ pub fn arrange(
             if placement.tiled_all_edges {
                 wp.tiled = Some(1 | 2 | 4 | 8);
             }
-            wp.decoration = Some(p.decoration);
+            wp.decoration = Some(decoration_for(p, is_focused, mode));
             wp.blur = Some(p.window_blur);
             wp.opacity = Some(window_opacity(is_focused, p.opacity_enabled, NORMAL_UNFOCUSED_OPACITY));
         }
@@ -1233,6 +1274,7 @@ mod tests {
             &OverlayParams {
                 overlay_width: 400,
                 border_gap: 8,
+                border_width: 0,
                 position_right: true,
                 cloud_position_default: None,
             },
@@ -1247,6 +1289,31 @@ mod tests {
     }
 
     #[test]
+    fn fresh_overlay_slot_insets_by_border_width() {
+        let placement = place_overlay_window(
+            &OverlaySnapshot {
+                box_geom: Rect { x: 0, y: 0, width: 0, height: 0 },
+                min_width: 0,
+                is_cloud: false,
+                ssd: true,
+                decorations_size: (0, 16),
+            },
+            &OverlayParams {
+                overlay_width: 400,
+                border_gap: 8,
+                border_width: 4,
+                position_right: true,
+                cloud_position_default: None,
+            },
+            &ctx(),
+        );
+        // Content sits one border width inside the zero-width slot on every
+        // side, so the border lands within the gaps.
+        assert_eq!(placement.pos, (1512 - 4, 54 + 4));
+        assert_eq!(placement.size, (400, 1018 - 8));
+    }
+
+    #[test]
     fn overlay_without_ssd_shrinks_by_decorations() {
         let placement = place_overlay_window(
             &OverlaySnapshot {
@@ -1256,7 +1323,7 @@ mod tests {
                 ssd: false,
                 decorations_size: (2, 18),
             },
-            &OverlayParams { overlay_width: 400, border_gap: 8, position_right: false, cloud_position_default: None },
+            &OverlayParams { overlay_width: 400, border_gap: 8, border_width: 0, position_right: false, cloud_position_default: None },
             &ctx(),
         );
         // Existing geometry is kept; the client is sized minus decorations.
@@ -1300,7 +1367,7 @@ mod tests {
             saved_maximized_size: (100, 50),
             saved_maximized_virtual: (150.0, 120.0),
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
         // Saved geometry spans grid columns 1-2 and row 1 → snapped to
         // (100,100) with size 200x100.
@@ -1309,6 +1376,27 @@ mod tests {
         assert_eq!(placement.size, (200, 100));
         assert_eq!(placement.hidden, Some(false));
         assert_eq!(placement.scale, 1.0);
+    }
+
+    #[test]
+    fn maximized_insets_by_border_width() {
+        let snap = NormalSnapshot {
+            mode: TilingMode::Maximized,
+            box_geom: Rect { x: 0, y: 0, width: 100, height: 50 },
+            min_size: (0, 0),
+            virtual_pos: (150.0, 120.0),
+            active_resize: None,
+            is_cloud: false,
+            saved_maximized_size: (100, 50),
+            saved_maximized_virtual: (150.0, 120.0),
+        };
+        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 4, cloud_position_default: None, desktop_grid_scale: 100.0 };
+        let placement = place_normal_window(&snap, &p, &ctx());
+        // Same cell span as without borders (100,100)+200x100, with the
+        // content inset so the border stays inside the covered cells.
+        assert_eq!(placement.virtual_write, Some((104.0, 104.0)));
+        assert_eq!(placement.pos, (104, 104));
+        assert_eq!(placement.size, (192, 92));
     }
 
     #[test]
@@ -1323,12 +1411,19 @@ mod tests {
             saved_maximized_size: (0, 0),
             saved_maximized_virtual: (0.0, 0.0),
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
         // Defaults to 360x100, docked inside the usable area (below the bar).
         assert_eq!(placement.pos, (1920 - 360 - 10, 30 + 6));
         assert_eq!(placement.size, (360, 100));
         assert_eq!(placement.hidden, None);
+
+        // With a border, the dock position insets so the border stays inside
+        // the gaps; the popup keeps its size.
+        let p = NormalParams { border_width: 4, ..p };
+        let placement = place_normal_window(&snap, &p, &ctx());
+        assert_eq!(placement.pos, (1920 - 360 - 10 - 4, 30 + 6 + 4));
+        assert_eq!(placement.size, (360, 100));
     }
 
     #[test]
@@ -1343,7 +1438,7 @@ mod tests {
             saved_maximized_size: (0, 0),
             saved_maximized_virtual: (0.0, 0.0),
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0 };
         let mut c = ctx();
         c.pan_x = 50.0;
         c.pan_y = 100.0;
@@ -1411,15 +1506,18 @@ mod tests {
                 border_color: crate::policy::api::Rgba([0.1, 0.2, 0.3, 0.4]),
                 corner_radius: 0,
             },
+            border_color_focused: crate::policy::api::Rgba([0.9, 0.1, 0.1, 1.0]),
             overlay: OverlayParams {
                 overlay_width: 400,
                 border_gap: 8,
+                border_width: 0,
                 position_right: true,
                 cloud_position_default: None,
             },
             normal: NormalParams {
                 gap_right: 10,
                 gap_top: 6,
+                border_width: 0,
                 cloud_position_default: None,
                 desktop_grid_scale: 100.0,
             },
@@ -1474,6 +1572,32 @@ mod tests {
         assert_eq!(wp.decoration, Some(arrange_params().decoration));
         assert_eq!(wp.blur, Some(true));
         assert_eq!(wp.opacity, Some(NORMAL_UNFOCUSED_OPACITY));
+    }
+
+    #[test]
+    fn arrange_focused_window_gets_focused_border_color() {
+        let mut focused = snap("firefox");
+        focused.is_focused = true;
+        let unfocused = snap("terminal");
+        let p = arrange_params();
+        let plan = arrange(&[focused, unfocused], &one_output(), &p);
+
+        assert_eq!(plan.windows[0].decoration.unwrap().border_color, p.border_color_focused);
+        assert_eq!(plan.windows[1].decoration.unwrap().border_color, p.decoration.border_color);
+    }
+
+    #[test]
+    fn arrange_fullscreen_window_gets_no_border() {
+        let mut w = snap("mpv");
+        w.mode = TilingMode::Fullscreen;
+        let mut p = arrange_params();
+        p.decoration.border_width = 4;
+        p.decoration.corner_radius = 12;
+        let plan = arrange(&[w], &one_output(), &p);
+
+        let dec = plan.windows[0].decoration.unwrap();
+        assert_eq!(dec.border_width, 0);
+        assert_eq!(dec.corner_radius, 0);
     }
 
     #[test]

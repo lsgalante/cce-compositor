@@ -1190,15 +1190,18 @@ impl WindowManager {
                 border_color: crate::policy::api::Rgba(self.layout.border_color),
                 corner_radius: self.layout.border_corner_radius,
             },
+            border_color_focused: crate::policy::api::Rgba(self.layout.border_color_focused),
             overlay: crate::policy::arrange::OverlayParams {
                 overlay_width: self.layout.overlay_width,
                 border_gap: self.layout.overlay_border_gap,
+                border_width: self.layout.border_width,
                 position_right: self.layout.overlay_position == "right",
                 cloud_position_default: self.layout.cloud_position_default,
             },
             normal: crate::policy::arrange::NormalParams {
                 gap_right: self.layout.gap_right,
                 gap_top: self.layout.gap_top,
+                border_width: self.layout.border_width,
                 cloud_position_default: self.layout.cloud_position_default,
                 desktop_grid_scale: self.layout.desktop_grid_scale,
             },
