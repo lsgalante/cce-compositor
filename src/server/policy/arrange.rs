@@ -2,8 +2,9 @@
 //
 // Functions here take plain-data snapshots and return placement plans; the
 // mechanism side (`window_manager.rs`) builds the snapshots from FFI state and
-// applies the plans to the scene graph. Extraction happens section by section;
-// currently covers the status-bar layout engine.
+// applies the plans to the scene graph. `arrange()` is the whole frame in one
+// call — the future `Policy::arrange` entry point — composed from the
+// per-section functions below it.
 
 use super::api::{Rect, WindowRole};
 use super::tiling::TilingMode;
@@ -714,6 +715,385 @@ pub fn layout_status_bars(
     placements
 }
 
+/// One enabled output, as `arrange` needs it.
+#[derive(Debug, Clone, Copy)]
+pub struct OutputSnapshot {
+    /// The output's layout box.
+    pub layout_box: Rect,
+    /// Layer-shell non-exclusive area, relative to the layout box; a
+    /// zero-sized rect means no exclusion.
+    pub non_exclusive: Rect,
+}
+
+/// Everything `arrange` reads about one window. Built once per frame by the
+/// mechanism side; seat-dependent answers (`being_moved`, `active_resize`)
+/// are captured here so the pure pass never queries mid-computation.
+#[derive(Debug, Clone)]
+pub struct WindowSnapshot {
+    pub app_id: Option<String>,
+    /// Only used verbatim in log lines.
+    pub title: Option<String>,
+    pub role: WindowRole,
+    pub minimized: bool,
+    /// Window state is Closing or Init.
+    pub closing_or_init: bool,
+    /// Resolved tiling mode (`get_mode_for_window`).
+    pub mode: TilingMode,
+    /// Mode-rule SSD override; pre-gated on `!mode_locked`.
+    pub rule_ssd: Option<bool>,
+    /// A seat is interactively moving this window.
+    pub being_moved: bool,
+    pub status_edge: StatusEdge,
+    pub is_focused: bool,
+    pub box_geom: Rect,
+    /// (min_width, min_height) size hints.
+    pub min_size: (i32, i32),
+    pub virtual_pos: (f64, f64),
+    pub active_resize: Option<(u32, u32)>,
+    /// Current `wm_requested.ssd`.
+    pub ssd: bool,
+    /// Raw decoration measurement (`measure_decorations`), not gated on
+    /// `ssd` — placement applies it only when the effective SSD is off.
+    pub decorations_size: (i32, i32),
+    pub was_maximized: bool,
+    pub saved_maximized_size: (i32, i32),
+    pub saved_maximized_virtual: (f64, f64),
+}
+
+/// Frame-wide inputs: config knobs plus the desktop viewport.
+pub struct ArrangeParams {
+    pub bar_height: i32,
+    pub status_hide_mode: bool,
+    pub hide_mode_preview: i32,
+    /// `status_background_blur > 0.001`.
+    pub status_blur: bool,
+    pub window_blur: bool,
+    /// `layout.window_opacity` — unfocused windows dim when set.
+    pub opacity_enabled: bool,
+    pub border_color: (u32, u32, u32, u32),
+    pub overlay: OverlayParams,
+    pub normal: NormalParams,
+    pub pan_x: f64,
+    pub pan_y: f64,
+    pub zoom: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BorderPlan {
+    pub width: u32,
+    pub color: (u32, u32, u32, u32),
+}
+
+/// Write instructions for one window. `None` leaves the field untouched, so
+/// the mechanism apply loop is a flat sequence of `if let Some` writes.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WindowPlan {
+    /// Enable/disable the window's scene tree.
+    pub scene_enabled: Option<bool>,
+    pub hidden: Option<bool>,
+    pub tiling_mode: Option<TilingMode>,
+    /// `wm_requested.tiled` edge bitmask.
+    pub tiled: Option<u32>,
+    pub ssd: Option<bool>,
+    pub scale: Option<f64>,
+    /// `rendering_requested.{x,y}`.
+    pub pos: Option<(i32, i32)>,
+    /// `wm_requested.dimensions` and `.bounds`.
+    pub size: Option<(u32, u32)>,
+    /// Persistent geometry write-back.
+    pub box_geom: Option<Rect>,
+    pub virtual_pos: Option<(f64, f64)>,
+    pub blur: Option<bool>,
+    pub border: Option<BorderPlan>,
+    pub opacity: Option<f32>,
+    pub was_maximized: Option<bool>,
+    /// Maximized-enter save: (restore size, restore virtual position).
+    pub saved_maximized: Option<((i32, i32), (f64, f64))>,
+}
+
+pub struct ArrangePlan {
+    /// Index-aligned with the input snapshots.
+    pub windows: Vec<WindowPlan>,
+    /// Whether each output's fallback background rect should be shown
+    /// (false while a wallpaper window exists).
+    pub background_rect_enabled: bool,
+}
+
+fn is_cloud_app(app_id: Option<&str>) -> bool {
+    app_id.map_or(false, |id| id.starts_with("cce-cloud"))
+}
+
+/// The whole arrange pass as one pure function: classify every window, place
+/// overlays/normals/status bars per output, and return per-window write
+/// instructions.
+///
+/// The output loop is last-wins, like the mechanism loop it replaces: every
+/// output pass re-plans every window, so with several outputs the final plan
+/// reflects the last one. State that arranging itself evolves (box geometry,
+/// virtual position, SSD overrides, the maximized save/restore machine) is
+/// tracked on a working copy of the snapshots so later sections and later
+/// output passes read what earlier ones wrote — exactly as the mutating
+/// original did.
+pub fn arrange(
+    windows: &[WindowSnapshot],
+    outputs: &[OutputSnapshot],
+    p: &ArrangeParams,
+) -> ArrangePlan {
+    let mut state: Vec<WindowSnapshot> = windows.to_vec();
+    let mut plan: Vec<WindowPlan> = vec![WindowPlan::default(); windows.len()];
+
+    let has_wallpaper = state.iter().any(|w| w.role == WindowRole::Background);
+    let default_border = BorderPlan { width: BW as u32, color: p.border_color };
+
+    for out in outputs {
+        let phys = out.layout_box;
+
+        let status_edges: Vec<StatusEdge> = state
+            .iter()
+            .filter(|w| w.role == WindowRole::StatusBar)
+            .map(|w| w.status_edge)
+            .collect();
+        let usable = compute_usable_area(
+            phys,
+            out.non_exclusive,
+            p.bar_height,
+            p.status_hide_mode,
+            &status_edges,
+        );
+        let ctx = PlacementCtx {
+            phys,
+            usable,
+            pan_x: p.pan_x,
+            pan_y: p.pan_y,
+            zoom: p.zoom,
+        };
+
+        let mut overlay_windows: Vec<usize> = Vec::new();
+        let mut normal_windows: Vec<usize> = Vec::new();
+
+        for (i, w) in state.iter_mut().enumerate() {
+            let class = classify_window(w.role, w.minimized, w.closing_or_init, w.mode, w.being_moved);
+            let wp = &mut plan[i];
+            match class {
+                WindowClass::Background => {
+                    wp.tiling_mode = Some(TilingMode::Status);
+                    wp.tiled = Some(0);
+                    wp.ssd = Some(false);
+                    w.ssd = false;
+                    wp.scale = Some(1.0);
+                    wp.scene_enabled = Some(true);
+                    wp.hidden = Some(false);
+                    wp.blur = Some(false);
+                    wp.pos = Some((phys.x, phys.y));
+                    wp.size = Some((phys.width as u32, phys.height as u32));
+                }
+                WindowClass::StatusBar => {
+                    wp.tiling_mode = Some(TilingMode::Status);
+                    wp.tiled = Some(0);
+                    wp.ssd = Some(false);
+                    w.ssd = false;
+                    wp.scale = Some(1.0);
+                    wp.scene_enabled = Some(true);
+                    wp.hidden = Some(false);
+                    wp.blur = Some(p.status_blur);
+                }
+                WindowClass::Hidden => {
+                    wp.scene_enabled = Some(false);
+                    wp.hidden = Some(true);
+                }
+                WindowClass::Overlay | WindowClass::Normal => {
+                    wp.scene_enabled = Some(true);
+                    wp.hidden = Some(false);
+                    wp.tiling_mode = Some(w.mode);
+                    if let Some(rule_ssd) = w.rule_ssd {
+                        wp.ssd = Some(rule_ssd);
+                        w.ssd = rule_ssd;
+                    }
+                    if class == WindowClass::Overlay {
+                        overlay_windows.push(i);
+                    } else {
+                        normal_windows.push(i);
+                    }
+                }
+            }
+        }
+
+        for (sp_idx, &i) in overlay_windows.iter().enumerate() {
+            if sp_idx == 0 {
+                let w = &state[i];
+                let placement = place_overlay_window(
+                    &OverlaySnapshot {
+                        box_geom: w.box_geom,
+                        min_width: w.min_size.0,
+                        is_cloud: is_cloud_app(w.app_id.as_deref()),
+                        ssd: w.ssd,
+                        decorations_size: w.decorations_size,
+                    },
+                    &p.overlay,
+                    &ctx,
+                );
+
+                if let Some(bg) = placement.box_geom_write {
+                    state[i].box_geom = bg;
+                }
+                state[i].virtual_pos = placement.virtual_pos;
+
+                let wp = &mut plan[i];
+                if let Some(bg) = placement.box_geom_write {
+                    wp.box_geom = Some(bg);
+                }
+                wp.pos = Some(placement.pos);
+                wp.scale = Some(1.0);
+                wp.virtual_pos = Some(placement.virtual_pos);
+                wp.size = Some(placement.size);
+                wp.tiled = Some(1 | 2 | 4 | 8);
+                wp.border = Some(default_border);
+                wp.blur = Some(p.window_blur);
+                wp.opacity = Some(window_opacity(
+                    state[i].is_focused,
+                    p.opacity_enabled,
+                    OVERLAY_UNFOCUSED_OPACITY,
+                ));
+            } else {
+                normal_windows.push(i);
+            }
+        }
+
+        // Manage entering/exiting Maximized state for normal windows.
+        for &i in &normal_windows {
+            let w = &state[i];
+            let transition = maximized_transition(
+                w.mode == TilingMode::Maximized,
+                w.was_maximized,
+                (w.box_geom.width, w.box_geom.height),
+                w.min_size,
+                w.saved_maximized_size,
+                w.saved_maximized_virtual,
+            );
+            match transition {
+                Some(MaximizedTransition::Enter { width, height }) => {
+                    let w = &mut state[i];
+                    w.saved_maximized_size = (width, height);
+                    w.saved_maximized_virtual = w.virtual_pos;
+                    w.was_maximized = true;
+                    let wp = &mut plan[i];
+                    wp.saved_maximized = Some(((width, height), w.saved_maximized_virtual));
+                    wp.was_maximized = Some(true);
+                    log::info!("[Maximized] Saved window {:?} geometry: {}x{} at ({}, {})",
+                        w.title.as_deref().unwrap_or(""),
+                        width, height,
+                        w.saved_maximized_virtual.0, w.saved_maximized_virtual.1
+                    );
+                }
+                Some(MaximizedTransition::Exit { width, height, virtual_x, virtual_y }) => {
+                    let w = &mut state[i];
+                    w.box_geom.width = width;
+                    w.box_geom.height = height;
+                    w.virtual_pos = (virtual_x, virtual_y);
+                    w.was_maximized = false;
+                    let wp = &mut plan[i];
+                    wp.box_geom = Some(w.box_geom);
+                    wp.virtual_pos = Some((virtual_x, virtual_y));
+                    wp.was_maximized = Some(false);
+                    wp.size = Some((width as u32, height as u32));
+                    log::info!("[Maximized] Restored window {:?} geometry: {}x{} at ({}, {})",
+                        w.title.as_deref().unwrap_or(""),
+                        width, height, virtual_x, virtual_y
+                    );
+                }
+                None => {}
+            }
+        }
+
+        // Arrange normal windows on the virtual surface.
+        for &i in &normal_windows {
+            let w = &state[i];
+            let placement = place_normal_window(
+                &NormalSnapshot {
+                    mode: w.mode,
+                    box_geom: w.box_geom,
+                    min_size: w.min_size,
+                    virtual_pos: w.virtual_pos,
+                    active_resize: w.active_resize,
+                    is_cloud: is_cloud_app(w.app_id.as_deref()),
+                    saved_maximized_size: w.saved_maximized_size,
+                    saved_maximized_virtual: w.saved_maximized_virtual,
+                },
+                &p.normal,
+                &ctx,
+            );
+
+            let is_focused = w.is_focused;
+            if let Some(v) = placement.virtual_write {
+                state[i].virtual_pos = v;
+            }
+
+            let wp = &mut plan[i];
+            wp.pos = Some(placement.pos);
+            wp.scale = Some(placement.scale);
+            if let Some(v) = placement.virtual_write {
+                wp.virtual_pos = Some(v);
+            }
+            if let Some(hidden) = placement.hidden {
+                wp.hidden = Some(hidden);
+            }
+            wp.size = Some(placement.size);
+            if placement.tiled_all_edges {
+                wp.tiled = Some(1 | 2 | 4 | 8);
+            }
+            wp.border = Some(default_border);
+            wp.blur = Some(p.window_blur);
+            wp.opacity = Some(window_opacity(is_focused, p.opacity_enabled, NORMAL_UNFOCUSED_OPACITY));
+        }
+
+        // Position status bar windows on this output, excluding any being
+        // interactively dragged.
+        let mut status_items: Vec<StatusBarItem> = Vec::new();
+        let mut status_idxs: Vec<usize> = Vec::new();
+        for (i, w) in state.iter().enumerate() {
+            if w.closing_or_init {
+                continue;
+            }
+            if let Some(app_id) = &w.app_id {
+                if app_id.starts_with("cce-status") {
+                    if w.being_moved {
+                        continue;
+                    }
+                    log::info!("[ArrangeStatus] app_id={} status_edge={:?}", app_id, w.status_edge);
+                    status_items.push(StatusBarItem {
+                        app_id: app_id.clone(),
+                        edge: w.status_edge,
+                        prev_len: std::cmp::max(w.box_geom.width, w.box_geom.height),
+                    });
+                    status_idxs.push(i);
+                }
+            }
+        }
+
+        let placements = layout_status_bars(
+            &status_items,
+            &StatusBarLayoutParams {
+                output: phys,
+                bar_height: p.bar_height as u32,
+                hide_mode: p.status_hide_mode,
+                hide_mode_preview: p.hide_mode_preview,
+            },
+        );
+
+        for (&i, placement) in status_idxs.iter().zip(placements.iter()) {
+            if let Some(pl) = placement {
+                plan[i].pos = Some((pl.x, pl.y));
+                plan[i].size = Some((pl.width, pl.height));
+            }
+        }
+    }
+
+    ArrangePlan {
+        windows: plan,
+        background_rect_enabled: !has_wallpaper,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -998,6 +1378,246 @@ mod tests {
         assert_eq!(window_opacity(false, false, OVERLAY_UNFOCUSED_OPACITY), 1.0);
         assert_eq!(window_opacity(false, true, OVERLAY_UNFOCUSED_OPACITY), 0.85);
         assert_eq!(window_opacity(false, true, NORMAL_UNFOCUSED_OPACITY), 0.90);
+    }
+
+    fn snap(app_id: &str) -> WindowSnapshot {
+        WindowSnapshot {
+            app_id: Some(app_id.to_string()),
+            title: None,
+            role: WindowRole::from_app_id(Some(app_id)),
+            minimized: false,
+            closing_or_init: false,
+            mode: TilingMode::Floating,
+            rule_ssd: None,
+            being_moved: false,
+            status_edge: StatusEdge::Unspecified,
+            is_focused: false,
+            box_geom: Rect { x: 0, y: 0, width: 640, height: 480 },
+            min_size: (0, 0),
+            virtual_pos: (100.0, 200.0),
+            active_resize: None,
+            ssd: true,
+            decorations_size: (0, 16),
+            was_maximized: false,
+            saved_maximized_size: (0, 0),
+            saved_maximized_virtual: (0.0, 0.0),
+        }
+    }
+
+    fn arrange_params() -> ArrangeParams {
+        ArrangeParams {
+            bar_height: 30,
+            status_hide_mode: false,
+            hide_mode_preview: 5,
+            status_blur: true,
+            window_blur: true,
+            opacity_enabled: true,
+            border_color: (10, 20, 30, 40),
+            overlay: OverlayParams {
+                overlay_width: 400,
+                border_gap: 8,
+                position_right: true,
+                cloud_position_default: None,
+            },
+            normal: NormalParams {
+                gap_right: 10,
+                gap_top: 6,
+                cloud_position_default: None,
+                desktop_grid_scale: 100.0,
+            },
+            pan_x: 0.0,
+            pan_y: 0.0,
+            zoom: 1.0,
+        }
+    }
+
+    fn one_output() -> Vec<OutputSnapshot> {
+        vec![OutputSnapshot {
+            layout_box: Rect { x: 0, y: 0, width: 1920, height: 1080 },
+            non_exclusive: Rect { x: 0, y: 0, width: 0, height: 0 },
+        }]
+    }
+
+    #[test]
+    fn arrange_background_covers_output_and_disables_fallback_rect() {
+        let windows = vec![snap("cce-wallpaper"), snap("firefox")];
+        let plan = arrange(&windows, &one_output(), &arrange_params());
+
+        assert!(!plan.background_rect_enabled);
+        let wp = &plan.windows[0];
+        assert_eq!(wp.tiling_mode, Some(TilingMode::Status));
+        assert_eq!(wp.tiled, Some(0));
+        assert_eq!(wp.ssd, Some(false));
+        assert_eq!(wp.scene_enabled, Some(true));
+        assert_eq!(wp.hidden, Some(false));
+        assert_eq!(wp.blur, Some(false));
+        assert_eq!(wp.pos, Some((0, 0)));
+        assert_eq!(wp.size, Some((1920, 1080)));
+
+        // Without a wallpaper window, the fallback rect stays on.
+        let plan = arrange(&windows[1..], &one_output(), &arrange_params());
+        assert!(plan.background_rect_enabled);
+    }
+
+    #[test]
+    fn arrange_normal_window_pans_with_border_blur_opacity() {
+        let mut w = snap("firefox");
+        w.is_focused = false;
+        let plan = arrange(&[w], &one_output(), &arrange_params());
+
+        let wp = &plan.windows[0];
+        assert_eq!(wp.scene_enabled, Some(true));
+        assert_eq!(wp.tiling_mode, Some(TilingMode::Floating));
+        assert_eq!(wp.pos, Some((100, 200)));
+        assert_eq!(wp.scale, Some(1.0));
+        assert_eq!(wp.size, Some((640, 480)));
+        assert_eq!(wp.hidden, Some(false));
+        assert_eq!(wp.tiled, None);
+        assert_eq!(wp.border, Some(BorderPlan { width: 0, color: (10, 20, 30, 40) }));
+        assert_eq!(wp.blur, Some(true));
+        assert_eq!(wp.opacity, Some(NORMAL_UNFOCUSED_OPACITY));
+    }
+
+    #[test]
+    fn arrange_hidden_window_disabled_in_scene() {
+        let mut w = snap("firefox");
+        w.minimized = true;
+        let plan = arrange(&[w], &one_output(), &arrange_params());
+
+        let wp = &plan.windows[0];
+        assert_eq!(wp.scene_enabled, Some(false));
+        assert_eq!(wp.hidden, Some(true));
+        assert_eq!(wp.pos, None);
+        assert_eq!(wp.size, None);
+    }
+
+    #[test]
+    fn arrange_first_overlay_gets_slot_second_demotes_to_normal() {
+        let mut first = snap("scratchpad");
+        first.mode = TilingMode::Overlay;
+        first.box_geom = Rect { x: 0, y: 0, width: 0, height: 0 };
+        let mut second = snap("other-overlay");
+        second.mode = TilingMode::Overlay;
+
+        let plan = arrange(&[first, second], &one_output(), &arrange_params());
+
+        // Fresh overlay: right slot (no bars, so the full output is usable),
+        // box_geom written back.
+        let wp = &plan.windows[0];
+        assert_eq!(wp.pos, Some((1512, 24)));
+        assert_eq!(wp.size, Some((400, 1048)));
+        assert_eq!(wp.box_geom, Some(Rect { x: 1512, y: 24, width: 400, height: 1048 }));
+        assert_eq!(wp.tiled, Some(15));
+        assert_eq!(wp.opacity, Some(OVERLAY_UNFOCUSED_OPACITY));
+
+        // Second overlay arranges as a pannable normal window.
+        let wp = &plan.windows[1];
+        assert_eq!(wp.tiling_mode, Some(TilingMode::Overlay));
+        assert_eq!(wp.pos, Some((100, 200)));
+        assert_eq!(wp.size, Some((640, 480)));
+        assert_eq!(wp.opacity, Some(NORMAL_UNFOCUSED_OPACITY));
+    }
+
+    #[test]
+    fn arrange_rule_ssd_reaches_overlay_sizing() {
+        let mut w = snap("scratchpad");
+        w.mode = TilingMode::Overlay;
+        w.ssd = true;
+        w.rule_ssd = Some(false);
+        w.decorations_size = (2, 18);
+
+        let plan = arrange(&[w], &one_output(), &arrange_params());
+        let wp = &plan.windows[0];
+        // The rule override is planned and the client size shrinks by the
+        // decorations, proving the override was visible to placement.
+        assert_eq!(wp.ssd, Some(false));
+        assert_eq!(wp.size, Some((638, 462)));
+    }
+
+    #[test]
+    fn arrange_maximized_enter_saves_geometry() {
+        let mut w = snap("firefox");
+        w.mode = TilingMode::Maximized;
+        w.box_geom = Rect { x: 0, y: 0, width: 150, height: 50 };
+        w.virtual_pos = (150.0, 120.0);
+
+        let plan = arrange(&[w], &one_output(), &arrange_params());
+        let wp = &plan.windows[0];
+        assert_eq!(wp.was_maximized, Some(true));
+        assert_eq!(wp.saved_maximized, Some(((150, 50), (150.0, 120.0))));
+        // Grid snap: spans columns 1-2, row 1 of the 100px grid.
+        assert_eq!(wp.virtual_pos, Some((100.0, 100.0)));
+        assert_eq!(wp.pos, Some((100, 100)));
+        assert_eq!(wp.size, Some((200, 100)));
+    }
+
+    #[test]
+    fn arrange_maximized_exit_restores_saved_geometry() {
+        let mut w = snap("firefox");
+        w.mode = TilingMode::Floating;
+        w.was_maximized = true;
+        w.saved_maximized_size = (500, 400);
+        w.saved_maximized_virtual = (10.0, 20.0);
+
+        let plan = arrange(&[w], &one_output(), &arrange_params());
+        let wp = &plan.windows[0];
+        assert_eq!(wp.was_maximized, Some(false));
+        assert_eq!(wp.box_geom, Some(Rect { x: 0, y: 0, width: 500, height: 400 }));
+        // The restored geometry flows into the pannable placement.
+        assert_eq!(wp.virtual_pos, Some((10.0, 20.0)));
+        assert_eq!(wp.pos, Some((10, 20)));
+        assert_eq!(wp.size, Some((500, 400)));
+    }
+
+    #[test]
+    fn arrange_status_bar_placed_unless_dragged() {
+        let mut bar = snap("cce-status-left-viewport");
+        bar.status_edge = StatusEdge::TopLeft;
+        bar.box_geom = Rect { x: 0, y: 0, width: 200, height: 30 };
+
+        let plan = arrange(&[bar.clone()], &one_output(), &arrange_params());
+        let wp = &plan.windows[0];
+        assert_eq!(wp.tiling_mode, Some(TilingMode::Status));
+        assert_eq!(wp.blur, Some(true));
+        assert_eq!(wp.pos, Some((12, 0)));
+        assert_eq!(wp.size, Some((200, 30)));
+
+        // A dragged bar keeps whatever geometry it has: no placement writes.
+        bar.being_moved = true;
+        let plan = arrange(&[bar], &one_output(), &arrange_params());
+        let wp = &plan.windows[0];
+        assert_eq!(wp.pos, None);
+        assert_eq!(wp.size, None);
+    }
+
+    #[test]
+    fn arrange_multi_output_is_last_wins() {
+        let outputs = vec![
+            OutputSnapshot {
+                layout_box: Rect { x: 0, y: 0, width: 1920, height: 1080 },
+                non_exclusive: Rect { x: 0, y: 0, width: 0, height: 0 },
+            },
+            OutputSnapshot {
+                layout_box: Rect { x: 1920, y: 0, width: 1280, height: 720 },
+                non_exclusive: Rect { x: 0, y: 0, width: 0, height: 0 },
+            },
+        ];
+        let windows = vec![snap("cce-wallpaper"), snap("firefox")];
+        let plan = arrange(&windows, &outputs, &arrange_params());
+
+        // The background covers the second output — the last pass wins.
+        assert_eq!(plan.windows[0].pos, Some((1920, 0)));
+        assert_eq!(plan.windows[0].size, Some((1280, 720)));
+
+        // Maximize state machine only fires once across passes: entering on
+        // pass one must not re-enter (and re-save) on pass two.
+        let mut w = snap("firefox");
+        w.mode = TilingMode::Maximized;
+        w.box_geom = Rect { x: 0, y: 0, width: 150, height: 50 };
+        w.virtual_pos = (150.0, 120.0);
+        let plan = arrange(&[w], &outputs, &arrange_params());
+        // Saved from the original geometry, not the pass-one grid snap.
+        assert_eq!(plan.windows[0].saved_maximized, Some(((150, 50), (150.0, 120.0))));
     }
 
     #[test]

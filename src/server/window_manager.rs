@@ -1071,21 +1071,6 @@ impl WindowManager {
     }
 
 
-fn get_closest_tag(x: f64, y: f64) -> i32 {
-    let centers = [(0.0, 0.0), (2000.0, 0.0), (0.0, 2000.0), (2000.0, 2000.0)];
-    let mut min_dist = f64::MAX;
-    let mut best_tag = 1;
-    for (i, &(cx, cy)) in centers.iter().enumerate() {
-        let dx = x - cx;
-        let dy = y - cy;
-        let dist = dx * dx + dy * dy;
-        if dist < min_dist {
-            min_dist = dist;
-            best_tag = (i + 1) as i32;
-        }
-    }
-    best_tag
-}
 
     pub unsafe fn arrange_views(&mut self) {
         log::debug!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
@@ -1100,7 +1085,7 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr_out = (*outputs_list).next;
-        
+
         let mut active_outputs: Vec<*mut crate::output::Output> = Vec::new();
         while curr_out != outputs_list {
             let next_out = (*curr_out).next;
@@ -1113,13 +1098,6 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
 
         if active_outputs.is_empty() {
             return;
-        }
-
-        let has_wallpaper = self.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_wallpaper());
-        for &output in &active_outputs {
-            if !(*output).background_rect.is_null() {
-                ffi::wlr_scene_node_set_enabled((*output).background_rect as *mut ffi::wlr_scene_node, !has_wallpaper);
-            }
         }
 
         let mut focused_window: *mut Window = std::ptr::null_mut();
@@ -1135,389 +1113,177 @@ fn get_closest_tag(x: f64, y: f64) -> i32 {
             curr_seat = next_seat;
         }
 
+        // Snapshot outputs and windows into plain data, compute the whole
+        // frame's plan in policy code, then apply it to the scene graph.
+        let mut output_snaps: Vec<crate::policy::arrange::OutputSnapshot> = Vec::new();
         for &output in &active_outputs {
             let wlr_box = (*output).sent.box_layout();
-            let phys_x = wlr_box.x;
-            let phys_y = wlr_box.y;
-            let phys_w = wlr_box.width;
-            let phys_h = wlr_box.height;
-
             let non_ex = (*output).layer_shell.scheduled.non_exclusive_area;
-            let mut status_edges: Vec<crate::window::StatusEdge> = Vec::new();
-            for &win_ptr in self.windows.iter() {
-                if win_ptr.is_null() || (*win_ptr).closed {
-                    continue;
-                }
-                if (*win_ptr).is_status_bar() {
-                    status_edges.push((*win_ptr).status_edge);
-                }
+            output_snaps.push(crate::policy::arrange::OutputSnapshot {
+                layout_box: crate::policy::api::Rect {
+                    x: wlr_box.x,
+                    y: wlr_box.y,
+                    width: wlr_box.width,
+                    height: wlr_box.height,
+                },
+                non_exclusive: crate::policy::api::Rect {
+                    x: non_ex.x,
+                    y: non_ex.y,
+                    width: non_ex.width,
+                    height: non_ex.height,
+                },
+            });
+        }
+
+        let mut win_ptrs: Vec<*mut Window> = Vec::new();
+        let mut window_snaps: Vec<crate::policy::arrange::WindowSnapshot> = Vec::new();
+        for &win_ptr in self.windows.iter() {
+            if win_ptr.is_null() || (*win_ptr).closed {
+                continue;
             }
-            let usable = crate::policy::arrange::compute_usable_area(
-                crate::policy::api::Rect { x: phys_x, y: phys_y, width: phys_w, height: phys_h },
-                crate::policy::api::Rect { x: non_ex.x, y: non_ex.y, width: non_ex.width, height: non_ex.height },
-                self.layout.bar_height as i32,
-                self.status_hide_mode,
-                &status_edges,
-            );
-            let viewport_w = wlr_box.width as f64;
-            let viewport_h = wlr_box.height as f64;
-            let camera_center_x = self.desk_pan_x + (viewport_w / 2.0) / self.desk_zoom;
-            let camera_center_y = self.desk_pan_y + (viewport_h / 2.0) / self.desk_zoom;
-            let _active_tag = Self::get_closest_tag(camera_center_x, camera_center_y);
+            let rule_ssd = if !(*win_ptr).mode_locked {
+                self.get_rule_for_window(win_ptr).and_then(|rule| rule.ssd)
+            } else {
+                None
+            };
+            window_snaps.push(crate::policy::arrange::WindowSnapshot {
+                app_id: (*win_ptr).get_app_id_string(),
+                title: (*win_ptr).get_title_string(),
+                role: (*win_ptr).role(),
+                minimized: (*win_ptr).minimized,
+                closing_or_init: matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init),
+                mode: self.get_mode_for_window(win_ptr),
+                rule_ssd,
+                being_moved: self.is_window_being_moved(win_ptr),
+                status_edge: (*win_ptr).status_edge,
+                is_focused: win_ptr == focused_window,
+                box_geom: crate::policy::api::Rect {
+                    x: (*win_ptr).box_geom.x,
+                    y: (*win_ptr).box_geom.y,
+                    width: (*win_ptr).box_geom.width,
+                    height: (*win_ptr).box_geom.height,
+                },
+                min_size: (
+                    (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32,
+                    (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32,
+                ),
+                virtual_pos: ((*win_ptr).virtual_x, (*win_ptr).virtual_y),
+                active_resize: self.get_active_resize_dimensions(win_ptr),
+                ssd: (*win_ptr).wm_requested.ssd,
+                decorations_size: (*win_ptr).measure_decorations(),
+                was_maximized: (*win_ptr).was_maximized,
+                saved_maximized_size: ((*win_ptr).saved_maximized_width, (*win_ptr).saved_maximized_height),
+                saved_maximized_virtual: ((*win_ptr).saved_maximized_virtual_x, (*win_ptr).saved_maximized_virtual_y),
+            });
+            win_ptrs.push(win_ptr);
+        }
 
-            let mut overlay_windows: Vec<*mut Window> = Vec::new();
-            let mut normal_windows: Vec<*mut Window> = Vec::new();
-
-            for &win_ptr in self.windows.iter() {
-                if (*win_ptr).closed {
-                    continue;
-                }
-
-                let mode = self.get_mode_for_window(win_ptr);
-                let class = crate::policy::arrange::classify_window(
-                    (*win_ptr).role(),
-                    (*win_ptr).minimized,
-                    matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init),
-                    mode,
-                    self.is_window_being_moved(win_ptr),
-                );
-
-                match class {
-                    crate::policy::arrange::WindowClass::Background => {
-                        (*win_ptr).tiling_mode = crate::tiling::TilingMode::Status;
-                        (*win_ptr).wm_requested.tiled = 0;
-                        (*win_ptr).wm_requested.ssd = false;
-                        (*win_ptr).scale = 1.0;
-                        ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
-                        (*win_ptr).rendering_requested.hidden = false;
-                        (*win_ptr).rendering_requested.blur = false;
-                        (*win_ptr).rendering_requested.x = phys_x;
-                        (*win_ptr).rendering_requested.y = phys_y;
-                        (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                            width: phys_w as u32,
-                            height: phys_h as u32,
-                        });
-                        (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                            width: phys_w as u32,
-                            height: phys_h as u32,
-                        };
-                    }
-                    crate::policy::arrange::WindowClass::StatusBar => {
-                        (*win_ptr).tiling_mode = crate::tiling::TilingMode::Status;
-                        (*win_ptr).wm_requested.tiled = 0;
-                        (*win_ptr).wm_requested.ssd = false;
-                        (*win_ptr).scale = 1.0;
-                        ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
-                        (*win_ptr).rendering_requested.hidden = false;
-                        (*win_ptr).rendering_requested.blur = self.layout.status_background_blur > 0.001;
-                    }
-                    crate::policy::arrange::WindowClass::Hidden => {
-                        ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, false);
-                        (*win_ptr).rendering_requested.hidden = true;
-                    }
-                    crate::policy::arrange::WindowClass::Overlay | crate::policy::arrange::WindowClass::Normal => {
-                        ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, true);
-                        (*win_ptr).rendering_requested.hidden = false;
-
-                        (*win_ptr).tiling_mode = mode;
-
-                        if !(*win_ptr).mode_locked {
-                            if let Some(rule) = self.get_rule_for_window(win_ptr) {
-                                if let Some(rule_ssd) = rule.ssd {
-                                    (*win_ptr).wm_requested.ssd = rule_ssd;
-                                }
-                            }
-                        }
-
-                        if class == crate::policy::arrange::WindowClass::Overlay {
-                            overlay_windows.push(win_ptr);
-                        } else {
-                            normal_windows.push(win_ptr);
-                        }
-                    }
-                }
-            }
-
-            let bw = 0;
-
-            let overlay_params = crate::policy::arrange::OverlayParams {
+        let params = crate::policy::arrange::ArrangeParams {
+            bar_height: self.layout.bar_height,
+            status_hide_mode: self.status_hide_mode,
+            hide_mode_preview: self.layout.status_module_hide_mode_preview as i32,
+            status_blur: self.layout.status_background_blur > 0.001,
+            window_blur: self.layout.window_blur,
+            opacity_enabled: self.layout.window_opacity,
+            border_color: (self.layout.border_r, self.layout.border_g, self.layout.border_b, self.layout.border_a),
+            overlay: crate::policy::arrange::OverlayParams {
                 overlay_width: self.layout.overlay_width,
                 border_gap: self.layout.overlay_border_gap,
                 position_right: self.layout.overlay_position == "right",
                 cloud_position_default: self.layout.cloud_position_default,
-            };
-            let normal_params = crate::policy::arrange::NormalParams {
+            },
+            normal: crate::policy::arrange::NormalParams {
                 gap_right: self.layout.gap_right,
                 gap_top: self.layout.gap_top,
                 cloud_position_default: self.layout.cloud_position_default,
                 desktop_grid_scale: self.layout.desktop_grid_scale,
-            };
-            let ctx = crate::policy::arrange::PlacementCtx {
-                phys: crate::policy::api::Rect { x: phys_x, y: phys_y, width: phys_w, height: phys_h },
-                usable,
-                pan_x: self.desk_pan_x,
-                pan_y: self.desk_pan_y,
-                zoom: self.desk_zoom,
-            };
+            },
+            pan_x: self.desk_pan_x,
+            pan_y: self.desk_pan_y,
+            zoom: self.desk_zoom,
+        };
 
-            for (sp_idx, &win_ptr) in overlay_windows.iter().enumerate() {
-                if sp_idx == 0 {
-                    let app_id = (*win_ptr).get_app_id_string();
-                    let is_cce_cloud = app_id.as_deref().map_or(false, |id| id.starts_with("cce-cloud"));
+        let plan = crate::policy::arrange::arrange(&window_snaps, &output_snaps, &params);
 
-                    let placement = crate::policy::arrange::place_overlay_window(
-                        &crate::policy::arrange::OverlaySnapshot {
-                            box_geom: crate::policy::api::Rect {
-                                x: (*win_ptr).box_geom.x,
-                                y: (*win_ptr).box_geom.y,
-                                width: (*win_ptr).box_geom.width,
-                                height: (*win_ptr).box_geom.height,
-                            },
-                            min_width: (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32,
-                            is_cloud: is_cce_cloud,
-                            ssd: (*win_ptr).wm_requested.ssd,
-                            decorations_size: (*win_ptr).get_decorations_size(),
-                        },
-                        &overlay_params,
-                        &ctx,
-                    );
-
-                    if let Some(bg) = placement.box_geom_write {
-                        (*win_ptr).box_geom.x = bg.x;
-                        (*win_ptr).box_geom.y = bg.y;
-                        (*win_ptr).box_geom.width = bg.width;
-                        (*win_ptr).box_geom.height = bg.height;
-                    }
-                    (*win_ptr).rendering_requested.x = placement.pos.0;
-                    (*win_ptr).rendering_requested.y = placement.pos.1;
-                    (*win_ptr).scale = 1.0;
-                    (*win_ptr).virtual_x = placement.virtual_pos.0;
-                    (*win_ptr).virtual_y = placement.virtual_pos.1;
-                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                        width: placement.size.0,
-                        height: placement.size.1,
-                    });
-                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                        width: placement.size.0,
-                        height: placement.size.1,
-                    };
-                    (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
-
-                    let is_focused = win_ptr == focused_window;
-                    (*win_ptr).rendering_requested.border = crate::window::Border {
-                        edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
-                        width: bw as u32,
-                        r: self.layout.border_r,
-                        g: self.layout.border_g,
-                        b: self.layout.border_b,
-                        a: self.layout.border_a,
-                    };
-                    (*win_ptr).rendering_requested.blur = self.layout.window_blur;
-                    (*win_ptr).rendering_requested.opacity = crate::policy::arrange::window_opacity(
-                        is_focused,
-                        self.layout.window_opacity,
-                        crate::policy::arrange::OVERLAY_UNFOCUSED_OPACITY,
-                    );
-                } else {
-                    normal_windows.push(win_ptr);
-                }
+        for &output in &active_outputs {
+            if !(*output).background_rect.is_null() {
+                ffi::wlr_scene_node_set_enabled((*output).background_rect as *mut ffi::wlr_scene_node, plan.background_rect_enabled);
             }
+        }
 
-            // Manage entering/exiting Maximized state for normal windows
-            for &win_ptr in &normal_windows {
-                let transition = crate::policy::arrange::maximized_transition(
-                    (*win_ptr).tiling_mode == crate::tiling::TilingMode::Maximized,
-                    (*win_ptr).was_maximized,
-                    ((*win_ptr).box_geom.width, (*win_ptr).box_geom.height),
-                    (
-                        (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32,
-                        (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32,
-                    ),
-                    ((*win_ptr).saved_maximized_width, (*win_ptr).saved_maximized_height),
-                    ((*win_ptr).saved_maximized_virtual_x, (*win_ptr).saved_maximized_virtual_y),
-                );
-                match transition {
-                    Some(crate::policy::arrange::MaximizedTransition::Enter { width, height }) => {
-                        (*win_ptr).saved_maximized_width = width;
-                        (*win_ptr).saved_maximized_height = height;
-                        (*win_ptr).saved_maximized_virtual_x = (*win_ptr).virtual_x;
-                        (*win_ptr).saved_maximized_virtual_y = (*win_ptr).virtual_y;
-                        (*win_ptr).was_maximized = true;
-                        log::info!("[Maximized] Saved window {:?} geometry: {}x{} at ({}, {})", 
-                            (*win_ptr).get_title_string().as_deref().unwrap_or(""), 
-                            width, height, 
-                            (*win_ptr).saved_maximized_virtual_x, (*win_ptr).saved_maximized_virtual_y
-                        );
-                    }
-                    Some(crate::policy::arrange::MaximizedTransition::Exit { width, height, virtual_x, virtual_y }) => {
-                        (*win_ptr).box_geom.width = width;
-                        (*win_ptr).box_geom.height = height;
-                        (*win_ptr).virtual_x = virtual_x;
-                        (*win_ptr).virtual_y = virtual_y;
-                        (*win_ptr).was_maximized = false;
-
-                        (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                            width: width as u32,
-                            height: height as u32,
-                        });
-                        (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                            width: width as u32,
-                            height: height as u32,
-                        };
-                        log::info!("[Maximized] Restored window {:?} geometry: {}x{} at ({}, {})", 
-                            (*win_ptr).get_title_string().as_deref().unwrap_or(""), 
-                            width, height, virtual_x, virtual_y
-                        );
-                    }
-                    None => {}
-                }
+        for (&win_ptr, wp) in win_ptrs.iter().zip(plan.windows.iter()) {
+            if let Some(enabled) = wp.scene_enabled {
+                ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, enabled);
             }
-
-            // Arrange normal windows on the virtual surface
-            for &win_ptr in &normal_windows {
-                let mode = (*win_ptr).tiling_mode;
-                let is_focused = win_ptr == focused_window;
-                let app_id = (*win_ptr).get_app_id_string();
-                let is_cce_cloud = app_id.as_deref().map_or(false, |id| id.starts_with("cce-cloud"));
-
-                let placement = crate::policy::arrange::place_normal_window(
-                    &crate::policy::arrange::NormalSnapshot {
-                        mode,
-                        box_geom: crate::policy::api::Rect {
-                            x: (*win_ptr).box_geom.x,
-                            y: (*win_ptr).box_geom.y,
-                            width: (*win_ptr).box_geom.width,
-                            height: (*win_ptr).box_geom.height,
-                        },
-                        min_size: (
-                            (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32,
-                            (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32,
-                        ),
-                        virtual_pos: ((*win_ptr).virtual_x, (*win_ptr).virtual_y),
-                        active_resize: self.get_active_resize_dimensions(win_ptr),
-                        is_cloud: is_cce_cloud,
-                        saved_maximized_size: ((*win_ptr).saved_maximized_width, (*win_ptr).saved_maximized_height),
-                        saved_maximized_virtual: ((*win_ptr).saved_maximized_virtual_x, (*win_ptr).saved_maximized_virtual_y),
-                    },
-                    &normal_params,
-                    &ctx,
-                );
-
-                (*win_ptr).rendering_requested.x = placement.pos.0;
-                (*win_ptr).rendering_requested.y = placement.pos.1;
-                (*win_ptr).scale = placement.scale;
-                if let Some((vx, vy)) = placement.virtual_write {
-                    (*win_ptr).virtual_x = vx;
-                    (*win_ptr).virtual_y = vy;
-                }
-                if let Some(hidden) = placement.hidden {
-                    (*win_ptr).rendering_requested.hidden = hidden;
-                }
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions {
-                    width: placement.size.0,
-                    height: placement.size.1,
-                });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions {
-                    width: placement.size.0,
-                    height: placement.size.1,
-                };
-                if placement.tiled_all_edges {
-                    (*win_ptr).wm_requested.tiled = 1 | 2 | 4 | 8;
-                }
-
-                // Apply borders, opacity, and blur to normal windows
+            if let Some(hidden) = wp.hidden {
+                (*win_ptr).rendering_requested.hidden = hidden;
+            }
+            if let Some(mode) = wp.tiling_mode {
+                (*win_ptr).tiling_mode = mode;
+            }
+            if let Some(tiled) = wp.tiled {
+                (*win_ptr).wm_requested.tiled = tiled;
+            }
+            if let Some(ssd) = wp.ssd {
+                (*win_ptr).wm_requested.ssd = ssd;
+            }
+            if let Some(scale) = wp.scale {
+                (*win_ptr).scale = scale;
+            }
+            if let Some((x, y)) = wp.pos {
+                (*win_ptr).rendering_requested.x = x;
+                (*win_ptr).rendering_requested.y = y;
+            }
+            if let Some(bg) = wp.box_geom {
+                (*win_ptr).box_geom.x = bg.x;
+                (*win_ptr).box_geom.y = bg.y;
+                (*win_ptr).box_geom.width = bg.width;
+                (*win_ptr).box_geom.height = bg.height;
+            }
+            if let Some((vx, vy)) = wp.virtual_pos {
+                (*win_ptr).virtual_x = vx;
+                (*win_ptr).virtual_y = vy;
+            }
+            if let Some((width, height)) = wp.size {
+                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width, height });
+                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width, height };
+            }
+            if let Some(border) = wp.border {
                 (*win_ptr).rendering_requested.border = crate::window::Border {
                     edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
-                    width: bw as u32,
-                    r: self.layout.border_r,
-                    g: self.layout.border_g,
-                    b: self.layout.border_b,
-                    a: self.layout.border_a,
+                    width: border.width,
+                    r: border.color.0,
+                    g: border.color.1,
+                    b: border.color.2,
+                    a: border.color.3,
                 };
-                (*win_ptr).rendering_requested.blur = self.layout.window_blur;
-                (*win_ptr).rendering_requested.opacity = crate::policy::arrange::window_opacity(
-                    is_focused,
-                    self.layout.window_opacity,
-                    crate::policy::arrange::NORMAL_UNFOCUSED_OPACITY,
-                );
             }
-            // Position status bar windows on this output.
-            // Snapshot the bars (excluding any being interactively dragged),
-            // lay them out in policy code, then apply the placements.
-            let mut status_items: Vec<crate::policy::arrange::StatusBarItem> = Vec::new();
-            let mut status_wins: Vec<*mut Window> = Vec::new();
-
-            for &win_ptr in self.windows.iter() {
-                if win_ptr.is_null() || (*win_ptr).closed {
-                    continue;
-                }
-                if matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
-                    continue;
-                }
-                if let Some(app_id) = (*win_ptr).get_app_id_string() {
-                    if app_id.starts_with("cce-status") {
-                        // Skip if currently being dragged interactively
-                        let mut is_being_dragged = false;
-                        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-                        let mut curr_seat = (*seats_list).next;
-                        while curr_seat != seats_list {
-                            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
-                            if let Some(ref op) = (*seat).op {
-                                if op.window_ptr == win_ptr && matches!(op.op_type, crate::seat::PointerOpType::Move) {
-                                    is_being_dragged = true;
-                                    break;
-                                }
-                            }
-                            curr_seat = (*curr_seat).next;
-                        }
-                        if is_being_dragged {
-                            continue;
-                        }
-
-                        log::info!("[ArrangeStatus] app_id={} status_edge={:?}", app_id, (*win_ptr).status_edge);
-                        status_items.push(crate::policy::arrange::StatusBarItem {
-                            app_id,
-                            edge: (*win_ptr).status_edge,
-                            prev_len: std::cmp::max((*win_ptr).box_geom.width, (*win_ptr).box_geom.height),
-                        });
-                        status_wins.push(win_ptr);
-                    }
-                }
+            if let Some(blur) = wp.blur {
+                (*win_ptr).rendering_requested.blur = blur;
             }
-
-            let placements = crate::policy::arrange::layout_status_bars(
-                &status_items,
-                &crate::policy::arrange::StatusBarLayoutParams {
-                    output: crate::policy::api::Rect {
-                        x: wlr_box.x,
-                        y: wlr_box.y,
-                        width: wlr_box.width,
-                        height: wlr_box.height,
-                    },
-                    bar_height: self.layout.bar_height as u32,
-                    hide_mode: self.status_hide_mode,
-                    hide_mode_preview: self.layout.status_module_hide_mode_preview as i32,
-                },
-            );
-
-            for (&win_ptr, placement) in status_wins.iter().zip(placements.iter()) {
-                if let Some(pl) = placement {
-                    (*win_ptr).rendering_requested.x = pl.x;
-                    (*win_ptr).rendering_requested.y = pl.y;
-                    (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width: pl.width, height: pl.height });
-                    (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width: pl.width, height: pl.height };
-                }
+            if let Some(opacity) = wp.opacity {
+                (*win_ptr).rendering_requested.opacity = opacity;
             }
+            if let Some(((width, height), (vx, vy))) = wp.saved_maximized {
+                (*win_ptr).saved_maximized_width = width;
+                (*win_ptr).saved_maximized_height = height;
+                (*win_ptr).saved_maximized_virtual_x = vx;
+                (*win_ptr).saved_maximized_virtual_y = vy;
+            }
+            if let Some(was_maximized) = wp.was_maximized {
+                (*win_ptr).was_maximized = was_maximized;
+            }
+        }
 
-            // Force configure for all status bar windows on this output so they receive the new geometry immediately
-            for &win_ptr in self.windows.iter() {
-                if !win_ptr.is_null() && !(*win_ptr).closed && (*win_ptr).is_status_bar() {
-                    if (*win_ptr).wm_requested.dimensions.is_some() {
-                        (*win_ptr).manage_finish();
-                    }
+        // Force configure for all status bar windows so they receive the new geometry immediately
+        for &win_ptr in self.windows.iter() {
+            if !win_ptr.is_null() && !(*win_ptr).closed && (*win_ptr).is_status_bar() {
+                if (*win_ptr).wm_requested.dimensions.is_some() {
+                    (*win_ptr).manage_finish();
                 }
             }
         }
+
         // If the focused window is no longer visible, refocus
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr_seat = (*seats_list).next;

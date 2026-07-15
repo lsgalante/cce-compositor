@@ -1012,6 +1012,13 @@ impl Window {
         if self.wm_requested.ssd {
             return (0, 0);
         }
+        self.measure_decorations()
+    }
+
+    /// Raw client-side decoration size (surface minus geometry), regardless
+    /// of the current SSD setting. Callers that honor SSD gate on it
+    /// themselves.
+    pub unsafe fn measure_decorations(&self) -> (i32, i32) {
         let surface = self.root_surface();
         if surface.is_null() {
             return (0, 0);
