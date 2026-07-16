@@ -77,6 +77,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  pointer-click [button]             (left|right|middle|back|forward or evdev code)");
     print("  pointer-press [button]             (held until pointer-release — drives drags)");
     print("  pointer-release [button]");
+    print("  migrate-input                      (local: move config.kdl keybindings to input.kdl)");
     print("  keypress <keycode>                 (evdev code; press+release to the focused client)");
     print("  key-down <keycode>                 (modifier codes — ctrl 29/97, shift 42/54,");
     print("  key-up <keycode>                    alt 56/100, super 125/126 — update client");
@@ -91,6 +92,12 @@ pub fn run_cce_ctl(args: Vec<String>) {
  
     if args[1] == "--help" || args[1] == "-h" || args[1] == "help" {
         usage(&args[0], false);
+        return;
+    }
+
+    // Local file operation — no compositor needed.
+    if args[1] == "migrate-input" {
+        crate::migrate_input::run();
         return;
     }
  

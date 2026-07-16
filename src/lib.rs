@@ -109,3 +109,6 @@ pub use run_server::run_server;
 #[path = "cce_ctl.rs"]
 pub mod cce_ctl;
 pub use cce_ctl::run_cce_ctl;
+
+#[path = "migrate_input.rs"]
+pub mod migrate_input;

@@ -188,13 +188,9 @@ pub struct StartupConfig {
     pub restart: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Keybind {
-    pub mods: u32,
-    pub keysym: u32,
-    pub action: Action,
-    pub command: Option<String>,
-}
+// The compositor's resolved keybind is the policy crate's `Binding`
+// (mods, keysym, action, command), kept under its historical name here.
+pub use cce_window_manager::bindings::Binding as Keybind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PointerBind {
@@ -677,6 +673,24 @@ pub fn parse_action(s: &str) -> Action {
         Action::Resize
     } else {
         Action::None
+    }
+}
+
+/// Warn when a spawn/toggle binding's executable can't be found (PATH lookup;
+/// absolute paths are checked directly).
+fn warn_if_command_missing(command: Option<&str>) {
+    let Some(cmd_str) = command else { return };
+    let cmd_exe = cmd_str.split_whitespace().next().unwrap_or("");
+    if cmd_exe.is_empty() {
+        return;
+    }
+    if let Ok(path_var) = std::env::var("PATH") {
+        for path_dir in std::env::split_paths(&path_var) {
+            if path_dir.join(cmd_exe).is_file() {
+                return;
+            }
+        }
+        eprintln!("[WARNING] Configured keybinding command not found in PATH: {}", cmd_exe);
     }
 }
 
@@ -1609,8 +1623,20 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
 
     let path_buf = std::path::Path::new(path);
     let input_path = path_buf.parent().unwrap_or_else(|| std::path::Path::new(".")).join("input.kdl");
+    let mut wm_domain_entries: Vec<cce_ui::input::BindingEntry> = Vec::new();
     if input_path.exists() {
         if let Ok(input_content) = fs::read_to_string(&input_path) {
+            // New domain-scoped format: a `cce-window-manager { ... }` block
+            // of `<action_name> "<chord>"` bindings. Other domains belong to
+            // clients/widgets and are ignored here.
+            match cce_ui::input::InputConfig::parse(&input_content) {
+                Ok(ic) => {
+                    wm_domain_entries = ic.domain(cce_ui::input::WINDOW_MANAGER_DOMAIN).to_vec();
+                }
+                Err(e) => eprintln!("[WARNING] {}: {}", input_path.display(), e),
+            }
+            // Legacy input.kdl contents: root-level key_bindings nodes and
+            // the input section.
             if let Ok(input_config) = parse_kdl_config(&input_content) {
                 config.key_bindings.extend(input_config.key_bindings);
                 if input_config.input.is_some() {
@@ -1704,6 +1730,37 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     }
 
     state.keybinds.clear();
+    let mut table = cce_window_manager::bindings::BindingTable::new();
+
+    // Primary source: the `cce-window-manager` domain of input.kdl.
+    for entry in &wm_domain_entries {
+        let Some(chord) = cce_window_manager::bindings::parse_chord(&entry.chord) else {
+            eprintln!("[WARNING] input.kdl: invalid chord {:?} for {}", entry.chord, entry.name);
+            continue;
+        };
+        let Some(action) = Action::from_name(&entry.name) else {
+            eprintln!("[WARNING] input.kdl: unknown window-manager action {:?}", entry.name);
+            continue;
+        };
+        let command = if action == Action::Spawn || action == Action::Toggle {
+            warn_if_command_missing(entry.command.as_deref());
+            entry.command.clone()
+        } else {
+            None
+        };
+        let keysym = parse_keysym(&chord.key);
+        if keysym == 0 {
+            eprintln!("[WARNING] input.kdl: unknown key {:?} in chord {:?}", chord.key, entry.chord);
+            continue;
+        }
+        if table.add(Keybind { mods: chord.mods, keysym, action, command }) {
+            eprintln!("[WARNING] input.kdl: {:?} is bound more than once", entry.chord);
+        }
+    }
+
+    // Legacy sources: config.kdl `key_bindings` nodes (including the
+    // synthesized brightness binds) and the `window_manager` section.
+    // input.kdl wins on chord conflicts via add_default.
     let mut seen = std::collections::HashSet::new();
     for kb in &config.key_bindings {
         let (mods_str, key_str) = if kb.mods.is_empty() {
@@ -1717,185 +1774,43 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         };
         let mods = parse_modifiers(&mods_str);
         let keysym = parse_keysym(&key_str);
-        
-        let binding_key = (mods, keysym);
-        if !seen.insert(binding_key) {
+
+        if !seen.insert((mods, keysym)) {
             eprintln!("[WARNING] Keybinding conflict: multiple actions mapped to mods={:?}, key={:?}", mods_str, key_str);
         }
 
         let action = parse_action(&kb.action);
         let command = if action == Action::Spawn || action == Action::Toggle {
-            if let Some(ref cmd_str) = kb.command {
-                let cmd_exe = cmd_str.split_whitespace().next().unwrap_or("");
-                if !cmd_exe.is_empty() {
-                    let mut found = false;
-                    if let Ok(path_var) = std::env::var("PATH") {
-                        for path_dir in std::env::split_paths(&path_var) {
-                            if path_dir.join(cmd_exe).is_file() {
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !found {
-                        eprintln!("[WARNING] Configured keybinding command not found in PATH: {}", cmd_exe);
-                    }
-                }
-            }
+            warn_if_command_missing(kb.command.as_deref());
             kb.command.clone()
         } else {
             None
         };
-        state.keybinds.push(Keybind {
-            mods,
-            keysym,
-            action,
-            command,
-        });
+        table.add_default(Keybind { mods, keysym, action, command });
     }
 
     if let Some(ref wm_config) = config.window_manager {
-        if let Some(ref close_win_str) = wm_config.close_window {
-            let (mods_str, key_str) = if let Some(last_plus) = close_win_str.rfind('+') {
-                (close_win_str[..last_plus].to_string(), close_win_str[last_plus+1..].to_string())
-            } else {
-                ("".to_string(), close_win_str.clone())
-            };
-            let mods = parse_modifiers(&mods_str);
-            let keysym = parse_keysym(&key_str);
-            state.keybinds.push(Keybind {
-                mods,
-                keysym,
-                action: Action::Close,
-                command: None,
-            });
-        }
-        if let Some(ref toggle_fs_str) = wm_config.toggle_fullscreen {
-            let (mods_str, key_str) = if let Some(last_plus) = toggle_fs_str.rfind('+') {
-                (toggle_fs_str[..last_plus].to_string(), toggle_fs_str[last_plus+1..].to_string())
-            } else {
-                ("".to_string(), toggle_fs_str.clone())
-            };
-            let mods = parse_modifiers(&mods_str);
-            let keysym = parse_keysym(&key_str);
-            state.keybinds.push(Keybind {
-                mods,
-                keysym,
-                action: Action::Fullscreen,
-                command: None,
-            });
-        }
-        if let Some(ref switcher_str) = wm_config.window_switcher {
-            let (mods_str, key_str) = if let Some(last_plus) = switcher_str.rfind('+') {
-                (switcher_str[..last_plus].to_string(), switcher_str[last_plus+1..].to_string())
-            } else {
-                ("".to_string(), switcher_str.clone())
-            };
-            let mods = parse_modifiers(&mods_str);
-            let keysym = parse_keysym(&key_str);
-            state.keybinds.push(Keybind {
-                mods,
-                keysym,
-                action: Action::WindowSwitcher,
-                command: None,
-            });
+        let wm_section_binds = [
+            (&wm_config.close_window, Action::Close),
+            (&wm_config.toggle_fullscreen, Action::Fullscreen),
+            (&wm_config.window_switcher, Action::WindowSwitcher),
+        ];
+        for (chord_str, action) in wm_section_binds {
+            let Some(chord_str) = chord_str else { continue };
+            if let Some(chord) = cce_window_manager::bindings::parse_chord(chord_str) {
+                let keysym = parse_keysym(&chord.key);
+                table.add_default(Keybind { mods: chord.mods, keysym, action, command: None });
+            }
         }
     }
 
-    let super_mod = parse_modifiers("super");
-    let left_sym = parse_keysym("Left");
-    let right_sym = parse_keysym("Right");
-    if !state.keybinds.iter().any(|b| b.mods == super_mod && b.keysym == left_sym) {
-        state.keybinds.push(Keybind {
-            mods: super_mod,
-            keysym: left_sym,
-            action: Action::OverlayLeft,
-            command: None,
-        });
-    }
-    if !state.keybinds.iter().any(|b| b.mods == super_mod && b.keysym == right_sym) {
-        state.keybinds.push(Keybind {
-            mods: super_mod,
-            keysym: right_sym,
-            action: Action::OverlayRight,
-            command: None,
-        });
+    // Stock defaults from the policy crate; never shadow configured chords.
+    for d in cce_window_manager::bindings::DEFAULT_BINDINGS {
+        let keysym = parse_keysym(d.key);
+        table.add_default(Keybind { mods: d.mods, keysym, action: d.action, command: None });
     }
 
-    let super_ctrl_mod = parse_modifiers("super+ctrl");
-    let up_sym = parse_keysym("Up");
-    let down_sym = parse_keysym("Down");
-    let equal_sym = parse_keysym("equal");
-    let minus_sym = parse_keysym("minus");
-
-    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == up_sym) {
-        state.keybinds.push(Keybind {
-            mods: super_ctrl_mod,
-            keysym: up_sym,
-            action: Action::PanUp,
-            command: None,
-        });
-    }
-    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == down_sym) {
-        state.keybinds.push(Keybind {
-            mods: super_ctrl_mod,
-            keysym: down_sym,
-            action: Action::PanDown,
-            command: None,
-        });
-    }
-    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == left_sym) {
-        state.keybinds.push(Keybind {
-            mods: super_ctrl_mod,
-            keysym: left_sym,
-            action: Action::PanLeft,
-            command: None,
-        });
-    }
-    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == right_sym) {
-        state.keybinds.push(Keybind {
-            mods: super_ctrl_mod,
-            keysym: right_sym,
-            action: Action::PanRight,
-            command: None,
-        });
-    }
-    let super_ctrl_shift_mod = parse_modifiers("super+ctrl+shift");
-    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_shift_mod && b.keysym == equal_sym) {
-        state.keybinds.push(Keybind {
-            mods: super_ctrl_shift_mod,
-            keysym: equal_sym,
-            action: Action::ZoomIn,
-            command: None,
-        });
-    }
-    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == minus_sym) {
-        state.keybinds.push(Keybind {
-            mods: super_ctrl_mod,
-            keysym: minus_sym,
-            action: Action::ZoomOut,
-            command: None,
-        });
-    }
-    if !state.keybinds.iter().any(|b| b.mods == super_ctrl_mod && b.keysym == equal_sym) {
-        state.keybinds.push(Keybind {
-            mods: super_ctrl_mod,
-            keysym: equal_sym,
-            action: Action::ZoomReset,
-            command: None,
-        });
-    }
-
-    let super_shift_mod = parse_modifiers("super+shift");
-    let r_sym = parse_keysym("r");
-    if !state.keybinds.iter().any(|b| b.mods == super_shift_mod && b.keysym == r_sym) {
-        state.keybinds.push(Keybind {
-            mods: super_shift_mod,
-            keysym: r_sym,
-            action: Action::Reload,
-            command: None,
-        });
-    }
+    state.keybinds = table.into_bindings();
 
     state.pointer_binds.clear();
     for pb in &config.pointer_bind {
