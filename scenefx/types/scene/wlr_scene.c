@@ -3007,16 +3007,24 @@ static bool apply_blur_region(struct wlr_scene_node *node, struct blur_data *blu
 	if (pixman_region32_intersect(&intersection, &expanded_damage, &node_visible_region)) {
 		should_compensate_blur = true;
 
-		// Expand the render damage to re-render surrounding blur nodes
-		pixman_region32_union(&render_data->damage, &render_data->damage, &intersection);
+		// Re-render the node's entire blur region, not just the damaged
+		// sliver: the blur samples the framebuffer up to sample_size beyond
+		// the damage, where pixels still hold the previous frame's final
+		// composited content — including this node's own content drawn above
+		// the blur. Re-blurring only the sliver bakes those stale samples
+		// into part of the backdrop while neighboring pixels keep last
+		// frame's blur, which shimmers whenever damage sweeps underneath
+		// (e.g. grid lines during a desktop pan). Re-blurring the whole node
+		// computes every pixel from the same freshly rendered below-content.
+		pixman_region32_union(&render_data->damage, &render_data->damage, &node_visible_region);
 		// Also make sure that the backend also knows about the new
 		// damage. Very important
 		output_state->committed |= WLR_OUTPUT_STATE_DAMAGE;
-		pixman_region32_union(&output_state->damage, &output_state->damage, &intersection);
+		pixman_region32_union(&output_state->damage, &output_state->damage, &node_visible_region);
 
 		// Expand it once more to get the blur padding region
 		// which is key for artifact removal :)
-		wlr_region_expand(&intersection, &intersection, sample_size);
+		wlr_region_expand(&intersection, &node_visible_region, sample_size);
 		// Don't re-add already added rectangles
 		pixman_region32_subtract(&intersection, &intersection, blur_padding_region);
 		pixman_region32_union(blur_padding_region, blur_padding_region, &intersection);
@@ -3439,11 +3447,18 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 		pixman_region32_init(&original_damage);
 		pixman_region32_copy(&original_damage, &render_data.damage);
 
-		// Only compensate for blur artifacts when the damage doesn't span
-		// the whole output
-		const bool full_damage =
-			original_damage.extents.x2 - original_damage.extents.x1 >= output->width
-			&& original_damage.extents.y2 - original_damage.extents.y1 >= output->height;
+		// Only compensate for blur artifacts when the damage doesn't cover
+		// the whole output. Test actual coverage, not extents: scattered
+		// damage (e.g. every grid cell rect moving during a desktop pan)
+		// has full-output extents while being mostly holes, and skipping
+		// compensation then leaves each blur node re-blurring only slivers
+		// against stale framebuffer content.
+		pixman_box32_t full_output_box = {
+			.x1 = 0, .y1 = 0,
+			.x2 = output->width, .y2 = output->height,
+		};
+		const bool full_damage = pixman_region32_contains_rectangle(
+			&original_damage, &full_output_box) == PIXMAN_REGION_IN;
 
 		// The extra region we copy and paste onto the framebuffer after render
 		// for artifact removal
