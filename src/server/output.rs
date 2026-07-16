@@ -486,7 +486,23 @@ impl Output {
         self.draw_grid();
         self.draw_adjust_overlay();
 
-        if !ffi::wlr_scene_output_needs_frame(self.scene_output) {
+        // A parked `ccectl screenshot` targeting this output forces a render
+        // even without damage so there is a fresh buffer to read back.
+        let pending_shot = {
+            let wm = &mut (*self.server).wm;
+            if wm
+                .pending_screenshot
+                .as_ref()
+                .map(|s| s.output == self as *mut Output)
+                .unwrap_or(false)
+            {
+                wm.pending_screenshot.take()
+            } else {
+                None
+            }
+        };
+
+        if pending_shot.is_none() && !ffi::wlr_scene_output_needs_frame(self.scene_output) {
             return Ok(());
         }
 
@@ -518,6 +534,22 @@ impl Output {
         if !ffi::wlr_output_commit_state(self.wlr_output, &state) {
             ffi::wlr_output_state_finish(&mut state);
             return Err("Failed to commit state");
+        }
+
+        // Read the just-committed frame back while the state's buffer is
+        // still alive; encode/notify happen on a worker thread.
+        if let Some(shot) = pending_shot {
+            if state.buffer.is_null() {
+                log::warn!("screenshot: output state has no buffer");
+            } else {
+                crate::screenshot::capture_state_buffer(
+                    (*self.server).renderer,
+                    state.buffer,
+                    ffi::river_wlr_output_get_width(self.wlr_output),
+                    ffi::river_wlr_output_get_height(self.wlr_output),
+                    shot,
+                );
+            }
         }
 
         ffi::wlr_output_state_finish(&mut state);

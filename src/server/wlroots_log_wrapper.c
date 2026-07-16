@@ -603,6 +603,11 @@ int river_wlr_surface_get_height(struct wlr_surface *surface) {
 	return surface->current.height;
 }
 
+void river_wlr_surface_get_buffer_size(struct wlr_surface *surface, int *width, int *height) {
+	*width = surface->current.buffer_width;
+	*height = surface->current.buffer_height;
+}
+
 struct wlr_keyboard *river_wlr_input_method_keyboard_grab_v2_get_keyboard(struct wlr_input_method_keyboard_grab_v2 *grab) {
 	return grab->keyboard;
 }

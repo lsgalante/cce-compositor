@@ -29,6 +29,8 @@ pub use cce_window_manager::tiling;
 pub mod config;
 #[path = "server/ipc_server.rs"]
 pub mod ipc_server;
+#[path = "server/screenshot.rs"]
+pub mod screenshot;
 #[path = "server/status_server.rs"]
 pub mod status_server;
 #[path = "server/scene_node_data.rs"]

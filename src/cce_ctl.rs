@@ -64,6 +64,9 @@ fn usage(name: &str, to_stderr: bool) {
     print("  input <device_name|*> scroll-factor <value>");
     print("  config-done");
     print("  spawn <command>");
+    print("  screenshot                          # capture the screen to ~/Pictures/screenshots");
+    print("  screenshot region <x> <y> <w> <h>   # capture an on-screen region (logical px)");
+    print("  screenshot window [app_id|id]       # capture a window (focused if omitted; works off-screen)");
     print("  notify <title> [body]");
     print("  bind <mods> <keysym> <action> [args...]");
     print("  pbind <mods> <button> <action>");

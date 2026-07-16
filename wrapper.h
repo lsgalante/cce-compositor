@@ -244,6 +244,7 @@ struct wlr_surface *river_wlr_seat_get_keyboard_focused_surface(struct wlr_seat 
 
 int river_wlr_surface_get_width(struct wlr_surface *surface);
 int river_wlr_surface_get_height(struct wlr_surface *surface);
+void river_wlr_surface_get_buffer_size(struct wlr_surface *surface, int *width, int *height);
 struct wlr_keyboard *river_wlr_input_method_keyboard_grab_v2_get_keyboard(struct wlr_input_method_keyboard_grab_v2 *grab);
 struct wl_signal *river_wlr_input_method_keyboard_grab_v2_get_destroy_signal(struct wlr_input_method_keyboard_grab_v2 *grab);
 

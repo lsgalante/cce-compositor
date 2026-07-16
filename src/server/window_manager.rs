@@ -75,6 +75,9 @@ pub struct WindowManager {
     pub gesture_binds: Vec<crate::config::GestureBind>,
     pub ipc_rx: Option<std::sync::mpsc::Receiver<crate::ipc_server::IpcRequest>>,
     pub ipc_timer: *mut ffi::wl_event_source,
+    /// A full-output/region screenshot parked for the next composited frame
+    /// (`ccectl screenshot`); consumed by `Output::render_and_commit`.
+    pub pending_screenshot: Option<crate::screenshot::PendingScreenshot>,
     pub startup: Vec<crate::config::StartupConfig>,
     pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
     pub status_sender: Option<crate::status_server::StatusSender>,
@@ -152,6 +155,7 @@ impl WindowManager {
         self.target_desk_pan_y = None;
         self.animation_timer = std::ptr::null_mut();
         self.desk_zoom = 1.0;
+        self.pending_screenshot = None;
         self.mode = WindowManagerMode::Normal;
         self.global_layout = crate::tiling::TilingMode::Cascade;
         self.restore_queue = Vec::new();
@@ -2606,6 +2610,84 @@ impl WindowManager {
                     (w * self.desk_zoom).round() as i32,
                     (h * self.desk_zoom).round() as i32,
                 )
+            }
+            "screenshot" => {
+                // screenshot                        → the enabled output's next frame
+                // screenshot region <x> <y> <w> <h> → on-screen region (logical px)
+                // screenshot window [app_id|id]     → window content, even off-viewport
+                let path = crate::screenshot::default_path();
+                match parts.get(1).copied() {
+                    Some("window") => {
+                        let target: *mut Window = if parts.len() >= 3 {
+                            self.find_window_by_query(&parts[2..].join(" "))
+                        } else if let Some(seat) = self.first_seat() {
+                            match (*seat).focused {
+                                crate::seat::Focus::Window(w) => w,
+                                _ => std::ptr::null_mut(),
+                            }
+                        } else {
+                            std::ptr::null_mut()
+                        };
+                        if target.is_null() {
+                            return "error: window not found\n".to_string();
+                        }
+                        match crate::screenshot::capture_window(target, path) {
+                            Ok(p) => format!("ok {}\n", p),
+                            Err(e) => format!("error: {}\n", e),
+                        }
+                    }
+                    None | Some("region") => {
+                        // Region args are logical on-screen coordinates relative to
+                        // the output; the capture crops the physical buffer.
+                        let region_logical = if parts.get(1) == Some(&"region") {
+                            let vals: Vec<f64> = parts[2..].iter().filter_map(|p| p.parse().ok()).collect();
+                            if vals.len() != 4 {
+                                return "error: usage: screenshot region <x> <y> <w> <h>\n".to_string();
+                            }
+                            Some((vals[0], vals[1], vals[2], vals[3]))
+                        } else {
+                            None
+                        };
+
+                        // First enabled output (same walk as center-window).
+                        let mut target_out: *mut crate::output::Output = std::ptr::null_mut();
+                        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+                        let mut curr_out = (*outputs_list).next;
+                        while curr_out != outputs_list {
+                            let output = crate::container_of!(curr_out, crate::output::Output, link);
+                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                                target_out = output;
+                                break;
+                            }
+                            curr_out = (*curr_out).next;
+                        }
+                        if target_out.is_null() {
+                            return "error: no enabled output\n".to_string();
+                        }
+
+                        let region = region_logical.map(|(x, y, w, h)| {
+                            // logical → buffer px via the output's effective scale.
+                            let buf_w = ffi::river_wlr_output_get_width((*target_out).wlr_output) as f64;
+                            let layout_w = (*target_out).sent.box_layout().width.max(1) as f64;
+                            let scale = buf_w / layout_w;
+                            ffi::wlr_box {
+                                x: (x * scale).round() as i32,
+                                y: (y * scale).round() as i32,
+                                width: (w * scale).round() as i32,
+                                height: (h * scale).round() as i32,
+                            }
+                        });
+
+                        self.pending_screenshot = Some(crate::screenshot::PendingScreenshot {
+                            output: target_out,
+                            region,
+                            path: path.clone(),
+                        });
+                        ffi::wlr_output_schedule_frame((*target_out).wlr_output);
+                        format!("ok {}\n", path.display())
+                    }
+                    Some(other) => format!("error: unknown screenshot target: {}\n", other),
+                }
             }
             "exit" => {
                 self.execute_action(&crate::config::Action::Exit, None);
