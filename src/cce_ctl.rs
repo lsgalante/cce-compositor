@@ -37,6 +37,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  minimize");
     print("  focus-next");
     print("  focus-prev");
+    print("  focus-up | focus-down | focus-left | focus-right");
     print("  window-switcher            # open the alt-tab window switcher (cce-cloud overlay)");
     print("  fullscreen");
     print("  mode-next");

@@ -1771,6 +1771,54 @@ impl WindowManager {
                     }
                 }
             }
+            Action::FocusUp | Action::FocusDown | Action::FocusLeft | Action::FocusRight => {
+                if let Some(seat) = self.first_seat() {
+                    let focused_win = if let crate::seat::Focus::Window(fw) = (*seat).focused {
+                        fw
+                    } else {
+                        std::ptr::null_mut()
+                    };
+
+                    let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
+                    let mut curr = (*render_list).next;
+                    let mut visible_windows = Vec::new();
+                    while curr != render_list {
+                        let next = (*curr).next;
+                        let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
+                        if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
+                            if !window.is_null() && !(*window).closed && !(*window).minimized {
+                                let is_status_bar = (*window).get_app_id_string()
+                                    .map_or(false, |aid| aid.starts_with("cce-status"));
+                                if !is_status_bar {
+                                    visible_windows.push(window);
+                                }
+                            }
+                        }
+                        curr = next;
+                    }
+
+                    // Window centers on the virtual surface — the policy
+                    // crate picks the winner, the seat applies it.
+                    let centers: Vec<(f64, f64)> = visible_windows
+                        .iter()
+                        .map(|&w| {
+                            (
+                                (*w).virtual_x + (*w).box_geom.width as f64 * (*w).scale / 2.0,
+                                (*w).virtual_y + (*w).box_geom.height as f64 * (*w).scale / 2.0,
+                            )
+                        })
+                        .collect();
+                    let focused_idx = visible_windows.iter().position(|&w| w == focused_win);
+                    let dir = crate::policy::focus::Direction::from_action(*action)
+                        .expect("arm only matches directional focus actions");
+                    if let Some(target_idx) = crate::policy::focus::directional_focus(&centers, focused_idx, dir) {
+                        let target_win = visible_windows[target_idx];
+                        (*seat).focus(crate::seat::Focus::Window(target_win));
+                        self.raise_window(target_win);
+                        self.dirty_windowing();
+                    }
+                }
+            }
             Action::WindowSwitcher => {
                 self.launch_window_switcher();
             }
@@ -2438,6 +2486,22 @@ impl WindowManager {
             }
             "focus-prev" => {
                 self.execute_action(&crate::config::Action::FocusPrev, None);
+                "ok\n".to_string()
+            }
+            "focus-up" => {
+                self.execute_action(&crate::config::Action::FocusUp, None);
+                "ok\n".to_string()
+            }
+            "focus-down" => {
+                self.execute_action(&crate::config::Action::FocusDown, None);
+                "ok\n".to_string()
+            }
+            "focus-left" => {
+                self.execute_action(&crate::config::Action::FocusLeft, None);
+                "ok\n".to_string()
+            }
+            "focus-right" => {
+                self.execute_action(&crate::config::Action::FocusRight, None);
                 "ok\n".to_string()
             }
             "window-switcher" => {
