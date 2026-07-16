@@ -111,6 +111,13 @@ pub fn extract_from_config(content: &str) -> Result<Extracted, String> {
             ] {
                 let Some(c) = child(children, prop) else { continue };
                 let Some(chord) = first_arg_string(c) else { continue };
+                let normalized = chord.to_lowercase().replace('-', "_");
+                if normalized.starts_with("swipe") || normalized.starts_with("pinch") {
+                    // A gesture binding (e.g. toggle_overview "swipe_down"),
+                    // consumed by the compositor's gesture path — not a
+                    // keybind, nothing to migrate.
+                    continue;
+                }
                 if !valid_chord(&chord) {
                     out.warnings.push(format!("window_manager.{}: invalid chord {:?} skipped", prop, chord));
                     continue;
@@ -289,11 +296,11 @@ window_manager {
     fn extracts_all_legacy_sources() {
         let x = extract_from_config(CONFIG).unwrap();
         // 2 nested spawns + 1 block toggle + 3 window_manager entries; the
-        // unknown action, the bad modifier, and the gesture-name chord are
-        // skipped with warnings.
+        // unknown action and the bad modifier warn, the gesture value
+        // (toggle_overview "swipe_down") is silently left to the gesture path.
         assert_eq!(x.wm.len(), 6);
         assert!(!x.wm.iter().any(|e| e.chord == "swipe_down"));
-        assert_eq!(x.warnings.len(), 4); // bogus action, hyper chord, swipe_down, list/tree mismatch
+        assert_eq!(x.warnings.len(), 3); // bogus action, hyper chord, list/tree mismatch
         let spawn = x.wm.iter().find(|e| e.chord == "super+d").unwrap();
         assert_eq!(spawn.name, "spawn");
         assert_eq!(spawn.command.as_deref(), Some("cce-cloud --apps"));
