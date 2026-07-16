@@ -103,7 +103,11 @@ pub struct WindowManager {
     pub last_viewport_zoom: f64,
     pub last_viewport_pan_x: f64,
     pub last_viewport_pan_y: f64,
+    /// True while a viewport zoom/pan gesture is in progress (blur suppressed).
+    /// Cleared by `viewport_settle_timer` a short debounce after the last motion,
+    /// so blur restores exactly once when the gesture truly stops.
     pub viewport_is_active: bool,
+    pub viewport_settle_timer: *mut ffi::wl_event_source,
     pub clean_exit_in_progress: bool,
     pub clean_exit_timer: *mut ffi::wl_event_source,
 }
@@ -154,6 +158,8 @@ impl WindowManager {
         self.target_desk_pan_x = None;
         self.target_desk_pan_y = None;
         self.animation_timer = std::ptr::null_mut();
+        self.viewport_is_active = false;
+        self.viewport_settle_timer = std::ptr::null_mut();
         self.desk_zoom = 1.0;
         self.pending_screenshot = None;
         self.mode = WindowManagerMode::Normal;
@@ -549,6 +555,10 @@ impl WindowManager {
         if !self.animation_timer.is_null() {
             ffi::wl_event_source_remove(self.animation_timer);
             self.animation_timer = std::ptr::null_mut();
+        }
+        if !self.viewport_settle_timer.is_null() {
+            ffi::wl_event_source_remove(self.viewport_settle_timer);
+            self.viewport_settle_timer = std::ptr::null_mut();
         }
         wl_listener_remove(&mut self.server_destroy);
     }
@@ -1327,36 +1337,45 @@ impl WindowManager {
     pub unsafe fn update_viewport_local(&mut self) {
         let zoom_changed = self.desk_zoom != self.last_viewport_zoom;
         let pan_changed = self.desk_pan_x != self.last_viewport_pan_x || self.desk_pan_y != self.last_viewport_pan_y;
-        let active = zoom_changed || pan_changed;
+        let moved = zoom_changed || pan_changed;
 
         self.last_viewport_zoom = self.desk_zoom;
         self.last_viewport_pan_x = self.desk_pan_x;
         self.last_viewport_pan_y = self.desk_pan_y;
-
-        let was_active = self.viewport_is_active;
-        self.viewport_is_active = active;
 
         self.arrange_views();
         // Clear rendering dirty flag so we don't trigger the idle callback's IPC handshake
         self.rendering_scheduled.dirty = false;
         self.remove_dirty_idle();
 
-        if active {
+        // Blur is toggled at most twice per gesture: off the moment real motion
+        // starts, on once the debounce timer confirms motion has stopped. During
+        // motion (and the brief gaps between discrete motion updates) the viewport
+        // stays "active" so blur is not re-enabled mid-gesture — that on/off churn
+        // was the flicker of the blurred desktop grid behind transparent windows.
+        if moved {
+            self.viewport_is_active = true;
             for &window in self.windows.iter() {
                 if !window.is_null() {
                     (*window).render_viewport_update();
                 }
             }
-        } else if was_active {
+            // (Re)arm the settle debounce: while motion keeps arriving this pushes
+            // the settle out, so it only fires once the gesture truly ends.
+            self.arm_viewport_settle_timer();
+        } else if self.viewport_is_active {
+            // A gap between motion updates within an ongoing gesture: keep blur
+            // suppressed and let the settle timer decide when the gesture ended.
             for &window in self.windows.iter() {
                 if !window.is_null() {
-                    (*window).render_finish();
+                    (*window).render_viewport_update();
                 }
             }
         } else {
+            // Stationary viewport: hold the finished, blurred state.
             for &window in self.windows.iter() {
                 if !window.is_null() {
-                    (*window).render_viewport_update();
+                    (*window).render_finish();
                 }
             }
         }
@@ -1384,6 +1403,48 @@ impl WindowManager {
         }
     }
 
+    /// (Re)arm the debounce that restores backdrop blur once viewport motion
+    /// stops. Called on every motion frame, so continuous panning keeps pushing
+    /// the settle out; it only fires `VIEWPORT_SETTLE_MS` after the last motion.
+    unsafe fn arm_viewport_settle_timer(&mut self) {
+        if self.viewport_settle_timer.is_null() {
+            let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+            self.viewport_settle_timer = ffi::wl_event_loop_add_timer(
+                event_loop,
+                Some(handle_viewport_settle_tick),
+                self as *mut WindowManager as *mut _,
+            );
+        }
+        if !self.viewport_settle_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.viewport_settle_timer, VIEWPORT_SETTLE_MS);
+        }
+    }
+
+    /// Restore the settled (blurred) render state for every window and repaint.
+    /// Runs once the settle debounce confirms the gesture has ended. Window
+    /// positions are already final from the last motion frame's arrange pass, so
+    /// this only flips each window back to its finished (blur-on) render.
+    unsafe fn finish_viewport_settle(&mut self) {
+        if !self.viewport_is_active {
+            return;
+        }
+        self.viewport_is_active = false;
+        for &window in self.windows.iter() {
+            if !window.is_null() {
+                (*window).render_finish();
+            }
+        }
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*outputs_list).next;
+        while curr != outputs_list {
+            let next = (*curr).next;
+            let output = crate::container_of!(curr, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                ffi::wlr_output_schedule_frame((*output).wlr_output);
+            }
+            curr = next;
+        }
+    }
 
     pub unsafe fn focused_window(&self) -> *mut crate::window::Window {
         let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
@@ -3576,6 +3637,22 @@ unsafe extern "C" fn handle_destroy_wm_resource(resource: *mut ffi::wl_resource)
         WindowManagerState::Manage => (*wm).manage_finish(),
         WindowManagerState::Render => (*wm).render_finish(),
     }
+}
+
+/// Debounce, in ms, between the last viewport motion and blur being restored.
+/// Long enough to outlast the ~16ms gaps between discrete pan/zoom updates (so
+/// blur is not restored mid-gesture), short enough that blur returns promptly.
+const VIEWPORT_SETTLE_MS: i32 = 120;
+
+/// One-shot timer callback: the viewport has been still for `VIEWPORT_SETTLE_MS`,
+/// so restore the blurred render state.
+pub(crate) unsafe extern "C" fn handle_viewport_settle_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = data as *mut WindowManager;
+    if wm.is_null() {
+        return 0;
+    }
+    (*wm).finish_viewport_settle();
+    0
 }
 
 pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
