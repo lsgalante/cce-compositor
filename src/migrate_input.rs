@@ -230,7 +230,7 @@ pub fn run() {
     if let Some(bak) = backup(&input_path) {
         println!("backed up {} -> {}", input_path.display(), bak.display());
     }
-    let mut write = |domain: &str, entries: &[BindingEntry], added: usize| {
+    let write = |domain: &str, entries: &[BindingEntry], added: usize| {
         if added == 0 {
             return;
         }
