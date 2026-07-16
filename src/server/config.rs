@@ -246,18 +246,35 @@ pub struct TouchpadConfig {
     pub dwt: Option<bool>,
     pub dwtp: Option<bool>,
     pub gestures: Option<GesturesConfig>,
+    pub accel_speed: Option<f64>,
+    pub accel_profile: Option<String>,
+    pub scroll_factor: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 pub struct TrackpointConfig {
     pub accel_speed: Option<f64>,
     pub accel_profile: Option<String>,
+    pub scroll_factor: Option<f64>,
 }
 
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub struct MouseConfig {
+    pub accel_speed: Option<f64>,
+    pub accel_profile: Option<String>,
+    pub scroll_factor: Option<f64>,
+}
+
+/// Pointer device configuration. Per-class blocks (`mouse` / `touchpad` /
+/// `trackpad` alias / `trackpoint`) override the top-level values for
+/// devices of that class; a device is a trackpoint if its name says so, a
+/// touchpad if it supports tap, and a mouse otherwise.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct InputConfig {
     pub accel_speed: Option<f64>,
     pub accel_profile: Option<String>,
+    pub scroll_factor: Option<f64>,
+    pub mouse: Option<MouseConfig>,
     pub touchpad: Option<TouchpadConfig>,
     pub trackpoint: Option<TrackpointConfig>,
 }
@@ -1349,10 +1366,16 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "input") {
         let accel_speed = get_child_arg_f64_opt(node, "accel_speed");
         let accel_profile = get_child_arg_string_opt(node, "accel_profile");
+        let scroll_factor = get_child_arg_f64_opt(node, "scroll_factor");
 
         let mut touchpad = None;
         if let Some(children) = node.children() {
-            if let Some(tp_node) = children.nodes().iter().find(|n| n.name().value() == "touchpad") {
+            // `trackpad` is the input.kdl spelling, `touchpad` the legacy one.
+            if let Some(tp_node) = children
+                .nodes()
+                .iter()
+                .find(|n| n.name().value() == "touchpad" || n.name().value() == "trackpad")
+            {
                 let tap_to_click = get_child_arg_bool_opt(tp_node, "tap_to_click");
                 let natural_scroll = get_child_arg_bool_opt(tp_node, "natural_scroll");
                 let dwt = get_child_arg_bool_opt(tp_node, "dwt");
@@ -1373,6 +1396,9 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                     dwt,
                     dwtp,
                     gestures,
+                    accel_speed: get_child_arg_f64_opt(tp_node, "accel_speed"),
+                    accel_profile: get_child_arg_string_opt(tp_node, "accel_profile"),
+                    scroll_factor: get_child_arg_f64_opt(tp_node, "scroll_factor"),
                 });
             }
         }
@@ -1385,6 +1411,18 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                 trackpoint = Some(TrackpointConfig {
                     accel_speed,
                     accel_profile,
+                    scroll_factor: get_child_arg_f64_opt(tp_node, "scroll_factor"),
+                });
+            }
+        }
+
+        let mut mouse = None;
+        if let Some(children) = node.children() {
+            if let Some(m_node) = children.nodes().iter().find(|n| n.name().value() == "mouse") {
+                mouse = Some(MouseConfig {
+                    accel_speed: get_child_arg_f64_opt(m_node, "accel_speed"),
+                    accel_profile: get_child_arg_string_opt(m_node, "accel_profile"),
+                    scroll_factor: get_child_arg_f64_opt(m_node, "scroll_factor"),
                 });
             }
         }
@@ -1392,6 +1430,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         input = Some(InputConfig {
             accel_speed,
             accel_profile,
+            scroll_factor,
+            mouse,
             touchpad,
             trackpoint,
         });
@@ -1725,8 +1765,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.input_rules = config.device.clone();
     state.input_config = config.input.clone().unwrap_or_default();
     unsafe {
-        state.apply_input_rules();
+        // Config first (its per-class scroll factors are defaults), then the
+        // name-based device rules so they stay the most specific override.
         state.apply_input_config();
+        state.apply_input_rules();
     }
 
     state.keybinds.clear();
@@ -1982,6 +2024,50 @@ mod tests {
         assert_eq!(wm.close_window, Some("super+q".to_string()));
         assert_eq!(wm.toggle_fullscreen, Some("super+f".to_string()));
         assert_eq!(wm.toggle_overview, Some("swipe_up".to_string()));
+    }
+
+    #[test]
+    fn test_kdl_input_device_classes_parsing() {
+        let content = r#"
+            input {
+                accel_profile "flat"
+                accel_speed (f64)1.0
+                scroll_factor (f64)1.0
+                mouse {
+                    accel_speed (f64)0.5
+                    scroll_factor (f64)2.0
+                }
+                trackpad {
+                    tap_to_click (bool)true
+                    natural_scroll (bool)true
+                    scroll_factor (f64)1.5
+                    accel_speed (f64)0.9
+                }
+                trackpoint {
+                    accel_speed (f64)0.4
+                    accel_profile "adaptive"
+                    scroll_factor (f64)3.0
+                }
+            }
+        "#;
+        let config = parse_kdl_config(content).unwrap();
+        let input = config.input.unwrap();
+        assert_eq!(input.accel_profile, Some("flat".to_string()));
+        assert_eq!(input.accel_speed, Some(1.0));
+        assert_eq!(input.scroll_factor, Some(1.0));
+        let mouse = input.mouse.unwrap();
+        assert_eq!(mouse.accel_speed, Some(0.5));
+        assert_eq!(mouse.scroll_factor, Some(2.0));
+        // `trackpad` parses into the touchpad block (input.kdl spelling).
+        let tp = input.touchpad.unwrap();
+        assert_eq!(tp.tap_to_click, Some(true));
+        assert_eq!(tp.natural_scroll, Some(true));
+        assert_eq!(tp.scroll_factor, Some(1.5));
+        assert_eq!(tp.accel_speed, Some(0.9));
+        let tpoint = input.trackpoint.unwrap();
+        assert_eq!(tpoint.accel_speed, Some(0.4));
+        assert_eq!(tpoint.accel_profile, Some("adaptive".to_string()));
+        assert_eq!(tpoint.scroll_factor, Some(3.0));
     }
 
     #[test]

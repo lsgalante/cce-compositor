@@ -87,7 +87,9 @@ impl LibinputDevice {
             }
         }
 
-        // Check if device name contains "trackpoint" (case-insensitive)
+        // Device class: trackpoint by name, touchpad by tap capability,
+        // mouse otherwise. Per-class config blocks override the top-level
+        // values for devices of that class.
         let name_ptr = ffi::river_wlr_input_device_get_name((*self.parent_device).wlr_device);
         let name = if !name_ptr.is_null() {
             std::ffi::CStr::from_ptr(name_ptr).to_string_lossy().to_lowercase()
@@ -95,25 +97,47 @@ impl LibinputDevice {
             String::new()
         };
         let is_trackpoint = name.contains("trackpoint");
+        let is_touchpad = !is_trackpoint && ffi::libinput_device_config_tap_get_finger_count(handle) > 0;
 
         // Acceleration Speed
-        let speed = if is_trackpoint {
-            config.trackpoint.as_ref().and_then(|t| t.accel_speed).or(config.accel_speed)
+        let class_speed = if is_trackpoint {
+            config.trackpoint.as_ref().and_then(|t| t.accel_speed)
+        } else if is_touchpad {
+            config.touchpad.as_ref().and_then(|t| t.accel_speed)
         } else {
-            config.accel_speed
+            config.mouse.as_ref().and_then(|m| m.accel_speed)
         };
-        if let Some(s) = speed {
+        if let Some(s) = class_speed.or(config.accel_speed) {
             if ffi::libinput_device_config_accel_get_profiles(handle) != 0 {
                 ffi::libinput_device_config_accel_set_speed(handle, s);
             }
         }
 
-        // Acceleration Profile
-        let profile_str = if is_trackpoint {
-            config.trackpoint.as_ref().and_then(|t| t.accel_profile.as_ref()).or(config.accel_profile.as_ref())
+        // Scroll factor (cce's own wheel-delta scaling, not libinput):
+        // class value -> top-level value. Name-based `device` rules run
+        // after this and stay the most specific override.
+        let class_scroll = if is_trackpoint {
+            config.trackpoint.as_ref().and_then(|t| t.scroll_factor)
+        } else if is_touchpad {
+            config.touchpad.as_ref().and_then(|t| t.scroll_factor)
         } else {
-            config.accel_profile.as_ref()
+            config.mouse.as_ref().and_then(|m| m.scroll_factor)
         };
+        if let Some(f) = class_scroll.or(config.scroll_factor) {
+            if f.is_finite() && f > 0.0 {
+                (*self.parent_device).config.scroll_factor = f;
+            }
+        }
+
+        // Acceleration Profile
+        let class_profile = if is_trackpoint {
+            config.trackpoint.as_ref().and_then(|t| t.accel_profile.as_ref())
+        } else if is_touchpad {
+            config.touchpad.as_ref().and_then(|t| t.accel_profile.as_ref())
+        } else {
+            config.mouse.as_ref().and_then(|m| m.accel_profile.as_ref())
+        };
+        let profile_str = class_profile.or(config.accel_profile.as_ref());
         if let Some(ref p_str) = profile_str {
             if ffi::libinput_device_config_accel_get_profiles(handle) != 0 {
                 let profile = match p_str.as_str() {
