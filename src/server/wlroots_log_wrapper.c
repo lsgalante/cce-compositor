@@ -770,12 +770,23 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, boo
 		wlr_scene_blur_set_transparency_mask_source((struct wlr_scene_blur *)std_blur_node, source_buffer);
 	}
 
-	// Ensure correct stack order (from back to front): opt_blur_node -> std_blur_node -> window content
-	if (std_blur_node) {
-		wlr_scene_node_lower_to_bottom(std_blur_node);
-	}
-	if (opt_blur_node) {
-		wlr_scene_node_lower_to_bottom(opt_blur_node);
+	// Ensure correct stack order (from back to front): opt_blur_node -> std_blur_node -> window content.
+	// Only reorder when out of order: the lower_to_bottom pair is not idempotent
+	// (on an already-ordered tree each call swaps the two nodes, and every swap
+	// damages the node's whole window-sized region — this runs per commit and
+	// per render_finish, so the no-op path must not touch the scene graph).
+	struct wlr_scene_node *want_bottom = opt_blur_node ? opt_blur_node : std_blur_node;
+	struct wlr_scene_node *want_second = opt_blur_node ? std_blur_node : NULL;
+	bool ordered = want_bottom != NULL
+		&& tree->children.next == &want_bottom->link
+		&& (want_second == NULL || want_bottom->link.next == &want_second->link);
+	if (!ordered) {
+		if (std_blur_node) {
+			wlr_scene_node_lower_to_bottom(std_blur_node);
+		}
+		if (opt_blur_node) {
+			wlr_scene_node_lower_to_bottom(opt_blur_node);
+		}
 	}
 }
 
