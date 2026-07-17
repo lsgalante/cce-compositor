@@ -11,6 +11,20 @@ pub use crate::shell_surface::ShellSurface;
 
 pub use crate::xwayland_override_redirect::XwaylandOverrideRedirect;
 
+/// Working directory of the shell running inside a foot window.
+///
+/// foot's own process cwd never follows `cd` — it stays at its launch dir for
+/// the window's whole life. The live directory the user is actually in lives in
+/// foot's child (the shell it spawned for that window). We read the first child
+/// and return its `/proc/<pid>/cwd`. Returns `None` if it can't be read.
+fn foot_shell_cwd(foot_pid: i32) -> Option<String> {
+    let children =
+        std::fs::read_to_string(format!("/proc/{0}/task/{0}/children", foot_pid)).ok()?;
+    let child: i32 = children.split_whitespace().next()?.parse().ok()?;
+    let cwd = std::fs::read_link(format!("/proc/{}/cwd", child)).ok()?;
+    Some(cwd.to_string_lossy().into_owned())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowManagerState {
     Idle,
@@ -319,6 +333,31 @@ impl WindowManager {
                             }
                         }
                     }
+                    // foot only tracks its launch dir, not the shell's current
+                    // dir, so restore the child shell's cwd via
+                    // --working-directory. Strip any pre-existing one first so
+                    // the flag doesn't accumulate across save/restore cycles.
+                    if app_id == "foot" {
+                        if let Some(cwd) = foot_shell_cwd(pid) {
+                            let mut i = 1;
+                            while i < args.len() {
+                                if args[i] == "--working-directory" || args[i] == "-D" {
+                                    args.drain(i..(i + 2).min(args.len()));
+                                } else if args[i].starts_with("--working-directory=")
+                                    || args[i].starts_with("-D")
+                                {
+                                    args.remove(i);
+                                } else {
+                                    i += 1;
+                                }
+                            }
+                            let flag = format!(
+                                "--working-directory='{}'",
+                                cwd.replace('\'', r"'\''")
+                            );
+                            args.insert(1.min(args.len()), flag);
+                        }
+                    }
                     args.join(" ")
                 } else {
                     String::new()
@@ -502,10 +541,16 @@ impl WindowManager {
         log::info!("Spawning restored windows. Total: {}", self.restore_queue.len());
         let restored = self.restore_queue.clone();
         std::thread::spawn(move || {
-            for (i, w) in restored.into_iter().enumerate() {
+            let mut spawned_any = false;
+            for w in restored.into_iter() {
                 if !w.cmdline.is_empty() {
-                    let delay = 1000 + i as u64 * 500;
-                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    // Small stagger so N clients don't all hit Vulkan device
+                    // init at the same instant; restore matching and focus
+                    // restoration are map-order independent.
+                    if spawned_any {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    spawned_any = true;
                     log::info!("Deferred spawning restored window command: {}", w.cmdline);
                     let cmd = w.cmdline;
                     match nix::unistd::fork() {
