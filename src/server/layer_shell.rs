@@ -597,7 +597,18 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                 is_status = true;
             }
         }
-        let use_optimized = if is_status { false } else { (*server).wm.layout.scenefx_optimized_blur };
+        // Optimized (cached) blur is counterproductive for surfaces stacked ABOVE
+        // windows (Top/Overlay): the scene graph re-dirties an optimized-blur node
+        // whenever any node below it updates (scenefx wlr_scene.c:744), so window
+        // content panning underneath forces a full re-bake every frame — a fixed-
+        // position shimmer (e.g. the always-mapped cce-notifier overlay). Regular
+        // blur is immune to that path and only re-bakes on real damage, so fall back
+        // to it here, exactly as status surfaces already do. Bottom/Background layers
+        // sit below windows and are unaffected, so they keep the cache.
+        let layer = (*wlr_layer_surface).current.layer;
+        let above_windows = layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_TOP
+            || layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY;
+        let use_optimized = if is_status || above_windows { false } else { (*server).wm.layout.scenefx_optimized_blur };
         let wlr_surface = (*wlr_layer_surface).surface;
         let geom_w = if !wlr_surface.is_null() {
             ffi::river_wlr_surface_get_width(wlr_surface)
