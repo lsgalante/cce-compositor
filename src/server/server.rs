@@ -15,6 +15,35 @@ use crate::xkb_config::XkbConfig;
 use crate::idle_inhibit_manager::IdleInhibitManager;
 use crate::lock_manager::LockManager;
 
+// Activation-attention notifications ("<app> needs attention / has requested
+// activation") are suppressed during the compositor's startup sequence: session
+// restore respawns every previously-open window, and each one issues an
+// xdg-activation request as it maps, which would otherwise spray a burst of
+// "needs attention" popups the moment you log in. `begin_startup_activation_grace`
+// is called once when startup begins; until the deadline passes, the handler
+// swallows the notification. Outside the startup path the cell is never set, so
+// activation notifications behave normally.
+static STARTUP_ACTIVATION_GRACE_UNTIL: std::sync::OnceLock<std::time::Instant> =
+    std::sync::OnceLock::new();
+
+/// How long after startup begins to keep suppressing activation notifications.
+/// Generous enough to cover restored heavyweight apps (e.g. a browser) that take
+/// several seconds to launch and request focus.
+const STARTUP_ACTIVATION_GRACE: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Begin the startup grace window during which activation-attention
+/// notifications are suppressed. Idempotent — only the first call takes effect.
+pub fn begin_startup_activation_grace() {
+    let _ = STARTUP_ACTIVATION_GRACE_UNTIL.set(std::time::Instant::now() + STARTUP_ACTIVATION_GRACE);
+}
+
+/// True while we're still inside the post-startup grace window.
+fn in_startup_activation_grace() -> bool {
+    STARTUP_ACTIVATION_GRACE_UNTIL
+        .get()
+        .is_some_and(|deadline| std::time::Instant::now() < *deadline)
+}
+
 // Helper macro equivalent to @fieldParentPtr in Zig
 #[macro_export]
 macro_rules! container_of {
@@ -361,7 +390,16 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
             };
             
             log::info!("xdg activation request for window '{}' ({})", title, app_id);
-            
+
+            if in_startup_activation_grace() {
+                log::info!(
+                    "activation notification suppressed during startup grace for '{}' ({})",
+                    title,
+                    app_id
+                );
+                break;
+            }
+
             let uid = unsafe { libc::getuid() };
             let bus_address = format!("unix:path=/run/user/{}/bus", uid);
             

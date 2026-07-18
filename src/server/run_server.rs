@@ -188,6 +188,12 @@ pub fn run_server() {
         std::process::exit(1);
     }
 
+    // Suppress the "requested activation" notification burst that session
+    // restore is about to trigger: every respawned window issues an
+    // xdg-activation request as it maps. The grace window covers the whole
+    // startup sequence (startup programs + restored windows).
+    server::begin_startup_activation_grace();
+
     // Spawn configured startup programs
     let current_startup = server.wm.startup.clone();
     for prog in current_startup {
