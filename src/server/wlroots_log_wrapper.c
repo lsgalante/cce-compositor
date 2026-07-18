@@ -694,7 +694,14 @@ static void find_buffer_iterator(struct wlr_scene_buffer *buffer, int sx, int sy
 	}
 }
 
-void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, bool optimized, bool ignore_transparent, int x, int y, int width, int height) {
+// `corner_radius` is in the same (scaled, device) pixels as width/height. It is applied
+// here rather than through river_scene_node_set_corner_radius so that a blur node can
+// never exist without it: that helper looks the blur up by scanning a tree's direct
+// children, so aiming it at the wrong tree silently no-ops, and it was never called at
+// all on the viewport-update path. Note the optimized blur node cannot be rounded --
+// wlr_scene_optimized_blur has no radius field -- so callers that need rounded corners
+// must pass optimized = false.
+void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, bool optimized, bool ignore_transparent, int x, int y, int width, int height, int corner_radius) {
 	if (node->type != WLR_SCENE_NODE_TREE) {
 		return;
 	}
@@ -759,6 +766,12 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, boo
 	} else {
 		wlr_scene_blur_set_should_only_blur_bottom_layer((struct wlr_scene_blur *)std_blur_node, optimized);
 		wlr_scene_blur_set_size((struct wlr_scene_blur *)std_blur_node, width, height);
+	}
+
+	// Set on both the create and the reuse path: a node reused across a resize keeps its
+	// radius, but one recreated after a blur toggle would otherwise come back square.
+	if (std_blur_node) {
+		wlr_scene_blur_set_corner_radius((struct wlr_scene_blur *)std_blur_node, corner_radius);
 	}
 
 	if (std_blur_node) {

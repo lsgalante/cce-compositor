@@ -629,6 +629,10 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
             0,
             geom_w,
             geom_h,
+            // 0 preserves existing behaviour: layer surfaces (status bar, etc.) never had a
+            // blur radius applied, and their corner rounding is handled separately. Left
+            // deliberately unchanged so this fix stays scoped to toplevels.
+            0,
         );
     }
 

@@ -449,8 +449,27 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let geom_h = (actual_h as f64 * scale) as i32;
     let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
                     app_id.starts_with("cce-status");
-    let use_optimized = if is_status { false } else { (*(*window).server).wm.layout.scenefx_optimized_blur };
     let is_cce_app = app_id.starts_with("cce-");
+    // Must mirror Window::set_rendering_state's radius exactly: both paths drive the same
+    // blur node, so if they disagree the corners flip between rounded and square depending
+    // on which one ran last.
+    let radius = if (*window).is_fullscreen() {
+        0
+    } else if (*window).rendering_requested.circular {
+        let w = (*window).rendering_sent.width as i32;
+        let h = (*window).rendering_sent.height as i32;
+        w.min(h) / 2
+    } else if (*window).wm_requested.ssd || is_cce_app {
+        (*(*window).server).wm.layout.backplate_corner_radius
+    } else {
+        0
+    };
+    let legacy_blur = std::env::var_os("CCE_BLUR_LEGACY").is_some(); // TEMP DIAGNOSTIC
+    let use_optimized = if is_status || (radius > 0 && !legacy_blur) {
+        false
+    } else {
+        (*(*window).server).wm.layout.scenefx_optimized_blur
+    };
     let blur_enabled = (*window).rendering_requested.blur && ((*window).wm_requested.ssd || is_cce_app || is_status);
     ffi::river_scene_node_enable_blur(
         (*window).tree as *mut ffi::wlr_scene_node,
@@ -461,6 +480,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         0,
         geom_w,
         geom_h,
+        // geom_w/h are already scaled to device px; the radius must match.
+        if legacy_blur { 0 } else { (radius as f64 * scale) as i32 },
     );
 
     let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;

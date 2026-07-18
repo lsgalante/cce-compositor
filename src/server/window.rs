@@ -1829,7 +1829,33 @@ impl Window {
             if is_status {
                 ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
             }
-            let use_optimized = if is_status { false } else { (*self.server).wm.layout.scenefx_optimized_blur };
+            // Hoisted above the blur setup: the blur node needs this radius, and whether
+            // the window wants rounded corners at all decides the optimized-blur question
+            // below.
+            let radius = if self.is_fullscreen() {
+                0
+            } else if requested.circular {
+                let w = self.rendering_sent.width as i32;
+                let h = self.rendering_sent.height as i32;
+                w.min(h) / 2
+            } else if self.wm_requested.ssd || is_cce_app {
+                (*self.server).wm.layout.backplate_corner_radius
+            } else {
+                0
+            };
+            // The optimized blur node sits UNDER the standard one and cannot be rounded
+            // (wlr_scene_optimized_blur has no radius field in the vendored scenefx), so
+            // for a window with rounded corners it would keep painting square corners
+            // underneath a correctly rounded standard blur. Trade the optimization away
+            // exactly where it would be visible, and keep it everywhere else.
+            // TEMP DIAGNOSTIC: CCE_BLUR_LEGACY=1 restores pre-fix behaviour (optimized blur
+            // always on, no radius) so both can be A/B'd from one build.
+            let legacy_blur = std::env::var_os("CCE_BLUR_LEGACY").is_some();
+            let use_optimized = if is_status || (radius > 0 && !legacy_blur) {
+                false
+            } else {
+                (*self.server).wm.layout.scenefx_optimized_blur
+            };
             let toplevel_w = match self.impl_type {
                 WindowImpl::Toplevel(toplevel) => {
                     if toplevel.is_null() { 0 } else { (*toplevel).geometry.width }
@@ -1855,20 +1881,11 @@ impl Window {
                 0,
                 width,
                 height,
+                // width/height above are scaled to device pixels, so the radius must be too
+                // (cf. the window_background rect, which scales it the same way).
+                if legacy_blur { 0 } else { (radius as f64 * self.scale) as i32 },
             );
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
-
-            let radius = if self.is_fullscreen() {
-                0
-            } else if requested.circular {
-                let w = self.rendering_sent.width as i32;
-                let h = self.rendering_sent.height as i32;
-                w.min(h) / 2
-            } else if self.wm_requested.ssd || is_cce_app {
-                (*self.server).wm.layout.backplate_corner_radius
-            } else {
-                0
-            };
 
             ffi::river_scene_node_set_corner_radius(
                 self.surfaces.tree as *mut ffi::wlr_scene_node,
@@ -2218,7 +2235,26 @@ impl Window {
                 if is_status {
                     ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
                 }
-                let use_optimized = if is_status { false } else { (*self.server).wm.layout.scenefx_optimized_blur };
+                // Same radius/optimized reasoning as set_rendering_state. Before, this path
+                // set no radius at all, so a blur node recreated during a pan came back
+                // square and stayed that way.
+                let radius = if self.is_fullscreen() {
+                    0
+                } else if requested.circular {
+                    let w = self.rendering_sent.width as i32;
+                    let h = self.rendering_sent.height as i32;
+                    w.min(h) / 2
+                } else if self.wm_requested.ssd || is_cce_app {
+                    (*self.server).wm.layout.backplate_corner_radius
+                } else {
+                    0
+                };
+                let legacy_blur = std::env::var_os("CCE_BLUR_LEGACY").is_some(); // TEMP DIAGNOSTIC
+                let use_optimized = if is_status || (radius > 0 && !legacy_blur) {
+                    false
+                } else {
+                    (*self.server).wm.layout.scenefx_optimized_blur
+                };
                 let toplevel_w = match self.impl_type {
                     WindowImpl::Toplevel(toplevel) => {
                         if toplevel.is_null() { 0 } else { (*toplevel).geometry.width }
@@ -2244,9 +2280,11 @@ impl Window {
                     0,
                     width,
                     height,
+                    if legacy_blur { 0 } else { (radius as f64 * self.scale) as i32 },
                 );
             } else {
-                ffi::river_scene_node_enable_blur(self.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true, 0, 0, 0, 0);
+                // Tearing the blur down: radius is irrelevant, the nodes are destroyed.
+                ffi::river_scene_node_enable_blur(self.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true, 0, 0, 0, 0, 0);
             }
 
             self.scale_only_render_finish();
@@ -3265,7 +3303,9 @@ impl Decoration {
         }
         let is_cce_app = app_id.starts_with("cce-");
         let blur_enabled = self.rendering_requested.blur && ((*self.window).wm_requested.ssd || is_cce_app || is_status);
-        ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled, (*server).wm.layout.scenefx_optimized_blur, ignore_transparent, 0, 0, 0, 0);
+        // Radius 0 preserves existing behaviour on the layer-surface path (see layer_shell.rs)
+        // — it never had a blur radius applied, and this fix is scoped to toplevels.
+        ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled, (*server).wm.layout.scenefx_optimized_blur, ignore_transparent, 0, 0, 0, 0, 0);
 
         let scale = (*self.window).scale;
         let scaled_x = (self.rendering_requested.offset_x as f64 * scale) as i32;
