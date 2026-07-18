@@ -124,6 +124,11 @@ pub struct WindowManager {
     pub viewport_settle_timer: *mut ffi::wl_event_source,
     pub clean_exit_in_progress: bool,
     pub clean_exit_timer: *mut ffi::wl_event_source,
+    /// Drives the hover fade on window borders (see `Window::border_reveal`).
+    pub border_fade_timer: *mut ffi::wl_event_source,
+    /// Whether the fade timer is currently armed, so re-arming while a fade is
+    /// already running doesn't restart it and double the step rate.
+    pub border_fade_running: bool,
     /// `window_manager.center_on_spawn`: whether a newly spawned window pulls the viewport
     /// over to it when it takes focus. Off, the desk stays put and the window opens wherever
     /// the layout placed it. Focus-follow panning between EXISTING windows is unaffected.
@@ -232,6 +237,17 @@ impl WindowManager {
             return Err("Failed to create clean exit timer event source");
         }
         self.clean_exit_in_progress = false;
+
+        self.border_fade_timer =
+            ffi::wl_event_loop_add_timer(event_loop, Some(handle_border_fade_tick), self as *mut WindowManager as *mut _);
+        if self.border_fade_timer.is_null() {
+            ffi::wl_event_source_remove(self.timeout);
+            ffi::wl_event_source_remove(self.ipc_timer);
+            ffi::wl_event_source_remove(self.clean_exit_timer);
+            return Err("Failed to create border fade timer event source");
+        }
+        self.border_fade_running = false;
+
         // Default until the config is parsed (which happens after this init).
         self.center_on_spawn = true;
 
@@ -649,6 +665,16 @@ impl WindowManager {
                 false
             }
         }
+    }
+
+    /// Start the border hover fade if it isn't already running. Idempotent —
+    /// re-arming mid-fade would restart the timer and step it twice as fast.
+    pub unsafe fn arm_border_fade(&mut self) {
+        if self.border_fade_running || self.border_fade_timer.is_null() {
+            return;
+        }
+        self.border_fade_running = true;
+        ffi::wl_event_source_timer_update(self.border_fade_timer, 16);
     }
 
     pub unsafe fn dirty_windowing(&mut self) {
@@ -1264,7 +1290,6 @@ impl WindowManager {
             normal: crate::policy::arrange::NormalParams {
                 gap_right: self.layout.gap_right,
                 gap_top: self.layout.gap_top,
-                border_width: self.layout.border_width,
                 cloud_position_default: self.layout.cloud_position_default,
                 desktop_grid_scale: self.layout.desktop_grid_scale,
                 desktop_gap_width: self.layout.desktop_gap_width as f64,
@@ -3747,6 +3772,40 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
         if !(*wm).animation_timer.is_null() {
             ffi::wl_event_source_timer_update((*wm).animation_timer, 16);
         }
+    }
+    0
+}
+
+/// Steps every window's border hover fade until all of them have settled.
+/// Windows at rest cost one comparison per zone and no repaint, so leaving
+/// this running for the tail of a fade is cheap.
+unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = data as *mut WindowManager;
+    let mut moving = false;
+    let windows: Vec<*mut crate::window::Window> = (*wm).windows.iter().copied().collect();
+    for window in windows {
+        if window.is_null() || (*window).closed {
+            continue;
+        }
+        if (*window).step_border_fade() {
+            moving = true;
+        }
+    }
+
+    if moving {
+        ffi::wl_event_source_timer_update((*wm).border_fade_timer, 16);
+        let outputs_list = &mut (*(*wm).server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*outputs_list).next;
+        while curr != outputs_list {
+            let next = (*curr).next;
+            let output = crate::container_of!(curr, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                ffi::wlr_output_schedule_frame((*output).wlr_output);
+            }
+            curr = next;
+        }
+    } else {
+        (*wm).border_fade_running = false;
     }
     0
 }

@@ -103,6 +103,41 @@ pub enum BorderElement {
     BottomRight,
 }
 
+impl BorderElement {
+    /// Every zone, in `index()` order.
+    pub const ALL: [BorderElement; 8] = [
+        BorderElement::Top,
+        BorderElement::Bottom,
+        BorderElement::Left,
+        BorderElement::Right,
+        BorderElement::TopLeft,
+        BorderElement::TopRight,
+        BorderElement::BottomLeft,
+        BorderElement::BottomRight,
+    ];
+
+    /// Index into `Window::border_reveal`. Declaration order; kept in one
+    /// place so the reveal array and the enum can't drift apart.
+    pub fn index(self) -> usize {
+        match self {
+            BorderElement::Top => 0,
+            BorderElement::Bottom => 1,
+            BorderElement::Left => 2,
+            BorderElement::Right => 3,
+            BorderElement::TopLeft => 4,
+            BorderElement::TopRight => 5,
+            BorderElement::BottomLeft => 6,
+            BorderElement::BottomRight => 7,
+        }
+    }
+}
+
+/// Per-frame step of the hover fade, as a fraction of the remaining distance
+/// to the target (the same exponential-approach shape the viewport pan uses).
+pub const BORDER_FADE_STEP: f32 = 0.25;
+/// Below this the fade is treated as finished and snapped to its target.
+pub const BORDER_FADE_EPSILON: f32 = 0.004;
+
 /// Length of a corner zone, measured from the outer corner along each band.
 /// Shared by the visual segments (draw_borders) and the pointer zones
 /// (cursor.rs get_border_zone) so they always agree. `configured` comes from
@@ -139,6 +174,10 @@ pub struct BorderRects {
     pub bottom: *mut ffi::wlr_scene_rect,
     /// The visible zone segments, indexed by the SEG_* constants.
     pub segments: [*mut ffi::wlr_scene_rect; 12],
+    /// Parent of `segments`, living in the global border overlay layer rather
+    /// than in the window tree. Tracks the window tree's position so the
+    /// segments keep their window-local coordinates.
+    pub tree: *mut ffi::wlr_scene_tree,
 }
 
 pub struct ShowWindowMenuRequest {
@@ -256,6 +295,12 @@ pub struct Window {
     /// The border zone the pointer is over (set by cursor.rs); that segment
     /// draws in `hover_color` while set.
     pub hovered_border_element: Option<BorderElement>,
+    /// Per-zone reveal factor, 0.0 (fully hidden) to 1.0 (fully drawn),
+    /// indexed by `BorderElement::index`. Borders rest invisible and only the
+    /// zone under the pointer fades in. Deliberately NOT part of
+    /// `rendering_requested.border`, which the arrange pass rewrites wholesale
+    /// every pass and would otherwise clobber.
+    pub border_reveal: [f32; 8],
     pub decorations_above: ffi::wl_list,
     pub decorations_above_tree: *mut ffi::wlr_scene_tree,
     pub popup_tree: *mut ffi::wlr_scene_tree,
@@ -413,13 +458,25 @@ impl Window {
             }
         };
 
+        // The invisible hit catchers stay in the window tree so pointer
+        // hit-testing and z-order are unchanged. The visible segments live in
+        // a sibling tree parented to the global border overlay layer, so a
+        // revealed edge draws over the neighbouring window it overhangs.
         let border_left = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
         let border_right = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
         let border_top = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
         let border_bottom = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
+
+        let border_tree = ffi::wlr_scene_tree_create((*server).scene.layers.border_overlay);
+        if border_tree.is_null() {
+            ffi::wlr_scene_node_destroy(tree as *mut ffi::wlr_scene_node);
+            ffi::wlr_scene_node_destroy(popup_tree as *mut ffi::wlr_scene_node);
+            ffi::wlr_scene_node_destroy(&mut (*capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
+            return Err("Failed to create window border tree");
+        }
         let mut border_segments = [std::ptr::null_mut(); 12];
         for seg in border_segments.iter_mut() {
-            *seg = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
+            *seg = ffi::wlr_scene_rect_create(border_tree, 0, 0, clear_color.as_ptr());
         }
 
         let decorations_above_tree = ffi::wlr_scene_tree_create(tree);
@@ -443,8 +500,10 @@ impl Window {
                 top: border_top,
                 bottom: border_bottom,
                 segments: border_segments,
+                tree: border_tree,
             },
             hovered_border_element: None,
+            border_reveal: [0.0; 8],
             decorations_above: std::mem::zeroed(),
             decorations_above_tree,
             popup_tree,
@@ -570,6 +629,14 @@ impl Window {
             popup_tree as *mut ffi::wlr_scene_node,
             crate::scene_node_data::SceneNodeDataVal::Window(raw),
         );
+        // The border segments sit outside the window tree; without data of
+        // their own a hit on a revealed segment would resolve to no window at
+        // all, so tag them with the window they belong to.
+        crate::scene_node_data::SceneNodeData::attach(
+            border_tree as *mut ffi::wlr_scene_node,
+            crate::scene_node_data::SceneNodeDataVal::Window(raw),
+        );
+        ffi::wlr_scene_node_set_enabled(border_tree as *mut ffi::wlr_scene_node, false);
 
         Ok(raw)
     }
@@ -1022,6 +1089,11 @@ impl Window {
         wl_listener_remove_safe(&mut (*window).commit);
         ffi::wlr_scene_node_destroy((*window).tree as *mut ffi::wlr_scene_node);
         ffi::wlr_scene_node_destroy((*window).popup_tree as *mut ffi::wlr_scene_node);
+        // The border segments hang off the global overlay layer, not off
+        // `tree`, so destroying the window tree does not take them with it.
+        // Left behind they would both leak and keep a SceneNodeData pointing
+        // at this freed window for the next hit test to find.
+        ffi::wlr_scene_node_destroy((*window).border.tree as *mut ffi::wlr_scene_node);
         ffi::wlr_scene_node_destroy(&mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
 
         (*window).node.deinit();
@@ -1740,6 +1812,12 @@ impl Window {
 
         ffi::wlr_scene_node_set_enabled(self.tree as *mut ffi::wlr_scene_node, enabled);
         ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
+        if !enabled {
+            // The segment tree is not a child of `tree`, so disabling the
+            // window does not hide a revealed border with it.
+            self.border_reveal = [0.0; 8];
+            ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
+        }
 
         if enabled {
             let app_id = self.get_app_id_string().unwrap_or_default();
@@ -1949,6 +2027,12 @@ impl Window {
             ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.bottom as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, false);
+            // Fullscreen skips draw_borders entirely, and the segment tree
+            // lives outside this window's tree, so it has to be taken down
+            // explicitly or a revealed edge would hang over the fullscreen
+            // surface.
+            self.border_reveal = [0.0; 8];
+            ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
         } else {
             self.box_geom.x = requested.x;
             self.box_geom.y = requested.y;
@@ -2110,6 +2194,10 @@ impl Window {
 
         ffi::wlr_scene_node_set_enabled(self.tree as *mut ffi::wlr_scene_node, enabled);
         ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
+        if !enabled {
+            self.border_reveal = [0.0; 8];
+            ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
+        }
 
         if enabled {
             self.box_geom.x = requested.x;
@@ -2166,6 +2254,33 @@ impl Window {
         }
     }
 
+    /// Advance the hover fade one tick. Every zone eases toward 1.0 if it is
+    /// the one under the pointer and 0.0 otherwise. Returns true while any
+    /// zone is still in motion, so the caller knows to schedule another tick.
+    pub unsafe fn step_border_fade(&mut self) -> bool {
+        let mut moving = false;
+        let mut changed = false;
+        for elem in BorderElement::ALL {
+            let i = elem.index();
+            let target = if self.hovered_border_element == Some(elem) { 1.0 } else { 0.0 };
+            let delta = target - self.border_reveal[i];
+            if delta.abs() <= BORDER_FADE_EPSILON {
+                if self.border_reveal[i] != target {
+                    self.border_reveal[i] = target;
+                    changed = true;
+                }
+                continue;
+            }
+            self.border_reveal[i] += delta * BORDER_FADE_STEP;
+            moving = true;
+            changed = true;
+        }
+        if changed {
+            self.draw_borders();
+        }
+        moving
+    }
+
     pub unsafe fn draw_borders(&mut self) {
         let requested = &self.rendering_requested;
 
@@ -2185,7 +2300,26 @@ impl Window {
         // enabled but transparent as scene hit-test catchers, so the pointer
         // never falls through the gaps (and width 0 keeps the legacy
         // invisible 8px virtual resize zones).
+        //
+        // Segments live in `border.tree`, parented to the global border
+        // overlay layer rather than to this window's tree, so it has to be
+        // positioned and enabled in step with the window by hand.
         let is_virtual_border = border.width == 0;
+        // Deliberately NOT gated on `wm_requested.ssd`: that flag defaults to
+        // false and is only set by a client calling use_ssd, and the segments
+        // have never depended on it — only `window_background` does.
+        let borders_visible = !requested.hidden
+            && !requested.circular
+            && !is_virtual_border
+            && self.border_reveal.iter().any(|&a| a > 0.0);
+        ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, borders_visible);
+        if borders_visible {
+            ffi::river_scene_node_set_position_if_changed(
+                self.border.tree as *mut ffi::wlr_scene_node,
+                self.box_geom.x,
+                self.box_geom.y,
+            );
+        }
         if requested.circular {
             ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
@@ -2268,12 +2402,17 @@ impl Window {
             let bar_y = cl - bw + g;
             let bar_h = content.height + 2 * bw - 2 * cl - 2 * g;
 
+            // Borders rest invisible; a zone is drawn only as far as its
+            // reveal factor has faded in. Channels are premultiplied alpha, so
+            // scaling all four by the factor is the correct fade.
             let color_for = |elem: BorderElement| -> [f32; 4] {
-                if self.hovered_border_element == Some(elem) {
+                let base = if self.hovered_border_element == Some(elem) {
                     border.hover_color
                 } else {
                     border_color
-                }
+                };
+                let a = self.border_reveal[elem.index()].clamp(0.0, 1.0);
+                [base[0] * a, base[1] * a, base[2] * a, base[3] * a]
             };
             let e = &border.edges;
             use BorderElement::*;
@@ -2293,6 +2432,9 @@ impl Window {
                 (SEG_BR_V, ffi::wlr_box { x: content.width, y: content.height - arm, width: bw, height: arm }, BottomRight, e.bottom && e.right),
             ];
             for (idx, bx, elem, enabled) in segs {
+                // A fully-faded-out zone is disabled outright rather than
+                // drawn transparent, so it costs nothing while at rest.
+                let enabled = enabled && self.border_reveal[elem.index()] > 0.0;
                 apply(self.border.segments[idx], bx, &color_for(elem), enabled);
             }
         }

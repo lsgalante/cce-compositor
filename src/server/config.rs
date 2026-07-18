@@ -77,7 +77,6 @@ impl Layout {
             gap_width: self.desktop_gap_width as f64,
             cell_inset: self.desktop_cell_fade_inset as f64,
             threshold: if self.desktop_snap { self.desktop_snap_threshold } else { 0.0 },
-            border_width: self.border_width as f64,
         }
     }
 }

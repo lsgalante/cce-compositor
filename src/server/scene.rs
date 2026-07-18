@@ -13,6 +13,12 @@ pub struct SceneLayers {
     pub overlay: *mut ffi::wlr_scene_tree,
     pub popups: *mut ffi::wlr_scene_tree,
     pub override_redirect: *mut ffi::wlr_scene_tree,
+    /// Hover-revealed window borders. Borders draw outside the content box, so
+    /// with the content filling its grid cell they overhang into the gap and
+    /// over the neighbouring window. Hosting them above every other layer
+    /// keeps a revealed edge visible instead of letting the neighbour occlude
+    /// it. Each window parents its own `border_tree` here.
+    pub border_overlay: *mut ffi::wlr_scene_tree,
 }
 
 pub struct Scene {
@@ -43,6 +49,7 @@ impl Scene {
                 overlay: std::ptr::null_mut(),
                 popups: std::ptr::null_mut(),
                 override_redirect: std::ptr::null_mut(),
+                border_overlay: std::ptr::null_mut(),
             },
         }
     }
@@ -98,8 +105,10 @@ impl Scene {
         self.layers.overlay = ffi::wlr_scene_tree_create(normal_tree);
         self.layers.popups = ffi::wlr_scene_tree_create(normal_tree);
         self.layers.override_redirect = ffi::wlr_scene_tree_create(normal_tree);
+        self.layers.border_overlay = ffi::wlr_scene_tree_create(normal_tree);
 
-        if self.layers.background.is_null()
+        if self.layers.border_overlay.is_null()
+            || self.layers.background.is_null()
             || self.layers.bottom.is_null()
             || self.layers.wm.is_null()
             || self.layers.top.is_null()

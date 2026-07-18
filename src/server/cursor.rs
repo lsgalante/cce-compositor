@@ -480,15 +480,17 @@ impl Cursor {
             let wm = &(*(*self.seat).server).wm;
             if wm.windows.iter().any(|&w| w == old) && !(*old).closed {
                 (*old).hovered_border_element = None;
-                (*old).draw_borders();
             }
         }
         self.hovered_border_window = target;
         self.hovered_border_element = element;
         if !target.is_null() {
             (*target).hovered_border_element = element;
-            (*target).draw_borders();
         }
+        // Borders rest invisible and fade in, so the change in hover target is
+        // the start of an animation rather than a repaint: the fade timer
+        // repaints every affected window as it steps.
+        (*(*self.seat).server).wm.arm_border_fade();
     }
 
     pub unsafe fn passthrough(&mut self, time_msec: u32) {
@@ -2266,6 +2268,11 @@ pub enum BorderZone {
     Resize(crate::window::Edges),
 }
 
+/// Floor on the border grab/reveal band, in layout pixels. Borders are
+/// invisible until hovered, so the band is the only thing to aim at; a 2px
+/// target would be unusable.
+pub const HOVER_BAND_MIN: f64 = 8.0;
+
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
     if (*(*window).server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
         return BorderZone::None;
@@ -2283,22 +2290,32 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
 
     // Width-only, matching draw_borders: visible borders are the zones at
     // their real width regardless of the ssd flag.
+    //
+    // Borders rest invisible and are revealed by hovering this band, so it
+    // doubles as the reveal target and must stay comfortable to hit: a
+    // narrow configured border still gets a HOVER_BAND_MIN-wide grab zone.
     let is_virtual_border = (*window).rendering_requested.border.width == 0;
-    let bw = if is_virtual_border {
-        8.0
+    let bw_unscaled = if is_virtual_border {
+        HOVER_BAND_MIN
     } else {
-        (*window).rendering_requested.border.width as f64
+        ((*window).rendering_requested.border.width as f64).max(HOVER_BAND_MIN)
     };
-    if bw <= 0.0 {
+    if bw_unscaled <= 0.0 {
         return BorderZone::None;
     }
+
+    // box_geom holds the UNSCALED content size; on screen the window covers
+    // `size * scale` (as scene::at accounts for). Without this the band sits
+    // in the wrong place at any zoom other than 1.0.
+    let scale = if (*window).scale > 0.0 { (*window).scale } else { 1.0 };
+    let bw = bw_unscaled * scale;
 
     let geom = (*window).box_geom;
     let rx = lx - geom.x as f64;
     let ry = ly - geom.y as f64;
 
-    let content_w = geom.width as f64;
-    let content_h = geom.height as f64;
+    let content_w = geom.width as f64 * scale;
+    let content_h = geom.height as f64 * scale;
 
     if rx >= 0.0 && rx < content_w && ry >= 0.0 && ry < content_h {
         return BorderZone::None;
@@ -2309,7 +2326,12 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
         // moves the window, everything else resizes. Corner squares of
         // `corner_len` (measured from the outer corners along the band)
         // resize on both adjacent edges, so the top corners still resize.
-        let corner_len = crate::window::border_corner_len(bw, (*(*window).server).wm.layout.border_corner_length);
+        // Derived in unscaled units (both inputs are unscaled), then brought
+        // into screen space alongside the band.
+        let corner_len = crate::window::border_corner_len(
+            bw_unscaled,
+            (*(*window).server).wm.layout.border_corner_length,
+        ) * scale;
 
         let dist_left = rx + bw;
         let dist_right = (content_w + bw) - rx;
