@@ -124,6 +124,10 @@ pub struct WindowManager {
     pub viewport_settle_timer: *mut ffi::wl_event_source,
     pub clean_exit_in_progress: bool,
     pub clean_exit_timer: *mut ffi::wl_event_source,
+    /// `window_manager.center_on_spawn`: whether a newly spawned window pulls the viewport
+    /// over to it when it takes focus. Off, the desk stays put and the window opens wherever
+    /// the layout placed it. Focus-follow panning between EXISTING windows is unaffected.
+    pub center_on_spawn: bool,
 }
 
 impl WindowManager {
@@ -228,6 +232,8 @@ impl WindowManager {
             return Err("Failed to create clean exit timer event source");
         }
         self.clean_exit_in_progress = false;
+        // Default until the config is parsed (which happens after this init).
+        self.center_on_spawn = true;
 
         self.global = ffi::wl_global_create(
             (*server).wl_server,

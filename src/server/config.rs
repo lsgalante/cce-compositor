@@ -231,6 +231,9 @@ pub struct WindowManagerConfig {
     pub toggle_fullscreen: Option<String>,
     pub toggle_overview: Option<String>,
     pub window_switcher: Option<String>,
+    /// Whether a newly spawned window pulls the viewport over to it. `None` = the default,
+    /// which is to centre (what the compositor has always done).
+    pub center_on_spawn: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
@@ -1631,7 +1634,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let toggle_fullscreen = get_child_arg_string_opt(node, "toggle_fullscreen");
         let toggle_overview = get_child_arg_string_opt(node, "toggle_overview");
         let window_switcher = get_child_arg_string_opt(node, "window_switcher");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher });
+        let center_on_spawn = get_child_arg_bool_opt(node, "center_on_spawn");
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, center_on_spawn });
     }
 
     Ok(Config {
@@ -1688,6 +1692,11 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
 
     state.output_scale = 1.0f32;
     state.display = config.display.clone();
+    state.center_on_spawn = config
+        .window_manager
+        .as_ref()
+        .and_then(|wm| wm.center_on_spawn)
+        .unwrap_or(true);
 
     state.layout.gap = config.layout.gap as i32;
     state.layout.gap_top = config.layout.gap_top as i32;
@@ -2024,6 +2033,34 @@ mod tests {
         assert_eq!(wm.close_window, Some("super+q".to_string()));
         assert_eq!(wm.toggle_fullscreen, Some("super+f".to_string()));
         assert_eq!(wm.toggle_overview, Some("swipe_up".to_string()));
+        // Absent means "unset", which the apply step reads as the centring default.
+        assert_eq!(wm.center_on_spawn, None);
+    }
+
+    #[test]
+    fn test_kdl_window_manager_center_on_spawn() {
+        let off = parse_kdl_config(
+            r#"
+            window_manager {
+                center_on_spawn (bool)false
+            }
+        "#,
+        )
+        .unwrap();
+        assert_eq!(off.window_manager.unwrap().center_on_spawn, Some(false));
+
+        let on = parse_kdl_config(
+            r#"
+            window_manager {
+                center_on_spawn (bool)true
+            }
+        "#,
+        )
+        .unwrap();
+        assert_eq!(on.window_manager.unwrap().center_on_spawn, Some(true));
+
+        // No window_manager block at all: nothing to read, and the apply step defaults on.
+        assert!(parse_kdl_config("layout {\n gap 4\n}").unwrap().window_manager.is_none());
     }
 
     #[test]

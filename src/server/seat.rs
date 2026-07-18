@@ -422,7 +422,14 @@ impl Seat {
                 if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
                     let app_id = (*window).get_app_id_string();
                     let is_cce_cloud = app_id.as_ref().map(|id| id == "cce-cloud").unwrap_or(false);
-                    let should_pan = (!is_new || !(*window).restored) && !is_cce_cloud;
+                    // A window newly on screen pulls the viewport over to it only when
+                    // `window_manager.center_on_spawn` allows it; one coming back from the
+                    // saved session at startup never did. Reopening an app mid-session is a
+                    // spawn even though `restored` is set — it only borrowed its old geometry
+                    // from `last_window_states`. Focus moving between windows that were
+                    // already up still pans either way; the key is about spawning.
+                    let spawn_pan = !(*window).session_restored && (*self.server).wm.center_on_spawn;
+                    let should_pan = (!is_new || spawn_pan) && !is_cce_cloud;
                     if should_pan {
                         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
                         let mut curr_out = (*outputs_list).next;

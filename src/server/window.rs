@@ -265,6 +265,11 @@ pub struct Window {
     pub mode_locked: bool,
     pub is_new: bool,
     pub restored: bool,
+    /// True only when the restored geometry came out of the startup restore queue
+    /// (`state.json`'s window list). A window reopened later in the session matches
+    /// `last_window_states` instead and leaves this false, so it still counts as a
+    /// fresh spawn for `center_on_spawn`.
+    pub session_restored: bool,
     pub restored_focused: bool,
     pub closed: bool,
     pub has_parent: bool,
@@ -449,6 +454,7 @@ impl Window {
             mode_locked: false,
             is_new: true,
             restored: false,
+            session_restored: false,
             restored_focused: false,
             closed: false,
             has_parent: false,
@@ -726,6 +732,7 @@ impl Window {
         }
         let title_str = self.get_title_string().unwrap_or_default();
         let mut saved_opt = (*self.server).wm.match_and_remove_restore_state(&app_id_str, &title_str);
+        let from_session = saved_opt.is_some();
         if saved_opt.is_none() {
             saved_opt = (*self.server).wm.match_last_window_state(&app_id_str, &title_str);
         }
@@ -770,6 +777,7 @@ impl Window {
             }
 
             self.restored = true;
+            self.session_restored = from_session;
             self.restored_focused = saved.focused;
         }
     }
