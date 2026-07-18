@@ -2098,9 +2098,10 @@ impl Window {
             ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
 
             // Disable backdrop blur during active viewport zoom/pan for maximum performance,
-            // EXCEPT for the data editor window (app_id: "cce-data-editor") which we want to keep blurred.
+            // EXCEPT for cce-* apps, which we keep blurred during the pan so their translucent
+            // backgrounds don't flicker as blur toggles on/off across motion frames.
             let app_id = self.get_app_id_string().unwrap_or_default();
-            if app_id.starts_with("cce-data-editor") {
+            if app_id.starts_with("cce-") {
                 let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                                 app_id.starts_with("cce-status");
                 let is_cce_app = app_id.starts_with("cce-");
