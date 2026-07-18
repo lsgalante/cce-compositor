@@ -503,6 +503,30 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         return;
     }
 
+    // A self-sizing overlay (cce-cloud) repaints at a new size on its own, with no
+    // configure round trip. The size-change branches below can't catch it: they
+    // compare against (*toplevel).geometry, which already holds the new value by
+    // the time they run, so size_changed is never true. Track the live geometry
+    // here instead and move the border with it, in the same commit that puts the
+    // new buffer on screen — waiting for the WM cycle (which round-trips out to
+    // the external window-manager client) leaves the border a size behind.
+    if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
+        let mut live = std::mem::zeroed();
+        ffi::river_wlr_xdg_surface_get_geometry(base, &mut live);
+        if live.width > 0 && live.height > 0
+            && (live.width != (*window).box_geom.width || live.height != (*window).box_geom.height)
+        {
+            (*window).box_geom.width = live.width;
+            (*window).box_geom.height = live.height;
+            // render_finish would otherwise reset box_geom from the render-start
+            // snapshot (rendering_sent) and snap the border back to the old size.
+            (*window).self_resized = true;
+            (*window).draw_borders();
+            (*window).set_dimensions(live.width as u32, live.height as u32);
+            (*(*window).server).wm.dirty_windowing();
+        }
+    }
+
     match (*toplevel).configure_state {
         ConfigureState::Idle | ConfigureState::Committed | ConfigureState::TimedOut(..) => {
             let old_geometry = (*toplevel).geometry;
@@ -519,6 +543,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
                 );
                 let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
                                 (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+                // Overlays are handled by the live-geometry sync above, before this
+                // match — size_changed is never true for them.
                 if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status {
                     (*window).set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
                     (*window).configure_sent.width = Some(new_geometry.width as u32);
@@ -546,9 +572,12 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             (*window).rendering_scheduled.width = new_geometry.width as u32;
             (*window).rendering_scheduled.height = new_geometry.height as u32;
 
-            let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
+            let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status ||
                             (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
-            if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status {
+            // Overlay included so its scheduled size tracks the client's own; the
+            // border itself is handled by the live-geometry sync above.
+            let is_overlay = (*window).tiling_mode == crate::tiling::TilingMode::Overlay;
+            if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status || is_overlay {
                 (*window).set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
                 if is_status {
                     (*window).box_geom.width = new_geometry.width;

@@ -285,6 +285,11 @@ pub struct Window {
     pub resize_start_w: u32,
     pub resize_start_h: u32,
     pub resize_edges: Option<Edges>,
+    /// The client resized itself and the new-size buffer is already on screen, so
+    /// `render_finish` must take the size from the live commit rather than the
+    /// render-start snapshot (`rendering_sent`), which still holds the previous
+    /// size and would snap the border back. Cleared once consumed.
+    pub self_resized: bool,
     pub commit: ffi::wl_listener,
     pub was_fullscreen: bool,
     pub saved_width: i32,
@@ -464,6 +469,7 @@ impl Window {
             resize_start_w: 0,
             resize_start_h: 0,
             resize_edges: None,
+            self_resized: false,
             commit: std::mem::zeroed(),
             was_fullscreen: false,
             saved_width: 0,
@@ -1022,7 +1028,9 @@ impl Window {
     pub unsafe fn set_dimensions_hint(&mut self, hint: DimensionsHint) {
         self.wm_scheduled.dimensions_hint = hint;
         if self.wm_sent.dimensions_hint != hint {
-            if matches!(self.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Status) {
+            // Overlay included: a self-sizing overlay (cce-cloud) changes its hint
+            // on every resize, and skipping it meant no arrange pass was scheduled.
+            if matches!(self.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Overlay) {
                 (*self.server).wm.dirty_windowing();
             }
             self.wm_sent.dimensions_hint = hint;
@@ -1865,8 +1873,11 @@ impl Window {
         // updated by the commit handler) always tracks the newest commit.
         // Pairing it with the older snapshot size clips the surface short
         // and makes the anchored edge bounce every cycle.
+        // self_resized: same reasoning, for a client that resized itself without a
+        // configure — its newest buffer is already on screen, so rendering_sent is
+        // behind and would drag the border back to the previous size.
         let mut resize_synced = false;
-        if self.resize_edges.is_some() {
+        if self.resize_edges.is_some() || self.self_resized {
             if let WindowImpl::Toplevel(toplevel) = self.impl_type {
                 if !toplevel.is_null() {
                     self.box_geom.width = (*toplevel).geometry.width;
@@ -1883,6 +1894,7 @@ impl Window {
                 self.box_geom.height = self.rendering_sent.height as i32;
             }
         }
+        self.self_resized = false;
 
         let mut clip = requested.clip;
         let mut content_clip = requested.content_clip;
