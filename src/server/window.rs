@@ -288,6 +288,9 @@ pub struct Window {
     pub tree: *mut ffi::wlr_scene_tree,
     pub fullscreen_background: *mut ffi::wlr_scene_rect,
     pub window_background: *mut ffi::wlr_scene_rect,
+    /// scenefx drop shadow, first child of `tree` so it renders beneath
+    /// everything else in the window; null if creation failed (shadow skipped).
+    pub shadow: *mut ffi::wlr_scene_shadow,
     pub decorations_below: ffi::wl_list,
     pub decorations_below_tree: *mut ffi::wlr_scene_tree,
     pub surfaces: crate::scene::SaveableSurfaces,
@@ -428,6 +431,16 @@ impl Window {
         // SceneFX 0.4 does not support restack_xwayland_surfaces
         // (*capture_scene).restack_xwayland_surfaces = false;
 
+        // Created first so it is the bottom-most child: the cast shadow must render
+        // beneath the (translucent) window content and its backgrounds. Geometry and
+        // color are synced per-frame in update_shadow; a null pointer just disables
+        // the effect rather than failing window creation.
+        let shadow_color = [0.0f32, 0.0f32, 0.0f32, 0.55f32];
+        let shadow = ffi::wlr_scene_shadow_create(tree, 0, 0, 0, 22.0, shadow_color.as_ptr());
+        if !shadow.is_null() {
+            ffi::wlr_scene_node_set_enabled(&mut (*shadow).node, false);
+        }
+
         let black_color = [0.0f32, 0.0f32, 0.0f32, 1.0f32];
         let fullscreen_background = ffi::wlr_scene_rect_create(tree, 0, 0, black_color.as_ptr());
         if fullscreen_background.is_null() {
@@ -491,6 +504,7 @@ impl Window {
             tree,
             fullscreen_background,
             window_background,
+            shadow,
             decorations_below: std::mem::zeroed(),
             decorations_below_tree,
             surfaces,
@@ -1885,6 +1899,8 @@ impl Window {
                 // (cf. the window_background rect, which scales it the same way).
                 if legacy_blur { 0 } else { (radius as f64 * self.scale) as i32 },
             );
+            let want_shadow = !is_status && (self.wm_requested.ssd || is_cce_app) && !self.is_fullscreen();
+            self.update_shadow(width, height, radius, want_shadow);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
             ffi::river_scene_node_set_corner_radius(
@@ -2282,6 +2298,8 @@ impl Window {
                     height,
                     if legacy_blur { 0 } else { (radius as f64 * self.scale) as i32 },
                 );
+                let want_shadow = !is_status && (self.wm_requested.ssd || is_cce_app) && !self.is_fullscreen();
+                self.update_shadow(width, height, radius, want_shadow);
             } else {
                 // Tearing the blur down: radius is irrelevant, the nodes are destroyed.
                 ffi::river_scene_node_enable_blur(self.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true, 0, 0, 0, 0, 0);
@@ -2290,6 +2308,46 @@ impl Window {
             self.scale_only_render_finish();
             self.draw_borders();
         }
+    }
+
+    /// Sync the drop shadow with the current geometry. `width`/`height` are the
+    /// content size in device px, `radius` the corner radius in logical px (as
+    /// computed for the blur/rounding paths). scenefx's box-shadow shader draws
+    /// the shadow of a box inset by sigma on all sides of the node box, so the
+    /// node is padded by sigma and offset so the casting box lands exactly on
+    /// the window, displaced by the configured offset — which should point away
+    /// from the light (down-right for the DE's default top-left light). The
+    /// window's own box is punched out via the clipped region so the shadow
+    /// darkens only the desktop around the window, never the (translucent)
+    /// window itself.
+    pub unsafe fn update_shadow(&self, width: i32, height: i32, radius: i32, want: bool) {
+        if self.shadow.is_null() {
+            return;
+        }
+        let node = &mut (*self.shadow).node as *mut ffi::wlr_scene_node;
+        let layout = &(*self.server).wm.layout;
+        let enabled = want && layout.shadow_enabled && width > 0 && height > 0;
+        ffi::wlr_scene_node_set_enabled(node, enabled);
+        if !enabled {
+            return;
+        }
+        let sigma = (layout.shadow_sigma as f64 * self.scale) as f32;
+        let pad = sigma.ceil() as i32;
+        let ox = (layout.shadow_offset_x as f64 * self.scale) as i32;
+        let oy = (layout.shadow_offset_y as f64 * self.scale) as i32;
+        let radius_dev = (radius as f64 * self.scale) as i32;
+        ffi::wlr_scene_shadow_set_color(self.shadow, layout.shadow_color.as_ptr());
+        ffi::wlr_scene_shadow_set_blur_sigma(self.shadow, sigma);
+        ffi::wlr_scene_shadow_set_corner_radius(self.shadow, radius_dev);
+        ffi::wlr_scene_shadow_set_size(self.shadow, width + 2 * pad, height + 2 * pad);
+        ffi::river_scene_node_set_position_if_changed(node, -pad + ox, -pad + oy);
+        let r = radius_dev.clamp(0, u16::MAX as i32) as u16;
+        ffi::wlr_scene_shadow_set_clipped_region(self.shadow, ffi::clipped_region {
+            area: ffi::wlr_box { x: pad - ox, y: pad - oy, width, height },
+            corners: ffi::fx_corner_radii {
+                top_left: r, top_right: r, bottom_right: r, bottom_left: r,
+            },
+        });
     }
 
     /// Advance the hover fade one tick. Every zone eases toward 1.0 if it is

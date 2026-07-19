@@ -57,6 +57,16 @@ pub struct Layout {
     pub desktop_cell_corner_radius: i32,
     pub desktop_cell_fade_inset: i64,
     pub desktop_grid_fade_mode: String,
+    /// Drop shadow under cce/ssd windows (scenefx box-shadow node).
+    pub shadow_enabled: bool,
+    /// Gaussian spread in logical px.
+    pub shadow_sigma: f32,
+    /// Premultiplied-alpha RGBA, like `border_color`.
+    pub shadow_color: [f32; 4],
+    /// Displacement of the cast shadow in logical px — should point away from
+    /// `light_source_position` (down-right for the default top-left light).
+    pub shadow_offset_x: i32,
+    pub shadow_offset_y: i32,
     /// Magnetic grid snap for interactive move/resize.
     pub desktop_snap: bool,
     /// Snap radius in virtual units.
@@ -127,6 +137,11 @@ impl Default for Layout {
             desktop_cell_corner_radius: 0,
             desktop_cell_fade_inset: 0,
             desktop_grid_fade_mode: "linear".to_string(),
+            shadow_enabled: true,
+            shadow_sigma: 22.0,
+            shadow_color: [0.0, 0.0, 0.0, 0.55],
+            shadow_offset_x: 7,
+            shadow_offset_y: 7,
             desktop_snap: true,
             desktop_snap_threshold: 24.0,
             scenefx_optimized_blur: true,
@@ -331,7 +346,23 @@ pub struct SurfaceConfig {
     pub border_corner_length: i64,
     #[serde(default = "default_cloud_position_default")]
     pub cloud_position_default: Option<[i32; 2]>,
+    #[serde(default = "default_shadow_enabled")]
+    pub shadow_enabled: bool,
+    #[serde(default = "default_shadow_sigma")]
+    pub shadow_sigma: f64,
+    #[serde(default = "default_shadow_color")]
+    pub shadow_color: String,
+    #[serde(default = "default_shadow_offset_x")]
+    pub shadow_offset_x: i64,
+    #[serde(default = "default_shadow_offset_y")]
+    pub shadow_offset_y: i64,
 }
+
+fn default_shadow_enabled() -> bool { true }
+fn default_shadow_sigma() -> f64 { 22.0 }
+fn default_shadow_color() -> String { "#0000008c".to_string() }
+fn default_shadow_offset_x() -> i64 { 7 }
+fn default_shadow_offset_y() -> i64 { 7 }
 
 impl Default for SurfaceConfig {
     fn default() -> Self {
@@ -356,6 +387,11 @@ impl Default for SurfaceConfig {
             border_segment_gap: default_border_segment_gap(),
             border_corner_length: 0,
             cloud_position_default: default_cloud_position_default(),
+            shadow_enabled: default_shadow_enabled(),
+            shadow_sigma: default_shadow_sigma(),
+            shadow_color: default_shadow_color(),
+            shadow_offset_x: default_shadow_offset_x(),
+            shadow_offset_y: default_shadow_offset_y(),
         }
      }
 }
@@ -1591,6 +1627,44 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                             }
                         }
                     }
+                    if let Some(shadow_node) = surface_children.nodes().iter().find(|n| n.name().value() == "shadow") {
+                        found_nested = true;
+                        for entry in shadow_node.entries() {
+                            if let Some(id) = entry.name() {
+                                match id.value() {
+                                    "enabled" => {
+                                        if let Some(val) = entry.value().as_bool() {
+                                            surface.shadow_enabled = val;
+                                        }
+                                    }
+                                    // Named `blur` to match the status/backplate blur keys.
+                                    "blur" => {
+                                        if let Some(val) = entry.value().as_f64() {
+                                            surface.shadow_sigma = val;
+                                        } else if let Some(val) = entry.value().as_i64() {
+                                            surface.shadow_sigma = val as f64;
+                                        }
+                                    }
+                                    "color" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surface.shadow_color = val.to_string();
+                                        }
+                                    }
+                                    "offset_x" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.shadow_offset_x = val;
+                                        }
+                                    }
+                                    "offset_y" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.shadow_offset_y = val;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
                     if let Some(cloud_node) = surface_children.nodes().iter().find(|n| n.name().value() == "cloud") {
                         found_nested = true;
                         if let Some(pos) = get_child_arg_vec2i_opt(cloud_node, "position_default") {
@@ -1764,6 +1838,11 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
     state.layout.status_module_hide_mode_preview = config.layout.status_module_hide_mode_preview;
     state.layout.cloud_position_default = config.surface.cloud_position_default;
+    state.layout.shadow_enabled = config.surface.shadow_enabled;
+    state.layout.shadow_sigma = config.surface.shadow_sigma.max(0.0) as f32;
+    state.layout.shadow_color = parse_hex_color_rgba(&config.surface.shadow_color);
+    state.layout.shadow_offset_x = config.surface.shadow_offset_x as i32;
+    state.layout.shadow_offset_y = config.surface.shadow_offset_y as i32;
 
     for (key, val) in &config.env {
         let expanded = expand_env_vars(val);
