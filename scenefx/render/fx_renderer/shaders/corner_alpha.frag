@@ -1,5 +1,24 @@
+// Corner-shape exponent: 2 = circular arc, > 2 = superellipse "squircle"
+// corners — kept in lockstep with the cce-ui clients' corner_shape so the
+// compositor's corner cut lands exactly on the corners the clients draw.
+uniform float corner_shape;
+
 float get_dist(vec2 q, float radius) {
-	return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+	vec2 p = max(q, 0.0);
+	if (corner_shape > 2.001 && radius > 0.0 && p.x > 0.0 && p.y > 0.0) {
+		// Superellipse (Lp-norm) corner, radius-normalized so the pow()
+		// arguments stay near 1 (mediump-safe). The Lp gradient is not unit
+		// length, so the distance carries a first-order |grad| correction —
+		// exact on the boundary, where the AA smoothstep samples it.
+		vec2 u = p / radius;
+		float lp = max(pow(pow(u.x, corner_shape) + pow(u.y, corner_shape),
+			1.0 / corner_shape), 1e-4);
+		vec2 g = vec2(pow(u.x / lp, corner_shape - 1.0),
+			pow(u.y / lp, corner_shape - 1.0));
+		return min(max(q.x, q.y), 0.0)
+			+ radius * (lp - 1.0) / max(length(g), 1e-4);
+	}
+	return min(max(q.x, q.y), 0.0) + length(p) - radius;
 }
 
 // Note: Returns 0.0 if outside, 1.0 if inside the bounds. The is_cutout parameter

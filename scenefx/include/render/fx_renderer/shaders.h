@@ -27,10 +27,18 @@ struct shader_corner_radii {
 	GLint top_right;
 	GLint bottom_left;
 	GLint bottom_right;
+	// The program's shared "corner_shape" uniform (see corner_alpha.frag).
+	// One location per program; radius and clip_radius instances of the same
+	// program resolve to the same location, which is harmless.
+	GLint shape;
 };
 
 void uniform_corner_radii_set(const struct shader_corner_radii *uniform,
 		const struct fx_corner_fradii *corners);
+
+// Renderer-global corner-shape exponent fed to every rounded-corner shader:
+// 2 (default) = circular arcs, > 2 = superellipse squircle corners.
+float fx_corner_shape(void);
 
 struct quad_shader {
 	GLuint program;

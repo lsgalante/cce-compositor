@@ -17,6 +17,12 @@ struct fx_renderer *fx_get_renderer(struct wlr_renderer *wlr_renderer);
 bool fx_renderer_check_ext(struct wlr_renderer *renderer, const char *ext);
 GLuint fx_renderer_get_buffer_fbo(struct wlr_renderer *renderer, struct wlr_buffer *buffer);
 
+// Renderer-global corner-shape exponent for every rounded-corner cut
+// (windows, blur, clipped regions): 2 (the default) is a circular arc,
+// > 2 a superellipse "squircle" with continuous curvature. Plain state —
+// callable before the renderer exists and without a current GL context.
+void fx_renderer_set_corner_shape(float shape);
+
 //
 // fx_texture
 //

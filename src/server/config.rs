@@ -248,6 +248,11 @@ pub struct WindowManagerConfig {
     /// Whether a newly spawned window pulls the viewport over to it. `None` = the default,
     /// which is to centre (what the compositor has always done).
     pub center_on_spawn: Option<bool>,
+    /// Corner-shape exponent for scenefx's rounded-corner cuts (window
+    /// surfaces, blur, shadows' clip): 2 = circular arc, > 2 = superellipse
+    /// squircle. The same `window_manager.corner_shape` key the cce-ui
+    /// clients read, so the compositor's cut lands on the corners they draw.
+    pub corner_shape: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
@@ -1708,7 +1713,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let toggle_overview = get_child_arg_string_opt(node, "toggle_overview");
         let window_switcher = get_child_arg_string_opt(node, "window_switcher");
         let center_on_spawn = get_child_arg_bool_opt(node, "center_on_spawn");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, center_on_spawn });
+        let corner_shape = get_child_arg_f64_opt(node, "corner_shape");
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, center_on_spawn, corner_shape });
     }
 
     Ok(Config {
@@ -1770,6 +1776,19 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         .as_ref()
         .and_then(|wm| wm.center_on_spawn)
         .unwrap_or(true);
+
+    // Feed scenefx's rounded-corner shaders the DE-wide corner-shape exponent
+    // (clamped like cce-ui's corner_shape()). Plain C state, safe pre-renderer
+    // and on live reload.
+    let corner_shape = config
+        .window_manager
+        .as_ref()
+        .and_then(|wm| wm.corner_shape)
+        .unwrap_or(2.0)
+        .clamp(2.0, 16.0) as f32;
+    unsafe {
+        crate::ffi::fx_renderer_set_corner_shape(corner_shape);
+    }
 
     state.layout.gap = config.layout.gap as i32;
     state.layout.gap_top = config.layout.gap_top as i32;
@@ -2139,6 +2158,23 @@ mod tests {
 
         // No window_manager block at all: nothing to read, and the apply step defaults on.
         assert!(parse_kdl_config("layout {\n gap 4\n}").unwrap().window_manager.is_none());
+    }
+
+    #[test]
+    fn test_kdl_window_manager_corner_shape() {
+        let set = parse_kdl_config(
+            r#"
+            window_manager {
+                corner_shape (f64)4.5
+            }
+        "#,
+        )
+        .unwrap();
+        assert_eq!(set.window_manager.unwrap().corner_shape, Some(4.5));
+
+        // Absent means "unset"; the apply step then feeds scenefx the circular default.
+        let unset = parse_kdl_config("window_manager {\n center_on_spawn (bool)true\n}").unwrap();
+        assert_eq!(unset.window_manager.unwrap().corner_shape, None);
     }
 
     #[test]
