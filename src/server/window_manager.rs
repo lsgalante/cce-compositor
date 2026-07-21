@@ -1642,11 +1642,43 @@ impl WindowManager {
     /// feed it the currently switchable windows in most-recently-used order, and
     /// hand off to a background thread that focuses whatever the user commits to.
     ///
-    /// cce-cloud is a `Layer::Overlay` surface with exclusive keyboard focus, so
-    /// once it is up it drives the interaction itself (Tab cycles, Super release
-    /// commits, Escape cancels) and prints the chosen entry to stdout. We only
-    /// build the list and map the committed entry back to a window id.
-    pub unsafe fn launch_window_switcher(&mut self) {
+    /// cce-cloud is a `Layer::Overlay` surface with exclusive keyboard focus,
+    /// and it commits on Super release / cancels on Escape by itself. Tab while
+    /// Super is held, however, never reaches it — that chord matches this very
+    /// keybinding — so a repeat press lands back here and is forwarded as a
+    /// `__cce_switcher_next__` / `__cce_switcher_prev__` line down the held-open
+    /// stdin pipe, moving the highlight. The committed entry is printed to
+    /// stdout; we only build the list and map the selection back to a window id.
+    ///
+    /// `backwards` is the super+shift+tab direction: it cycles the highlight
+    /// the other way, and opening with it lands on the least-recently-used
+    /// window instead of the previously focused one.
+    pub unsafe fn launch_window_switcher(&mut self, backwards: bool) {
+        let cycle_line: &[u8] = if backwards {
+            b"__cce_switcher_prev__\n"
+        } else {
+            b"__cce_switcher_next__\n"
+        };
+
+        // A repeat super+(shift+)tab while the switcher is already up moves its
+        // highlight instead of spawning a second switcher.
+        {
+            let mut active = ACTIVE_SWITCHER.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(handle) = active.as_mut() {
+                use std::io::Write;
+                if handle
+                    .stdin
+                    .write_all(cycle_line)
+                    .and_then(|_| handle.stdin.flush())
+                    .is_ok()
+                {
+                    return;
+                }
+                // Dead pipe: the child exited and we raced its cleanup thread.
+                // Drop the stale handle and open a fresh switcher below.
+                *active = None;
+            }
+        }
         // Most-recently-used order (focus_history is MRU-front). The focused
         // window lands first, so cce-cloud auto-selects index 1 — the previously
         // focused window — which is the classic alt-tab default.
@@ -1682,6 +1714,12 @@ impl WindowManager {
             input.push('\n');
             items.push((id, display));
         }
+        if backwards {
+            // cce-cloud auto-highlights index 1 once the items land; two prev
+            // steps from there wrap to the last entry, so a backwards open
+            // starts on the least-recently-used window (classic alt+shift+tab).
+            input.push_str("__cce_switcher_prev__\n__cce_switcher_prev__\n");
+        }
 
         // Position near the top-centre of the enabled output. Passing explicit
         // -x/-y keeps cce-cloud a layer-shell overlay (omitting both would make
@@ -1705,8 +1743,49 @@ impl WindowManager {
         let y_pos = origin_y + 80;
 
         let display_env = std::env::var("WAYLAND_DISPLAY").ok();
+
+        let mut child = match std::process::Command::new(cce_cloud_cmd())
+            .args([
+                "--switcher",
+                "-p",
+                "Windows:",
+                "-x",
+                &x_pos.to_string(),
+                "-y",
+                &y_pos.to_string(),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("window switcher: failed to spawn cce-cloud: {}", e);
+                return;
+            }
+        };
+
+        // Feed the item list but keep stdin open: repeat super+(shift+)tab
+        // presses write cycle lines down the same pipe. cce-cloud streams
+        // items in as they arrive and does not wait for EOF.
+        let generation = SWITCHER_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(input.as_bytes());
+            let _ = stdin.flush();
+            *ACTIVE_SWITCHER.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(SwitcherHandle { generation, stdin });
+        }
+
         std::thread::spawn(move || {
-            run_window_switcher(input, items, x_pos, y_pos, display_env);
+            run_window_switcher(child, items, display_env);
+            // The switcher is gone; release its stdin unless a newer switcher
+            // already replaced it.
+            let mut active = ACTIVE_SWITCHER.lock().unwrap_or_else(|e| e.into_inner());
+            if active.as_ref().map_or(false, |h| h.generation == generation) {
+                *active = None;
+            }
         });
     }
 
@@ -1961,7 +2040,10 @@ impl WindowManager {
                 }
             }
             Action::WindowSwitcher => {
-                self.launch_window_switcher();
+                self.launch_window_switcher(false);
+            }
+            Action::WindowSwitcherPrev => {
+                self.launch_window_switcher(true);
             }
             Action::Reload => {
                 log::info!("monolithic execute_action: Reload requested");
@@ -3379,46 +3461,28 @@ fn cce_cloud_cmd() -> String {
     "cce-cloud".to_string()
 }
 
-/// Body of the window switcher, run on a detached thread. Spawns cce-cloud in
-/// switcher mode, pipes it the item list, waits for the committed selection on
-/// stdout, and asks the compositor to focus it via the control socket (so the
-/// actual focus change happens on the main thread through the IPC dispatcher).
+/// Stdin of the currently open `cce-cloud --switcher` child. Held open (in
+/// `ACTIVE_SWITCHER`) so repeat super+tab presses can advance the highlight via
+/// cce-cloud's magic `__cce_switcher_next__` stdin line; the generation lets the
+/// per-switcher cleanup thread avoid clearing a newer switcher's handle.
+struct SwitcherHandle {
+    generation: u64,
+    stdin: std::process::ChildStdin,
+}
+
+static ACTIVE_SWITCHER: std::sync::Mutex<Option<SwitcherHandle>> = std::sync::Mutex::new(None);
+static SWITCHER_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Tail of the window switcher, run on a detached thread: waits for the
+/// committed selection on the already-spawned child's stdout, and asks the
+/// compositor to focus it via the control socket (so the actual focus change
+/// happens on the main thread through the IPC dispatcher).
 fn run_window_switcher(
-    input: String,
+    mut child: std::process::Child,
     items: Vec<(String, String)>,
-    x_pos: i32,
-    y_pos: i32,
     display_env: Option<String>,
 ) {
     use std::io::{Read, Write};
-
-    let mut child = match std::process::Command::new(cce_cloud_cmd())
-        .args([
-            "--switcher",
-            "-p",
-            "Windows:",
-            "-x",
-            &x_pos.to_string(),
-            "-y",
-            &y_pos.to_string(),
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("window switcher: failed to spawn cce-cloud: {}", e);
-            return;
-        }
-    };
-
-    // Write the item list, then drop stdin so cce-cloud sees EOF on the feed.
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input.as_bytes());
-        let _ = stdin.flush();
-    }
 
     let mut selected = String::new();
     if let Some(mut stdout) = child.stdout.take() {

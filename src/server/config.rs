@@ -245,6 +245,7 @@ pub struct WindowManagerConfig {
     pub toggle_fullscreen: Option<String>,
     pub toggle_overview: Option<String>,
     pub window_switcher: Option<String>,
+    pub window_switcher_prev: Option<String>,
     /// Whether a newly spawned window pulls the viewport over to it. `None` = the default,
     /// which is to centre (what the compositor has always done).
     pub center_on_spawn: Option<bool>,
@@ -1712,9 +1713,10 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let toggle_fullscreen = get_child_arg_string_opt(node, "toggle_fullscreen");
         let toggle_overview = get_child_arg_string_opt(node, "toggle_overview");
         let window_switcher = get_child_arg_string_opt(node, "window_switcher");
+        let window_switcher_prev = get_child_arg_string_opt(node, "window_switcher_prev");
         let center_on_spawn = get_child_arg_bool_opt(node, "center_on_spawn");
         let corner_shape = get_child_arg_f64_opt(node, "corner_shape");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, center_on_spawn, corner_shape });
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, corner_shape });
     }
 
     Ok(Config {
@@ -1942,6 +1944,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             (&wm_config.close_window, Action::Close),
             (&wm_config.toggle_fullscreen, Action::Fullscreen),
             (&wm_config.window_switcher, Action::WindowSwitcher),
+            (&wm_config.window_switcher_prev, Action::WindowSwitcherPrev),
         ];
         for (chord_str, action) in wm_section_binds {
             let Some(chord_str) = chord_str else { continue };
