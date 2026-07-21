@@ -419,7 +419,15 @@ impl Seat {
                     false
                 };
 
-                if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
+                // Floating AND maximized windows live at real desk-plane coordinates,
+                // so focus pans the viewport to either; fullscreen is pinned to an
+                // output and popups/overlays aren't desk citizens.
+                if !window.is_null()
+                    && matches!(
+                        (*window).tiling_mode,
+                        crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Maximized
+                    )
+                {
                     let app_id = (*window).get_app_id_string();
                     let is_cce_cloud = app_id.as_ref().map(|id| id == "cce-cloud").unwrap_or(false);
                     // A window newly on screen pulls the viewport over to it only when
