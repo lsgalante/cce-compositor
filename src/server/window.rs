@@ -2081,24 +2081,12 @@ impl Window {
         ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
         ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
 
-        let (geom_x, geom_y) = match self.impl_type {
-            WindowImpl::Toplevel(toplevel) => {
-                if toplevel.is_null() {
-                    (0, 0)
-                } else {
-                    let mut x = (*toplevel).geometry.x;
-                    let mut y = (*toplevel).geometry.y;
-                    if self.wm_requested.ssd {
-                        x = 0;
-                        y = 0;
-                    }
-
-                    (x, y)
-                }
-            }
-            _ => (0, 0),
-        };
-        ffi::river_scene_node_set_position_if_changed(self.surfaces.tree as *mut ffi::wlr_scene_node, -geom_x, -geom_y);
+        // No geometry compensation here: wlr_scene_xdg_surface_create already
+        // anchors its subtree at the top-left of the xdg window geometry (it
+        // re-offsets by -geometry on every commit), so subtracting geometry.x/y
+        // again shifted CSD windows with shadow margins (Electron/Chromium
+        // floating) up-left by their shadow size, off the desktop grid.
+        ffi::river_scene_node_set_position_if_changed(self.surfaces.tree as *mut ffi::wlr_scene_node, 0, 0);
 
         self.apply_surface_clip(&clip, &content_clip);
 
