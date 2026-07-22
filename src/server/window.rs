@@ -343,6 +343,10 @@ pub struct Window {
     /// render-start snapshot (`rendering_sent`), which still holds the previous
     /// size and would snap the border back. Cleared once consumed.
     pub self_resized: bool,
+    /// Set by the commit listener, cleared by the window-manager stream
+    /// timer after a capture: the damage gate for `stream_server` frames.
+    /// Starts true so a fresh subscriber gets an immediate first frame.
+    pub stream_dirty: bool,
     pub commit: ffi::wl_listener,
     pub was_fullscreen: bool,
     pub saved_width: i32,
@@ -549,6 +553,7 @@ impl Window {
             resize_start_h: 0,
             resize_edges: None,
             self_resized: false,
+            stream_dirty: true,
             commit: std::mem::zeroed(),
             was_fullscreen: false,
             saved_width: 0,
@@ -3673,6 +3678,7 @@ unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
 
 unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let window = crate::container_of!(listener, Window, commit);
+    (*window).stream_dirty = true;
     let was_status = (*window).is_status_bar();
     (*window).render_finish();
     if was_status {

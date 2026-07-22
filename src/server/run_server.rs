@@ -180,6 +180,9 @@ pub fn run_server() {
     let status_sender = crate::status_server::spawn_status_server(Some(socket_str.clone()));
     server.wm.status_sender = Some(status_sender);
 
+    let stream_hub = crate::stream_server::spawn_stream_server(Some(socket_str.clone()));
+    server.wm.stream_hub = Some(stream_hub);
+
 
     let started = unsafe { ffi::wlr_backend_start(server.backend) };
     if !started {

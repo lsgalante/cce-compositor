@@ -33,6 +33,8 @@ pub mod ipc_server;
 pub mod screenshot;
 #[path = "server/status_server.rs"]
 pub mod status_server;
+#[path = "server/stream_server.rs"]
+pub mod stream_server;
 #[path = "server/scene_node_data.rs"]
 pub mod scene_node_data;
 #[path = "server/output.rs"]

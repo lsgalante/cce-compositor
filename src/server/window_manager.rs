@@ -89,6 +89,10 @@ pub struct WindowManager {
     pub gesture_binds: Vec<crate::config::GestureBind>,
     pub ipc_rx: Option<std::sync::mpsc::Receiver<crate::ipc_server::IpcRequest>>,
     pub ipc_timer: *mut ffi::wl_event_source,
+    /// Window-stream subscribers (cce-remote's live view); frames are
+    /// produced by `handle_stream_timer` when a subscribed window is dirty.
+    pub stream_hub: Option<crate::stream_server::StreamHub>,
+    pub stream_timer: *mut ffi::wl_event_source,
     /// A full-output/region screenshot parked for the next composited frame
     /// (`ccectl screenshot`); consumed by `Output::render_and_commit`.
     pub pending_screenshot: Option<crate::screenshot::PendingScreenshot>,
@@ -201,6 +205,8 @@ impl WindowManager {
         self.gesture_binds = Vec::new();
         self.ipc_rx = None;
         self.ipc_timer = std::ptr::null_mut();
+        self.stream_hub = None;
+        self.stream_timer = std::ptr::null_mut();
         self.startup = Vec::new();
         self.startup_pids = Vec::new();
         self.status_sender = None;
@@ -247,6 +253,16 @@ impl WindowManager {
             return Err("Failed to create border fade timer event source");
         }
         self.border_fade_running = false;
+
+        self.stream_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_stream_timer), self as *mut WindowManager as *mut _);
+        if self.stream_timer.is_null() {
+            ffi::wl_event_source_remove(self.timeout);
+            ffi::wl_event_source_remove(self.ipc_timer);
+            ffi::wl_event_source_remove(self.clean_exit_timer);
+            ffi::wl_event_source_remove(self.border_fade_timer);
+            return Err("Failed to create stream timer event source");
+        }
+        ffi::wl_event_source_timer_update(self.stream_timer, 200);
 
         // Default until the config is parsed (which happens after this init).
         self.center_on_spawn = true;
@@ -3442,7 +3458,77 @@ unsafe extern "C" fn handle_ipc_timer(data: *mut std::ffi::c_void) -> std::os::r
     if !(*wm).ipc_timer.is_null() {
         ffi::wl_event_source_timer_update((*wm).ipc_timer, 10);
     }
-    
+
+    0
+}
+
+/// Window-stream tick: resolve each subscription (`focused` re-resolves per
+/// tick, so streams follow focus), capture windows that are dirty (commit
+/// listener set `stream_dirty`) or due a keepalive, and try_send frames to
+/// the writer threads — never blocking the compositor (a full channel means
+/// the client is slow and simply skips the frame). Fast cadence only while
+/// subscribers exist.
+unsafe extern "C" fn handle_stream_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = &mut *(data as *mut WindowManager);
+    let idle_rearm = |wm: &WindowManager, ms: i32| {
+        if !wm.stream_timer.is_null() {
+            ffi::wl_event_source_timer_update(wm.stream_timer, ms);
+        }
+    };
+    let Some(hub) = wm.stream_hub.clone() else {
+        idle_rearm(wm, 500);
+        return 0;
+    };
+    let Ok(mut subs) = hub.subs.lock() else {
+        idle_rearm(wm, 500);
+        return 0;
+    };
+    if subs.is_empty() {
+        idle_rearm(wm, 200);
+        return 0;
+    }
+
+    // Each unique window is captured at most once per tick, shared by Arc.
+    let mut captured: Vec<(*mut Window, std::sync::Arc<crate::stream_server::Frame>)> = Vec::new();
+    let mut dead: Vec<usize> = Vec::new();
+    for i in 0..subs.len() {
+        let win = if subs[i].query == "focused" {
+            wm.focused_window()
+        } else {
+            wm.find_window_by_query(&subs[i].query)
+        };
+        if win.is_null() {
+            continue;
+        }
+        let keepalive = subs[i].last_sent.elapsed().as_secs() >= 15;
+        if !(*win).stream_dirty && !subs[i].needs_frame && !keepalive {
+            continue;
+        }
+        let frame = match captured.iter().find(|(w, _)| *w == win) {
+            Some((_, f)) => f.clone(),
+            None => match crate::screenshot::capture_window_rgba(win) {
+                Ok((rgba, w, h)) => {
+                    let f = std::sync::Arc::new(crate::stream_server::Frame { width: w, height: h, rgba });
+                    captured.push((win, f.clone()));
+                    (*win).stream_dirty = false;
+                    f
+                }
+                Err(_) => continue,
+            },
+        };
+        match subs[i].tx.try_send(frame) {
+            Ok(()) => {
+                subs[i].needs_frame = false;
+                subs[i].last_sent = std::time::Instant::now();
+            }
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {} // slow client: drop frame
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => dead.push(i),
+        }
+    }
+    for i in dead.into_iter().rev() {
+        subs.remove(i);
+    }
+    idle_rearm(wm, 33);
     0
 }
 
