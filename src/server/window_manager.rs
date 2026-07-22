@@ -2928,6 +2928,21 @@ impl WindowManager {
                 self.execute_action(&crate::config::Action::Exit, None);
                 "ok\n".to_string()
             }
+            "restart-compositor" => {
+                // Leave the restart flag for cce-display-manager's daemon (it
+                // checks after the session worker exits, verifies the file is
+                // owned by the session user, and relaunches this same session
+                // greeter-free), then exit cleanly — which saves window state,
+                // so the restored compositor brings the session back.
+                let user = std::env::var("USER")
+                    .unwrap_or_else(|_| format!("uid{}", unsafe { libc::getuid() }));
+                let flag = format!("/tmp/cce-restart-requested-{}", user);
+                if let Err(e) = std::fs::write(&flag, b"restart\n") {
+                    return format!("error: cannot write {}: {}\n", flag, e);
+                }
+                self.execute_action(&crate::config::Action::Exit, None);
+                "ok restarting\n".to_string()
+            }
             "reload" => {
                 unsafe {
                     match self.reload_config() {

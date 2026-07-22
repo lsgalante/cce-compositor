@@ -59,6 +59,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  adjust-position-mode [true|false|query]");
     print("  exit");
     print("  restart");
+    print("  restart-compositor        # exit cleanly; cce-display-manager relaunches the session");
     print("  reload");
     print("  repeat <rate> <delay>");
     print("  input <device_name|*> scroll-factor <value>");
