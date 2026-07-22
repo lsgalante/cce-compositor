@@ -2778,6 +2778,50 @@ impl WindowManager {
                     "error: no seat found\n".to_string()
                 }
             }
+            "close-window" => {
+                // close-window <app_id|id> [title substring...] — ask a specific
+                // window to close. The optional title filter disambiguates when an
+                // app has several windows (e.g. KeePassXC's orphaned "Unlock
+                // Database" prompt next to its main window).
+                if parts.len() < 2 { return "error: missing app_id/id\n".to_string(); }
+                let query = parts[1].to_lowercase();
+                let title_filter = parts[2..].join(" ").to_lowercase();
+                let mut target: *mut Window = std::ptr::null_mut();
+                let mut best_score = 0;
+                for &w in self.windows.iter() {
+                    if w.is_null() || (*w).closed
+                        || !matches!((*w).state, crate::window::WindowState::Mapped)
+                    {
+                        continue;
+                    }
+                    if !title_filter.is_empty() {
+                        let title = (*w).get_title_string().unwrap_or_default().to_lowercase();
+                        if !title.contains(&title_filter) {
+                            continue;
+                        }
+                    }
+                    let id_match = query.parse::<u32>().map_or(false, |id| (*w).ref_key.index == id);
+                    let aid = (*w).get_app_id_string().unwrap_or_default().to_lowercase();
+                    let score = if id_match || aid == query {
+                        100
+                    } else if !query.is_empty() && aid.contains(&query) {
+                        50
+                    } else {
+                        0
+                    };
+                    if score > best_score {
+                        best_score = score;
+                        target = w;
+                    }
+                }
+                if target.is_null() {
+                    return "error: window not found\n".to_string();
+                }
+                let title = (*target).get_title_string().unwrap_or_default();
+                log::info!("[ipc] close-window: closing {:?}", title);
+                (*target).close();
+                format!("ok {}\n", title)
+            }
             "center-window" | "bring-window" => {
                 // Pan the desktop so the target window (given app_id/id, or the
                 // focused window if omitted) is centered in the output, then focus

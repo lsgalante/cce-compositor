@@ -52,6 +52,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  overlay-left");
     print("  overlay-right");
     print("  focus-window <app_id>");
+    print("  close-window <app_id|id> [title-substring]  # close a specific window");
     print("  center-window [<app_id>]   # pan focused/named window on-screen; replies x= y= w= h=");
     print("  expose");
     print("  windows [--json]           # list windows; --json emits one JSON object per line");
