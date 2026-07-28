@@ -898,3 +898,15 @@ int river_scene_buffer_get_height(struct wlr_scene_buffer *scene_buffer) {
 	}
 	return scene_buffer->dst_height;
 }
+
+int river_scene_buffer_get_dest_width(struct wlr_scene_buffer *scene_buffer) {
+	return scene_buffer->dst_width;
+}
+
+int river_scene_buffer_get_dest_height(struct wlr_scene_buffer *scene_buffer) {
+	return scene_buffer->dst_height;
+}
+
+bool river_scene_node_get_enabled(struct wlr_scene_node *node) {
+	return node->enabled;
+}

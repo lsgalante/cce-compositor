@@ -69,6 +69,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  screenshot                          # capture the screen to ~/Pictures/screenshots");
     print("  screenshot region <x> <y> <w> <h>   # capture an on-screen region (logical px)");
     print("  screenshot window [app_id|id]       # capture a window (focused if omitted; works off-screen)");
+    print("  debug-buffers [app_id|id]           # dump a window's scene buffers (pos/dest/natural/surface)");
     print("  notify <title> [body]");
     print("  bind <mods> <keysym> <action> [args...]");
     print("  pbind <mods> <button> <action>");

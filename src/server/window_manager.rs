@@ -2191,6 +2191,64 @@ impl WindowManager {
             self.stop_panning_animation();
         }
         match action {
+            // Scene introspection: dump every scene buffer of a window's
+            // trees — position, dest size, natural buffer size,
+            // surface-backed or not. Found the zoom-ghost bug; kept as a
+            // debugging tool.
+            "debug-buffers" => {
+                let win = if parts.len() >= 2 {
+                    self.find_window_by_query(&parts[1..].join(" "))
+                } else {
+                    self.focused_window()
+                };
+                if win.is_null() {
+                    return "error: no matching window\n".to_string();
+                }
+                let mut out = format!(
+                    "window box=({},{},{}x{}) scale={} saved={} tree_en={} surf_en={} saved_en={}\n",
+                    (*win).box_geom.x, (*win).box_geom.y, (*win).box_geom.width, (*win).box_geom.height,
+                    (*win).scale,
+                    (*win).surfaces.saved,
+                    ffi::river_scene_node_get_enabled((*win).tree as *mut ffi::wlr_scene_node),
+                    ffi::river_scene_node_get_enabled((*win).surfaces.tree as *mut ffi::wlr_scene_node),
+                    ffi::river_scene_node_get_enabled((*win).surfaces.saved_tree as *mut ffi::wlr_scene_node),
+                );
+                unsafe extern "C" fn dump_iter(
+                    buffer: *mut ffi::wlr_scene_buffer,
+                    sx: i32,
+                    sy: i32,
+                    user_data: *mut std::ffi::c_void,
+                ) {
+                    let out = &mut *(user_data as *mut String);
+                    let node = buffer as *mut ffi::wlr_scene_node;
+                    let surface = ffi::river_scene_node_get_surface(node);
+                    out.push_str(&format!(
+                        "  buf sx={} sy={} dest={}x{} natural={}x{} surface={} enabled={}\n",
+                        sx,
+                        sy,
+                        ffi::river_scene_buffer_get_dest_width(buffer),
+                        ffi::river_scene_buffer_get_dest_height(buffer),
+                        ffi::river_scene_buffer_get_width(buffer),
+                        ffi::river_scene_buffer_get_height(buffer),
+                        !surface.is_null(),
+                        ffi::river_scene_node_get_enabled(node),
+                    ));
+                }
+                for (name, node) in [
+                    ("surfaces", (*win).surfaces.tree as *mut ffi::wlr_scene_node),
+                    ("saved", (*win).surfaces.saved_tree as *mut ffi::wlr_scene_node),
+                    ("popup", (*win).popup_tree as *mut ffi::wlr_scene_node),
+                    ("whole-tree", (*win).tree as *mut ffi::wlr_scene_node),
+                ] {
+                    out.push_str(&format!("[{}]\n", name));
+                    ffi::wlr_scene_node_for_each_buffer(
+                        node,
+                        Some(dump_iter),
+                        &mut out as *mut String as *mut std::ffi::c_void,
+                    );
+                }
+                return out;
+            }
             "status-hide-mode" => {
                 let enable = if parts.len() >= 2 {
                     match parts[1] {
