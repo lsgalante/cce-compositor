@@ -2191,6 +2191,72 @@ impl WindowManager {
             self.stop_panning_animation();
         }
         match action {
+            // Scene introspection: dump EVERY buffer in the whole scene —
+            // layer, layout position, dest/natural size, owning client pid.
+            // Nothing on screen can hide from this.
+            "debug-scene" => {
+                unsafe extern "C" fn dump_iter(
+                    buffer: *mut ffi::wlr_scene_buffer,
+                    sx: i32,
+                    sy: i32,
+                    user_data: *mut std::ffi::c_void,
+                ) {
+                    let out = &mut *(user_data as *mut String);
+                    let node = buffer as *mut ffi::wlr_scene_node;
+                    let surface = ffi::river_scene_node_get_surface(node);
+                    let mut pid = 0;
+                    if !surface.is_null() {
+                        let res = ffi::river_wlr_surface_get_resource(surface);
+                        if !res.is_null() {
+                            let client = ffi::wl_resource_get_client(res);
+                            if !client.is_null() {
+                                let (mut uid, mut gid) = (0, 0);
+                                ffi::wl_client_get_credentials(client, &mut pid, &mut uid, &mut gid);
+                            }
+                        }
+                    }
+                    out.push_str(&format!(
+                        "  buf sx={} sy={} dest={}x{} natural={}x{} surface={} pid={} enabled={}\n",
+                        sx,
+                        sy,
+                        ffi::river_scene_buffer_get_dest_width(buffer),
+                        ffi::river_scene_buffer_get_dest_height(buffer),
+                        ffi::river_scene_buffer_get_width(buffer),
+                        ffi::river_scene_buffer_get_height(buffer),
+                        !surface.is_null(),
+                        pid,
+                        ffi::river_scene_node_get_enabled(node),
+                    ));
+                }
+                let scene = &(*self.server).scene;
+                let mut out = String::new();
+                let layers: [(&str, *mut ffi::wlr_scene_tree); 12] = [
+                    ("background", scene.layers.background),
+                    ("bottom", scene.layers.bottom),
+                    ("wm", scene.layers.wm),
+                    ("top", scene.layers.top),
+                    ("fullscreen", scene.layers.fullscreen),
+                    ("overlay", scene.layers.overlay),
+                    ("popups", scene.layers.popups),
+                    ("override_redirect", scene.layers.override_redirect),
+                    ("border_overlay", scene.layers.border_overlay),
+                    ("drag_icons", scene.drag_icons),
+                    ("hidden", scene.hidden_tree),
+                    ("locked", scene.locked_tree),
+                ];
+                for (name, tree) in layers {
+                    if tree.is_null() {
+                        continue;
+                    }
+                    out.push_str(&format!("[{}]\n", name));
+                    ffi::wlr_scene_node_for_each_buffer(
+                        tree as *mut ffi::wlr_scene_node,
+                        Some(dump_iter),
+                        &mut out as *mut String as *mut std::ffi::c_void,
+                    );
+                }
+                return out;
+            }
             // Scene introspection: dump every scene buffer of a window's
             // trees — position, dest size, natural buffer size,
             // surface-backed or not. Found the zoom-ghost bug; kept as a
