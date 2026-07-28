@@ -1622,21 +1622,35 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
 
     if (modifiers & 0x40) != 0 || is_on_background || is_overview || was_panning {
         let wm = &mut (*seat.server).wm;
-        wm.stop_panning_animation();
         let step = delta / wm.desk_zoom;
-        match (*event).orientation {
-            ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL => {
+        let vertical =
+            (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
+        if is_finger {
+            // Finger/continuous scroll tracks 1:1 — the surface follows the
+            // gesture directly, no easing between the two.
+            wm.stop_panning_animation();
+            if vertical {
                 wm.desk_pan_y += step;
-            }
-            ffi::wl_pointer_axis_WL_POINTER_AXIS_HORIZONTAL_SCROLL => {
+            } else {
                 wm.desk_pan_x += step;
             }
-            _ => {}
-        }
-        if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
-            wm.update_viewport_local();
+            if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
+                wm.update_viewport_local();
+            } else {
+                wm.dirty_windowing();
+            }
         } else {
-            wm.dirty_windowing();
+            // Discrete wheel clicks glide: each click advances the pan
+            // animation target, so successive clicks accumulate into one
+            // smooth run instead of a stutter of jumps.
+            if vertical {
+                let base = wm.target_desk_pan_y.unwrap_or(wm.desk_pan_y);
+                wm.target_desk_pan_y = Some(base + step);
+            } else {
+                let base = wm.target_desk_pan_x.unwrap_or(wm.desk_pan_x);
+                wm.target_desk_pan_x = Some(base + step);
+            }
+            wm.start_panning_animation();
         }
         return;
     }
