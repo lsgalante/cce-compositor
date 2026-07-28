@@ -470,8 +470,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     } else {
         crate::window::widen_corner_radius(radius, actual_w as i32, actual_h as i32)
     };
-    let legacy_blur = std::env::var_os("CCE_BLUR_LEGACY").is_some(); // TEMP DIAGNOSTIC
-    let use_optimized = if is_status || (radius > 0 && !legacy_blur) {
+    let use_optimized = if is_status || radius > 0 {
         false
     } else {
         (*(*window).server).wm.layout.scenefx_optimized_blur
@@ -487,7 +486,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         geom_w,
         geom_h,
         // geom_w/h are already scaled to device px; the radius must match.
-        if legacy_blur { 0 } else { (radius as f64 * scale) as i32 },
+        (radius as f64 * scale) as i32,
     );
 
     let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;
@@ -556,37 +555,13 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
 
     match (*toplevel).configure_state {
         ConfigureState::Idle | ConfigureState::Committed | ConfigureState::TimedOut(..) => {
-            let old_geometry = (*toplevel).geometry;
-            let mut new_geometry = std::mem::zeroed();
-            ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
-            (*toplevel).geometry = new_geometry;
-
-            let size_changed = new_geometry.width != old_geometry.width || new_geometry.height != old_geometry.height;
-
-            if size_changed {
-                log::debug!(
-                    "client initiated size change: {}x{} -> {}x{}",
-                    old_geometry.width, old_geometry.height, new_geometry.width, new_geometry.height
-                );
-                let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
-                                (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
-                // Overlays are handled by the live-geometry sync above, before this
-                // match — size_changed is never true for them.
-                if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status {
-                    (*window).set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
-                    (*window).configure_sent.width = Some(new_geometry.width as u32);
-                    (*window).configure_sent.height = Some(new_geometry.height as u32);
-                    if is_status {
-                        (*window).box_geom.width = new_geometry.width;
-                        (*window).box_geom.height = new_geometry.height;
-                        (*(*window).server).wm.dirty_windowing();
-                    }
-                } else {
-                    (*window).render_finish();
-                }
-            } else if old_geometry.x != new_geometry.x || old_geometry.y != new_geometry.y {
-                (*window).render_finish();
-            }
+            // Nothing to do: client-initiated size/position changes CANNOT
+            // be detected here. The top of handle_commit already refreshed
+            // (*toplevel).geometry from this commit, so any comparison
+            // against it never fires (the branch that used to live here was
+            // dead for that reason). Self-sizing overlays are handled by the
+            // live-geometry sync above; clients resizing through a configure
+            // round trip land in the Acked arm.
         }
         ConfigureState::Inflight(..) => {
             (*window).send_frame_done();

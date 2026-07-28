@@ -1902,10 +1902,7 @@ impl Window {
             // for a window with rounded corners it would keep painting square corners
             // underneath a correctly rounded standard blur. Trade the optimization away
             // exactly where it would be visible, and keep it everywhere else.
-            // TEMP DIAGNOSTIC: CCE_BLUR_LEGACY=1 restores pre-fix behaviour (optimized blur
-            // always on, no radius) so both can be A/B'd from one build.
-            let legacy_blur = std::env::var_os("CCE_BLUR_LEGACY").is_some();
-            let use_optimized = if is_status || (radius > 0 && !legacy_blur) {
+            let use_optimized = if is_status || radius > 0 {
                 false
             } else {
                 (*self.server).wm.layout.scenefx_optimized_blur
@@ -1940,7 +1937,7 @@ impl Window {
                 height,
                 // width/height above are scaled to device pixels, so the radius must be too
                 // (cf. the window_background rect, which scales it the same way).
-                if legacy_blur { 0 } else { (radius as f64 * self.scale) as i32 },
+                (radius as f64 * self.scale) as i32,
             );
             let want_shadow = !is_status && (self.wm_requested.ssd || is_cce_app) && !self.is_fullscreen();
             self.update_shadow(width, height, radius, want_shadow);
@@ -2296,8 +2293,7 @@ impl Window {
                 } else {
                     0
                 };
-                let legacy_blur = std::env::var_os("CCE_BLUR_LEGACY").is_some(); // TEMP DIAGNOSTIC
-                let use_optimized = if is_status || (radius > 0 && !legacy_blur) {
+                let use_optimized = if is_status || radius > 0 {
                     false
                 } else {
                     (*self.server).wm.layout.scenefx_optimized_blur
@@ -2330,7 +2326,7 @@ impl Window {
                     0,
                     width,
                     height,
-                    if legacy_blur { 0 } else { (radius as f64 * self.scale) as i32 },
+                    (radius as f64 * self.scale) as i32,
                 );
                 let want_shadow = !is_status && (self.wm_requested.ssd || is_cce_app) && !self.is_fullscreen();
                 self.update_shadow(width, height, radius, want_shadow);
