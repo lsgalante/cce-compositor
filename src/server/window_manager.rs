@@ -673,6 +673,114 @@ impl WindowManager {
         }
     }
 
+    /// Snapshot for `Policy::action`: seat- and scene-dependent facts
+    /// (cursor output, hovered window, focus) resolved up front, the
+    /// arrange-pass convention.
+    unsafe fn build_action_ctx(&mut self) -> crate::policy::api::ActionCtx {
+        use crate::policy::api::{ActionCtx, ActionWindow, Rect, WindowId};
+
+        // First enabled output: the legacy viewport for zooms and View jumps.
+        let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
+        let (mut first_x, mut first_y) = (0.0, 0.0);
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                let wlr_box = (*output).sent.box_layout();
+                viewport_w = wlr_box.width as f64;
+                viewport_h = wlr_box.height as f64;
+                first_x = wlr_box.x as f64;
+                first_y = wlr_box.y as f64;
+                break;
+            }
+            curr_out = (*curr_out).next;
+        }
+
+        let mut cursor_viewport = Rect {
+            x: first_x as i32,
+            y: first_y as i32,
+            width: viewport_w as i32,
+            height: viewport_h as i32,
+        };
+        let mut has_cursor = false;
+        let (mut cursor_x, mut cursor_y) = (0.0, 0.0);
+        let mut hovered = None;
+        let mut focused = None;
+        if let Some(seat) = self.first_seat() {
+            has_cursor = true;
+            cursor_x = (*seat).cursor.x();
+            cursor_y = (*seat).cursor.y();
+            let wlr_output = (*self.server).om.output_at(cursor_x, cursor_y);
+            if !wlr_output.is_null() {
+                let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+                ffi::wlr_output_layout_get_box((*self.server).om.output_layout, wlr_output, &mut output_box);
+                cursor_viewport = Rect {
+                    x: output_box.x,
+                    y: output_box.y,
+                    width: output_box.width,
+                    height: output_box.height,
+                };
+            }
+            if let Some(result) = (*self.server).scene.at(cursor_x, cursor_y) {
+                if let crate::scene_node_data::SceneNodeDataVal::Window(w) = result.data {
+                    if !(*w).is_status_bar() && !(*w).is_wallpaper() {
+                        hovered = Some(WindowId((*w).ref_key));
+                    }
+                }
+            }
+            if let crate::seat::Focus::Window(fw) = (*seat).focused {
+                if !fw.is_null() && !(*fw).closed {
+                    focused = Some(WindowId((*fw).ref_key));
+                }
+            }
+        }
+
+        let mut windows = Vec::new();
+        for &w in self.windows.iter() {
+            if w.is_null() || (*w).closed {
+                continue;
+            }
+            let app_id = (*w).get_app_id_string();
+            let is_status = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
+            let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
+            let visible = !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
+            let mode = self.get_mode_for_window(w);
+            let expose_eligible = !(*w).minimized
+                && !is_status
+                && !is_wallpaper
+                && visible
+                && mode != crate::tiling::TilingMode::Popup
+                && mode != crate::tiling::TilingMode::Overlay;
+            windows.push(ActionWindow {
+                id: WindowId((*w).ref_key),
+                x: (*w).virtual_x,
+                y: (*w).virtual_y,
+                w: if (*w).box_geom.width > 0 { (*w).box_geom.width as f64 } else { 800.0 },
+                h: if (*w).box_geom.height > 0 { (*w).box_geom.height as f64 } else { 600.0 },
+                expose_eligible,
+            });
+        }
+
+        ActionCtx {
+            camera: self.camera(),
+            overview: self.mode == WindowManagerMode::Overview,
+            pan_target_x: self.target_desk_pan_x,
+            pan_target_y: self.target_desk_pan_y,
+            viewport_w,
+            viewport_h,
+            cursor_viewport,
+            has_cursor,
+            cursor_x,
+            cursor_y,
+            hovered,
+            focused,
+            grid_period: self.layout.desktop_grid_scale.max(5.0)
+                + self.layout.desktop_gap_width.max(0) as f64,
+            windows,
+        }
+    }
+
     /// Record the edge auto-pan velocity (screen px/s) and arm its 16ms tick
     /// when nonzero. A zero velocity just parks: the armed tick sees it and
     /// stops itself without re-arming.
@@ -1920,6 +2028,23 @@ impl WindowManager {
     pub unsafe fn execute_action(&mut self, action: &crate::config::Action, command: Option<&str>) {
         use crate::config::Action;
         self.stop_panning_animation();
+
+        // Snapshot → policy → commands: the camera actions (zoom, pan, view
+        // jumps, overview) are decided in the policy crate. An empty command
+        // list means the policy doesn't claim the action, and the legacy
+        // arms below handle it.
+        {
+            use crate::policy::api::{Compositor, Policy};
+            let ctx = self.build_action_ctx();
+            let cmds = crate::policy::actions::DefaultPolicy.action(&ctx, *action);
+            if !cmds.is_empty() {
+                for cmd in &cmds {
+                    self.apply(cmd);
+                }
+                return;
+            }
+        }
+
         match action {
             Action::None => {}
             Action::Spawn => {
@@ -2207,110 +2332,6 @@ impl WindowManager {
                     }
                 }
             }
-            Action::View1 | Action::View2 | Action::View3 | Action::View4 => {
-                let (target_x, target_y) = match action {
-                    Action::View1 => (0.0, 0.0),
-                    Action::View2 => (2000.0, 0.0),
-                    Action::View3 => (0.0, 2000.0),
-                    Action::View4 => (2000.0, 2000.0),
-                    _ => (0.0, 0.0),
-                };
-                
-                let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
-                let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                let mut curr_out = (*outputs_list).next;
-                while curr_out != outputs_list {
-                    let output = crate::container_of!(curr_out, crate::output::Output, link);
-                    if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                        let wlr_box = (*output).sent.box_layout();
-                        viewport_w = wlr_box.width as f64;
-                        viewport_h = wlr_box.height as f64;
-                        break;
-                    }
-                    curr_out = (*curr_out).next;
-                }
-                
-                let cam = crate::policy::camera::center_on(target_x, target_y, viewport_w, viewport_h, self.desk_zoom);
-                self.desk_pan_x = cam.pan_x;
-                self.desk_pan_y = cam.pan_y;
-                self.dirty_windowing();
-            }
-            Action::SetViewport1 | Action::SetViewport2 | Action::SetViewport3 | Action::SetViewport4 => {
-                let (target_x, target_y) = match action {
-                    Action::SetViewport1 => (0.0, 0.0),
-                    Action::SetViewport2 => (2000.0, 0.0),
-                    Action::SetViewport3 => (0.0, 2000.0),
-                    Action::SetViewport4 => (2000.0, 2000.0),
-                    _ => (0.0, 0.0),
-                };
-                if let Some(seat) = self.first_seat() {
-                    if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                        let w = if (*fw).box_geom.width > 0 { (*fw).box_geom.width as f64 } else { 800.0 };
-                        let h = if (*fw).box_geom.height > 0 { (*fw).box_geom.height as f64 } else { 600.0 };
-                        (*fw).virtual_x = target_x - w / 2.0;
-                        (*fw).virtual_y = target_y - h / 2.0;
-                        self.dirty_windowing();
-                    }
-                }
-            }
-            Action::ZoomIn | Action::ZoomOut | Action::ZoomReset => {
-                let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
-                let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                let mut curr_out = (*outputs_list).next;
-                while curr_out != outputs_list {
-                    let output = crate::container_of!(curr_out, crate::output::Output, link);
-                    if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                        let wlr_box = (*output).sent.box_layout();
-                        viewport_w = wlr_box.width as f64;
-                        viewport_h = wlr_box.height as f64;
-                        break;
-                    }
-                    curr_out = (*curr_out).next;
-                }
-                
-                // Keyed zooms pivot about the viewport center.
-                let dir = match action {
-                    Action::ZoomIn => 1.0,
-                    Action::ZoomOut => -1.0,
-                    _ => 0.0,
-                };
-                let new_zoom = crate::policy::camera::keyed_zoom(self.desk_zoom, dir);
-                let cam = crate::policy::camera::zoom_about_anchor(
-                    self.camera(),
-                    viewport_w / 2.0,
-                    viewport_h / 2.0,
-                    new_zoom,
-                );
-                self.desk_pan_x = cam.pan_x;
-                self.desk_pan_y = cam.pan_y;
-                self.desk_zoom = cam.zoom;
-                self.mode = if crate::policy::camera::is_overview(cam.zoom) { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
-                self.dirty_windowing();
-            }
-            Action::PanLeft | Action::PanRight | Action::PanUp | Action::PanDown => {
-                // Keyed pans move cell-by-cell and land aligned: the target
-                // is the adjacent pan offset that puts the viewport origin on
-                // a grid-period boundary, eased in by the pan animation.
-                // Basing each step on the pending target (not the current
-                // offset) lets rapid presses queue one cell apiece.
-                let period = self.layout.desktop_grid_scale.max(5.0)
-                    + self.layout.desktop_gap_width.max(0) as f64;
-                let (dx, dy) = match action {
-                    Action::PanLeft => (-1.0, 0.0),
-                    Action::PanRight => (1.0, 0.0),
-                    Action::PanUp => (0.0, -1.0),
-                    _ => (0.0, 1.0),
-                };
-                if dx != 0.0 {
-                    let base = self.target_desk_pan_x.unwrap_or(self.desk_pan_x);
-                    self.target_desk_pan_x = Some(crate::policy::pan::aligned_step(base, period, dx));
-                }
-                if dy != 0.0 {
-                    let base = self.target_desk_pan_y.unwrap_or(self.desk_pan_y);
-                    self.target_desk_pan_y = Some(crate::policy::pan::aligned_step(base, period, dy));
-                }
-                self.start_panning_animation();
-            }
             Action::OverlayLeft => {
                 self.layout.overlay_position = "left".to_string();
                 self.dirty_windowing();
@@ -2318,181 +2339,6 @@ impl WindowManager {
             Action::OverlayRight => {
                 self.layout.overlay_position = "right".to_string();
                 self.dirty_windowing();
-            }
-            Action::Expose => {
-                if self.mode == WindowManagerMode::Overview {
-                    let mut viewport_w = 1920.0;
-                    let mut viewport_h = 1080.0;
-                    let mut phys_x = 0.0;
-                    let mut phys_y = 0.0;
-                    let mut output_found = false;
-
-                    if let Some(seat) = self.first_seat() {
-                        let lx = (*seat).cursor.x();
-                        let ly = (*seat).cursor.y();
-                        let wlr_output = (*self.server).om.output_at(lx, ly);
-                        if !wlr_output.is_null() {
-                            let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-                            ffi::wlr_output_layout_get_box((*self.server).om.output_layout, wlr_output, &mut output_box);
-                            viewport_w = output_box.width as f64;
-                            viewport_h = output_box.height as f64;
-                            phys_x = output_box.x as f64;
-                            phys_y = output_box.y as f64;
-                            output_found = true;
-                        }
-                    }
-
-                    if !output_found {
-                        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                        let mut curr_out = (*outputs_list).next;
-                        while curr_out != outputs_list {
-                            let output = crate::container_of!(curr_out, crate::output::Output, link);
-                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                                let wlr_box = (*output).sent.box_layout();
-                                viewport_w = wlr_box.width as f64;
-                                viewport_h = wlr_box.height as f64;
-                                phys_x = wlr_box.x as f64;
-                                phys_y = wlr_box.y as f64;
-                                break;
-                            }
-                            curr_out = (*curr_out).next;
-                        }
-                    }
-
-                    if let Some(seat) = self.first_seat() {
-                        let lx = (*seat).cursor.x();
-                        let ly = (*seat).cursor.y();
-
-                        let mut hovered_win: *mut crate::window::Window = std::ptr::null_mut();
-                        if let Some(result) = (*self.server).scene.at(lx, ly) {
-                            if let crate::scene_node_data::SceneNodeDataVal::Window(window) = result.data {
-                                hovered_win = window;
-                            }
-                        }
-
-                        if !hovered_win.is_null() && !(*hovered_win).is_status_bar() && !(*hovered_win).is_wallpaper() {
-                            (*seat).focus(crate::seat::Focus::Window(hovered_win));
-                            if !(*seat).object.is_null() && !(*hovered_win).object.is_null() {
-                                ffi::wl_resource_post_event((*seat).object, 4, (*hovered_win).object);
-                            }
-
-                            let win_w = if (*hovered_win).box_geom.width > 0 { (*hovered_win).box_geom.width as f64 } else { 800.0 };
-                            let win_h = if (*hovered_win).box_geom.height > 0 { (*hovered_win).box_geom.height as f64 } else { 600.0 };
-                            let center_x = (*hovered_win).virtual_x + win_w / 2.0;
-                            let center_y = (*hovered_win).virtual_y + win_h / 2.0;
-                            let cam = crate::policy::camera::center_on(center_x, center_y, viewport_w, viewport_h, 1.0);
-                            self.desk_zoom = cam.zoom;
-                            self.mode = WindowManagerMode::Normal;
-                            self.desk_pan_x = cam.pan_x;
-                            self.desk_pan_y = cam.pan_y;
-                            self.stop_panning_animation();
-                            if matches!(self.state, WindowManagerState::Idle) {
-                                self.update_viewport_local();
-                            } else {
-                                self.dirty_windowing();
-                            }
-                            return;
-                        } else {
-                            let vx = self.desk_pan_x + (lx - phys_x) / self.desk_zoom;
-                            let vy = self.desk_pan_y + (ly - phys_y) / self.desk_zoom;
-                            let cam = crate::policy::camera::center_on(vx, vy, viewport_w, viewport_h, 1.0);
-                            self.desk_zoom = cam.zoom;
-                            self.mode = WindowManagerMode::Normal;
-                            self.desk_pan_x = cam.pan_x;
-                            self.desk_pan_y = cam.pan_y;
-                            self.stop_panning_animation();
-                            if matches!(self.state, WindowManagerState::Idle) {
-                                self.update_viewport_local();
-                            } else {
-                                self.dirty_windowing();
-                            }
-                            return;
-                        }
-                    }
-
-                    self.desk_zoom = 1.0;
-                    self.mode = WindowManagerMode::Normal;
-                    self.desk_pan_x = 0.0;
-                    self.desk_pan_y = 0.0;
-                    self.stop_panning_animation();
-                    if matches!(self.state, WindowManagerState::Idle) {
-                        self.update_viewport_local();
-                    } else {
-                        self.dirty_windowing();
-                    }
-                } else {
-                    let mut min_vx = f64::MAX;
-                    let mut max_vx = f64::MIN;
-                    let mut min_vy = f64::MAX;
-                    let mut max_vy = f64::MIN;
-                    let mut has_visible_windows = false;
-
-                    for &win_ptr in self.windows.iter() {
-                        if win_ptr.is_null() || (*win_ptr).closed || (*win_ptr).minimized {
-                            continue;
-                        }
-
-                        let app_id = (*win_ptr).get_app_id_string();
-                        let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
-                        let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
-                        if is_status_bar || is_wallpaper {
-                            continue;
-                        }
-
-                        let visible = !matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
-                        if !visible {
-                            continue;
-                        }
-
-                        let mode = self.get_mode_for_window(win_ptr);
-                        if mode == crate::tiling::TilingMode::Popup || mode == crate::tiling::TilingMode::Overlay {
-                            continue;
-                        }
-
-                        let win_w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as f64 } else { 800.0 };
-                        let win_h = if (*win_ptr).box_geom.height > 0 { (*win_ptr).box_geom.height as f64 } else { 600.0 };
-
-                        let vx = (*win_ptr).virtual_x;
-                        let vy = (*win_ptr).virtual_y;
-
-                        if vx < min_vx { min_vx = vx; }
-                        if vx + win_w > max_vx { max_vx = vx + win_w; }
-                        if vy < min_vy { min_vy = vy; }
-                        if vy + win_h > max_vy { max_vy = vy + win_h; }
-                        has_visible_windows = true;
-                    }
-
-                    if has_visible_windows {
-                        let mut viewport_w = 1920.0;
-                        let mut viewport_h = 1080.0;
-                        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                        let mut curr_out = (*outputs_list).next;
-                        while curr_out != outputs_list {
-                            let output = crate::container_of!(curr_out, crate::output::Output, link);
-                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                                let wlr_box = (*output).sent.box_layout();
-                                viewport_w = wlr_box.width as f64;
-                                viewport_h = wlr_box.height as f64;
-                                break;
-                            }
-                            curr_out = (*curr_out).next;
-                        }
-
-                        let cam = crate::policy::camera::fit_bounds(min_vx, min_vy, max_vx, max_vy, viewport_w, viewport_h);
-                        self.desk_zoom = cam.zoom;
-                        // Overview by fiat even when the fit lands at zoom 1
-                        // (a desktop smaller than the screen): the next
-                        // Expose must exit, not re-enter.
-                        self.mode = WindowManagerMode::Overview;
-                        self.desk_pan_x = cam.pan_x;
-                        self.desk_pan_y = cam.pan_y;
-                        if matches!(self.state, WindowManagerState::Idle) {
-                            self.update_viewport_local();
-                        } else {
-                            self.dirty_windowing();
-                        }
-                    }
-                }
             }
             _ => {}
         }
@@ -4004,6 +3850,65 @@ pub(crate) unsafe extern "C" fn handle_viewport_settle_tick(data: *mut std::ffi:
     }
     (*wm).finish_viewport_settle();
     0
+}
+
+/// The mechanism half of the trait boundary: apply one policy `Command`
+/// against the scene/seat world. Command order matters — the apply loop is a
+/// flat sequence, mirroring the arrange-plan convention.
+impl crate::policy::api::Compositor for WindowManager {
+    fn apply(&mut self, cmd: &crate::policy::api::Command) {
+        use crate::policy::api::Command;
+        unsafe {
+            match *cmd {
+                Command::SetCamera { camera, overview } => {
+                    self.desk_pan_x = camera.pan_x;
+                    self.desk_pan_y = camera.pan_y;
+                    self.desk_zoom = camera.zoom;
+                    if let Some(overview) = overview {
+                        self.mode = if overview { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
+                    }
+                }
+                Command::PanTo { x, y } => {
+                    if let Some(x) = x {
+                        self.target_desk_pan_x = Some(x);
+                    }
+                    if let Some(y) = y {
+                        self.target_desk_pan_y = Some(y);
+                    }
+                    self.start_panning_animation();
+                }
+                Command::StopPanAnimation => self.stop_panning_animation(),
+                Command::Focus(id) => {
+                    if let Some(&win) = self.windows.get(id.0) {
+                        if !win.is_null() && !(*win).closed {
+                            if let Some(seat) = self.first_seat() {
+                                (*seat).focus(crate::seat::Focus::Window(win));
+                                if !(*seat).object.is_null() && !(*win).object.is_null() {
+                                    ffi::wl_resource_post_event((*seat).object, 4, (*win).object);
+                                }
+                            }
+                        }
+                    }
+                }
+                Command::MoveWindow { id, x, y } => {
+                    if let Some(&win) = self.windows.get(id.0) {
+                        if !win.is_null() && !(*win).closed {
+                            (*win).virtual_x = x;
+                            (*win).virtual_y = y;
+                        }
+                    }
+                }
+                Command::Relayout => self.dirty_windowing(),
+                Command::RefreshCamera => {
+                    if matches!(self.state, WindowManagerState::Idle) {
+                        self.update_viewport_local();
+                    } else {
+                        self.dirty_windowing();
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// 16ms edge auto-pan tick: scroll the desktop by the current velocity, then
