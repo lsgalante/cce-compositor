@@ -795,10 +795,15 @@ impl Output {
                         } else {
                             0
                         };
+                        // Cell positions from the EXACT period, rounded per
+                        // cell: a rounded-period spacing drifts from the
+                        // world-anchored windows at fractional zooms (the
+                        // grid visibly slides against window edges when
+                        // panning).
                         for col in 0..=cells.cols {
-                            let rel_x = col * frame.period_px;
+                            let rel_x = (col as f64 * frame.period_px_exact).round() as i32;
                             for row in 0..=cells.rows {
-                                let rel_y = row * frame.period_px;
+                                let rel_y = (row as f64 * frame.period_px_exact).round() as i32;
                                 get_rect(cells.cell_px, cells.cell_px, cells.color.0.as_ptr(), rel_x, rel_y, cells.corner_radius_px, inset_scaled);
                             }
                         }
