@@ -362,7 +362,12 @@ impl Seat {
             Focus::LayerSurface(_) | Focus::Window(_) | Focus::LockSurface(_) | Focus::OverrideRedirect(_) | Focus::ShellSurface(_) => {
                 ffi::wlr_seat_keyboard_notify_clear_focus(self.wlr_seat);
                 let focused_client = ffi::river_wlr_seat_get_pointer_focused_client(self.wlr_seat);
-                if !focused_client.is_null() {
+                // Keep pointer focus through an active implicit grab (held
+                // client-notified button): clicking a window changes focus,
+                // and dropping pointer focus here orphans the grab until the
+                // next in-surface motion re-enters — a press-then-leave drag
+                // (cursor straight out of the window) lost its target.
+                if !focused_client.is_null() && self.cursor.notified_pressed.is_empty() {
                     ffi::wlr_seat_pointer_notify_clear_focus(self.wlr_seat);
                 }
             }

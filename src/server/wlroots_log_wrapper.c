@@ -381,6 +381,10 @@ struct wlr_seat_client *river_wlr_seat_get_pointer_focused_client(struct wlr_sea
 	return seat->pointer_state.focused_client;
 }
 
+struct wlr_surface *river_wlr_seat_get_pointer_focused_surface(struct wlr_seat *seat) {
+	return seat->pointer_state.focused_surface;
+}
+
 struct wl_client *river_wlr_seat_client_get_client(struct wlr_seat_client *client) {
 	return client->client;
 }

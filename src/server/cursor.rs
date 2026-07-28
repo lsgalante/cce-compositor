@@ -29,6 +29,10 @@ pub struct Cursor {
     /// by then (seat op, overview, …) — an orphaned press wedges client-side
     /// input state (widget routers keep a grab armed forever).
     pub notified_pressed: HashSet<u32>,
+    /// Layout origin of the surface the first notified press landed on: the
+    /// implicit grab's frame of reference, so held-button motion stays
+    /// surface-relative wherever the pointer goes (passthrough's grab branch).
+    pub grab_origin: (f64, f64),
 
     pub touch_down_listener: ffi::wl_listener,
     pub touch_motion_listener: ffi::wl_listener,
@@ -85,6 +89,7 @@ impl Default for Cursor {
             touch_points: HashMap::new(),
             pressed: HashMap::new(),
             notified_pressed: HashSet::new(),
+            grab_origin: (0.0, 0.0),
 
             touch_down_listener: unsafe { std::mem::zeroed() },
             touch_motion_listener: unsafe { std::mem::zeroed() },
@@ -497,6 +502,27 @@ impl Cursor {
         let lx = self.x();
         let ly = self.y();
         let server = (*self.seat).server;
+
+        // Implicit grab (standard Wayland drag semantics): while any button
+        // the focused client saw pressed is still held, motion keeps flowing
+        // to that surface — relative to its origin at press time — wherever
+        // the pointer goes, so a client-side drag (slider, ramp key) tracks
+        // outside the window. Focus is neither re-evaluated nor cleared until
+        // the last such button releases; wlroots nulls the focused surface if
+        // it is destroyed mid-grab, which falls through to normal dispatch.
+        if !self.notified_pressed.is_empty() {
+            let focused =
+                ffi::river_wlr_seat_get_pointer_focused_surface((*self.seat).wlr_seat);
+            if !focused.is_null() {
+                ffi::wlr_seat_pointer_notify_motion(
+                    (*self.seat).wlr_seat,
+                    time_msec,
+                    lx - self.grab_origin.0,
+                    ly - self.grab_origin.1,
+                );
+                return;
+            }
+        }
 
         if let Some(result) = (*server).scene.at(lx, ly) {
             let lock_state = (*server).lock_manager.state;
@@ -1164,6 +1190,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         cursor.pressed.insert((*event).button, None);
 
         if !should_block_button {
+            let first_grab_button = cursor.notified_pressed.is_empty();
             ffi::wlr_seat_pointer_notify_button(
                 seat.wlr_seat,
                 (*event).time_msec,
@@ -1171,6 +1198,16 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 (*event).state,
             );
             cursor.notified_pressed.insert((*event).button);
+            // First grab button: record the pressed surface's layout origin
+            // as the implicit grab's frame of reference (passthrough keeps
+            // motion surface-relative through it while the button is held).
+            if first_grab_button {
+                let glx = cursor.x();
+                let gly = cursor.y();
+                if let Some(result) = (*seat.server).scene.at(glx, gly) {
+                    cursor.grab_origin = (glx - result.sx, gly - result.sy);
+                }
+            }
         }
 
         // If pressed, update focus to window under cursor
