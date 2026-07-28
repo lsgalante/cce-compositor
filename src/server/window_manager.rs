@@ -2135,47 +2135,28 @@ impl WindowManager {
         }
     }
 
-    /// Resolve a window by a query string: an exact numeric window id first,
-    /// otherwise a case-insensitive app_id match (exact beats substring).
-    /// Returns null if nothing mapped matches. Shared by focus-window /
-    /// center-window.
+    /// Resolve a window by a query string via the policy crate's matching
+    /// rules (numeric window id first, then app_id with
+    /// exact-beats-substring). Returns null if nothing mapped matches.
+    /// Shared by focus-window / center-window / window-stream.
     pub unsafe fn find_window_by_query(&self, query: &str) -> *mut Window {
-        let query = query.to_lowercase();
-
-        if let Ok(id) = query.parse::<u32>() {
-            for &w in self.windows.iter() {
-                if !w.is_null() && !(*w).closed
-                    && matches!((*w).state, crate::window::WindowState::Mapped)
-                    && (*w).ref_key.index == id
-                {
-                    return w;
-                }
-            }
-        }
-
-        let mut best_target: *mut Window = std::ptr::null_mut();
-        let mut best_score = 0;
+        let mut candidates = Vec::new();
+        let mut ptrs: Vec<*mut Window> = Vec::new();
         for &w in self.windows.iter() {
             if !w.is_null() && !(*w).closed
                 && matches!((*w).state, crate::window::WindowState::Mapped)
             {
-                if let Some(aid) = (*w).get_app_id_string() {
-                    let aid_lower = aid.to_lowercase();
-                    let score = if aid_lower == query {
-                        100
-                    } else if aid_lower.contains(&query) {
-                        50
-                    } else {
-                        0
-                    };
-                    if score > best_score {
-                        best_score = score;
-                        best_target = w;
-                    }
-                }
+                candidates.push(crate::policy::query::QueryCandidate {
+                    index: (*w).ref_key.index,
+                    app_id: (*w).get_app_id_string(),
+                });
+                ptrs.push(w);
             }
         }
-        best_target
+        match crate::policy::query::find_window(&candidates, query) {
+            Some(pos) => ptrs[pos],
+            None => std::ptr::null_mut(),
+        }
     }
 
     pub unsafe fn process_ipc_command(&mut self, cmd: &str) -> String {
