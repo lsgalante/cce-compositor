@@ -1798,33 +1798,41 @@ impl WindowManager {
         self.focus_history.retain(|&w| w != window);
     }
 
+    /// Refocus after the focused window goes away, by the policy crate's
+    /// next-visible rule (most recent eligible history entry, else the last
+    /// eligible window in window order, else clear focus). This side owns
+    /// eligibility (mapped, not minimized, not status/background).
     pub unsafe fn focus_next_visible_window(&mut self, seat: *mut crate::seat::Seat) {
-        let mut next_focus: *mut Window = std::ptr::null_mut();
-        for &w in self.focus_history.iter() {
-            if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
-                let app_id = (*w).get_app_id_string();
-                let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
-                let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
-                if !is_status_bar && !is_wallpaper {
-                    next_focus = w;
-                    break;
-                }
+        let eligible = |w: *mut Window| -> bool {
+            if (*w).closed || (*w).minimized || !matches!((*w).state, crate::window::WindowState::Mapped) {
+                return false;
             }
-        }
-        if next_focus.is_null() {
-            for &w in self.windows.iter() {
-                if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
-                    let app_id = (*w).get_app_id_string();
-                    let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
-                    let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
-                    if !is_status_bar && !is_wallpaper {
-                        next_focus = w;
-                    }
-                }
-            }
-        }
-        if !next_focus.is_null() {
-            (*seat).focus(crate::seat::Focus::Window(next_focus));
+            let app_id = (*w).get_app_id_string();
+            let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
+            let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
+            !is_status_bar && !is_wallpaper
+        };
+        let candidate = |w: *mut Window| crate::policy::focus::FocusCandidate {
+            id: crate::policy::api::WindowId((*w).ref_key),
+            eligible: eligible(w),
+        };
+        let history: Vec<_> = self
+            .focus_history
+            .iter()
+            .filter(|&&w| !w.is_null())
+            .map(|&w| candidate(w))
+            .collect();
+        let windows: Vec<_> = self
+            .windows
+            .iter()
+            .filter(|&&w| !w.is_null())
+            .map(|&w| candidate(w))
+            .collect();
+        let next = crate::policy::focus::next_visible_focus(&history, &windows)
+            .and_then(|id| self.windows.get(id.0).copied())
+            .unwrap_or(std::ptr::null_mut());
+        if !next.is_null() {
+            (*seat).focus(crate::seat::Focus::Window(next));
         } else {
             (*seat).focus(crate::seat::Focus::None);
         }
@@ -2123,14 +2131,6 @@ impl WindowManager {
                 self.start_clean_exit();
             }
             Action::LayoutNext => {}
-            Action::OverlayLeft => {
-                self.layout.overlay_position = "left".to_string();
-                self.dirty_windowing();
-            }
-            Action::OverlayRight => {
-                self.layout.overlay_position = "right".to_string();
-                self.dirty_windowing();
-            }
             _ => {}
         }
     }
@@ -3706,6 +3706,12 @@ impl crate::policy::api::Compositor for WindowManager {
                             (*win).virtual_y = y;
                         }
                     }
+                }
+                Command::SetOverlayPosition(side) => {
+                    self.layout.overlay_position = match side {
+                        crate::policy::api::OverlaySide::Left => "left".to_string(),
+                        crate::policy::api::OverlaySide::Right => "right".to_string(),
+                    };
                 }
                 Command::Relayout => self.dirty_windowing(),
                 Command::RefreshCamera => {
