@@ -158,6 +158,11 @@ pub struct Output {
     pub rendering_current: RenderingState,
 
     // Cached grid parameters to avoid redrawing when unchanged
+    /// Camera state at this output's last rendered frame; any difference
+    /// forces a full-output repaint (see the frame chokepoint).
+    pub last_rendered_pan_x: f64,
+    pub last_rendered_pan_y: f64,
+    pub last_rendered_zoom: f64,
     pub last_grid_viewport_w: i32,
     pub last_grid_viewport_h: i32,
     pub last_grid_zoom: f64,
@@ -414,6 +419,9 @@ impl Output {
             sent_wl_output: false,
             rendering_requested: RenderingState { tearing: false },
             rendering_current: RenderingState { tearing: false },
+            last_rendered_pan_x: f64::NAN,
+            last_rendered_pan_y: f64::NAN,
+            last_rendered_zoom: f64::NAN,
             last_grid_viewport_w: 0,
             last_grid_viewport_h: 0,
             last_grid_zoom: 0.0,
@@ -484,6 +492,28 @@ impl Output {
                 None
             }
         };
+
+        // One chokepoint for every camera-mutation path (wheel zoom, IPC,
+        // keyed actions, edge-pan, the pan animation — whichever of
+        // update_viewport_local or the manage transaction carried it): if
+        // the camera changed since this output last rendered, per-node
+        // damage under-reports the whole-screen relayout (stale slivers of
+        // the previous zoom survive wherever idle content used to be), so
+        // force a full repaint. Must run BEFORE the needs-frame early-out —
+        // a camera change with no other pending damage would otherwise skip
+        // the frame entirely.
+        {
+            let wm = &(*self.server).wm;
+            let cam = (wm.desk_pan_x, wm.desk_pan_y, wm.desk_zoom);
+            if cam != (self.last_rendered_pan_x, self.last_rendered_pan_y, self.last_rendered_zoom) {
+                self.last_rendered_pan_x = cam.0;
+                self.last_rendered_pan_y = cam.1;
+                self.last_rendered_zoom = cam.2;
+                if !self.scene_output.is_null() {
+                    ffi::river_scene_output_damage_whole(self.scene_output);
+                }
+            }
+        }
 
         if pending_shot.is_none() && !ffi::wlr_scene_output_needs_frame(self.scene_output) {
             return Ok(());
