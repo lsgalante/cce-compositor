@@ -2305,10 +2305,7 @@ pub enum BorderZone {
     Resize(crate::window::Edges),
 }
 
-/// Floor on the border grab/reveal band, in layout pixels. Borders are
-/// invisible until hovered, so the band is the only thing to aim at; a 2px
-/// target would be unusable.
-pub const HOVER_BAND_MIN: f64 = 8.0;
+pub use crate::window::HOVER_BAND_MIN;
 
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
     if (*(*window).server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
@@ -2325,18 +2322,12 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
         return BorderZone::None;
     }
 
-    // Width-only, matching draw_borders: visible borders are the zones at
-    // their real width regardless of the ssd flag.
-    //
-    // Borders rest invisible and are revealed by hovering this band, so it
-    // doubles as the reveal target and must stay comfortable to hit: a
-    // narrow configured border still gets a HOVER_BAND_MIN-wide grab zone.
-    let is_virtual_border = (*window).rendering_requested.border.width == 0;
-    let bw_unscaled = if is_virtual_border {
-        HOVER_BAND_MIN
-    } else {
-        ((*window).rendering_requested.border.width as f64).max(HOVER_BAND_MIN)
-    };
+    // The shared band formula (doubled width, floored) — matching
+    // draw_borders' catchers and segments, so the zones and the visuals
+    // cannot drift. Foam ownership between neighboring windows needs no
+    // handling here: the catchers are clipped at the walls, so the scene
+    // hit-test already hands each half of a shared gap to the nearer window.
+    let bw_unscaled = crate::window::border_band_width((*window).rendering_requested.border.width);
     if bw_unscaled <= 0.0 {
         return BorderZone::None;
     }
