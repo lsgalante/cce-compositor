@@ -22,10 +22,6 @@ extracted from this crate's `src/server/policy/`; `src/lib.rs` re-exports it as
 `crate::policy` / `crate::tiling` / `crate::slotmap`, so mechanism code keeps using
 the historical paths.
 
-> Note: `README.md` is stale — it describes an old split `cce-server`/`cce-client`
-> architecture. The real architecture is monolithic (a single `cce-fx` server binary
-> plus the `ccectl` control client). `standalone client mode is deprecated`.
-
 ## Build / run / install
 
 ```sh
@@ -105,12 +101,14 @@ treats them as opaque.
   server, loads config + persisted state, adds the wayland socket, spawns the init
   program (`~/.config/cce/init` via `sh -c`) and the IPC + status servers, then
   `wl_display_run`.
-- **`window_manager.rs`** (~3800 lines) — the heart. Holds the WM state, viewport
-  pan/zoom ("overview"/desktop-grid), window lists, and the IPC command dispatcher
-  `process_ipc_command()`. IPC requests arrive on an mpsc channel drained by a
-  wlroots event-loop timer (`handle_ipc_timer`) so all mutation happens on the main
-  thread.
-- **`window.rs`** (~3300 lines) — per-window model and rendering (borders, blur,
+- **`window_manager.rs`** (~3900 lines) — the heart of the mechanism side. Holds the
+  WM state, the camera fields, window lists, the IPC command dispatcher
+  `process_ipc_command()`, the `Policy::action` snapshot builder
+  (`build_action_ctx`) and the `Compositor` command applier. IPC requests arrive on
+  an mpsc channel drained by a wlroots event-loop timer (`handle_ipc_timer`) so all
+  mutation happens on the main thread. Decision logic (camera math, action
+  dispatch, snapping, refocus, grid geometry) lives in `cce-window-manager`.
+- **`window.rs`** (~3900 lines) — per-window model and rendering (borders, blur,
   viewport transforms).
 - **`crate::tiling`** (from `cce-window-manager`) — `TilingMode` enum: `Floating`,
   `Cascade`, `Grid`, `Fullscreen`, `Popup`, `Overlay`, `Maximized`. Modes apply
@@ -128,9 +126,8 @@ treats them as opaque.
 
 Loaded on startup from **`$XDG_CONFIG_HOME/cce/config.kdl`** (falls back to
 `~/.config/cce/config.kdl`). An adjacent `input.kdl` is merged in for key bindings and
-input settings. **The format is KDL** (via the `kdl` crate) despite some source
-comments in `config.rs` still saying "TOML" — trust `parse_kdl_config`, not the
-comments. `config.rs` maps parsed values onto `WindowManager` state (layout gaps,
+input settings. **The format is KDL** (via the `kdl` crate; `parse_kdl_config`).
+`config.rs` maps parsed values onto `WindowManager` state (layout gaps,
 border/blur/desktop styling, keybindings → `Action`s, startup programs, output/display
 settings). Live reconfiguration comes in over IPC (`ccectl reload`, `bind`, `layout …`,
 `config-done`, etc.).

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # cce-desktop-menu — Context menu for CCE desktop background
 
-CCE_CTL="/home/lsgalante/.local/bin/ccectl"
-CLEAR_CLOUD="/home/lsgalante/.local/bin/cce-cloud"
+CCE_CTL="$HOME/.local/bin/ccectl"
+CLEAR_CLOUD="$HOME/.local/bin/cce-cloud"
 
 # Default to empty coordinates if not provided
 x_arg=""
@@ -59,11 +59,11 @@ case "$btn" in
         ;;
     "files")
         # Run files
-        /home/lsgalante/.local/bin/cce-files &
+        "$HOME"/.local/bin/cce-files &
         ;;
     "data_editor")
         # Run data editor
-        /home/lsgalante/.local/bin/cce-data-editor &
+        "$HOME"/.local/bin/cce-data-editor &
         ;;
     "apps")
         # Run applications search/list
@@ -71,7 +71,7 @@ case "$btn" in
         ;;
     "settings")
         # Run settings interface
-        /home/lsgalante/.local/bin/cce-system-settings &
+        "$HOME"/.local/bin/cce-system-settings &
         ;;
     "expose")
         $CCE_CTL expose

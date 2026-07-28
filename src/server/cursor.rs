@@ -912,7 +912,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 cursor.right_click_on_bg = true;
                 let x = cursor.x() as i32;
                 let y = cursor.y() as i32;
-                let cmd = format!("/home/lsgalante/.local/bin/cce-desktop-menu -x {} -y {}", x, y);
+                let home = std::env::var("HOME").unwrap_or_default();
+                let cmd = format!("{}/.local/bin/cce-desktop-menu -x {} -y {}", home, x, y);
                 (*server).wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
 
                 seat.focus(Focus::None);
@@ -1042,7 +1043,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 let y = cursor.y() as i32;
                 let index = (*border_target_win).ref_key.index;
                 let app_id = (*border_target_win).get_app_id_string().unwrap_or_else(|| "unknown".to_string());
-                let cmd = format!("/home/lsgalante/.local/bin/cce-app-menu -x {} -y {} -i {} -a {}", x, y, index, app_id);
+                let home = std::env::var("HOME").unwrap_or_default();
+                let cmd = format!("{}/.local/bin/cce-app-menu -x {} -y {} -i {} -a {}", home, x, y, index, app_id);
                 (*server).wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
 
                 cursor.pressed.insert((*event).button, None);
