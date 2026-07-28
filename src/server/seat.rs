@@ -29,6 +29,12 @@ pub struct SeatOp {
     pub start_win_h: u32,
     pub start_win_virtual_x: f64,
     pub start_win_virtual_y: f64,
+    /// Desk pan at op start. The op tracks the cursor in virtual space as
+    /// `start + cursor_delta/zoom + (pan - start_pan)`: the pan-delta term
+    /// keeps the dragged window/edge pinned to the cursor when edge auto-pan
+    /// (or anything else) scrolls the desktop mid-drag.
+    pub start_pan_x: f64,
+    pub start_pan_y: f64,
     pub start_tiling_mode: crate::tiling::TilingMode,
     pub start_mode_locked: bool,
     pub started_in_overview: bool,
@@ -1130,9 +1136,9 @@ impl Seat {
                             let scale = (*(*self.server).wm.server).wm.desk_zoom;
                             let pan_x = (*(*self.server).wm.server).wm.desk_pan_x;
                             let pan_y = (*(*self.server).wm.server).wm.desk_pan_y;
-                            let virtual_dx = dx as f64 / scale;
-                            let virtual_dy = dy as f64 / scale;
-                            
+                            let virtual_dx = dx as f64 / scale + (pan_x - op.start_pan_x);
+                            let virtual_dy = dy as f64 / scale + (pan_y - op.start_pan_y);
+
                             let vx = op.start_win_virtual_x + virtual_dx;
                             let vy = op.start_win_virtual_y + virtual_dy;
                             let (vx, vy) = crate::policy::snap::snap_move(
@@ -1172,8 +1178,8 @@ impl Seat {
                         let scale = (*(*self.server).wm.server).wm.desk_zoom;
                         let pan_x = (*(*self.server).wm.server).wm.desk_pan_x;
                         let pan_y = (*(*self.server).wm.server).wm.desk_pan_y;
-                        let virtual_dx = dx as f64 / scale;
-                        let virtual_dy = dy as f64 / scale;
+                        let virtual_dx = dx as f64 / scale + (pan_x - op.start_pan_x);
+                        let virtual_dy = dy as f64 / scale + (pan_y - op.start_pan_y);
 
                         let mut vx = op.start_win_virtual_x;
                         let mut vy = op.start_win_virtual_y;
@@ -1249,11 +1255,52 @@ impl Seat {
             }
             (*self.server).wm.dirty_windowing();
         }
+        self.update_edge_pan(x as f64, y as f64);
+    }
+
+    /// Edge auto-pan eligibility + velocity for the current op: while an
+    /// interactive move/resize holds the cursor inside the band at an output
+    /// edge, the desktop scrolls that way, ramping from 0 at the band's inner
+    /// rim to full speed at the screen edge. Called on every op motion AND
+    /// from the edge-pan tick's op_update, which is what re-arms the timer —
+    /// so the scroll continues while the cursor rests pinned at the edge.
+    unsafe fn update_edge_pan(&mut self, lx: f64, ly: f64) {
+        let wm = &mut (*self.server).wm;
+        let mut vx = 0.0;
+        let mut vy = 0.0;
+        let eligible = wm.layout.desktop_edge_pan
+            && match self.op {
+                Some(ref op) => {
+                    !op.window_ptr.is_null()
+                        && !(*op.window_ptr).closed
+                        && !(*op.window_ptr).is_status_bar()
+                }
+                None => false,
+            };
+        if eligible {
+            let wlr_output = (*self.server).om.output_at(lx, ly);
+            if !wlr_output.is_null() {
+                let mut ob = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+                ffi::wlr_output_layout_get_box((*self.server).om.output_layout, wlr_output, &mut ob);
+                let band = wm.layout.desktop_edge_pan_band.max(1.0);
+                let speed = wm.layout.desktop_edge_pan_speed.max(0.0);
+                // 0 outside the band, 1 at (or past) the screen edge.
+                let ramp = |dist_to_edge: f64| ((band - dist_to_edge) / band).clamp(0.0, 1.0);
+                vx = speed
+                    * (ramp((ob.x + ob.width) as f64 - lx) - ramp(lx - ob.x as f64));
+                vy = speed
+                    * (ramp((ob.y + ob.height) as f64 - ly) - ramp(ly - ob.y as f64));
+            }
+        }
+        wm.set_edge_pan_velocity(vx, vy);
     }
 
     pub unsafe fn op_end(&mut self) {
         if let Some(op) = self.op.take() {
             log::debug!("end seat op");
+            let wm = &mut (*self.server).wm;
+            wm.edge_pan_vx = 0.0;
+            wm.edge_pan_vy = 0.0;
             let win = op.window_ptr;
             if !win.is_null() && !(*win).closed {
                 if let PointerOpType::Resize { .. } = op.op_type {
@@ -1498,6 +1545,8 @@ unsafe extern "C" fn seat_op_start_pointer(
             start_win_h: 0,
             start_win_virtual_x: 0.0,
             start_win_virtual_y: 0.0,
+            start_pan_x: (*(*seat).server).wm.desk_pan_x,
+            start_pan_y: (*(*seat).server).wm.desk_pan_y,
             start_tiling_mode: crate::tiling::TilingMode::Floating,
             start_mode_locked: false,
             started_in_overview: false,

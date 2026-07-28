@@ -828,6 +828,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     start_win_h: (*clicked_status).box_geom.height as u32,
                     start_win_virtual_x: (*clicked_status).virtual_x,
                     start_win_virtual_y: (*clicked_status).virtual_y,
+                    start_pan_x: (*server).wm.desk_pan_x,
+                    start_pan_y: (*server).wm.desk_pan_y,
                     start_tiling_mode: (*clicked_status).tiling_mode,
                     start_mode_locked: (*clicked_status).mode_locked,
                     started_in_overview: false,
@@ -867,6 +869,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     start_win_h: (*clicked_win).box_geom.height as u32,
                     start_win_virtual_x: (*clicked_win).virtual_x,
                     start_win_virtual_y: (*clicked_win).virtual_y,
+                    start_pan_x: (*server).wm.desk_pan_x,
+                    start_pan_y: (*server).wm.desk_pan_y,
                     start_tiling_mode: (*clicked_win).tiling_mode,
                     start_mode_locked: (*clicked_win).mode_locked,
                     started_in_overview: true,
@@ -995,6 +999,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         start_win_virtual_y: (*target_win).virtual_y,
                         start_tiling_mode: (*target_win).tiling_mode,
                         start_mode_locked: (*target_win).mode_locked,
+                        start_pan_x: (*(*seat).server).wm.desk_pan_x,
+                        start_pan_y: (*(*seat).server).wm.desk_pan_y,
                         started_in_overview: (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
                     });
                     cursor.op_start_pointer();
@@ -1088,7 +1094,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                             start_win_virtual_y: (*border_target_win).virtual_y,
                             start_tiling_mode: (*border_target_win).tiling_mode,
                             start_mode_locked: (*border_target_win).mode_locked,
-                            started_in_overview: (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
+                            start_pan_x: (*(*seat).server).wm.desk_pan_x,
+                        start_pan_y: (*(*seat).server).wm.desk_pan_y,
+                        started_in_overview: (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
                         });
                         cursor.op_start_pointer();
                         cursor.pressed.insert((*event).button, None);
@@ -1168,7 +1176,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                             start_win_virtual_y: (*border_target_win).virtual_y,
                             start_tiling_mode: (*border_target_win).tiling_mode,
                             start_mode_locked: (*border_target_win).mode_locked,
-                            started_in_overview: (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
+                            start_pan_x: (*(*seat).server).wm.desk_pan_x,
+                        start_pan_y: (*(*seat).server).wm.desk_pan_y,
+                        started_in_overview: (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
                         });
                         cursor.op_start_pointer();
                         cursor.pressed.insert((*event).button, None);

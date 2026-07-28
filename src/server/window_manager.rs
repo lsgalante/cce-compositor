@@ -116,6 +116,12 @@ pub struct WindowManager {
     pub target_desk_pan_x: Option<f64>,
     pub target_desk_pan_y: Option<f64>,
     pub animation_timer: *mut ffi::wl_event_source,
+    /// Edge auto-pan velocity during an interactive move/resize, in SCREEN
+    /// px/s (the tick divides by zoom). Written by `Seat::update_edge_pan`
+    /// on every op motion; both zero when the cursor is outside the bands.
+    pub edge_pan_vx: f64,
+    pub edge_pan_vy: f64,
+    pub edge_pan_timer: *mut ffi::wl_event_source,
     pub has_restored_focused_window: bool,
     pub restored_focused_window_mapped: bool,
     pub last_viewport_zoom: f64,
@@ -185,6 +191,9 @@ impl WindowManager {
         self.target_desk_pan_x = None;
         self.target_desk_pan_y = None;
         self.animation_timer = std::ptr::null_mut();
+        self.edge_pan_vx = 0.0;
+        self.edge_pan_vy = 0.0;
+        self.edge_pan_timer = std::ptr::null_mut();
         self.viewport_is_active = false;
         self.viewport_settle_timer = std::ptr::null_mut();
         self.desk_zoom = 1.0;
@@ -639,6 +648,10 @@ impl WindowManager {
             ffi::wl_event_source_remove(self.animation_timer);
             self.animation_timer = std::ptr::null_mut();
         }
+        if !self.edge_pan_timer.is_null() {
+            ffi::wl_event_source_remove(self.edge_pan_timer);
+            self.edge_pan_timer = std::ptr::null_mut();
+        }
         if !self.viewport_settle_timer.is_null() {
             ffi::wl_event_source_remove(self.viewport_settle_timer);
             self.viewport_settle_timer = std::ptr::null_mut();
@@ -649,6 +662,28 @@ impl WindowManager {
     pub unsafe fn stop_panning_animation(&mut self) {
         self.target_desk_pan_x = None;
         self.target_desk_pan_y = None;
+    }
+
+    /// Record the edge auto-pan velocity (screen px/s) and arm its 16ms tick
+    /// when nonzero. A zero velocity just parks: the armed tick sees it and
+    /// stops itself without re-arming.
+    pub unsafe fn set_edge_pan_velocity(&mut self, vx: f64, vy: f64) {
+        self.edge_pan_vx = vx;
+        self.edge_pan_vy = vy;
+        if vx == 0.0 && vy == 0.0 {
+            return;
+        }
+        if self.edge_pan_timer.is_null() {
+            let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+            self.edge_pan_timer = ffi::wl_event_loop_add_timer(
+                event_loop,
+                Some(handle_edge_pan_tick),
+                self as *mut WindowManager as *mut _,
+            );
+        }
+        if !self.edge_pan_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.edge_pan_timer, 16);
+        }
     }
 
     /// Arm the pan animation timer (creating it on first use): every 16ms
@@ -1152,8 +1187,8 @@ impl WindowManager {
                         let scale = self.desk_zoom;
                         let dx = op.x - op.start_x;
                         let dy = op.y - op.start_y;
-                        let virtual_dx = dx as f64 / scale;
-                        let virtual_dy = dy as f64 / scale;
+                        let virtual_dx = dx as f64 / scale + (self.desk_pan_x - op.start_pan_x);
+                        let virtual_dy = dy as f64 / scale + (self.desk_pan_y - op.start_pan_y);
                         // Same math (and snapping) as the seat op's Resize
                         // arm — this recomputation feeds the arrange
                         // snapshot and must not diverge from it.
@@ -3963,6 +3998,41 @@ pub(crate) unsafe extern "C" fn handle_viewport_settle_tick(data: *mut std::ffi:
         return 0;
     }
     (*wm).finish_viewport_settle();
+    0
+}
+
+/// 16ms edge auto-pan tick: scroll the desktop by the current velocity, then
+/// re-run the seat op at its last cursor position so the dragged window keeps
+/// tracking the (pinned) cursor — the op's pan-delta term turns the scroll
+/// into window motion. op_update re-derives the velocity and re-arms this
+/// timer, so the loop sustains itself until the op ends or the cursor leaves
+/// the edge bands; then it stops without re-arming.
+pub(crate) unsafe extern "C" fn handle_edge_pan_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = data as *mut WindowManager;
+    if wm.is_null() {
+        return 0;
+    }
+    let (vx, vy) = ((*wm).edge_pan_vx, (*wm).edge_pan_vy);
+    if vx == 0.0 && vy == 0.0 {
+        return 0;
+    }
+    let seat = match (*wm).first_seat() {
+        Some(seat) if (*seat).op.is_some() => seat,
+        _ => {
+            (*wm).edge_pan_vx = 0.0;
+            (*wm).edge_pan_vy = 0.0;
+            return 0;
+        }
+    };
+    let (ox, oy) = {
+        let op = (*seat).op.as_ref().unwrap();
+        (op.x, op.y)
+    };
+    let dt = 0.016;
+    let zoom = (*wm).desk_zoom.max(0.01);
+    (*wm).desk_pan_x += vx * dt / zoom;
+    (*wm).desk_pan_y += vy * dt / zoom;
+    (*seat).op_update(ox, oy);
     0
 }
 

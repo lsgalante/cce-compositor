@@ -826,6 +826,8 @@ unsafe extern "C" fn handle_request_move(
             start_win_virtual_y: (*window).virtual_y,
             start_tiling_mode: (*window).tiling_mode,
             start_mode_locked: (*window).mode_locked,
+            start_pan_x: (*(*window).server).wm.desk_pan_x,
+            start_pan_y: (*(*window).server).wm.desk_pan_y,
             started_in_overview: (*(*window).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
         });
         cursor.op_start_pointer();
@@ -881,6 +883,8 @@ unsafe extern "C" fn handle_request_resize(
             start_win_virtual_y: (*window).virtual_y,
             start_tiling_mode: (*window).tiling_mode,
             start_mode_locked: (*window).mode_locked,
+            start_pan_x: (*(*window).server).wm.desk_pan_x,
+            start_pan_y: (*(*window).server).wm.desk_pan_y,
             started_in_overview: (*(*window).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
         });
         cursor.op_start_pointer();

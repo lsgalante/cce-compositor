@@ -71,6 +71,14 @@ pub struct Layout {
     pub desktop_snap: bool,
     /// Snap radius in virtual units.
     pub desktop_snap_threshold: f64,
+    /// Edge auto-pan: dragging/resizing against a screen edge scrolls the
+    /// desktop underneath the pinned cursor.
+    pub desktop_edge_pan: bool,
+    /// Width of the trigger band inside each output edge, in layout px.
+    pub desktop_edge_pan_band: f64,
+    /// Full-tilt pan speed at the screen edge, in screen px/s (the tick
+    /// divides by zoom; speed ramps linearly across the band).
+    pub desktop_edge_pan_speed: f64,
     pub scenefx_optimized_blur: bool,
     pub status_backdrop_blur_ignore_transparent: bool,
     pub window_backdrop_blur_ignore_transparent: bool,
@@ -144,6 +152,9 @@ impl Default for Layout {
             shadow_offset_y: 7,
             desktop_snap: true,
             desktop_snap_threshold: 24.0,
+            desktop_edge_pan: true,
+            desktop_edge_pan_band: 32.0,
+            desktop_edge_pan_speed: 1000.0,
             scenefx_optimized_blur: true,
             status_backdrop_blur_ignore_transparent: true,
             window_backdrop_blur_ignore_transparent: true,
@@ -327,6 +338,12 @@ pub struct SurfaceConfig {
     pub desktop_snap: bool,
     #[serde(default = "default_desktop_snap_threshold")]
     pub desktop_snap_threshold: i64,
+    #[serde(default = "default_desktop_edge_pan")]
+    pub desktop_edge_pan: bool,
+    #[serde(default = "default_desktop_edge_pan_band")]
+    pub desktop_edge_pan_band: i64,
+    #[serde(default = "default_desktop_edge_pan_speed")]
+    pub desktop_edge_pan_speed: i64,
     #[serde(default = "default_backplate_color")]
     pub backplate_color: String,
     #[serde(default = "default_backplate_blur")]
@@ -382,6 +399,9 @@ impl Default for SurfaceConfig {
             desktop_grid_fade_mode: default_desktop_grid_fade_mode(),
             desktop_snap: default_desktop_snap(),
             desktop_snap_threshold: default_desktop_snap_threshold(),
+            desktop_edge_pan: default_desktop_edge_pan(),
+            desktop_edge_pan_band: default_desktop_edge_pan_band(),
+            desktop_edge_pan_speed: default_desktop_edge_pan_speed(),
             backplate_color: default_backplate_color(),
             backplate_blur: default_backplate_blur(),
             backplate_corner_radius: default_backplate_corner_radius(),
@@ -441,6 +461,18 @@ fn default_desktop_snap() -> bool {
 
 fn default_desktop_snap_threshold() -> i64 {
     24
+}
+
+fn default_desktop_edge_pan() -> bool {
+    true
+}
+
+fn default_desktop_edge_pan_band() -> i64 {
+    32
+}
+
+fn default_desktop_edge_pan_speed() -> i64 {
+    1000
 }
 
 fn default_backplate_color() -> String {
@@ -1562,6 +1594,21 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.desktop_snap_threshold = val;
                                         }
                                     }
+                                    "edge_pan" => {
+                                        if let Some(val) = entry.value().as_bool() {
+                                            surface.desktop_edge_pan = val;
+                                        }
+                                    }
+                                    "edge_pan_band" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.desktop_edge_pan_band = val;
+                                        }
+                                    }
+                                    "edge_pan_speed" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.desktop_edge_pan_speed = val;
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1709,6 +1756,9 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.desktop_grid_fade_mode = get_child_arg_string(node, "grid_fade_mode", &default_desktop_grid_fade_mode());
             surface.desktop_snap = get_child_arg_bool(node, "desktop_snap", default_desktop_snap());
             surface.desktop_snap_threshold = get_child_arg_i64(node, "desktop_snap_threshold", default_desktop_snap_threshold());
+            surface.desktop_edge_pan = get_child_arg_bool(node, "desktop_edge_pan", default_desktop_edge_pan());
+            surface.desktop_edge_pan_band = get_child_arg_i64(node, "desktop_edge_pan_band", default_desktop_edge_pan_band());
+            surface.desktop_edge_pan_speed = get_child_arg_i64(node, "desktop_edge_pan_speed", default_desktop_edge_pan_speed());
             surface.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
             surface.backplate_blur = get_child_arg_f64(node, "backplate_blur", default_backplate_blur());
             surface.backplate_corner_radius = get_child_arg_i64(node, "backplate_corner_radius", default_backplate_corner_radius());
@@ -1857,6 +1907,9 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.desktop_grid_scale = config.surface.desktop_grid_scale as f64;
     state.layout.desktop_snap = config.surface.desktop_snap;
     state.layout.desktop_snap_threshold = config.surface.desktop_snap_threshold.max(0) as f64;
+    state.layout.desktop_edge_pan = config.surface.desktop_edge_pan;
+    state.layout.desktop_edge_pan_band = config.surface.desktop_edge_pan_band.max(1) as f64;
+    state.layout.desktop_edge_pan_speed = config.surface.desktop_edge_pan_speed.max(0) as f64;
     state.layout.desktop_gap_width = config.surface.desktop_gap_width as i32;
     state.layout.desktop_cell_corner_radius = config.surface.desktop_cell_corner_radius as i32;
     state.layout.desktop_cell_fade_inset = config.surface.desktop_cell_fade_inset;
