@@ -736,6 +736,21 @@ impl WindowManager {
             }
         }
 
+        // Render-list membership feeds focus_cyclable: the focus ring only
+        // walks windows that are actually being rendered.
+        let mut rendered = std::collections::HashSet::new();
+        let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*render_list).next;
+        while curr != render_list {
+            let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
+            if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
+                if !window.is_null() {
+                    rendered.insert(window as usize);
+                }
+            }
+            curr = (*curr).next;
+        }
+
         let mut windows = Vec::new();
         for &w in self.windows.iter() {
             if w.is_null() || (*w).closed {
@@ -745,19 +760,25 @@ impl WindowManager {
             let is_status = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
             let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
             let visible = !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
-            let mode = self.get_mode_for_window(w);
+            let resolved_mode = self.get_mode_for_window(w);
             let expose_eligible = !(*w).minimized
                 && !is_status
                 && !is_wallpaper
                 && visible
-                && mode != crate::tiling::TilingMode::Popup
-                && mode != crate::tiling::TilingMode::Overlay;
+                && resolved_mode != crate::tiling::TilingMode::Popup
+                && resolved_mode != crate::tiling::TilingMode::Overlay;
+            let focus_cyclable = rendered.contains(&(w as usize)) && !(*w).minimized && !is_status;
             windows.push(ActionWindow {
                 id: WindowId((*w).ref_key),
                 x: (*w).virtual_x,
                 y: (*w).virtual_y,
                 w: if (*w).box_geom.width > 0 { (*w).box_geom.width as f64 } else { 800.0 },
                 h: if (*w).box_geom.height > 0 { (*w).box_geom.height as f64 } else { 600.0 },
+                scale: (*w).scale,
+                mode: (*w).tiling_mode,
+                resolved_mode,
+                visible,
+                focus_cyclable,
                 expose_eligible,
             });
         }
@@ -2119,128 +2140,6 @@ impl WindowManager {
                     }
                 }
             }
-            Action::Close => {
-                if let Some(seat) = self.first_seat() {
-                    if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                        log::info!("close: closing focused window");
-                        (*fw).close();
-                        self.focus_next_visible_window(seat);
-                        self.dirty_windowing();
-                    }
-                }
-            }
-            Action::Minimize => {
-                if let Some(seat) = self.first_seat() {
-                    if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                        log::info!("minimize: minimizing focused window");
-                        (*fw).minimized = true;
-                        self.focus_next_visible_window(seat);
-                        self.dirty_windowing();
-                    }
-                }
-            }
-            Action::FocusNext | Action::FocusPrev => {
-                if let Some(seat) = self.first_seat() {
-                    let focused_win = if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                        fw
-                    } else {
-                        std::ptr::null_mut()
-                    };
-
-                    let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-                    let mut curr = (*render_list).next;
-                    let mut visible_windows = Vec::new();
-                    while curr != render_list {
-                        let next = (*curr).next;
-                        let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-                        if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
-                            if !window.is_null() && !(*window).closed && !(*window).minimized {
-                                let is_status_bar = (*window).get_app_id_string()
-                                    .map_or(false, |aid| aid.starts_with("cce-status"));
-                                if !is_status_bar {
-                                    visible_windows.push(window);
-                                }
-                            }
-                        }
-                        curr = next;
-                    }
-
-                    visible_windows.sort_by_key(|&w| unsafe { (*w).ref_key.index });
-
-                    let n = visible_windows.len();
-                    if n > 0 {
-                        let current_idx = visible_windows.iter().position(|&w| w == focused_win);
-                        let target_idx = match current_idx {
-                            Some(idx) => {
-                                if *action == Action::FocusNext {
-                                    (idx + 1) % n
-                                } else {
-                                    (idx + n - 1) % n
-                                }
-                            }
-                            None => {
-                                if *action == Action::FocusNext {
-                                    0
-                                } else {
-                                    n - 1
-                                }
-                            }
-                        };
-                        let target_win = visible_windows[target_idx];
-                        (*seat).focus(crate::seat::Focus::Window(target_win));
-                        self.raise_window(target_win);
-                        self.dirty_windowing();
-                    }
-                }
-            }
-            Action::FocusUp | Action::FocusDown | Action::FocusLeft | Action::FocusRight => {
-                if let Some(seat) = self.first_seat() {
-                    let focused_win = if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                        fw
-                    } else {
-                        std::ptr::null_mut()
-                    };
-
-                    let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-                    let mut curr = (*render_list).next;
-                    let mut visible_windows = Vec::new();
-                    while curr != render_list {
-                        let next = (*curr).next;
-                        let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-                        if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
-                            if !window.is_null() && !(*window).closed && !(*window).minimized {
-                                let is_status_bar = (*window).get_app_id_string()
-                                    .map_or(false, |aid| aid.starts_with("cce-status"));
-                                if !is_status_bar {
-                                    visible_windows.push(window);
-                                }
-                            }
-                        }
-                        curr = next;
-                    }
-
-                    // Window centers on the virtual surface — the policy
-                    // crate picks the winner, the seat applies it.
-                    let centers: Vec<(f64, f64)> = visible_windows
-                        .iter()
-                        .map(|&w| {
-                            (
-                                (*w).virtual_x + (*w).box_geom.width as f64 * (*w).scale / 2.0,
-                                (*w).virtual_y + (*w).box_geom.height as f64 * (*w).scale / 2.0,
-                            )
-                        })
-                        .collect();
-                    let focused_idx = visible_windows.iter().position(|&w| w == focused_win);
-                    let dir = crate::policy::focus::Direction::from_action(*action)
-                        .expect("arm only matches directional focus actions");
-                    if let Some(target_idx) = crate::policy::focus::directional_focus(&centers, focused_idx, dir) {
-                        let target_win = visible_windows[target_idx];
-                        (*seat).focus(crate::seat::Focus::Window(target_win));
-                        self.raise_window(target_win);
-                        self.dirty_windowing();
-                    }
-                }
-            }
             Action::WindowSwitcher => {
                 self.launch_window_switcher(false);
             }
@@ -2268,70 +2167,7 @@ impl WindowManager {
                 log::info!("monolithic execute_action: Exit requested");
                 self.start_clean_exit();
             }
-            Action::Fullscreen => {
-                if let Some(seat) = self.first_seat() {
-                    if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                        let is_fullscreen = (*fw).tiling_mode == crate::tiling::TilingMode::Fullscreen;
-                        if is_fullscreen {
-                            let target_mode = self.get_mode_for_window(fw);
-                            (*fw).tiling_mode = if target_mode == crate::tiling::TilingMode::Fullscreen {
-                                crate::tiling::TilingMode::Cascade
-                            } else {
-                                target_mode
-                            };
-                            (*fw).mode_locked = false;
-                        } else {
-                            (*fw).tiling_mode = crate::tiling::TilingMode::Fullscreen;
-                            (*fw).mode_locked = true;
-                        }
-                        self.dirty_windowing();
-                    }
-                }
-            }
             Action::LayoutNext => {}
-            Action::ModeNext => {
-                let cycle = [
-                    crate::tiling::TilingMode::Floating,
-                    crate::tiling::TilingMode::Fullscreen,
-                ];
-                if let Some(seat) = self.first_seat() {
-                    if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                        let current_mode = (*fw).tiling_mode;
-                        let next = cycle
-                            .iter()
-                            .position(|m| *m == current_mode)
-                            .map(|i| cycle[(i + 1) % cycle.len()])
-                            .unwrap_or(crate::tiling::TilingMode::Floating);
-                        (*fw).tiling_mode = next;
-                        (*fw).mode_locked = true;
-                        self.dirty_windowing();
-                    }
-                }
-            }
-            Action::ModeNextShared => {
-                let cycle = [
-                    crate::tiling::TilingMode::Floating,
-                    crate::tiling::TilingMode::Fullscreen,
-                ];
-                if let Some(seat) = self.first_seat() {
-                    if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                        let current_mode = (*fw).tiling_mode;
-                        let next = cycle
-                            .iter()
-                            .position(|m| *m == current_mode)
-                            .map(|i| cycle[(i + 1) % cycle.len()])
-                            .unwrap_or(crate::tiling::TilingMode::Floating);
-                        
-                        for &w in self.windows.iter() {
-                            if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) && (*w).tiling_mode == current_mode {
-                                (*w).tiling_mode = next;
-                                (*w).mode_locked = true;
-                            }
-                        }
-                        self.dirty_windowing();
-                    }
-                }
-            }
             Action::OverlayLeft => {
                 self.layout.overlay_position = "left".to_string();
                 self.dirty_windowing();
@@ -3878,6 +3714,40 @@ impl crate::policy::api::Compositor for WindowManager {
                     self.start_panning_animation();
                 }
                 Command::StopPanAnimation => self.stop_panning_animation(),
+                Command::FocusNextVisible => {
+                    if let Some(seat) = self.first_seat() {
+                        self.focus_next_visible_window(seat);
+                    }
+                }
+                Command::Raise(id) => {
+                    if let Some(&win) = self.windows.get(id.0) {
+                        if !win.is_null() && !(*win).closed {
+                            self.raise_window(win);
+                        }
+                    }
+                }
+                Command::CloseWindow(id) => {
+                    if let Some(&win) = self.windows.get(id.0) {
+                        if !win.is_null() && !(*win).closed {
+                            (*win).close();
+                        }
+                    }
+                }
+                Command::SetMinimized { id, minimized } => {
+                    if let Some(&win) = self.windows.get(id.0) {
+                        if !win.is_null() && !(*win).closed {
+                            (*win).minimized = minimized;
+                        }
+                    }
+                }
+                Command::SetWindowMode { id, mode, locked } => {
+                    if let Some(&win) = self.windows.get(id.0) {
+                        if !win.is_null() && !(*win).closed {
+                            (*win).tiling_mode = mode;
+                            (*win).mode_locked = locked;
+                        }
+                    }
+                }
                 Command::Focus(id) => {
                     if let Some(&win) = self.windows.get(id.0) {
                         if !win.is_null() && !(*win).closed {
