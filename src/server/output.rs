@@ -161,17 +161,10 @@ pub struct Output {
     pub last_grid_viewport_w: i32,
     pub last_grid_viewport_h: i32,
     pub last_grid_zoom: f64,
-    pub last_grid_pan_x: f64,
-    pub last_grid_pan_y: f64,
-    pub last_grid_spacing: f64,
-    pub last_grid_gap_width: i32,
-    pub last_grid_cell_color: [f32; 4],
-    pub last_grid_cell_corner_radius: i32,
-    pub last_grid_cell_fade_inset: i64,
-    pub last_grid_fade_mode: String,
-    pub last_grid_gap_color: String,
-    pub last_grid_gap_color_rgba: [f32; 4],
-    pub grid_is_low_res: bool,
+    /// The spec the pool was last drawn from; a change (or viewport/zoom
+    /// change) forces a redraw. Pan alone never redraws — it only moves the
+    /// grid tree.
+    pub last_grid_spec: Option<crate::policy::api::BackgroundSpec>,
     pub grid_rect_pool: Vec<*mut ffi::wlr_scene_rect>,
     pub grid_force_redraw_frames: u8,
 
@@ -424,17 +417,7 @@ impl Output {
             last_grid_viewport_w: 0,
             last_grid_viewport_h: 0,
             last_grid_zoom: 0.0,
-            last_grid_pan_x: 0.0,
-            last_grid_pan_y: 0.0,
-            last_grid_spacing: 0.0,
-            last_grid_gap_width: 0,
-            last_grid_cell_color: [0.0, 0.0, 0.0, 0.0],
-            last_grid_cell_corner_radius: 0,
-            last_grid_cell_fade_inset: 0,
-            last_grid_fade_mode: String::new(),
-            last_grid_gap_color: String::new(),
-            last_grid_gap_color_rgba: [0.0, 0.0, 0.0, 0.0],
-            grid_is_low_res: false,
+            last_grid_spec: None,
             grid_rect_pool: Vec::new(),
             grid_force_redraw_frames: 0,
             destroy: std::mem::zeroed(),
@@ -673,6 +656,12 @@ impl Output {
         }
     }
 
+    /// Draw the desktop background from the policy crate's declarative
+    /// spec: `Layout::background_spec()` says WHAT to show, and (for the
+    /// grid) `policy::background::grid_frame` derives this frame's geometry
+    /// — tree shift, backdrop extent, cell lattice, density fade. This side
+    /// keeps the scene nodes, the rect reuse pool, and scenefx's fade-inset
+    /// wire encoding.
     pub unsafe fn draw_grid(&mut self) {
         if self.grid_tree.is_null() {
             return;
@@ -687,165 +676,123 @@ impl Output {
         ffi::wlr_scene_node_raise_to_top(self.grid_tree as *mut ffi::wlr_scene_node);
 
         let (viewport_w, viewport_h) = self.current.dimensions();
-        let zoom = if wm.desk_zoom.is_nan() || wm.desk_zoom <= 0.0 {
-            1.0
-        } else {
-            wm.desk_zoom
-        };
+        let spec = wm.layout.background_spec();
+        let zoom = crate::policy::background::sanitized_zoom(wm.desk_zoom);
 
-        let cell_size = wm.layout.desktop_grid_scale.max(5.0);
-        let gap_size = (wm.layout.desktop_gap_width as f64).max(0.0);
-        let period = cell_size + gap_size;
-
-        // Smoothly fade out grid cells when they get too small (period * zoom < 30px)
-        // to prevent extreme visual noise, layout popping, and massive CPU allocation stutters when zooming.
-        let period_pixels = period * zoom;
-        let density_fade = if period_pixels < 15.0 {
-            0.0
-        } else if period_pixels < 30.0 {
-            (period_pixels - 15.0) / 15.0
-        } else {
-            1.0
-        };
-
-        let mut cell_color: [f32; 4] = wm.layout.desktop_cell_color;
-        cell_color[3] *= density_fade as f32;
-        let cell_corner_radius = wm.layout.desktop_cell_corner_radius;
-        let cell_fade_inset = wm.layout.desktop_cell_fade_inset;
-        let fade_mode_str = &wm.layout.desktop_grid_fade_mode;
-        let gap_color = &wm.layout.desktop_gap_color;
-
-        // Detect layout or viewport changes to request a redraw.
+        // Spec/viewport/zoom changes force a redraw of the rect pool; pan
+        // alone only moves the grid tree.
         let structure_changed = self.last_grid_viewport_w != viewport_w
             || self.last_grid_viewport_h != viewport_h
             || self.last_grid_zoom != zoom
-            || self.last_grid_spacing != cell_size
-            || self.last_grid_gap_width != gap_size as i32
-            || self.last_grid_cell_color != cell_color
-            || self.last_grid_cell_corner_radius != cell_corner_radius
-            || self.last_grid_cell_fade_inset != cell_fade_inset
-            || &self.last_grid_fade_mode != fade_mode_str
-            || &self.last_grid_gap_color != gap_color;
-
+            || self.last_grid_spec.as_ref() != Some(&spec);
         if structure_changed {
             self.grid_force_redraw_frames = 3;
         }
-
-        // Modulo shift calculations for virtual grid infinite scrolling.
-        // Use .floor() to match window coordinates truncation direction.
-        let origin_x = ((-wm.desk_pan_x) * zoom).floor() as i32;
-        let origin_y = ((-wm.desk_pan_y) * zoom).floor() as i32;
-
-        let period_pixels_i = period_pixels.round() as i32;
-        if period_pixels_i > 0 {
-            let dest_x = self.sent.x + origin_x.rem_euclid(period_pixels_i) - period_pixels_i;
-            let dest_y = self.sent.y + origin_y.rem_euclid(period_pixels_i) - period_pixels_i;
-
-            // Apply shift translation to root grid tree node.
-            ffi::river_scene_node_set_position_if_changed(
-                self.grid_tree as *mut ffi::wlr_scene_node,
-                dest_x,
-                dest_y,
-            );
-        }
-
-        if self.grid_force_redraw_frames > 0 {
+        let force = self.grid_force_redraw_frames > 0;
+        if force {
             self.grid_force_redraw_frames -= 1;
-
             self.last_grid_viewport_w = viewport_w;
             self.last_grid_viewport_h = viewport_h;
             self.last_grid_zoom = zoom;
-            self.last_grid_spacing = cell_size;
-            self.last_grid_gap_width = gap_size as i32;
-            self.last_grid_cell_color = cell_color;
-            self.last_grid_cell_corner_radius = cell_corner_radius;
-            self.last_grid_cell_fade_inset = cell_fade_inset;
-            self.last_grid_fade_mode = fade_mode_str.clone();
-            self.last_grid_gap_color = gap_color.clone();
-            self.last_grid_gap_color_rgba = crate::config::parse_hex_color_rgba(&self.last_grid_gap_color);
-            self.grid_is_low_res = self.last_grid_zoom != zoom;
+            self.last_grid_spec = Some(spec.clone());
+        }
 
-            let grid_tree = self.grid_tree;
-            let pool = &mut self.grid_rect_pool;
-            let mut pool_idx = 0;
+        let grid_tree = self.grid_tree;
+        let pool = &mut self.grid_rect_pool;
+        let mut pool_idx = 0;
 
-            // Helper closure to manage/reuse the pool of wlr_scene_rect elements.
-            let mut get_rect = |w: i32, h: i32, color_ptr: *const f32, x: i32, y: i32, corner_r: i32, fade_i: i32| -> *mut ffi::wlr_scene_rect {
-                let rect = if pool_idx < pool.len() {
-                    let node = pool[pool_idx];
-                    ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, true);
-                    ffi::wlr_scene_rect_set_size(node, w, h);
-                    ffi::wlr_scene_rect_set_color(node, color_ptr);
-                    node
-                } else {
-                    let node = ffi::wlr_scene_rect_create(grid_tree, w, h, color_ptr);
-                    if !node.is_null() {
-                        pool.push(node);
-                    }
-                    node
-                };
-
-                if !rect.is_null() {
-                    ffi::wlr_scene_node_set_position(rect as *mut ffi::wlr_scene_node, x, y);
-                    ffi::river_scene_rect_set_corner_radius(rect, corner_r);
-                    ffi::wlr_scene_rect_set_fade_inset(rect, fade_i);
+        // Helper closure to manage/reuse the pool of wlr_scene_rect elements.
+        let mut get_rect = |w: i32, h: i32, color_ptr: *const f32, x: i32, y: i32, corner_r: i32, fade_i: i32| -> *mut ffi::wlr_scene_rect {
+            let rect = if pool_idx < pool.len() {
+                let node = pool[pool_idx];
+                ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, true);
+                ffi::wlr_scene_rect_set_size(node, w, h);
+                ffi::wlr_scene_rect_set_color(node, color_ptr);
+                node
+            } else {
+                let node = ffi::wlr_scene_rect_create(grid_tree, w, h, color_ptr);
+                if !node.is_null() {
+                    pool.push(node);
                 }
-                pool_idx += 1;
-                rect
+                node
             };
 
-            // 1. Draw base/background rect using the gap color.
-            // Sized larger by one period to prevent flickering at edges during pan shifts.
-            let bg_w = viewport_w + period_pixels_i;
-            let bg_h = viewport_h + period_pixels_i;
-            get_rect(bg_w, bg_h, self.last_grid_gap_color_rgba.as_ptr(), 0, 0, 0, 0);
+            if !rect.is_null() {
+                ffi::wlr_scene_node_set_position(rect as *mut ffi::wlr_scene_node, x, y);
+                ffi::river_scene_rect_set_corner_radius(rect, corner_r);
+                ffi::wlr_scene_rect_set_fade_inset(rect, fade_i);
+            }
+            pool_idx += 1;
+            rect
+        };
 
-            // 2. Draw grid cells.
-            let cols = (viewport_w as f64 / period_pixels_i as f64).ceil() as i32 + 1;
-            let rows = (viewport_h as f64 / period_pixels_i as f64).ceil() as i32 + 1;
+        match &spec {
+            crate::policy::api::BackgroundSpec::Grid(grid) => {
+                let frame = crate::policy::background::grid_frame(
+                    grid,
+                    wm.camera(),
+                    viewport_w,
+                    viewport_h,
+                    self.sent.x,
+                    self.sent.y,
+                );
 
-            if density_fade > 0.0 && cols > 0 && rows > 0 && cols <= 1000 && rows <= 1000 && cols * rows <= 20000 {
-                let rw = (cell_size * zoom).round() as i32;
-                let rh = (cell_size * zoom).round() as i32;
-                let scaled_corner_radius = (cell_corner_radius as f64 * zoom).round() as i32;
-                let fade_mode = match fade_mode_str.as_str() {
-                    "smoothstep" => 1,
-                    "quadratic" => 2,
-                    "cosine" => 3,
-                    "gaussian" => 4,
-                    _ => 0, // "linear"
-                };
-                
-                // Cap the active fade inset at 45% of the cell size to prevent cells from completely blurring out at high zoom out levels
-                let max_inset = (rw as f64 * 0.45).floor() as i32;
-                let inset_pixels = (cell_fade_inset as f64 * zoom).round() as i32;
-                let active_inset = inset_pixels.min(max_inset).max(0);
+                if let Some((x, y)) = frame.tree_pos {
+                    ffi::river_scene_node_set_position_if_changed(
+                        grid_tree as *mut ffi::wlr_scene_node,
+                        x,
+                        y,
+                    );
+                }
 
-                let inset_scaled = if active_inset > 0 {
-                    (active_inset * 1000) + fade_mode
-                } else {
-                    0
-                };
+                if force {
+                    // Backdrop in the gap color, then the cell lattice.
+                    get_rect(frame.backdrop_w, frame.backdrop_h, grid.gap_color.0.as_ptr(), 0, 0, 0, 0);
 
-                if rw > 0 && rh > 0 {
-                    for col in 0..=cols {
-                        let rel_x = col * period_pixels_i;
-                        for row in 0..=rows {
-                            let rel_y = row * period_pixels_i;
-                            get_rect(rw, rh, cell_color.as_ptr(), rel_x, rel_y, scaled_corner_radius, inset_scaled);
+                    if let Some(cells) = &frame.cells {
+                        // scenefx fade-inset wire encoding: inset px * 1000
+                        // + fade-mode index; 0 disables the fade.
+                        use crate::policy::api::GridFadeMode;
+                        let fade_mode = match grid.fade_mode {
+                            GridFadeMode::Linear => 0,
+                            GridFadeMode::Smoothstep => 1,
+                            GridFadeMode::Quadratic => 2,
+                            GridFadeMode::Cosine => 3,
+                            GridFadeMode::Gaussian => 4,
+                        };
+                        let inset_scaled = if cells.fade_inset_px > 0 {
+                            cells.fade_inset_px * 1000 + fade_mode
+                        } else {
+                            0
+                        };
+                        for col in 0..=cells.cols {
+                            let rel_x = col * frame.period_px;
+                            for row in 0..=cells.rows {
+                                let rel_y = row * frame.period_px;
+                                get_rect(cells.cell_px, cells.cell_px, cells.color.0.as_ptr(), rel_x, rel_y, cells.corner_radius_px, inset_scaled);
+                            }
                         }
                     }
                 }
             }
+            crate::policy::api::BackgroundSpec::Solid(color) => {
+                ffi::river_scene_node_set_position_if_changed(
+                    grid_tree as *mut ffi::wlr_scene_node,
+                    self.sent.x,
+                    self.sent.y,
+                );
+                if force {
+                    get_rect(viewport_w, viewport_h, color.0.as_ptr(), 0, 0, 0, 0);
+                }
+            }
+        }
 
+        if force {
             // Disable unused rects in the pool to release GPU/scene resources.
             for i in pool_idx..pool.len() {
                 ffi::wlr_scene_node_set_enabled(pool[i] as *mut ffi::wlr_scene_node, false);
             }
         }
-
-        self.last_grid_pan_x = wm.desk_pan_x;
-        self.last_grid_pan_y = wm.desk_pan_y;
     }
 }
 

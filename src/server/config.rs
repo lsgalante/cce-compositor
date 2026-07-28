@@ -87,6 +87,22 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// The desktop background as the policy crate's declarative spec. The
+    /// desktop is always the grid; per-frame geometry comes from
+    /// `policy::background::grid_frame`.
+    pub fn background_spec(&self) -> crate::policy::api::BackgroundSpec {
+        use crate::policy::api::{BackgroundSpec, GridFadeMode, GridSpec, Rgba};
+        BackgroundSpec::Grid(GridSpec {
+            gap_color: Rgba(parse_hex_color_rgba(&self.desktop_gap_color)),
+            cell_color: Rgba(self.desktop_cell_color),
+            cell_size: self.desktop_grid_scale,
+            gap_width: self.desktop_gap_width as f64,
+            cell_corner_radius: self.desktop_cell_corner_radius,
+            cell_fade_inset: self.desktop_cell_fade_inset as i32,
+            fade_mode: GridFadeMode::from_name(&self.desktop_grid_fade_mode),
+        })
+    }
+
     /// Snap parameters for interactive ops. A zero threshold (snap
     /// disabled) makes every snap function a no-op.
     pub fn snap_params(&self) -> crate::policy::snap::SnapParams {
