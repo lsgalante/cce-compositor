@@ -1949,11 +1949,7 @@ impl Window {
                 // (cf. the window_background rect, which scales it the same way).
                 (radius as f64 * self.scale) as i32,
             );
-            // Every normal window casts the DE shadow. CSD apps don't draw
-            // their own here (frameless Electron reserves shadow margins but
-            // leaves them transparent), so without this, non-cce windows sat
-            // flat and shadowless next to shadowed cce siblings.
-            let want_shadow = !is_status && !self.is_fullscreen();
+            let want_shadow = !is_status && (self.wm_requested.ssd || is_cce_app) && !self.is_fullscreen();
             self.update_shadow(width, height, radius, want_shadow);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
@@ -2330,11 +2326,7 @@ impl Window {
                     height,
                     (radius as f64 * self.scale) as i32,
                 );
-                // Every normal window casts the DE shadow. CSD apps don't draw
-            // their own here (frameless Electron reserves shadow margins but
-            // leaves them transparent), so without this, non-cce windows sat
-            // flat and shadowless next to shadowed cce siblings.
-            let want_shadow = !is_status && !self.is_fullscreen();
+                let want_shadow = !is_status && (self.wm_requested.ssd || is_cce_app) && !self.is_fullscreen();
                 self.update_shadow(width, height, radius, want_shadow);
             } else {
                 // Tearing the blur down: radius is irrelevant, the nodes are destroyed.
