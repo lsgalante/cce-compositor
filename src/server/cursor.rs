@@ -1571,9 +1571,8 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
             if delta != 0.0 {
                 let wm = &mut (*seat.server).wm;
                 wm.stop_panning_animation();
-                let zoom_factor = 1.005_f64.powf(-delta);
                 let old_zoom = wm.desk_zoom;
-                let new_zoom = (old_zoom * zoom_factor).clamp(0.1, 10.0);
+                let new_zoom = crate::policy::camera::wheel_zoom(old_zoom, delta);
                 if new_zoom != old_zoom {
                     let cx = cursor.x();
                     let cy = cursor.y();
@@ -1585,10 +1584,18 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
                     } else {
                         (0.0, 0.0)
                     };
-                    wm.desk_pan_x += (cx - phys_x) * (1.0 / old_zoom - 1.0 / new_zoom);
-                    wm.desk_pan_y += (cy - phys_y) * (1.0 / old_zoom - 1.0 / new_zoom);
-                    wm.desk_zoom = new_zoom;
-                    wm.mode = if (new_zoom - 1.0).abs() > 0.001 { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal };
+                    // Wheel zoom pivots about the cursor: the virtual point
+                    // under it stays put on screen.
+                    let cam = crate::policy::camera::zoom_about_anchor(
+                        wm.camera(),
+                        cx - phys_x,
+                        cy - phys_y,
+                        new_zoom,
+                    );
+                    wm.desk_pan_x = cam.pan_x;
+                    wm.desk_pan_y = cam.pan_y;
+                    wm.desk_zoom = cam.zoom;
+                    wm.mode = if crate::policy::camera::is_overview(cam.zoom) { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal };
                     if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
                         wm.update_viewport_local();
                     } else {

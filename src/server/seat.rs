@@ -493,39 +493,31 @@ impl Seat {
                             };
 
                             let wm = &mut (*self.server).wm;
-                            let scale = wm.desk_zoom;
+                            let cam = wm.camera();
+                            // fw/fh are screen px; the window's virtual
+                            // footprint is that over zoom.
+                            let vw_w = fw / cam.zoom;
+                            let vw_h = fh / cam.zoom;
+                            let visible = crate::policy::camera::visible_fraction(
+                                (*window).virtual_x,
+                                (*window).virtual_y,
+                                vw_w,
+                                vw_h,
+                                cam,
+                                viewport_w,
+                                viewport_h,
+                            );
 
-                            // Calculate window visibility percentage in viewport
-                            let v_w = viewport_w / scale;
-                            let v_h = viewport_h / scale;
-                            let v_left = wm.desk_pan_x;
-                            let v_right = v_left + v_w;
-                            let v_top = wm.desk_pan_y;
-                            let v_bottom = v_top + v_h;
-
-                            let w_left = (*window).virtual_x;
-                            let w_top = (*window).virtual_y;
-                            let w_right = w_left + fw;
-                            let w_bottom = w_top + fh;
-
-                            let i_left = w_left.max(v_left);
-                            let i_right = w_right.min(v_right);
-                            let i_top = w_top.max(v_top);
-                            let i_bottom = w_bottom.min(v_bottom);
-
-                            let i_w = (i_right - i_left).max(0.0);
-                            let i_h = (i_bottom - i_top).max(0.0);
-                            let i_area = i_w * i_h;
-                            let w_area = fw * fh;
-
-                            let visible_percent = if w_area > 0.0 { i_area / w_area } else { 0.0 };
-
-                            if visible_percent < 0.75 {
-                                let target_x = (*window).virtual_x + (fw / 2.0 - viewport_w / 2.0) / scale;
-                                let target_y = (*window).virtual_y + (fh / 2.0 - viewport_h / 2.0) / scale;
-
-                                wm.target_desk_pan_x = Some(target_x);
-                                wm.target_desk_pan_y = Some(target_y);
+                            if visible < crate::policy::camera::FOCUS_VISIBLE_THRESHOLD {
+                                let target = crate::policy::camera::center_on(
+                                    (*window).virtual_x + vw_w / 2.0,
+                                    (*window).virtual_y + vw_h / 2.0,
+                                    viewport_w,
+                                    viewport_h,
+                                    cam.zoom,
+                                );
+                                wm.target_desk_pan_x = Some(target.pan_x);
+                                wm.target_desk_pan_y = Some(target.pan_y);
                                 wm.start_panning_animation();
                             }
                         }

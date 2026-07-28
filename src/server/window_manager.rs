@@ -664,6 +664,15 @@ impl WindowManager {
         self.target_desk_pan_y = None;
     }
 
+    /// The current camera as the policy crate's plain-data snapshot.
+    pub fn camera(&self) -> crate::policy::camera::Camera {
+        crate::policy::camera::Camera {
+            pan_x: self.desk_pan_x,
+            pan_y: self.desk_pan_y,
+            zoom: self.desk_zoom,
+        }
+    }
+
     /// Record the edge auto-pan velocity (screen px/s) and arm its 16ms tick
     /// when nonzero. A zero velocity just parks: the armed tick sees it and
     /// stops itself without re-arming.
@@ -2221,8 +2230,9 @@ impl WindowManager {
                     curr_out = (*curr_out).next;
                 }
                 
-                self.desk_pan_x = target_x - (viewport_w / 2.0) / self.desk_zoom;
-                self.desk_pan_y = target_y - (viewport_h / 2.0) / self.desk_zoom;
+                let cam = crate::policy::camera::center_on(target_x, target_y, viewport_w, viewport_h, self.desk_zoom);
+                self.desk_pan_x = cam.pan_x;
+                self.desk_pan_y = cam.pan_y;
                 self.dirty_windowing();
             }
             Action::SetViewport1 | Action::SetViewport2 | Action::SetViewport3 | Action::SetViewport4 => {
@@ -2258,20 +2268,23 @@ impl WindowManager {
                     curr_out = (*curr_out).next;
                 }
                 
-                let cx = self.desk_pan_x + (viewport_w / 2.0) / self.desk_zoom;
-                let cy = self.desk_pan_y + (viewport_h / 2.0) / self.desk_zoom;
-                
-                let new_zoom = match action {
-                    Action::ZoomIn => (self.desk_zoom * 1.1).min(10.0),
-                    Action::ZoomOut => (self.desk_zoom / 1.1).max(0.1),
-                    Action::ZoomReset => 1.0,
-                    _ => self.desk_zoom,
+                // Keyed zooms pivot about the viewport center.
+                let dir = match action {
+                    Action::ZoomIn => 1.0,
+                    Action::ZoomOut => -1.0,
+                    _ => 0.0,
                 };
-                
-                self.desk_pan_x = cx - (viewport_w / 2.0) / new_zoom;
-                self.desk_pan_y = cy - (viewport_h / 2.0) / new_zoom;
-                self.desk_zoom = new_zoom;
-                self.mode = if (new_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
+                let new_zoom = crate::policy::camera::keyed_zoom(self.desk_zoom, dir);
+                let cam = crate::policy::camera::zoom_about_anchor(
+                    self.camera(),
+                    viewport_w / 2.0,
+                    viewport_h / 2.0,
+                    new_zoom,
+                );
+                self.desk_pan_x = cam.pan_x;
+                self.desk_pan_y = cam.pan_y;
+                self.desk_zoom = cam.zoom;
+                self.mode = if crate::policy::camera::is_overview(cam.zoom) { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
                 self.dirty_windowing();
             }
             Action::PanLeft | Action::PanRight | Action::PanUp | Action::PanDown => {
@@ -2367,10 +2380,11 @@ impl WindowManager {
                             let win_h = if (*hovered_win).box_geom.height > 0 { (*hovered_win).box_geom.height as f64 } else { 600.0 };
                             let center_x = (*hovered_win).virtual_x + win_w / 2.0;
                             let center_y = (*hovered_win).virtual_y + win_h / 2.0;
-                            self.desk_zoom = 1.0;
+                            let cam = crate::policy::camera::center_on(center_x, center_y, viewport_w, viewport_h, 1.0);
+                            self.desk_zoom = cam.zoom;
                             self.mode = WindowManagerMode::Normal;
-                            self.desk_pan_x = center_x - viewport_w / 2.0;
-                            self.desk_pan_y = center_y - viewport_h / 2.0;
+                            self.desk_pan_x = cam.pan_x;
+                            self.desk_pan_y = cam.pan_y;
                             self.stop_panning_animation();
                             if matches!(self.state, WindowManagerState::Idle) {
                                 self.update_viewport_local();
@@ -2381,10 +2395,11 @@ impl WindowManager {
                         } else {
                             let vx = self.desk_pan_x + (lx - phys_x) / self.desk_zoom;
                             let vy = self.desk_pan_y + (ly - phys_y) / self.desk_zoom;
-                            self.desk_zoom = 1.0;
+                            let cam = crate::policy::camera::center_on(vx, vy, viewport_w, viewport_h, 1.0);
+                            self.desk_zoom = cam.zoom;
                             self.mode = WindowManagerMode::Normal;
-                            self.desk_pan_x = vx - viewport_w / 2.0;
-                            self.desk_pan_y = vy - viewport_h / 2.0;
+                            self.desk_pan_x = cam.pan_x;
+                            self.desk_pan_y = cam.pan_y;
                             self.stop_panning_animation();
                             if matches!(self.state, WindowManagerState::Idle) {
                                 self.update_viewport_local();
@@ -2463,24 +2478,14 @@ impl WindowManager {
                             curr_out = (*curr_out).next;
                         }
 
-                        let box_w = max_vx - min_vx;
-                        let box_h = max_vy - min_vy;
-
-                        let margin = 100.0;
-                        let avail_w = (viewport_w - 2.0 * margin).max(200.0);
-                        let avail_h = (viewport_h - 2.0 * margin).max(200.0);
-
-                        let zoom_x = avail_w / box_w.max(1.0);
-                        let zoom_y = avail_h / box_h.max(1.0);
-                        let new_zoom = zoom_x.min(zoom_y).min(1.0).max(0.05);
-
-                        let center_x = min_vx + box_w / 2.0;
-                        let center_y = min_vy + box_h / 2.0;
-
-                        self.desk_zoom = new_zoom;
+                        let cam = crate::policy::camera::fit_bounds(min_vx, min_vy, max_vx, max_vy, viewport_w, viewport_h);
+                        self.desk_zoom = cam.zoom;
+                        // Overview by fiat even when the fit lands at zoom 1
+                        // (a desktop smaller than the screen): the next
+                        // Expose must exit, not re-enter.
                         self.mode = WindowManagerMode::Overview;
-                        self.desk_pan_x = center_x - (viewport_w / 2.0) / new_zoom;
-                        self.desk_pan_y = center_y - (viewport_h / 2.0) / new_zoom;
+                        self.desk_pan_x = cam.pan_x;
+                        self.desk_pan_y = cam.pan_y;
                         if matches!(self.state, WindowManagerState::Idle) {
                             self.update_viewport_local();
                         } else {
