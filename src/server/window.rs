@@ -89,6 +89,21 @@ impl Border {
     }
 }
 
+/// A window-scale corner radius as scenefx should consume it: the configured
+/// nominal (circle-equivalent) radius widened by the curvature-match span
+/// factor, capped at half the smaller content extent so opposite corners
+/// can't overlap — the exact counterpart of cce-ui's
+/// `VkRenderer::clip_corner_radius`, which widens the clients' plate/clip
+/// corners the same way. `width`/`height` and the returned radius are in
+/// logical px; callers scale to device px where they already do.
+pub fn widen_corner_radius(nominal: i32, width: i32, height: i32) -> i32 {
+    if nominal <= 0 {
+        return nominal;
+    }
+    let widened = (nominal as f64 * crate::config::corner_span_factor()).round() as i32;
+    widened.min(width.min(height) / 2)
+}
+
 /// One of the 8 interactive border zones. Each draws as its own visual
 /// element (corners as two-rect Ls) and highlights independently on hover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1889,6 +1904,9 @@ impl Window {
             };
             let actual_w = if self.rendering_sent.width > 0 { self.rendering_sent.width } else { toplevel_w as u32 };
             let actual_h = if self.rendering_sent.height > 0 { self.rendering_sent.height } else { toplevel_h as u32 };
+            // Widen squircle corners to the span the clients draw (see
+            // widen_corner_radius); circles already sit at the half-extent cap.
+            let radius = if requested.circular { radius } else { widen_corner_radius(radius, actual_w as i32, actual_h as i32) };
             let width = (actual_w as f64 * self.scale) as i32;
             let height = (actual_h as f64 * self.scale) as i32;
             ffi::river_scene_node_enable_blur(
@@ -2278,6 +2296,9 @@ impl Window {
                 };
                 let actual_w = if self.rendering_sent.width > 0 { self.rendering_sent.width } else { toplevel_w as u32 };
                 let actual_h = if self.rendering_sent.height > 0 { self.rendering_sent.height } else { toplevel_h as u32 };
+                // Same span widening as set_rendering_state — the two paths
+                // drive the same blur node and must agree.
+                let radius = if requested.circular { radius } else { widen_corner_radius(radius, actual_w as i32, actual_h as i32) };
                 let width = (actual_w as f64 * self.scale) as i32;
                 let height = (actual_h as f64 * self.scale) as i32;
                 ffi::river_scene_node_enable_blur(
@@ -2380,7 +2401,10 @@ impl Window {
         let bg_height = (self.box_geom.height as f64 * self.scale) as i32;
         ffi::river_scene_rect_set_size_if_changed(self.window_background, bg_width, bg_height);
         ffi::wlr_scene_rect_set_color(self.window_background, border_color.as_ptr());
-        ffi::river_scene_rect_set_corner_radius(self.window_background, (border.corner_radius as f64 * self.scale) as i32);
+        // The background plate sits directly under the client's plate, so its
+        // corners take the same span widening as the blur/clip radius.
+        let bg_radius = widen_corner_radius(border.corner_radius, self.box_geom.width, self.box_geom.height);
+        ffi::river_scene_rect_set_corner_radius(self.window_background, (bg_radius as f64 * self.scale) as i32);
         ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden && self.wm_requested.ssd);
 
         // The border draws as 8 zone segments (4 edge bars + 4 two-rect L

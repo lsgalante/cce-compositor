@@ -476,6 +476,23 @@ const HOVER_LIGHTEN: f32 = 0.35;
 
 /// Mix a premultiplied-alpha color toward white (which is `[a, a, a, a]` in
 /// premultiplied space), keeping the alpha.
+/// Curvature-matched corner-span factor for window-scale squircle corners,
+/// mirroring cce-ui's `layout::corner_span_factor()` exactly: a raw
+/// superellipse of exponent n at a circle's nominal radius turns tighter at
+/// the diagonal, so the corner span is scaled by (n − 1)·2^(1/n)/√2 to make
+/// the diagonal curvature equal the configured radius. The clients widen
+/// their plate corners by this factor, so every compositor-side corner cut
+/// (blur, shadow, surface clip, background rect) must widen the same way or
+/// the cuts land outside the corners the clients draw. Exactly 1 at n = 2.
+/// Written on config load/reload (same place the exponent is pushed into
+/// scenefx), read on the render paths — f64 bits in an atomic, like
+/// scenefx's own global_corner_shape.
+static CORNER_SPAN_FACTOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0x3FF0000000000000); // 1.0f64
+
+pub fn corner_span_factor() -> f64 {
+    f64::from_bits(CORNER_SPAN_FACTOR.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 pub fn lighten_premultiplied(c: [f32; 4], t: f32) -> [f32; 4] {
     [
         c[0] + (c[3] - c[0]) * t,
@@ -1787,10 +1804,16 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         .as_ref()
         .and_then(|wm| wm.corner_shape)
         .unwrap_or(2.0)
-        .clamp(2.0, 16.0) as f32;
+        .clamp(2.0, 16.0);
     unsafe {
-        crate::ffi::fx_renderer_set_corner_shape(corner_shape);
+        crate::ffi::fx_renderer_set_corner_shape(corner_shape as f32);
     }
+    let span_factor = if corner_shape > 2.001 {
+        (corner_shape - 1.0) * 2f64.powf(1.0 / corner_shape) / std::f64::consts::SQRT_2
+    } else {
+        1.0
+    };
+    CORNER_SPAN_FACTOR.store(span_factor.to_bits(), std::sync::atomic::Ordering::Relaxed);
 
     state.layout.gap = config.layout.gap as i32;
     state.layout.gap_top = config.layout.gap_top as i32;

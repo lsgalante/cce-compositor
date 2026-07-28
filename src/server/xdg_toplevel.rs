@@ -464,6 +464,12 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     } else {
         0
     };
+    // Same span widening as Window::set_rendering_state (part of the mirror).
+    let radius = if (*window).rendering_requested.circular {
+        radius
+    } else {
+        crate::window::widen_corner_radius(radius, actual_w as i32, actual_h as i32)
+    };
     let legacy_blur = std::env::var_os("CCE_BLUR_LEGACY").is_some(); // TEMP DIAGNOSTIC
     let use_optimized = if is_status || (radius > 0 && !legacy_blur) {
         false
