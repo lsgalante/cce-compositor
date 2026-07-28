@@ -651,6 +651,23 @@ impl WindowManager {
         self.target_desk_pan_y = None;
     }
 
+    /// Arm the pan animation timer (creating it on first use): every 16ms
+    /// `handle_panning_animation_tick` eases `desk_pan_x/y` toward
+    /// `target_desk_pan_x/y`. Callers set the targets first.
+    pub unsafe fn start_panning_animation(&mut self) {
+        if self.animation_timer.is_null() {
+            let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+            self.animation_timer = ffi::wl_event_loop_add_timer(
+                event_loop,
+                Some(handle_panning_animation_tick),
+                self as *mut WindowManager as *mut _,
+            );
+        }
+        if !self.animation_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.animation_timer, 16);
+        }
+    }
+
     pub unsafe fn ensure_windowing(&self) -> bool {
         match self.state {
             WindowManagerState::Manage => true,
@@ -2223,19 +2240,28 @@ impl WindowManager {
                 self.dirty_windowing();
             }
             Action::PanLeft | Action::PanRight | Action::PanUp | Action::PanDown => {
-                let step = 100.0 / self.desk_zoom;
-                match action {
-                    Action::PanLeft => self.desk_pan_x -= step,
-                    Action::PanRight => self.desk_pan_x += step,
-                    Action::PanUp => self.desk_pan_y -= step,
-                    Action::PanDown => self.desk_pan_y += step,
-                    _ => {}
+                // Keyed pans move cell-by-cell and land aligned: the target
+                // is the adjacent pan offset that puts the viewport origin on
+                // a grid-period boundary, eased in by the pan animation.
+                // Basing each step on the pending target (not the current
+                // offset) lets rapid presses queue one cell apiece.
+                let period = self.layout.desktop_grid_scale.max(5.0)
+                    + self.layout.desktop_gap_width.max(0) as f64;
+                let (dx, dy) = match action {
+                    Action::PanLeft => (-1.0, 0.0),
+                    Action::PanRight => (1.0, 0.0),
+                    Action::PanUp => (0.0, -1.0),
+                    _ => (0.0, 1.0),
+                };
+                if dx != 0.0 {
+                    let base = self.target_desk_pan_x.unwrap_or(self.desk_pan_x);
+                    self.target_desk_pan_x = Some(crate::policy::pan::aligned_step(base, period, dx));
                 }
-                if matches!(self.state, WindowManagerState::Idle) {
-                    self.update_viewport_local();
-                } else {
-                    self.dirty_windowing();
+                if dy != 0.0 {
+                    let base = self.target_desk_pan_y.unwrap_or(self.desk_pan_y);
+                    self.target_desk_pan_y = Some(crate::policy::pan::aligned_step(base, period, dy));
                 }
+                self.start_panning_animation();
             }
             Action::OverlayLeft => {
                 self.layout.overlay_position = "left".to_string();
