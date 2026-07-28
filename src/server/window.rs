@@ -1019,15 +1019,25 @@ impl Window {
             }
         } else {
             let mut should_focus = true;
-            if self.restored {
-                if self.restored_focused {
-                    (*self.server).wm.restored_focused_window_mapped = true;
-                    log::info!("[FocusRestore] Restored focused window mapped: {:?}", self.get_title());
-                } else {
-                    if (*self.server).wm.has_restored_focused_window && (*self.server).wm.restored_focused_window_mapped {
-                        log::info!("[FocusRestore] Blocking focus to non-focused restored window {:?} because restored focused window is already mapped", self.get_title());
-                        should_focus = false;
-                    }
+            if self.restored && self.restored_focused {
+                (*self.server).wm.restored_focused_window_mapped = true;
+                log::info!("[FocusRestore] Restored focused window mapped: {:?}", self.get_title());
+            } else if (*self.server).wm.has_restored_focused_window
+                && (*self.server).wm.restored_focused_window_mapped
+            {
+                if self.restored {
+                    // A restored sibling mapping after the session's focused
+                    // window: never steal back.
+                    log::info!("[FocusRestore] Blocking focus to non-focused restored window {:?} because restored focused window is already mapped", self.get_title());
+                    should_focus = false;
+                } else if !(*self.server).wm.startup_input_seen {
+                    // A window mapping unbidden while the session is still
+                    // settling (no key/button pressed yet) — an autostart
+                    // like keepassxc popping up after the restored windows.
+                    // It must not steal focus (or drag the focus-follow pan
+                    // over to itself) from the session's focused window.
+                    log::info!("[FocusRestore] Blocking focus steal by unrestored window {:?} mapping before first input", self.get_title());
+                    should_focus = false;
                 }
             }
 

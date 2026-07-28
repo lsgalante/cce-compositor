@@ -234,6 +234,11 @@ unsafe extern "C" fn handle_key(listener: *mut ffi::wl_listener, data: *mut std:
         if keyboard.pressed.len() < 32 {
             keyboard.pressed.insert((*event).keycode);
         }
+        // First deliberate input ends the session-restore settling phase
+        // (see the focus gate in Window::map).
+        if !keyboard.group.is_null() && !(*keyboard.group).seat.is_null() {
+            (*(*(*keyboard.group).seat).server).wm.startup_input_seen = true;
+        }
     }
 
     if !keyboard.group.is_null() {

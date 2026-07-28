@@ -756,6 +756,12 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
     let ly = cursor.y();
     let server = seat.server;
 
+    // First deliberate input ends the session-restore settling phase (see
+    // the focus gate in Window::map).
+    if (*event).state == ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED {
+        (*server).wm.startup_input_seen = true;
+    }
+
     let mut is_app_surface = false;
     let mut is_overlay_window = false;
     if let Some(result) = (*server).scene.at(lx, ly) {

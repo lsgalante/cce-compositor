@@ -124,6 +124,11 @@ pub struct WindowManager {
     pub edge_pan_timer: *mut ffi::wl_event_source,
     pub has_restored_focused_window: bool,
     pub restored_focused_window_mapped: bool,
+    /// True after the first deliberate input (key or button press) of the
+    /// session. Until then the session is still "settling" from restore:
+    /// windows that map unbidden (autostarts like keepassxc) must not steal
+    /// focus from the restored session's focused window.
+    pub startup_input_seen: bool,
     pub last_viewport_zoom: f64,
     pub last_viewport_pan_x: f64,
     pub last_viewport_pan_y: f64,
@@ -208,6 +213,7 @@ impl WindowManager {
         self.display = std::collections::HashMap::new();
         self.has_restored_focused_window = false;
         self.restored_focused_window_mapped = false;
+        self.startup_input_seen = false;
         self.mode_rules = Vec::new();
         self.keybinds = Vec::new();
         self.pointer_binds = Vec::new();
