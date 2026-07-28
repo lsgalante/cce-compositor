@@ -187,6 +187,7 @@ struct wl_signal *river_wlr_seat_get_start_drag_signal(struct wlr_seat *seat);
 struct wl_signal *river_wlr_seat_get_request_set_primary_selection_signal(struct wlr_seat *seat);
 struct wlr_seat_client *river_wlr_seat_get_pointer_focused_client(struct wlr_seat *seat);
 struct wlr_surface *river_wlr_seat_get_pointer_focused_surface(struct wlr_seat *seat);
+void river_scene_output_damage_whole(struct wlr_scene_output *scene_output);
 struct wl_client *river_wlr_seat_client_get_client(struct wlr_seat_client *client);
 struct wlr_keyboard *river_wlr_seat_get_keyboard(struct wlr_seat *seat);
 struct wl_global *river_wlr_seat_get_global(struct wlr_seat *seat);

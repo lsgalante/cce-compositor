@@ -385,6 +385,24 @@ struct wlr_surface *river_wlr_seat_get_pointer_focused_surface(struct wlr_seat *
 	return seat->pointer_state.focused_surface;
 }
 
+/* Damage the whole output and schedule a frame — the public-field replica of
+ * scenefx's internal scene_output_damage_whole(). Viewport zoom re-lays-out
+ * the entire screen, but per-node damage under-reports at the seams (stale
+ * slivers of the previous zoom level survive), so camera motion forces a
+ * full repaint. */
+void river_scene_output_damage_whole(struct wlr_scene_output *scene_output) {
+	struct wlr_output *output = scene_output->output;
+	pixman_region32_t damage;
+	pixman_region32_init_rect(&damage, 0, 0, output->width, output->height);
+	wlr_output_schedule_frame(output);
+	wlr_damage_ring_add(&scene_output->damage_ring, &damage);
+	/* pending_commit_damage lives in the WLR_PRIVATE member — reaching in is
+	 * the same deal as the pointer_state accesses elsewhere in this file. */
+	pixman_region32_union(&scene_output->WLR_PRIVATE.pending_commit_damage,
+		&scene_output->WLR_PRIVATE.pending_commit_damage, &damage);
+	pixman_region32_fini(&damage);
+}
+
 struct wl_client *river_wlr_seat_client_get_client(struct wlr_seat_client *client) {
 	return client->client;
 }

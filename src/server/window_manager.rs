@@ -1671,14 +1671,22 @@ impl WindowManager {
             }
         }
 
-        // Commit outputs or schedule frame updates
+        // Commit outputs or schedule frame updates. A camera-motion frame
+        // re-lays-out the whole screen but per-node damage under-reports at
+        // the seams (stale slivers of the previous zoom level survive — an
+        // idle window's old pixels are nobody's damage), so motion forces a
+        // full repaint.
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*outputs_list).next;
         while curr != outputs_list {
             let next = (*curr).next;
             let output = crate::container_of!(curr, crate::output::Output, link);
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                ffi::wlr_output_schedule_frame((*output).wlr_output);
+                if moved && !(*output).scene_output.is_null() {
+                    ffi::river_scene_output_damage_whole((*output).scene_output);
+                } else {
+                    ffi::wlr_output_schedule_frame((*output).wlr_output);
+                }
             }
             curr = next;
         }
@@ -1725,13 +1733,19 @@ impl WindowManager {
                 (*window).render_finish();
             }
         }
+        // Settling re-enables blur and re-finishes every window; sweep any
+        // remaining motion-frame slivers with one full repaint.
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*outputs_list).next;
         while curr != outputs_list {
             let next = (*curr).next;
             let output = crate::container_of!(curr, crate::output::Output, link);
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                ffi::wlr_output_schedule_frame((*output).wlr_output);
+                if !(*output).scene_output.is_null() {
+                    ffi::river_scene_output_damage_whole((*output).scene_output);
+                } else {
+                    ffi::wlr_output_schedule_frame((*output).wlr_output);
+                }
             }
             curr = next;
         }
