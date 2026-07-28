@@ -770,6 +770,9 @@ impl WindowManager {
             let focus_cyclable = rendered.contains(&(w as usize)) && !(*w).minimized && !is_status;
             windows.push(ActionWindow {
                 id: WindowId((*w).ref_key),
+                app_id,
+                title: (*w).get_title_string(),
+                mapped: matches!((*w).state, crate::window::WindowState::Mapped),
                 x: (*w).virtual_x,
                 y: (*w).virtual_y,
                 w: if (*w).box_geom.width > 0 { (*w).box_geom.width as f64 } else { 800.0 },
@@ -2057,7 +2060,7 @@ impl WindowManager {
         {
             use crate::policy::api::{Compositor, Policy};
             let ctx = self.build_action_ctx();
-            let cmds = crate::policy::actions::DefaultPolicy.action(&ctx, *action);
+            let cmds = crate::policy::actions::DefaultPolicy.action(&ctx, *action, command);
             if !cmds.is_empty() {
                 for cmd in &cmds {
                     self.apply(cmd);
@@ -2089,54 +2092,6 @@ impl WindowManager {
                         Err(e) => {
                             log::error!("failed to fork child process: {}", e);
                         }
-                    }
-                }
-            }
-            Action::Toggle => {
-                if let Some(cmd) = command {
-                    let prog_name = crate::config::extract_program_name(cmd);
-                    let mut matched_win: *mut Window = std::ptr::null_mut();
-                    for &w in self.windows.iter() {
-                        if !w.is_null() && !(*w).closed && matches!((*w).state, crate::window::WindowState::Mapped) {
-                            let aid = (*w).get_app_id_string();
-                            let title = (*w).get_title_string();
-
-                            let mut match_aid = false;
-                            if let Some(ref aid_str) = aid {
-                                let aid_lower = aid_str.to_lowercase();
-                                let prog_lower = prog_name.to_lowercase();
-                                if aid_lower == prog_lower || aid_lower.contains(&prog_lower) || prog_lower.contains(&aid_lower) {
-                                    match_aid = true;
-                                }
-                            } else if let Some(ref title_str) = title {
-                                let title_lower = title_str.to_lowercase();
-                                let prog_lower = prog_name.to_lowercase();
-                                if title_lower.contains(&prog_lower) {
-                                    match_aid = true;
-                                }
-                            }
-                            if match_aid {
-                                matched_win = w;
-                                break;
-                            }
-                        }
-                    }
-
-                    if !matched_win.is_null() {
-                        let aid = (*matched_win).get_app_id_string().unwrap_or_default();
-                        log::info!("toggle: closing window {:?}", aid);
-                        (*matched_win).close();
-                        if let Some(seat) = self.first_seat() {
-                            if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                                if fw == matched_win {
-                                    self.focus_next_visible_window(seat);
-                                }
-                            }
-                        }
-                        self.dirty_windowing();
-                    } else {
-                        log::info!("toggle: spawning {}", cmd);
-                        self.execute_action(&Action::Spawn, Some(cmd));
                     }
                 }
             }
@@ -3696,6 +3651,9 @@ impl crate::policy::api::Compositor for WindowManager {
         use crate::policy::api::Command;
         unsafe {
             match *cmd {
+                Command::Spawn(ref cmdline) => {
+                    self.execute_action(&crate::config::Action::Spawn, Some(cmdline));
+                }
                 Command::SetCamera { camera, overview } => {
                     self.desk_pan_x = camera.pan_x;
                     self.desk_pan_y = camera.pan_y;

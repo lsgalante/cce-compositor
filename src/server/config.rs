@@ -838,19 +838,6 @@ pub fn default_state_path() -> Option<String> {
     }
 }
 
-pub fn extract_program_name(cmd: &str) -> String {
-    let trimmed = cmd.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    let first_token = trimmed.split_whitespace().next().unwrap_or("");
-    if let Some(pos) = first_token.rfind('/') {
-        first_token[pos+1..].to_string()
-    } else {
-        first_token.to_string()
-    }
-}
-
 fn expand_env_vars(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let chars: Vec<char> = s.chars().collect();
