@@ -1971,11 +1971,19 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             eprintln!("[WARNING] input.kdl: unknown window-manager action {:?}", entry.name);
             continue;
         };
-        let command = if action == Action::Spawn || action == Action::Toggle {
-            warn_if_command_missing(entry.command.as_deref());
-            entry.command.clone()
-        } else {
-            None
+        let command = match action {
+            Action::Spawn | Action::Toggle => {
+                warn_if_command_missing(entry.command.as_deref());
+                entry.command.clone()
+            }
+            // Media-key actions have stock commands (policy-side
+            // `media_command`); a `command=` property overrides.
+            Action::VolumeUp | Action::VolumeDown | Action::VolumeMute | Action::MicMute
+            | Action::BrightnessUp | Action::BrightnessDown => {
+                warn_if_command_missing(entry.command.as_deref());
+                entry.command.clone()
+            }
+            _ => None,
         };
         let keysym = parse_keysym(&chord.key);
         if keysym == 0 {
