@@ -153,6 +153,29 @@ pub const BORDER_FADE_STEP: f32 = 0.25;
 /// Below this the fade is treated as finished and snapped to its target.
 pub const BORDER_FADE_EPSILON: f32 = 0.004;
 
+/// Per-tick step of the fullscreen-toggle animation, as a fraction of the
+/// remaining distance to the target rect (the pan/border-fade shape).
+pub const FS_ANIM_STEP: f64 = 0.22;
+/// A channel within this many screen px of its target counts as settled.
+pub const FS_ANIM_EPSILON: f64 = 0.5;
+/// Hard cap on animation lifetime (~3s at 16ms) so a client that never
+/// commits its new size can't leave the window stuck mid-stretch.
+pub const FS_ANIM_MAX_TICKS: u32 = 180;
+
+/// State of an in-flight fullscreen-toggle animation, in screen px.
+#[derive(Clone, Copy)]
+pub struct FsAnim {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    /// The target only becomes real once the next arrange/configure lands;
+    /// until the target has moved off the start rect the animation must not
+    /// declare itself settled (start == target on the first ticks).
+    pub moved: bool,
+    pub ticks: u32,
+}
+
 /// Length of a corner zone, measured from the outer corner along each band.
 /// Shared by the visual segments (draw_borders) and the pointer zones
 /// (cursor.rs get_border_zone) so they always agree. `configured` comes from
@@ -357,11 +380,11 @@ pub struct Window {
     pub closed: bool,
     pub has_parent: bool,
     pub minimized: bool,
-    pub anim_x: Option<f64>,
-    pub anim_y: Option<f64>,
-    pub anim_w: Option<f64>,
-    pub anim_h: Option<f64>,
-    pub anim_opacity: Option<f64>,
+    /// While Some, the window is mid fullscreen-toggle: its on-screen rect is
+    /// this box, eased toward the arranged geometry by `step_fs_anim` on the
+    /// border-fade tick. `render_finish` draws at this rect (position, buffer
+    /// stretch, backdrop, clip) instead of the settled geometry.
+    pub fs_anim: Option<FsAnim>,
     pub circular: bool,
     pub blur: bool,
     pub scale: f64,
@@ -571,11 +594,7 @@ impl Window {
             closed: false,
             has_parent: false,
             minimized: false,
-            anim_x: None,
-            anim_y: None,
-            anim_w: None,
-            anim_h: None,
-            anim_opacity: None,
+            fs_anim: None,
             circular: false,
             blur: false,
             scale: 1.0,
@@ -1674,6 +1693,7 @@ impl Window {
         let new_fullscreen = !output.is_null();
         if new_fullscreen && !self.was_fullscreen {
             if self.box_geom.width > 0 && self.box_geom.height > 0 {
+                self.start_fs_anim();
                 self.saved_width = self.box_geom.width;
                 self.saved_height = self.box_geom.height;
                 self.saved_virtual_x = self.virtual_x;
@@ -1683,6 +1703,9 @@ impl Window {
             }
         } else if !new_fullscreen && self.was_fullscreen {
             if self.saved_width > 0 && self.saved_height > 0 {
+                // Captures the on-screen fullscreen rect before the restore
+                // below rewrites box_geom.
+                self.start_fs_anim();
                 self.box_geom.width = self.saved_width;
                 self.box_geom.height = self.saved_height;
                 self.virtual_x = self.saved_virtual_x;
@@ -1964,8 +1987,17 @@ impl Window {
             // Widen squircle corners to the span the clients draw (see
             // widen_corner_radius); circles already sit at the half-extent cap.
             let radius = if requested.circular { radius } else { widen_corner_radius(radius, actual_w as i32, actual_h as i32) };
-            let width = (actual_w as f64 * self.scale) as i32;
-            let height = (actual_h as f64 * self.scale) as i32;
+            // Mid fullscreen-toggle the window draws at the animated rect:
+            // buffers stretch per-axis toward it (aspect changes in flight,
+            // so the axes diverge) and the effect extents follow.
+            let (scale_x, scale_y) = match self.fs_anim {
+                Some(anim) if actual_w > 0 && actual_h > 0 => {
+                    (anim.w / actual_w as f64, anim.h / actual_h as f64)
+                }
+                _ => (self.scale, self.scale),
+            };
+            let width = (actual_w as f64 * scale_x) as i32;
+            let height = (actual_h as f64 * scale_y) as i32;
             ffi::river_scene_node_enable_blur(
                 self.tree as *mut ffi::wlr_scene_node,
                 blur_enabled,
@@ -1997,7 +2029,8 @@ impl Window {
             );
 
             struct ScaleData {
-                scale: f64,
+                scale_x: f64,
+                scale_y: f64,
                 ancestor: *mut ffi::wlr_scene_node,
             }
 
@@ -2014,24 +2047,26 @@ impl Window {
                 if !surface.is_null() {
                     let w = ffi::river_wlr_surface_get_width(surface);
                     let h = ffi::river_wlr_surface_get_height(surface);
-                    if data.scale == 1.0 {
+                    if data.scale_x == 1.0 && data.scale_y == 1.0 {
                         ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
                         ffi::river_scene_node_set_position_if_changed(node, 0, 0);
                     } else {
-                        let dest_w = (w as f64 * data.scale) as i32;
-                        let dest_h = (h as f64 * data.scale) as i32;
+                        let dest_w = (w as f64 * data.scale_x) as i32;
+                        let dest_h = (h as f64 * data.scale_y) as i32;
                         ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
 
                         let (px, py) = get_parent_position_relative_to(node, data.ancestor);
-                        let dest_x = (px as f64 * (data.scale - 1.0)) as i32;
-                        let dest_y = (py as f64 * (data.scale - 1.0)) as i32;
+                        let dest_x = (px as f64 * (data.scale_x - 1.0)) as i32;
+                        let dest_y = (py as f64 * (data.scale_y - 1.0)) as i32;
                         ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
                     }
                     // Keep the opaque region in step with the dest scale —
                     // unscaled it covers the shrunken node's translucent CSD
                     // margins and occlusion culling stops repainting behind
-                    // the client shadow (stale pixels show through it).
-                    ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, data.scale);
+                    // the client shadow (stale pixels show through it). The
+                    // region must never overclaim, so a briefly non-uniform
+                    // stretch takes the smaller axis.
+                    ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, data.scale_x.min(data.scale_y));
                 }
                 // Non-surface buffers are frozen SAVED copies (see
                 // save_surface_tree_iter): their natural buffer size is
@@ -2043,7 +2078,7 @@ impl Window {
                 // leaves it briefly at the old zoom, which restore corrects.
             }
 
-            let scale_data_surfaces = ScaleData { scale: self.scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
+            let scale_data_surfaces = ScaleData { scale_x, scale_y, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.surfaces.tree as *mut ffi::wlr_scene_node,
                 Some(set_expose_scale_iterator),
@@ -2051,7 +2086,7 @@ impl Window {
             );
 
             if self.surfaces.saved {
-                let scale_data_saved = ScaleData { scale: self.scale, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
+                let scale_data_saved = ScaleData { scale_x, scale_y, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
                 ffi::wlr_scene_node_for_each_buffer(
                     self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
                     Some(set_expose_scale_iterator),
@@ -2059,7 +2094,7 @@ impl Window {
                 );
             }
             
-            let scale_data_popup = ScaleData { scale: self.scale, ancestor: self.popup_tree as *mut ffi::wlr_scene_node };
+            let scale_data_popup = ScaleData { scale_x, scale_y, ancestor: self.popup_tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.popup_tree as *mut ffi::wlr_scene_node,
                 Some(set_expose_scale_iterator),
@@ -2153,11 +2188,39 @@ impl Window {
             self.box_geom.x = requested.x;
             self.box_geom.y = requested.y;
             ffi::wlr_scene_node_set_enabled(self.fullscreen_background as *mut ffi::wlr_scene_node, false);
-            self.draw_borders();
+            if self.fs_anim.is_none() {
+                self.draw_borders();
+            }
         }
 
         ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
         ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
+
+        // Mid fullscreen-toggle: draw at the animated rect regardless of which
+        // branch above ran. The tree overrides its settled position, the black
+        // backdrop rides the rect (it is what grows/shrinks visually on both
+        // directions), the clip follows, and the borders stay down until the
+        // animation settles — the final settling frame re-runs the branch
+        // above with fs_anim cleared and puts everything back.
+        if let Some(anim) = self.fs_anim {
+            let ax = anim.x.round() as i32;
+            let ay = anim.y.round() as i32;
+            let aw = (anim.w.round() as i32).max(1);
+            let ah = (anim.h.round() as i32).max(1);
+            ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, ax, ay);
+            ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, ax, ay);
+            ffi::wlr_scene_node_set_enabled(self.fullscreen_background as *mut ffi::wlr_scene_node, true);
+            ffi::wlr_scene_rect_set_size(self.fullscreen_background, aw, ah);
+            clip = ffi::wlr_box { x: 0, y: 0, width: aw, height: ah };
+            content_clip = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+            ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.bottom as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, false);
+            self.border_reveal = [0.0; 8];
+            ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
+        }
 
         // No geometry compensation here: wlr_scene_xdg_surface_create already
         // anchors its subtree at the top-left of the xdg window geometry (it
@@ -2198,6 +2261,11 @@ impl Window {
     }
 
     pub unsafe fn scale_only_render_finish(&mut self) {
+        // Mid fullscreen-toggle the animation tick owns the buffer dest
+        // sizes; a uniform-scale pass here would stomp the stretch.
+        if self.fs_anim.is_some() {
+            return;
+        }
         if self.scale == 1.0 {
             self.last_applied_scale = 1.0;
             return;
@@ -2447,6 +2515,108 @@ impl Window {
             self.draw_borders();
         }
         moving
+    }
+
+    /// The output a fullscreen window fills: the one the WM pinned it to, or
+    /// the first enabled output (the same fallback manage/render use).
+    pub unsafe fn fullscreen_output(&self) -> *mut crate::output::Output {
+        if !self.wm_requested.fullscreen.is_null() {
+            return self.wm_requested.fullscreen;
+        }
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*outputs_list).next;
+        while curr != outputs_list {
+            let out = crate::container_of!(curr, crate::output::Output, link);
+            if (*out).sent.state == crate::output::OutputStateValue::Enabled {
+                return out;
+            }
+            curr = (*curr).next;
+        }
+        std::ptr::null_mut()
+    }
+
+    /// Arms the fullscreen-toggle animation at the window's current on-screen
+    /// rect. Called from manage_finish on the enter/exit transition, before
+    /// the settled geometry is rewritten; a re-toggle mid-flight continues
+    /// from wherever the previous animation had reached. Sized with
+    /// last_applied_scale (the scale actually drawn) because self.scale has
+    /// already been rewritten to the destination state's scale by the arrange
+    /// pass in this same cycle.
+    unsafe fn start_fs_anim(&mut self) {
+        if !matches!(self.impl_type, WindowImpl::Toplevel(_))
+            || !matches!(self.state, WindowState::Mapped)
+            || self.box_geom.width <= 0
+            || self.box_geom.height <= 0
+        {
+            return;
+        }
+        let (x, y, w, h) = if let Some(a) = self.fs_anim {
+            (a.x, a.y, a.w, a.h)
+        } else {
+            let s = if self.last_applied_scale > 0.0 { self.last_applied_scale } else { 1.0 };
+            (
+                self.box_geom.x as f64,
+                self.box_geom.y as f64,
+                self.box_geom.width as f64 * s,
+                self.box_geom.height as f64 * s,
+            )
+        };
+        self.fs_anim = Some(FsAnim { x, y, w, h, moved: false, ticks: 0 });
+        (*self.server).wm.arm_border_fade();
+    }
+
+    /// One tick of the fullscreen-toggle animation. Returns true while the
+    /// caller should re-render (including the final settling frame). The
+    /// target rect is recomputed live every tick — the output box while
+    /// fullscreen, else the arranged position at the last configured size —
+    /// so it tracks the client's asynchronous resize instead of freezing a
+    /// stale goal on the first frame.
+    pub unsafe fn step_fs_anim(&mut self) -> bool {
+        let Some(mut anim) = self.fs_anim else {
+            return false;
+        };
+
+        let (tx, ty, tw, th) = if self.is_fullscreen() {
+            let output = self.fullscreen_output();
+            if output.is_null() {
+                self.fs_anim = None;
+                return true;
+            }
+            let (w, h) = (*output).sent.dimensions();
+            ((*output).sent.x as f64, (*output).sent.y as f64, w as f64, h as f64)
+        } else {
+            let w = self.configure_sent.width.map(|w| w as i32).unwrap_or(self.box_geom.width);
+            let h = self.configure_sent.height.map(|h| h as i32).unwrap_or(self.box_geom.height);
+            (
+                self.rendering_requested.x as f64,
+                self.rendering_requested.y as f64,
+                w as f64 * self.scale,
+                h as f64 * self.scale,
+            )
+        };
+
+        anim.ticks += 1;
+        let dx = tx - anim.x;
+        let dy = ty - anim.y;
+        let dw = tw - anim.w;
+        let dh = th - anim.h;
+        let settled = dx.abs() < FS_ANIM_EPSILON
+            && dy.abs() < FS_ANIM_EPSILON
+            && dw.abs() < FS_ANIM_EPSILON
+            && dh.abs() < FS_ANIM_EPSILON;
+        if !settled {
+            anim.moved = true;
+        }
+        if (settled && anim.moved) || anim.ticks > FS_ANIM_MAX_TICKS {
+            self.fs_anim = None;
+            return true;
+        }
+        anim.x += dx * FS_ANIM_STEP;
+        anim.y += dy * FS_ANIM_STEP;
+        anim.w += dw * FS_ANIM_STEP;
+        anim.h += dh * FS_ANIM_STEP;
+        self.fs_anim = Some(anim);
+        true
     }
 
     /// Outward extent (unscaled px) the interactive border may reach on each

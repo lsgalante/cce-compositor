@@ -4155,9 +4155,10 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
     0
 }
 
-/// Steps every window's border hover fade until all of them have settled.
-/// Windows at rest cost one comparison per zone and no repaint, so leaving
-/// this running for the tail of a fade is cheap.
+/// Steps every window's border hover fade — and any in-flight
+/// fullscreen-toggle animation — until all of them have settled. Windows at
+/// rest cost one comparison per zone and no repaint, so leaving this running
+/// for the tail of a fade is cheap.
 unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let wm = data as *mut WindowManager;
     let mut moving = false;
@@ -4167,6 +4168,10 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
             continue;
         }
         if (*window).step_border_fade() {
+            moving = true;
+        }
+        if (*window).step_fs_anim() {
+            (*window).render_finish();
             moving = true;
         }
     }
