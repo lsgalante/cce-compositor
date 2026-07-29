@@ -843,6 +843,15 @@ impl Window {
         }
     }
 
+    /// Overlay-mode UI (cce-cloud menus and the like): takes keyboard input
+    /// while open, but is invisible to the window manager's notion of "the
+    /// focused window" — persistence, camera follow, arrange focus styling
+    /// and refocus rules all look through it to the real window underneath.
+    pub unsafe fn is_overlay_ui(&self) -> bool {
+        self.tiling_mode == crate::tiling::TilingMode::Overlay
+            || self.get_app_id_string().as_deref() == Some("cce-cloud")
+    }
+
     pub unsafe fn try_restore(&mut self) {
         if self.restored {
             return;

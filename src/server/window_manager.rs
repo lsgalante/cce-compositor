@@ -870,10 +870,13 @@ impl WindowManager {
                     }
                 }
             }
-            if let crate::seat::Focus::Window(fw) = (*seat).focused {
-                if !fw.is_null() && !(*fw).closed {
-                    focused = Some(WindowId((*fw).ref_key));
-                }
+        }
+        // The WM's effective focus (overlay UI looked through): actions
+        // triggered from a menu act on the real window underneath.
+        {
+            let fw = self.focused_window();
+            if !fw.is_null() && !(*fw).closed {
+                focused = Some(WindowId((*fw).ref_key));
             }
         }
 
@@ -908,7 +911,10 @@ impl WindowManager {
                 && visible
                 && resolved_mode != crate::tiling::TilingMode::Popup
                 && resolved_mode != crate::tiling::TilingMode::Overlay;
-            let focus_cyclable = rendered.contains(&(w as usize)) && !(*w).minimized && !is_status;
+            let focus_cyclable = rendered.contains(&(w as usize))
+                && !(*w).minimized
+                && !is_status
+                && !(*w).is_overlay_ui();
             windows.push(ActionWindow {
                 id: WindowId((*w).ref_key),
                 app_id,
@@ -1887,15 +1893,39 @@ impl WindowManager {
         }
     }
 
+    /// The window manager's notion of the focused window. Overlay UI
+    /// (cce-cloud menus) holds SEAT focus while open so it gets input, but
+    /// is transparent here: this falls through to the most recently focused
+    /// real window, so opening a menu never changes what "the focused
+    /// window" is — for saved state, arrange styling, viewport actions, or
+    /// the stream's `focused` query. (Logging out via the desktop menu used
+    /// to save the MENU as the session's focused window, poisoning the next
+    /// restore.)
     pub unsafe fn focused_window(&self) -> *mut crate::window::Window {
         let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
             if let crate::seat::Focus::Window(w) = (*seat).focused {
-                return w;
+                if !w.is_null() && !(*w).is_overlay_ui() {
+                    return w;
+                }
+                break;
             }
             curr_seat = (*curr_seat).next;
+        }
+        // Seat focus is on overlay UI (or nothing): the effective focused
+        // window is the most recent real one still on screen.
+        for &w in self.focus_history.iter() {
+            if !w.is_null()
+                && !(*w).closed
+                && matches!((*w).state, crate::window::WindowState::Mapped)
+                && !(*w).is_overlay_ui()
+                && !(*w).is_status_bar()
+                && !(*w).is_wallpaper()
+            {
+                return w;
+            }
         }
         std::ptr::null_mut()
     }
@@ -1946,6 +1976,11 @@ impl WindowManager {
         if window.is_null() {
             return;
         }
+        // Overlay UI never enters the history: it takes input while open but
+        // must not displace the real window as "most recently focused".
+        if (*window).is_overlay_ui() {
+            return;
+        }
         self.focus_history.retain(|&w| w != window);
         self.focus_history.insert(0, window);
     }
@@ -1961,6 +1996,9 @@ impl WindowManager {
     pub unsafe fn focus_next_visible_window(&mut self, seat: *mut crate::seat::Seat) {
         let eligible = |w: *mut Window| -> bool {
             if (*w).closed || (*w).minimized || !matches!((*w).state, crate::window::WindowState::Mapped) {
+                return false;
+            }
+            if (*w).is_overlay_ui() {
                 return false;
             }
             let app_id = (*w).get_app_id_string();
