@@ -1480,7 +1480,7 @@ impl WindowManager {
                         // Same math (and snapping) as the seat op's Resize
                         // arm — this recomputation feeds the arrange
                         // snapshot and must not diverge from it.
-                        let sp = self.layout.snap_params();
+                        let sp = self.layout.snap_params().for_zoom(self.desk_zoom);
                         let new_w = crate::policy::snap::resize_axis(
                             op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
                             edges.left, edges.right, 50.0, &sp,
