@@ -1953,13 +1953,17 @@ impl Window {
             self.update_shadow(width, height, radius, want_shadow);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
+            // Device px, like the blur radius above: the surface content is
+            // scaled to its dest size, so an unscaled clip radius would keep
+            // cutting zoom-1-sized corners into a zoomed-down window (the
+            // clients' own drawn corners shrink with the buffer).
             ffi::river_scene_node_set_corner_radius(
                 self.surfaces.tree as *mut ffi::wlr_scene_node,
-                radius,
+                (radius as f64 * self.scale) as i32,
             );
             ffi::river_scene_rect_set_corner_radius(
                 self.window_background,
-                radius,
+                (radius as f64 * self.scale) as i32,
             );
 
             struct ScaleData {
