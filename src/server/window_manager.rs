@@ -2129,6 +2129,11 @@ impl WindowManager {
             Action::WindowSwitcherPrev => {
                 self.launch_window_switcher(true);
             }
+            Action::Screenshot => {
+                // Same capture as `ccectl screenshot`: the enabled output's
+                // next frame, saved under ~/Pictures/screenshots.
+                let _ = self.process_ipc_command("screenshot");
+            }
             Action::Reload => {
                 log::info!("monolithic execute_action: Reload requested");
                 match self.reload_config() {

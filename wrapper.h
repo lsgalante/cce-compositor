@@ -269,6 +269,7 @@ void river_scene_node_set_corner_radius(struct wlr_scene_node *node, int radius)
 void river_scene_buffer_set_dest_size_if_changed(struct wlr_scene_buffer *scene_buffer, int width, int height);
 int river_scene_buffer_get_width(struct wlr_scene_buffer *scene_buffer);
 int river_scene_buffer_get_height(struct wlr_scene_buffer *scene_buffer);
+void river_scene_buffer_set_scaled_opaque_region(struct wlr_scene_buffer *scene_buffer, struct wlr_surface *surface, double scale);
 int river_scene_buffer_get_dest_width(struct wlr_scene_buffer *scene_buffer);
 int river_scene_buffer_get_dest_height(struct wlr_scene_buffer *scene_buffer);
 bool river_scene_node_get_enabled(struct wlr_scene_node *node);

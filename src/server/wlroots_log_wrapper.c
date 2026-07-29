@@ -48,6 +48,7 @@ void river_init_wlroots_log(enum wlr_log_importance importance) {
 #include <time.h>
 #include <scenefx/types/wlr_scene.h>
 #include <wlr/types/wlr_output.h>
+#include <wlr/util/region.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
@@ -897,6 +898,24 @@ int river_scene_buffer_get_height(struct wlr_scene_buffer *scene_buffer) {
 		return scene_buffer->buffer->height;
 	}
 	return scene_buffer->dst_height;
+}
+
+/* Scale a surface's opaque region to match a custom buffer dest size and
+ * apply it to the scene buffer. The scene keeps opaque regions in SURFACE
+ * coordinates and scenefx's occlusion culling only intersects them with the
+ * node box — so a zoomed-down window's unscaled opaque rect still covered
+ * (almost) the whole scaled node, INCLUDING its translucent CSD shadow
+ * margins. Culling then skipped repainting behind the shadow ring: stale
+ * pixels showed through the translucent shadow around focused windows when
+ * zoomed (worst at the bottom, where Chromium's ring is tallest). */
+void river_scene_buffer_set_scaled_opaque_region(struct wlr_scene_buffer *scene_buffer,
+		struct wlr_surface *surface, double scale) {
+	pixman_region32_t scaled;
+	pixman_region32_init(&scaled);
+	pixman_region32_copy(&scaled, &surface->opaque_region);
+	wlr_region_scale(&scaled, &scaled, (float)scale);
+	wlr_scene_buffer_set_opaque_region(scene_buffer, &scaled);
+	pixman_region32_fini(&scaled);
 }
 
 int river_scene_buffer_get_dest_width(struct wlr_scene_buffer *scene_buffer) {

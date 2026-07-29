@@ -1993,6 +1993,11 @@ impl Window {
                         let dest_y = (py as f64 * (data.scale - 1.0)) as i32;
                         ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
                     }
+                    // Keep the opaque region in step with the dest scale —
+                    // unscaled it covers the shrunken node's translucent CSD
+                    // margins and occlusion culling stops repainting behind
+                    // the client shadow (stale pixels show through it).
+                    ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, data.scale);
                 }
                 // Non-surface buffers are frozen SAVED copies (see
                 // save_surface_tree_iter): their natural buffer size is
@@ -2201,6 +2206,11 @@ impl Window {
                     let dest_y = (py as f64 * (data.scale - 1.0)) as i32;
                     ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
                 }
+                // Keep the opaque region in step with the dest scale —
+                // unscaled it covers the shrunken node's translucent CSD
+                // margins and occlusion culling stops repainting behind
+                // the client shadow (stale pixels show through it).
+                ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, data.scale);
             }
             // Non-surface buffers are frozen SAVED copies (see
             // save_surface_tree_iter): their natural buffer size is
@@ -3604,6 +3614,11 @@ impl Decoration {
                     let dest_y = (py as f64 * (data.scale - 1.0)) as i32;
                     ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
                 }
+                // Keep the opaque region in step with the dest scale —
+                // unscaled it covers the shrunken node's translucent CSD
+                // margins and occlusion culling stops repainting behind
+                // the client shadow (stale pixels show through it).
+                ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, data.scale);
             }
             // Non-surface buffers are frozen SAVED copies (see
             // save_surface_tree_iter): their natural buffer size is
@@ -3674,6 +3689,11 @@ impl Decoration {
                     let dest_y = (py as f64 * (data.scale - 1.0)) as i32;
                     ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
                 }
+                // Keep the opaque region in step with the dest scale —
+                // unscaled it covers the shrunken node's translucent CSD
+                // margins and occlusion culling stops repainting behind
+                // the client shadow (stale pixels show through it).
+                ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, data.scale);
             }
             // Non-surface buffers are frozen SAVED copies (see
             // save_surface_tree_iter): their natural buffer size is
