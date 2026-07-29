@@ -1021,7 +1021,28 @@ impl Window {
             let mut should_focus = true;
             if self.restored && self.restored_focused {
                 (*self.server).wm.restored_focused_window_mapped = true;
-                log::info!("[FocusRestore] Restored focused window mapped: {:?}", self.get_title());
+                if (*self.server).wm.startup_input_seen {
+                    // The user already typed/clicked somewhere (e.g. into
+                    // the keepassxc unlock dialog) while this window was
+                    // still loading — mapping now must not yank focus out
+                    // from under them.
+                    log::info!("[FocusRestore] Restored focused window {:?} mapped after user input; leaving focus alone", self.get_title());
+                    should_focus = false;
+                } else {
+                    log::info!("[FocusRestore] Restored focused window mapped: {:?}", self.get_title());
+                }
+            } else if (*self.server).wm.has_restored_focused_window
+                && !(*self.server).wm.restored_focused_window_mapped
+                && !(*self.server).wm.startup_input_seen
+            {
+                // Strict settle phase: until the session's focused window
+                // maps (or the user intervenes), NOTHING else auto-focuses —
+                // neither restored siblings mapping first nor autostarts.
+                // This also keeps the focus-follow pan parked at the saved
+                // camera instead of wandering to whichever window loads
+                // fastest.
+                log::info!("[FocusRestore] Holding focus for the session's focused window; {:?} maps unfocused", self.get_title());
+                should_focus = false;
             } else if (*self.server).wm.has_restored_focused_window
                 && (*self.server).wm.restored_focused_window_mapped
             {

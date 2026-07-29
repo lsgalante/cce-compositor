@@ -124,6 +124,10 @@ pub struct WindowManager {
     pub edge_pan_timer: *mut ffi::wl_event_source,
     pub has_restored_focused_window: bool,
     pub restored_focused_window_mapped: bool,
+    /// Dim frames at restored windows' saved geometry while their programs
+    /// relaunch (see create_restore_placeholders).
+    pub restore_placeholders: Vec<RestorePlaceholder>,
+    pub restore_placeholder_timer: *mut ffi::wl_event_source,
     /// True after the first deliberate input (key or button press) of the
     /// session. Until then the session is still "settling" from restore:
     /// windows that map unbidden (autostarts like keepassxc) must not steal
@@ -213,6 +217,8 @@ impl WindowManager {
         self.display = std::collections::HashMap::new();
         self.has_restored_focused_window = false;
         self.restored_focused_window_mapped = false;
+        self.restore_placeholders = Vec::new();
+        self.restore_placeholder_timer = std::ptr::null_mut();
         self.startup_input_seen = false;
         self.mode_rules = Vec::new();
         self.keybinds = Vec::new();
@@ -319,11 +325,128 @@ impl WindowManager {
                     self.restore_queue.len(),
                     self.has_restored_focused_window
                 );
+                self.create_restore_placeholders();
             } else {
                 log::error!("Failed to parse state JSON from {}", path);
             }
         } else {
             log::info!("State file not found or unreadable at {}, starting with empty state.", path);
+        }
+    }
+
+    /// Dim frames at every restored window's saved geometry, shown from
+    /// login until the real window maps (or a timeout sweeps the leftovers):
+    /// the desk isn't a void while slow programs load, and the saved camera
+    /// has something to be pointed at. Purely visual — placeholders are
+    /// scene rects, not windows; focus logic never sees them.
+    pub unsafe fn create_restore_placeholders(&mut self) {
+        let parent = (*self.server).scene.layers.wm;
+        if parent.is_null() {
+            return;
+        }
+        for entry in &self.restore_queue {
+            if entry.width == 0 || entry.height == 0 {
+                continue;
+            }
+            let mut color = if entry.focused {
+                self.layout.border_color_focused
+            } else {
+                self.layout.border_color
+            };
+            // Dim: scale all channels (premultiplied convention).
+            for c in color.iter_mut() {
+                *c *= 0.25;
+            }
+            let rect = ffi::wlr_scene_rect_create(parent, entry.width as i32, entry.height as i32, color.as_ptr());
+            if rect.is_null() {
+                continue;
+            }
+            self.restore_placeholders.push(RestorePlaceholder {
+                rect,
+                app_id: entry.app_id.clone(),
+                title: entry.title.clone(),
+                vx: entry.virtual_x,
+                vy: entry.virtual_y,
+                w: entry.width,
+                h: entry.height,
+            });
+        }
+        if self.restore_placeholders.is_empty() {
+            return;
+        }
+        self.update_restore_placeholders();
+        // Sweep leftovers whose programs never came back.
+        let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+        self.restore_placeholder_timer = ffi::wl_event_loop_add_timer(
+            event_loop,
+            Some(handle_restore_placeholder_timeout),
+            self as *mut WindowManager as *mut _,
+        );
+        if !self.restore_placeholder_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.restore_placeholder_timer, 60_000);
+        }
+    }
+
+    /// Keep placeholders tracking the camera, same transform as windows.
+    pub unsafe fn update_restore_placeholders(&mut self) {
+        if self.restore_placeholders.is_empty() {
+            return;
+        }
+        let (mut out_x, mut out_y) = (0, 0);
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                let wlr_box = (*output).sent.box_layout();
+                out_x = wlr_box.x;
+                out_y = wlr_box.y;
+                break;
+            }
+            curr_out = (*curr_out).next;
+        }
+        let zoom = self.desk_zoom;
+        let radius = (self.layout.backplate_corner_radius as f64 * zoom) as i32;
+        for p in &self.restore_placeholders {
+            let x = out_x + ((p.vx - self.desk_pan_x) * zoom) as i32;
+            let y = out_y + ((p.vy - self.desk_pan_y) * zoom) as i32;
+            ffi::river_scene_node_set_position_if_changed(p.rect as *mut ffi::wlr_scene_node, x, y);
+            ffi::river_scene_rect_set_size_if_changed(
+                p.rect,
+                (p.w as f64 * zoom) as i32,
+                (p.h as f64 * zoom) as i32,
+            );
+            ffi::river_scene_rect_set_corner_radius(p.rect, radius);
+        }
+    }
+
+    /// Drop the placeholder claimed by a matched restore entry.
+    unsafe fn remove_placeholder_for(&mut self, entry: &SavedWindowState) {
+        if let Some(pos) = self
+            .restore_placeholders
+            .iter()
+            .position(|p| p.app_id == entry.app_id && p.title == entry.title)
+        {
+            let p = self.restore_placeholders.remove(pos);
+            if !p.rect.is_null() {
+                ffi::wlr_scene_node_destroy(p.rect as *mut ffi::wlr_scene_node);
+            }
+        }
+        if self.restore_placeholders.is_empty() && !self.restore_placeholder_timer.is_null() {
+            ffi::wl_event_source_remove(self.restore_placeholder_timer);
+            self.restore_placeholder_timer = std::ptr::null_mut();
+        }
+    }
+
+    pub unsafe fn clear_restore_placeholders(&mut self) {
+        for p in self.restore_placeholders.drain(..) {
+            if !p.rect.is_null() {
+                ffi::wlr_scene_node_destroy(p.rect as *mut ffi::wlr_scene_node);
+            }
+        }
+        if !self.restore_placeholder_timer.is_null() {
+            ffi::wl_event_source_remove(self.restore_placeholder_timer);
+            self.restore_placeholder_timer = std::ptr::null_mut();
         }
     }
 
@@ -544,7 +667,9 @@ impl WindowManager {
         }
         // First pass: Exact match (app_id AND title)
         if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id && w.title == title) {
-            return Some(self.restore_queue.remove(pos));
+            let entry = self.restore_queue.remove(pos);
+            self.remove_placeholder_for(&entry);
+            return Some(entry);
         }
         // Second pass: Fuzzy title match (e.g. prefix match, asterisk stripping)
         if let Some(pos) = self.restore_queue.iter().position(|w| {
@@ -555,11 +680,15 @@ impl WindowManager {
             let t2 = w.title.trim_end_matches('*');
             t1 == t2 || t1.starts_with(t2) || t2.starts_with(t1)
         }) {
-            return Some(self.restore_queue.remove(pos));
+            let entry = self.restore_queue.remove(pos);
+            self.remove_placeholder_for(&entry);
+            return Some(entry);
         }
         // Third pass: app_id only match
         if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id) {
-            return Some(self.restore_queue.remove(pos));
+            let entry = self.restore_queue.remove(pos);
+            self.remove_placeholder_for(&entry);
+            return Some(entry);
         }
         None
     }
@@ -658,6 +787,12 @@ impl WindowManager {
             ffi::wl_event_source_remove(self.edge_pan_timer);
             self.edge_pan_timer = std::ptr::null_mut();
         }
+        if !self.restore_placeholder_timer.is_null() {
+            ffi::wl_event_source_remove(self.restore_placeholder_timer);
+            self.restore_placeholder_timer = std::ptr::null_mut();
+        }
+        // Placeholder rects go down with the scene; only the bookkeeping.
+        self.restore_placeholders.clear();
         if !self.viewport_settle_timer.is_null() {
             ffi::wl_event_source_remove(self.viewport_settle_timer);
             self.viewport_settle_timer = std::ptr::null_mut();
@@ -1377,6 +1512,7 @@ impl WindowManager {
 
 
     pub unsafe fn arrange_views(&mut self) {
+        self.update_restore_placeholders();
         log::debug!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
         if log::log_enabled!(log::Level::Debug) {
             for (idx, &win_ptr) in self.windows.iter().enumerate() {
@@ -3873,6 +4009,32 @@ impl crate::policy::api::Compositor for WindowManager {
             }
         }
     }
+}
+
+/// One dim frame standing in for a restored window until its program maps.
+pub struct RestorePlaceholder {
+    pub rect: *mut ffi::wlr_scene_rect,
+    pub app_id: String,
+    pub title: String,
+    pub vx: f64,
+    pub vy: f64,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// Sweep placeholders whose programs never came back.
+pub(crate) unsafe extern "C" fn handle_restore_placeholder_timeout(
+    data: *mut std::ffi::c_void,
+) -> std::os::raw::c_int {
+    let wm = data as *mut WindowManager;
+    if !wm.is_null() {
+        log::info!(
+            "[Restore] Sweeping {} placeholder(s) whose windows never mapped",
+            (*wm).restore_placeholders.len()
+        );
+        (*wm).clear_restore_placeholders();
+    }
+    0
 }
 
 /// 16ms edge auto-pan tick: scroll the desktop by the current velocity, then
