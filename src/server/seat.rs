@@ -447,7 +447,9 @@ impl Seat {
                     // spawn even though `restored` is set — it only borrowed its old geometry
                     // from `last_window_states`. Focus moving between windows that were
                     // already up still pans either way; the key is about spawning.
-                    let spawn_pan = !(*window).session_restored && (*self.server).wm.center_on_spawn;
+                    let spawn_pan = !(*window).session_restored
+                        && !(*window).hint_placed
+                        && (*self.server).wm.center_on_spawn;
                     let should_pan = (!is_new || spawn_pan) && !is_cce_cloud;
                     if should_pan {
                         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;

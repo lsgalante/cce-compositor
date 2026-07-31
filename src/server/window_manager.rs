@@ -112,6 +112,12 @@ pub struct WindowManager {
     pub injected_key_mods: u32,
     pub restore_queue: Vec<SavedWindowState>,
     pub last_window_states: Vec<SavedWindowState>,
+    /// One-shot placement hints (`place-next <app_id> <x> <y>` over IPC):
+    /// the next map of a floating toplevel with this app_id lands near the
+    /// given layout position instead of its remembered spot — widget-spawned
+    /// pickers open at the control that launched them. (app_id, screen x/y,
+    /// registered-at; entries expire unconsumed after a few seconds.)
+    pub pending_placements: Vec<(String, f64, f64, std::time::Instant)>,
     pub shutting_down: bool,
     pub target_desk_pan_x: Option<f64>,
     pub target_desk_pan_y: Option<f64>,
@@ -211,6 +217,7 @@ impl WindowManager {
         self.global_layout = crate::tiling::TilingMode::Cascade;
         self.restore_queue = Vec::new();
         self.last_window_states = Vec::new();
+        self.pending_placements = Vec::new();
         self.shutting_down = false;
         self.layout = crate::config::Layout::default();
         self.output_scale = 1.0;
@@ -717,6 +724,16 @@ impl WindowManager {
             return Some(w.clone());
         }
         None
+    }
+
+    /// Consume the placement hint for `app_id`, if one was registered in the
+    /// last few seconds (stale hints — a spawn that never mapped — are purged).
+    pub fn take_pending_placement(&mut self, app_id: &str) -> Option<(f64, f64)> {
+        const HINT_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+        self.pending_placements.retain(|(_, _, _, at)| at.elapsed() < HINT_TTL);
+        let idx = self.pending_placements.iter().position(|(id, _, _, _)| id == app_id)?;
+        let (_, x, y, _) = self.pending_placements.remove(idx);
+        Some((x, y))
     }
 
     pub unsafe fn spawn_restored_windows(&mut self) {
@@ -3246,6 +3263,24 @@ impl WindowManager {
                 } else {
                     "error: invalid dy or dx\n".to_string()
                 }
+            }
+            "place-next" => {
+                // place-next <app_id> <x> <y>: one-shot hint — the next map of
+                // a floating toplevel with this app_id lands near this layout
+                // position (top-left, clamped on-screen) instead of its
+                // remembered spot. Widgets send it with the pointer location
+                // just before spawning a picker so it opens at the control.
+                if parts.len() < 4 {
+                    return "error: usage: place-next <app_id> <x> <y>\n".to_string();
+                }
+                let (x, y) = match (parts[2].parse::<f64>(), parts[3].parse::<f64>()) {
+                    (Ok(x), Ok(y)) => (x, y),
+                    _ => return "error: x/y must be numbers\n".to_string(),
+                };
+                let app_id = parts[1].to_string();
+                self.pending_placements.retain(|(id, _, _, _)| id != &app_id);
+                self.pending_placements.push((app_id, x, y, std::time::Instant::now()));
+                "ok\n".to_string()
             }
             "pointer-location" => {
                 let mut reply = "error: no seat\n".to_string();

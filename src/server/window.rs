@@ -371,6 +371,10 @@ pub struct Window {
     pub mode_locked: bool,
     pub is_new: bool,
     pub restored: bool,
+    /// Placed at map by a one-shot `place-next` hint (widget-spawned picker
+    /// opening at its control): suppresses the spawn viewport pan — the
+    /// window is already where the user is looking.
+    pub hint_placed: bool,
     /// True only when the restored geometry came out of the startup restore queue
     /// (`state.json`'s window list). A window reopened later in the session matches
     /// `last_window_states` instead and leaves this false, so it still counts as a
@@ -589,6 +593,7 @@ impl Window {
             mode_locked: false,
             is_new: true,
             restored: false,
+            hint_placed: false,
             session_restored: false,
             restored_focused: false,
             closed: false,
@@ -931,6 +936,66 @@ impl Window {
         }
     }
 
+    /// Apply a one-shot `place-next` hint: land the window's top-left just
+    /// below-right of the hinted layout position (the control that spawned
+    /// it), clamped to the output so it stays fully on-screen. Runs after
+    /// `try_restore` so the remembered SIZE is kept — only the position is
+    /// overridden — and marks `hint_placed` so the spawn viewport pan is
+    /// skipped (the window is already under the user's pointer).
+    unsafe fn try_hint_placement(&mut self) {
+        if self.tiling_mode != crate::tiling::TilingMode::Floating {
+            return;
+        }
+        let app_id = self.get_app_id_string().unwrap_or_default();
+        if app_id.is_empty() {
+            return;
+        }
+        let Some((hx, hy)) = (*self.server).wm.take_pending_placement(&app_id) else {
+            return;
+        };
+
+        // First enabled output's layout box (the center-window fallback).
+        let (mut vp_w, mut vp_h) = (1920.0_f64, 1080.0_f64);
+        let (mut phys_x, mut phys_y) = (0i32, 0i32);
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                let wlr_box = (*output).sent.box_layout();
+                vp_w = wlr_box.width as f64;
+                vp_h = wlr_box.height as f64;
+                phys_x = wlr_box.x;
+                phys_y = wlr_box.y;
+                break;
+            }
+            curr_out = (*curr_out).next;
+        }
+
+        let wm = &(*self.server).wm;
+        let zoom = wm.desk_zoom.max(0.01);
+        let w = if self.box_geom.width > 0 { self.box_geom.width as f64 } else { 400.0 } * zoom;
+        let h = if self.box_geom.height > 0 { self.box_geom.height as f64 } else { 400.0 } * zoom;
+
+        const OFFSET: f64 = 12.0; // context-menu-style drop below-right of the control
+        const MARGIN: f64 = 8.0;
+        let sx = (hx + OFFSET)
+            .min(phys_x as f64 + vp_w - w - MARGIN)
+            .max(phys_x as f64 + MARGIN);
+        let sy = (hy + OFFSET)
+            .min(phys_y as f64 + vp_h - h - MARGIN)
+            .max(phys_y as f64 + MARGIN);
+
+        // screen = phys + (virtual - desk_pan) * zoom  →  invert for virtual.
+        self.virtual_x = wm.desk_pan_x + (sx - phys_x as f64) / zoom;
+        self.virtual_y = wm.desk_pan_y + (sy - phys_y as f64) / zoom;
+        self.hint_placed = true;
+        log::info!(
+            "place-next hint applied: app_id={} screen=({:.0},{:.0}) virtual=({:.1},{:.1})",
+            app_id, sx, sy, self.virtual_x, self.virtual_y
+        );
+    }
+
     pub unsafe fn map(&mut self) -> Result<(), &'static str> {
         log::debug!("window '{:?}' mapped", self.get_title());
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
@@ -938,6 +1003,7 @@ impl Window {
         self.state = WindowState::Mapped;
 
         self.try_restore();
+        self.try_hint_placement();
 
         let surface = self.root_surface();
         if !surface.is_null() {
