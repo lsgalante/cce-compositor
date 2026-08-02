@@ -742,6 +742,24 @@ impl WindowManager {
         std::thread::spawn(move || {
             let mut spawned_any = false;
             for w in restored.into_iter() {
+                // A wine/Proton window records its WINDOWS-side exe path
+                // (C:\... or C:/...) as the command — /bin/sh can never run
+                // it, so each one burns a silent no-op fork per login. Skip
+                // them outright.
+                let cmd_trimmed = w.cmdline.trim();
+                let bytes = cmd_trimmed.as_bytes();
+                let is_windows_path = bytes.len() > 2
+                    && bytes[0].is_ascii_alphabetic()
+                    && bytes[1] == b':'
+                    && (bytes[2] == b'/' || bytes[2] == b'\\');
+                if is_windows_path {
+                    log::info!(
+                        "Skipping unrestorable Windows-path command for {:?}: {}",
+                        w.app_id,
+                        cmd_trimmed
+                    );
+                    continue;
+                }
                 if !w.cmdline.is_empty() {
                     // Small stagger so N clients don't all hit Vulkan device
                     // init at the same instant; restore matching and focus
