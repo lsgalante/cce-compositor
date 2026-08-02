@@ -1478,6 +1478,13 @@ impl WindowManager {
         if app_id.as_deref() == Some("cce-notifier") || app_id.as_deref() == Some("cce-notification-daemon") || app_id.as_deref() == Some("clear-notification-daemon") {
             return crate::tiling::TilingMode::Popup;
         }
+        // An explicit set_popup via the cce window-management protocol beats the
+        // app_id heuristic below: a cce-cloud toplevel that flagged itself a popup
+        // sizes itself (dmenu-style) instead of taking the overlay dock's
+        // full-height fresh slot.
+        if (*win).tiling_mode == crate::tiling::TilingMode::Popup {
+            return crate::tiling::TilingMode::Popup;
+        }
         if app_id.as_deref().map_or(false, |id| id.starts_with("cce-cloud")) {
             return crate::tiling::TilingMode::Overlay;
         }
