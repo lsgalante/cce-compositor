@@ -229,8 +229,15 @@ impl XdgToplevel {
                 && scheduled.maximized == sent.maximized
                 && scheduled.inform_fullscreen == sent.inform_fullscreen
                 && scheduled.resizing == sent.resizing;
+            // Idle AND Committed: after any completed configure round-trip
+            // the state machine RESTS in Committed (Acked → Committed on
+            // commit; only the timeout path returns to Idle), so gating on
+            // Idle alone leaves this absorb dead in steady state — the exact
+            // moment the echo loop runs. Inflight/Acked stay excluded: a
+            // real configure is mid-flight and the scheduled size may need
+            // to supersede it.
             if non_size_equal
-                && matches!(self.configure_state, ConfigureState::Idle)
+                && matches!(self.configure_state, ConfigureState::Idle | ConfigureState::Committed)
                 && self.geometry.width > 0
                 && self.geometry.height > 0
                 && echo_w == Some(self.geometry.width as u32)
