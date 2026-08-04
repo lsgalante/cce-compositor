@@ -220,9 +220,19 @@ impl XdgToplevel {
         {
             let echo_w = scheduled.width.or(sent.width);
             let echo_h = scheduled.height.or(sent.height);
-            let non_size_equal = scheduled.bounds.width == sent.bounds.width
-                && scheduled.bounds.height == sent.bounds.height
-                && scheduled.activated == sent.activated
+            // Bounds are part of the echo, not a separate signal, when they
+            // merely track the echoed size: the arrange schedules a status
+            // window's bounds equal to its own box, so a self-resize ALWAYS
+            // carries a matching bounds delta — requiring bounds equality
+            // here would keep the absorb permanently disabled for exactly
+            // the windows that loop. A bounds change that differs from the
+            // echoed size (a real available-area change) still forces a
+            // configure.
+            let bounds_ok = (scheduled.bounds.width == sent.bounds.width
+                && scheduled.bounds.height == sent.bounds.height)
+                || (echo_w == Some(scheduled.bounds.width as u32)
+                    && echo_h == Some(scheduled.bounds.height as u32));
+            let non_size_equal = scheduled.activated == sent.activated
                 && scheduled.ssd == sent.ssd
                 && scheduled.tiled == sent.tiled
                 && scheduled.capabilities == sent.capabilities
@@ -236,18 +246,40 @@ impl XdgToplevel {
             // moment the echo loop runs. Inflight/Acked stay excluded: a
             // real configure is mid-flight and the scheduled size may need
             // to supersede it.
-            if non_size_equal
-                && matches!(self.configure_state, ConfigureState::Idle | ConfigureState::Committed)
-                && self.geometry.width > 0
+            let size_is_echo = self.geometry.width > 0
                 && self.geometry.height > 0
                 && echo_w == Some(self.geometry.width as u32)
-                && echo_h == Some(self.geometry.height as u32)
+                && echo_h == Some(self.geometry.height as u32);
+            if size_is_echo
+                && non_size_equal
+                && bounds_ok
+                && matches!(self.configure_state, ConfigureState::Idle | ConfigureState::Committed)
             {
+                let absorbed_bounds = scheduled.bounds;
                 (*self.window).configure_sent.width = echo_w;
                 (*self.window).configure_sent.height = echo_h;
+                (*self.window).configure_sent.bounds = absorbed_bounds;
                 (*self.window).configure_scheduled.width = None;
                 (*self.window).configure_scheduled.height = None;
                 return false;
+            }
+            if size_is_echo && log::log_enabled!(log::Level::Debug) {
+                // The size restates committed geometry yet the absorb
+                // declined — name the blocker (the state, or which non-size
+                // field), so a live echo loop is diagnosable from the log.
+                log::debug!(
+                    "XdgToplevel::configure: echo NOT absorbed: state={:?} non_size_equal={} \
+                     (bounds {}x{}/{}x{} act {}/{} ssd {}/{} tiled {:?}/{:?} caps {:?}/{:?} max {}/{} fs {}/{} rsz {}/{})",
+                    self.configure_state, non_size_equal,
+                    scheduled.bounds.width, scheduled.bounds.height, sent.bounds.width, sent.bounds.height,
+                    scheduled.activated, sent.activated,
+                    scheduled.ssd, sent.ssd,
+                    scheduled.tiled, sent.tiled,
+                    scheduled.capabilities, sent.capabilities,
+                    scheduled.maximized, sent.maximized,
+                    scheduled.inform_fullscreen, sent.inform_fullscreen,
+                    scheduled.resizing, sent.resizing,
+                );
             }
         }
 
