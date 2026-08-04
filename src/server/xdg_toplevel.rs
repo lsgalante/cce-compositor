@@ -207,6 +207,43 @@ impl XdgToplevel {
             }
         }
 
+        // Absorb a size-only ECHO: the scheduled size merely restates what the
+        // client has already committed (its current geometry) and nothing else
+        // changed. Sending it anyway hands a self-sizing client a stale size
+        // one commit later — and when the client's content width flaps (the
+        // cpu module's text crossing 10%), that stale echo re-triggers a
+        // resize on both sides and the pair ping-pongs at frame rate (the
+        // status-bar jitter: ~3300 alternating 95/104 configures in 5min).
+        // Agree with reality instead and send nothing. A configure whose size
+        // DIFFERS from the committed geometry — a real compositor-driven
+        // resize — always goes through.
+        {
+            let echo_w = scheduled.width.or(sent.width);
+            let echo_h = scheduled.height.or(sent.height);
+            let non_size_equal = scheduled.bounds.width == sent.bounds.width
+                && scheduled.bounds.height == sent.bounds.height
+                && scheduled.activated == sent.activated
+                && scheduled.ssd == sent.ssd
+                && scheduled.tiled == sent.tiled
+                && scheduled.capabilities == sent.capabilities
+                && scheduled.maximized == sent.maximized
+                && scheduled.inform_fullscreen == sent.inform_fullscreen
+                && scheduled.resizing == sent.resizing;
+            if non_size_equal
+                && matches!(self.configure_state, ConfigureState::Idle)
+                && self.geometry.width > 0
+                && self.geometry.height > 0
+                && echo_w == Some(self.geometry.width as u32)
+                && echo_h == Some(self.geometry.height as u32)
+            {
+                (*self.window).configure_sent.width = echo_w;
+                (*self.window).configure_sent.height = echo_h;
+                (*self.window).configure_scheduled.width = None;
+                (*self.window).configure_scheduled.height = None;
+                return false;
+            }
+        }
+
         ffi::wlr_xdg_toplevel_set_activated(self.wlr_toplevel, scheduled.activated);
         ffi::wlr_xdg_toplevel_set_tiled(
             self.wlr_toplevel,
