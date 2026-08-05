@@ -450,7 +450,16 @@ impl Seat {
                     let spawn_pan = !(*window).session_restored
                         && !(*window).hint_placed
                         && (*self.server).wm.center_on_spawn;
-                    let should_pan = (!is_new || spawn_pan) && !is_cce_cloud;
+                    // A restored window maps unfocused and keeps is_new until
+                    // its first focus — which, after a session restart, is
+                    // the user's first CLICK on it. Suppressing that pan made
+                    // every window seem to ignore focus-follow right after
+                    // login. Once real input has been seen the settling phase
+                    // is over: a first focus is user intent and pans like any
+                    // other, except for placement-hinted spawns (pickers that
+                    // open at their control and must not yank the camera).
+                    let user_focus = (*self.server).wm.startup_input_seen && !(*window).hint_placed;
+                    let should_pan = (!is_new || spawn_pan || user_focus) && !is_cce_cloud;
                     if should_pan {
                         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
                         let mut curr_out = (*outputs_list).next;
