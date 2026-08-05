@@ -655,6 +655,27 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         }
     }
 
+    // Status segments self-size the same way when an in-surface menu grows or
+    // contracts the surface (no configure round trip). Track the live
+    // geometry in the same commit: box_geom feeds the expanded-state order
+    // hash that restacks the segment into the popups layer, so a lagging
+    // box_geom left the freshly opened menu stacked UNDER its sibling
+    // segments (their text drew sharp over the menu's blur) for a beat.
+    // Unlike the overlay branch, no set_dimensions — the WM deliberately
+    // leaves status segment sizes to the client.
+    if is_status {
+        let mut live = std::mem::zeroed();
+        ffi::river_wlr_xdg_surface_get_geometry(base, &mut live);
+        if live.width > 0 && live.height > 0
+            && (live.width != (*window).box_geom.width || live.height != (*window).box_geom.height)
+        {
+            (*window).box_geom.width = live.width;
+            (*window).box_geom.height = live.height;
+            (*window).self_resized = true;
+            (*(*window).server).wm.dirty_windowing();
+        }
+    }
+
     match (*toplevel).configure_state {
         ConfigureState::Idle | ConfigureState::Committed | ConfigureState::TimedOut(..) => {
             // Nothing to do: client-initiated size/position changes CANNOT
