@@ -121,6 +121,9 @@ pub struct WindowManager {
     pub shutting_down: bool,
     pub target_desk_pan_x: Option<f64>,
     pub target_desk_pan_y: Option<f64>,
+    /// Eased alongside the pan targets by the animation tick — the overview
+    /// enter/exit transition (`SetCamera { animate: true }`).
+    pub target_desk_zoom: Option<f64>,
     pub animation_timer: *mut ffi::wl_event_source,
     /// Edge auto-pan velocity during an interactive move/resize, in SCREEN
     /// px/s (the tick divides by zoom). Written by `Seat::update_edge_pan`
@@ -205,6 +208,7 @@ impl WindowManager {
         self.desk_pan_y = 0.0;
         self.target_desk_pan_x = None;
         self.target_desk_pan_y = None;
+        self.target_desk_zoom = None;
         self.animation_timer = std::ptr::null_mut();
         self.edge_pan_vx = 0.0;
         self.edge_pan_vy = 0.0;
@@ -838,6 +842,7 @@ impl WindowManager {
     pub unsafe fn stop_panning_animation(&mut self) {
         self.target_desk_pan_x = None;
         self.target_desk_pan_y = None;
+        self.target_desk_zoom = None;
     }
 
     /// The current camera as the policy crate's plain-data snapshot.
@@ -1009,9 +1014,10 @@ impl WindowManager {
         }
     }
 
-    /// Arm the pan animation timer (creating it on first use): every 16ms
+    /// Arm the camera animation timer (creating it on first use): every 16ms
     /// `handle_panning_animation_tick` eases `desk_pan_x/y` toward
-    /// `target_desk_pan_x/y`. Callers set the targets first.
+    /// `target_desk_pan_x/y` and `desk_zoom` toward `target_desk_zoom` (the
+    /// overview enter/exit transition). Callers set the targets first.
     pub unsafe fn start_panning_animation(&mut self) {
         if self.animation_timer.is_null() {
             let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
@@ -4018,12 +4024,26 @@ impl crate::policy::api::Compositor for WindowManager {
                 Command::Spawn(ref cmdline) => {
                     self.execute_action(&crate::config::Action::Spawn, Some(cmdline));
                 }
-                Command::SetCamera { camera, overview } => {
-                    self.desk_pan_x = camera.pan_x;
-                    self.desk_pan_y = camera.pan_y;
-                    self.desk_zoom = camera.zoom;
+                Command::SetCamera { camera, overview, animate } => {
+                    // The mode flips immediately either way, so a re-toggle
+                    // mid-flight exits/enters rather than re-entering.
                     if let Some(overview) = overview {
                         self.mode = if overview { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
+                    }
+                    if animate {
+                        self.target_desk_pan_x = Some(camera.pan_x);
+                        self.target_desk_pan_y = Some(camera.pan_y);
+                        self.target_desk_zoom = Some(camera.zoom);
+                        self.start_panning_animation();
+                    } else {
+                        self.desk_pan_x = camera.pan_x;
+                        self.desk_pan_y = camera.pan_y;
+                        self.desk_zoom = camera.zoom;
+                        // An instant write cancels any easing in flight — the
+                        // stale targets would otherwise drag the camera back.
+                        self.target_desk_pan_x = None;
+                        self.target_desk_pan_y = None;
+                        self.target_desk_zoom = None;
                     }
                 }
                 Command::PanTo { x, y } => {
@@ -4200,7 +4220,22 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
             (*wm).target_desk_pan_y = None;
         }
     }
-    
+
+    // Zoom eases geometrically (exponential approach in log space): a linear
+    // step would leap multiple-x per frame at the small end of an overview
+    // exit, while a constant per-frame RATIO reads as uniform motion.
+    if let Some(target_zoom) = (*wm).target_desk_zoom {
+        let cur = (*wm).desk_zoom.max(1e-6);
+        let log_delta = (target_zoom / cur).ln();
+        if log_delta.abs() > 0.001 {
+            (*wm).desk_zoom = cur * (log_delta * factor).exp();
+            done = false;
+        } else {
+            (*wm).desk_zoom = target_zoom;
+            (*wm).target_desk_zoom = None;
+        }
+    }
+
     if matches!((*wm).state, WindowManagerState::Idle) {
         (*wm).update_viewport_local();
     } else {
