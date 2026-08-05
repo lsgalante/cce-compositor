@@ -1267,32 +1267,36 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     }
 
     // The status bar's own config file wins over the shared status keys:
-    // ~/.config/cce/cce-status-interface/config.kdl, `module { spacing }`.
+    // ~/.config/cce/cce-status-interface/config.kdl, `module { spacing height }`.
     // Re-read on every config (re)load, so `ccectl reload` picks up edits.
     {
         let app_cfg = cce_ui::config::get_app_config_path("cce-status-interface");
         if let Ok(content) = std::fs::read_to_string(&app_cfg) {
             if let Ok(app_doc) = content.parse::<kdl::KdlDocument>() {
                 if let Some(module) = app_doc.nodes().iter().find(|n| n.name().value() == "module") {
-                    let spacing = module
-                        .entries()
-                        .iter()
-                        .find(|e| e.name().map(|id| id.value()) == Some("spacing"))
-                        .map(|e| e.value())
-                        .or_else(|| {
-                            module.children().and_then(|c| {
-                                c.nodes()
-                                    .iter()
-                                    .find(|n| n.name().value() == "spacing")
-                                    .and_then(|n| n.entries().first().map(|e| e.value()))
+                    // A module key in either KDL spelling: `spacing=(f64)12`
+                    // prop on the module node, or a `spacing 12` child node.
+                    let module_i64 = |key: &str| -> Option<i64> {
+                        module
+                            .entries()
+                            .iter()
+                            .find(|e| e.name().map(|id| id.value()) == Some(key))
+                            .map(|e| e.value())
+                            .or_else(|| {
+                                module.children().and_then(|c| {
+                                    c.nodes()
+                                        .iter()
+                                        .find(|n| n.name().value() == key)
+                                        .and_then(|n| n.entries().first().map(|e| e.value()))
+                                })
                             })
-                        });
-                    if let Some(v) = spacing {
-                        if let Some(i) = v.as_i64() {
-                            layout.status_module_spacing = i;
-                        } else if let Some(f) = v.as_f64() {
-                            layout.status_module_spacing = f.round() as i64;
-                        }
+                            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f.round() as i64)))
+                    };
+                    if let Some(i) = module_i64("spacing") {
+                        layout.status_module_spacing = i;
+                    }
+                    if let Some(i) = module_i64("height") {
+                        layout.bar_height = i;
                     }
                 }
             }
