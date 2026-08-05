@@ -1413,6 +1413,21 @@ impl WindowManager {
                     (*window).rendering_requested.circular.hash(&mut hasher);
                     (*window).rendering_requested.hidden.hash(&mut hasher);
                     (*window).tiling_mode.hash(&mut hasher);
+                    // A status segment's layer flips between top and popups
+                    // on expand/contract (see the reorder pass below), so
+                    // expansion state must participate in the hash — without
+                    // it the restack waits for an unrelated reorder, and the
+                    // open menu sits UNDER its sibling segments (their text
+                    // stays unblurred over the menu) until one happens.
+                    if (*window).tiling_mode == crate::tiling::TilingMode::Status {
+                        let bg = (*window).box_geom;
+                        let thickness = match (*window).status_edge {
+                            crate::policy::arrange::StatusEdge::Left
+                            | crate::policy::arrange::StatusEdge::Right => bg.width,
+                            _ => bg.height,
+                        };
+                        (thickness > self.layout.bar_height).hash(&mut hasher);
+                    }
                 }
                 crate::wm_node::WmNodeType::ShellSurface(shell_surface) => {
                     (shell_surface as usize).hash(&mut hasher);
