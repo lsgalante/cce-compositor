@@ -1456,7 +1456,26 @@ impl WindowManager {
                             } else if (*window).tiling_mode == crate::tiling::TilingMode::Popup {
                                 (*self.server).scene.layers.popups
                             } else if (*window).tiling_mode == crate::tiling::TilingMode::Status {
-                                (*self.server).scene.layers.top
+                                // An EXPANDED segment (in-surface menu open;
+                                // thicker than the bar) stacks like a popup:
+                                // this loop re-raises every window in
+                                // render-list order each pass, so leaving it
+                                // in the shared Status layer let whichever
+                                // sibling rendered last cover the menu's
+                                // strip band (the strip-band click routing
+                                // bug — an arrange-time raise was clobbered
+                                // here every frame).
+                                let bg = (*window).box_geom;
+                                let thickness = match (*window).status_edge {
+                                    crate::policy::arrange::StatusEdge::Left
+                                    | crate::policy::arrange::StatusEdge::Right => bg.width,
+                                    _ => bg.height,
+                                };
+                                if thickness > self.layout.bar_height {
+                                    (*self.server).scene.layers.popups
+                                } else {
+                                    (*self.server).scene.layers.top
+                                }
                             } else if (*window).rendering_requested.circular {
                                 (*self.server).scene.layers.top
                             } else if (*window).tiling_mode == crate::tiling::TilingMode::Overlay && self.layout.overlay_behavior == "above" {
@@ -1730,9 +1749,11 @@ impl WindowManager {
                 };
                 if thickness > 0 && thickness <= self.layout.bar_height {
                     (*win_ptr).status_collapsed_len = len;
-                } else if thickness > self.layout.bar_height {
-                    ffi::wlr_scene_node_raise_to_top((*win_ptr).tree as *mut _);
                 }
+                // Stacking of the expanded segment lives in the
+                // render_finish reorder pass (→ layers.popups), which
+                // re-stacks every window each frame — a raise here was
+                // clobbered by it.
             }
             window_snaps.push(crate::policy::arrange::WindowSnapshot {
                 app_id: (*win_ptr).get_app_id_string(),
