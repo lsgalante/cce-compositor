@@ -405,6 +405,11 @@ pub struct Window {
     /// render-start snapshot (`rendering_sent`), which still holds the previous
     /// size and would snap the border back. Cleared once consumed.
     pub self_resized: bool,
+    /// Status segments: the along-bar length last seen while the segment was
+    /// at bar thickness. Feeds WindowSnapshot::status_collapsed_len so an
+    /// EXPANDED segment (surface grown into an in-surface menu) keeps its
+    /// frozen slot in the arrange pass.
+    pub status_collapsed_len: i32,
     /// Set by the commit listener, cleared by the window-manager stream
     /// timer after a capture: the damage gate for `stream_server` frames.
     /// Starts true so a fresh subscriber gets an immediate first frame.
@@ -612,6 +617,7 @@ impl Window {
             resize_start_h: 0,
             resize_edges: None,
             self_resized: false,
+            status_collapsed_len: 0,
             stream_dirty: true,
             commit: std::mem::zeroed(),
             was_fullscreen: false,

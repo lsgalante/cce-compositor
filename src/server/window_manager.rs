@@ -1716,6 +1716,24 @@ impl WindowManager {
             } else {
                 None
             };
+            // Status segments: refresh the frozen collapsed slot length
+            // while at bar thickness; while EXPANDED (in-surface menu, the
+            // surface is thicker than the bar) keep the frozen value and
+            // raise the segment above its siblings and the windows the open
+            // menu now overlaps.
+            if (*win_ptr).get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                let bg = (*win_ptr).box_geom;
+                let (len, thickness) = match (*win_ptr).status_edge {
+                    crate::policy::arrange::StatusEdge::Left
+                    | crate::policy::arrange::StatusEdge::Right => (bg.height, bg.width),
+                    _ => (bg.width, bg.height),
+                };
+                if thickness > 0 && thickness <= self.layout.bar_height {
+                    (*win_ptr).status_collapsed_len = len;
+                } else if thickness > self.layout.bar_height {
+                    ffi::wlr_scene_node_raise_to_top((*win_ptr).tree as *mut _);
+                }
+            }
             window_snaps.push(crate::policy::arrange::WindowSnapshot {
                 app_id: (*win_ptr).get_app_id_string(),
                 title: (*win_ptr).get_title_string(),
@@ -1723,6 +1741,7 @@ impl WindowManager {
                 minimized: (*win_ptr).minimized,
                 closing_or_init: matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init),
                 mode: self.get_mode_for_window(win_ptr),
+                status_collapsed_len: (*win_ptr).status_collapsed_len,
                 rule_ssd,
                 being_moved: self.is_window_being_moved(win_ptr),
                 status_edge: (*win_ptr).status_edge,
