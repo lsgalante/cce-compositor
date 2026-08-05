@@ -2027,6 +2027,13 @@ impl Window {
                 let w = self.rendering_sent.width as i32;
                 let h = self.rendering_sent.height as i32;
                 w.min(h) / 2
+            } else if is_status {
+                // Status segments draw their own module-box corners. The
+                // backplate clip is invisible on a bar-thin segment (the
+                // half-extent cap keeps it inside the transparent band) but
+                // carves visible sweeps into an EXPANDED segment's in-surface
+                // menu box once the cap stops binding.
+                0
             } else if self.wm_requested.ssd || is_cce_app {
                 (*self.server).wm.layout.backplate_corner_radius
             } else {
@@ -2470,6 +2477,10 @@ impl Window {
                     let w = self.rendering_sent.width as i32;
                     let h = self.rendering_sent.height as i32;
                     w.min(h) / 2
+                } else if is_status {
+                    // Same status exemption as set_rendering_state — the two
+                    // paths drive the same nodes and must agree.
+                    0
                 } else if self.wm_requested.ssd || is_cce_app {
                     (*self.server).wm.layout.backplate_corner_radius
                 } else {
