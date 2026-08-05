@@ -521,6 +521,22 @@ impl Seat {
                                 wm.target_desk_pan_x = Some(target.pan_x);
                                 wm.target_desk_pan_y = Some(target.pan_y);
                                 wm.start_panning_animation();
+                            } else if let Some(target) = crate::policy::camera::nudge_into_view(
+                                (*window).virtual_x,
+                                (*window).virtual_y,
+                                vw_w,
+                                vw_h,
+                                cam,
+                                viewport_w,
+                                viewport_h,
+                            ) {
+                                // Mostly visible but clipped: slide the
+                                // clipped edge on-screen instead of
+                                // recentering — focusing a window should
+                                // never leave part of it hanging off.
+                                wm.target_desk_pan_x = Some(target.pan_x);
+                                wm.target_desk_pan_y = Some(target.pan_y);
+                                wm.start_panning_animation();
                             }
                         }
                     }
