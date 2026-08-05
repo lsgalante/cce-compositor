@@ -1752,6 +1752,7 @@ impl WindowManager {
             bar_height: self.layout.bar_height,
             status_hide_mode: self.status_hide_mode,
             hide_mode_preview: self.layout.status_module_hide_mode_preview as i32,
+            status_module_spacing: self.layout.status_module_spacing as i32,
             status_blur: self.layout.status_background_blur > 0.001,
             window_blur: self.layout.window_blur,
             opacity_enabled: self.layout.window_opacity,

@@ -87,6 +87,10 @@ pub struct Layout {
     pub status_backdrop_blur_ignore_transparent: bool,
     pub window_backdrop_blur_ignore_transparent: bool,
     pub status_module_hide_mode_preview: i64,
+    /// Gap between adjacent status segments; the bar's own config file
+    /// (`~/.config/cce/cce-status-interface/config.kdl`, `module { spacing }`)
+    /// overrides the shared `style { status module_spacing }`.
+    pub status_module_spacing: i64,
     pub cloud_position_default: Option<[i32; 2]>,
 }
 
@@ -180,6 +184,7 @@ impl Default for Layout {
             status_backdrop_blur_ignore_transparent: true,
             window_backdrop_blur_ignore_transparent: true,
             status_module_hide_mode_preview: 4,
+            status_module_spacing: 12,
             cloud_position_default: None,
         }
     }
@@ -642,6 +647,8 @@ pub struct LayoutConfig {
     pub window_backdrop_blur_ignore_transparent: bool,
     #[serde(default = "default_status_module_hide_mode_preview")]
     pub status_module_hide_mode_preview: i64,
+    #[serde(default = "default_status_module_spacing")]
+    pub status_module_spacing: i64,
 }
 
 impl Default for LayoutConfig {
@@ -667,6 +674,7 @@ impl Default for LayoutConfig {
             status_backdrop_blur_ignore_transparent: default_status_backdrop_blur_ignore_transparent(),
             window_backdrop_blur_ignore_transparent: default_window_backdrop_blur_ignore_transparent(),
             status_module_hide_mode_preview: default_status_module_hide_mode_preview(),
+            status_module_spacing: default_status_module_spacing(),
         }
     }
 }
@@ -691,6 +699,9 @@ fn default_window_opacity() -> bool { true }
 fn default_status_backdrop_blur_ignore_transparent() -> bool { true }
 
 fn default_status_module_hide_mode_preview() -> i64 { 4 }
+fn default_status_module_spacing() -> i64 {
+    crate::policy::arrange::DEFAULT_STATUS_MODULE_SPACING as i64
+}
 fn default_window_backdrop_blur_ignore_transparent() -> bool { true }
 
 #[derive(Debug, Deserialize)]
@@ -1252,6 +1263,40 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         layout.status_background_blur = get_nested_prop_f64(node, "status", "background_blur", default_status_background_blur());
         layout.status_backdrop_blur_ignore_transparent = get_nested_prop_bool(node, "status", "backdrop_blur_ignore_transparent", default_status_backdrop_blur_ignore_transparent());
         layout.status_module_hide_mode_preview = get_nested_prop_i64(node, "status", "module_hide_mode_preview", default_status_module_hide_mode_preview());
+        layout.status_module_spacing = get_nested_prop_i64(node, "status", "module_spacing", default_status_module_spacing());
+    }
+
+    // The status bar's own config file wins over the shared status keys:
+    // ~/.config/cce/cce-status-interface/config.kdl, `module { spacing }`.
+    // Re-read on every config (re)load, so `ccectl reload` picks up edits.
+    {
+        let app_cfg = cce_ui::config::get_app_config_path("cce-status-interface");
+        if let Ok(content) = std::fs::read_to_string(&app_cfg) {
+            if let Ok(app_doc) = content.parse::<kdl::KdlDocument>() {
+                if let Some(module) = app_doc.nodes().iter().find(|n| n.name().value() == "module") {
+                    let spacing = module
+                        .entries()
+                        .iter()
+                        .find(|e| e.name().map(|id| id.value()) == Some("spacing"))
+                        .map(|e| e.value())
+                        .or_else(|| {
+                            module.children().and_then(|c| {
+                                c.nodes()
+                                    .iter()
+                                    .find(|n| n.name().value() == "spacing")
+                                    .and_then(|n| n.entries().first().map(|e| e.value()))
+                            })
+                        });
+                    if let Some(v) = spacing {
+                        if let Some(i) = v.as_i64() {
+                            layout.status_module_spacing = i;
+                        } else if let Some(f) = v.as_f64() {
+                            layout.status_module_spacing = f.round() as i64;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // 2. env
@@ -1975,6 +2020,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
     state.layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
     state.layout.status_module_hide_mode_preview = config.layout.status_module_hide_mode_preview;
+    state.layout.status_module_spacing = config.layout.status_module_spacing;
     state.layout.cloud_position_default = config.surface.cloud_position_default;
     state.layout.shadow_enabled = config.surface.shadow_enabled;
     state.layout.shadow_sigma = config.surface.shadow_sigma.max(0.0) as f32;
