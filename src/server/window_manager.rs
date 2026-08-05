@@ -404,6 +404,75 @@ impl WindowManager {
         }
     }
 
+    /// The restore placeholder under a layout-space point, as its virtual
+    /// rect `(vx, vy, w, h)`. Topmost (latest-created) wins on overlap.
+    pub unsafe fn placeholder_at(&self, lx: f64, ly: f64) -> Option<(f64, f64, f64, f64)> {
+        if self.restore_placeholders.is_empty() {
+            return None;
+        }
+        let (mut out_x, mut out_y) = (0.0, 0.0);
+        let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                let wlr_box = (*output).sent.box_layout();
+                out_x = wlr_box.x as f64;
+                out_y = wlr_box.y as f64;
+                break;
+            }
+            curr_out = (*curr_out).next;
+        }
+        let zoom = self.desk_zoom;
+        for p in self.restore_placeholders.iter().rev() {
+            let x = out_x + (p.vx - self.desk_pan_x) * zoom;
+            let y = out_y + (p.vy - self.desk_pan_y) * zoom;
+            let w = p.w as f64 * zoom;
+            let h = p.h as f64 * zoom;
+            if lx >= x && lx < x + w && ly >= y && ly < y + h {
+                return Some((p.vx, p.vy, p.w as f64, p.h as f64));
+            }
+        }
+        None
+    }
+
+    /// Focus-follow camera rules for a bare virtual rect — the same
+    /// center-when-mostly-hidden / nudge-when-clipped behavior windows get,
+    /// for things that are not windows (restore placeholders).
+    pub unsafe fn pan_to_virtual_rect(&mut self, vx: f64, vy: f64, w: f64, h: f64) {
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        let mut viewport: Option<ffi::wlr_box> = None;
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                viewport = Some((*output).sent.box_layout());
+                break;
+            }
+            curr_out = (*curr_out).next;
+        }
+        let Some(viewport) = viewport else { return };
+        let (vw, vh) = (viewport.width as f64, viewport.height as f64);
+        let cam = self.camera();
+        let visible = crate::policy::camera::visible_fraction(vx, vy, w, h, cam, vw, vh);
+        let target = if visible < crate::policy::camera::FOCUS_VISIBLE_THRESHOLD {
+            Some(crate::policy::camera::center_on(
+                vx + w / 2.0,
+                vy + h / 2.0,
+                vw,
+                vh,
+                cam.zoom,
+            ))
+        } else {
+            crate::policy::camera::nudge_into_view(vx, vy, w, h, cam, vw, vh)
+        };
+        if let Some(target) = target {
+            self.target_desk_pan_x = Some(target.pan_x);
+            self.target_desk_pan_y = Some(target.pan_y);
+            self.start_panning_animation();
+        }
+    }
+
     /// Keep placeholders tracking the camera, same transform as windows.
     pub unsafe fn update_restore_placeholders(&mut self) {
         if self.restore_placeholders.is_empty() {

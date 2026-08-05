@@ -1259,8 +1259,16 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         }
 
         if !clicked_something && (*event).button == 0x110 {
-            seat.focus(Focus::None);
-            (*(*seat).server).wm.dirty_windowing();
+            // Restore placeholders are bare scene rects the hit-test can't
+            // see, but they stand in for restored windows — clicking one
+            // gets the same camera rules as clicking the real window.
+            let wm = &mut (*server).wm;
+            if let Some((pvx, pvy, pw, ph)) = wm.placeholder_at(lx, ly) {
+                wm.pan_to_virtual_rect(pvx, pvy, pw, ph);
+            } else {
+                seat.focus(Focus::None);
+                (*(*seat).server).wm.dirty_windowing();
+            }
         }
     } else {
         assert_eq!((*event).state, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED);
