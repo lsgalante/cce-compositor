@@ -69,6 +69,10 @@ pub struct Layout {
     pub shadow_offset_y: i32,
     /// Magnetic grid snap for interactive move/resize.
     pub desktop_snap: bool,
+    /// Speed ramp + duration (ms) for the overview enter/exit transition.
+    /// `None` (no/invalid `desktop { overview_ramp= }`) falls back to the
+    /// exponential-approach camera animation.
+    pub overview_anim: Option<(crate::policy::ramp::SpeedRamp, f64)>,
     /// Snap radius in virtual units.
     pub desktop_snap_threshold: f64,
     /// Edge auto-pan: dragging/resizing against a screen edge scrolls the
@@ -167,6 +171,7 @@ impl Default for Layout {
             shadow_offset_x: 7,
             shadow_offset_y: 7,
             desktop_snap: true,
+            overview_anim: None,
             desktop_snap_threshold: 24.0,
             desktop_edge_pan: true,
             desktop_edge_pan_band: 32.0,
@@ -352,6 +357,10 @@ pub struct SurfaceConfig {
     pub desktop_grid_fade_mode: String,
     #[serde(default = "default_desktop_snap")]
     pub desktop_snap: bool,
+    #[serde(default)]
+    pub desktop_overview_ramp: String,
+    #[serde(default = "default_desktop_overview_ms")]
+    pub desktop_overview_ms: i64,
     #[serde(default = "default_desktop_snap_threshold")]
     pub desktop_snap_threshold: i64,
     #[serde(default = "default_desktop_edge_pan")]
@@ -414,6 +423,8 @@ impl Default for SurfaceConfig {
             desktop_cell_fade_inset: default_desktop_cell_fade_inset(),
             desktop_grid_fade_mode: default_desktop_grid_fade_mode(),
             desktop_snap: default_desktop_snap(),
+            desktop_overview_ramp: String::new(),
+            desktop_overview_ms: default_desktop_overview_ms(),
             desktop_snap_threshold: default_desktop_snap_threshold(),
             desktop_edge_pan: default_desktop_edge_pan(),
             desktop_edge_pan_band: default_desktop_edge_pan_band(),
@@ -469,6 +480,10 @@ fn default_desktop_cell_fade_inset() -> i64 {
 
 fn default_desktop_grid_fade_mode() -> String {
     "linear".to_string()
+}
+
+fn default_desktop_overview_ms() -> i64 {
+    350
 }
 
 fn default_desktop_snap() -> bool {
@@ -1592,6 +1607,16 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.desktop_snap = val;
                                         }
                                     }
+                                    "overview_ramp" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surface.desktop_overview_ramp = val.to_string();
+                                        }
+                                    }
+                                    "overview_ms" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.desktop_overview_ms = val;
+                                        }
+                                    }
                                     "snap_threshold" => {
                                         if let Some(val) = entry.value().as_i64() {
                                             surface.desktop_snap_threshold = val;
@@ -1758,6 +1783,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.desktop_cell_fade_inset = get_child_arg_i64(node, "desktop_cell_fade_inset", default_desktop_cell_fade_inset());
             surface.desktop_grid_fade_mode = get_child_arg_string(node, "grid_fade_mode", &default_desktop_grid_fade_mode());
             surface.desktop_snap = get_child_arg_bool(node, "desktop_snap", default_desktop_snap());
+            surface.desktop_overview_ramp = get_child_arg_string(node, "desktop_overview_ramp", "");
+            surface.desktop_overview_ms = get_child_arg_i64(node, "desktop_overview_ms", default_desktop_overview_ms());
             surface.desktop_snap_threshold = get_child_arg_i64(node, "desktop_snap_threshold", default_desktop_snap_threshold());
             surface.desktop_edge_pan = get_child_arg_bool(node, "desktop_edge_pan", default_desktop_edge_pan());
             surface.desktop_edge_pan_band = get_child_arg_i64(node, "desktop_edge_pan_band", default_desktop_edge_pan_band());
@@ -1909,6 +1936,17 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.desktop_cell_color = parse_hex_color_rgba(&config.surface.desktop_cell_color);
     state.layout.desktop_grid_scale = config.surface.desktop_grid_scale as f64;
     state.layout.desktop_snap = config.surface.desktop_snap;
+    state.layout.overview_anim = if config.surface.desktop_overview_ramp.is_empty() {
+        None
+    } else {
+        match crate::policy::ramp::SpeedRamp::from_spec(&config.surface.desktop_overview_ramp) {
+            Some(ramp) => Some((ramp, (config.surface.desktop_overview_ms.max(16)) as f64)),
+            None => {
+                log::warn!("overview_ramp {:?} is invalid or all-zero; falling back to the exponential camera animation", config.surface.desktop_overview_ramp);
+                None
+            }
+        }
+    };
     state.layout.desktop_snap_threshold = config.surface.desktop_snap_threshold.max(0) as f64;
     state.layout.desktop_edge_pan = config.surface.desktop_edge_pan;
     state.layout.desktop_edge_pan_band = config.surface.desktop_edge_pan_band.max(1) as f64;

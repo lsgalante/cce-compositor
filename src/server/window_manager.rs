@@ -122,8 +122,13 @@ pub struct WindowManager {
     pub target_desk_pan_x: Option<f64>,
     pub target_desk_pan_y: Option<f64>,
     /// Eased alongside the pan targets by the animation tick — the overview
-    /// enter/exit transition (`SetCamera { animate: true }`).
+    /// enter/exit transition (`SetCamera { animate: true }`) when no speed
+    /// ramp is configured.
     pub target_desk_zoom: Option<f64>,
+    /// Duration-based camera transition driven by the configured
+    /// `desktop { overview_ramp= overview_ms= }` speed profile. When active
+    /// it owns the camera; the exponential targets above stay clear.
+    pub camera_ramp_anim: Option<CameraRampAnim>,
     pub animation_timer: *mut ffi::wl_event_source,
     /// Edge auto-pan velocity during an interactive move/resize, in SCREEN
     /// px/s (the tick divides by zoom). Written by `Seat::update_edge_pan`
@@ -209,6 +214,7 @@ impl WindowManager {
         self.target_desk_pan_x = None;
         self.target_desk_pan_y = None;
         self.target_desk_zoom = None;
+        self.camera_ramp_anim = None;
         self.animation_timer = std::ptr::null_mut();
         self.edge_pan_vx = 0.0;
         self.edge_pan_vy = 0.0;
@@ -843,6 +849,7 @@ impl WindowManager {
         self.target_desk_pan_x = None;
         self.target_desk_pan_y = None;
         self.target_desk_zoom = None;
+        self.camera_ramp_anim = None;
     }
 
     /// The current camera as the policy crate's plain-data snapshot.
@@ -4031,9 +4038,30 @@ impl crate::policy::api::Compositor for WindowManager {
                         self.mode = if overview { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
                     }
                     if animate {
-                        self.target_desk_pan_x = Some(camera.pan_x);
-                        self.target_desk_pan_y = Some(camera.pan_y);
-                        self.target_desk_zoom = Some(camera.zoom);
+                        if let Some((_, duration_ms)) = self.layout.overview_anim {
+                            // Ramp-driven: a fixed-duration transition from
+                            // the camera as it stands (a re-toggle mid-flight
+                            // restarts the ramp from here). The exponential
+                            // targets stay clear — the ramp owns the camera.
+                            self.camera_ramp_anim = Some(CameraRampAnim {
+                                start_pan_x: self.desk_pan_x,
+                                start_pan_y: self.desk_pan_y,
+                                start_ln_zoom: self.desk_zoom.max(1e-6).ln(),
+                                target_pan_x: camera.pan_x,
+                                target_pan_y: camera.pan_y,
+                                target_ln_zoom: camera.zoom.max(1e-6).ln(),
+                                started: std::time::Instant::now(),
+                                duration_ms,
+                            });
+                            self.target_desk_pan_x = None;
+                            self.target_desk_pan_y = None;
+                            self.target_desk_zoom = None;
+                        } else {
+                            self.camera_ramp_anim = None;
+                            self.target_desk_pan_x = Some(camera.pan_x);
+                            self.target_desk_pan_y = Some(camera.pan_y);
+                            self.target_desk_zoom = Some(camera.zoom);
+                        }
                         self.start_panning_animation();
                     } else {
                         self.desk_pan_x = camera.pan_x;
@@ -4044,6 +4072,7 @@ impl crate::policy::api::Compositor for WindowManager {
                         self.target_desk_pan_x = None;
                         self.target_desk_pan_y = None;
                         self.target_desk_zoom = None;
+                        self.camera_ramp_anim = None;
                     }
                 }
                 Command::PanTo { x, y } => {
@@ -4190,15 +4219,53 @@ pub(crate) unsafe extern "C" fn handle_edge_pan_tick(data: *mut std::ffi::c_void
     0
 }
 
+/// A duration-based camera transition: linear pan / log-space zoom
+/// interpolation, timed through the configured overview speed ramp.
+pub struct CameraRampAnim {
+    pub start_pan_x: f64,
+    pub start_pan_y: f64,
+    pub start_ln_zoom: f64,
+    pub target_pan_x: f64,
+    pub target_pan_y: f64,
+    pub target_ln_zoom: f64,
+    pub started: std::time::Instant,
+    pub duration_ms: f64,
+}
+
 pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let wm = data as *mut WindowManager;
     if wm.is_null() {
         return 0;
     }
-    
+
     let mut done = true;
     let factor = 0.15;
-    
+
+    // Ramp-driven transition: position is a pure function of elapsed time,
+    // so a stalled tick (busy frame) never changes where the camera lands.
+    if let Some(anim) = &(*wm).camera_ramp_anim {
+        let t = anim.started.elapsed().as_secs_f64() * 1000.0 / anim.duration_ms;
+        if t >= 1.0 {
+            (*wm).desk_pan_x = anim.target_pan_x;
+            (*wm).desk_pan_y = anim.target_pan_y;
+            (*wm).desk_zoom = anim.target_ln_zoom.exp();
+            (*wm).camera_ramp_anim = None;
+        } else if let Some((ramp, _)) = &(*wm).layout.overview_anim {
+            let p = ramp.progress(t);
+            (*wm).desk_pan_x = anim.start_pan_x + (anim.target_pan_x - anim.start_pan_x) * p;
+            (*wm).desk_pan_y = anim.start_pan_y + (anim.target_pan_y - anim.start_pan_y) * p;
+            (*wm).desk_zoom =
+                (anim.start_ln_zoom + (anim.target_ln_zoom - anim.start_ln_zoom) * p).exp();
+            done = false;
+        } else {
+            // Ramp was unconfigured mid-flight (reload): land instantly.
+            (*wm).desk_pan_x = anim.target_pan_x;
+            (*wm).desk_pan_y = anim.target_pan_y;
+            (*wm).desk_zoom = anim.target_ln_zoom.exp();
+            (*wm).camera_ramp_anim = None;
+        }
+    }
+
     if let Some(target_x) = (*wm).target_desk_pan_x {
         let dx = target_x - (*wm).desk_pan_x;
         if dx.abs() > 0.5 {
