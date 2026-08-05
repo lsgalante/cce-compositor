@@ -1353,6 +1353,19 @@ impl Seat {
                         (*self.server).wm.dirty_windowing();
                     }
                 }
+                // A border TAP — press+release without meaningful motion —
+                // is a click, not a drag. The press focused the window and
+                // killed any focus-follow pan (drag protection), which left
+                // a mostly-hidden window stranded: aiming at a thin content
+                // sliver at the screen edge, it is easy to land on the
+                // border band instead, focus the window, and see nothing
+                // happen. Restore the pan for taps; real drags (any actual
+                // motion) keep the camera still.
+                let dx = (op.x - op.start_x).abs();
+                let dy = (op.y - op.start_y).abs();
+                if dx < 4 && dy < 4 {
+                    self.focus_follow_pan(win);
+                }
             }
             match op.input {
                 SeatOpInput::Pointer => {
