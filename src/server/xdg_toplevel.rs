@@ -250,10 +250,21 @@ impl XdgToplevel {
                 && self.geometry.height > 0
                 && echo_w == Some(self.geometry.width as u32)
                 && echo_h == Some(self.geometry.height as u32);
+            // Timeout recovery states absorb too: a hot echo loop drives the
+            // machine into TimedOut/TimedOutAcked, and an absorb that disarms
+            // there switches itself off at exactly the moment it exists for
+            // (observed live: a title-flapping window module sustained a
+            // 372↔456 storm at state=TimedOutAcked). Only Inflight/Acked stay
+            // excluded — a real configure is mid-flight there. Absorbing
+            // leaves the timeout recovery untouched: a late ack or the next
+            // commit still walks the state back to Idle.
             if size_is_echo
                 && non_size_equal
                 && bounds_ok
-                && matches!(self.configure_state, ConfigureState::Idle | ConfigureState::Committed)
+                && !matches!(
+                    self.configure_state,
+                    ConfigureState::Inflight(..) | ConfigureState::Acked
+                )
             {
                 let absorbed_bounds = scheduled.bounds;
                 (*self.window).configure_sent.width = echo_w;
