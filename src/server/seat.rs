@@ -324,6 +324,14 @@ impl Seat {
         }
 
         if self.focused == new_focus {
+            // Re-focusing the already-focused window is still intent: a
+            // click on the sliver of a mostly-hidden focused window (or on
+            // a clipped one) should bring it over — its popups/menus open
+            // relative to the window and land off-viewport otherwise. The
+            // pan no-ops once the window is fully visible.
+            if let Focus::Window(window) = new_focus {
+                self.focus_follow_pan(window);
+            }
             return;
         }
 
@@ -430,23 +438,13 @@ impl Seat {
                     false
                 };
 
-                // Floating AND maximized windows live at real desk-plane coordinates,
-                // so focus pans the viewport to either; fullscreen is pinned to an
-                // output and popups/overlays aren't desk citizens.
-                if !window.is_null()
-                    && matches!(
-                        (*window).tiling_mode,
-                        crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Maximized
-                    )
-                {
-                    let app_id = (*window).get_app_id_string();
-                    let is_cce_cloud = app_id.as_ref().map(|id| id == "cce-cloud").unwrap_or(false);
-                    // A window newly on screen pulls the viewport over to it only when
-                    // `window_manager.center_on_spawn` allows it; one coming back from the
-                    // saved session at startup never did. Reopening an app mid-session is a
-                    // spawn even though `restored` is set — it only borrowed its old geometry
-                    // from `last_window_states`. Focus moving between windows that were
-                    // already up still pans either way; the key is about spawning.
+                // A window newly on screen pulls the viewport over to it only when
+                // `window_manager.center_on_spawn` allows it; one coming back from the
+                // saved session at startup never did. Reopening an app mid-session is a
+                // spawn even though `restored` is set — it only borrowed its old geometry
+                // from `last_window_states`. Focus moving between windows that were
+                // already up still pans either way; the key is about spawning.
+                if !window.is_null() {
                     let spawn_pan = !(*window).session_restored
                         && !(*window).hint_placed
                         && (*self.server).wm.center_on_spawn;
@@ -459,97 +457,11 @@ impl Seat {
                     // other, except for placement-hinted spawns (pickers that
                     // open at their control and must not yank the camera).
                     let user_focus = (*self.server).wm.startup_input_seen && !(*window).hint_placed;
-                    let should_pan = (!is_new || spawn_pan || user_focus) && !is_cce_cloud;
-                    if should_pan {
-                        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                        let mut curr_out = (*outputs_list).next;
-                        let mut target_output: *mut crate::output::Output = std::ptr::null_mut();
-                        while curr_out != outputs_list {
-                            let output = crate::container_of!(curr_out, crate::output::Output, link);
-                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                                if target_output.is_null() {
-                                    target_output = output;
-                                }
-                                let wlr_box = (*output).sent.box_layout();
-                                let wx = (*window).box_geom.x;
-                                let wy = (*window).box_geom.y;
-                                if wx >= wlr_box.x && wx < wlr_box.x + wlr_box.width
-                                    && wy >= wlr_box.y && wy < wlr_box.y + wlr_box.height
-                                {
-                                    target_output = output;
-                                    break;
-                                }
-                            }
-                            curr_out = (*curr_out).next;
-                        }
-
-                        if !target_output.is_null() {
-                            let wlr_box = (*target_output).sent.box_layout();
-                            let viewport_w = wlr_box.width as f64;
-                            let viewport_h = wlr_box.height as f64;
-
-                            let fw = if (*window).box_geom.width > 0 {
-                                (*window).box_geom.width as f64
-                            } else if (*window).wm_scheduled.dimensions_hint.min_width > 32 {
-                                (*window).wm_scheduled.dimensions_hint.min_width as f64
-                            } else {
-                                800.0
-                            };
-                            let fh = if (*window).box_geom.height > 0 {
-                                (*window).box_geom.height as f64
-                            } else if (*window).wm_scheduled.dimensions_hint.min_height > 32 {
-                                (*window).wm_scheduled.dimensions_hint.min_height as f64
-                            } else {
-                                600.0
-                            };
-
-                            let wm = &mut (*self.server).wm;
-                            let cam = wm.camera();
-                            // fw/fh are screen px; the window's virtual
-                            // footprint is that over zoom.
-                            let vw_w = fw / cam.zoom;
-                            let vw_h = fh / cam.zoom;
-                            let visible = crate::policy::camera::visible_fraction(
-                                (*window).virtual_x,
-                                (*window).virtual_y,
-                                vw_w,
-                                vw_h,
-                                cam,
-                                viewport_w,
-                                viewport_h,
-                            );
-
-                            if visible < crate::policy::camera::FOCUS_VISIBLE_THRESHOLD {
-                                let target = crate::policy::camera::center_on(
-                                    (*window).virtual_x + vw_w / 2.0,
-                                    (*window).virtual_y + vw_h / 2.0,
-                                    viewport_w,
-                                    viewport_h,
-                                    cam.zoom,
-                                );
-                                wm.target_desk_pan_x = Some(target.pan_x);
-                                wm.target_desk_pan_y = Some(target.pan_y);
-                                wm.start_panning_animation();
-                            } else if let Some(target) = crate::policy::camera::nudge_into_view(
-                                (*window).virtual_x,
-                                (*window).virtual_y,
-                                vw_w,
-                                vw_h,
-                                cam,
-                                viewport_w,
-                                viewport_h,
-                            ) {
-                                // Mostly visible but clipped: slide the
-                                // clipped edge on-screen instead of
-                                // recentering — focusing a window should
-                                // never leave part of it hanging off.
-                                wm.target_desk_pan_x = Some(target.pan_x);
-                                wm.target_desk_pan_y = Some(target.pan_y);
-                                wm.start_panning_animation();
-                            }
-                        }
+                    if !is_new || spawn_pan || user_focus {
+                        self.focus_follow_pan(window);
                     }
                 }
+
 
                 // Focus root surface of window
                 let surface = (*window).root_surface();
@@ -878,6 +790,114 @@ impl Seat {
                 }
             }
             crate::layer_shell::LayerShellSeatFocus::None => {}
+        }
+    }
+
+
+    /// Focus-follow: pan the camera to a focused Floating/Maximized window —
+    /// centering when it is mostly hidden, nudging a clipped edge into view
+    /// otherwise. Fullscreen is pinned to an output and popups/overlays are
+    /// not desk citizens, so other modes no-op, as do cce-cloud and windows
+    /// already fully visible.
+    pub unsafe fn focus_follow_pan(&mut self, window: *mut crate::window::Window) {
+        if window.is_null()
+            || !matches!(
+                (*window).tiling_mode,
+                crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Maximized
+            )
+        {
+            return;
+        }
+        let app_id = (*window).get_app_id_string();
+        if app_id.as_ref().map(|id| id == "cce-cloud").unwrap_or(false) {
+            return;
+        }
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        let mut target_output: *mut crate::output::Output = std::ptr::null_mut();
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                if target_output.is_null() {
+                    target_output = output;
+                }
+                let wlr_box = (*output).sent.box_layout();
+                let wx = (*window).box_geom.x;
+                let wy = (*window).box_geom.y;
+                if wx >= wlr_box.x && wx < wlr_box.x + wlr_box.width
+                    && wy >= wlr_box.y && wy < wlr_box.y + wlr_box.height
+                {
+                    target_output = output;
+                    break;
+                }
+            }
+            curr_out = (*curr_out).next;
+        }
+
+        if !target_output.is_null() {
+            let wlr_box = (*target_output).sent.box_layout();
+            let viewport_w = wlr_box.width as f64;
+            let viewport_h = wlr_box.height as f64;
+
+            let fw = if (*window).box_geom.width > 0 {
+                (*window).box_geom.width as f64
+            } else if (*window).wm_scheduled.dimensions_hint.min_width > 32 {
+                (*window).wm_scheduled.dimensions_hint.min_width as f64
+            } else {
+                800.0
+            };
+            let fh = if (*window).box_geom.height > 0 {
+                (*window).box_geom.height as f64
+            } else if (*window).wm_scheduled.dimensions_hint.min_height > 32 {
+                (*window).wm_scheduled.dimensions_hint.min_height as f64
+            } else {
+                600.0
+            };
+
+            let wm = &mut (*self.server).wm;
+            let cam = wm.camera();
+            // fw/fh are screen px; the window's virtual
+            // footprint is that over zoom.
+            let vw_w = fw / cam.zoom;
+            let vw_h = fh / cam.zoom;
+            let visible = crate::policy::camera::visible_fraction(
+                (*window).virtual_x,
+                (*window).virtual_y,
+                vw_w,
+                vw_h,
+                cam,
+                viewport_w,
+                viewport_h,
+            );
+
+            if visible < crate::policy::camera::FOCUS_VISIBLE_THRESHOLD {
+                let target = crate::policy::camera::center_on(
+                    (*window).virtual_x + vw_w / 2.0,
+                    (*window).virtual_y + vw_h / 2.0,
+                    viewport_w,
+                    viewport_h,
+                    cam.zoom,
+                );
+                wm.target_desk_pan_x = Some(target.pan_x);
+                wm.target_desk_pan_y = Some(target.pan_y);
+                wm.start_panning_animation();
+            } else if let Some(target) = crate::policy::camera::nudge_into_view(
+                (*window).virtual_x,
+                (*window).virtual_y,
+                vw_w,
+                vw_h,
+                cam,
+                viewport_w,
+                viewport_h,
+            ) {
+                // Mostly visible but clipped: slide the
+                // clipped edge on-screen instead of
+                // recentering — focusing a window should
+                // never leave part of it hanging off.
+                wm.target_desk_pan_x = Some(target.pan_x);
+                wm.target_desk_pan_y = Some(target.pan_y);
+                wm.start_panning_animation();
+            }
         }
     }
 
