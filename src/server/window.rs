@@ -2061,8 +2061,18 @@ impl Window {
                 }
                 _ => 0,
             };
-            let actual_w = if self.rendering_sent.width > 0 { self.rendering_sent.width } else { toplevel_w as u32 };
-            let actual_h = if self.rendering_sent.height > 0 { self.rendering_sent.height } else { toplevel_h as u32 };
+            // Status segments are self-sizing: their committed geometry is
+            // fresher than the render-start snapshot (`rendering_sent`),
+            // which lags an expand/contract commit by a render pass — same
+            // rule as the commit-path blur sizing in xdg_toplevel.rs.
+            let (actual_w, actual_h) = if is_status && toplevel_w > 0 && toplevel_h > 0 {
+                (toplevel_w as u32, toplevel_h as u32)
+            } else {
+                (
+                    if self.rendering_sent.width > 0 { self.rendering_sent.width } else { toplevel_w as u32 },
+                    if self.rendering_sent.height > 0 { self.rendering_sent.height } else { toplevel_h as u32 },
+                )
+            };
             // Widen squircle corners to the span the clients draw (see
             // widen_corner_radius); circles already sit at the half-extent cap.
             let radius = if requested.circular { radius } else { widen_corner_radius(radius, actual_w as i32, actual_h as i32) };
@@ -2503,8 +2513,15 @@ impl Window {
                     }
                     _ => 0,
                 };
-                let actual_w = if self.rendering_sent.width > 0 { self.rendering_sent.width } else { toplevel_w as u32 };
-                let actual_h = if self.rendering_sent.height > 0 { self.rendering_sent.height } else { toplevel_h as u32 };
+                // Same self-sizing rule as set_rendering_state above.
+                let (actual_w, actual_h) = if is_status && toplevel_w > 0 && toplevel_h > 0 {
+                    (toplevel_w as u32, toplevel_h as u32)
+                } else {
+                    (
+                        if self.rendering_sent.width > 0 { self.rendering_sent.width } else { toplevel_w as u32 },
+                        if self.rendering_sent.height > 0 { self.rendering_sent.height } else { toplevel_h as u32 },
+                    )
+                };
                 // Same span widening as set_rendering_state — the two paths
                 // drive the same blur node and must agree.
                 let radius = if requested.circular { radius } else { widen_corner_radius(radius, actual_w as i32, actual_h as i32) };

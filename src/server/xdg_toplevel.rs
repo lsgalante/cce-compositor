@@ -530,13 +530,24 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         ignore_transparent = (*(*window).server).wm.layout.status_backdrop_blur_ignore_transparent;
     }
     let scale = (*window).scale;
-    let actual_w = if (*window).rendering_sent.width > 0 { (*window).rendering_sent.width } else { (*toplevel).geometry.width as u32 };
-    let actual_h = if (*window).rendering_sent.height > 0 { (*window).rendering_sent.height } else { (*toplevel).geometry.height as u32 };
-    let geom_w = (actual_w as f64 * scale) as i32;
-    let geom_h = (actual_h as f64 * scale) as i32;
-    let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
+    let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status ||
                     app_id.starts_with("cce-status");
     let is_cce_app = app_id.starts_with("cce-");
+    // Status segments are SELF-sizing (their bounds track their own box), so
+    // the geometry of the commit being handled is the truth. `rendering_sent`
+    // is a render-start snapshot that lags a contract commit by a render pass
+    // — sizing the blur from it left a menu-sized blur ghost hanging below
+    // the strip until the next commit re-ran this path.
+    let (actual_w, actual_h) = if is_status && (*toplevel).geometry.width > 0 && (*toplevel).geometry.height > 0 {
+        ((*toplevel).geometry.width as u32, (*toplevel).geometry.height as u32)
+    } else {
+        (
+            if (*window).rendering_sent.width > 0 { (*window).rendering_sent.width } else { (*toplevel).geometry.width as u32 },
+            if (*window).rendering_sent.height > 0 { (*window).rendering_sent.height } else { (*toplevel).geometry.height as u32 },
+        )
+    };
+    let geom_w = (actual_w as f64 * scale) as i32;
+    let geom_h = (actual_h as f64 * scale) as i32;
     // Must mirror Window::set_rendering_state's radius exactly: both paths drive the same
     // blur node, so if they disagree the corners flip between rounded and square depending
     // on which one ran last.
@@ -546,6 +557,10 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         let w = (*window).rendering_sent.width as i32;
         let h = (*window).rendering_sent.height as i32;
         w.min(h) / 2
+    } else if is_status {
+        // Same status exemption as Window::set_rendering_state (part of the
+        // mirror): status segments draw their own module-box corners.
+        0
     } else if (*window).wm_requested.ssd || is_cce_app {
         (*(*window).server).wm.layout.backplate_corner_radius
     } else {
