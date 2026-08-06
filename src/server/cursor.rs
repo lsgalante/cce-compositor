@@ -800,6 +800,50 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             return;
         }
 
+        // Click-away-close for in-surface status menus: if any status
+        // segment is expanded (menu open) and this press did not land on it,
+        // push a one-shot dismiss over the status socket. The line carries
+        // the pressed segment's app_id so a press ON an expanded segment
+        // exempts that segment (it handles its own clicks) while still
+        // dismissing any other open menu.
+        {
+            let mut target_status: *mut crate::window::Window = std::ptr::null_mut();
+            if let Some(result) = (*server).scene.at(lx, ly) {
+                if let SceneNodeDataVal::Window(window) = result.data {
+                    if (*window).is_status_bar() {
+                        target_status = window;
+                    }
+                }
+            }
+            let bar_h = (*server).wm.layout.bar_height;
+            let any_other_expanded = (*server).wm.windows.iter().any(|&w| {
+                !w.is_null()
+                    && !(*w).closed
+                    && w != target_status
+                    && (*w).is_status_bar()
+                    && matches!((*w).state, crate::window::WindowState::Mapped)
+                    && {
+                        let bg = (*w).box_geom;
+                        let thickness = match (*w).status_edge {
+                            crate::policy::arrange::StatusEdge::Left
+                            | crate::policy::arrange::StatusEdge::Right => bg.width,
+                            _ => bg.height,
+                        };
+                        thickness > bar_h
+                    }
+            });
+            if any_other_expanded {
+                let except = if target_status.is_null() {
+                    "-".to_string()
+                } else {
+                    (*target_status).get_app_id_string().unwrap_or_else(|| "-".to_string())
+                };
+                if let Some(ref sender) = (*server).wm.status_sender {
+                    sender.send_menu_dismiss(&except);
+                }
+            }
+        }
+
         // Status-bar segments are dragged either in adjust-position mode or
         // directly with super+left-drag (0x40 = WLR_MODIFIER_LOGO).
         let super_held = {

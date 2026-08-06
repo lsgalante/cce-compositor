@@ -24,6 +24,17 @@ pub struct StatusUpdate {
     pub modifiers_text: String,
 }
 
+/// A message from the main loop to the server thread: either a new state
+/// snapshot for the state topics, or a one-shot menu-dismiss event.
+#[derive(Debug, Clone)]
+pub enum StatusMsg {
+    State(StatusUpdate),
+    /// Click-away-close for in-surface status menus: every `dismiss`
+    /// subscriber EXCEPT the segment whose app_id is carried here should
+    /// close its open menu (the exempt segment saw the press itself).
+    MenuDismiss { except_app_id: String },
+}
+
 /// Subscription types that the status bar script can request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Subscription {
@@ -31,6 +42,8 @@ enum Subscription {
     Layout,
     Title,
     Modifiers,
+    /// One-shot menu-dismiss events only — never receives state pushes.
+    Dismiss,
     Unknown,
 }
 
@@ -41,6 +54,7 @@ impl Subscription {
             "layout" => Subscription::Layout,
             "title" => Subscription::Title,
             "modifiers" => Subscription::Modifiers,
+            "dismiss" => Subscription::Dismiss,
             _ => Subscription::Unknown,
         }
     }
@@ -55,13 +69,19 @@ struct Client {
 /// Handle to the status server for sending updates from the main loop.
 #[derive(Debug, Clone)]
 pub struct StatusSender {
-    tx: mpsc::Sender<StatusUpdate>,
+    tx: mpsc::Sender<StatusMsg>,
 }
 
 impl StatusSender {
     pub fn send(&self, update: StatusUpdate) {
         // If the channel is full or the receiver is gone, just drop it.
-        let _ = self.tx.send(update);
+        let _ = self.tx.send(StatusMsg::State(update));
+    }
+
+    /// Fire a one-shot menu-dismiss at every `dismiss` subscriber except the
+    /// segment with this app_id (pass "-" to exempt nobody).
+    pub fn send_menu_dismiss(&self, except_app_id: &str) {
+        let _ = self.tx.send(StatusMsg::MenuDismiss { except_app_id: except_app_id.to_string() });
     }
 }
 
@@ -75,7 +95,7 @@ pub fn get_status_socket_path(display_socket: Option<&str>) -> String {
 
 /// Spawn the status server thread. Returns a StatusSender for the main loop.
 pub fn spawn_status_server(display_socket: Option<String>) -> StatusSender {
-    let (tx, rx) = mpsc::channel::<StatusUpdate>();
+    let (tx, rx) = mpsc::channel::<StatusMsg>();
 
     std::thread::Builder::new()
         .name("cce-status-server".into())
@@ -87,7 +107,7 @@ pub fn spawn_status_server(display_socket: Option<String>) -> StatusSender {
     StatusSender { tx }
 }
 
-fn status_server_main(rx: mpsc::Receiver<StatusUpdate>, display_socket: Option<String>) {
+fn status_server_main(rx: mpsc::Receiver<StatusMsg>, display_socket: Option<String>) {
     let socket_path = get_status_socket_path(display_socket.as_deref());
     // Remove stale socket
     let _ = std::fs::remove_file(&socket_path);
@@ -147,12 +167,17 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>, display_socket: Option<S
         }
 
         // Process incoming updates from the main loop
+        let mut dismiss_events: Vec<String> = Vec::new();
         loop {
             match rx.try_recv() {
-                Ok(update) => {
+                Ok(StatusMsg::State(update)) => {
                     latest = Some(update);
                     activity = true;
                     has_new_update = true;
+                }
+                Ok(StatusMsg::MenuDismiss { except_app_id }) => {
+                    dismiss_events.push(except_app_id);
+                    activity = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -163,12 +188,46 @@ fn status_server_main(rx: mpsc::Receiver<StatusUpdate>, display_socket: Option<S
             }
         }
 
+        // One-shot dismiss lines go only to `dismiss` subscribers; the line
+        // payload is the exempt app_id.
+        if !dismiss_events.is_empty() {
+            let mut dead_clients = Vec::new();
+            for (i, client) in clients.iter_mut().enumerate() {
+                if client.subscription != Subscription::Dismiss {
+                    continue;
+                }
+                for except in &dismiss_events {
+                    match client
+                        .stream
+                        .write_all(except.as_bytes())
+                        .and_then(|_| client.stream.write_all(b"\n"))
+                    {
+                        Ok(_) => {}
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(_) => {
+                            dead_clients.push(i);
+                            break;
+                        }
+                    }
+                }
+            }
+            dead_clients.dedup();
+            for i in dead_clients.into_iter().rev() {
+                clients.remove(i);
+            }
+        }
+
         // If we got a new update, push it to all clients
         if has_new_update {
             if let Some(ref update) = latest {
                 let mut dead_clients = Vec::new();
 
                 for (i, client) in clients.iter_mut().enumerate() {
+                    // Dismiss subscribers get one-shot events only, never
+                    // state pushes.
+                    if client.subscription == Subscription::Dismiss {
+                        continue;
+                    }
                     let msg = format_for_subscription(client.subscription, update);
                     match client
                         .stream
@@ -232,7 +291,7 @@ fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
         Subscription::Layout => update.layout_text.clone(),
         Subscription::Title => update.title_text.clone(),
         Subscription::Modifiers => update.modifiers_text.clone(),
-        Subscription::Unknown => String::new(),
+        Subscription::Dismiss | Subscription::Unknown => String::new(),
     }
 }
 
