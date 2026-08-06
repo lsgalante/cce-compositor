@@ -89,6 +89,9 @@ pub struct WindowManager {
     pub gesture_binds: Vec<crate::config::GestureBind>,
     pub ipc_rx: Option<std::sync::mpsc::Receiver<crate::ipc_server::IpcRequest>>,
     pub ipc_timer: *mut ffi::wl_event_source,
+    /// Minute tick for the traveling light_source segment: re-arranges so
+    /// its perimeter position follows the time of day.
+    pub sun_timer: *mut ffi::wl_event_source,
     /// Window-stream subscribers (cce-remote's live view); frames are
     /// produced by `handle_stream_timer` when a subscribed window is dirty.
     pub stream_hub: Option<crate::stream_server::StreamHub>,
@@ -243,6 +246,7 @@ impl WindowManager {
         self.gesture_binds = Vec::new();
         self.ipc_rx = None;
         self.ipc_timer = std::ptr::null_mut();
+        self.sun_timer = std::ptr::null_mut();
         self.stream_hub = None;
         self.stream_timer = std::ptr::null_mut();
         self.startup = Vec::new();
@@ -273,6 +277,14 @@ impl WindowManager {
             return Err("Failed to create IPC timer event source");
         }
         ffi::wl_event_source_timer_update(self.ipc_timer, 10);
+
+        self.sun_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_sun_timer), self as *mut WindowManager as *mut _);
+        if self.sun_timer.is_null() {
+            ffi::wl_event_source_remove(self.timeout);
+            ffi::wl_event_source_remove(self.ipc_timer);
+            return Err("Failed to create sun timer event source");
+        }
+        ffi::wl_event_source_timer_update(self.sun_timer, 60_000);
 
         self.clean_exit_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_clean_exit_timeout), self as *mut WindowManager as *mut _);
         if self.clean_exit_timer.is_null() {
@@ -892,6 +904,10 @@ impl WindowManager {
         if !self.clean_exit_timer.is_null() {
             ffi::wl_event_source_remove(self.clean_exit_timer);
             self.clean_exit_timer = std::ptr::null_mut();
+        }
+        if !self.sun_timer.is_null() {
+            ffi::wl_event_source_remove(self.sun_timer);
+            self.sun_timer = std::ptr::null_mut();
         }
         if !self.animation_timer.is_null() {
             ffi::wl_event_source_remove(self.animation_timer);
@@ -1808,6 +1824,7 @@ impl WindowManager {
             status_hide_mode: self.status_hide_mode,
             hide_mode_preview: self.layout.status_module_hide_mode_preview as i32,
             status_module_spacing: self.layout.status_module_spacing as i32,
+            day_fraction: Some(local_day_fraction()),
             status_blur: self.layout.status_background_blur > 0.001,
             window_blur: self.layout.window_blur,
             opacity_enabled: self.layout.window_opacity,
@@ -3704,6 +3721,31 @@ impl WindowManager {
             Err("No config file found".to_string())
         }
     }
+}
+
+/// Local time as a fraction of the day (0 = midnight, 0.5 = noon) — the
+/// input driving the light_source segment's perimeter position.
+pub fn local_day_fraction() -> f64 {
+    unsafe {
+        let now = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&now, &mut tm).is_null() {
+            return 0.5;
+        }
+        (tm.tm_hour as f64 * 3600.0 + tm.tm_min as f64 * 60.0 + tm.tm_sec as f64) / 86400.0
+    }
+}
+
+/// Minute tick: the light_source segment's perimeter position depends on the
+/// time of day, so a periodic re-arrange keeps it drifting (~a few px/min).
+unsafe extern "C" fn handle_sun_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = data as *mut WindowManager;
+    if wm.is_null() {
+        return 0;
+    }
+    (*wm).dirty_windowing();
+    ffi::wl_event_source_timer_update((*wm).sun_timer, 60_000);
+    0
 }
 
 unsafe extern "C" fn handle_ipc_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
