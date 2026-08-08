@@ -296,7 +296,21 @@ fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
 }
 
 pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> StatusUpdate {
-    let focused_window = wm.focused_window();
+    // `focused_window()` falls back to the most recent real window so the
+    // bar doesn't flash while overlay UI (the launcher) briefly holds
+    // focus. But an explicit Focus::None (desktop click) is a real,
+    // user-visible state — keystrokes go nowhere — and the status feed
+    // must report it honestly instead of showing the last window as if it
+    // still had focus.
+    let seat_focus_is_none = wm
+        .first_seat()
+        .map(|s| matches!((*s).focused, crate::seat::Focus::None))
+        .unwrap_or(false);
+    let focused_window = if seat_focus_is_none {
+        std::ptr::null_mut()
+    } else {
+        wm.focused_window()
+    };
 
     let text = format!("Mode: {:?} | Zoom: {:.2} | Pan: ({:.0}, {:.0})", wm.mode, wm.desk_zoom, wm.desk_pan_x, wm.desk_pan_y);
     let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
