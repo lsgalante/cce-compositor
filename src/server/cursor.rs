@@ -546,12 +546,14 @@ impl Cursor {
                     if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                         is_window = true;
                     }
+                    // No mode gate: the band scales with the window
+                    // (get_border_zone is zoom-aware), so the resize/move
+                    // controls reveal and work at any zoom, not just 1.
                     if !(*window).is_status_bar()
                         && !(*window).is_wallpaper()
                         && (*window).tiling_mode != crate::tiling::TilingMode::Popup
                         && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
                         && (*window).tiling_mode != crate::tiling::TilingMode::Status
-                        && (*server).wm.mode == crate::window_manager::WindowManagerMode::Normal
                     {
                         match get_border_zone(window, lx, ly) {
                             BorderZone::Resize(edges) => {
@@ -900,7 +902,19 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 }
             }
 
-            if !clicked_win.is_null() && !(*clicked_win).is_status_bar() && !(*clicked_win).is_wallpaper() {
+            // A press on the border band falls through to the normal
+            // border path below (move/resize by zone, zoom-aware) — the
+            // resize controls work at any zoom. Content presses grab the
+            // whole window; true background presses exit overview.
+            let overview_win_valid = !clicked_win.is_null()
+                && !(*clicked_win).is_status_bar()
+                && !(*clicked_win).is_wallpaper();
+            let overview_border_zone = if overview_win_valid {
+                get_border_zone(clicked_win, lx, ly)
+            } else {
+                BorderZone::None
+            };
+            if overview_win_valid && matches!(overview_border_zone, BorderZone::None) {
                 (*server).wm.stop_panning_animation();
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
@@ -929,7 +943,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 cursor.pressed.insert((*event).button, None);
                 cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
                 return;
-            } else {
+            } else if !overview_win_valid {
                 cursor.left_click_on_bg_in_overview = true;
                 (*server).wm.execute_action(&crate::config::Action::Expose, None);
                 cursor.pressed.insert((*event).button, None);
@@ -2399,9 +2413,6 @@ pub enum BorderZone {
 pub use crate::window::HOVER_BAND_MIN;
 
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
-    if (*(*window).server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
-        return BorderZone::None;
-    }
     if (*window).tiling_mode == crate::tiling::TilingMode::Popup
         || (*window).tiling_mode == crate::tiling::TilingMode::Fullscreen
         || (*window).tiling_mode == crate::tiling::TilingMode::Status
