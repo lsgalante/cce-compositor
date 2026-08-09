@@ -368,6 +368,23 @@ impl Cursor {
         self.passthrough(crate::util::msec_timestamp());
     }
 
+    /// Re-evaluate pointer focus at the current position after the scene
+    /// mapping changed beneath a STATIONARY cursor — a commit moved/resized a
+    /// surface or re-anchored its window geometry. No motion fired (the
+    /// cursor did not move), so enter/leave and the surface-local coordinates
+    /// would otherwise go stale and the next click could be dispatched
+    /// against the old mapping or dropped entirely (the cce-ui overflow-rim
+    /// popovers exposed exactly this). Skips seats mid-op: the compositor
+    /// owns the pointer during a drag/resize op and `op_end_pointer` restores
+    /// focus itself; an implicit client grab is already handled inside
+    /// `passthrough`.
+    pub unsafe fn refresh_after_scene_change(&mut self) {
+        if (*self.seat).op.is_some() {
+            return;
+        }
+        self.update_state();
+    }
+
     pub unsafe fn update_drag_icons(&mut self) {
         let drag_icons_tree = (*(*self.seat).server).scene.drag_icons;
         let children_head = ffi::river_scene_tree_get_children(drag_icons_tree) as *mut WlList;

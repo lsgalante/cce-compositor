@@ -20,6 +20,9 @@ pub struct XdgToplevel {
     pub wlr_toplevel: *mut ffi::wlr_xdg_toplevel,
     pub decoration: *mut XdgDecoration,
     pub geometry: ffi::wlr_box,
+    /// Surface extent as of the last commit — with `geometry`, the mapping
+    /// change detector for the deferred pointer refresh (see `handle_commit`).
+    pub last_surface_size: (i32, i32),
     pub configure_state: ConfigureState,
 
     pub destroy: ffi::wl_listener,
@@ -59,6 +62,7 @@ impl XdgToplevel {
             wlr_toplevel,
             decoration: std::ptr::null_mut(),
             geometry: std::mem::zeroed(),
+            last_surface_size: (0, 0),
             configure_state: ConfigureState::Idle,
 
             destroy: std::mem::zeroed(),
@@ -520,9 +524,37 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let toplevel = crate::container_of!(listener, XdgToplevel, commit);
     let window = (*toplevel).window;
     let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
+    let old_geometry = (*toplevel).geometry;
     let mut new_geometry = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
     (*toplevel).geometry = new_geometry;
+
+    // A commit that changes the window-geometry box or the surface extent
+    // changes the surface↔frame mapping under a STATIONARY cursor (the scene
+    // helper re-anchors the subtree by -geometry; a grown buffer adds
+    // hoverable area): pointer focus and surface-local coords go stale with
+    // no motion to fix them, and the next click is dispatched against the old
+    // mapping or dropped — the cce-ui overflow-rim popovers exposed this.
+    // Deferred to idle: wlroots' own scene commit listeners re-anchor AFTER
+    // this handler, so an inline refresh would query the stale scene.
+    {
+        let surface = ffi::river_wlr_xdg_surface_get_surface(base);
+        let surf_size = (
+            ffi::river_wlr_surface_get_width(surface),
+            ffi::river_wlr_surface_get_height(surface),
+        );
+        let mapping_changed = old_geometry.x != new_geometry.x
+            || old_geometry.y != new_geometry.y
+            || old_geometry.width != new_geometry.width
+            || old_geometry.height != new_geometry.height
+            || surf_size != (*toplevel).last_surface_size;
+        (*toplevel).last_surface_size = surf_size;
+        if mapping_changed
+            && matches!((*window).state, crate::window::WindowState::Mapped)
+        {
+            (*(*window).server).input_manager.schedule_pointer_refresh();
+        }
+    }
 
     let app_id = (*window).get_app_id_string().unwrap_or_default();
     let mut ignore_transparent = (*(*window).server).wm.layout.window_backdrop_blur_ignore_transparent;

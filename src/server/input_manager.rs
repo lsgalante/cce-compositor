@@ -27,6 +27,11 @@ pub struct InputManager {
     pub new_text_input: ffi::wl_listener,
     pub new_input_method: ffi::wl_listener,
     pub new_virtual_pointer_listener: ffi::wl_listener,
+
+    /// Pending deferred pointer-focus re-evaluation (see
+    /// [`InputManager::schedule_pointer_refresh`]); null when none. One idle
+    /// source coalesces every scene-mapping change of a dispatch.
+    pub pointer_refresh_idle: *mut ffi::wl_event_source,
 }
 
 pub struct InputManagerObject {
@@ -102,8 +107,37 @@ impl InputManager {
         Ok(())
     }
 
+    /// Schedule a pointer-focus re-evaluation for every seat, deferred to an
+    /// idle callback and coalesced (one source no matter how many commits
+    /// land in a dispatch). Used when a commit changes the surface↔frame
+    /// mapping under a stationary cursor — geometry re-anchor or surface
+    /// extent change. Deferred, NOT inline: wlroots' own scene commit
+    /// listeners re-anchor the surface tree AFTER the compositor's toplevel
+    /// commit handler runs, so an inline refresh would query the stale
+    /// mapping.
+    pub unsafe fn schedule_pointer_refresh(&mut self) {
+        if !self.pointer_refresh_idle.is_null() {
+            return;
+        }
+        let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+        let idle = ffi::wl_event_loop_add_idle(
+            event_loop,
+            Some(handle_pointer_refresh_idle),
+            self as *mut InputManager as *mut _,
+        );
+        if idle.is_null() {
+            log::error!("Failed to schedule pointer-refresh idle source");
+            return;
+        }
+        self.pointer_refresh_idle = idle;
+    }
+
     pub unsafe fn deinit(&mut self) {
         log::info!("[deinit] InputManager::deinit started");
+        if !self.pointer_refresh_idle.is_null() {
+            ffi::wl_event_source_remove(self.pointer_refresh_idle);
+            self.pointer_refresh_idle = std::ptr::null_mut();
+        }
         if !self.global.is_null() {
             log::info!("[deinit] destroying input manager global");
             ffi::wl_global_destroy(self.global);
@@ -398,4 +432,17 @@ unsafe extern "C" fn handle_new_virtual_pointer(listener: *mut ffi::wl_listener,
 
     // Attach device to the default seat
     (*im.default_seat).attach_device(device);
+}
+
+unsafe extern "C" fn handle_pointer_refresh_idle(data: *mut std::ffi::c_void) {
+    let manager = data as *mut InputManager;
+    (*manager).pointer_refresh_idle = std::ptr::null_mut();
+    let seats_head = &mut (*manager).seats as *mut ffi::wl_list as *mut WlList;
+    let mut curr = (*seats_head).next;
+    while curr != seats_head {
+        let next = (*curr).next;
+        let seat = crate::container_of!(curr, Seat, link);
+        (*seat).cursor.refresh_after_scene_change();
+        curr = next;
+    }
 }
