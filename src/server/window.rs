@@ -938,7 +938,11 @@ impl Window {
 
             self.restored = true;
             self.session_restored = from_session;
-            self.restored_focused = saved.focused;
+            // The saved `focused` flag only means something for the startup
+            // restore queue; on a `last_window_states` borrow it is stale
+            // (whether the app happened to be focused when last closed) and
+            // must not feed the settle-phase focus gates.
+            self.restored_focused = from_session && saved.focused;
         }
     }
 
@@ -1119,7 +1123,7 @@ impl Window {
             }
         } else {
             let mut should_focus = true;
-            if self.restored && self.restored_focused {
+            if self.session_restored && self.restored_focused {
                 (*self.server).wm.restored_focused_window_mapped = true;
                 if (*self.server).wm.startup_input_seen {
                     // The user already typed/clicked somewhere (e.g. into
@@ -1146,9 +1150,13 @@ impl Window {
             } else if (*self.server).wm.has_restored_focused_window
                 && (*self.server).wm.restored_focused_window_mapped
             {
-                if self.restored {
+                if self.session_restored {
                     // A restored sibling mapping after the session's focused
-                    // window: never steal back.
+                    // window: never steal back. Only true session restores —
+                    // a mid-session spawn that borrowed geometry from
+                    // last_window_states is a fresh launch and must focus
+                    // (and spawn-pan) normally, else it maps invisible at
+                    // its remembered off-viewport spot for the whole session.
                     log::info!("[FocusRestore] Blocking focus to non-focused restored window {:?} because restored focused window is already mapped", self.get_title());
                     should_focus = false;
                 } else if !(*self.server).wm.startup_input_seen {
