@@ -2576,14 +2576,16 @@ impl WindowManager {
     pub unsafe fn process_ipc_command(&mut self, cmd: &str) -> String {
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
-            self.stop_panning_animation();
             return "error: empty command\n".to_string();
         }
-        
+
+        // No blanket stop_panning_animation here: it killed any camera
+        // flight on EVERY IPC command — a `windows --json` poll or a
+        // status-bar ccectl call landing mid-transition froze the camera
+        // partway, silently. Commands that change the camera cancel
+        // in-flight animation themselves (policy StopPanAnimation, the
+        // instant SetCamera arm, seat op starts).
         let action = parts[0];
-        if action != "focus-window" {
-            self.stop_panning_animation();
-        }
         match action {
             // Scene introspection: dump EVERY buffer in the whole scene —
             // layer, layout position, dest/natural size, owning client pid.
@@ -4192,12 +4194,8 @@ impl crate::policy::api::Compositor for WindowManager {
                             // restarts the ramp from here). The exponential
                             // targets stay clear — the ramp owns the camera.
                             self.camera_ramp_anim = Some(CameraRampAnim {
-                                start_pan_x: self.desk_pan_x,
-                                start_pan_y: self.desk_pan_y,
-                                start_ln_zoom: self.desk_zoom.max(1e-6).ln(),
-                                target_pan_x: camera.pan_x,
-                                target_pan_y: camera.pan_y,
-                                target_ln_zoom: camera.zoom.max(1e-6).ln(),
+                                start: self.camera(),
+                                target: camera,
                                 started: std::time::Instant::now(),
                                 duration_ms,
                             });
@@ -4367,15 +4365,14 @@ pub(crate) unsafe extern "C" fn handle_edge_pan_tick(data: *mut std::ffi::c_void
     0
 }
 
-/// A duration-based camera transition: linear pan / log-space zoom
-/// interpolation, timed through the configured overview speed ramp.
+/// A duration-based camera transition timed through the configured
+/// overview speed ramp. Interpolation is anchor-stable
+/// (`camera::anchored_interp`): the whole flight is a zoom about the one
+/// point that keeps the same screen position under both cameras, so the
+/// transition reads as a direct zoom rather than a slide-while-zooming.
 pub struct CameraRampAnim {
-    pub start_pan_x: f64,
-    pub start_pan_y: f64,
-    pub start_ln_zoom: f64,
-    pub target_pan_x: f64,
-    pub target_pan_y: f64,
-    pub target_ln_zoom: f64,
+    pub start: crate::policy::camera::Camera,
+    pub target: crate::policy::camera::Camera,
     pub started: std::time::Instant,
     pub duration_ms: f64,
 }
@@ -4394,22 +4391,22 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
     if let Some(anim) = &(*wm).camera_ramp_anim {
         let t = anim.started.elapsed().as_secs_f64() * 1000.0 / anim.duration_ms;
         if t >= 1.0 {
-            (*wm).desk_pan_x = anim.target_pan_x;
-            (*wm).desk_pan_y = anim.target_pan_y;
-            (*wm).desk_zoom = anim.target_ln_zoom.exp();
+            (*wm).desk_pan_x = anim.target.pan_x;
+            (*wm).desk_pan_y = anim.target.pan_y;
+            (*wm).desk_zoom = anim.target.zoom;
             (*wm).camera_ramp_anim = None;
         } else if let Some((ramp, _)) = &(*wm).layout.overview_anim {
             let p = ramp.progress(t);
-            (*wm).desk_pan_x = anim.start_pan_x + (anim.target_pan_x - anim.start_pan_x) * p;
-            (*wm).desk_pan_y = anim.start_pan_y + (anim.target_pan_y - anim.start_pan_y) * p;
-            (*wm).desk_zoom =
-                (anim.start_ln_zoom + (anim.target_ln_zoom - anim.start_ln_zoom) * p).exp();
+            let cam = crate::policy::camera::anchored_interp(anim.start, anim.target, p);
+            (*wm).desk_pan_x = cam.pan_x;
+            (*wm).desk_pan_y = cam.pan_y;
+            (*wm).desk_zoom = cam.zoom;
             done = false;
         } else {
             // Ramp was unconfigured mid-flight (reload): land instantly.
-            (*wm).desk_pan_x = anim.target_pan_x;
-            (*wm).desk_pan_y = anim.target_pan_y;
-            (*wm).desk_zoom = anim.target_ln_zoom.exp();
+            (*wm).desk_pan_x = anim.target.pan_x;
+            (*wm).desk_pan_y = anim.target.pan_y;
+            (*wm).desk_zoom = anim.target.zoom;
             (*wm).camera_ramp_anim = None;
         }
     }
