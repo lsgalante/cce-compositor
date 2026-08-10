@@ -2296,6 +2296,46 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			mask_transform = wlr_output_transform_invert(mask->transform);
 			mask_transform = wlr_output_transform_compose(mask_transform, data->transform);
 			mask_src_box = mask->src_box;
+
+			// Map the blur box through the mask buffer's own geometry instead
+			// of stretching the whole mask texture over the blur rect: a mask
+			// buffer LARGER than the blur box (a client overflow rim — the
+			// surface extends transparently past the xdg geometry the blur is
+			// sized to) would otherwise squeeze its transparent rim INTO the
+			// box, and ignore_transparent then kills the blur in a rim-scaled
+			// band at the window's right/bottom. Sample exactly the sub-rect
+			// of the mask that overlaps the blur box, 1:1 in layout space.
+			// Congruent boxes (the common case) skip this and keep the
+			// previous full-texture mapping byte-for-byte.
+			if (tex != NULL) {
+				int mask_x, mask_y, blur_x, blur_y;
+				if (wlr_scene_node_coords(&mask->node, &mask_x, &mask_y) &&
+						wlr_scene_node_coords(node, &blur_x, &blur_y)) {
+					int mask_w = 0, mask_h = 0;
+					scene_node_get_size(&mask->node, &mask_w, &mask_h);
+					if (mask_w > 0 && mask_h > 0 &&
+							(mask_w != blur->width || mask_h != blur->height ||
+								mask_x != blur_x || mask_y != blur_y)) {
+						struct wlr_fbox full = mask_src_box;
+						if (full.width <= 0 || full.height <= 0) {
+							full = (struct wlr_fbox){
+								.x = 0,
+								.y = 0,
+								.width = tex->width,
+								.height = tex->height,
+							};
+						}
+						double sx = full.width / mask_w;
+						double sy = full.height / mask_h;
+						mask_src_box = (struct wlr_fbox){
+							.x = full.x + (blur_x - mask_x) * sx,
+							.y = full.y + (blur_y - mask_y) * sy,
+							.width = blur->width * sx,
+							.height = blur->height * sy,
+						};
+					}
+				}
+			}
 		}
 
 		struct fx_corner_radii blur_corners = blur->corners;

@@ -4,6 +4,12 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-changed=src/server/wlroots_log_wrapper.c");
     println!("cargo:rerun-if-changed=wrapper.h");
+    // Vendored scenefx sources: without these, editing a scenefx .c/.h
+    // silently ships a stale static lib (meson only reruns when build.rs
+    // does; meson compile is a fast no-op when nothing changed).
+    println!("cargo:rerun-if-changed=scenefx/types");
+    println!("cargo:rerun-if-changed=scenefx/render");
+    println!("cargo:rerun-if-changed=scenefx/include");
     println!("cargo:rerun-if-changed=protocol/river-xkb-bindings-v1.xml");
     println!("cargo:rerun-if-changed=protocol/river-layer-shell-v1.xml");
     println!("cargo:rerun-if-changed=protocol/river-input-management-v1.xml");
