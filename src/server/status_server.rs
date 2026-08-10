@@ -64,6 +64,12 @@ impl Subscription {
 struct Client {
     subscription: Subscription,
     stream: UnixStream,
+    /// The last line actually written to this client. A state push only
+    /// re-sends a topic whose formatted line CHANGED — a StatusUpdate is
+    /// one struct, so e.g. a camera animation (viewport text embeds pan/
+    /// zoom) used to re-broadcast identical layout/title lines at frame
+    /// rate, and every subscriber rebuilt its segment per frame.
+    last_line: Option<String>,
 }
 
 /// Handle to the status server for sending updates from the main loop.
@@ -150,6 +156,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, display_socket: Option<Stri
                         let client = Client {
                             subscription: sub,
                             stream,
+                            last_line: None,
                         };
                         clients.push(client);
                         activity = true;
@@ -229,12 +236,19 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, display_socket: Option<Stri
                         continue;
                     }
                     let msg = format_for_subscription(client.subscription, update);
+                    // Only lines that changed for THIS topic go out (see
+                    // Client::last_line); a fresh client always gets one.
+                    if client.last_line.as_deref() == Some(msg.as_str()) {
+                        continue;
+                    }
                     match client
                         .stream
                         .write_all(msg.as_bytes())
                         .and_then(|_| client.stream.write_all(b"\n"))
                     {
-                        Ok(_) => {}
+                        Ok(_) => {
+                            client.last_line = Some(msg);
+                        }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                             // Client not ready to receive — skip for now
                         }
