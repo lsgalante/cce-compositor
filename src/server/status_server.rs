@@ -326,9 +326,29 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
         wm.focused_window()
     };
 
-    let text = format!("Mode: {:?} | Zoom: {:.2} | Pan: ({:.0}, {:.0})", wm.mode, wm.desk_zoom, wm.desk_pan_x, wm.desk_pan_y);
-    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-    let viewport_json = format!("{{\"text\": \"{}\", \"tooltip\": \"Camera State\"}}", escaped);
+    // Viewport tabs, not camera debug text: the old payload embedded live
+    // pan/zoom numbers, so every camera animation frame re-rendered (and
+    // RESIZED) the unfocused window module — the intermittent "Mode" flicker.
+    // The markup is stable per active viewport; clicks on the tabs resolve to
+    // `ccectl view <n>` bar-side. "active" carries the viewport number for
+    // the bar's layout menu (it used to parse it out of the Pan text).
+    let anchors = [(0.0f64, 0.0f64), (2000.0, 0.0), (0.0, 2000.0), (2000.0, 2000.0)];
+    let active = anchors
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            let da = (wm.desk_pan_x - a.0).powi(2) + (wm.desk_pan_y - a.1).powi(2);
+            let db = (wm.desk_pan_x - b.0).powi(2) + (wm.desk_pan_y - b.1).powi(2);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| i + 1)
+        .unwrap_or(1);
+    let mut tabs = String::new();
+    for i in 1..=4 {
+        let color = if i == active { "#7dffff" } else { "#767686" };
+        tabs.push_str(&format!("<span color='{}'>{}</span>", color, i));
+    }
+    let viewport_json = format!("{{\"text\": \"{}\", \"active\": {}}}", tabs, active);
 
     let layout_text = if !focused_window.is_null() {
         (*focused_window).tiling_mode.as_str().to_string()
