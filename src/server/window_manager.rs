@@ -2411,6 +2411,14 @@ impl WindowManager {
                 }
             }
         }
+        // The traveling light_source segment crosses over its siblings on
+        // the top edge; sorting it to the tail makes it the last segment
+        // moved to the render-list end, so the reorder pass raises it last
+        // — in front of every other segment. (Stacking rules live in this
+        // per-frame path, never as one-shot raises.)
+        status_bar_windows.sort_by_key(|&w| {
+            (*w).get_app_id_string().map_or(false, |id| id.ends_with("light_source"))
+        });
         for win_ptr in status_bar_windows {
             let node_link = &mut (*win_ptr).node.link as *mut ffi::wl_list as *mut WlList;
             let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
