@@ -1550,6 +1550,24 @@ impl WindowManager {
             curr = next;
         }
 
+        // The traveling light_source segment crosses over its sibling
+        // segments; raise it after the loop so it stacks in front of them
+        // within its layer regardless of render-list order. Re-applied on
+        // every reorder pass — a rule in the stacking authority, not a
+        // one-shot raise.
+        if reorder {
+            for &w in self.windows.iter() {
+                if !w.is_null()
+                    && !(*w).closed
+                    && matches!((*w).state, crate::window::WindowState::Mapped)
+                    && (*w).get_app_id_string().map_or(false, |id| id.ends_with("light_source"))
+                {
+                    ffi::wlr_scene_node_raise_to_top((*w).tree as *mut ffi::wlr_scene_node);
+                    ffi::wlr_scene_node_place_above((*w).popup_tree as *mut _, (*w).tree as *mut _);
+                }
+            }
+        }
+
         (*self.server).om.commit_output_state(self.server);
 
         let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
@@ -2411,14 +2429,6 @@ impl WindowManager {
                 }
             }
         }
-        // The traveling light_source segment crosses over its siblings on
-        // the top edge; sorting it to the tail makes it the last segment
-        // moved to the render-list end, so the reorder pass raises it last
-        // — in front of every other segment. (Stacking rules live in this
-        // per-frame path, never as one-shot raises.)
-        status_bar_windows.sort_by_key(|&w| {
-            (*w).get_app_id_string().map_or(false, |id| id.ends_with("light_source"))
-        });
         for win_ptr in status_bar_windows {
             let node_link = &mut (*win_ptr).node.link as *mut ffi::wl_list as *mut WlList;
             let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
