@@ -13,7 +13,7 @@ protocol XML files you'll see throughout `src/server/` and `protocol/`.
 
 This crate lives inside a larger Cargo workspace (the workspace root is the **parent**
 directory `../Cargo.toml`, which lists ~20 `cce-*` sibling apps). This crate is the
-compositor; the siblings (`cce-status-interface`, `cce-system-settings`, etc.) are
+compositor; the siblings (`cce-status-interface`, `cce-system-interface`, etc.) are
 clients that talk to it over its sockets. Intra-workspace dependencies: `cce-ui`
 (`../cce-ui`, config helpers) and **`cce-window-manager`** (`../cce-window-manager`,
 its own repo) — the pure-Rust window-management **policy layer** (arrange pass,
@@ -44,7 +44,7 @@ is ignored because profiles are only honored at the workspace root.
   Any arg other than `client`/`help` just starts the server (`cce_fx::run_server()`).
 - **`ccectl`** (`src/bin/ccectl.rs`) — thin IPC client; all logic is in
   `src/cce_ctl.rs` (`run_cce_ctl`). Run `ccectl` with no args to see the full command
-  list (layout, view, mode, viewport, pointer-*, key*, bind, spawn, notify, exit, …).
+  list (layout, mode, pointer-*, key*, bind, spawn, notify, exit, …).
 
 ### System dependencies (checked by `build.rs`)
 
@@ -141,8 +141,8 @@ Persistent window state is saved to **`~/.local/state/cce/state.json`**
 - **Control socket** `/tmp/cce-{WAYLAND_DISPLAY}.sock` (`ipc_server.rs`): line-oriented
   request/reply over a Unix socket. `ccectl` / `cce_ctl.rs` is the client.
 - **Status socket** `/tmp/cce-status-{WAYLAND_DISPLAY}.sock` (`status_server.rs`): runs
-  on its own thread; a client sends one subscription line (`viewport`, `layout`,
-  `title`, or `modifiers`) and receives JSON/text lines on every change. This feeds the
+  on its own thread; a client sends one subscription line (`layout`, `title`,
+  `modifiers`, or `dismiss`) and receives text lines on every change. This feeds the
   status bar (`cce-status-interface`). The main loop pushes updates through a
   `StatusSender` mpsc handle.
 

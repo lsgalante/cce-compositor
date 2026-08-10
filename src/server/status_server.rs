@@ -2,7 +2,7 @@
 //
 // Runs in a dedicated thread. cce-status connects to
 // /tmp/cce-status-{WAYLAND_DISPLAY}.sock, sends a subscription line
-// ("viewport", "layout", or "title"), and receives JSON lines whenever the status changes.
+// ("layout", "title", "modifiers", or "dismiss") and receives lines whenever the status changes.
 //
 // The main loop sends updates through an mpsc channel. The server thread
 // owns the socket and handles all I/O independently of the Wayland event loop.
@@ -14,8 +14,6 @@ use std::sync::mpsc;
 /// A status update sent from the main loop to the server thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusUpdate {
-    /// JSON string for viewport module subscribers
-    pub viewport_json: String,
     /// Plain text for layout module subscribers
     pub layout_text: String,
     /// Plain text for title module subscribers
@@ -38,7 +36,6 @@ pub enum StatusMsg {
 /// Subscription types that the status bar script can request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Subscription {
-    Viewport,
     Layout,
     Title,
     Modifiers,
@@ -50,7 +47,6 @@ enum Subscription {
 impl Subscription {
     fn from_str(s: &str) -> Self {
         match s.trim() {
-            "viewport" => Subscription::Viewport,
             "layout" => Subscription::Layout,
             "title" => Subscription::Title,
             "modifiers" => Subscription::Modifiers,
@@ -301,7 +297,6 @@ fn read_subscription(stream: &UnixStream) -> Subscription {
 
 fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
     match sub {
-        Subscription::Viewport => update.viewport_json.clone(),
         Subscription::Layout => update.layout_text.clone(),
         Subscription::Title => update.title_text.clone(),
         Subscription::Modifiers => update.modifiers_text.clone(),
@@ -325,24 +320,6 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
     } else {
         wm.focused_window()
     };
-
-    // The viewport payload carries only the active viewport number (nearest
-    // View1-4 anchor): the bar reads it at menu-open time for the layout
-    // menu's viewport-layout target. Nothing renders this payload — the
-    // viewport tabs are gone, and the old camera debug text (live pan/zoom
-    // floats) caused per-frame bar rebuilds during camera animations.
-    let anchors = [(0.0f64, 0.0f64), (2000.0, 0.0), (0.0, 2000.0), (2000.0, 2000.0)];
-    let active = anchors
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| {
-            let da = (wm.desk_pan_x - a.0).powi(2) + (wm.desk_pan_y - a.1).powi(2);
-            let db = (wm.desk_pan_x - b.0).powi(2) + (wm.desk_pan_y - b.1).powi(2);
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|(i, _)| i + 1)
-        .unwrap_or(1);
-    let viewport_json = format!("{{\"active\": {}}}", active);
 
     let layout_text = if !focused_window.is_null() {
         (*focused_window).tiling_mode.as_str().to_string()
@@ -398,7 +375,6 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
     let modifiers_text = if super_pressed { "super" } else { "none" }.to_string();
 
     StatusUpdate {
-        viewport_json,
         layout_text,
         title_text,
         modifiers_text,

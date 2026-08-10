@@ -2727,40 +2727,6 @@ impl WindowManager {
                 self.dirty_windowing();
                 return format!("ok {}\n", enable);
             }
-            "view" => {
-                if parts.len() < 2 { return "error: missing tag\n".to_string(); }
-                if let Ok(tag) = parts[1].parse::<i32>() {
-                    if tag >= 1 && tag <= 4 {
-                        let act = match tag {
-                            1 => crate::config::Action::View1,
-                            2 => crate::config::Action::View2,
-                            3 => crate::config::Action::View3,
-                            4 => crate::config::Action::View4,
-                            _ => crate::config::Action::None,
-                        };
-                        self.execute_action(&act, None);
-                        return "ok\n".to_string();
-                    }
-                }
-                "error: invalid tag\n".to_string()
-            }
-            "set-viewport" | "set-tag" => {
-                if parts.len() < 2 { return "error: missing viewport index\n".to_string(); }
-                if let Ok(tag) = parts[1].parse::<i32>() {
-                    if tag >= 1 && tag <= 4 {
-                        let act = match tag {
-                            1 => crate::config::Action::SetViewport1,
-                            2 => crate::config::Action::SetViewport2,
-                            3 => crate::config::Action::SetViewport3,
-                            4 => crate::config::Action::SetViewport4,
-                            _ => crate::config::Action::None,
-                        };
-                        self.execute_action(&act, None);
-                        return "ok\n".to_string();
-                    }
-                }
-                "error: invalid viewport index\n".to_string()
-            }
             "pan-by" => {
                 if parts.len() < 3 { return "error: missing dx or dy\n".to_string(); }
                 if let (Ok(dx), Ok(dy)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
@@ -3337,9 +3303,6 @@ impl WindowManager {
                     _ => return format!("error: unknown layout key: {}\n", key),
                 }
                 self.dirty_windowing();
-                "ok\n".to_string()
-            }
-            "viewport-layout" => {
                 "ok\n".to_string()
             }
             "mode" => {

@@ -71,7 +71,7 @@ case "$btn" in
         ;;
     "settings")
         # Run settings interface
-        "$HOME"/.local/bin/cce-system-settings &
+        "$HOME"/.local/bin/cce-system-interface &
         ;;
     "expose")
         $CCE_CTL expose

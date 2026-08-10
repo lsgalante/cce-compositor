@@ -7,7 +7,7 @@ rounded-corner scene effects. It began as a Rust rewrite of the
 
 This crate is the compositor. It lives inside the larger `cce` Cargo workspace (root at
 the parent directory), alongside client apps such as `cce-status-interface`,
-`cce-system-settings`, and other `cce-*` siblings that connect to it over its sockets.
+`cce-system-interface`, and other `cce-*` siblings that connect to it over its sockets.
 
 ## Binaries
 

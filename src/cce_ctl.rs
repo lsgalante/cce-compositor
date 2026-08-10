@@ -32,7 +32,6 @@ fn usage(name: &str, to_stderr: bool) {
     print("");
     print("commands:");
     print("  layout <gap|gap_top|gap_left|gap_right|gap_bottom|offset|grid_gap|bar_height> <value>");
-    print("  view <1-4>");
     print("  close");
     print("  minimize");
     print("  focus-next");
@@ -75,9 +74,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  bind <mods> <keysym> <action> [args...]");
     print("  pbind <mods> <button> <action>");
     print("  retile");
-    print("  set-viewport <1-4>");
     print("  mode <cascade|grid|fullscreen|floating|popup|maximized|overlay> <app_id> [title]");
-    print("  viewport-layout <1-4> <cascade|grid|fullscreen|floating|popup|maximized|overlay>");
     print("  pointer-location");
     print("  pointer-move-to <x> <y>            (layout pixels)");
     print("  pointer-move-by <dx> <dy>");
