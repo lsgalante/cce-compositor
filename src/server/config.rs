@@ -775,15 +775,15 @@ pub fn parse_hex_color_rgba(hex_str: &str) -> [f32; 4] {
 
 pub fn parse_tiling_mode(s: &str) -> TilingMode {
     match s.to_lowercase().as_str() {
-        "floating" => TilingMode::Floating,
-        "cascade" => TilingMode::Cascade,
-        "grid" => TilingMode::Grid,
         "fullscreen" => TilingMode::Fullscreen,
         "popup" => TilingMode::Popup,
         "sidepanel" | "side_panel" | "side-panel" | "pinned" | "overlay" => TilingMode::Overlay,
         "status" => TilingMode::Status,
-        "maximized" => TilingMode::Maximized,
-        _ => TilingMode::Cascade,
+        // "maximized" is the retired name for grid-locked windows.
+        "tiled" | "maximized" => TilingMode::Tiled,
+        // Everything else — including the retired "cascade"/"grid" layout
+        // modes still present in old configs — is Floating.
+        _ => TilingMode::Floating,
     }
 }
 
@@ -2217,7 +2217,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
                         gesture_type: g_type.to_string(),
                         fingers,
                         direction: direction.clone(),
-                        action: Action::Expose,
+                        action: Action::Overview,
                         command: None,
                     });
                 }

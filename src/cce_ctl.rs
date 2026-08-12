@@ -54,7 +54,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  close-window <app_id|id> [title-substring]  # close a specific window");
     print("  center-window [<app_id>]   # pan focused/named window on-screen; replies x= y= w= h=");
     print("  place-next <app_id> <x> <y> # one-shot: next map of app_id lands near this layout pos");
-    print("  expose");
+    print("  overview");
     print("  windows [--json]           # list windows; --json emits one JSON object per line");
     print("  status-hide-mode [true|false]");
     print("  adjust-position-mode [true|false|query]");
@@ -74,7 +74,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  bind <mods> <keysym> <action> [args...]");
     print("  pbind <mods> <button> <action>");
     print("  retile");
-    print("  mode <cascade|grid|fullscreen|floating|popup|maximized|overlay> <app_id> [title]");
+    print("  mode <floating|tiled|fullscreen|popup|overlay> <app_id> [title]");
     print("  pointer-location");
     print("  pointer-move-to <x> <y>            (layout pixels)");
     print("  pointer-move-by <dx> <dy>");

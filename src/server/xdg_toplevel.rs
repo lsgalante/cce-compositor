@@ -894,7 +894,7 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
     let window = (*toplevel).window;
 
     if ffi::river_wlr_xdg_toplevel_get_requested_maximized((*toplevel).wlr_toplevel) {
-        (*window).tiling_mode = crate::tiling::TilingMode::Maximized;
+        (*window).tiling_mode = crate::tiling::TilingMode::Tiled;
         (*window).mode_locked = true;
         (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Maximize;
     } else {

@@ -803,7 +803,7 @@ impl Seat {
         if window.is_null()
             || !matches!(
                 (*window).tiling_mode,
-                crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Maximized
+                crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Tiled
             )
         {
             return;
@@ -1015,6 +1015,10 @@ impl Seat {
                 if (*win).tiling_mode != crate::tiling::TilingMode::Floating
                     && (*win).tiling_mode != crate::tiling::TilingMode::Overlay
                 {
+                    // Un-tile for the drag but KEEP the geometry (clearing
+                    // was_tiled suppresses the arrange Exit restore);
+                    // landing grid-aligned re-tiles it in op_end.
+                    (*win).was_tiled = false;
                     (*win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*win).mode_locked = true;
                     (*self.server).wm.raise_window(win);
@@ -1191,6 +1195,20 @@ impl Seat {
                             (*win).virtual_x = vx;
                             (*win).virtual_y = vy;
 
+                            // Overview moves displace what they cover: any
+                            // window the drag covers past the threshold
+                            // scoots to the side the drag vacated.
+                            if (*self.server).wm.mode
+                                == crate::window_manager::WindowManagerMode::Overview
+                            {
+                                displace_covered(
+                                    self.server,
+                                    win,
+                                    (virtual_dx, virtual_dy),
+                                    &sp,
+                                );
+                            }
+
                             let mut out_x = 0;
                             let mut out_y = 0;
                             let outputs_list = &mut (*(*self.server).wm.server).om.outputs as *mut ffi::wl_list as *mut WlList;
@@ -1353,6 +1371,49 @@ impl Seat {
                         (*self.server).wm.dirty_windowing();
                     }
                 }
+                // Geometric mode detection: a move/resize that lands every
+                // content edge on a visible desktop-grid cell edge makes the
+                // window Tiled (it then reports the maximized state to its
+                // client); landing off-grid makes it Floating, in place.
+                // Only windows resolving Floating/Tiled participate —
+                // Popup/Overlay/Status/Fullscreen are untouched.
+                let resolved = (*self.server).wm.get_mode_for_window(win);
+                if matches!(
+                    resolved,
+                    crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Tiled
+                ) {
+                    // Unscaled params: alignment classifies the resting
+                    // geometry, the zoom-aware grab distance is irrelevant.
+                    let sp = (*self.server).wm.layout.snap_params();
+                    let (w, h) = match (*win).wm_requested.dimensions {
+                        // A just-finished resize may not be acked into
+                        // box_geom yet; the requested size is what the
+                        // window is about to become.
+                        Some(d) => (d.width as f64, d.height as f64),
+                        None => ((*win).box_geom.width as f64, (*win).box_geom.height as f64),
+                    };
+                    let aligned = crate::policy::snap::is_cell_aligned(
+                        (*win).virtual_x,
+                        (*win).virtual_y,
+                        w,
+                        h,
+                        &sp,
+                        1.0,
+                    );
+                    if aligned && resolved != crate::tiling::TilingMode::Tiled {
+                        (*win).tiling_mode = crate::tiling::TilingMode::Tiled;
+                        (*win).mode_locked = true;
+                        (*self.server).wm.dirty_windowing();
+                    } else if !aligned && resolved == crate::tiling::TilingMode::Tiled {
+                        // Un-tile in place: clearing was_tiled keeps the
+                        // arrange Exit transition from restoring the old
+                        // floating geometry.
+                        (*win).was_tiled = false;
+                        (*win).tiling_mode = crate::tiling::TilingMode::Floating;
+                        (*win).mode_locked = true;
+                        (*self.server).wm.dirty_windowing();
+                    }
+                }
                 // A border TAP — press+release without meaningful motion —
                 // is a click, not a drag. The press focused the window and
                 // killed any focus-follow pan (drag protection), which left
@@ -1374,6 +1435,67 @@ impl Seat {
             }
         }
     }
+}
+
+/// Live overview displacement for one motion step of a move op: every
+/// mapped, visible Floating/Tiled window the drag covers past the policy
+/// threshold relocates to the side the drag vacated
+/// (`crate::policy::overview::displace`). Single-level on purpose — a
+/// displaced window does not cascade into a third.
+unsafe fn displace_covered(
+    server: *mut Server,
+    win: *mut crate::window::Window,
+    drag_delta: (f64, f64),
+    sp: &crate::policy::snap::SnapParams,
+) {
+    let wm = &mut (*server).wm;
+    let moved = (
+        (*win).virtual_x,
+        (*win).virtual_y,
+        (*win).box_geom.width as f64,
+        (*win).box_geom.height as f64,
+    );
+    let mut ptrs: Vec<*mut crate::window::Window> = Vec::new();
+    let mut cands: Vec<crate::policy::overview::DisplaceCandidate> = Vec::new();
+    for &w in wm.windows.iter() {
+        if w.is_null() || w == win || (*w).closed || (*w).minimized {
+            continue;
+        }
+        if !matches!((*w).state, crate::window::WindowState::Mapped) {
+            continue;
+        }
+        if (*w).is_status_bar() || (*w).is_wallpaper() {
+            continue;
+        }
+        let mode = wm.get_mode_for_window(w);
+        if mode != crate::tiling::TilingMode::Floating
+            && mode != crate::tiling::TilingMode::Tiled
+        {
+            continue;
+        }
+        ptrs.push(w);
+        cands.push(crate::policy::overview::DisplaceCandidate {
+            x: (*w).virtual_x,
+            y: (*w).virtual_y,
+            w: (*w).box_geom.width as f64,
+            h: (*w).box_geom.height as f64,
+            tiled: mode == crate::tiling::TilingMode::Tiled,
+        });
+    }
+    if cands.is_empty() {
+        return;
+    }
+    let moves =
+        crate::policy::overview::displace(moved, drag_delta, &cands, sp, sp.gap_width);
+    if moves.is_empty() {
+        return;
+    }
+    for (idx, (nx, ny)) in moves {
+        let w = ptrs[idx];
+        (*w).virtual_x = nx;
+        (*w).virtual_y = ny;
+    }
+    wm.dirty_windowing();
 }
 
 unsafe extern "C" fn handle_request_set_cursor(

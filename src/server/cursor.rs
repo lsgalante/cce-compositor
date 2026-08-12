@@ -962,7 +962,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 return;
             } else if !overview_win_valid {
                 cursor.left_click_on_bg_in_overview = true;
-                (*server).wm.execute_action(&crate::config::Action::Expose, None);
+                (*server).wm.execute_action(&crate::config::Action::Overview, None);
                 cursor.pressed.insert((*event).button, None);
                 return;
             }
@@ -1030,22 +1030,10 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Overlay
                 {
-                    if (*target_win).was_maximized {
-                        (*target_win).box_geom.width = (*target_win).saved_maximized_width;
-                        (*target_win).box_geom.height = (*target_win).saved_maximized_height;
-                        (*target_win).virtual_x = (*target_win).saved_maximized_virtual_x;
-                        (*target_win).virtual_y = (*target_win).saved_maximized_virtual_y;
-                        (*target_win).was_maximized = false;
-                        
-                        (*target_win).wm_requested.dimensions = Some(crate::window::Dimensions {
-                            width: (*target_win).saved_maximized_width as u32,
-                            height: (*target_win).saved_maximized_height as u32,
-                        });
-                        (*target_win).wm_requested.bounds = crate::window::Dimensions {
-                            width: (*target_win).saved_maximized_width as u32,
-                            height: (*target_win).saved_maximized_height as u32,
-                        };
-                    }
+                    // A tiled window un-tiles for the drag but keeps its
+                    // cell-quantized geometry; landing grid-aligned re-tiles
+                    // it (op_end geometric detection).
+                    (*target_win).was_tiled = false;
                     (*target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*target_win).mode_locked = true;
                 }
@@ -1136,22 +1124,10 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 BorderZone::Resize(edges) => {
                     if (*event).button == 0x110 { // BTN_LEFT
                         if initial_mode != crate::tiling::TilingMode::Floating {
-                            if (*border_target_win).was_maximized {
-                                (*border_target_win).box_geom.width = (*border_target_win).saved_maximized_width;
-                                (*border_target_win).box_geom.height = (*border_target_win).saved_maximized_height;
-                                (*border_target_win).virtual_x = (*border_target_win).saved_maximized_virtual_x;
-                                (*border_target_win).virtual_y = (*border_target_win).saved_maximized_virtual_y;
-                                (*border_target_win).was_maximized = false;
-                                
-                                (*border_target_win).wm_requested.dimensions = Some(crate::window::Dimensions {
-                                    width: (*border_target_win).saved_maximized_width as u32,
-                                    height: (*border_target_win).saved_maximized_height as u32,
-                                });
-                                (*border_target_win).wm_requested.bounds = crate::window::Dimensions {
-                                    width: (*border_target_win).saved_maximized_width as u32,
-                                    height: (*border_target_win).saved_maximized_height as u32,
-                                };
-                            }
+                            // A tiled window un-tiles for the drag but keeps its
+                            // cell-quantized geometry; landing grid-aligned re-tiles
+                            // it (op_end geometric detection).
+                            (*border_target_win).was_tiled = false;
                             (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                             (*border_target_win).mode_locked = true;
                         }
@@ -1201,11 +1177,11 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         cursor.last_click_window = border_target_win;
 
                         if is_double_click {
-                            if initial_mode == crate::tiling::TilingMode::Maximized {
+                            if initial_mode == crate::tiling::TilingMode::Tiled {
                                 (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                                 (*border_target_win).mode_locked = true;
                             } else {
-                                (*border_target_win).tiling_mode = crate::tiling::TilingMode::Maximized;
+                                (*border_target_win).tiling_mode = crate::tiling::TilingMode::Tiled;
                                 (*border_target_win).mode_locked = true;
                             }
                             seat.focus(Focus::Window(border_target_win));
@@ -1218,22 +1194,10 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         if initial_mode != crate::tiling::TilingMode::Floating
                             && initial_mode != crate::tiling::TilingMode::Overlay
                         {
-                            if (*border_target_win).was_maximized {
-                                (*border_target_win).box_geom.width = (*border_target_win).saved_maximized_width;
-                                (*border_target_win).box_geom.height = (*border_target_win).saved_maximized_height;
-                                (*border_target_win).virtual_x = (*border_target_win).saved_maximized_virtual_x;
-                                (*border_target_win).virtual_y = (*border_target_win).saved_maximized_virtual_y;
-                                (*border_target_win).was_maximized = false;
-                                
-                                (*border_target_win).wm_requested.dimensions = Some(crate::window::Dimensions {
-                                    width: (*border_target_win).saved_maximized_width as u32,
-                                    height: (*border_target_win).saved_maximized_height as u32,
-                                });
-                                (*border_target_win).wm_requested.bounds = crate::window::Dimensions {
-                                    width: (*border_target_win).saved_maximized_width as u32,
-                                    height: (*border_target_win).saved_maximized_height as u32,
-                                };
-                            }
+                            // A tiled window un-tiles for the drag but keeps its
+                            // cell-quantized geometry; landing grid-aligned re-tiles
+                            // it (op_end geometric detection).
+                            (*border_target_win).was_tiled = false;
                             (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                             (*border_target_win).mode_locked = true;
                         }
@@ -2177,7 +2141,7 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         log::info!("Swipe gesture matched action: {:?}", matched_action);
         cursor.gesture_triggered = true;
 
-        if matched_action == crate::config::Action::Expose && (*seat.server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
+        if matched_action == crate::config::Action::Overview && (*seat.server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
             let lx = cursor.x();
             let ly = cursor.y();
             let mut hovered_win: *mut crate::window::Window = std::ptr::null_mut();

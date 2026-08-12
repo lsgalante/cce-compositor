@@ -107,7 +107,7 @@ pub fn extract_from_config(content: &str) -> Result<Extracted, String> {
                 ("close_window", "close_window"),
                 ("toggle_fullscreen", "toggle_fullscreen"),
                 ("window_switcher", "window_switcher"),
-                ("toggle_overview", "expose"),
+                ("toggle_overview", "overview"),
             ] {
                 let Some(c) = child(children, prop) else { continue };
                 let Some(chord) = first_arg_string(c) else { continue };

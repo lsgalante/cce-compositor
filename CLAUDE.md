@@ -111,8 +111,9 @@ treats them as opaque.
 - **`window.rs`** (~3900 lines) — per-window model and rendering (borders, blur,
   viewport transforms).
 - **`crate::tiling`** (from `cce-window-manager`) — `TilingMode` enum: `Floating`,
-  `Cascade`, `Grid`, `Fullscreen`, `Popup`, `Overlay`, `Maximized`. Modes apply
-  per-window and per-viewport.
+  `Tiled` (grid-aligned; the window reports xdg maximized), `Fullscreen`,
+  `Popup`, `Overlay`, `Status`. Tiled-ness is geometric: the seat op's end
+  (`seat.rs::op_end`) promotes/demotes via `policy::snap::is_cell_aligned`.
 - Input stack: `input_manager.rs`, `seat.rs`, `cursor.rs`, `keyboard*.rs`,
   `xkb_*.rs`, `libinput_*.rs`, `pointer_*.rs`, `tablet*.rs`, `text_input.rs`,
   `input_relay.rs`/`input_popup.rs` (IME).

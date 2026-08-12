@@ -81,7 +81,6 @@ pub struct WindowManager {
     pub desk_pan_y: f64,
     pub desk_zoom: f64,
     pub mode: WindowManagerMode,
-    pub global_layout: crate::tiling::TilingMode,
     pub layout: crate::config::Layout,
     pub mode_rules: Vec<crate::config::ModeRule>,
     pub keybinds: Vec<crate::config::Keybind>,
@@ -231,7 +230,6 @@ impl WindowManager {
         self.desk_zoom = 1.0;
         self.pending_screenshot = None;
         self.mode = WindowManagerMode::Normal;
-        self.global_layout = crate::tiling::TilingMode::Cascade;
         self.restore_queue = Vec::new();
         self.last_window_states = Vec::new();
         self.pending_placements = Vec::new();
@@ -349,7 +347,6 @@ impl WindowManager {
                 self.desk_pan_y = state.desk_pan_y;
                 self.desk_zoom = state.desk_zoom;
                 self.mode = if (state.desk_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
-                self.global_layout = state.global_layout;
                 self.restore_queue = state.windows;
                 self.last_window_states = state.last_window_states;
                 self.has_restored_focused_window = self.restore_queue.iter().any(|w| w.focused);
@@ -680,7 +677,6 @@ impl WindowManager {
             desk_pan_x: self.desk_pan_x,
             desk_pan_y: self.desk_pan_y,
             desk_zoom: self.desk_zoom,
-            global_layout: self.global_layout,
             windows: saved_wins,
             last_window_states: self.last_window_states.clone(),
         };
@@ -1051,7 +1047,7 @@ impl WindowManager {
             let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
             let visible = !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
             let resolved_mode = self.get_mode_for_window(w);
-            let expose_eligible = !(*w).minimized
+            let overview_eligible = !(*w).minimized
                 && !is_status
                 && !is_wallpaper
                 && visible
@@ -1075,7 +1071,7 @@ impl WindowManager {
                 resolved_mode,
                 visible,
                 focus_cyclable,
-                expose_eligible,
+                overview_eligible,
             });
         }
 
@@ -1844,9 +1840,9 @@ impl WindowManager {
                 active_resize: self.get_active_resize_dimensions(win_ptr),
                 ssd: (*win_ptr).wm_requested.ssd,
                 decorations_size: (*win_ptr).measure_decorations(),
-                was_maximized: (*win_ptr).was_maximized,
-                saved_maximized_size: ((*win_ptr).saved_maximized_width, (*win_ptr).saved_maximized_height),
-                saved_maximized_virtual: ((*win_ptr).saved_maximized_virtual_x, (*win_ptr).saved_maximized_virtual_y),
+                was_tiled: (*win_ptr).was_tiled,
+                saved_floating_size: ((*win_ptr).saved_floating_width, (*win_ptr).saved_floating_height),
+                saved_floating_virtual: ((*win_ptr).saved_floating_virtual_x, (*win_ptr).saved_floating_virtual_y),
             });
             win_ptrs.push(win_ptr);
         }
@@ -1946,14 +1942,14 @@ impl WindowManager {
             if let Some(opacity) = wp.opacity {
                 (*win_ptr).rendering_requested.opacity = opacity;
             }
-            if let Some(((width, height), (vx, vy))) = wp.saved_maximized {
-                (*win_ptr).saved_maximized_width = width;
-                (*win_ptr).saved_maximized_height = height;
-                (*win_ptr).saved_maximized_virtual_x = vx;
-                (*win_ptr).saved_maximized_virtual_y = vy;
+            if let Some(((width, height), (vx, vy))) = wp.saved_floating {
+                (*win_ptr).saved_floating_width = width;
+                (*win_ptr).saved_floating_height = height;
+                (*win_ptr).saved_floating_virtual_x = vx;
+                (*win_ptr).saved_floating_virtual_y = vy;
             }
-            if let Some(was_maximized) = wp.was_maximized {
-                (*win_ptr).was_maximized = was_maximized;
+            if let Some(was_tiled) = wp.was_tiled {
+                (*win_ptr).was_tiled = was_tiled;
             }
         }
 
@@ -2558,7 +2554,6 @@ impl WindowManager {
                 log::info!("monolithic execute_action: Exit requested");
                 self.start_clean_exit();
             }
-            Action::LayoutNext => {}
             _ => {}
         }
     }
@@ -2897,8 +2892,9 @@ impl WindowManager {
                 self.execute_action(&crate::config::Action::Close, None);
                 "ok\n".to_string()
             }
-            "expose" => {
-                self.execute_action(&crate::config::Action::Expose, None);
+            // "expose" is the retired name for the overview toggle.
+            "overview" | "expose" => {
+                self.execute_action(&crate::config::Action::Overview, None);
                 "ok\n".to_string()
             }
             "wm-mode" => {
@@ -2908,12 +2904,12 @@ impl WindowManager {
                 let target = parts[1].to_lowercase();
                 if target == "normal" {
                     if self.mode == WindowManagerMode::Overview {
-                        self.execute_action(&crate::config::Action::Expose, None);
+                        self.execute_action(&crate::config::Action::Overview, None);
                     }
                     return "ok\n".to_string();
                 } else if target == "overview" {
                     if self.mode == WindowManagerMode::Normal {
-                        self.execute_action(&crate::config::Action::Expose, None);
+                        self.execute_action(&crate::config::Action::Overview, None);
                     }
                     return "ok\n".to_string();
                 }

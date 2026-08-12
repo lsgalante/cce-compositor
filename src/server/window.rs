@@ -420,11 +420,11 @@ pub struct Window {
     pub saved_height: i32,
     pub saved_virtual_x: f64,
     pub saved_virtual_y: f64,
-    pub was_maximized: bool,
-    pub saved_maximized_width: i32,
-    pub saved_maximized_height: i32,
-    pub saved_maximized_virtual_x: f64,
-    pub saved_maximized_virtual_y: f64,
+    pub was_tiled: bool,
+    pub saved_floating_width: i32,
+    pub saved_floating_height: i32,
+    pub saved_floating_virtual_x: f64,
+    pub saved_floating_virtual_y: f64,
 
     pub wm_scheduled: WmScheduledState,
     pub wm_sent: WmSentState,
@@ -625,11 +625,11 @@ impl Window {
             saved_height: 0,
             saved_virtual_x: 0.0,
             saved_virtual_y: 0.0,
-            was_maximized: false,
-            saved_maximized_width: 0,
-            saved_maximized_height: 0,
-            saved_maximized_virtual_x: 0.0,
-            saved_maximized_virtual_y: 0.0,
+            was_tiled: false,
+            saved_floating_width: 0,
+            saved_floating_height: 0,
+            saved_floating_virtual_x: 0.0,
+            saved_floating_virtual_y: 0.0,
             wm_scheduled: WmScheduledState {
                 dimensions_hint: DimensionsHint { min_width: 0, min_height: 0, max_width: 0, max_height: 0 },
                 decoration_hint: ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_ONLY_SUPPORTS_CSD,
@@ -1824,9 +1824,9 @@ impl Window {
         };
         self.wm_requested.dimensions = None;
 
-        let is_maximized_layout = self.tiling_mode == crate::tiling::TilingMode::Cascade
-            || self.tiling_mode == crate::tiling::TilingMode::Grid
-            || self.tiling_mode == crate::tiling::TilingMode::Maximized;
+        // A tiled window thinks it is maximized: the xdg maximized state
+        // follows the mode.
+        let is_maximized_layout = self.tiling_mode == crate::tiling::TilingMode::Tiled;
         self.configure_scheduled = Configure {
             width,
             height,
@@ -2131,7 +2131,7 @@ impl Window {
                 ancestor: *mut ffi::wlr_scene_node,
             }
 
-            unsafe extern "C" fn set_expose_scale_iterator(
+            unsafe extern "C" fn set_overview_scale_iterator(
                 buffer: *mut ffi::wlr_scene_buffer,
                 sx: i32,
                 sy: i32,
@@ -2178,7 +2178,7 @@ impl Window {
             let scale_data_surfaces = ScaleData { scale_x, scale_y, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.surfaces.tree as *mut ffi::wlr_scene_node,
-                Some(set_expose_scale_iterator),
+                Some(set_overview_scale_iterator),
                 &scale_data_surfaces as *const ScaleData as *mut std::ffi::c_void,
             );
 
@@ -2186,7 +2186,7 @@ impl Window {
                 let scale_data_saved = ScaleData { scale_x, scale_y, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
                 ffi::wlr_scene_node_for_each_buffer(
                     self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
-                    Some(set_expose_scale_iterator),
+                    Some(set_overview_scale_iterator),
                     &scale_data_saved as *const ScaleData as *mut std::ffi::c_void,
                 );
             }
@@ -2194,7 +2194,7 @@ impl Window {
             let scale_data_popup = ScaleData { scale_x, scale_y, ancestor: self.popup_tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.popup_tree as *mut ffi::wlr_scene_node,
-                Some(set_expose_scale_iterator),
+                Some(set_overview_scale_iterator),
                 &scale_data_popup as *const ScaleData as *mut std::ffi::c_void,
             );
             self.last_applied_scale = self.scale;
@@ -2379,7 +2379,7 @@ impl Window {
             ancestor: *mut ffi::wlr_scene_node,
         }
 
-        unsafe extern "C" fn set_expose_scale_iterator(
+        unsafe extern "C" fn set_overview_scale_iterator(
             buffer: *mut ffi::wlr_scene_buffer,
             sx: i32,
             sy: i32,
@@ -2424,7 +2424,7 @@ impl Window {
         let scale_data_surfaces = ScaleData { scale: self.scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
         ffi::wlr_scene_node_for_each_buffer(
             self.surfaces.tree as *mut ffi::wlr_scene_node,
-            Some(set_expose_scale_iterator),
+            Some(set_overview_scale_iterator),
             &scale_data_surfaces as *const ScaleData as *mut std::ffi::c_void,
         );
 
@@ -2432,7 +2432,7 @@ impl Window {
             let scale_data_saved = ScaleData { scale: self.scale, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
-                Some(set_expose_scale_iterator),
+                Some(set_overview_scale_iterator),
                 &scale_data_saved as *const ScaleData as *mut std::ffi::c_void,
             );
         }
@@ -2440,7 +2440,7 @@ impl Window {
         let scale_data_popup = ScaleData { scale: self.scale, ancestor: self.popup_tree as *mut ffi::wlr_scene_node };
         ffi::wlr_scene_node_for_each_buffer(
             self.popup_tree as *mut ffi::wlr_scene_node,
-            Some(set_expose_scale_iterator),
+            Some(set_overview_scale_iterator),
             &scale_data_popup as *const ScaleData as *mut std::ffi::c_void,
         );
 
@@ -3900,7 +3900,7 @@ impl Decoration {
             ancestor: *mut ffi::wlr_scene_node,
         }
 
-        unsafe extern "C" fn set_expose_scale_iterator(
+        unsafe extern "C" fn set_overview_scale_iterator(
             buffer: *mut ffi::wlr_scene_buffer,
             sx: i32,
             sy: i32,
@@ -3945,7 +3945,7 @@ impl Decoration {
         let scale_data = ScaleData { scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
         ffi::wlr_scene_node_for_each_buffer(
             self.surfaces.tree as *mut ffi::wlr_scene_node,
-            Some(set_expose_scale_iterator),
+            Some(set_overview_scale_iterator),
             &scale_data as *const ScaleData as *mut std::ffi::c_void,
         );
 
@@ -3953,7 +3953,7 @@ impl Decoration {
             let scale_data_saved = ScaleData { scale, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
-                Some(set_expose_scale_iterator),
+                Some(set_overview_scale_iterator),
                 &scale_data_saved as *const ScaleData as *mut std::ffi::c_void,
             );
         }
@@ -3975,7 +3975,7 @@ impl Decoration {
             ancestor: *mut ffi::wlr_scene_node,
         }
 
-        unsafe extern "C" fn set_expose_scale_iterator(
+        unsafe extern "C" fn set_overview_scale_iterator(
             buffer: *mut ffi::wlr_scene_buffer,
             sx: i32,
             sy: i32,
@@ -4020,7 +4020,7 @@ impl Decoration {
         let scale_data = ScaleData { scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
         ffi::wlr_scene_node_for_each_buffer(
             self.surfaces.tree as *mut ffi::wlr_scene_node,
-            Some(set_expose_scale_iterator),
+            Some(set_overview_scale_iterator),
             &scale_data as *const ScaleData as *mut std::ffi::c_void,
         );
 
@@ -4028,7 +4028,7 @@ impl Decoration {
             let scale_data_saved = ScaleData { scale, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
-                Some(set_expose_scale_iterator),
+                Some(set_overview_scale_iterator),
                 &scale_data_saved as *const ScaleData as *mut std::ffi::c_void,
             );
         }
