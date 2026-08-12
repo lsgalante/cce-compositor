@@ -604,7 +604,14 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     } else {
         crate::window::widen_corner_radius(radius, actual_w as i32, actual_h as i32)
     };
-    let use_optimized = if is_status || radius > 0 {
+    // Rounded corners do NOT require live blur: the corner shape is applied by the
+    // standard blur node's sampler (wlr_scene_blur_set_corner_radius) in both modes;
+    // the optimized node only re-bakes the shared offscreen cache
+    // (fx_render_pass_add_optimized_blur -> read_to_buffer) and never paints on
+    // screen. The old `radius > 0` opt-out silently disabled the optimization for
+    // every (rounded) window, forcing full-backdrop dual-kawase blur per frame per
+    // translucent window — the DE-wide hover-lag / constant-GPU-load root cause.
+    let use_optimized = if is_status {
         false
     } else {
         (*(*window).server).wm.layout.scenefx_optimized_blur
