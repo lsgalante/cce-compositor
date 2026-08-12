@@ -291,6 +291,10 @@ pub struct WindowManagerConfig {
     /// squircle. The same `window_manager.corner_shape` key the cce-ui
     /// clients read, so the compositor's cut lands on the corners they draw.
     pub corner_shape: Option<f64>,
+    /// Extra app_ids (beyond cce-* apps and SSD requesters) that get the full
+    /// decorated-window treatment: rounded corner clip, blur-behind, shadow.
+    /// KDL: `rounded_apps "claude-desktop" "org.example.App"`.
+    pub rounded_apps: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
@@ -1047,6 +1051,26 @@ fn get_child_arg_vec2i_opt(node: &kdl::KdlNode, child_name: &str) -> Option<[i32
     None
 }
 
+
+/// All positional string args of a child node, e.g. `rounded_apps "a" "b"`.
+/// `Some` when the child node is present (even with no args), `None` when absent.
+fn get_child_args_string_vec_opt(node: &kdl::KdlNode, child_name: &str) -> Option<Vec<String>> {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                return Some(
+                    child
+                        .entries()
+                        .iter()
+                        .filter(|e| e.name().is_none())
+                        .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                        .collect(),
+                );
+            }
+        }
+    }
+    None
+}
 
 fn get_child_arg_string_opt(node: &kdl::KdlNode, child_name: &str) -> Option<String> {
     if let Some(children) = node.children() {
@@ -1862,7 +1886,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let window_switcher_prev = get_child_arg_string_opt(node, "window_switcher_prev");
         let center_on_spawn = get_child_arg_bool_opt(node, "center_on_spawn");
         let corner_shape = get_child_arg_f64_opt(node, "corner_shape");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, corner_shape });
+        let rounded_apps = get_child_args_string_vec_opt(node, "rounded_apps");
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, corner_shape, rounded_apps });
     }
 
     Ok(Config {
@@ -1924,6 +1949,11 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         .as_ref()
         .and_then(|wm| wm.center_on_spawn)
         .unwrap_or(true);
+    state.rounded_apps = config
+        .window_manager
+        .as_ref()
+        .and_then(|wm| wm.rounded_apps.clone())
+        .unwrap_or_default();
 
     // Feed scenefx's rounded-corner shaders the DE-wide corner-shape exponent
     // (clamped like cce-ui's corner_shape()). Plain C state, safe pre-renderer
@@ -2336,6 +2366,33 @@ mod tests {
 
         // No window_manager block at all: nothing to read, and the apply step defaults on.
         assert!(parse_kdl_config("layout {\n gap 4\n}").unwrap().window_manager.is_none());
+    }
+
+    #[test]
+    fn test_kdl_window_manager_rounded_apps() {
+        let listed = parse_kdl_config(
+            r#"
+            window_manager {
+                rounded_apps "claude-desktop" "org.keepassxc.KeePassXC"
+            }
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            listed.window_manager.unwrap().rounded_apps,
+            Some(vec!["claude-desktop".to_string(), "org.keepassxc.KeePassXC".to_string()])
+        );
+
+        // Absent means "unset": the apply step reads it as an empty allowlist.
+        let absent = parse_kdl_config(
+            r#"
+            window_manager {
+                center_on_spawn (bool)true
+            }
+        "#,
+        )
+        .unwrap();
+        assert_eq!(absent.window_manager.unwrap().rounded_apps, None);
     }
 
     #[test]

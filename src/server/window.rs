@@ -2020,8 +2020,8 @@ impl Window {
             let app_id = self.get_app_id_string().unwrap_or_default();
             let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                             app_id.starts_with("cce-status");
-            let is_cce_app = app_id.starts_with("cce-");
-            let blur_enabled = requested.blur && (self.wm_requested.ssd || is_cce_app || is_status);
+            let is_decorated = (*self.server).wm.is_decorated_app(&app_id);
+            let blur_enabled = requested.blur && (self.wm_requested.ssd || is_decorated || is_status);
             let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
             if is_status {
                 ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
@@ -2042,7 +2042,7 @@ impl Window {
                 // carves visible sweeps into an EXPANDED segment's in-surface
                 // menu box once the cap stops binding.
                 0
-            } else if self.wm_requested.ssd || is_cce_app {
+            } else if self.wm_requested.ssd || is_decorated {
                 (*self.server).wm.layout.backplate_corner_radius
             } else {
                 0
@@ -2108,7 +2108,7 @@ impl Window {
                 // (cf. the window_background rect, which scales it the same way).
                 (radius as f64 * self.scale) as i32,
             );
-            let want_shadow = !is_status && (self.wm_requested.ssd || is_cce_app) && !self.is_fullscreen();
+            let want_shadow = !is_status && (self.wm_requested.ssd || is_decorated) && !self.is_fullscreen();
             self.update_shadow(width, height, radius, want_shadow);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
@@ -2480,8 +2480,8 @@ impl Window {
             if app_id.starts_with("cce-") {
                 let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                                 app_id.starts_with("cce-status");
-                let is_cce_app = app_id.starts_with("cce-");
-                let blur_enabled = requested.blur && (self.wm_requested.ssd || is_cce_app || is_status);
+                let is_decorated = (*self.server).wm.is_decorated_app(&app_id);
+                let blur_enabled = requested.blur && (self.wm_requested.ssd || is_decorated || is_status);
                 let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
                 if is_status {
                     ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
@@ -2499,7 +2499,7 @@ impl Window {
                     // Same status exemption as set_rendering_state — the two
                     // paths drive the same nodes and must agree.
                     0
-                } else if self.wm_requested.ssd || is_cce_app {
+                } else if self.wm_requested.ssd || is_decorated {
                     (*self.server).wm.layout.backplate_corner_radius
                 } else {
                     0
@@ -2546,7 +2546,7 @@ impl Window {
                     height,
                     (radius as f64 * self.scale) as i32,
                 );
-                let want_shadow = !is_status && (self.wm_requested.ssd || is_cce_app) && !self.is_fullscreen();
+                let want_shadow = !is_status && (self.wm_requested.ssd || is_decorated) && !self.is_fullscreen();
                 self.update_shadow(width, height, radius, want_shadow);
             } else {
                 // Tearing the blur down: radius is irrelevant, the nodes are destroyed.
@@ -3884,8 +3884,8 @@ impl Decoration {
         if is_status {
             ignore_transparent = (*server).wm.layout.status_backdrop_blur_ignore_transparent;
         }
-        let is_cce_app = app_id.starts_with("cce-");
-        let blur_enabled = self.rendering_requested.blur && ((*self.window).wm_requested.ssd || is_cce_app || is_status);
+        let is_decorated = (*server).wm.is_decorated_app(&app_id);
+        let blur_enabled = self.rendering_requested.blur && ((*self.window).wm_requested.ssd || is_decorated || is_status);
         // Radius 0 preserves existing behaviour on the layer-surface path (see layer_shell.rs)
         // — it never had a blur radius applied, and this fix is scoped to toplevels.
         ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled, (*server).wm.layout.scenefx_optimized_blur, ignore_transparent, 0, 0, 0, 0, 0);

@@ -169,6 +169,10 @@ pub struct WindowManager {
     /// over to it when it takes focus. Off, the desk stays put and the window opens wherever
     /// the layout placed it. Focus-follow panning between EXISTING windows is unaffected.
     pub center_on_spawn: bool,
+    /// `window_manager.rounded_apps`: extra app_ids that get the decorated-window
+    /// treatment (rounded corner clip, blur-behind, shadow) alongside cce-* apps
+    /// and SSD requesters.
+    pub rounded_apps: Vec<String>,
 }
 
 impl WindowManager {
@@ -231,6 +235,7 @@ impl WindowManager {
         self.restore_queue = Vec::new();
         self.last_window_states = Vec::new();
         self.pending_placements = Vec::new();
+        self.rounded_apps = Vec::new();
         self.shutting_down = false;
         self.layout = crate::config::Layout::default();
         self.output_scale = 1.0;
@@ -757,6 +762,15 @@ impl WindowManager {
         } else {
             log::info!("Clean exit: waiting for {} remaining windows to close...", normal_windows_count);
         }
+    }
+
+    /// Whether an app_id gets the decorated-window treatment (rounded corner
+    /// clip, blur-behind, drop shadow) without requesting SSD: every cce app,
+    /// plus the `window_manager.rounded_apps` config allowlist. The one
+    /// predicate behind every radius/blur/shadow decision — the mirrored
+    /// render sites must all agree or the effects visibly disagree per pass.
+    pub fn is_decorated_app(&self, app_id: &str) -> bool {
+        app_id.starts_with("cce-") || self.rounded_apps.iter().any(|a| a == app_id)
     }
 
     pub unsafe fn match_and_remove_restore_state(&mut self, app_id: &str, title: &str) -> Option<SavedWindowState> {
