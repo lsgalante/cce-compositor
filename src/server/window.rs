@@ -2368,10 +2368,14 @@ impl Window {
             return;
         }
 
-        if self.scale == self.last_applied_scale {
-            return;
-        }
-
+        // No last_applied_scale short-circuit here: wlroots' scene-surface
+        // commit listener resets a committed buffer's dest size and opaque
+        // region to the surface's natural extent, so any client repainting
+        // while scaled (browser animations, caret blink) pops back to full
+        // size even though the cached scale says nothing changed. This runs
+        // per rendered frame (output.rs render_and_commit), after commits and
+        // before build_state, and every setter below is change-checked — an
+        // already-correct tree produces no damage.
         self.last_applied_scale = self.scale;
 
         struct ScaleData {
