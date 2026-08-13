@@ -901,7 +901,7 @@ unsafe extern "C" fn handle_request_state(listener: *mut ffi::wl_listener, data:
 /// frame-callback interval can be compared against the rate the output is
 /// actually rendering at — the two diverging is the signature of a surface
 /// being skipped by the scene's visible gate in `wlr_scene_buffer_send_frame_done`.
-fn frame_debug() -> bool {
+pub(crate) fn frame_debug() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FLAG.get_or_init(|| std::env::var_os("CCE_FRAME_DEBUG").is_some())
 }

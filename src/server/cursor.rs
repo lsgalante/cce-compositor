@@ -727,19 +727,47 @@ unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut s
         (*cursor.constraint).confine(&mut dx, &mut dy);
     }
 
+    // Real libinput motion collapses the compositor to ~3fps, while an injected
+    // warp at the SAME event rate sustains ~58fps — so the cost is somewhere in
+    // this handler rather than in rendering or the scene. Time each stage.
+    let t_start = if crate::output::frame_debug() {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
+
     ffi::wlr_cursor_move(cursor.wlr_cursor, std::ptr::null_mut(), dx, dy);
+    let t_move = t_start.map(|s| s.elapsed().as_micros());
     cursor.update_hovered();
+    let t_hovered = t_start.map(|s| s.elapsed().as_micros());
     cursor.update_drag_icons();
+    let t_drag = t_start.map(|s| s.elapsed().as_micros());
 
     let seat = &mut *cursor.seat;
     if (*seat).op.is_some() {
         let lx = (*cursor.wlr_cursor).x as i32;
         let ly = (*cursor.wlr_cursor).y as i32;
         (*seat).op_update(lx, ly);
+        if let (Some(s), Some(m), Some(h), Some(d)) = (t_start, t_move, t_hovered, t_drag) {
+            log::info!(
+                "[cce-frame] t={} motion(op) total={}us move={}us hovered={}us drag={}us",
+                crate::util::msec_timestamp() % 100000,
+                s.elapsed().as_micros(), m, h - m, d - h
+            );
+        }
         return;
     }
 
     cursor.passthrough((*event).time_msec);
+
+    if let (Some(s), Some(m), Some(h), Some(d)) = (t_start, t_move, t_hovered, t_drag) {
+        let total = s.elapsed().as_micros();
+        log::info!(
+            "[cce-frame] t={} motion total={}us move={}us hovered={}us drag={}us passthrough={}us",
+            crate::util::msec_timestamp() % 100000,
+            total, m, h - m, d - h, total - d
+        );
+    }
 }
 
 unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
