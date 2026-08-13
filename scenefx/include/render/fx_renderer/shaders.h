@@ -159,6 +159,23 @@ struct box_shadow_shader {
 
 bool link_box_shadow_program(struct box_shadow_shader *shader);
 
+struct bevel_shader {
+	GLuint program;
+	GLint proj;
+	GLint color;
+	GLint pos_attrib;
+	GLint position;
+	GLint size;
+	GLint corner_radius;
+	GLint thickness;
+	GLint light_dir;
+	GLint light_intensity;
+	GLint shade_intensity;
+	GLint shoulder;
+};
+
+bool link_bevel_program(struct bevel_shader *shader);
+
 struct blur_shader {
 	GLuint program;
 	GLint proj;

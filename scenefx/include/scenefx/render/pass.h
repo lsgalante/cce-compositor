@@ -83,6 +83,24 @@ struct fx_render_box_shadow_options {
 	struct wlr_render_color color;
 };
 
+struct fx_render_bevel_options {
+	struct wlr_box box;
+	/* Clip region, leave NULL to disable clipping */
+	const pixman_region32_t *clip;
+
+	int corner_radius;
+	/* Rim width in px: how far in from the edge the chamfer reaches. */
+	float thickness;
+	/* Direction TOWARD the light, screen space with y down. */
+	float light_dir[2];
+	float light_intensity;
+	float shade_intensity;
+	/* 0 = hard flat chamfer, 1 = fully rounded shoulder. */
+	float shoulder;
+	/* Tint of the highlight; alpha scales the whole effect. */
+	struct wlr_render_color color;
+};
+
 struct fx_render_blur_pass_options {
 	struct fx_render_texture_options tex_options;
 	struct fx_framebuffer *current_buffer;
@@ -138,6 +156,12 @@ void fx_render_pass_add_rounded_rect_grad(struct fx_gles_render_pass *render_pas
  */
 void fx_render_pass_add_box_shadow(struct fx_gles_render_pass *pass,
 		const struct fx_render_box_shadow_options *options);
+
+/**
+ * Render an edge bevel: a lit chamfer around the inside of a rounded rect.
+ */
+void fx_render_pass_add_bevel(struct fx_gles_render_pass *pass,
+		const struct fx_render_bevel_options *options);
 
 /**
  * Render blur.

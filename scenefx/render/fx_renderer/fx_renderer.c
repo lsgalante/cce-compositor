@@ -95,6 +95,7 @@ static inline void free_shaders(struct fx_renderer *renderer) {
 	glDeleteProgram(renderer->shaders.tex_effects_rgbx.program);
 	glDeleteProgram(renderer->shaders.tex_effects_ext.program);
 	glDeleteProgram(renderer->shaders.box_shadow.program);
+	glDeleteProgram(renderer->shaders.bevel.program);
 	glDeleteProgram(renderer->shaders.blur1.program);
 	glDeleteProgram(renderer->shaders.blur2.program);
 	glDeleteProgram(renderer->shaders.blur_effects.program);
@@ -420,6 +421,11 @@ static bool link_shaders(struct fx_renderer *renderer) {
 	// box shadow shader
 	if (!link_box_shadow_program(&renderer->shaders.box_shadow)) {
 		wlr_log(WLR_ERROR, "Could not link box shadow shader");
+		goto error;
+	}
+	// bevel shader
+	if (!link_bevel_program(&renderer->shaders.bevel)) {
+		wlr_log(WLR_ERROR, "Could not link bevel shader");
 		goto error;
 	}
 

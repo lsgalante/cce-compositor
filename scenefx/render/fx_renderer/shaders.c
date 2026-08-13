@@ -18,6 +18,7 @@
 #include "quad_grad_round_frag_src.h"
 #include "tex_frag_src.h"
 #include "box_shadow_frag_src.h"
+#include "bevel_frag_src.h"
 #include "blur1_frag_src.h"
 #include "blur2_frag_src.h"
 #include "blur_effects_frag_src.h"
@@ -329,6 +330,27 @@ bool link_box_shadow_program(struct box_shadow_shader *shader) {
 	shader->clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
 	shader->clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
 	shader->clip_radius.shape = glGetUniformLocation(prog, "corner_shape");
+
+	return true;
+}
+
+bool link_bevel_program(struct bevel_shader *shader) {
+	GLuint prog;
+	shader->program = prog = link_program(bevel_frag_src);
+	if (!shader->program) {
+		return false;
+	}
+	shader->proj = glGetUniformLocation(prog, "proj");
+	shader->color = glGetUniformLocation(prog, "color");
+	shader->pos_attrib = glGetAttribLocation(prog, "pos");
+	shader->position = glGetUniformLocation(prog, "position");
+	shader->size = glGetUniformLocation(prog, "size");
+	shader->corner_radius = glGetUniformLocation(prog, "corner_radius");
+	shader->thickness = glGetUniformLocation(prog, "thickness");
+	shader->light_dir = glGetUniformLocation(prog, "light_dir");
+	shader->light_intensity = glGetUniformLocation(prog, "light_intensity");
+	shader->shade_intensity = glGetUniformLocation(prog, "shade_intensity");
+	shader->shoulder = glGetUniformLocation(prog, "shoulder");
 
 	return true;
 }

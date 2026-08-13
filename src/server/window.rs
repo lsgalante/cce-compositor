@@ -349,6 +349,11 @@ pub struct Window {
     /// scenefx drop shadow, first child of `tree` so it renders beneath
     /// everything else in the window; null if creation failed (shadow skipped).
     pub shadow: *mut ffi::wlr_scene_shadow,
+    /// scenefx bevel node: the lit chamfer around the inside of the window's
+    /// edge. Created LAST in the window tree so it draws over the surface —
+    /// the rim overlays the client's outermost pixels. Null if creation
+    /// failed (the effect is then simply absent).
+    pub bevel: *mut ffi::wlr_scene_bevel,
     pub decorations_below: ffi::wl_list,
     pub decorations_below_tree: *mut ffi::wlr_scene_tree,
     pub surfaces: crate::scene::SaveableSurfaces,
@@ -542,6 +547,17 @@ impl Window {
             }
         };
 
+        // Created after the surfaces so it is ABOVE them in the window tree:
+        // the bevel is an inner rim drawn over the client's outermost pixels,
+        // not something tucked behind them. Geometry, light and colour are
+        // synced per frame in update_bevel; a null pointer disables the
+        // effect rather than failing window creation.
+        let bevel_color = [1.0f32, 1.0f32, 1.0f32, 1.0f32];
+        let bevel = ffi::wlr_scene_bevel_create(tree, 0, 0, 0, 0.0, bevel_color.as_ptr());
+        if !bevel.is_null() {
+            ffi::wlr_scene_node_set_enabled(&mut (*bevel).node, false);
+        }
+
         // The invisible hit catchers stay in the window tree so pointer
         // hit-testing and z-order are unchanged. The visible segments live in
         // a sibling tree parented to the global border overlay layer, so a
@@ -576,6 +592,7 @@ impl Window {
             fullscreen_background,
             window_background,
             shadow,
+            bevel,
             decorations_below: std::mem::zeroed(),
             decorations_below_tree,
             surfaces,
@@ -2112,6 +2129,7 @@ impl Window {
             );
             let want_shadow = !is_status && (self.wm_requested.ssd || is_decorated) && !self.is_fullscreen();
             self.update_shadow(width, height, radius, want_shadow);
+                self.update_bevel(width, height, radius, want_shadow);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
             // Device px, like the blur radius above: the surface content is
@@ -2575,6 +2593,7 @@ impl Window {
                 // window and swallows the shadow whole.
                 let want_shadow = !is_status && (self.wm_requested.ssd || is_decorated) && !self.is_fullscreen();
                 self.update_shadow(width, height, radius, want_shadow);
+                self.update_bevel(width, height, radius, want_shadow);
             }
 
             self.scale_only_render_finish();
@@ -2620,6 +2639,58 @@ impl Window {
                 top_left: r, top_right: r, bottom_right: r, bottom_left: r,
             },
         });
+    }
+
+    /// Sync the edge bevel with the current geometry. `width`/`height` are the
+    /// content size in device px and `radius` the corner radius in logical px,
+    /// exactly as `update_shadow` takes them. The rim is drawn INSIDE that box
+    /// (see the shader), so it overlays the client's outermost pixels and needs
+    /// no room of its own.
+    ///
+    /// The light direction is the DE's convention — the same top-left source
+    /// the drop shadow is offset away from — so a window reads as a slab lit
+    /// from the same place as everything else on the desktop.
+    pub unsafe fn update_bevel(&self, width: i32, height: i32, radius: i32, want: bool) {
+        if self.bevel.is_null() {
+            return;
+        }
+        let node = &mut (*self.bevel).node as *mut ffi::wlr_scene_node;
+        let layout = &(*self.server).wm.layout;
+        let enabled = want
+            && layout.bevel_enabled
+            && layout.bevel_thickness > 0.0
+            && width > 0
+            && height > 0;
+        ffi::wlr_scene_node_set_enabled(node, enabled);
+        if !enabled {
+            return;
+        }
+
+        // Device px, like the blur radius and shadow sigma: the content is
+        // scaled to its dest size, so an unscaled rim would keep its zoom-1
+        // width while the window shrinks.
+        let thickness = (layout.bevel_thickness as f64 * self.scale) as f32;
+        let radius_dev = (radius as f64 * self.scale) as i32;
+
+        // Light from the top-left, matching shadow_offset_x/y pointing away
+        // from it. Normalized here so the shader can take it as-is.
+        let (lx, ly) = (layout.bevel_light_x, layout.bevel_light_y);
+        let len = (lx * lx + ly * ly).sqrt();
+        let (lx, ly) = if len > 1e-6 { (lx / len, ly / len) } else { (-0.7071, -0.7071) };
+
+        ffi::wlr_scene_bevel_set_size(self.bevel, width, height);
+        ffi::wlr_scene_bevel_set_corner_radius(self.bevel, radius_dev);
+        ffi::wlr_scene_bevel_set_thickness(self.bevel, thickness.max(1.0));
+        ffi::wlr_scene_bevel_set_light(
+            self.bevel,
+            lx,
+            ly,
+            layout.bevel_light_intensity,
+            layout.bevel_shade_intensity,
+        );
+        ffi::wlr_scene_bevel_set_shoulder(self.bevel, layout.bevel_shoulder);
+        ffi::wlr_scene_bevel_set_color(self.bevel, layout.bevel_color.as_ptr());
+        ffi::river_scene_node_set_position_if_changed(node, 0, 0);
     }
 
     /// Advance the hover fade one tick. Every zone eases toward 1.0 if it is

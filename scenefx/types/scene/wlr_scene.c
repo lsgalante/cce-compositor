@@ -82,6 +82,12 @@ struct wlr_scene_shadow *wlr_scene_shadow_from_node(struct wlr_scene_node *node)
 	return shadow;
 }
 
+struct wlr_scene_bevel *wlr_scene_bevel_from_node(struct wlr_scene_node *node) {
+	assert(node->type == WLR_SCENE_NODE_BEVEL);
+	struct wlr_scene_bevel *bevel = wl_container_of(node, bevel, node);
+	return bevel;
+}
+
 struct wlr_scene_blur *wlr_scene_blur_from_node(struct wlr_scene_node *node) {
 	assert(node->type == WLR_SCENE_NODE_BLUR);
 	struct wlr_scene_blur *blur = wl_container_of(node, blur, node);
@@ -280,6 +286,7 @@ static bool _scene_nodes_in_box(struct wlr_scene_node *node, struct wlr_box *box
 	case WLR_SCENE_NODE_RECT:
 	case WLR_SCENE_NODE_BUFFER:
 	case WLR_SCENE_NODE_SHADOW:
+	case WLR_SCENE_NODE_BEVEL:
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:
 	case WLR_SCENE_NODE_BLUR:;
 		struct wlr_box node_box = { .x = lx, .y = ly };
@@ -391,7 +398,9 @@ static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
 	} else if (node->type == WLR_SCENE_NODE_SHADOW) {
 		// TODO: test & handle case of blur sigma = 0 and color[3] = 1?
 		return;
-	} else if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR || node->type == WLR_SCENE_NODE_BLUR) {
+	} else if (node->type == WLR_SCENE_NODE_BEVEL
+			|| node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR
+			|| node->type == WLR_SCENE_NODE_BLUR) {
 		// Always transparent
 		return;
 	}
@@ -1099,6 +1108,88 @@ struct wlr_scene_shadow *wlr_scene_shadow_create(struct wlr_scene_tree *parent,
 	scene_node_update(&scene_shadow->node, NULL);
 
 	return scene_shadow;
+}
+
+struct wlr_scene_bevel *wlr_scene_bevel_create(struct wlr_scene_tree *parent,
+		int width, int height, int corner_radius, float thickness,
+		const float color[static 4]) {
+	struct wlr_scene_bevel *scene_bevel = calloc(1, sizeof(*scene_bevel));
+	if (scene_bevel == NULL) {
+		return NULL;
+	}
+	assert(parent);
+	scene_node_init(&scene_bevel->node, WLR_SCENE_NODE_BEVEL, parent);
+
+	scene_bevel->width = width;
+	scene_bevel->height = height;
+	scene_bevel->corner_radius = corner_radius;
+	scene_bevel->thickness = thickness;
+	// Default light: top-left, matching the DE's shadow convention.
+	scene_bevel->light_dir[0] = -0.7071f;
+	scene_bevel->light_dir[1] = -0.7071f;
+	scene_bevel->light_intensity = 1.0f;
+	scene_bevel->shade_intensity = 1.0f;
+	scene_bevel->shoulder = 0.5f;
+	memcpy(scene_bevel->color, color, sizeof(scene_bevel->color));
+
+	scene_node_update(&scene_bevel->node, NULL);
+
+	return scene_bevel;
+}
+
+void wlr_scene_bevel_set_size(struct wlr_scene_bevel *bevel, int width, int height) {
+	if (bevel->width == width && bevel->height == height) {
+		return;
+	}
+	bevel->width = width;
+	bevel->height = height;
+	scene_node_update(&bevel->node, NULL);
+}
+
+void wlr_scene_bevel_set_corner_radius(struct wlr_scene_bevel *bevel, int radius) {
+	if (bevel->corner_radius == radius) {
+		return;
+	}
+	bevel->corner_radius = radius;
+	scene_node_update(&bevel->node, NULL);
+}
+
+void wlr_scene_bevel_set_thickness(struct wlr_scene_bevel *bevel, float thickness) {
+	if (bevel->thickness == thickness) {
+		return;
+	}
+	bevel->thickness = thickness;
+	scene_node_update(&bevel->node, NULL);
+}
+
+void wlr_scene_bevel_set_light(struct wlr_scene_bevel *bevel, float dir_x, float dir_y,
+		float light_intensity, float shade_intensity) {
+	if (bevel->light_dir[0] == dir_x && bevel->light_dir[1] == dir_y
+			&& bevel->light_intensity == light_intensity
+			&& bevel->shade_intensity == shade_intensity) {
+		return;
+	}
+	bevel->light_dir[0] = dir_x;
+	bevel->light_dir[1] = dir_y;
+	bevel->light_intensity = light_intensity;
+	bevel->shade_intensity = shade_intensity;
+	scene_node_update(&bevel->node, NULL);
+}
+
+void wlr_scene_bevel_set_shoulder(struct wlr_scene_bevel *bevel, float shoulder) {
+	if (bevel->shoulder == shoulder) {
+		return;
+	}
+	bevel->shoulder = shoulder;
+	scene_node_update(&bevel->node, NULL);
+}
+
+void wlr_scene_bevel_set_color(struct wlr_scene_bevel *bevel, const float color[static 4]) {
+	if (memcmp(bevel->color, color, sizeof(bevel->color)) == 0) {
+		return;
+	}
+	memcpy(bevel->color, color, sizeof(bevel->color));
+	scene_node_update(&bevel->node, NULL);
 }
 
 void wlr_scene_shadow_set_size(struct wlr_scene_shadow *shadow, int width, int height) {
@@ -1862,6 +1953,11 @@ void scene_node_get_size(struct wlr_scene_node *node, int *width, int *height) {
 		*width = scene_shadow->width;
 		*height = scene_shadow->height;
 		break;
+	case WLR_SCENE_NODE_BEVEL:;
+		struct wlr_scene_bevel *scene_bevel = wlr_scene_bevel_from_node(node);
+		*width = scene_bevel->width;
+		*height = scene_bevel->height;
+		break;
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:;
 		struct wlr_scene_optimized_blur *scene_blur =
 			wlr_scene_optimized_blur_from_node(node);
@@ -2056,6 +2152,7 @@ static bool scene_node_at_iterator(struct wlr_scene_node *node,
 			return false;
 		}
 	} else if (node->type == WLR_SCENE_NODE_SHADOW
+			|| node->type == WLR_SCENE_NODE_BEVEL
 			|| node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR
 			|| node->type == WLR_SCENE_NODE_BLUR) {
 		// Disable interaction
@@ -2313,6 +2410,48 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.clip = &render_region,
 		};
 		fx_render_pass_add_box_shadow(fx_pass, &shadow_options);
+		break;
+	case WLR_SCENE_NODE_BEVEL:;
+		struct wlr_scene_bevel *scene_bevel = wlr_scene_bevel_from_node(node);
+
+		// The light direction is authored in screen space, so it has to
+		// follow the output transform along with the box it lights.
+		float bevel_dir_x = scene_bevel->light_dir[0];
+		float bevel_dir_y = scene_bevel->light_dir[1];
+		switch (node_transform) {
+		case WL_OUTPUT_TRANSFORM_90:
+			bevel_dir_x = scene_bevel->light_dir[1];
+			bevel_dir_y = -scene_bevel->light_dir[0];
+			break;
+		case WL_OUTPUT_TRANSFORM_180:
+			bevel_dir_x = -scene_bevel->light_dir[0];
+			bevel_dir_y = -scene_bevel->light_dir[1];
+			break;
+		case WL_OUTPUT_TRANSFORM_270:
+			bevel_dir_x = -scene_bevel->light_dir[1];
+			bevel_dir_y = scene_bevel->light_dir[0];
+			break;
+		default:
+			break;
+		}
+
+		struct fx_render_bevel_options bevel_options = {
+			.box = dst_box,
+			.corner_radius = scene_bevel->corner_radius * data->scale,
+			.thickness = scene_bevel->thickness * data->scale,
+			.light_dir = { bevel_dir_x, bevel_dir_y },
+			.light_intensity = scene_bevel->light_intensity,
+			.shade_intensity = scene_bevel->shade_intensity,
+			.shoulder = scene_bevel->shoulder,
+			.color = {
+				.r = scene_bevel->color[0],
+				.g = scene_bevel->color[1],
+				.b = scene_bevel->color[2],
+				.a = scene_bevel->color[3],
+			},
+			.clip = &render_region,
+		};
+		fx_render_pass_add_bevel(fx_pass, &bevel_options);
 		break;
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:;
 		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
@@ -2770,6 +2909,10 @@ static bool scene_node_invisible(struct wlr_scene_node *node) {
 		struct wlr_scene_shadow *shadow = wlr_scene_shadow_from_node(node);
 
 		return shadow->color[3] == 0.f;
+	} else if (node->type == WLR_SCENE_NODE_BEVEL) {
+		struct wlr_scene_bevel *bevel = wlr_scene_bevel_from_node(node);
+
+		return bevel->color[3] == 0.f || bevel->thickness <= 0.f;
 	}
 
 	return false;

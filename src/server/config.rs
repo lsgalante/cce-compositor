@@ -67,6 +67,22 @@ pub struct Layout {
     /// `light_source_position` (down-right for the default top-left light).
     pub shadow_offset_x: i32,
     pub shadow_offset_y: i32,
+    /// Edge bevel: a lit chamfer drawn around the INSIDE of a decorated
+    /// window's edge (scenefx bevel node), lit from `bevel_light_*` — the
+    /// same top-left source the drop shadow is offset away from.
+    pub bevel_enabled: bool,
+    /// Rim width in logical px.
+    pub bevel_thickness: f32,
+    /// Direction toward the light; y is down, so the default is up-left.
+    pub bevel_light_x: f32,
+    pub bevel_light_y: f32,
+    /// Strength of the lit and shaded sides, 0..1.
+    pub bevel_light_intensity: f32,
+    pub bevel_shade_intensity: f32,
+    /// 0 = hard flat chamfer, 1 = fully rounded shoulder.
+    pub bevel_shoulder: f32,
+    /// Highlight tint, premultiplied RGBA; alpha scales the whole effect.
+    pub bevel_color: [f32; 4],
     /// Magnetic grid snap for interactive move/resize.
     pub desktop_snap: bool,
     /// Speed ramp + duration (ms) for the overview enter/exit transition.
@@ -169,6 +185,14 @@ impl Default for Layout {
             desktop_cell_corner_radius: 0,
             desktop_cell_fade_inset: 0,
             desktop_grid_fade_mode: "linear".to_string(),
+            bevel_enabled: true,
+            bevel_thickness: 6.0,
+            bevel_light_x: -0.7071,
+            bevel_light_y: -0.7071,
+            bevel_light_intensity: 0.35,
+            bevel_shade_intensity: 0.30,
+            bevel_shoulder: 0.65,
+            bevel_color: [1.0, 1.0, 1.0, 1.0],
             shadow_enabled: true,
             shadow_sigma: 22.0,
             shadow_color: [0.0, 0.0, 0.0, 0.55],
@@ -413,6 +437,20 @@ pub struct SurfaceConfig {
     pub shadow_offset_x: i64,
     #[serde(default = "default_shadow_offset_y")]
     pub shadow_offset_y: i64,
+    #[serde(default = "default_bevel_enabled")]
+    pub bevel_enabled: bool,
+    #[serde(default = "default_bevel_thickness")]
+    pub bevel_thickness: f64,
+    #[serde(default = "default_bevel_light")]
+    pub bevel_light: String,
+    #[serde(default = "default_bevel_light_intensity")]
+    pub bevel_light_intensity: f64,
+    #[serde(default = "default_bevel_shade_intensity")]
+    pub bevel_shade_intensity: f64,
+    #[serde(default = "default_bevel_shoulder")]
+    pub bevel_shoulder: f64,
+    #[serde(default = "default_bevel_color")]
+    pub bevel_color: String,
 }
 
 fn default_shadow_enabled() -> bool { true }
@@ -420,6 +458,30 @@ fn default_shadow_sigma() -> f64 { 22.0 }
 fn default_shadow_color() -> String { "#0000008c".to_string() }
 fn default_shadow_offset_x() -> i64 { 7 }
 fn default_shadow_offset_y() -> i64 { 7 }
+fn default_bevel_enabled() -> bool { true }
+fn default_bevel_thickness() -> f64 { 6.0 }
+/// Compass point the light comes FROM, matching the shadow's top-left source.
+fn default_bevel_light() -> String { "top-left".to_string() }
+fn default_bevel_light_intensity() -> f64 { 0.35 }
+fn default_bevel_shade_intensity() -> f64 { 0.30 }
+fn default_bevel_shoulder() -> f64 { 0.65 }
+fn default_bevel_color() -> String { "#ffffffff".to_string() }
+
+/// Map a compass point to a unit vector pointing TOWARD the light, in screen
+/// space (y down). Anything unrecognized keeps the DE's top-left default.
+pub fn parse_light_direction(s: &str) -> (f32, f32) {
+    let d = 0.7071_f32;
+    match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "top" | "up" | "north" => (0.0, -1.0),
+        "bottom" | "down" | "south" => (0.0, 1.0),
+        "left" | "west" => (-1.0, 0.0),
+        "right" | "east" => (1.0, 0.0),
+        "top-right" | "up-right" | "north-east" => (d, -d),
+        "bottom-left" | "down-left" | "south-west" => (-d, d),
+        "bottom-right" | "down-right" | "south-east" => (d, d),
+        _ => (-d, -d),
+    }
+}
 
 impl Default for SurfaceConfig {
     fn default() -> Self {
@@ -454,6 +516,13 @@ impl Default for SurfaceConfig {
             shadow_color: default_shadow_color(),
             shadow_offset_x: default_shadow_offset_x(),
             shadow_offset_y: default_shadow_offset_y(),
+            bevel_enabled: default_bevel_enabled(),
+            bevel_thickness: default_bevel_thickness(),
+            bevel_light: default_bevel_light(),
+            bevel_light_intensity: default_bevel_light_intensity(),
+            bevel_shade_intensity: default_bevel_shade_intensity(),
+            bevel_shoulder: default_bevel_shoulder(),
+            bevel_color: default_bevel_color(),
         }
      }
 }
@@ -1798,6 +1867,53 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                             }
                         }
                     }
+                    if let Some(bevel_node) = surface_children.nodes().iter().find(|n| n.name().value() == "bevel") {
+                        found_nested = true;
+                        for entry in bevel_node.entries() {
+                            if let Some(id) = entry.name() {
+                                match id.value() {
+                                    "enabled" => {
+                                        if let Some(val) = entry.value().as_bool() {
+                                            surface.bevel_enabled = val;
+                                        }
+                                    }
+                                    "thickness" => {
+                                        if let Some(val) = entry.value().as_f64() {
+                                            surface.bevel_thickness = val;
+                                        } else if let Some(val) = entry.value().as_i64() {
+                                            surface.bevel_thickness = val as f64;
+                                        }
+                                    }
+                                    "light" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surface.bevel_light = val.to_string();
+                                        }
+                                    }
+                                    "light_intensity" => {
+                                        if let Some(val) = entry.value().as_f64() {
+                                            surface.bevel_light_intensity = val;
+                                        }
+                                    }
+                                    "shade_intensity" => {
+                                        if let Some(val) = entry.value().as_f64() {
+                                            surface.bevel_shade_intensity = val;
+                                        }
+                                    }
+                                    "shoulder" => {
+                                        if let Some(val) = entry.value().as_f64() {
+                                            surface.bevel_shoulder = val;
+                                        }
+                                    }
+                                    "color" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surface.bevel_color = val.to_string();
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
                     if let Some(shadow_node) = surface_children.nodes().iter().find(|n| n.name().value() == "shadow") {
                         found_nested = true;
                         for entry in shadow_node.entries() {
@@ -2061,6 +2177,15 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.shadow_color = parse_hex_color_rgba(&config.surface.shadow_color);
     state.layout.shadow_offset_x = config.surface.shadow_offset_x as i32;
     state.layout.shadow_offset_y = config.surface.shadow_offset_y as i32;
+    state.layout.bevel_enabled = config.surface.bevel_enabled;
+    state.layout.bevel_thickness = config.surface.bevel_thickness.max(0.0) as f32;
+    let (bevel_lx, bevel_ly) = parse_light_direction(&config.surface.bevel_light);
+    state.layout.bevel_light_x = bevel_lx;
+    state.layout.bevel_light_y = bevel_ly;
+    state.layout.bevel_light_intensity = config.surface.bevel_light_intensity.clamp(0.0, 1.0) as f32;
+    state.layout.bevel_shade_intensity = config.surface.bevel_shade_intensity.clamp(0.0, 1.0) as f32;
+    state.layout.bevel_shoulder = config.surface.bevel_shoulder.clamp(0.0, 1.0) as f32;
+    state.layout.bevel_color = parse_hex_color_rgba(&config.surface.bevel_color);
 
     for (key, val) in &config.env {
         let expanded = expand_env_vars(val);

@@ -61,6 +61,7 @@ enum wlr_scene_node_type {
 	WLR_SCENE_NODE_RECT,
 	WLR_SCENE_NODE_BUFFER,
 	WLR_SCENE_NODE_SHADOW,
+	WLR_SCENE_NODE_BEVEL,
 	WLR_SCENE_NODE_OPTIMIZED_BLUR,
 	WLR_SCENE_NODE_BLUR,
 };
@@ -168,6 +169,23 @@ struct wlr_scene_shadow {
 	float blur_sigma;
 
 	struct clipped_region clipped_region;
+};
+
+/** A lit chamfer around the inside of a rounded rect. */
+struct wlr_scene_bevel {
+	struct wlr_scene_node node;
+	int width, height;
+	int corner_radius;
+	/** Rim width in px: how far in from the edge the chamfer reaches. */
+	float thickness;
+	/** Direction TOWARD the light, screen space with y down. */
+	float light_dir[2];
+	float light_intensity;
+	float shade_intensity;
+	/** 0 = hard flat chamfer, 1 = fully rounded shoulder. */
+	float shoulder;
+	/** Highlight tint; alpha scales the whole effect. */
+	float color[4];
 };
 
 struct wlr_scene_blur {
@@ -517,6 +535,12 @@ struct wlr_scene_rect *wlr_scene_rect_from_node(struct wlr_scene_node *node);
  */
 struct wlr_scene_shadow *wlr_scene_shadow_from_node(struct wlr_scene_node *node);
 
+/**
+ * If this node represents a wlr_scene_bevel, that structure is returned.
+ * Asserts otherwise.
+ */
+struct wlr_scene_bevel *wlr_scene_bevel_from_node(struct wlr_scene_node *node);
+
 struct wlr_scene_blur *wlr_scene_blur_from_node(struct wlr_scene_node *node);
 
 /**
@@ -589,6 +613,21 @@ struct wlr_scene_shadow *wlr_scene_shadow_create(struct wlr_scene_tree *parent,
  * Change the width and height of an existing shadow node.
  */
 void wlr_scene_shadow_set_size(struct wlr_scene_shadow *shadow, int width, int height);
+
+/**
+ * Add a bevel node: a lit chamfer drawn around the inside of the given box.
+ */
+struct wlr_scene_bevel *wlr_scene_bevel_create(struct wlr_scene_tree *parent,
+	int width, int height, int corner_radius, float thickness,
+	const float color[static 4]);
+
+void wlr_scene_bevel_set_size(struct wlr_scene_bevel *bevel, int width, int height);
+void wlr_scene_bevel_set_corner_radius(struct wlr_scene_bevel *bevel, int radius);
+void wlr_scene_bevel_set_thickness(struct wlr_scene_bevel *bevel, float thickness);
+void wlr_scene_bevel_set_light(struct wlr_scene_bevel *bevel, float dir_x, float dir_y,
+	float light_intensity, float shade_intensity);
+void wlr_scene_bevel_set_shoulder(struct wlr_scene_bevel *bevel, float shoulder);
+void wlr_scene_bevel_set_color(struct wlr_scene_bevel *bevel, const float color[static 4]);
 
 /**
  * Change the corner radius of an existing shadow node.

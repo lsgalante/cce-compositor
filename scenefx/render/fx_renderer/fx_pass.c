@@ -1116,6 +1116,51 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
 	return fx_options->current_buffer;
 }
 
+void fx_render_pass_add_bevel(struct fx_gles_render_pass *pass,
+		const struct fx_render_bevel_options *options) {
+	struct fx_renderer *renderer = pass->buffer->renderer;
+
+	struct wlr_box box = options->box;
+	assert(box.width > 0 && box.height > 0);
+
+	pixman_region32_t clip_region;
+	if (options->clip) {
+		pixman_region32_init(&clip_region);
+		pixman_region32_copy(&clip_region, options->clip);
+	} else {
+		pixman_region32_init_rect(&clip_region, box.x, box.y, box.width, box.height);
+	}
+
+	push_fx_debug(renderer);
+
+	// The highlight adds light and the shade subtracts it, both premultiplied
+	// into the same draw — ordinary source-over blending.
+	setup_blending(WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
+	glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+
+	glUseProgram(renderer->shaders.bevel.program);
+
+	const struct wlr_render_color *color = &options->color;
+	set_proj_matrix(renderer->shaders.bevel.proj, pass->projection_matrix, &box);
+	glUniform4f(renderer->shaders.bevel.color, color->r, color->g, color->b, color->a);
+	glUniform2f(renderer->shaders.bevel.size, box.width, box.height);
+	glUniform2f(renderer->shaders.bevel.position, box.x, box.y);
+	glUniform1f(renderer->shaders.bevel.corner_radius, options->corner_radius);
+	glUniform1f(renderer->shaders.bevel.thickness, options->thickness);
+	glUniform2f(renderer->shaders.bevel.light_dir,
+			options->light_dir[0], options->light_dir[1]);
+	glUniform1f(renderer->shaders.bevel.light_intensity, options->light_intensity);
+	glUniform1f(renderer->shaders.bevel.shade_intensity, options->shade_intensity);
+	glUniform1f(renderer->shaders.bevel.shoulder, options->shoulder);
+
+	render(&box, &clip_region, renderer->shaders.bevel.pos_attrib);
+	pixman_region32_fini(&clip_region);
+
+	glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+
+	pop_fx_debug(renderer);
+}
+
 void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 		struct fx_render_blur_pass_options *fx_options) {
 	if (pass->fx_offscreen_buffers == NULL) {
