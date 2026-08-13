@@ -2128,8 +2128,14 @@ impl Window {
                 (radius as f64 * self.scale) as i32,
             );
             let want_shadow = !is_status && (self.wm_requested.ssd || is_decorated) && !self.is_fullscreen();
+                // The bevel keys on its OWN app list, not on is_decorated:
+                // every cce-ui app draws its own bevel, so a compositor one
+                // would sit on top of it.
+                let want_bevel = !is_status
+                    && !self.is_fullscreen()
+                    && (*self.server).wm.is_beveled_app(&app_id);
             self.update_shadow(width, height, radius, want_shadow);
-                self.update_bevel(width, height, radius, want_shadow);
+                self.update_bevel(width, height, radius, want_bevel);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
             // Device px, like the blur radius above: the surface content is
@@ -2592,8 +2598,14 @@ impl Window {
                 // from before the gesture, so the punch-out overruns the shrunken
                 // window and swallows the shadow whole.
                 let want_shadow = !is_status && (self.wm_requested.ssd || is_decorated) && !self.is_fullscreen();
+                // The bevel keys on its OWN app list, not on is_decorated:
+                // every cce-ui app draws its own bevel, so a compositor one
+                // would sit on top of it.
+                let want_bevel = !is_status
+                    && !self.is_fullscreen()
+                    && (*self.server).wm.is_beveled_app(&app_id);
                 self.update_shadow(width, height, radius, want_shadow);
-                self.update_bevel(width, height, radius, want_shadow);
+                self.update_bevel(width, height, radius, want_bevel);
             }
 
             self.scale_only_render_finish();

@@ -180,6 +180,7 @@ pub struct WindowManager {
     /// treatment (rounded corner clip, blur-behind, shadow) alongside cce-* apps
     /// and SSD requesters.
     pub rounded_apps: Vec<String>,
+    pub bevel_apps: Vec<String>,
 }
 
 /// `CCE_DIRTY_BACKTRACE=1` — who called `dirty_windowing`. Separate from the
@@ -268,6 +269,7 @@ impl WindowManager {
         self.last_window_states = Vec::new();
         self.pending_placements = Vec::new();
         self.rounded_apps = Vec::new();
+        self.bevel_apps = Vec::new();
         self.shutting_down = false;
         self.layout = crate::config::Layout::default();
         self.output_scale = 1.0;
@@ -806,6 +808,15 @@ impl WindowManager {
     /// render sites must all agree or the effects visibly disagree per pass.
     pub fn is_decorated_app(&self, app_id: &str) -> bool {
         app_id.starts_with("cce-") || self.rounded_apps.iter().any(|a| a == app_id)
+    }
+
+    /// Should the compositor draw an edge bevel on this app? Unlike
+    /// `is_decorated_app` there is NO implicit cce-* arm: every cce-ui app
+    /// draws its own bevel, and a second one from the compositor just doubles
+    /// the rim. Only apps named in `bevel_apps` (defaulting to `rounded_apps`)
+    /// get one.
+    pub fn is_beveled_app(&self, app_id: &str) -> bool {
+        self.bevel_apps.iter().any(|a| a == app_id)
     }
 
     pub unsafe fn match_and_remove_restore_state(&mut self, app_id: &str, title: &str) -> Option<SavedWindowState> {

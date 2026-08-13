@@ -319,6 +319,13 @@ pub struct WindowManagerConfig {
     /// decorated-window treatment: rounded corner clip, blur-behind, shadow.
     /// KDL: `rounded_apps "claude-desktop" "org.example.App"`.
     pub rounded_apps: Option<Vec<String>>,
+    /// Which apps the compositor draws an edge BEVEL on. Separate from
+    /// `rounded_apps` because drawing one is only right for apps that do not
+    /// bevel themselves — every cce-ui app already draws its own, so beveling
+    /// them compositor-side doubles the rim. Unset falls back to
+    /// `rounded_apps` (never the implicit cce-* set).
+    /// KDL: `bevel_apps "claude-desktop"`.
+    pub bevel_apps: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
@@ -2003,7 +2010,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let center_on_spawn = get_child_arg_bool_opt(node, "center_on_spawn");
         let corner_shape = get_child_arg_f64_opt(node, "corner_shape");
         let rounded_apps = get_child_args_string_vec_opt(node, "rounded_apps");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, corner_shape, rounded_apps });
+        let bevel_apps = get_child_args_string_vec_opt(node, "bevel_apps");
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, corner_shape, rounded_apps, bevel_apps });
     }
 
     Ok(Config {
@@ -2070,6 +2078,13 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         .as_ref()
         .and_then(|wm| wm.rounded_apps.clone())
         .unwrap_or_default();
+    // Unset means "same apps as rounded_apps" — which deliberately excludes
+    // the implicit cce-* set, since those draw their own bevels.
+    state.bevel_apps = config
+        .window_manager
+        .as_ref()
+        .and_then(|wm| wm.bevel_apps.clone())
+        .unwrap_or_else(|| state.rounded_apps.clone());
 
     // Feed scenefx's rounded-corner shaders the DE-wide corner-shape exponent
     // (clamped like cce-ui's corner_shape()). Plain C state, safe pre-renderer
