@@ -198,6 +198,16 @@ pub(crate) fn arrange_debug() -> bool {
     *FLAG.get_or_init(|| std::env::var_os("CCE_ARRANGE_DEBUG").is_some())
 }
 
+/// `CCE_MANAGE_DEBUG=1` — per-stage timing of the manage/render transaction.
+/// A 1 Hz status-bar clock commit runs a full transaction, and the compositor
+/// burns ~17% of a core on an idle desktop; gating and removing the logging and
+/// the state write did not move that number, so the work is in the transaction
+/// itself. One line per phase, emitted once per transaction.
+pub(crate) fn manage_debug() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("CCE_MANAGE_DEBUG").is_some())
+}
+
 impl WindowManager {
     pub unsafe fn init(&mut self) -> Result<(), ()> {
         // This is a stub for the 0-arg struct instantiation.
@@ -1281,7 +1291,10 @@ impl WindowManager {
             self.sent.session_locked = session_locked;
         }
 
+        let mt0 = if manage_debug() { Some(std::time::Instant::now()) } else { None };
+
         (*self.server).om.auto_layout();
+        let mt_auto = mt0.map(|s| s.elapsed().as_micros());
 
         let outputs = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*outputs).next;
@@ -1291,6 +1304,8 @@ impl WindowManager {
             (*output).manage_start();
             curr = next;
         }
+
+        let mt_outputs = mt0.map(|s| s.elapsed().as_micros());
 
         if !self.sent.output_config.is_null() {
             log::warn!("sent.output_config was not null in manage_start, destroying old configuration");
@@ -1304,6 +1319,7 @@ impl WindowManager {
         for &win_ptr in self.windows.iter() {
             (*win_ptr).manage_start();
         }
+        let mt_windows = mt0.map(|s| s.elapsed().as_micros());
 
         let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*seats).next;
@@ -1314,7 +1330,19 @@ impl WindowManager {
             curr = next;
         }
 
+        let mt_seats = mt0.map(|s| s.elapsed().as_micros());
+
         self.arrange_views();
+
+        if let (Some(s), Some(a), Some(o), Some(w), Some(t)) =
+            (mt0, mt_auto, mt_outputs, mt_windows, mt_seats)
+        {
+            let total = s.elapsed().as_micros();
+            log::info!(
+                "[manage] start total={}us auto_layout={}us outputs={}us windows={}us(n={}) seats={}us arrange={}us",
+                total, a, o - a, w - o, self.windows.count(), t - w, total - t
+            );
+        }
 
         if !self.object.is_null() {
             ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_MANAGER_V1_MANAGE_START);
@@ -1427,6 +1455,8 @@ impl WindowManager {
         assert!(matches!(self.state, WindowManagerState::Render));
         self.state = WindowManagerState::Idle;
         self.cancel_timeout_timer();
+
+        let rf0 = if manage_debug() { Some(std::time::Instant::now()) } else { None };
 
         log::debug!("render sequence finish");
 
@@ -1629,7 +1659,15 @@ impl WindowManager {
         if self.scheduled.dirty || self.scheduled.dirty_lazy || self.rendering_scheduled.dirty {
             self.add_dirty_idle();
         }
+        let sv0 = if manage_debug() { Some(std::time::Instant::now()) } else { None };
         self.save_state();
+        if let (Some(r), Some(s)) = (rf0, sv0) {
+            log::info!(
+                "[manage] render_finish total={}us save_state={}us",
+                r.elapsed().as_micros(),
+                s.elapsed().as_micros()
+            );
+        }
     }
 }
 
