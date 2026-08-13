@@ -2482,8 +2482,11 @@ impl Window {
             // Disable backdrop blur during active viewport zoom/pan for maximum performance,
             // EXCEPT for cce-* apps, which we keep blurred during the pan so their translucent
             // backgrounds don't flicker as blur toggles on/off across motion frames.
+            // The geometry below is computed for EVERY window regardless: the drop
+            // shadow has to track the zoom even where live blur does not (see the
+            // update_shadow call at the end of the block).
             let app_id = self.get_app_id_string().unwrap_or_default();
-            if app_id.starts_with("cce-") {
+            {
                 let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                                 app_id.starts_with("cce-status");
                 let is_decorated = (*self.server).wm.is_decorated_app(&app_id);
@@ -2548,22 +2551,30 @@ impl Window {
                 let radius = if requested.circular { radius } else { widen_corner_radius(radius, actual_w as i32, actual_h as i32) };
                 let width = (actual_w as f64 * self.scale) as i32;
                 let height = (actual_h as f64 * self.scale) as i32;
-                ffi::river_scene_node_enable_blur(
-                    self.tree as *mut ffi::wlr_scene_node,
-                    blur_enabled,
-                    use_optimized,
-                    ignore_transparent,
-                    0,
-                    0,
-                    width,
-                    height,
-                    (radius as f64 * self.scale) as i32,
-                );
+                if app_id.starts_with("cce-") {
+                    ffi::river_scene_node_enable_blur(
+                        self.tree as *mut ffi::wlr_scene_node,
+                        blur_enabled,
+                        use_optimized,
+                        ignore_transparent,
+                        0,
+                        0,
+                        width,
+                        height,
+                        (radius as f64 * self.scale) as i32,
+                    );
+                } else {
+                    // Tearing the blur down: radius is irrelevant, the nodes are destroyed.
+                    ffi::river_scene_node_enable_blur(self.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true, 0, 0, 0, 0, 0);
+                }
+                // Every window, blurred or not: the shadow's size, blur sigma,
+                // offset and — critically — the clipped region that punches the
+                // window out of it are all scale-dependent, and nothing else on
+                // the motion path touches them. Left stale they keep the scale
+                // from before the gesture, so the punch-out overruns the shrunken
+                // window and swallows the shadow whole.
                 let want_shadow = !is_status && (self.wm_requested.ssd || is_decorated) && !self.is_fullscreen();
                 self.update_shadow(width, height, radius, want_shadow);
-            } else {
-                // Tearing the blur down: radius is irrelevant, the nodes are destroyed.
-                ffi::river_scene_node_enable_blur(self.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true, 0, 0, 0, 0, 0);
             }
 
             self.scale_only_render_finish();

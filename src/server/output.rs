@@ -560,6 +560,7 @@ impl Output {
                     ffi::river_scene_node_get_enabled((*window).tree as *mut ffi::wlr_scene_node),
                 );
                 if let Ok(tag) = std::ffi::CString::new(app) {
+                    ffi::river_scene_shadow_dbg((*window).shadow, tag.as_ptr());
                     ffi::river_scene_ovdbg_dump(
                         (*window).tree as *mut ffi::wlr_scene_node,
                         tag.as_ptr(),

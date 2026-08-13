@@ -960,3 +960,21 @@ static void river_ovdbg_buffer_iter(struct wlr_scene_buffer *buffer,
 void river_scene_ovdbg_dump(struct wlr_scene_node *node, const char *tag) {
 	wlr_scene_node_for_each_buffer(node, river_ovdbg_buffer_iter, (void *)tag);
 }
+
+/* Overview-delay/shadow debugging: report a window's drop-shadow node state so
+ * it can be compared against the window's current zoom scale. Everything here
+ * is device px, as update_shadow writes it. */
+void river_scene_shadow_dbg(struct wlr_scene_shadow *shadow, const char *tag) {
+	if (!shadow) {
+		fprintf(stderr, "[ovdbg] %s shadow=NULL\n", tag);
+		return;
+	}
+	struct wlr_scene_node *node = &shadow->node;
+	fprintf(stderr,
+		"[ovdbg] %s shadow en=%d pos=(%d,%d) size=%dx%d sigma=%.1f radius=%d "
+		"clip=(%d,%d %dx%d)\n",
+		tag, node->enabled, node->x, node->y, shadow->width, shadow->height,
+		shadow->blur_sigma, shadow->corner_radius,
+		shadow->clipped_region.area.x, shadow->clipped_region.area.y,
+		shadow->clipped_region.area.width, shadow->clipped_region.area.height);
+}
