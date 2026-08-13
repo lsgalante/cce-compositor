@@ -2613,6 +2613,36 @@ impl Window {
         }
     }
 
+    /// The backplate / content-clip corner radius in logical px, before span
+    /// widening. Single source for every writer of that radius: the two render
+    /// paths clip the surface with it, and `draw_borders` shapes the backplate
+    /// rect with it. Those disagreed — draw_borders applied the BORDER ring's
+    /// radius to the backplate node and, running last, silently overrode the
+    /// value set_rendering_state had just written, making
+    /// `backplate_corner_radius` dead config.
+    pub unsafe fn backplate_radius_base(&self) -> i32 {
+        if self.is_fullscreen() {
+            return 0;
+        }
+        if self.rendering_requested.circular {
+            let w = self.rendering_sent.width as i32;
+            let h = self.rendering_sent.height as i32;
+            return w.min(h) / 2;
+        }
+        let app_id = self.get_app_id_string().unwrap_or_default();
+        let is_status = self.tiling_mode == crate::tiling::TilingMode::Status
+            || app_id.starts_with("cce-status");
+        if is_status {
+            return 0;
+        }
+        let is_decorated = (*self.server).wm.is_decorated_app(&app_id);
+        if self.wm_requested.ssd || is_decorated {
+            (*self.server).wm.layout.backplate_corner_radius
+        } else {
+            0
+        }
+    }
+
     /// Sync the drop shadow with the current geometry. `width`/`height` are the
     /// content size in device px, `radius` the corner radius in logical px (as
     /// computed for the blur/rounding paths). scenefx's box-shadow shader draws
@@ -2925,9 +2955,15 @@ impl Window {
         let bg_height = (self.box_geom.height as f64 * self.scale) as i32;
         ffi::river_scene_rect_set_size_if_changed(self.window_background, bg_width, bg_height);
         ffi::wlr_scene_rect_set_color(self.window_background, border_color.as_ptr());
-        // The background plate sits directly under the client's plate, so its
-        // corners take the same span widening as the blur/clip radius.
-        let bg_radius = widen_corner_radius(border.corner_radius, self.box_geom.width, self.box_geom.height);
+        // The background plate sits directly under the client's plate, so it
+        // takes the BACKPLATE radius and the same span widening as the
+        // blur/clip radius — not the border ring's radius, which is a
+        // separate key describing a different edge.
+        let bg_radius = widen_corner_radius(
+            self.backplate_radius_base(),
+            self.box_geom.width,
+            self.box_geom.height,
+        );
         ffi::river_scene_rect_set_corner_radius(self.window_background, (bg_radius as f64 * self.scale) as i32);
         ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden && self.wm_requested.ssd);
 
