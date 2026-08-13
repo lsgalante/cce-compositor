@@ -186,12 +186,12 @@ impl Default for Layout {
             desktop_cell_fade_inset: 0,
             desktop_grid_fade_mode: "linear".to_string(),
             bevel_enabled: true,
-            bevel_thickness: 6.0,
+            bevel_thickness: 10.0,
             bevel_light_x: -0.7071,
             bevel_light_y: -0.7071,
-            bevel_light_intensity: 0.35,
-            bevel_shade_intensity: 0.30,
-            bevel_shoulder: 0.65,
+            bevel_light_intensity: 0.6,
+            bevel_shade_intensity: 0.5,
+            bevel_shoulder: 0.55,
             bevel_color: [1.0, 1.0, 1.0, 1.0],
             shadow_enabled: true,
             shadow_sigma: 22.0,
@@ -459,12 +459,12 @@ fn default_shadow_color() -> String { "#0000008c".to_string() }
 fn default_shadow_offset_x() -> i64 { 7 }
 fn default_shadow_offset_y() -> i64 { 7 }
 fn default_bevel_enabled() -> bool { true }
-fn default_bevel_thickness() -> f64 { 6.0 }
+fn default_bevel_thickness() -> f64 { 10.0 }
 /// Compass point the light comes FROM, matching the shadow's top-left source.
 fn default_bevel_light() -> String { "top-left".to_string() }
-fn default_bevel_light_intensity() -> f64 { 0.35 }
-fn default_bevel_shade_intensity() -> f64 { 0.30 }
-fn default_bevel_shoulder() -> f64 { 0.65 }
+fn default_bevel_light_intensity() -> f64 { 0.6 }
+fn default_bevel_shade_intensity() -> f64 { 0.5 }
+fn default_bevel_shoulder() -> f64 { 0.55 }
 fn default_bevel_color() -> String { "#ffffffff".to_string() }
 
 /// Map a compass point to a unit vector pointing TOWARD the light, in screen
