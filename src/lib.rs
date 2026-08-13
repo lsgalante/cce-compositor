@@ -20,6 +20,8 @@ pub mod xkb_bindings;
 pub mod layer_shell;
 #[path = "server/scene.rs"]
 pub mod scene;
+#[path = "server/text.rs"]
+pub mod text;
 // The window-management policy layer lives in the sibling crate
 // `cce-window-manager` (pure Rust, no FFI). The aliases keep the historical
 // `crate::policy::…` / `crate::tiling` / `crate::slotmap` paths working.

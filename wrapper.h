@@ -283,3 +283,4 @@ void river_scene_rect_set_corner_radius(struct wlr_scene_rect *rect, int radius)
 #endif // WRAPPER_H
 void river_scene_ovdbg_dump(struct wlr_scene_node *node, const char *tag);
 void river_scene_shadow_dbg(struct wlr_scene_shadow *shadow, const char *tag);
+struct wlr_buffer *river_data_buffer_create(int width, int height, size_t stride, const void *data);

@@ -47,6 +47,9 @@ void river_init_wlroots_log(enum wlr_log_importance importance) {
 
 #include <time.h>
 #include <scenefx/types/wlr_scene.h>
+#include <wlr/types/wlr_buffer.h>
+#include <wlr/interfaces/wlr_buffer.h>
+#include <drm_fourcc.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/util/region.h>
 #include <wlr/types/wlr_compositor.h>
@@ -977,4 +980,72 @@ void river_scene_shadow_dbg(struct wlr_scene_shadow *shadow, const char *tag) {
 		shadow->blur_sigma, shadow->corner_radius,
 		shadow->clipped_region.area.x, shadow->clipped_region.area.y,
 		shadow->clipped_region.area.width, shadow->clipped_region.area.height);
+}
+
+/* ------------------------------------------------------------------
+ * CPU-backed buffer: lets the compositor hand the renderer pixels it
+ * rasterized itself (the desktop-grid square labels). wlroots has no public
+ * constructor for this, so implement the minimal wlr_buffer: the renderer
+ * reaches the pixels through data-ptr access and uploads them like any shm
+ * buffer. The data is copied in, so the caller's Rust Vec can be dropped.
+ * ------------------------------------------------------------------ */
+struct cce_data_buffer {
+	struct wlr_buffer base;
+	void *data;
+	uint32_t format;
+	size_t stride;
+};
+
+static void cce_data_buffer_destroy(struct wlr_buffer *wlr_buffer) {
+	struct cce_data_buffer *buf = (struct cce_data_buffer *)wlr_buffer;
+	free(buf->data);
+	free(buf);
+}
+
+static bool cce_data_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffer,
+		uint32_t flags, void **data, uint32_t *format, size_t *stride) {
+	struct cce_data_buffer *buf = (struct cce_data_buffer *)wlr_buffer;
+	if (flags & WLR_BUFFER_DATA_PTR_ACCESS_WRITE) {
+		return false; /* immutable once built */
+	}
+	*data = buf->data;
+	*format = buf->format;
+	*stride = buf->stride;
+	return true;
+}
+
+static void cce_data_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer) {
+	/* nothing to unmap */
+}
+
+static const struct wlr_buffer_impl cce_data_buffer_impl = {
+	.destroy = cce_data_buffer_destroy,
+	.begin_data_ptr_access = cce_data_buffer_begin_data_ptr_access,
+	.end_data_ptr_access = cce_data_buffer_end_data_ptr_access,
+};
+
+/* Copy `data` (ARGB8888, premultiplied, `stride` bytes per row) into a new
+ * buffer. Returns NULL on allocation failure. The buffer starts with one
+ * reference, as wlr_buffer_init leaves it: pass it to a scene buffer and then
+ * drop this reference with wlr_buffer_drop(). */
+struct wlr_buffer *river_data_buffer_create(int width, int height,
+		size_t stride, const void *data) {
+	if (width <= 0 || height <= 0 || stride == 0) {
+		return NULL;
+	}
+	struct cce_data_buffer *buf = calloc(1, sizeof(*buf));
+	if (!buf) {
+		return NULL;
+	}
+	size_t size = stride * (size_t)height;
+	buf->data = malloc(size);
+	if (!buf->data) {
+		free(buf);
+		return NULL;
+	}
+	memcpy(buf->data, data, size);
+	buf->format = DRM_FORMAT_ARGB8888;
+	buf->stride = stride;
+	wlr_buffer_init(&buf->base, &cce_data_buffer_impl, width, height);
+	return &buf->base;
 }

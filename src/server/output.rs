@@ -172,6 +172,17 @@ pub struct Output {
     pub last_grid_spec: Option<crate::policy::api::BackgroundSpec>,
     pub grid_rect_pool: Vec<*mut ffi::wlr_scene_rect>,
     pub grid_force_redraw_frames: u8,
+    /// Scene nodes for the per-square chess-style labels (overview only), and
+    /// the rasterized glyph buffers behind them. Pooled exactly like
+    /// `grid_rect_pool`: reused across frames, disabled past the live count.
+    /// Each entry remembers the buffer it currently shows, because
+    /// `wlr_scene_buffer_set_buffer` damages the node unconditionally — even
+    /// when handed the buffer already on it — and these are re-walked every
+    /// frame while the overview camera moves.
+    pub cell_label_pool: Vec<(*mut ffi::wlr_scene_buffer, *mut ffi::wlr_buffer)>,
+    pub cell_labels: crate::text::LabelCache,
+    /// Label point size actually in use, so a zoom change can re-rasterize.
+    pub last_label_px: u32,
 
     pub destroy: ffi::wl_listener,
     pub request_state: ffi::wl_listener,
@@ -428,6 +439,9 @@ impl Output {
             last_grid_spec: None,
             grid_rect_pool: Vec::new(),
             grid_force_redraw_frames: 0,
+            cell_label_pool: Vec::new(),
+            cell_labels: Default::default(),
+            last_label_px: 0,
             destroy: std::mem::zeroed(),
             request_state: std::mem::zeroed(),
             frame: std::mem::zeroed(),
@@ -869,6 +883,127 @@ impl Output {
             for i in pool_idx..pool.len() {
                 ffi::wlr_scene_node_set_enabled(pool[i] as *mut ffi::wlr_scene_node, false);
             }
+        }
+
+        self.draw_cell_labels();
+    }
+
+    /// Name every visible desktop square, chess style, while overview is open.
+    ///
+    /// The labels live in the grid tree, so they inherit its modulo shift and
+    /// ride along with a pan for free; only the world index of the first drawn
+    /// cell (`GridFrame::first_col/row`, computed in policy) is needed to know
+    /// what to write. Outside overview every node is disabled — this is a
+    /// navigation aid, not desktop furniture.
+    unsafe fn draw_cell_labels(&mut self) {
+        let wm = &(*self.server).wm;
+        let overview = wm.mode == crate::window_manager::WindowManagerMode::Overview;
+
+        if !overview {
+            if !self.cell_label_pool.is_empty() {
+                for &(node, _) in &self.cell_label_pool {
+                    ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, false);
+                }
+            }
+            return;
+        }
+        if self.grid_tree.is_null() {
+            return;
+        }
+
+        let (viewport_w, viewport_h) = self.current.dimensions();
+        let spec = wm.layout.background_spec();
+        let crate::policy::api::BackgroundSpec::Grid(grid) = &spec else {
+            self.disable_cell_labels();
+            return;
+        };
+        let frame = crate::policy::background::grid_frame(
+            grid,
+            wm.camera(),
+            viewport_w,
+            viewport_h,
+            self.sent.x,
+            self.sent.y,
+        );
+        let Some(cells) = &frame.cells else {
+            self.disable_cell_labels();
+            return;
+        };
+
+        // A fixed fraction of the on-screen cell, clamped so labels stay
+        // readable when zoomed far out and don't swell into billboards when
+        // near. Below the floor there is no room for glyphs at all.
+        let px = ((cells.cell_px as f32) * 0.16).clamp(9.0, 40.0);
+        if px * 3.0 > cells.cell_px as f32 {
+            self.disable_cell_labels();
+            return;
+        }
+        let px_key = px.round() as u32;
+        if px_key != self.last_label_px || self.cell_labels.len() > 512 {
+            self.cell_labels.clear();
+            self.last_label_px = px_key;
+            // The freed buffers' addresses can be handed straight back to the
+            // next rasterization, so a stale pointer here would compare equal
+            // to a different label and skip the update.
+            for entry in self.cell_label_pool.iter_mut() {
+                entry.1 = std::ptr::null_mut();
+            }
+        }
+
+        let inset = (cells.cell_px as f64 * 0.06).round() as i32;
+        let mut idx = 0usize;
+        for col in 0..=cells.cols {
+            let rel_x = (col as f64 * frame.period_px_exact).round() as i32;
+            for row in 0..=cells.rows {
+                let rel_y = (row as f64 * frame.period_px_exact).round() as i32;
+                let text = crate::policy::cells::square_label(
+                    frame.first_col + col,
+                    frame.first_row + row,
+                );
+                let Some(label) = self.cell_labels.get(&text, px) else {
+                    continue;
+                };
+                let (buf, lw, lh) = (label.buffer, label.width, label.height);
+
+                let node = if idx < self.cell_label_pool.len() {
+                    let (node, shown) = self.cell_label_pool[idx];
+                    if shown != buf {
+                        ffi::wlr_scene_buffer_set_buffer(node, buf);
+                        self.cell_label_pool[idx].1 = buf;
+                    }
+                    ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, true);
+                    node
+                } else {
+                    let node = ffi::wlr_scene_buffer_create(self.grid_tree, buf);
+                    if node.is_null() {
+                        continue;
+                    }
+                    self.cell_label_pool.push((node, buf));
+                    node
+                };
+                ffi::wlr_scene_buffer_set_dest_size(node, lw, lh);
+                // Top-left corner of the cell, inside the fade inset.
+                ffi::river_scene_node_set_position_if_changed(
+                    node as *mut ffi::wlr_scene_node,
+                    rel_x + inset,
+                    rel_y + inset,
+                );
+                let _ = lh;
+                idx += 1;
+            }
+        }
+
+        for i in idx..self.cell_label_pool.len() {
+            ffi::wlr_scene_node_set_enabled(
+                self.cell_label_pool[i].0 as *mut ffi::wlr_scene_node,
+                false,
+            );
+        }
+    }
+
+    unsafe fn disable_cell_labels(&self) {
+        for &(node, _) in &self.cell_label_pool {
+            ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, false);
         }
     }
 }
