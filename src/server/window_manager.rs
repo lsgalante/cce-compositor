@@ -3100,6 +3100,65 @@ impl WindowManager {
                 (*target).close();
                 format!("ok {}\n", title)
             }
+            "move-window" => {
+                // move-window <square> [app_id|id] — put a window on a named
+                // desktop square (chess style, e.g. "C-9"). With no app_id the
+                // focused window moves. A Tiled window keeps the SHAPE of its
+                // block and is re-anchored with its top-left on that square;
+                // a Floating window keeps its size.
+                if parts.len() < 2 {
+                    return "error: usage: move-window <square> [app_id|id]\n".to_string();
+                }
+                let sp = self.layout.snap_params();
+                let Some((col, row)) = crate::policy::cells::parse_square(parts[1]) else {
+                    return format!(
+                        "error: '{}' is not a square (expected e.g. A1, C-9, -B2)\n",
+                        parts[1]
+                    );
+                };
+                let target: *mut Window = if parts.len() >= 3 {
+                    self.find_window_by_query(&parts[2..].join(" "))
+                } else if let Some(seat) = self.first_seat() {
+                    match (*seat).focused {
+                        crate::seat::Focus::Window(w) => w,
+                        _ => std::ptr::null_mut(),
+                    }
+                } else {
+                    std::ptr::null_mut()
+                };
+                if target.is_null() {
+                    return "error: window not found\n".to_string();
+                }
+                if (*target).minimized {
+                    (*target).minimized = false;
+                }
+
+                let (x, y, _, _) = crate::policy::cells::square_rect(
+                    col,
+                    row,
+                    sp.cell_size,
+                    sp.gap_width,
+                    sp.cell_inset,
+                );
+                (*target).virtual_x = x;
+                (*target).virtual_y = y;
+                // Saved floating geometry follows the window, so a later
+                // Tiled -> Floating transition restores it at the new square
+                // rather than yanking it back to where it used to live.
+                (*target).saved_floating_virtual_x = x;
+                (*target).saved_floating_virtual_y = y;
+                self.dirty_windowing();
+
+                let cell = crate::policy::cells::window_span_label(
+                    x,
+                    y,
+                    (*target).box_geom.width as f64,
+                    (*target).box_geom.height as f64,
+                    sp.cell_size,
+                    sp.gap_width,
+                );
+                format!("ok cell={} vx={:.1} vy={:.1}\n", cell, x, y)
+            }
             "center-window" | "bring-window" => {
                 // Pan the desktop so the target window (given app_id/id, or the
                 // focused window if omitted) is centered in the output, then focus
@@ -3295,10 +3354,21 @@ impl WindowManager {
                 }
 
                 let mut out = String::new();
+                let sp = self.layout.snap_params();
                 for &w in self.windows.iter() {
                     if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                         let app_id = (*w).get_app_id_string().unwrap_or_default();
                         let title = (*w).get_title_string().unwrap_or_default();
+                        // Which desktop square(s) the window sits on, chess
+                        // style: "C-9" for one, "C-9:D-9" for a block.
+                        let cell = crate::policy::cells::window_span_label(
+                            (*w).virtual_x,
+                            (*w).virtual_y,
+                            (*w).box_geom.width as f64,
+                            (*w).box_geom.height as f64,
+                            sp.cell_size,
+                            sp.gap_width,
+                        );
                         if as_json {
                             out.push_str(&serde_json::json!({
                                 "id": (*w).ref_key.index,
@@ -3311,6 +3381,7 @@ impl WindowManager {
                                 "h": (*w).box_geom.height,
                                 "vx": (*w).virtual_x,
                                 "vy": (*w).virtual_y,
+                                "cell": cell,
                                 "minimized": (*w).minimized,
                                 "has_parent": (*w).has_parent,
                                 "focused": w == focused_window,
@@ -3319,7 +3390,7 @@ impl WindowManager {
                             out.push('\n');
                         } else {
                             out.push_str(&format!(
-                                "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} minimized={} has_parent={} focused={} ssd={}\n",
+                                "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} cell={} minimized={} has_parent={} focused={} ssd={}\n",
                                 (*w).ref_key.index,
                                 app_id,
                                 title,
@@ -3330,6 +3401,7 @@ impl WindowManager {
                                 (*w).box_geom.height,
                                 (*w).virtual_x,
                                 (*w).virtual_y,
+                                cell,
                                 (*w).minimized,
                                 (*w).has_parent,
                                 w == focused_window,

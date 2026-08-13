@@ -1185,13 +1185,24 @@ impl Seat {
 
                             let vx = op.start_win_virtual_x + virtual_dx;
                             let vy = op.start_win_virtual_y + virtual_dy;
-                            let (vx, vy) = crate::policy::snap::snap_move(
-                                vx,
-                                vy,
-                                (*win).box_geom.width as f64,
-                                (*win).box_geom.height as f64,
-                                &sp,
-                            );
+                            // A Tiled window only ever occupies whole squares,
+                            // so its drag snaps hard to the nearest one. The
+                            // magnetic snap below is for Floating windows,
+                            // which use it to decide whether they land aligned
+                            // (and so become Tiled) at op_end.
+                            let (vx, vy) = if (*self.server).wm.get_mode_for_window(win)
+                                == crate::tiling::TilingMode::Tiled
+                            {
+                                crate::policy::snap::snap_move_tiled(vx, vy, &sp)
+                            } else {
+                                crate::policy::snap::snap_move(
+                                    vx,
+                                    vy,
+                                    (*win).box_geom.width as f64,
+                                    (*win).box_geom.height as f64,
+                                    &sp,
+                                )
+                            };
                             (*win).virtual_x = vx;
                             (*win).virtual_y = vy;
 
