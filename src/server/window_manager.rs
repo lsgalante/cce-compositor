@@ -181,6 +181,15 @@ fn dirty_backtrace_debug() -> bool {
     *FLAG.get_or_init(|| std::env::var_os("CCE_DIRTY_BACKTRACE").is_some())
 }
 
+/// `CCE_ARRANGE_DEBUG=1` — the arrange pass and its per-window dump. A status
+/// bar commit runs a full arrange every second, so at debug level this alone
+/// wrote ~15-20 lines/second (and allocated a title + app_id String per window
+/// per pass) on an otherwise idle desktop.
+pub(crate) fn arrange_debug() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("CCE_ARRANGE_DEBUG").is_some())
+}
+
 impl WindowManager {
     pub unsafe fn init(&mut self) -> Result<(), ()> {
         // This is a stub for the 0-arg struct instantiation.
@@ -1732,8 +1741,8 @@ impl WindowManager {
 
     pub unsafe fn arrange_views(&mut self) {
         self.update_restore_placeholders();
-        log::debug!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
-        if log::log_enabled!(log::Level::Debug) {
+        if arrange_debug() {
+            log::debug!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
             for (idx, &win_ptr) in self.windows.iter().enumerate() {
                 if win_ptr.is_null() { continue; }
                 let title = (*win_ptr).get_title_string().unwrap_or_else(|| "None".to_string());

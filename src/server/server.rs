@@ -203,7 +203,6 @@ pub struct WlrXwayland {
 
 // Wayland list manipulation utilities
 pub unsafe fn wl_list_insert(list: *mut WlList, elm: *mut WlList) {
-    log::info!("wl_list_insert: list={:?}, elm={:?}", list, elm);
     if list.is_null() {
         log::error!("wl_list_insert: list is null!");
         return;
@@ -216,7 +215,6 @@ pub unsafe fn wl_list_insert(list: *mut WlList, elm: *mut WlList) {
     (*elm).next = (*list).next;
     (*(*list).next).prev = elm;
     (*list).next = elm;
-    log::info!("wl_list_insert: done");
 }
 
 pub unsafe fn wl_list_remove(elm: *mut WlList) {
