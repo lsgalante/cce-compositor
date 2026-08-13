@@ -114,6 +114,14 @@ pub struct WindowManager {
     pub injected_key_mods: u32,
     pub restore_queue: Vec<SavedWindowState>,
     pub last_window_states: Vec<SavedWindowState>,
+    /// The JSON last successfully written to `state.json`. `save_state` runs at
+    /// the end of every transaction commit, and a 1 Hz status-bar clock tick is
+    /// enough to run a transaction — so an idle desktop rewrote ~21KB to disk
+    /// every second for state that never changed. Skipping the write when the
+    /// serialization is byte-identical keeps the file exactly as current as
+    /// before while making an idle session silent on disk. `None` until the
+    /// first write, so a fresh start always writes once.
+    last_saved_state_json: Option<String>,
     /// One-shot placement hints (`place-next <app_id> <x> <y>` over IPC):
     /// the next map of a floating toplevel with this app_id lands near the
     /// given layout position instead of its remembered spot — widget-spawned
@@ -574,8 +582,6 @@ impl WindowManager {
             log::error!("Could not resolve state file path");
             return;
         };
-        log::debug!("Saving state to {}", path_str);
-        
         let focused_win = self.focused_window();
         let mut saved_wins = Vec::new();
         let mut last_states = self.last_window_states.clone();
@@ -698,12 +704,19 @@ impl WindowManager {
         };
         
         if let Ok(json_str) = serde_json::to_string_pretty(&state) {
+            if self.last_saved_state_json.as_deref() == Some(json_str.as_str()) {
+                return;
+            }
+            log::debug!("Saving state to {}", path_str);
             let path = std::path::Path::new(&path_str);
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            if let Err(e) = std::fs::write(path, json_str) {
-                log::error!("Failed to write state file: {}", e);
+            match std::fs::write(path, &json_str) {
+                // Only remember it once it is actually on disk, so a failed
+                // write is retried on the next transaction rather than latched.
+                Ok(()) => self.last_saved_state_json = Some(json_str),
+                Err(e) => log::error!("Failed to write state file: {}", e),
             }
         }
     }
