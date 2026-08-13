@@ -1711,9 +1711,24 @@ void wlr_scene_buffer_send_frame_done(struct wlr_scene_buffer *scene_buffer,
 	bool visible = !pixman_region32_empty(&scene_buffer->node.visible);
 	if (cce_frame_debug_match(scene_buffer->dst_width, scene_buffer->dst_height)) {
 		pixman_box32_t *extents = pixman_region32_extents(&scene_buffer->node.visible);
-		wlr_log(WLR_INFO, "[cce-frame] t=%lld send_frame_done dst=%dx%d sent=%d visible_extents=(%d,%d %dx%d)",
+		// listeners: is anything wired to turn this signal into a client callback?
+		// (wlr_scene_surface registers one; zero means the emit goes nowhere.)
+		// committed_cb / pending_cb: does the surface actually hold a frame callback
+		// for wlr_surface_send_frame_done to fire? A request stuck in `pending` means
+		// the client asked but the compositor has not applied that commit yet — which
+		// separates "compositor drops it" from "client's request never landed".
+		int listeners = wl_list_length(&scene_buffer->events.frame_done.listener_list);
+		int committed_cb = -1, pending_cb = -1;
+		struct wlr_scene_surface *scene_surface =
+			wlr_scene_surface_try_from_buffer(scene_buffer);
+		if (scene_surface != NULL && scene_surface->surface != NULL) {
+			committed_cb = wl_list_length(&scene_surface->surface->current.frame_callback_list);
+			pending_cb = wl_list_length(&scene_surface->surface->pending.frame_callback_list);
+		}
+		wlr_log(WLR_INFO, "[cce-frame] t=%lld send_frame_done dst=%dx%d sent=%d listeners=%d committed_cb=%d pending_cb=%d visible_extents=(%d,%d %dx%d)",
 				(long long)cce_now_ms(), scene_buffer->dst_width, scene_buffer->dst_height,
-				visible, extents->x1, extents->y1,
+				visible, listeners, committed_cb, pending_cb,
+				extents->x1, extents->y1,
 				extents->x2 - extents->x1, extents->y2 - extents->y1);
 	}
 	if (visible) {
