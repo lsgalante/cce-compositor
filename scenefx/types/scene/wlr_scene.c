@@ -1,8 +1,10 @@
 #include <assert.h>
 #include <pixman.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <wlr/backend.h>
 #include <wlr/render/swapchain.h>
 #include <wlr/render/drm_syncobj.h>
@@ -1661,9 +1663,60 @@ void wlr_scene_buffer_set_transform(struct wlr_scene_buffer *scene_buffer,
 	scene_node_update(&scene_buffer->node, NULL);
 }
 
+// Frame-callback delivery tracer. A demand-driven client cannot repaint while
+// it waits on a frame callback, so a surface silently skipped by the visible
+// gate below stalls until the next output frame that does reach it. Set
+// CCE_FRAME_DEBUG=1 to trace every buffer, or CCE_FRAME_DEBUG=WxH (the dst
+// size, e.g. 504x1032) to trace one window — the filtered form is what to use
+// while measuring, since tracing every buffer adds writes to the very thread
+// whose latency is under test.
+static bool cce_frame_debug_match(int dst_width, int dst_height) {
+	static bool initialized = false;
+	static bool enabled = false;
+	static int want_w = -1, want_h = -1;
+	if (!initialized) {
+		const char *value = getenv("CCE_FRAME_DEBUG");
+		if (value && *value) {
+			enabled = true;
+			// "WxH" matches one size exactly; a bare "W" matches on width only
+			// (a window's height can change under it); anything else traces all.
+			int parsed = sscanf(value, "%dx%d", &want_w, &want_h);
+			if (parsed == 1) {
+				want_h = -1;
+			} else if (parsed != 2) {
+				want_w = want_h = -1;
+			}
+		}
+		initialized = true;
+	}
+	if (!enabled) {
+		return false;
+	}
+	if (want_w < 0) {
+		return true;
+	}
+	return dst_width == want_w && (want_h < 0 || dst_height == want_h);
+}
+
+// Same time base as cce-ui's CCE_PRESENT_DEBUG and cce-system-interface's
+// CCE_HOVER_DEBUG (epoch ms mod 100000) so the three logs interleave directly.
+static int64_t cce_now_ms(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return ((int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000) % 100000;
+}
+
 void wlr_scene_buffer_send_frame_done(struct wlr_scene_buffer *scene_buffer,
 		struct wlr_scene_frame_done_event *event) {
-	if (!pixman_region32_empty(&scene_buffer->node.visible)) {
+	bool visible = !pixman_region32_empty(&scene_buffer->node.visible);
+	if (cce_frame_debug_match(scene_buffer->dst_width, scene_buffer->dst_height)) {
+		pixman_box32_t *extents = pixman_region32_extents(&scene_buffer->node.visible);
+		wlr_log(WLR_INFO, "[cce-frame] t=%lld send_frame_done dst=%dx%d sent=%d visible_extents=(%d,%d %dx%d)",
+				(long long)cce_now_ms(), scene_buffer->dst_width, scene_buffer->dst_height,
+				visible, extents->x1, extents->y1,
+				extents->x2 - extents->x1, extents->y2 - extents->y1);
+	}
+	if (visible) {
 		wl_signal_emit_mutable(&scene_buffer->events.frame_done, event);
 	}
 }

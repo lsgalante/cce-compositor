@@ -897,10 +897,38 @@ unsafe extern "C" fn handle_request_state(listener: *mut ffi::wl_listener, data:
     (*output.server).wm.dirty_windowing();
 }
 
+/// `CCE_FRAME_DEBUG` (any value) also ticks every output frame, so a client's
+/// frame-callback interval can be compared against the rate the output is
+/// actually rendering at — the two diverging is the signature of a surface
+/// being skipped by the scene's visible gate in `wlr_scene_buffer_send_frame_done`.
+fn frame_debug() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("CCE_FRAME_DEBUG").is_some())
+}
+
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let output = &mut *crate::container_of!(listener, Output, frame);
+    let render_start = if frame_debug() {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     if let Err(e) = output.render_and_commit() {
         log::error!("{}", e);
+    }
+    if let Some(start) = render_start {
+        // Epoch ms mod 100000 — the shared tracer time base (see cce-ui's
+        // CCE_PRESENT_DEBUG), so compositor and client logs interleave.
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 100000;
+        log::info!(
+            "[cce-frame] t={} output frame (render_and_commit {}us)",
+            t,
+            start.elapsed().as_micros()
+        );
     }
     let now = util::timestamp();
     let mut ffi_now = ffi::timespec {

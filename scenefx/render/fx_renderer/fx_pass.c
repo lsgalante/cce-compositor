@@ -19,9 +19,23 @@
 #include "scenefx/render/fx_renderer/fx_offscreen_buffers.h"
 #include "scenefx/render/fx_renderer/fx_renderer.h"
 #include "scenefx/types/fx/blur_data.h"
+#include "util/env.h"
 #include "util/matrix.h"
 
 #define MAX_QUADS 86 // 4kb
+
+// The blur traces below sit in the per-node, per-frame render path: at ~10 blur
+// nodes and 60Hz that is ~600 synchronous formatted writes/second on the same
+// thread that composites and delivers frame callbacks. Gate them.
+static bool cce_blur_debug(void) {
+	static bool initialized = false;
+	static bool enabled = false;
+	if (!initialized) {
+		enabled = env_parse_bool("CCE_BLUR_DEBUG");
+		initialized = true;
+	}
+	return enabled;
+}
 
 struct fx_render_texture_options fx_render_texture_options_default(
 		const struct wlr_render_texture_options *base) {
@@ -1115,10 +1129,14 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 	TRACY_BOTH_ZONES_START(renderer);
 	push_fx_debug(renderer);
 
-	wlr_log(WLR_INFO, "[scenefx] add_blur dst_box: %dx%d at (%d, %d), optimized: %d strength: %f",
-			tex_options->base.dst_box.width, tex_options->base.dst_box.height,
-			tex_options->base.dst_box.x, tex_options->base.dst_box.y,
-			fx_options->use_optimized_blur, fx_options->blur_strength);
+	// NOTE: `optimized` here is the flag saying this node SAMPLES the cached
+	// buffer — it is not a re-bake. The bake is add_optimized_blur, below.
+	if (cce_blur_debug()) {
+		wlr_log(WLR_INFO, "[scenefx] add_blur dst_box: %dx%d at (%d, %d), optimized: %d strength: %f",
+				tex_options->base.dst_box.width, tex_options->base.dst_box.height,
+				tex_options->base.dst_box.x, tex_options->base.dst_box.y,
+				fx_options->use_optimized_blur, fx_options->blur_strength);
+	}
 
 	const bool has_strength = fx_options->blur_strength < 1.0;
 	struct fx_framebuffer *buffer = pass->fx_offscreen_buffers->optimized_blur_buffer;
@@ -1224,8 +1242,11 @@ bool fx_render_pass_add_optimized_blur(struct fx_gles_render_pass *pass,
 	TRACY_ZONE_TEXT_f("\tSaturation: %f", fx_options->blur_data->saturation);
 	push_fx_debug(renderer);
 
-	wlr_log(WLR_INFO, "[scenefx] add_optimized_blur dst_box: %dx%d at (%d, %d)",
-			dst_box.width, dst_box.height, dst_box.x, dst_box.y);
+	// The actual cache re-bake (rare: a healthy session bakes only at startup).
+	if (cce_blur_debug()) {
+		wlr_log(WLR_INFO, "[scenefx] add_optimized_blur dst_box: %dx%d at (%d, %d)",
+				dst_box.width, dst_box.height, dst_box.x, dst_box.y);
+	}
 
 	pixman_region32_t clip;
 	pixman_region32_init_rect(&clip,
