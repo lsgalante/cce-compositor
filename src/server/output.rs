@@ -527,6 +527,47 @@ impl Output {
             }
         }
 
+        // Overview-delay debugging: while /tmp/cce-ovdbg exists (contents =
+        // comma-separated app_id substrings), dump the scene-side truth for
+        // matching windows every rendered frame. Toggle live with
+        // `echo firefox,cce-calendar > /tmp/cce-ovdbg`; `rm` to stop.
+        if let Ok(filter) = std::fs::read_to_string("/tmp/cce-ovdbg") {
+            let pats: Vec<&str> = filter.trim().split(',').filter(|p| !p.is_empty()).collect();
+            for &window in wm.windows.iter() {
+                if window.is_null() || (*window).closed {
+                    continue;
+                }
+                let app = (*window).get_app_id_string().unwrap_or_default();
+                if !pats.iter().any(|p| app.contains(p)) {
+                    continue;
+                }
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                eprintln!(
+                    "[ovdbg] t={}.{:03} win {} scale={} req=({},{}) box=({},{}) state={:?} hidden={} saved={} tree_en={}",
+                    now.as_secs(),
+                    now.subsec_millis(),
+                    app,
+                    (*window).scale,
+                    (*window).rendering_requested.x,
+                    (*window).rendering_requested.y,
+                    (*window).box_geom.x,
+                    (*window).box_geom.y,
+                    (*window).state,
+                    (*window).rendering_requested.hidden,
+                    (*window).surfaces.saved,
+                    ffi::river_scene_node_get_enabled((*window).tree as *mut ffi::wlr_scene_node),
+                );
+                if let Ok(tag) = std::ffi::CString::new(app) {
+                    ffi::river_scene_ovdbg_dump(
+                        (*window).tree as *mut ffi::wlr_scene_node,
+                        tag.as_ptr(),
+                    );
+                }
+            }
+        }
+
         let mut state = std::mem::zeroed();
         ffi::wlr_output_state_init(&mut state);
         

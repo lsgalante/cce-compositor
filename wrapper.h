@@ -281,3 +281,4 @@ void river_scene_rect_set_size_if_changed(struct wlr_scene_rect *rect, int width
 void river_scene_rect_set_corner_radius(struct wlr_scene_rect *rect, int radius);
 
 #endif // WRAPPER_H
+void river_scene_ovdbg_dump(struct wlr_scene_node *node, const char *tag);

@@ -929,3 +929,34 @@ int river_scene_buffer_get_dest_height(struct wlr_scene_buffer *scene_buffer) {
 bool river_scene_node_get_enabled(struct wlr_scene_node *node) {
 	return node->enabled;
 }
+
+/* Overview-delay debugging: dump the true scene-side state of every buffer
+ * under a node — enabled flags, absolute position, dest size, whether a
+ * wlr_buffer/texture is attached, the primary output, and the computed
+ * visibility region. The visibility extents are the ground truth for "will
+ * this buffer be drawn": an empty region means the scene considers it
+ * invisible regardless of what the window-manager state says. */
+static void river_ovdbg_buffer_iter(struct wlr_scene_buffer *buffer,
+		int sx, int sy, void *data) {
+	const char *tag = data;
+	struct wlr_scene_node *node = &buffer->node;
+	int lx = 0, ly = 0;
+	bool coords_en = wlr_scene_node_coords(node, &lx, &ly);
+	pixman_box32_t *ext = pixman_region32_extents(&node->WLR_PRIVATE.visible);
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	fprintf(stderr,
+		"[ovdbg] t=%ld.%03ld %s buf=%p en=%d coords_en=%d abs=(%d,%d) "
+		"dst=%dx%d bufwh=%dx%d wlrbuf=%p tex=%p primary=%p vis=(%d,%d %dx%d)\n",
+		(long)ts.tv_sec, ts.tv_nsec / 1000000, tag, (void *)buffer,
+		node->enabled, coords_en, lx, ly,
+		buffer->dst_width, buffer->dst_height,
+		buffer->WLR_PRIVATE.buffer_width, buffer->WLR_PRIVATE.buffer_height,
+		(void *)buffer->buffer, (void *)buffer->WLR_PRIVATE.texture,
+		(void *)buffer->primary_output,
+		ext->x1, ext->y1, ext->x2 - ext->x1, ext->y2 - ext->y1);
+}
+
+void river_scene_ovdbg_dump(struct wlr_scene_node *node, const char *tag) {
+	wlr_scene_node_for_each_buffer(node, river_ovdbg_buffer_iter, (void *)tag);
+}
