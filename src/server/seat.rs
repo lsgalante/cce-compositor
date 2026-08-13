@@ -36,6 +36,12 @@ pub struct SeatOp {
     pub start_pan_x: f64,
     pub start_pan_y: f64,
     pub start_tiling_mode: crate::tiling::TilingMode,
+    /// Was the window Tiled when the drag was GRABBED? Every op site un-tiles
+    /// a tiled window before building this struct (the drag needs it floating
+    /// to follow the pointer), so `start_tiling_mode` already reads Floating
+    /// and cannot answer this. A tiled window's move snaps hard to whole
+    /// squares, so the motion handler has to know.
+    pub start_was_tiled: bool,
     pub start_mode_locked: bool,
     pub started_in_overview: bool,
 }
@@ -1190,9 +1196,13 @@ impl Seat {
                             // magnetic snap below is for Floating windows,
                             // which use it to decide whether they land aligned
                             // (and so become Tiled) at op_end.
-                            let (vx, vy) = if (*self.server).wm.get_mode_for_window(win)
-                                == crate::tiling::TilingMode::Tiled
-                            {
+                            //
+                            // This asks what the window was when GRABBED, not
+                            // what it is now: op_update un-tiles a tiled window
+                            // on the first motion event so the drag can follow
+                            // the pointer, so the live mode is always Floating
+                            // here and a test against it never fires.
+                            let (vx, vy) = if op.start_was_tiled {
                                 crate::policy::snap::snap_move_tiled(vx, vy, &sp)
                             } else {
                                 crate::policy::snap::snap_move(
@@ -1734,6 +1744,7 @@ unsafe extern "C" fn seat_op_start_pointer(
             start_pan_x: (*(*seat).server).wm.desk_pan_x,
             start_pan_y: (*(*seat).server).wm.desk_pan_y,
             start_tiling_mode: crate::tiling::TilingMode::Floating,
+            start_was_tiled: false,
             start_mode_locked: false,
             started_in_overview: false,
         });
