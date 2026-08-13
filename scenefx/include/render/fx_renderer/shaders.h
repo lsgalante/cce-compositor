@@ -167,6 +167,9 @@ struct bevel_shader {
 	GLint position;
 	GLint size;
 	GLint corner_radius;
+	// The shared corner-shape exponent (see corner_alpha.frag) — the rim has
+	// to trace the same superellipse every other corner cut does.
+	GLint corner_shape;
 	GLint thickness;
 	GLint light_dir;
 	GLint light_intensity;

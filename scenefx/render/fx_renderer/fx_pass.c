@@ -1146,6 +1146,9 @@ void fx_render_pass_add_bevel(struct fx_gles_render_pass *pass,
 	glUniform2f(renderer->shaders.bevel.size, box.width, box.height);
 	glUniform2f(renderer->shaders.bevel.position, box.x, box.y);
 	glUniform1f(renderer->shaders.bevel.corner_radius, options->corner_radius);
+	// The radius the compositor sends is span-widened for this exponent, so
+	// the rim has to read it as the same superellipse the other cuts do.
+	glUniform1f(renderer->shaders.bevel.corner_shape, fx_corner_shape());
 	glUniform1f(renderer->shaders.bevel.thickness, options->thickness);
 	glUniform2f(renderer->shaders.bevel.light_dir,
 			options->light_dir[0], options->light_dir[1]);

@@ -30,20 +30,30 @@ uniform float shade_intensity;
 // 0 = a hard flat chamfer, 1 = fully rounded shoulder.
 uniform float shoulder;
 
-// Signed distance to a rounded rect; negative inside.
-float rounded_rect_sdf(vec2 p, vec2 half_size, float radius) {
-    vec2 q = abs(p) - half_size + radius;
-    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+// Defined in corner_alpha.frag, which is concatenated after this source (the
+// same way box_shadow.frag gets it). Using the shared routine rather than a
+// private circular SDF is the whole point: at corner_shape > 2 the DE's
+// corners are superellipses and the compositor hands us the span-WIDENED
+// radius that shape needs. Read as a circle, that radius drew an arc twice
+// the size of the real corner and the rim peeled ~15px off the edge at the
+// diagonal.
+float corner_dist(vec2 size, vec2 position,
+        float radius_tl, float radius_tr, float radius_bl, float radius_br);
+
+// The rounded rect is symmetric in both axes here (one radius on all four
+// corners), so corner_dist's internal y flip cancels and offsetting the
+// `position` uniform by d is just a translation of the sample point by -d.
+float bevel_dist(vec2 offset) {
+    return corner_dist(size, position + offset,
+        corner_radius, corner_radius, corner_radius, corner_radius);
 }
 
 void main() {
-    vec2 half_size = size * 0.5;
-    vec2 center = position + half_size;
-    vec2 p = gl_FragCoord.xy - center;
+    float dist = bevel_dist(vec2(0.0));
 
-    float dist = rounded_rect_sdf(p, half_size, corner_radius);
-
-    // Outside the rect, or deeper in than the rim: nothing to draw.
+    // Outside the rect, or deeper in than the rim: nothing to draw. Discard
+    // before the gradient so the four extra SDF evaluations only run on the
+    // thin band that actually shades.
     float rim = max(thickness, 1.0);
     if (dist > 0.0 || dist < -rim) {
         discard;
@@ -54,12 +64,12 @@ void main() {
 
     // The surface normal of the chamfer. Its in-plane part points OUT of the
     // rect (the gradient of the SDF), and its steepness falls off across the
-    // rim — steep at the edge, flat where it meets the face.
+    // rim — steep at the edge, flat where it meets the face. Sampling at
+    // -offset means the differences below are already in the same space the
+    // light direction is authored in.
     vec2 grad = normalize(vec2(
-        rounded_rect_sdf(p + vec2(1.0, 0.0), half_size, corner_radius) -
-        rounded_rect_sdf(p - vec2(1.0, 0.0), half_size, corner_radius),
-        rounded_rect_sdf(p + vec2(0.0, 1.0), half_size, corner_radius) -
-        rounded_rect_sdf(p - vec2(0.0, 1.0), half_size, corner_radius)
+        bevel_dist(vec2(-1.0, 0.0)) - bevel_dist(vec2(1.0, 0.0)),
+        bevel_dist(vec2(0.0, -1.0)) - bevel_dist(vec2(0.0, 1.0))
     ) + vec2(1e-6));
 
     // Slope profile across the rim. Mixing linear and smoothstep gives the

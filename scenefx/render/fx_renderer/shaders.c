@@ -335,8 +335,14 @@ bool link_box_shadow_program(struct box_shadow_shader *shader) {
 }
 
 bool link_bevel_program(struct bevel_shader *shader) {
+	// Same pairing as link_box_shadow_program: the rim's SDF is the shared
+	// corner routine, so the shape follows corner_shape like every other cut.
+	GLchar bevel_src[8192];
+	snprintf(bevel_src, sizeof(bevel_src), "%s\n%s", bevel_frag_src,
+		corner_alpha_frag_src);
+
 	GLuint prog;
-	shader->program = prog = link_program(bevel_frag_src);
+	shader->program = prog = link_program(bevel_src);
 	if (!shader->program) {
 		return false;
 	}
@@ -346,6 +352,7 @@ bool link_bevel_program(struct bevel_shader *shader) {
 	shader->position = glGetUniformLocation(prog, "position");
 	shader->size = glGetUniformLocation(prog, "size");
 	shader->corner_radius = glGetUniformLocation(prog, "corner_radius");
+	shader->corner_shape = glGetUniformLocation(prog, "corner_shape");
 	shader->thickness = glGetUniformLocation(prog, "thickness");
 	shader->light_dir = glGetUniformLocation(prog, "light_dir");
 	shader->light_intensity = glGetUniformLocation(prog, "light_intensity");
