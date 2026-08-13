@@ -1549,10 +1549,17 @@ impl WindowManager {
                 crate::wm_node::WmNodeType::Window(window) => {
                     (*window).render_finish();
                     if reorder {
-                        if (*window).rendering_requested.hidden {
-                            ffi::wlr_scene_node_reparent((*window).tree as *mut _, (*self.server).scene.hidden_tree);
-                            ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, (*self.server).scene.hidden_tree);
-                        } else {
+                        {
+                            // Viewport-hidden windows are NOT parked under the
+                            // disabled hidden_tree: they keep their normal layer
+                            // parent and stacking slot, hidden purely by their
+                            // disabled node (render_finish and
+                            // render_viewport_update both own that flag).
+                            // Un-hiding happens on camera-motion frames, which
+                            // never run this reorder pass — a window parked here
+                            // stayed invisible after scrolling into view until
+                            // the next unrelated transaction reparented it (the
+                            // off-screen reveal delay in overview/zoom).
                             let layer = if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
                                 (*self.server).scene.layers.background
                             } else if rendered_fullscreen(window) {
@@ -1594,7 +1601,7 @@ impl WindowManager {
                             } else {
                                 ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                             }
-                            if rendered_fullscreen(window) {
+                            if !(*window).rendering_requested.hidden && rendered_fullscreen(window) {
                                 found_fullscreen = true;
                             }
 
