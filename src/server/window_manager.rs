@@ -121,7 +121,7 @@ pub struct WindowManager {
     /// serialization is byte-identical keeps the file exactly as current as
     /// before while making an idle session silent on disk. `None` until the
     /// first write, so a fresh start always writes once.
-    last_saved_state_json: Option<String>,
+    pub last_saved_state_json: Option<String>,
     /// One-shot placement hints (`place-next <app_id> <x> <y>` over IPC):
     /// the next map of a floating toplevel with this app_id lands near the
     /// given layout position instead of its remembered spot — widget-spawned
