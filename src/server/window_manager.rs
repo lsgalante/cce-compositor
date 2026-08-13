@@ -174,6 +174,13 @@ pub struct WindowManager {
     pub rounded_apps: Vec<String>,
 }
 
+/// `CCE_DIRTY_BACKTRACE=1` — who called `dirty_windowing`. Separate from the
+/// log level because the capture is expensive enough to distort what it measures.
+fn dirty_backtrace_debug() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("CCE_DIRTY_BACKTRACE").is_some())
+}
+
 impl WindowManager {
     pub unsafe fn init(&mut self) -> Result<(), ()> {
         // This is a stub for the 0-arg struct instantiation.
@@ -1177,7 +1184,11 @@ impl WindowManager {
     }
 
     pub unsafe fn dirty_windowing(&mut self) {
-        if log::log_enabled!(log::Level::Debug) {
+        // Capturing and symbolizing a backtrace costs far more than the event it
+        // annotates, and this fires on routine commits — the session runs at
+        // --log-level debug, so keying it on Debug meant ~160 log lines/second
+        // and most of a 19MB session log. Behind its own switch now.
+        if dirty_backtrace_debug() {
             let bt = std::backtrace::Backtrace::force_capture();
             log::debug!("dirty_windowing called from backtrace:\n{}", bt);
         }
