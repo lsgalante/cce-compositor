@@ -31,9 +31,39 @@ make install    # build + install to ~/.local/bin (see below)
 make clean      # cargo clean
 ```
 
-`make install` copies `cce-fx` (symlinked as `cce`), `ccectl`, the `scripts/*` menu
-helpers, and `gpu-watcher` (+ its systemd user unit) into `~/.local/bin`. It reads
-binaries from `../target/release/` because the workspace target dir is at the parent.
+`make install` builds, then delegates to `./scripts/ccebuild install --no-build cce-fx`,
+which installs `cce-fx` (symlinked as `cce`), `ccectl`, the `scripts/*` helpers, and
+`gpu-watcher.service` into `~/.local/bin` / `~/.config/systemd/user`. It reads binaries
+from `../target/release/` because the workspace target dir is at the parent. The recipe
+invokes the in-repo `./scripts/ccebuild` rather than the one on `PATH`: this crate is
+what *installs* ccebuild, so it cannot depend on it already being present.
+
+### `scripts/ccebuild` — the DE-wide build/install tool
+
+This crate owns **`ccebuild`**, the entry point for building and installing the whole
+workspace (see the workspace `../CLAUDE.md` for the full command list). It lives here
+because this crate already ships helper scripts to `~/.local/bin`, and because the
+workspace root is not a git repo so nothing there can be versioned.
+
+It derives every binary from `cargo metadata` instead of hand-written lists — the
+per-crate Makefiles used to name their binaries manually, which silently left crates
+with extra `[[bin]]` targets uninstalled. All the crate Makefiles are now thin wrappers
+around it. When touching it, keep two invariants:
+
+- **`prune` detects dead crates from `.fingerprint/` only.** Those dirs are exactly
+  `<pkg>-<hex hash>`. Deriving names from `deps/` instead picks up incremental
+  artifacts like `cce_terminal-0qsvll1iqr9dj` whose non-hex suffix survives stripping
+  and looks like an unknown crate — that false positive selected *live* caches for
+  deletion. `incremental/` is excluded from deletion for the same reason: a pattern
+  loose enough to match those suffixes also matches live siblings like
+  `cce-authenticator`.
+- **Never widen the artifact glob.** `cce-status*` also matches the live
+  `cce-status-interface`, and `cce*` matches the entire tree (a 180G false reading).
+  Matching is anchored: a basename must equal a dead crate name exactly, or that name
+  plus a hex hash.
+
+`ccebuild restart` deliberately cannot reach the compositor: `cce-fx` is not a user
+unit (startcce launches it), and restarting it would tear down the session.
 
 Building emits a harmless warning that per-package `[profile.*]` in this `Cargo.toml`
 is ignored because profiles are only honored at the workspace root.
