@@ -41,15 +41,33 @@ resolve_workspace() {
 }
 
 # Every bin target cargo knows about, minus EXCLUDE. This is the whole point of
-# the script: one authoritative list, not 20 hand-written ones.
+# the script: one authoritative list, not 20 hand-written ones. With package
+# names as arguments, only those packages' bins — what a per-crate `make install`
+# needs.
 workspace_bins() {
+    local filter='.packages[]'
+    if [ "$#" -gt 0 ]; then
+        local json
+        json=$(printf '%s\n' "$@" | jq -R . | jq -sc .)
+        filter=".packages[] | select(.name as \$n | $json | index(\$n))"
+    fi
     cargo metadata --manifest-path "$WS/Cargo.toml" --no-deps --format-version 1 2>/dev/null \
-        | jq -r '.packages[].targets[] | select(.kind | index("bin")) | .name' \
+        | jq -r "$filter | .targets[] | select(.kind | index(\"bin\")) | .name" \
         | sort -u \
         | while read -r bin; do
             case " ${EXCLUDE[*]} " in *" $bin "*) continue ;; esac
             printf '%s\n' "$bin"
           done
+}
+
+# Guard against a typo'd package name silently installing nothing.
+assert_packages() {
+    local known name
+    known=$(cargo metadata --manifest-path "$WS/Cargo.toml" --no-deps --format-version 1 2>/dev/null \
+            | jq -r '.packages[].name')
+    for name in "$@"; do
+        printf '%s\n' "$known" | grep -qxF "$name" || die "unknown package '$name'"
+    done
 }
 
 # User-session unit files shipped by crates (system units excluded — see above).
@@ -72,8 +90,23 @@ cmd_build() {
     ( cd "$WS" && cargo build --release --workspace )
 }
 
+# install [--no-build] [PKG...] — no packages means the whole workspace; named
+# packages install only their own bins and units, which is what the per-crate
+# Makefile wrappers call.
 cmd_install() {
-    [ "${1:-}" = --no-build ] || cmd_build
+    local build=1
+    [ "${1:-}" = --no-build ] && { build=0; shift; }
+    local pkgs=("$@")
+    [ ${#pkgs[@]} -gt 0 ] && assert_packages "${pkgs[@]}"
+
+    if [ "$build" -eq 1 ]; then
+        if [ ${#pkgs[@]} -gt 0 ]; then
+            printf '==> building %s (release)\n' "${pkgs[*]}"
+            ( cd "$WS" && cargo build --release "${pkgs[@]/#/-p}" )
+        else
+            cmd_build
+        fi
+    fi
 
     mkdir -p "$BINDIR" "$UNITDIR"
     local n=0 missing=()
@@ -88,34 +121,59 @@ cmd_install() {
         # currently running is safe (the live process keeps its inode).
         install -m 755 "$WS/target/release/$bin" "$BINDIR/$bin"
         n=$((n + 1))
-    done < <(workspace_bins)
+    done < <(workspace_bins "${pkgs[@]}")
 
     # The compositor is installed as cce-fx and invoked as `cce`.
     if [ -f "$BINDIR/cce-fx" ]; then
         ln -sf cce-fx "$BINDIR/cce"
     fi
 
-    printf '==> installing helper scripts\n'
-    local s
-    for s in "$WS"/cce-compositor/scripts/*; do
-        [ -f "$s" ] || continue
-        case "$s" in *.service) continue ;; esac
-        install -m 755 "$s" "$BINDIR/$(basename "$s")"
-        n=$((n + 1))
-    done
+    # Helper scripts live in cce-compositor; only install them when that crate is
+    # in scope (i.e. a full install, or an explicit cce-fx install).
+    if [ ${#pkgs[@]} -eq 0 ] || [[ " ${pkgs[*]} " == *" cce-fx "* ]]; then
+        printf '==> installing helper scripts\n'
+        local s
+        for s in "$WS"/cce-compositor/scripts/*; do
+            [ -f "$s" ] || continue
+            case "$s" in *.service) continue ;; esac
+            install -m 755 "$s" "$BINDIR/$(basename "$s")"
+            n=$((n + 1))
+        done
+    fi
 
-    printf '==> installing user units -> %s\n' "$UNITDIR"
-    local u
+    local u units=0
     while read -r u; do
         [ -n "$u" ] || continue
+        # Filtered install: only units belonging to a selected package's crate.
+        if [ ${#pkgs[@]} -gt 0 ]; then
+            local dir
+            dir=$(basename "$(dirname "$u")")
+            [ "$dir" = scripts ] && dir=$(basename "$(dirname "$(dirname "$u")")")
+            crate_selected "$dir" "${pkgs[@]}" || continue
+        fi
+        [ "$units" -eq 0 ] && printf '==> installing user units -> %s\n' "$UNITDIR"
         install -m 644 "$u" "$UNITDIR/$(basename "$u")"
+        units=$((units + 1))
     done < <(user_units)
-    systemctl --user daemon-reload 2>/dev/null || true
+    [ "$units" -gt 0 ] && { systemctl --user daemon-reload 2>/dev/null || true; }
 
     if [ ${#missing[@]} -gt 0 ]; then
         printf 'ccebuild: NOT BUILT, skipped: %s\n' "${missing[*]}" >&2
     fi
     printf '==> installed %d files\n' "$n"
+}
+
+# Is directory name $1 the crate dir of any of the packages in $2..? Package name
+# and directory usually match, but not always (cce-fx lives in cce-compositor).
+crate_selected() {
+    local dir=$1; shift
+    local pkg manifest
+    for pkg in "$@"; do
+        manifest=$(cargo metadata --manifest-path "$WS/Cargo.toml" --no-deps --format-version 1 2>/dev/null \
+                   | jq -r --arg p "$pkg" '.packages[] | select(.name == $p) | .manifest_path')
+        [ "$(basename "$(dirname "$manifest")")" = "$dir" ] && return 0
+    done
+    return 1
 }
 
 # Report drift three ways: built-vs-installed, and installed-vs-running. The

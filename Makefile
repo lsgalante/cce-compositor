@@ -3,25 +3,12 @@
 build:
 	cargo build --release
 
+# Binaries, helper scripts and user units are enumerated by ccebuild from
+# cargo metadata, so this crate's extra [[bin]] targets are picked up without
+# being named here — hand-listing them is what left cce-bevel and the keyring
+# helpers uninstalled for weeks.
 install: build
-	mkdir -p ~/.local/bin
-	@if [ -f ../target/release/cce-fx ]; then \
-		install -m 755 ../target/release/cce-fx ~/.local/bin/cce-fx; \
-		ln -sf cce-fx ~/.local/bin/cce; \
-	else \
-		echo "Error: cce-fx binary not found"; exit 1; \
-	fi
-	@if [ -f ../target/release/ccectl ]; then \
-		install -m 755 ../target/release/ccectl ~/.local/bin/ccectl; \
-	else \
-		echo "Error: ccectl binary not found"; exit 1; \
-	fi
-	install -m 755 scripts/cce-desktop-menu ~/.local/bin/cce-desktop-menu
-	install -m 755 scripts/cce-app-menu ~/.local/bin/cce-app-menu
-	install -m 755 scripts/gpu-watcher ~/.local/bin/gpu-watcher
-	install -m 755 scripts/ccebuild ~/.local/bin/ccebuild
-	mkdir -p ~/.config/systemd/user
-	install -m 644 scripts/gpu-watcher.service ~/.config/systemd/user/gpu-watcher.service
+	./scripts/ccebuild install --no-build cce-fx
 
 run:
 	cargo run --bin cce-fx
