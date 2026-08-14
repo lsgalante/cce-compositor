@@ -202,12 +202,25 @@ cmd_status() {
     printf -- '-- %d up to date, %d stale, %d missing\n' "$ok" "$stale" "$missing"
 
     printf '\n==> running processes not using the installed binary\n'
+    # Scan /proc directly rather than prefiltering with `pgrep -f cce-`: a
+    # process's ARGV has no reliable bearing on which binary it is. The
+    # compositor is the case that matters — startcce launches it through the
+    # `cce` symlink, so its argv is "…/bin/cce --log-level debug -c
+    # /tmp/cce-launch.sh" and it only ever matched 'cce-' by way of that
+    # incidental script path. Rename or drop that argument and the one process
+    # this report exists for would silently vanish from it, precisely because
+    # `restart` cannot restart the compositor and it therefore sits on a stale
+    # binary longer than anything else. (`ccectl` was unreachable for the same
+    # reason.) The exe basename below is the authoritative test; it needs no
+    # help from a guess about argv.
     local found=0 pid exe base
-    for pid in $(pgrep -f 'cce-' 2>/dev/null || true); do
+    for pid in /proc/[0-9]*; do
+        pid=${pid#/proc/}
         exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
         base=${exe%% (deleted)}
         base=$(basename "$base")
-        case "$base" in cce*|ccectl) ;; *) continue ;; esac
+        # `cce*` already covers ccectl and the bare `cce` symlink.
+        case "$base" in cce*) ;; *) continue ;; esac
         if [ "$exe" != "$BINDIR/$base" ]; then
             printf '  %-8s %-24s %s\n' "$pid" "$base" "$exe"
             found=1
