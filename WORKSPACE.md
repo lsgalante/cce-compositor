@@ -1,0 +1,200 @@
+# The cce workspace
+
+Guidance for working anywhere in the `cce` Wayland desktop workspace — the layout,
+the multi-repo rule, the build/install entry point, config, and IPC.
+
+**This file lives here, not at the workspace root, because the root is not a git
+repository** (see the multi-repo section below) — anything written there is
+unversioned and lost on a fresh clone. The root `CLAUDE.md` is a pointer to this
+file and repeats only the two rules that must not be acted against before reading
+it. Per-crate notes stay in each crate's own `CLAUDE.md`; compositor-specific
+detail is in the adjacent `CLAUDE.md`.
+
+**Paths below are relative to the workspace root** — the parent of this crate — so
+`cce-ui/src/` means `../cce-ui/src/` when read from here.
+
+## What this is
+
+This is the **`cce` Cargo workspace** (`resolver = "2"`). It is a complete Wayland
+desktop environment written in Rust, split into two halves:
+
+- **`cce-compositor/`** — the compositor + tiling window manager (`cce-fx`, symlinked
+  as `cce`), built on wlroots 0.20 via FFI with vendored scenefx. This crate is its own
+  world: it has a `build.rs` native-build pipeline, a `Makefile`, and its own detailed
+  **`cce-compositor/CLAUDE.md`** — read that before working inside `cce-compositor/`.
+- **~18 `cce-*` client apps** (`cce-status-interface`, `cce-system-interface`,
+  `cce-designer`, `cce-files`, `cce-color-editor`, `cce-email`, `cce-graph`, `cce-notifier`,
+  `cce-authenticator`, `cce-display-manager`, `cce-text-editor`,
+  `cce-data-editor`, `cce-fonts`, `cce-cloud`, `cce-layout-interface`,
+  `cce-screenaver`, `cce-test-interface`, `cce-terminal`, …) — Wayland client GUIs that connect to the
+  compositor and to each other over Unix sockets. (The desktop background is drawn
+  natively by the compositor — the former `cce-wallpaper` client was retired.)
+
+The one thing tying every crate together is **`cce-ui`**, the shared GUI toolkit. Every
+client depends on it (`cce-ui = { path = "../cce-ui" }`); the compositor depends on it
+too. There is one other shared crate: **`cce-window-manager`** — the compositor's
+pure-Rust window-management policy layer (arrange pass, `TilingMode`, saved state,
+slotmap; no FFI), extracted from `cce-compositor/` and consumed only by it. The compositor
+re-exports it as `crate::policy` / `crate::tiling` / `crate::slotmap`.
+
+### Version control: this is a MULTI-repo, not a monorepo
+
+The workspace root itself (this directory — holding `Cargo.toml`, `Cargo.lock`,
+`target/`) is **not** under version control. Instead, **each member crate is its own
+independent git repository** with its own committed `Cargo.lock`. The crates sit
+side-by-side under this directory to form the build workspace, but are versioned and
+published separately.
+
+**The local repos are the source of truth — there are no push remotes.** Publishing
+goes through **gitsite** (`~/Dropbox/src/gitsite`): repos listed in its `repos.conf`
+are mirrored, rendered, and deployed as a static read-only site at
+**https://git.lucas.co** (browsable, and clonable over dumb HTTP for `clone`-mode
+entries). A systemd user timer (`gitsite.timer`) republishes automatically when any
+listed repo's HEAD changes, so committing locally IS publishing. Crate repos carry a
+fetch-only `origin = https://git.lucas.co/<crate>.git` — `git push` does not work
+against it by design (static host; no receive-pack, no SSH). New crates get a line in
+`repos.conf`. (The pre-2026-08-11 per-crate codeberg.org remotes are retired; those
+repos still exist server-side for old history.)
+
+Consequences to respect:
+- **Do not `git init` at the root** — it would swallow every crate as an embedded repo.
+  Commit inside the relevant crate's own repo.
+- **Each crate must build standalone.** Do not introduce `[workspace.dependencies]` /
+  `<dep>.workspace = true`: a standalone clone of a single crate's repo has no
+  `[workspace]` parent, so inherited deps fail to resolve. Dependency versions are
+  intentionally declared per-crate (minor drift between independent crates is fine).
+- A crate's `[profile.*]` is honored when it's built standalone (it is then its own
+  workspace root) and ignored (with a warning) in the full-tree build — that warning is
+  expected, not a bug to "fix" by deleting the profile.
+
+## Build, test, run
+
+The workspace `target/` dir is shared at the repo root (`./target/`). There is no root
+Makefile, but **`ccebuild` is the DE-wide entry point** — do not hand-roll a loop over
+the crates. It ships in `cce-compositor/scripts/ccebuild` and installs to
+`~/.local/bin`:
+
+```sh
+ccebuild install            # build the workspace, install every binary + unit
+ccebuild install cce-email  # just one package (what each crate's `make install` runs)
+ccebuild restart            # restart user services left on a replaced binary
+ccebuild status             # built-vs-installed drift, AND running-vs-installed
+ccebuild prune              # target/ artifacts of crates cargo no longer knows
+ccebuild install-system     # the root-owned binaries (needs sudo)
+```
+
+The full deploy loop is `ccebuild install && ccebuild restart`. `ccebuild` derives
+every binary from `cargo metadata`, which is the point: the per-crate Makefiles used
+to name their binaries by hand, so crates with extra `[[bin]]` targets shipped
+incomplete for weeks (`cce-ui` without `cce-bevel`, `cce-display-manager` without its
+three `cce-keyring-unlock*` helpers). Each crate's `make install` is now a thin
+wrapper around `ccebuild install --no-build <pkg>`; `make build/run/clean` are
+unchanged. **Never add a binary name to a Makefile** — cargo already knows it.
+
+`ccebuild status` is the tool for "is what's running actually the code I built?".
+Because `install` unlinks before writing, a process still on the old inode reports its
+exe as `(deleted)`, which is how both `status` and `restart` detect drift. It also
+catches apps launched straight out of `target/` rather than `~/.local/bin`.
+
+For plain cargo work:
+
+```sh
+cargo build --release                       # build every crate
+cargo build -p cce-status-interface         # build one client
+cargo run  -p cce-system-interface           # run one client
+cargo test --workspace                       # all tests (tests are sparse)
+cargo test -p cce-fx --lib config::          # tests in one module of one crate
+```
+
+Building the workspace compiles the **compositor** too, which triggers its `build.rs`
+(meson/ninja to build vendored scenefx, wayland-scanner for protocols, bindgen over
+wlroots). That needs native system deps — see `cce-compositor/CLAUDE.md` for the full list. If you
+only touch a client, prefer `-p <crate>` to avoid rebuilding the compositor — but note
+that alternating `cargo build --release` with `cargo build --release -p <crate>`
+resolves different unified feature sets, so each invocation re-invalidates a few
+crates (~11s). Pick one shape and stay with it.
+
+Binary names do not reliably match the crate: `cce-fx` lives in `cce-compositor/`,
+`cce-system-interface` and `cce-files` declare explicit `[[bin]]` names, and several
+crates ship extra bins (`cce-ui` → `cce-ramp`/`cce-bevel`, `cce-compositor` → `ccectl`,
+`cce-display-manager` → three keyring helpers). Ask cargo rather than guessing:
+`cargo metadata --no-deps --format-version 1 | jq -r '.packages[].targets[] | select(.kind|index("bin")) | .name'`.
+
+## The `cce-ui` toolkit (start here for any client work)
+
+`cce-ui` is a **custom retained-mode GUI toolkit**, not a wrapper around an existing
+framework. Understanding it is the prerequisite for touching any client.
+
+- **Transport**: raw `wayland-client` 0.31 + `smithay-client-toolkit` 0.19, driven by a
+  `calloop` event loop. Clients are real Wayland surfaces, not toolkit windows.
+- **Rendering**: raw Vulkan via **ash** (`cce-ui/src/vk/` — `VkRenderer`; the wgpu
+  path was retired), with **glyphon**/cosmic-text for text shaping. Widgets emit
+  vertex batches (quads, rounded rects, vectors, arcs, circles) — see the re-export
+  list in `cce-ui/src/engine.rs`. There is no HTML/DOM; the UI is drawn as GPU
+  primitives.
+- **The `Application` trait** (`cce-ui/src/backend/window_runner.rs`) is the contract
+  every client implements. Key methods: `new`, `settings`, `update(msg)`, `tick(dt)`,
+  `display_list` (the single paint path) plus `overlay_quads` / `custom_vertices`,
+  and the input hooks (`handle_pointer_move`, `handle_mouse_input`, …). Apps needing
+  direct renderer access (3D scenes, app-shaped text, non-rect window chrome) use the
+  extended hooks `renderer_init` / `stage_renderer` / `standard_csd` /
+  `take_window_action` — `cce-designer` is the reference consumer. A client's
+  `main.rs` is typically a struct implementing `Application` plus a one-line
+  `cce_ui::engine::run::<MyApp>();`.
+- **Modules**: `widget/` (containers, inputs, editor, `json_layout`), `layout.rs`
+  (fonts + sizing, lots of `*_font_parsed()` getters), `color.rs`, `config.rs`,
+  `protocol.rs` (talking to the compositor), `context.rs`, `process.rs`,
+  `file_dialog.rs`, `scale.rs` (HiDPI), `mcp.rs` (tools-only MCP server over
+  Streamable HTTP so apps can expose their state/actions to AI agents —
+  `cce-designer` is the reference consumer, see its CLAUDE.md).
+
+When adding a widget or a client, mirror an existing client (e.g.
+`cce-status-interface`) rather than inventing a new structure.
+
+## Configuration (shared across the whole DE)
+
+Config is **KDL** (`kdl` crate), loaded from `~/.config/cce/` (honoring
+`XDG_CONFIG_HOME`), via `cce-ui/src/config.rs`:
+
+- **`~/.config/cce/config.kdl`** — the shared/global config (`get_config_path()`).
+- **`~/.config/cce/<app-name>/config.kdl`** — per-app override
+  (`get_app_config_path(app_name)`).
+- **`~/.config/cce/input.kdl`** — DE-wide keybindings and pointer input settings,
+  domain-scoped (`cce-ui/src/input.rs`): top-level nodes are domains
+  (`cce-window-manager` for compositor actions, `cce-ui` for toolkit-wide widget
+  defaults, `cce-<app>` for per-app bindings), children are `name "chord"`
+  bindings. Resolution for an app is `<app>.<name>` → `cce-ui.<name>`; the
+  compositor maps its domain onto `cce-window-manager::api::Action` via the
+  policy crate's `bindings` module. Legacy keybind entries in `config.kdl` still
+  load; `input.kdl` wins on conflict. `ccectl migrate-input` extracts config.kdl
+  keybindings into input.kdl (with backup; config.kdl is never rewritten).
+  A top-level `input { }` block holds global pointer hardware defaults with
+  per-device-class sub-blocks (`mouse` / `trackpad` / `trackpoint`: accel,
+  scroll_factor…), consumed by the compositor; an `input { }` child inside an
+  app domain holds that app's scroll overrides, applied client-side by cce-ui
+  (pixel deltas scale as trackpad, discrete wheel clicks as mouse). Keybinding
+  and input edits are made directly on the file (e.g. via cce-data-editor) —
+  there is deliberately no dedicated settings UI.
+- Config edits are backed up under `~/.config/cce/backups/config.kdl.<n>.bak`.
+
+The compositor additionally runs `~/.config/cce/init` on startup and persists window
+state to `~/.local/state/cce/state.json` — details in `cce-compositor/CLAUDE.md`.
+
+## How the pieces talk (IPC)
+
+Clients and compositor communicate over Unix sockets keyed by `$WAYLAND_DISPLAY`:
+
+- **Control**: `/tmp/cce-{WAYLAND_DISPLAY}.sock` — line-oriented request/reply. The
+  `ccectl` binary (in `cce-compositor/`) is the CLI client; run `ccectl` with no args for the
+  command list.
+- **Status**: `/tmp/cce-status-{WAYLAND_DISPLAY}.sock` — subscribe to `viewport` /
+  `layout` / `title` / `modifiers` and receive push updates. This feeds
+  `cce-status-interface` (the status bar).
+
+## Repo hygiene
+
+The repo root and `cce-compositor/scratch/` are littered with **ad-hoc debugging artifacts** — many
+`screenshot_*.png`, `*.log` (some enormous, e.g. `debug.txt`, `dropbox_strace.log`),
+and one-off `*.py` inspection scripts (`patch*.py`, `scan_*.py`, `inspect_*.py`). These
+are **not part of the build**. Don't treat them as source, and don't add more to the
+root; use the scratchpad directory for temporary files.

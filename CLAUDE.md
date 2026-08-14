@@ -41,7 +41,7 @@ what *installs* ccebuild, so it cannot depend on it already being present.
 ### `scripts/ccebuild` — the DE-wide build/install tool
 
 This crate owns **`ccebuild`**, the entry point for building and installing the whole
-workspace (see the workspace `../CLAUDE.md` for the full command list). It lives here
+workspace (see the workspace guide `./WORKSPACE.md` for the full command list). It lives here
 because this crate already ships helper scripts to `~/.local/bin`, and because the
 workspace root is not a git repo so nothing there can be versioned.
 
