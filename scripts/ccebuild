@@ -158,6 +158,108 @@ cmd_status() {
     [ "$found" -eq 0 ] && printf '  (none — every running cce process is on its installed binary)\n'
 }
 
+# Delete target/ artifacts belonging to crates cargo no longer knows about —
+# what renamed crates leave behind (cce-system-settings, cce-wallpaper, …), once
+# 15G of it. Dry-run by default.
+#
+# The matching is deliberately strict. A glob like 'cce-status*' also eats the
+# LIVE cce-status-interface, and a bare 'cce*' matches the entire tree; both were
+# real near-misses. So: a basename must equal a dead crate name exactly, or that
+# name followed by a hex hash (cargo's artifact suffix) — never a name followed
+# by more words.
+cmd_prune() {
+    local apply=0
+    [ "${1:-}" = --apply ] && apply=1
+
+    # Live names in both hyphen and underscore form (cargo uses both).
+    local live
+    live=$( { cargo metadata --manifest-path "$WS/Cargo.toml" --no-deps --format-version 1 2>/dev/null \
+                | jq -r '.packages[] | .name, (.targets[] | .name)'; } | sort -u )
+    live=$(printf '%s\n%s\n' "$live" "$(printf '%s\n' "$live" | tr '-' '_')" | sort -u)
+
+    # Detect dead crates from .fingerprint/ ONLY. Those directories are exactly
+    # <pkgname>-<hex hash>, one per crate, so stripping the hash yields a real
+    # package name. Deriving names from deps/ instead reads artifacts like
+    # cce_terminal-0qsvll1iqr9dj (incremental) whose suffix is not hex, leaving a
+    # bogus "crate name" that looks orphaned — a false positive that would have
+    # deleted live cce-ui and cce-terminal caches.
+    local dead
+    dead=$(find "$WS/target" -maxdepth 3 -path '*/.fingerprint/*' -name 'cce*' -printf '%f\n' 2>/dev/null \
+           | sed -E 's/-[0-9a-f]{8,}$//' | sort -u)
+    dead=$(comm -23 <(printf '%s\n' "$dead" | grep -v '^$' | sort -u) <(printf '%s\n' "$live"))
+
+    if [ -z "$dead" ]; then
+        printf 'ccebuild: no orphaned crate artifacts\n'
+        return
+    fi
+
+    printf '==> orphaned crates (no longer in cargo metadata):\n'
+    printf '%s\n' "$dead" | sed 's/^/  /'
+
+    local list total
+    list=$(mktemp); trap 'rm -f "$list"' RETURN
+    # Only hex-suffixed artifacts (deps/, .fingerprint/, top-level binaries).
+    # incremental/ is deliberately NOT pruned: its directory suffixes are not hex,
+    # so a pattern loose enough to catch them ("cce" + any alnum) would also match
+    # live siblings like cce-authenticator. It is regenerable anyway — clear the
+    # whole of target/*/incremental if you want that space.
+    local name under
+    while read -r name; do
+        [ -n "$name" ] || continue
+        under=$(printf '%s' "$name" | tr '-' '_')
+        find "$WS/target" -maxdepth 4 -regextype posix-extended \
+             -not -path '*/incremental/*' \
+             -regex ".*/($name|$under)(-[0-9a-f]{8,})?(\..*)?" -prune -print 2>/dev/null >> "$list"
+    done <<< "$dead"
+    sort -u "$list" -o "$list"
+
+    # Guard: nothing whose basename stem is a live crate may be in the list.
+    local leak
+    leak=$(awk -F/ 'NR==FNR{l[$0];next}{b=$NF; sub(/\.(d|rlib|rmeta|so|o|dwo)$/,"",b); sub(/-[0-9a-f]{8,}$/,"",b); if(b in l) print $0}' \
+           <(printf '%s\n' "$live") "$list" | head -3)
+    [ -n "$leak" ] && die "refusing to prune: live artifacts matched:"$'\n'"$leak"
+
+    total=$(tr '\n' '\0' < "$list" | du -shc --files0-from=- 2>/dev/null | tail -1 | cut -f1)
+    printf -- '-- %s entries, %s\n' "$(wc -l < "$list")" "${total:-0}"
+
+    if [ "$apply" -eq 0 ]; then
+        printf 'ccebuild: dry run — pass `prune --apply` to delete\n'
+        return
+    fi
+    tr '\n' '\0' < "$list" | xargs -0 rm -rf
+    printf '==> pruned\n'
+}
+
+# The root-owned install paths. Separate command because it needs sudo, which is
+# exactly why these drifted three weeks behind everything else.
+cmd_install_system() {
+    local stamp; stamp=$(date +%F)
+    # Fail early and legibly rather than dying mid-way through a partial update:
+    # under `set -e` a password prompt on a non-interactive run aborts after the
+    # first backup, leaving one binary replaced and the rest stale.
+    if ! sudo -n true 2>/dev/null; then
+        printf 'ccebuild: sudo needs a password — run this from a terminal:\n' >&2
+        printf '  sudo -v && ccebuild install-system\n' >&2
+        exit 1
+    fi
+    local pairs=(
+        "cce-display-manager:/usr/bin/cce-display-manager"
+        "cce-keyring-unlockd:/usr/local/sbin/cce-keyring-unlockd"
+        "cce-keyring-unlock-setup:/usr/local/sbin/cce-keyring-unlock-setup"
+    )
+    local entry bin dest
+    for entry in "${pairs[@]}"; do
+        bin=${entry%%:*}; dest=${entry#*:}
+        [ -f "$WS/target/release/$bin" ] || die "$bin not built — run: ccebuild build"
+        [ -e "$dest" ] || { printf 'ccebuild: %s absent, skipping\n' "$dest"; continue; }
+        printf '  %s -> %s\n' "$bin" "$dest"
+        sudo cp -a "$dest" "$dest.bak-$stamp"
+        # `install` unlinks first: safe even though these are running as root.
+        sudo install -m 755 "$WS/target/release/$bin" "$dest"
+    done
+    printf '==> system binaries updated (takes effect at next login; nothing restarted)\n'
+}
+
 usage() {
     cat <<'EOF'
 usage: ccebuild <command>
@@ -167,6 +269,10 @@ usage: ccebuild <command>
                         and user unit (derived from cargo metadata)
   status                show built-vs-installed drift, and running processes
                         that are not on their installed binary
+  prune [--apply]       delete target/ artifacts of crates cargo no longer
+                        knows about (renamed/retired); dry-run by default
+  install-system        update the root-owned binaries (needs sudo); backs up
+                        each and restarts nothing
 
 environment:
   CCE_WORKSPACE  workspace root (default: located from the current directory)
@@ -178,9 +284,11 @@ command -v jq >/dev/null || die "jq is required"
 WS=$(resolve_workspace)
 
 case "${1:-}" in
-    build)   cmd_build ;;
-    install) shift; cmd_install "$@" ;;
-    status)  cmd_status ;;
+    build)          cmd_build ;;
+    install)        shift; cmd_install "$@" ;;
+    status)         cmd_status ;;
+    prune)          shift; cmd_prune "$@" ;;
+    install-system) cmd_install_system ;;
     -h|--help|help|"") usage ;;
     *) die "unknown command '$1' (try: ccebuild --help)" ;;
 esac
