@@ -230,6 +230,61 @@ cmd_prune() {
     printf '==> pruned\n'
 }
 
+# Restart the user services whose binary has been replaced underneath them.
+#
+# `install` unlinks the destination before writing, so a service still running
+# the pre-install inode reports its exe as "... (deleted)" — a precise signal
+# that a restart is owed, and one that needs no timestamp bookkeeping. Units
+# already on the current binary are left alone, so this is safe to run after
+# every install.
+#
+# The compositor is deliberately unreachable here: it is not a user unit (it is
+# started by startcce), and restarting it would tear down the session.
+cmd_restart() {
+    local all=0
+    [ "${1:-}" = --all ] && all=1
+
+    systemctl --user daemon-reload 2>/dev/null || true
+
+    local units unit pid exe want=()
+    units=$(systemctl --user list-units --type=service --state=running --no-legend 2>/dev/null \
+            | awk '{print $1}' | grep -E '^(cce|gpu-watcher)' || true)
+    [ -n "$units" ] || { printf 'ccebuild: no cce user services running\n'; return; }
+
+    for unit in $units; do
+        if [ "$all" -eq 1 ]; then
+            want+=("$unit")
+            continue
+        fi
+        pid=$(systemctl --user show -p MainPID --value "$unit" 2>/dev/null)
+        [ -n "$pid" ] && [ "$pid" != 0 ] || continue
+        exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
+        case "$exe" in *"(deleted)") want+=("$unit") ;; esac
+    done
+
+    if [ ${#want[@]} -eq 0 ]; then
+        printf 'ccebuild: every running cce service is already on its current binary\n'
+        return
+    fi
+
+    printf '==> restarting %d service(s)\n' "${#want[@]}"
+    for unit in "${want[@]}"; do
+        printf '  %s ... ' "$unit"
+        if systemctl --user restart "$unit" 2>/dev/null; then
+            printf '%s\n' "$(systemctl --user is-active "$unit")"
+        else
+            printf 'FAILED\n'
+        fi
+    done
+
+    # A unit that comes back inactive is a silent breakage — surface it.
+    local bad=0
+    for unit in "${want[@]}"; do
+        [ "$(systemctl --user is-active "$unit")" = active ] || { printf 'ccebuild: %s is NOT active\n' "$unit" >&2; bad=1; }
+    done
+    [ "$bad" -eq 0 ] || exit 1
+}
+
 # The root-owned install paths. Separate command because it needs sudo, which is
 # exactly why these drifted three weeks behind everything else.
 cmd_install_system() {
@@ -269,6 +324,8 @@ usage: ccebuild <command>
                         and user unit (derived from cargo metadata)
   status                show built-vs-installed drift, and running processes
                         that are not on their installed binary
+  restart [--all]       restart user services still running a replaced binary
+                        (--all: every running cce service). Never the compositor.
   prune [--apply]       delete target/ artifacts of crates cargo no longer
                         knows about (renamed/retired); dry-run by default
   install-system        update the root-owned binaries (needs sudo); backs up
@@ -287,6 +344,7 @@ case "${1:-}" in
     build)          cmd_build ;;
     install)        shift; cmd_install "$@" ;;
     status)         cmd_status ;;
+    restart)        shift; cmd_restart "$@" ;;
     prune)          shift; cmd_prune "$@" ;;
     install-system) cmd_install_system ;;
     -h|--help|help|"") usage ;;
