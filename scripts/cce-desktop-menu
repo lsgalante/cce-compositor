@@ -11,12 +11,12 @@ y_arg=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -x|--x-pos)
-            x_arg="-x $2"
-            shift 2
+            # A flag with no value must still consume itself: bare `shift 2`
+            # is a no-op when one arg remains, and the loop spins forever.
+            if [[ $# -ge 2 ]]; then x_arg="-x $2"; shift 2; else shift; fi
             ;;
         -y|--y-pos)
-            y_arg="-y $2"
-            shift 2
+            if [[ $# -ge 2 ]]; then y_arg="-y $2"; shift 2; else shift; fi
             ;;
         *)
             shift
