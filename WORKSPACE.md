@@ -128,7 +128,9 @@ framework. Understanding it is the prerequisite for touching any client.
 - **Transport**: raw `wayland-client` 0.31 + `smithay-client-toolkit` 0.19, driven by a
   `calloop` event loop. Clients are real Wayland surfaces, not toolkit windows.
 - **Rendering**: raw Vulkan via **ash** (`cce-ui/src/vk/` — `VkRenderer`; the wgpu
-  path was retired), with **glyphon**/cosmic-text for text shaping. Widgets emit
+  path was retired), with **cosmic-text** for text shaping (depended on directly
+  since the wgpu retirement — it used to be reached through glyphon, whose only
+  other export was the wgpu renderer nothing here used). Widgets emit
   vertex batches (quads, rounded rects, vectors, arcs, circles) — see the re-export
   list in `cce-ui/src/engine.rs`. There is no HTML/DOM; the UI is drawn as GPU
   primitives.

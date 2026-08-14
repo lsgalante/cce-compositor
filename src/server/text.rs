@@ -1,7 +1,7 @@
 //! Minimal CPU text rendering, for the desktop-grid square labels.
 //!
 //! The compositor has no toolkit — clients own their own text (cce-ui does
-//! Vulkan + glyphon). The one thing the compositor itself has to letter is the
+//! Vulkan + cosmic-text). The one thing the compositor itself has to letter is the
 //! desktop grid, so this is deliberately the smallest thing that works:
 //! fontdue rasterizes a short ASCII label into an ARGB8888 buffer, which
 //! `river_data_buffer_create` wraps as a `wlr_buffer` for a scene node.
