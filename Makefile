@@ -19,6 +19,7 @@ install: build
 	install -m 755 scripts/cce-desktop-menu ~/.local/bin/cce-desktop-menu
 	install -m 755 scripts/cce-app-menu ~/.local/bin/cce-app-menu
 	install -m 755 scripts/gpu-watcher ~/.local/bin/gpu-watcher
+	install -m 755 scripts/ccebuild ~/.local/bin/ccebuild
 	mkdir -p ~/.config/systemd/user
 	install -m 644 scripts/gpu-watcher.service ~/.config/systemd/user/gpu-watcher.service
 

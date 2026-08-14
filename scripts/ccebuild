@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# ccebuild — build, install and inspect every binary in the cce workspace.
+#
+# The per-crate Makefiles name their binaries by hand, so a crate with extra
+# [[bin]] targets (cce-ui's cce-bevel/cce-ramp, cce-display-manager's keyring
+# helpers) or a crate with no Makefile at all silently never gets installed —
+# 11 of the workspace's 33 bin targets were unreachable that way. Everything
+# here is derived from `cargo metadata` instead, so new crates and new
+# src/bin/*.rs files are picked up with no edit to this script.
+
+set -euo pipefail
+
+# Dev-only binaries: built by the workspace, never installed.
+EXCLUDE=(vk-smoke)
+
+# Crates whose .service files are SYSTEM units (/etc/systemd/system, root-owned).
+# They are not user units and must not land in ~/.config/systemd/user.
+SYSTEM_UNIT_CRATES=(cce-display-manager)
+
+PREFIX="${CCE_PREFIX:-$HOME/.local}"
+BINDIR="$PREFIX/bin"
+UNITDIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
+die() { printf 'ccebuild: %s\n' "$*" >&2; exit 1; }
+
+# The workspace root. Never hardcoded: honour $CCE_WORKSPACE, else ask cargo
+# about the current directory (this script lives in ~/.local/bin once installed,
+# so its own path says nothing about where the source tree is).
+resolve_workspace() {
+    if [ -n "${CCE_WORKSPACE:-}" ]; then
+        [ -f "$CCE_WORKSPACE/Cargo.toml" ] || die "CCE_WORKSPACE=$CCE_WORKSPACE has no Cargo.toml"
+        printf '%s\n' "$CCE_WORKSPACE"
+        return
+    fi
+    local manifest
+    if manifest=$(cargo locate-project --workspace --message-format plain 2>/dev/null); then
+        dirname "$manifest"
+        return
+    fi
+    die "not inside the cce workspace — cd into it, or set CCE_WORKSPACE=/path/to/cce"
+}
+
+# Every bin target cargo knows about, minus EXCLUDE. This is the whole point of
+# the script: one authoritative list, not 20 hand-written ones.
+workspace_bins() {
+    cargo metadata --manifest-path "$WS/Cargo.toml" --no-deps --format-version 1 2>/dev/null \
+        | jq -r '.packages[].targets[] | select(.kind | index("bin")) | .name' \
+        | sort -u \
+        | while read -r bin; do
+            case " ${EXCLUDE[*]} " in *" $bin "*) continue ;; esac
+            printf '%s\n' "$bin"
+          done
+}
+
+# User-session unit files shipped by crates (system units excluded — see above).
+user_units() {
+    find "$WS" -maxdepth 3 -name '*.service' -not -path "$WS/target/*" 2>/dev/null \
+        | while read -r unit; do
+            local crate
+            crate=$(basename "$(dirname "$unit")")
+            [ "$crate" = scripts ] && crate=$(basename "$(dirname "$(dirname "$unit")")")
+            case " ${SYSTEM_UNIT_CRATES[*]} " in *" $crate "*) continue ;; esac
+            printf '%s\n' "$unit"
+          done
+}
+
+cmd_build() {
+    printf '==> building workspace (release)\n'
+    # One invocation for the whole workspace. Building per-crate with -p would
+    # resolve a different unified feature set and re-invalidate crates on every
+    # alternation between the two command shapes.
+    ( cd "$WS" && cargo build --release --workspace )
+}
+
+cmd_install() {
+    [ "${1:-}" = --no-build ] || cmd_build
+
+    mkdir -p "$BINDIR" "$UNITDIR"
+    local n=0 missing=()
+
+    printf '==> installing binaries -> %s\n' "$BINDIR"
+    while read -r bin; do
+        if [ ! -f "$WS/target/release/$bin" ]; then
+            missing+=("$bin")
+            continue
+        fi
+        # `install` unlinks the destination first, so replacing a binary that is
+        # currently running is safe (the live process keeps its inode).
+        install -m 755 "$WS/target/release/$bin" "$BINDIR/$bin"
+        n=$((n + 1))
+    done < <(workspace_bins)
+
+    # The compositor is installed as cce-fx and invoked as `cce`.
+    if [ -f "$BINDIR/cce-fx" ]; then
+        ln -sf cce-fx "$BINDIR/cce"
+    fi
+
+    printf '==> installing helper scripts\n'
+    local s
+    for s in "$WS"/cce-compositor/scripts/*; do
+        [ -f "$s" ] || continue
+        case "$s" in *.service) continue ;; esac
+        install -m 755 "$s" "$BINDIR/$(basename "$s")"
+        n=$((n + 1))
+    done
+
+    printf '==> installing user units -> %s\n' "$UNITDIR"
+    local u
+    while read -r u; do
+        [ -n "$u" ] || continue
+        install -m 644 "$u" "$UNITDIR/$(basename "$u")"
+    done < <(user_units)
+    systemctl --user daemon-reload 2>/dev/null || true
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        printf 'ccebuild: NOT BUILT, skipped: %s\n' "${missing[*]}" >&2
+    fi
+    printf '==> installed %d files\n' "$n"
+}
+
+# Report drift three ways: built-vs-installed, and installed-vs-running. The
+# last one matters because an app launched straight out of target/ (or from a
+# stale path) keeps running old code that no reinstall can touch.
+cmd_status() {
+    local built inst stale=0 missing=0 ok=0
+    printf '%-28s %-8s %s\n' NAME STATE DETAIL
+    while read -r bin; do
+        built="$WS/target/release/$bin"
+        inst="$BINDIR/$bin"
+        if [ ! -f "$built" ]; then
+            printf '%-28s %-8s %s\n' "$bin" "nobuild" "not in target/release"
+            continue
+        fi
+        if [ ! -f "$inst" ]; then
+            printf '%-28s %-8s %s\n' "$bin" "MISSING" "never installed"
+            missing=$((missing + 1))
+        elif [ "$built" -nt "$inst" ]; then
+            printf '%-28s %-8s %s\n' "$bin" "STALE" "built $(date -r "$built" +%m-%d_%H:%M:%S) > installed $(date -r "$inst" +%m-%d_%H:%M:%S)"
+            stale=$((stale + 1))
+        else
+            ok=$((ok + 1))
+        fi
+    done < <(workspace_bins)
+    printf -- '-- %d up to date, %d stale, %d missing\n' "$ok" "$stale" "$missing"
+
+    printf '\n==> running processes not using the installed binary\n'
+    local found=0 pid exe base
+    for pid in $(pgrep -f 'cce-' 2>/dev/null || true); do
+        exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
+        base=${exe%% (deleted)}
+        base=$(basename "$base")
+        case "$base" in cce*|ccectl) ;; *) continue ;; esac
+        if [ "$exe" != "$BINDIR/$base" ]; then
+            printf '  %-8s %-24s %s\n' "$pid" "$base" "$exe"
+            found=1
+        fi
+    done
+    [ "$found" -eq 0 ] && printf '  (none — every running cce process is on its installed binary)\n'
+}
+
+usage() {
+    cat <<'EOF'
+usage: ccebuild <command>
+
+  build                 cargo build --release --workspace
+  install [--no-build]  build, then install every bin target, helper script
+                        and user unit (derived from cargo metadata)
+  status                show built-vs-installed drift, and running processes
+                        that are not on their installed binary
+
+environment:
+  CCE_WORKSPACE  workspace root (default: located from the current directory)
+  CCE_PREFIX     install prefix (default: ~/.local)
+EOF
+}
+
+command -v jq >/dev/null || die "jq is required"
+WS=$(resolve_workspace)
+
+case "${1:-}" in
+    build)   cmd_build ;;
+    install) shift; cmd_install "$@" ;;
+    status)  cmd_status ;;
+    -h|--help|help|"") usage ;;
+    *) die "unknown command '$1' (try: ccebuild --help)" ;;
+esac
