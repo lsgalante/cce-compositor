@@ -11,6 +11,24 @@ pub struct Cursor {
     pub xcursor_manager: *mut ffi::wlr_xcursor_manager,
     pub constraint: *mut crate::pointer_constraint::PointerConstraint,
 
+    /// Animated-XCursor playback. An XCursor theme may ship several images per
+    /// cursor with a per-frame `delay`; wlroots parses them but never advances
+    /// them — `wlr_xcursor_frame` has no callers inside wlroots, so driving the
+    /// animation is the compositor's job. This timer is the driver.
+    ///
+    /// `anim_xcursor` doubles as the "is anything animating" flag: it is null
+    /// for every static cursor, which is the overwhelmingly common case, and
+    /// the timer then stays disarmed and costs nothing. It borrows from
+    /// `xcursor_manager`'s theme, so it MUST be cleared before that manager is
+    /// destroyed (see `set_theme`) and whenever anything else takes over this
+    /// seat's cursor image (a client surface). Tablet tools are not such a
+    /// case: each drives its own `wlr_cursor`, never the seat's.
+    pub anim_timer: *mut ffi::wl_event_source,
+    pub anim_xcursor: *mut ffi::wlr_xcursor,
+    /// Wall-clock ms at which the current animation started, so elapsed time
+    /// (not absolute time) picks the frame and every cursor starts at frame 0.
+    pub anim_started_msec: u32,
+
     pub motion_listener: ffi::wl_listener,
     pub motion_absolute_listener: ffi::wl_listener,
     pub button_listener: ffi::wl_listener,
@@ -76,6 +94,9 @@ impl Default for Cursor {
             wlr_cursor: std::ptr::null_mut(),
             xcursor_manager: std::ptr::null_mut(),
             constraint: std::ptr::null_mut(),
+            anim_timer: std::ptr::null_mut(),
+            anim_xcursor: std::ptr::null_mut(),
+            anim_started_msec: 0,
             motion_listener: unsafe { std::mem::zeroed() },
             motion_absolute_listener: unsafe { std::mem::zeroed() },
             button_listener: unsafe { std::mem::zeroed() },
@@ -146,9 +167,26 @@ impl Cursor {
         self.wlr_cursor = wlr_cursor;
         self.xcursor_manager = xcursor_manager;
 
+        // The animated-cursor driver. Created disarmed; `set_xcursor` arms it
+        // only for a cursor that actually has more than one frame.
+        let event_loop = ffi::wl_display_get_event_loop((*(*seat).server).wl_server);
+        let anim_timer = ffi::wl_event_loop_add_timer(
+            event_loop,
+            Some(handle_xcursor_anim),
+            self as *mut Cursor as *mut _,
+        );
+        if anim_timer.is_null() {
+            ffi::wlr_xcursor_manager_destroy(xcursor_manager);
+            ffi::wlr_cursor_destroy(wlr_cursor);
+            self.xcursor_manager = std::ptr::null_mut();
+            self.wlr_cursor = std::ptr::null_mut();
+            return Err("Failed to create xcursor animation timer");
+        }
+        self.anim_timer = anim_timer;
+
         // Load default cursor theme
         ffi::wlr_xcursor_manager_load(xcursor_manager, 1.0);
-        ffi::wlr_cursor_set_xcursor(wlr_cursor, xcursor_manager, b"default\0".as_ptr() as *const _);
+        self.set_xcursor(b"default\0".as_ptr() as *const _);
 
         // Setup listeners
         let motion_ptr = &mut self.motion_listener as *mut ffi::wl_listener as *mut WlListener;
@@ -337,6 +375,12 @@ impl Cursor {
         wl_listener_remove(&mut self.hold_begin_listener);
         wl_listener_remove(&mut self.hold_end_listener);
 
+        self.stop_xcursor_animation();
+        if !self.anim_timer.is_null() {
+            ffi::wl_event_source_remove(self.anim_timer);
+            self.anim_timer = std::ptr::null_mut();
+        }
+
         if !self.xcursor_manager.is_null() {
             ffi::wlr_xcursor_manager_destroy(self.xcursor_manager);
             self.xcursor_manager = std::ptr::null_mut();
@@ -441,17 +485,17 @@ impl Cursor {
             }
         }
 
+        // Before the old theme is freed: a running animation holds a pointer
+        // into its images.
+        self.stop_xcursor_animation();
+
         if !self.xcursor_manager.is_null() {
             ffi::wlr_xcursor_manager_destroy(self.xcursor_manager);
         }
         self.xcursor_manager = xcursor_manager;
 
         ffi::wlr_xcursor_manager_load(self.xcursor_manager, 1.0);
-        ffi::wlr_cursor_set_xcursor(
-            self.wlr_cursor,
-            self.xcursor_manager,
-            b"default\0".as_ptr() as *const _,
-        );
+        self.set_xcursor(b"default\0".as_ptr() as *const _);
 
         Ok(())
     }
@@ -462,6 +506,114 @@ impl Cursor {
             self.xcursor_manager,
             name,
         );
+        // `wlr_cursor_set_xcursor` paints frame 0 and stops there; if this
+        // cursor has more frames, take over from here.
+        self.start_xcursor_animation(name);
+    }
+
+    /// Stop any running xcursor animation and disarm the timer. Idempotent, and
+    /// safe to call when nothing is animating.
+    ///
+    /// Every path that hands this seat's cursor image to someone else must call
+    /// this: a client surface cursor, or a theme swap that frees the images
+    /// `anim_xcursor` borrows. The gate is deliberately on the
+    /// unsafe transitions rather than a list of states where animating is known
+    /// to be fine — a state nobody thought of must land on "stop", not on
+    /// "keep dereferencing a freed theme".
+    pub unsafe fn stop_xcursor_animation(&mut self) {
+        self.anim_xcursor = std::ptr::null_mut();
+        if !self.anim_timer.is_null() {
+            // 0 disarms a libwayland timer.
+            ffi::wl_event_source_timer_update(self.anim_timer, 0);
+        }
+    }
+
+    /// Begin driving `name`'s frames, if it has more than one. Static cursors —
+    /// every cursor in a stock theme — leave the timer disarmed.
+    unsafe fn start_xcursor_animation(&mut self, name: *const std::os::raw::c_char) {
+        if self.anim_timer.is_null() || self.xcursor_manager.is_null() {
+            self.stop_xcursor_animation();
+            return;
+        }
+
+        let xcursor = ffi::wlr_xcursor_manager_get_xcursor(self.xcursor_manager, name, 1.0);
+
+        // Already playing this exact cursor: leave its clock running. The
+        // compositor re-asserts its cursor constantly — `clear_focus` sets
+        // "default" on EVERY pointer motion over the background — and
+        // restarting here would re-arm the timer sooner than the frame delay
+        // and pin the animation on frame 0 for as long as the mouse moves.
+        // The pointer is stable per (theme, name, scale) for the manager's
+        // lifetime, and `set_theme` stops the animation before freeing the old
+        // manager, so a stale pointer can never compare equal.
+        if !xcursor.is_null() && xcursor == self.anim_xcursor {
+            return;
+        }
+
+        self.stop_xcursor_animation();
+        if xcursor.is_null() {
+            return;
+        }
+        // One image is a static cursor. `total_delay == 0` would also make
+        // `wlr_xcursor_frame`'s `time % total_delay` divide by zero, so a theme
+        // with all-zero delays must never reach the driver.
+        if (*xcursor).image_count <= 1 || (*xcursor).total_delay == 0 {
+            return;
+        }
+
+        self.anim_xcursor = xcursor;
+        self.anim_started_msec = crate::util::msec_timestamp();
+        self.arm_next_frame(0);
+    }
+
+    /// Arm the timer for the delay of frame `idx`, clamped to >= 1ms: a zero
+    /// delay on a single frame would re-arm instantly and spin the event loop.
+    unsafe fn arm_next_frame(&mut self, idx: u32) {
+        let xcursor = self.anim_xcursor;
+        if xcursor.is_null() || idx >= (*xcursor).image_count {
+            return;
+        }
+        let image = *(*xcursor).images.offset(idx as isize);
+        if image.is_null() {
+            return;
+        }
+        let delay = (*image).delay.max(1).min(i32::MAX as u32) as i32;
+        ffi::wl_event_source_timer_update(self.anim_timer, delay);
+    }
+
+    /// Timer body: pick the frame for the elapsed time and paint it.
+    ///
+    /// The frame is derived from elapsed wall-clock rather than a running
+    /// counter, so a late or coalesced timer resyncs to where the animation
+    /// should be instead of drifting further behind.
+    unsafe fn advance_xcursor_frame(&mut self) {
+        let xcursor = self.anim_xcursor;
+        if xcursor.is_null() || self.wlr_cursor.is_null() {
+            return;
+        }
+
+        let elapsed = crate::util::msec_timestamp().wrapping_sub(self.anim_started_msec);
+        let idx = ffi::wlr_xcursor_frame(xcursor, elapsed);
+        if idx < 0 || idx as u32 >= (*xcursor).image_count {
+            return;
+        }
+        let idx = idx as u32;
+
+        let image = *(*xcursor).images.offset(idx as isize);
+        if image.is_null() {
+            return;
+        }
+        let buffer = ffi::wlr_xcursor_image_get_buffer(image);
+        if !buffer.is_null() {
+            ffi::wlr_cursor_set_buffer(
+                self.wlr_cursor,
+                buffer,
+                (*image).hotspot_x as i32,
+                (*image).hotspot_y as i32,
+                1.0,
+            );
+        }
+        self.arm_next_frame(idx);
     }
 
     pub unsafe fn op_start_pointer(&mut self) {
@@ -615,11 +767,7 @@ impl Cursor {
 
     pub unsafe fn clear_focus(&mut self) {
         ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
-        ffi::wlr_cursor_set_xcursor(
-            self.wlr_cursor,
-            self.xcursor_manager,
-            b"default\0".as_ptr() as *const _,
-        );
+        self.set_xcursor(b"default\0".as_ptr() as *const _);
     }
 
     // ── Synthetic pointer injection (`ccectl pointer-*`) ─────────────────────────
@@ -1777,9 +1925,19 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
 
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, frame_listener);
-    
+
     let seat = &mut *cursor.seat;
     ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+}
+
+/// Animated-xcursor tick. `data` is the `Cursor`, which lives inline in a
+/// `Box::into_raw`'d `Seat` and so never moves. Re-arms itself from
+/// `advance_xcursor_frame`; a stopped animation leaves the timer disarmed and
+/// this is not called again until something arms it.
+unsafe extern "C" fn handle_xcursor_anim(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let cursor = &mut *(data as *mut Cursor);
+    cursor.advance_xcursor_frame();
+    0
 }
 
 unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

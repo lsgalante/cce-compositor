@@ -1537,6 +1537,9 @@ unsafe extern "C" fn handle_request_set_cursor(
     let is_wm = !wm_client.is_null() && event_client == wm_client;
 
     if focused_client == (*event).seat_client || is_wm {
+        // The client owns the cursor image from here; a compositor-driven
+        // xcursor animation would paint over it on its next tick.
+        seat.cursor.stop_xcursor_animation();
         ffi::wlr_cursor_set_surface(
             seat.cursor.wlr_cursor,
             (*event).surface,
