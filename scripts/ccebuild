@@ -95,6 +95,17 @@ user_units() {
           done
 }
 
+# Helper scripts a crate ships in its own scripts/ dir. Not just this crate's:
+# a script belongs in the repo whose code it is about (cce-keyring-selftest
+# reports on the keyring chain, so it lives with it in cce-display-manager), and
+# anything installed from outside a repo is unversioned and lost on a fresh
+# clone. Units are excluded here — user_units() installs those, to a different
+# directory — and .desktop entries never live here.
+crate_scripts() {
+    find "$WS" -mindepth 3 -maxdepth 3 -path '*/scripts/*' -type f \
+        -not -path "$WS/target/*" 2>/dev/null
+}
+
 # XDG .desktop entries shipped by crates, at the crate root next to Cargo.toml.
 #
 # These used to be hand-written straight into ~/.local/share/applications, which
@@ -166,18 +177,19 @@ cmd_install() {
         ln -sf cce-fx "$BINDIR/cce"
     fi
 
-    # Helper scripts live in cce-compositor; only install them when that crate is
-    # in scope (i.e. a full install, or an explicit cce-fx install).
-    if [ ${#pkgs[@]} -eq 0 ] || [[ " ${pkgs[*]} " == *" cce-fx "* ]]; then
-        printf '==> installing helper scripts\n'
-        local s
-        for s in "$WS"/cce-compositor/scripts/*; do
-            [ -f "$s" ] || continue
-            case "$s" in *.service) continue ;; esac
-            install -m 755 "$s" "$BINDIR/$(basename "$s")"
-            n=$((n + 1))
-        done
-    fi
+    local s scripts=0
+    while read -r s; do
+        [ -n "$s" ] || continue
+        case "$s" in *.service) continue ;; esac
+        # Same filtered install as the units and desktop entries below.
+        if [ ${#pkgs[@]} -gt 0 ]; then
+            crate_selected "$(file_crate_dir "$s")" "${pkgs[@]}" || continue
+        fi
+        [ "$scripts" -eq 0 ] && printf '==> installing helper scripts -> %s\n' "$BINDIR"
+        install -m 755 "$s" "$BINDIR/$(basename "$s")"
+        scripts=$((scripts + 1))
+        n=$((n + 1))
+    done < <(crate_scripts)
 
     local u units=0
     while read -r u; do

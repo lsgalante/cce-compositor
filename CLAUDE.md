@@ -71,6 +71,13 @@ It also installs the **`.desktop` entries** crates ship at their own root into
 in `~/.local/share/applications` until 2026-08-16; see `./WORKSPACE.md` for the
 `Exec=`/`MimeType=` rules that go with them.
 
+**Helper scripts** are installed from **any** crate's `scripts/` dir, not just
+this one's (`crate_scripts()`, same per-package filtering). A script belongs in
+the repo whose code it is about — `cce-keyring-selftest` reports on the keyring
+chain, so it ships from `cce-display-manager/scripts/` — and anything installed
+from outside a repo is unversioned and gone on a fresh clone, which is how that
+script and the `.desktop` entries above both started out.
+
 `ccebuild restart` deliberately cannot reach the compositor: `cce-fx` is not a user
 unit (startcce launches it), and restarting it would tear down the session.
 
