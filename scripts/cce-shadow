@@ -1,0 +1,488 @@
+#!/usr/bin/env bash
+# cce-shadow — run a second cce-fx session that is completely invisible.
+#
+# The session runs on the wlroots headless backend: it has a real output, a real
+# scenefx renderer and real clients, but nothing is ever scanned out to a
+# monitor. That makes it the place to verify compositor and client changes
+# without taking over the screen and keyboard of whoever is using the machine.
+# The nested (wayland-backend) approach it replaces needed a visible window,
+# stole focus, and had to be re-centred before every capture.
+#
+# Everything it touches is confined to $CCE_SHADOW_DIR. The isolation is the
+# whole point, so it is worth knowing which parts are load-bearing:
+#
+#   HOME             Screenshots are written to a hardcoded $HOME/Pictures/
+#                    screenshots and ignore XDG entirely, so without this the
+#                    shadow litters the real one.
+#   XDG_STATE_HOME   Holds state.json. Sharing the real one makes the shadow
+#                    restore the live session's windows — it respawns a
+#                    duplicate of every app the user has open.
+#   notifications    `ccectl screenshot` shells out to notify-send, and the
+#                    D-Bus session bus is shared with the live session, so a
+#                    toast would pop on the user's real screen. The compositor
+#                    only defaults this off when the config is *unreadable*; a
+#                    config that exists but omits the key defaults it ON, and
+#                    the seeded config is a copy of the user's, which omits it.
+#                    So seed_config writes the key explicitly. Do not drop it.
+#
+# Deliberately NOT isolated: XDG_RUNTIME_DIR (the wayland socket must live in a
+# real user-owned dir, and the display name already differs) and the D-Bus
+# session bus (unavoidable, and harmless as long as the shadow does not run the
+# apps that *claim* a name — see "Do not run" below).
+
+set -euo pipefail
+
+SHADOW_DIR="${CCE_SHADOW_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/cce-shadow}"
+SHADOW_HOME="$SHADOW_DIR/home"
+RUN_DIR="$SHADOW_DIR/run"
+PIDFILE="$RUN_DIR/cce-fx.pid"
+DISPLAY_FILE="$RUN_DIR/display"
+LOG="$RUN_DIR/cce-fx.log"
+SHOTS="$SHADOW_DIR/shots"
+
+# Resolved before any override, so seeding reads the user's real config.
+REAL_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/cce"
+
+START_TIMEOUT_MS=15000
+
+die()  { printf 'cce-shadow: %s\n' "$*" >&2; exit 1; }
+note() { printf '==> %s\n' "$*"; }
+
+usage() {
+    cat <<'EOF'
+usage: cce-shadow <command> [args...]
+
+  start [opts]        start the invisible session (no-op if already running)
+      --fresh           discard the existing shadow home and reseed it
+      --restore         keep saved window state (default: start empty, so
+                        runs do not inherit the previous one's windows)
+      --exec <cmd>      run <cmd> inside the session once it is up
+      --scale <n>       output scale, e.g. 2 for HiDPI (default 1)
+      --gpu <path>      pin the renderer (default: first non-NVIDIA render
+                        node, because window capture fails on NVIDIA);
+                        --gpu none leaves the choice to wlroots
+      --bin <path>      cce-fx to run (default: PATH, then target/release)
+  stop                stop it and clean up its sockets
+  status              is it running, on which display, with what in it
+  ctl <args...>       run ccectl against it   (e.g. ctl windows)
+  spawn <cmd>         launch a client inside it
+  shot [name]         screenshot it; copies to <shots>/<name>.png and prints the path
+  shot-window [id]    screenshot one window (works even off-screen)
+  run <cmd...>        run any command with the session's environment
+  logs [-f]           show the compositor log
+  env                 print the environment as shell exports
+
+Do not run inside the shadow: cce-authenticator (claims the PolicyKit D-Bus
+name), cce-secrets (Secret Service), cce-remote (binds 0.0.0.0:17017). Every
+other cce app is safe; cce-cloud's daemon socket is already display-keyed.
+EOF
+}
+
+# ── locating binaries ────────────────────────────────────────────────────────
+# Prefer whatever is installed, because the usual reason to start a shadow is to
+# verify what `ccebuild install` just deployed. Fall back to the workspace build
+# so the script also works in a tree that was never installed.
+workspace() {
+    if [ -n "${CCE_WORKSPACE:-}" ]; then printf '%s\n' "$CCE_WORKSPACE"; return; fi
+    cargo locate-project --workspace --message-format plain 2>/dev/null | xargs -r dirname
+}
+
+# Pick a render node whose textures the compositor can actually read back.
+#
+# Full-output capture reads the output's own buffer and works anywhere, but
+# `screenshot window` reads the *client's* imported dmabuf, and when the
+# compositor is on the NVIDIA node while the client rendered on another,
+# wlr_texture_read_pixels reports format 0x0 and the capture fails. Preferring
+# a non-NVIDIA node keeps window capture working; `--gpu none` opts out, and
+# an explicit `--gpu <path>` always wins.
+default_gpu() {
+    local d drv
+    for d in /dev/dri/renderD*; do
+        [ -e "$d" ] || continue
+        drv=$(sed -n 's/^DRIVER=//p' "/sys/class/drm/${d##*/}/device/uevent" 2>/dev/null)
+        [ "$drv" = nvidia ] && continue
+        printf '%s\n' "$d"
+        return
+    done
+}
+
+find_bin() {
+    local name=$1 override=${2:-} ws
+    if [ -n "$override" ]; then
+        [ -x "$override" ] || die "no executable at $override"
+        printf '%s\n' "$override"; return
+    fi
+    local p
+    if p=$(command -v "$name" 2>/dev/null); then printf '%s\n' "$p"; return; fi
+    ws=$(workspace)
+    if [ -n "$ws" ] && [ -x "$ws/target/release/$name" ]; then
+        printf '%s\n' "$ws/target/release/$name"; return
+    fi
+    die "cannot find $name — install it, or pass --bin / set CCE_WORKSPACE"
+}
+
+# ── process identity ─────────────────────────────────────────────────────────
+# Always confirm via /proc/<pid>/exe before signalling. A pidfile can go stale
+# and have its number reused, and matching on argv instead would be worse: the
+# live session is also a cce-fx, and killing the wrong one ends the user's
+# desktop. `ccebuild install` unlinks before writing, so a running binary's exe
+# often reads "<path> (deleted)" — strip that before comparing.
+shadow_pid() {
+    local pid exe
+    [ -f "$PIDFILE" ] || return 1
+    pid=$(cat "$PIDFILE" 2>/dev/null) || return 1
+    [ -n "$pid" ] && [ -d "/proc/$pid" ] || return 1
+    exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || return 1
+    exe=${exe% (deleted)}
+    case "${exe##*/}" in cce-fx|cce) ;; *) return 1 ;; esac
+    printf '%s\n' "$pid"
+}
+
+shadow_display() { cat "$DISPLAY_FILE" 2>/dev/null || true; }
+
+# Every process the shadow started, the compositor excepted.
+#
+# They cannot be found by process group: the compositor setsid's whatever it
+# spawns, so each client is its own session leader and a `kill -- -PGID` on the
+# compositor reaches none of them. They also must not be found by name — the
+# live session runs the very same binaries. The environment is the one honest
+# marker: only a shadow process has HOME pointing inside the shadow. Without
+# this sweep the clients survive `stop`, and because the next `start` reuses the
+# same display name they reattach to the new compositor — which looks exactly
+# like session restore gone wrong (15 windows from one spawn).
+shadow_children() {
+    local pid comp=${1:-}
+    for pid in /proc/[0-9]*; do
+        pid=${pid#/proc/}
+        [ "$pid" = "$comp" ] && continue
+        grep -qz "^HOME=$SHADOW_HOME$" "/proc/$pid/environ" 2>/dev/null && printf '%s\n' "$pid"
+    done
+}
+
+require_running() {
+    shadow_pid >/dev/null || die "not running — start it with: cce-shadow start"
+    [ -n "$(shadow_display)" ] || die "running but no display recorded; try: cce-shadow stop"
+}
+
+# The environment a client (or ccectl) needs to talk to the shadow.
+shadow_env() {
+    printf '%s\n' \
+        "HOME=$SHADOW_HOME" \
+        "XDG_CONFIG_HOME=$SHADOW_HOME/.config" \
+        "XDG_STATE_HOME=$SHADOW_HOME/.local/state" \
+        "XDG_CACHE_HOME=$SHADOW_HOME/.cache" \
+        "XDG_DATA_HOME=$SHADOW_HOME/.local/share" \
+        "WAYLAND_DISPLAY=$(shadow_display)"
+}
+
+# ── config seeding ───────────────────────────────────────────────────────────
+# Copy only config.kdl and input.kdl. The real config dir also holds
+# accounts.json, google_client.json and cce-remote.pin — credentials that have
+# no business being duplicated into a scratch directory.
+seed_config() {
+    local scale=$1 cfg="$SHADOW_HOME/.config/cce"
+    mkdir -p "$cfg" "$SHADOW_HOME/Pictures/screenshots" \
+             "$SHADOW_HOME/.local/state" "$SHADOW_HOME/.cache" \
+             "$SHADOW_HOME/.local/share"
+
+    if [ ! -f "$cfg/config.kdl" ]; then
+        if [ -f "$REAL_CONFIG/config.kdl" ]; then
+            cp "$REAL_CONFIG/config.kdl" "$cfg/config.kdl"
+            note "seeded config from $REAL_CONFIG/config.kdl"
+        else
+            : > "$cfg/config.kdl"
+            note "no config at $REAL_CONFIG/config.kdl — starting empty"
+        fi
+        [ -f "$REAL_CONFIG/input.kdl" ] && cp "$REAL_CONFIG/input.kdl" "$cfg/input.kdl"
+
+        # Per-app overrides (~/.config/cce/<app>/config.kdl) decide fonts and
+        # colours for most clients — without them cce-terminal and friends fall
+        # back to defaults and look nothing like the real session. These are
+        # config only; the credentials in this tree (accounts.json,
+        # google_client.json, cce-remote.pin) sit at the top level and are
+        # deliberately not matched by this.
+        local appdir app
+        for appdir in "$REAL_CONFIG"/*/; do
+            [ -d "$appdir" ] || continue
+            app=$(basename "$appdir")
+            [ "$app" = backups ] && continue
+            [ -f "$appdir/config.kdl" ] || continue
+            mkdir -p "$cfg/$app"
+            cp "$appdir/config.kdl" "$cfg/$app/config.kdl"
+        done
+    fi
+
+    # cce-ui resolves font *aliases* (monospace, terminal, status-interface,
+    # window-borders …) by reading $HOME/.config/fontconfig/fonts.conf itself —
+    # keyed on HOME, not XDG_CONFIG_HOME (cce-ui/src/layout.rs,
+    # read_preferred_fonts). With HOME isolated the file is missing, the content
+    # defaults to empty and every alias falls back to Noto, so surfaces that ask
+    # for an alias rather than a concrete family (the status bar, cce-terminal)
+    # would render in the wrong face. Widgets naming a family outright are
+    # unaffected — verified by pixel-comparing this app with and without the
+    # copy. Seed it so both kinds match the real session.
+    if [ ! -f "$SHADOW_HOME/.config/fontconfig/fonts.conf" ] \
+       && [ -f "$HOME/.config/fontconfig/fonts.conf" ]; then
+        mkdir -p "$SHADOW_HOME/.config/fontconfig"
+        cp "$HOME/.config/fontconfig/fonts.conf" "$SHADOW_HOME/.config/fontconfig/fonts.conf"
+    fi
+
+    # See the header: readable-but-key-absent means notifications default ON.
+    if ! grep -q '^notifications' "$cfg/config.kdl" 2>/dev/null; then
+        printf '\n// cce-shadow: keep captures off the real screen.\nnotifications {\n    screenshots (bool)false\n}\n' \
+            >> "$cfg/config.kdl"
+    fi
+
+    # KDL is typed and the parser reads this with as_f64(), which returns None
+    # for an integer literal — "(f64)2" silently leaves the output at scale 1,
+    # while "(f64)2.0" applies. Normalise before writing.
+    case "$scale" in *.*) ;; *) scale="$scale.0" ;; esac
+
+    if [ "$scale" != "1.0" ]; then
+        # The headless output is HEADLESS-1. Resolution is not settable (the
+        # config output block understands scale but not mode), so scale is the
+        # only lever on effective size: 1280x720 at scale 2 is a 640x360
+        # logical desktop, which is how HiDPI layout gets exercised.
+        if grep -q '^output {' "$cfg/config.kdl"; then
+            awk -v ins="    HEADLESS-1 scale=(f64)$scale" '
+                /^output \{/ && !done { print; print ins; done=1; next }
+                /HEADLESS-1 scale=/ { next }
+                { print }' "$cfg/config.kdl" > "$cfg/config.kdl.tmp"
+            mv "$cfg/config.kdl.tmp" "$cfg/config.kdl"
+        else
+            printf '\noutput {\n    HEADLESS-1 scale=(f64)%s\n}\n' "$scale" >> "$cfg/config.kdl"
+        fi
+        note "output scale $scale"
+    fi
+}
+
+# ── commands ─────────────────────────────────────────────────────────────────
+cmd_start() {
+    local fresh=0 restore=0 exec_cmd=':' scale=1 gpu="${CCE_SHADOW_GPU:-}" bin=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --fresh) fresh=1; shift ;;
+            --restore) restore=1; shift ;;
+            --exec)  exec_cmd=${2:?--exec needs a command}; shift 2 ;;
+            --scale) scale=${2:?--scale needs a number}; shift 2 ;;
+            --gpu)   gpu=${2:?--gpu needs a device path}; shift 2 ;;
+            --bin)   bin=${2:?--bin needs a path}; shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+
+    local pid
+    if pid=$(shadow_pid); then
+        note "already running (pid $pid, display $(shadow_display))"
+        return 0
+    fi
+
+    [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ] \
+        || die "XDG_RUNTIME_DIR is unset or missing — the wayland socket needs it"
+
+    local cce_fx; cce_fx=$(find_bin cce-fx "$bin")
+
+    if [ "$fresh" = 1 ]; then
+        note "discarding $SHADOW_HOME"
+        rm -rf "$SHADOW_HOME"
+    fi
+    mkdir -p "$RUN_DIR" "$SHOTS"
+    seed_config "$scale"
+    rm -f "$DISPLAY_FILE"
+
+    # The compositor saves its windows on shutdown and respawns them on start.
+    # That is correct behaviour and it stays inside the shadow, but it makes a
+    # verification run depend on whatever the previous one left behind — three
+    # start/stop cycles had nine cce-files windows stacked up. A harness should
+    # begin from a known state, so discard it unless the run is *about* restore.
+    if [ "$restore" = 0 ]; then
+        rm -f "$SHADOW_HOME/.local/state/cce/state.json"
+    else
+        note "keeping saved window state"
+    fi
+
+    [ -z "$gpu" ] && gpu=$(default_gpu)
+    case "$gpu" in none) gpu="" ;; esac
+
+    local -a env_args=(-u WAYLAND_DISPLAY -u DISPLAY)
+    local e; while read -r e; do env_args+=("$e"); done < <(
+        printf '%s\n' \
+            "HOME=$SHADOW_HOME" \
+            "XDG_CONFIG_HOME=$SHADOW_HOME/.config" \
+            "XDG_STATE_HOME=$SHADOW_HOME/.local/state" \
+            "XDG_CACHE_HOME=$SHADOW_HOME/.cache" \
+            "XDG_DATA_HOME=$SHADOW_HOME/.local/share" \
+            "WLR_BACKENDS=headless" \
+            "WLR_HEADLESS_OUTPUTS=1")
+    [ -n "$gpu" ] && env_args+=("WLR_RENDER_DRM_DEVICE=$gpu")
+
+    note "starting $cce_fx (headless)"
+    env "${env_args[@]}" setsid nohup \
+        "$cce_fx" --no-xwayland --log-level info -c "$exec_cmd" \
+        > "$LOG" 2>&1 &
+    local started=$!
+    printf '%s\n' "$started" > "$PIDFILE"
+
+    # The compositor picks its own display via wl_display_add_socket_auto, so
+    # the log is the only authority on which one it got. Waiting for that line
+    # is also what proves it survived startup.
+    local waited=0 display=""
+    while [ "$waited" -lt "$((START_TIMEOUT_MS / 50))" ]; do
+        if [ -d "/proc/$started" ]; then
+            display=$(grep -a -m1 -oE 'display socket: [^ ]+' "$LOG" 2>/dev/null | awk '{print $3}' || true)
+            [ -n "$display" ] && break
+        else
+            printf '%s\n' "--- last lines of $LOG ---" >&2
+            tail -20 "$LOG" >&2 || true
+            rm -f "$PIDFILE"
+            die "cce-fx exited during startup"
+        fi
+        sleep 0.05
+        waited=$((waited + 1))
+    done
+    [ -n "$display" ] || { rm -f "$PIDFILE"; die "no display socket after $((START_TIMEOUT_MS / 1000))s; see $LOG"; }
+
+    printf '%s\n' "$display" > "$DISPLAY_FILE"
+    note "up on $display (pid $started)"
+    note "drive it with: cce-shadow ctl windows"
+}
+
+cmd_stop() {
+    local pid display
+    pid=$(shadow_pid) || pid=""
+    display=$(shadow_display)
+
+    if [ -n "$pid" ]; then
+        kill "$pid" 2>/dev/null || true
+        local waited=0
+        while [ -d "/proc/$pid" ] && [ "$waited" -lt 100 ]; do sleep 0.05; waited=$((waited + 1)); done
+        [ -d "/proc/$pid" ] && { kill -9 "$pid" 2>/dev/null || true; }
+    fi
+
+    # Sweep the clients even when the compositor was already gone — that is
+    # precisely the case where they are left behind.
+    local -a kids=(); local k
+    while read -r k; do [ -n "$k" ] && kids+=("$k"); done < <(shadow_children "$pid")
+    if [ ${#kids[@]} -gt 0 ]; then
+        note "stopping ${#kids[@]} client(s) left in the shadow"
+        kill "${kids[@]}" 2>/dev/null || true
+        local waited=0
+        while [ "$waited" -lt 60 ]; do
+            local alive=0
+            for k in "${kids[@]}"; do [ -d "/proc/$k" ] && alive=1 && break; done
+            [ "$alive" = 0 ] && break
+            sleep 0.05; waited=$((waited + 1))
+        done
+        for k in "${kids[@]}"; do [ -d "/proc/$k" ] && kill -9 "$k" 2>/dev/null || true; done
+    fi
+
+    if [ -z "$pid" ]; then
+        rm -f "$PIDFILE" "$DISPLAY_FILE"
+        note "not running"
+        return 0
+    fi
+
+    # The compositor does not always unlink these on the way out, and a stale
+    # socket makes the next ccectl hang instead of failing fast.
+    if [ -n "$display" ]; then
+        rm -f "/tmp/cce-$display.sock" "/tmp/cce-stream-$display.sock" \
+              "/tmp/cce-status-interface-$display.sock" "/tmp/cce-status-$display.sock"
+    fi
+    rm -f "$PIDFILE" "$DISPLAY_FILE"
+    note "stopped (was $display, pid $pid)"
+}
+
+cmd_status() {
+    local pid
+    if ! pid=$(shadow_pid); then
+        printf 'stopped\n'
+        [ -f "$PIDFILE" ] && printf 'note: stale pidfile at %s\n' "$PIDFILE"
+        return 0
+    fi
+    printf 'running   pid %s on %s\n' "$pid" "$(shadow_display)"
+    printf 'home      %s\n' "$SHADOW_HOME"
+    printf 'log       %s\n' "$LOG"
+    printf 'uptime    %s\n' "$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')"
+    local n; n=$(cmd_ctl windows 2>/dev/null | grep -c 'window id=' || true)
+    printf 'windows   %s\n' "${n:-0}"
+    printf 'clients   %s\n' "$(shadow_children "$pid" | wc -l)"
+}
+
+cmd_ctl() {
+    require_running
+    local ccectl; ccectl=$(find_bin ccectl)
+    local -a env_args=(); local e
+    while read -r e; do env_args+=("$e"); done < <(shadow_env)
+    env "${env_args[@]}" "$ccectl" "$@"
+}
+
+cmd_run() {
+    require_running
+    [ $# -gt 0 ] || die "run needs a command"
+    local -a env_args=(); local e
+    while read -r e; do env_args+=("$e"); done < <(shadow_env)
+    env "${env_args[@]}" "$@"
+}
+
+# A complete PNG ends with the 12-byte IEND chunk, whose last 8 bytes are the
+# literal "IEND" plus its fixed CRC. Checking for it is exact, where checking
+# for a non-zero size is not.
+png_complete() {
+    [ -s "$1" ] || return 1
+    tail -c 8 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n' | grep -q '49454e44ae426082'
+}
+
+# Screenshots land in the shadow's own $HOME/Pictures/screenshots.
+#
+# "ok <path>" means the *capture* succeeded, not that the file is ready: the
+# compositor PNG-encodes on a worker thread and answers the IPC first on
+# purpose, so that a large output does not stall the socket. The path is
+# therefore created before it is filled, and copying on the reply alone yields
+# a 0-byte file. Wait for the terminator instead.
+capture() {
+    local name=$1; shift
+    local reply path
+    reply=$(cmd_ctl "$@") || die "capture failed: $reply"
+    case "$reply" in
+        ok\ *) path=${reply#ok } ;;
+        *) die "unexpected ccectl reply: $reply" ;;
+    esac
+    local waited=0
+    while ! png_complete "$path"; do
+        [ "$waited" -lt 200 ] || die "timed out waiting for $path to finish encoding"
+        sleep 0.05
+        waited=$((waited + 1))
+    done
+    if [ -n "$name" ]; then
+        mkdir -p "$SHOTS"
+        cp "$path" "$SHOTS/$name.png"
+        printf '%s\n' "$SHOTS/$name.png"
+    else
+        printf '%s\n' "$path"
+    fi
+}
+
+cmd_shot()        { capture "${1:-}" screenshot; }
+cmd_shot_window() { local n=${2:-}; capture "$n" screenshot window ${1:+"$1"}; }
+
+cmd_logs() {
+    [ -f "$LOG" ] || die "no log at $LOG"
+    if [ "${1:-}" = "-f" ]; then tail -f "$LOG"; else tail -40 "$LOG"; fi
+}
+
+cmd_env() { require_running; shadow_env | sed 's/^/export /'; }
+
+case "${1:-}" in
+    start)        shift; cmd_start "$@" ;;
+    stop)         shift; cmd_stop "$@" ;;
+    status)       shift; cmd_status "$@" ;;
+    ctl)          shift; cmd_ctl "$@" ;;
+    spawn)        shift; [ $# -gt 0 ] || die "spawn needs a command"; cmd_ctl spawn "$@" ;;
+    shot)         shift; cmd_shot "$@" ;;
+    shot-window)  shift; cmd_shot_window "$@" ;;
+    run)          shift; cmd_run "$@" ;;
+    logs)         shift; cmd_logs "$@" ;;
+    env)          shift; cmd_env "$@" ;;
+    -h|--help|help|"") usage ;;
+    *) die "unknown command: $1 (try: cce-shadow help)" ;;
+esac

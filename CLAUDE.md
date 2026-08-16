@@ -68,6 +68,54 @@ unit (startcce launches it), and restarting it would tear down the session.
 Building emits a harmless warning that per-package `[profile.*]` in this `Cargo.toml`
 is ignored because profiles are only honored at the workspace root.
 
+### `scripts/cce-shadow` — an invisible session to verify in
+
+`cce-shadow start` runs a second `cce-fx` on the wlroots **headless** backend: a
+real output, real scenefx rendering, real clients, but nothing is ever scanned
+out, so it does not touch the screen, focus or input of whoever is using the
+machine. It is the replacement for the nested (wayland-backend) approach, which
+needed a visible window and had to be re-centred before every capture.
+
+```sh
+cce-shadow start [--fresh|--restore|--scale N|--gpu PATH|--exec CMD]
+cce-shadow ctl windows          # ccectl against the shadow
+cce-shadow spawn cce-files
+cce-shadow shot [name]          # PNG path on stdout
+cce-shadow status | logs | run <cmd> | env | stop
+```
+
+Everything lives under `$CCE_SHADOW_DIR` (default
+`~/.local/state/cce-shadow`). Four things there are load-bearing, and each was a
+bug before it was a feature:
+
+- **`HOME` is isolated** because screenshots go to a hardcoded
+  `$HOME/Pictures/screenshots` and ignore XDG entirely.
+- **`XDG_STATE_HOME` is isolated** because `state.json` otherwise restores the
+  *live* session's windows, respawning a duplicate of every open app. `start`
+  additionally discards the shadow's own `state.json` unless `--restore`, so a
+  run never inherits the previous one's windows.
+- **`stop` sweeps clients by environment**, matching `HOME=$SHADOW_HOME` in
+  `/proc/<pid>/environ`. They cannot be found by process group (the compositor
+  `setsid`s what it spawns) and must not be found by name (the live session runs
+  the same binaries — matching `cce-files` would kill the user's file manager).
+  Skipping the sweep leaves clients alive that reattach when the next `start`
+  reuses the display name, which looks exactly like session restore gone wrong.
+- **A `notifications { screenshots (bool)false }` key is written into the
+  seeded config.** The compositor only defaults this off when the config is
+  *unreadable*; a config that exists but omits the key defaults it ON, and the
+  seeded config is a copy of the user's, which omits it. Without it every
+  capture fires a `notify-send` toast onto the user's real screen, because the
+  D-Bus session bus is necessarily shared.
+
+The GPU pin (`--gpu`, default: first non-NVIDIA render node) is not cosmetic:
+full-output capture works anywhere, but `screenshot window` reads the client's
+imported dmabuf and reports read format `0x0` when the compositor is on the
+NVIDIA node and the client rendered elsewhere.
+
+Not reachable this way, so still live-session work: real DRM/KMS modesetting and
+page-flip timing, suspend/resume, and libinput hardware paths (gestures, accel)
+— injected events do not exercise them.
+
 ### Two binaries
 
 - **`cce-fx`** (`src/bin/cce.rs`, symlinked to `cce`) — the compositor server.
