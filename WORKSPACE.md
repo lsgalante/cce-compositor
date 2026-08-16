@@ -86,7 +86,7 @@ ccebuild install-system     # the root-owned binaries (needs sudo)
 The full deploy loop is `ccebuild install && ccebuild restart`. `ccebuild` derives
 every binary from `cargo metadata`, which is the point: the per-crate Makefiles used
 to name their binaries by hand, so crates with extra `[[bin]]` targets shipped
-incomplete for weeks (`cce-ui` without `cce-bevel`, `cce-display-manager` without its
+incomplete for weeks (`cce-ui` without `cce-relief`, `cce-display-manager` without its
 three `cce-keyring-unlock*` helpers). Each crate's `make install` is now a thin
 wrapper around `ccebuild install --no-build <pkg>`; `make build/run/clean` are
 unchanged. **Never add a binary name to a Makefile** — cargo already knows it.
@@ -116,7 +116,7 @@ crates (~11s). Pick one shape and stay with it.
 
 Binary names do not reliably match the crate: `cce-fx` lives in `cce-compositor/`,
 `cce-system-interface` and `cce-files` declare explicit `[[bin]]` names, and several
-crates ship extra bins (`cce-ui` → `cce-ramp`/`cce-bevel`, `cce-compositor` → `ccectl`,
+crates ship extra bins (`cce-ui` → `cce-ramp`/`cce-relief`, `cce-compositor` → `ccectl`,
 `cce-display-manager` → three keyring helpers). Ask cargo rather than guessing:
 `cargo metadata --no-deps --format-version 1 | jq -r '.packages[].targets[] | select(.kind|index("bin")) | .name'`.
 
