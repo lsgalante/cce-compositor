@@ -62,6 +62,15 @@ around it. When touching it, keep two invariants:
   Matching is anchored: a basename must equal a dead crate name exactly, or that name
   plus a hex hash.
 
+It also installs the **`.desktop` entries** crates ship at their own root into
+`$XDG_DATA_HOME/applications` (then `update-desktop-database`), discovered by
+`desktop_entries()` and filtered per package exactly like units. Discovery is
+`-maxdepth 2` — crate root only — so keep the file next to `Cargo.toml`; units get
+`-maxdepth 3` because `cce-compositor/scripts/` holds one, which is what the shared
+`file_crate_dir()` helper unwraps. These entries were unversioned hand-written files
+in `~/.local/share/applications` until 2026-08-16; see `./WORKSPACE.md` for the
+`Exec=`/`MimeType=` rules that go with them.
+
 `ccebuild restart` deliberately cannot reach the compositor: `cce-fx` is not a user
 unit (startcce launches it), and restarting it would tear down the session.
 

@@ -91,6 +91,29 @@ three `cce-keyring-unlock*` helpers). Each crate's `make install` is now a thin
 wrapper around `ccebuild install --no-build <pkg>`; `make build/run/clean` are
 unchanged. **Never add a binary name to a Makefile** — cargo already knows it.
 
+### Desktop entries
+
+A crate that should appear in the launcher — or be selectable as an XDG default —
+ships **`<crate>/<name>.desktop` at its own root**, next to `Cargo.toml` and beside
+any `*.service` it ships. `ccebuild install` copies those into
+`$XDG_DATA_HOME/applications` and runs `update-desktop-database`, filtered by
+package the same way units are.
+
+Two rules, both learned the hard way when these files lived only in
+`~/.local/share/applications` and were hand-edited there:
+
+- **`Exec=` is a bare binary name**, never an absolute path. `~/.local/bin` is the
+  first entry on the session PATH, and the launcher (`cce-cloud`) spawns through
+  `sh -c`, so the name resolves. Nine of the ten imported entries had baked in
+  `/home/lsgalante/.local/bin/…`.
+- **An app is only reachable as a default handler if it declares `MimeType=`.** The
+  settings app's Default Apps page builds each dropdown by scanning installed
+  entries for the ones claiming that category's MIME types, so an app with no
+  `MimeType=` line simply never appears as a candidate — which is why `cce-files`
+  could not be chosen as the file manager despite having an entry. Declaring a type
+  also means honoring it: the app has to accept the path or URL argv the field code
+  (`%f`/`%u`) passes it.
+
 `ccebuild status` is the tool for "is what's running actually the code I built?".
 Because `install` unlinks before writing, a process still on the old inode reports its
 exe as `(deleted)`, which is how both `status` and `restart` detect drift. It also
