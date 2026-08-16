@@ -23,7 +23,7 @@ desktop environment written in Rust, split into two halves:
   world: it has a `build.rs` native-build pipeline, a `Makefile`, and its own detailed
   **`cce-compositor/CLAUDE.md`** — read that before working inside `cce-compositor/`.
 - **~18 `cce-*` client apps** (`cce-status-interface`, `cce-system-interface`,
-  `cce-designer`, `cce-files`, `cce-color-editor`, `cce-email`, `cce-graph`, `cce-notifier`,
+  `cce-designer`, `cce-files`, `cce-color-editor`, `cce-mail`, `cce-graph`, `cce-notifier`,
   `cce-authenticator`, `cce-display-manager`, `cce-text-editor`,
   `cce-data-editor`, `cce-fonts`, `cce-cloud`, `cce-layout-interface`,
   `cce-screenaver`, `cce-test-interface`, `cce-terminal`, …) — Wayland client GUIs that connect to the
@@ -76,7 +76,7 @@ the crates. It ships in `cce-compositor/scripts/ccebuild` and installs to
 
 ```sh
 ccebuild install            # build the workspace, install every binary + unit
-ccebuild install cce-email  # just one package (what each crate's `make install` runs)
+ccebuild install cce-mail  # just one package (what each crate's `make install` runs)
 ccebuild restart            # restart user services left on a replaced binary
 ccebuild status             # built-vs-installed drift, AND running-vs-installed
 ccebuild prune              # target/ artifacts of crates cargo no longer knows
