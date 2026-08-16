@@ -30,6 +30,7 @@ PREFIX="${CCE_PREFIX:-$HOME/.local}"
 BINDIR="$PREFIX/bin"
 UNITDIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 DESKTOPDIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+ICONDIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons"
 DBUSDIR="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services"
 
 die() { printf 'ccebuild: %s\n' "$*" >&2; exit 1; }
@@ -132,6 +133,38 @@ dbus_services() {
 # settings app's Default Apps page.
 desktop_entries() {
     find "$WS" -maxdepth 2 -name '*.desktop' -not -path "$WS/target/*" 2>/dev/null
+}
+
+# App icons, as a whole XDG icon theme tree a crate ships under hicolor/ —
+# cce-icons/hicolor/scalable/apps/cce-files.svg installs to
+# $XDG_DATA_HOME/icons/hicolor/scalable/apps/cce-files.svg. The path IS the
+# install path, so an icon's size and context are its directory rather than a
+# rule in this script: adding 48x48/apps or scalable/mimetypes later needs no
+# edit here. The icon's basename must equal the Icon= key in the crate's
+# .desktop entry, which is what makes them resolve at all.
+#
+# Two things are load-bearing:
+#
+# - **`-type l` as well as `-type f`.** Every file in cce-icons/hicolor is a
+#   symlink into ../../../svg (svg/ is the sole source; an entry there is a name
+#   for a glyph, not a second copy of it). `-type f` alone does not match a
+#   symlink, so the plain `-type f` used by crate_scripts/dbus_services would
+#   find nothing at all here and report success. `install` dereferences, so the
+#   destination is a real file either way.
+# - **hicolor, and no index.theme.** hicolor is the spec's fallback theme,
+#   searched whatever the user's icon theme is; the sibling cce cursor theme
+#   installs to icons/cce and nothing anywhere selects it. The system
+#   hicolor-icon-theme package owns the index.theme listing every size/context
+#   dir, and a theme is the union of its trees across base dirs — shipping a
+#   second index here that named only scalable/apps would be read first and hide
+#   every other hicolor directory.
+#
+# The extension filter is the icon formats the icon-theme spec defines, not a
+# per-crate list: it is what keeps the tree's own README.md out of the install.
+app_icons() {
+    find "$WS" -mindepth 3 -path '*/hicolor/*' \( -type f -o -type l \) \
+        \( -name '*.svg' -o -name '*.png' -o -name '*.xpm' \) \
+        -not -path "$WS/target/*" 2>/dev/null
 }
 
 # The crate directory a shipped data file belongs to. Units may sit one level
@@ -244,6 +277,33 @@ cmd_install() {
     # Refreshes the MIME cache that makes a newly-declared MimeType resolvable.
     # Absent on a minimal install and non-fatal there, so failure is ignored.
     [ "$desktops" -gt 0 ] && { update-desktop-database "$DESKTOPDIR" 2>/dev/null || true; }
+
+    # Deliberately NOT filtered by package. The icon theme is one shared tree
+    # owned by cce-icons, which has no Cargo.toml — it is an asset repo, not a
+    # crate — so crate_selected() can never match it and a filtered install
+    # would silently install no icons at all. file_crate_dir() is no help
+    # either: the dir above an icon is `apps`, not the crate. Over-installing a
+    # dozen small files on `ccebuild install cce-preview` is the cheaper wrong
+    # answer than an app whose entry points at an icon that was never shipped.
+    local i icons=0 rel
+    while read -r i; do
+        [ -n "$i" ] || continue
+        # Everything after the hicolor/ component, so the source tree's layout
+        # is reproduced verbatim under $ICONDIR.
+        rel="hicolor/${i#*/hicolor/}"
+        [ "$icons" -eq 0 ] && printf '==> installing app icons -> %s\n' "$ICONDIR"
+        install -D -m 644 "$i" "$ICONDIR/$rel"
+        icons=$((icons + 1))
+        n=$((n + 1))
+    done < <(app_icons)
+    # GTK reads the mmapped cache in preference to the directory when it is
+    # newer than the directory, so a new icon can be invisible until it is
+    # rebuilt. --ignore-theme-index because this tree deliberately ships no
+    # index.theme (see app_icons above); absent on a minimal install, so
+    # failure is ignored.
+    [ "$icons" -gt 0 ] && {
+        gtk-update-icon-cache --ignore-theme-index -q -f "$ICONDIR/hicolor" 2>/dev/null || true
+    }
 
     if [ ${#missing[@]} -gt 0 ]; then
         printf 'ccebuild: NOT BUILT, skipped: %s\n' "${missing[*]}" >&2

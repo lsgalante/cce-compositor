@@ -114,6 +114,25 @@ Two rules, both learned the hard way when these files lived only in
   also means honoring it: the app has to accept the path or URL argv the field code
   (`%f`/`%u`) passes it.
 
+### App icons
+
+An entry's `Icon=` should be the app's own name (`Icon=cce-files`), backed by
+`cce-icons/hicolor/scalable/apps/cce-files.svg`. `ccebuild install` mirrors any
+crate's `hicolor/` tree into `$XDG_DATA_HOME/icons/hicolor/` and refreshes the GTK
+icon cache; `cce-icons/hicolor/README.md` documents the naming and the symlink
+convention that keeps `svg/` the sole source of the artwork.
+
+Before 2026-08-16 the entries borrowed generic freedesktop names
+(`preferences-system`, `system-file-manager`), which resolved only if some other
+installed theme happened to provide them, and `cce-preview` "worked" only because
+five PNGs had been hand-copied into `~/.local/share/icons` — unversioned, and gone
+on a fresh clone. The same failure as the `.desktop` files themselves.
+
+Note that **nothing displayed an `Icon=` key at all** until the launcher was taught
+to: `cce-cloud`'s `AppInfo` had no icon field. `cce_ui::icon` is the shared
+resolver (theme name or absolute path → file); it is distinct from
+`cce_ui::upload_icon`, which loads a *bundled* cce-icons glyph for in-widget use.
+
 `ccebuild status` is the tool for "is what's running actually the code I built?".
 Because `install` unlinks before writing, a process still on the old inode reports its
 exe as `(deleted)`, which is how both `status` and `restart` detect drift. It also

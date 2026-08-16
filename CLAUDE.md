@@ -71,6 +71,16 @@ It also installs the **`.desktop` entries** crates ship at their own root into
 in `~/.local/share/applications` until 2026-08-16; see `./WORKSPACE.md` for the
 `Exec=`/`MimeType=` rules that go with them.
 
+**App icons** install from any crate's `hicolor/` tree (`app_icons()`), mirrored
+verbatim into `$XDG_DATA_HOME/icons/hicolor/` — so an icon's size and context are
+its directory, not a rule in the script, and `48x48/apps` would need no edit here.
+In practice the tree is `cce-icons/hicolor/`, whose files are all **symlinks** into
+its own `svg/`; that makes `-type l` load-bearing in the `find`, because `-type f`
+alone matches none of them and would report a clean install of nothing. The install
+is deliberately *not* package-filtered: `cce-icons` has no `Cargo.toml`, so
+`crate_selected()` can never match it. See `cce-icons/hicolor/README.md` for why the
+target is `hicolor` rather than the `cce` theme, and why it ships no `index.theme`.
+
 **Helper scripts** are installed from **any** crate's `scripts/` dir, not just
 this one's (`crate_scripts()`, same per-package filtering). A script belongs in
 the repo whose code it is about — `cce-keyring-selftest` reports on the keyring
