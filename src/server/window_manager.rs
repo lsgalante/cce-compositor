@@ -98,6 +98,12 @@ pub struct WindowManager {
     /// A full-output/region screenshot parked for the next composited frame
     /// (`ccectl screenshot`); consumed by `Output::render_and_commit`.
     pub pending_screenshot: Option<crate::screenshot::PendingScreenshot>,
+    /// The reply channel of the IPC command currently being dispatched, so a
+    /// command that cannot answer yet can carry it away and answer later
+    /// (only `screenshot` does). Set by `handle_ipc_timer` around the
+    /// dispatch; if it is still here afterwards, the command answered
+    /// synchronously and the timer sends its return value.
+    pub pending_ipc_reply: Option<std::sync::mpsc::Sender<String>>,
     pub startup: Vec<crate::config::StartupConfig>,
     pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
     pub status_sender: Option<crate::status_server::StatusSender>,
@@ -264,6 +270,7 @@ impl WindowManager {
         self.viewport_settle_timer = std::ptr::null_mut();
         self.desk_zoom = 1.0;
         self.pending_screenshot = None;
+        self.pending_ipc_reply = None;
         self.mode = WindowManagerMode::Normal;
         self.restore_queue = Vec::new();
         self.last_window_states = Vec::new();
@@ -2620,7 +2627,15 @@ impl WindowManager {
             Action::Screenshot => {
                 // Same capture as `ccectl screenshot`: the enabled output's
                 // next frame, saved under ~/Pictures/screenshots.
+                //
+                // Hide any borrowed reply channel first: this action can be
+                // reached from an IPC command of its own, and the screenshot
+                // dispatch takes the channel to answer later — which would
+                // hand this capture's verdict to whoever asked for the
+                // *action*, and leave them waiting a frame for it.
+                let borrowed = self.pending_ipc_reply.take();
                 let _ = self.process_ipc_command("screenshot");
+                self.pending_ipc_reply = borrowed;
             }
             Action::Reload => {
                 log::info!("monolithic execute_action: Reload requested");
@@ -3305,13 +3320,22 @@ impl WindowManager {
                             }
                         });
 
-                        self.pending_screenshot = Some(crate::screenshot::PendingScreenshot {
-                            output: target_out,
+                        // The capture happens a frame from now, in
+                        // `Output::render_and_commit`, so the reply channel
+                        // rides along with it: answering `ok <path>` here
+                        // claimed success for captures that then failed (an
+                        // unsupported readback format, a failed commit) and
+                        // named a file that never appeared. Taking the
+                        // channel is what tells `handle_ipc_timer` not to
+                        // answer, so the returned string goes nowhere.
+                        self.pending_screenshot = Some(crate::screenshot::PendingScreenshot::new(
+                            target_out,
                             region,
-                            path: path.clone(),
-                        });
+                            path,
+                            self.pending_ipc_reply.take(),
+                        ));
                         ffi::wlr_output_schedule_frame((*target_out).wlr_output);
-                        format!("ok {}\n", path.display())
+                        String::new()
                     }
                     Some(other) => format!("error: unknown screenshot target: {}\n", other),
                 }
@@ -3910,8 +3934,16 @@ unsafe extern "C" fn handle_ipc_timer(data: *mut std::ffi::c_void) -> std::os::r
     
     if let Some(ref rx) = (*wm).ipc_rx {
         while let Ok(req) = rx.try_recv() {
+            // Lend the reply channel to the dispatch: a command whose real
+            // outcome is only known later (`screenshot`, which lands a frame
+            // from now) takes it and answers itself. If it is still here, the
+            // command answered synchronously and its return value is the
+            // reply.
+            (*wm).pending_ipc_reply = Some(req.reply_tx);
             let reply = (*wm).process_ipc_command(&req.command);
-            let _ = req.reply_tx.send(reply);
+            if let Some(tx) = (*wm).pending_ipc_reply.take() {
+                let _ = tx.send(reply);
+            }
         }
     }
     

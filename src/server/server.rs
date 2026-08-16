@@ -875,6 +875,13 @@ impl Default for Server {
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.pointer_binds, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.gesture_binds, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.ipc_rx, None);
+            // Same reason as ipc_rx above, and not optional: an mpsc endpoint
+            // has no null niche, so `Option` tags it out of band and zeroed
+            // bytes decode as `Some(<null channel>)` — dropping that segfaults.
+            // pending_screenshot holds one too (its deferred IPC reply), which
+            // is what makes zeroed bytes decode as a live `Some` there as well.
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.pending_ipc_reply, None);
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.pending_screenshot, None);
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.startup, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.startup_pids, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.status_sender, None);

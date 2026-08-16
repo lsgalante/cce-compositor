@@ -607,9 +607,10 @@ impl Output {
 
         // Read the just-committed frame back while the state's buffer is
         // still alive; encode/notify happen on a worker thread.
-        if let Some(shot) = pending_shot {
+        if let Some(mut shot) = pending_shot {
             if state.buffer.is_null() {
                 log::warn!("screenshot: output state has no buffer");
+                shot.reply_err("screenshot: output state has no buffer");
             } else {
                 crate::screenshot::capture_state_buffer(
                     (*self.server).renderer,

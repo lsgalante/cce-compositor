@@ -67,9 +67,22 @@ fn handle_client(mut stream: UnixStream, tx: mpsc::Sender<IpcRequest>) {
             let s = String::from_utf8_lossy(&buf[..n]);
             let cmd = s.trim().to_string();
             if !cmd.is_empty() {
+                // Commands answer from the IPC drain and so are quick; a
+                // second is a generous leash that still surfaces a wedged
+                // compositor. `screenshot` is the exception: its reply now
+                // waits for the capture, which happens on the next composited
+                // frame, and a cold readback (first capture after an idle
+                // spell — NVIDIA recompiles shaders on the way) has been
+                // measured over a second. Timing that out would report
+                // failure for a capture that lands.
+                let timeout = if cmd.starts_with("screenshot") {
+                    std::time::Duration::from_secs(5)
+                } else {
+                    std::time::Duration::from_millis(1000)
+                };
                 let (reply_tx, reply_rx) = mpsc::channel();
                 if tx.send(IpcRequest { command: cmd, reply_tx }).is_ok() {
-                    if let Ok(reply) = reply_rx.recv_timeout(std::time::Duration::from_millis(1000)) {
+                    if let Ok(reply) = reply_rx.recv_timeout(timeout) {
                         let _ = stream.write_all(reply.as_bytes());
                     } else {
                         let _ = stream.write_all(b"error: timeout processing command\n");
