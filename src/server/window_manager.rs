@@ -898,58 +898,162 @@ impl WindowManager {
         log::info!("Spawning restored windows. Total: {}", self.restore_queue.len());
         let restored = self.restore_queue.clone();
         std::thread::spawn(move || {
+            // Clients that reach for the Secret Service on startup start last,
+            // behind the keyring barrier: launched into a still-locked keyring
+            // they either fail outright or hang on KeePassXC's modal unlock
+            // prompt — which in turn delays the D-Bus unlock they are waiting
+            // for. Everything else starts immediately.
+            let (secret_gated, immediate): (Vec<_>, Vec<_>) = restored
+                .into_iter()
+                .partition(|w| Self::needs_secret_service(&w.cmdline));
+
             let mut spawned_any = false;
-            for w in restored.into_iter() {
-                // A wine/Proton window records its WINDOWS-side exe path
-                // (C:\... or C:/...) as the command — /bin/sh can never run
-                // it, so each one burns a silent no-op fork per login. Skip
-                // them outright.
-                let cmd_trimmed = w.cmdline.trim();
-                let bytes = cmd_trimmed.as_bytes();
-                let is_windows_path = bytes.len() > 2
-                    && bytes[0].is_ascii_alphabetic()
-                    && bytes[1] == b':'
-                    && (bytes[2] == b'/' || bytes[2] == b'\\');
-                if is_windows_path {
-                    log::info!(
-                        "Skipping unrestorable Windows-path command for {:?}: {}",
-                        w.app_id,
-                        cmd_trimmed
-                    );
-                    continue;
-                }
-                if !w.cmdline.is_empty() {
-                    // Small stagger so N clients don't all hit Vulkan device
-                    // init at the same instant; restore matching and focus
-                    // restoration are map-order independent.
-                    if spawned_any {
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                    spawned_any = true;
-                    log::info!("Deferred spawning restored window command: {}", w.cmdline);
-                    let cmd = w.cmdline;
-                    match nix::unistd::fork() {
-                        Ok(nix::unistd::ForkResult::Child) => {
-                            crate::process::cleanup_child();
-                            let env: Vec<std::ffi::CString> = std::env::vars()
-                                .map(|(k, v)| std::ffi::CString::new(format!("{}={}", k, v)).unwrap())
-                                .collect();
-                            let env_ptrs: Vec<&std::ffi::CStr> = env.iter().map(|s| s.as_c_str()).collect();
-                            let sh_c = std::ffi::CString::new("/bin/sh").unwrap();
-                            let c_c = std::ffi::CString::new("-c").unwrap();
-                            let cmd_c = std::ffi::CString::new(cmd).unwrap();
-                            let args = [sh_c.as_c_str(), c_c.as_c_str(), cmd_c.as_c_str()];
-                            let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
-                            std::process::exit(1);
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            log::error!("failed to fork child process: {}", e);
-                        }
-                    }
+            for w in &immediate {
+                Self::spawn_restored_one(w, &mut spawned_any);
+            }
+            if !secret_gated.is_empty() {
+                Self::wait_for_secret_service(secret_gated.len());
+                for w in &secret_gated {
+                    Self::spawn_restored_one(w, &mut spawned_any);
                 }
             }
         });
+    }
+
+    /// True when this restored command will talk to `org.freedesktop.secrets`
+    /// as it starts. Electron names its backend on the command line, and that
+    /// is the population that blocks on a locked keyring (`basic` is Electron's
+    /// plaintext fallback — it never touches the Secret Service).
+    fn needs_secret_service(cmdline: &str) -> bool {
+        match cmdline.split("--password-store=").nth(1) {
+            Some(rest) => !matches!(rest.split_whitespace().next(), None | Some("basic")),
+            None => false,
+        }
+    }
+
+    /// Block until the Secret Service reports its default collection unlocked.
+    ///
+    /// Bounded twice over, because a login must never wedge here: if nothing
+    /// owns the bus name shortly after startup this machine has no keyring to
+    /// wait for, and if the collection simply never unlocks the gated apps
+    /// still get launched (degraded, exactly as they were before this barrier
+    /// existed) rather than being dropped.
+    fn wait_for_secret_service(gated: usize) {
+        const NAME_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+        const UNLOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+        const POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
+        let busctl = |args: &[&str]| -> Option<String> {
+            let out = std::process::Command::new("busctl").args(args).output().ok()?;
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+
+        let started = std::time::Instant::now();
+        let mut have_name = false;
+        while started.elapsed() < NAME_GRACE {
+            if busctl(&[
+                "--user", "call", "org.freedesktop.DBus", "/org/freedesktop/DBus",
+                "org.freedesktop.DBus", "NameHasOwner", "s", "org.freedesktop.secrets",
+            ])
+            .as_deref()
+                == Some("b true")
+            {
+                have_name = true;
+                break;
+            }
+            std::thread::sleep(POLL);
+        }
+        if !have_name {
+            log::info!(
+                "No Secret Service on the bus after {NAME_GRACE:?}; starting {gated} keyring client(s) without waiting"
+            );
+            return;
+        }
+
+        let started = std::time::Instant::now();
+        while started.elapsed() < UNLOCK_TIMEOUT {
+            match busctl(&[
+                "--user", "get-property", "org.freedesktop.secrets",
+                "/org/freedesktop/secrets/aliases/default",
+                "org.freedesktop.Secret.Collection", "Locked",
+            ])
+            .as_deref()
+            {
+                Some("b false") => {
+                    log::info!(
+                        "Keyring unlocked after {:?}; starting {gated} gated client(s)",
+                        started.elapsed()
+                    );
+                    return;
+                }
+                _ => std::thread::sleep(POLL),
+            }
+        }
+        log::warn!(
+            "Keyring still locked after {UNLOCK_TIMEOUT:?}; starting {gated} gated client(s) anyway"
+        );
+    }
+
+    fn spawn_restored_one(w: &SavedWindowState, spawned_any: &mut bool) {
+        // A wine/Proton window records its WINDOWS-side exe path
+        // (C:\... or C:/...) as the command — /bin/sh can never run
+        // it, so each one burns a silent no-op fork per login. Skip
+        // them outright.
+        let cmd_trimmed = w.cmdline.trim();
+        let bytes = cmd_trimmed.as_bytes();
+        let is_windows_path = bytes.len() > 2
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'/' || bytes[2] == b'\\');
+        if is_windows_path {
+            log::info!(
+                "Skipping unrestorable Windows-path command for {:?}: {}",
+                w.app_id,
+                cmd_trimmed
+            );
+            return;
+        }
+        // The Secret Service provider is owned by cce-keepassxc.service so it
+        // comes up with the session rather than from the middle of this queue;
+        // respawning it here would just race that unit.
+        if std::path::Path::new(cmd_trimmed).file_name().and_then(|f| f.to_str()) == Some("keepassxc")
+        {
+            log::info!("Skipping {cmd_trimmed}: started by cce-keepassxc.service");
+            return;
+        }
+        if w.cmdline.is_empty() {
+            return;
+        }
+        // Small stagger so N clients don't all hit Vulkan device
+        // init at the same instant; restore matching and focus
+        // restoration are map-order independent.
+        if *spawned_any {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        *spawned_any = true;
+        log::info!("Deferred spawning restored window command: {}", w.cmdline);
+        let cmd = w.cmdline.clone();
+        match unsafe { nix::unistd::fork() } {
+            Ok(nix::unistd::ForkResult::Child) => {
+                crate::process::cleanup_child();
+                let env: Vec<std::ffi::CString> = std::env::vars()
+                    .map(|(k, v)| std::ffi::CString::new(format!("{}={}", k, v)).unwrap())
+                    .collect();
+                let env_ptrs: Vec<&std::ffi::CStr> = env.iter().map(|s| s.as_c_str()).collect();
+                let sh_c = std::ffi::CString::new("/bin/sh").unwrap();
+                let c_c = std::ffi::CString::new("-c").unwrap();
+                let cmd_c = std::ffi::CString::new(cmd).unwrap();
+                let args = [sh_c.as_c_str(), c_c.as_c_str(), cmd_c.as_c_str()];
+                let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
+                std::process::exit(1);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                log::error!("failed to fork child process: {}", e);
+            }
+        }
     }
 
     pub fn start_ipc(&mut self, display_socket: Option<String>) {
@@ -4754,5 +4858,83 @@ mod tests {
         }
 
         std::mem::forget(wm);
+    }
+
+    #[test]
+    fn secret_service_gating_picks_only_keyring_clients() {
+        // The real restored cmdline that lost the race against the keyring.
+        assert!(WindowManager::needs_secret_service(
+            "/usr/lib/claude-desktop/claude-desktop --password-store=gnome-libsecret"
+        ));
+        assert!(WindowManager::needs_secret_service(
+            "bitwarden --password-store=kwallet6 --ozone-platform=wayland"
+        ));
+        // Electron's plaintext fallback never reaches the Secret Service, so
+        // gating it would delay the app for nothing.
+        assert!(!WindowManager::needs_secret_service(
+            "some-app --password-store=basic"
+        ));
+        // Everything else starts immediately — including the provider itself,
+        // which must never wait on the barrier it is supposed to satisfy.
+        assert!(!WindowManager::needs_secret_service("/usr/bin/keepassxc"));
+        assert!(!WindowManager::needs_secret_service(
+            "/home/lsgalante/.local/bin/cce-terminal"
+        ));
+        assert!(!WindowManager::needs_secret_service(""));
+    }
+
+    /// The barrier must actually hold while the collection reports locked, and
+    /// release promptly once it flips — that ordering is the whole fix, so it
+    /// is exercised here against a stub `busctl` rather than reasoned about.
+    #[test]
+    fn keyring_barrier_holds_until_unlocked_then_releases() {
+        let dir = std::env::temp_dir().join(format!("cce-barrier-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let flag = dir.join("unlocked");
+        let shim = dir.join("busctl");
+        // Reports the name owned, and the collection locked until `flag` exists.
+        std::fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\n\
+                 case \"$*\" in\n\
+                 *NameHasOwner*) echo 'b true' ;;\n\
+                 *Locked*) [ -e {flag} ] && echo 'b false' || echo 'b true' ;;\n\
+                 esac\n",
+                flag = flag.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{old_path}", dir.display()));
+
+        // Flip the stub to "unlocked" shortly after the wait begins.
+        let flag_writer = flag.clone();
+        let unlock_at = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            std::fs::write(&flag_writer, b"").unwrap();
+        });
+
+        let started = std::time::Instant::now();
+        WindowManager::wait_for_secret_service(1);
+        let waited = started.elapsed();
+        t.join().unwrap();
+        std::env::set_var("PATH", old_path);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Held for the locked window...
+        assert!(
+            started + waited >= unlock_at,
+            "barrier released before the collection unlocked (waited {waited:?})"
+        );
+        // ...and did not sit there afterwards.
+        assert!(
+            waited < std::time::Duration::from_secs(5),
+            "barrier did not release promptly after unlock (waited {waited:?})"
+        );
     }
 }

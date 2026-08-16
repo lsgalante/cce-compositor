@@ -13,9 +13,18 @@ set -euo pipefail
 # Dev-only binaries: built by the workspace, never installed.
 EXCLUDE=(vk-smoke)
 
-# Crates whose .service files are SYSTEM units (/etc/systemd/system, root-owned).
-# They are not user units and must not land in ~/.config/systemd/user.
-SYSTEM_UNIT_CRATES=(cce-display-manager)
+# Session targets a USER unit can be wanted by. Anything else (graphical.target,
+# multi-user.target) is a SYSTEM unit: root-owned, /etc/systemd/system, never
+# installed here.
+#
+# Classified per FILE, from the unit's own [Install] WantedBy, because a crate
+# can legitimately ship both: cce-display-manager has the root unlock daemon
+# (multi-user.target) next to the per-session unlock client and KeePassXC units
+# (graphical-session.target). The old per-crate exclusion list swallowed the
+# whole crate, so its user units silently never installed — the same
+# hand-maintained-list failure this script exists to avoid. Matching is exact:
+# graphical.target and graphical-session.target are different targets.
+USER_UNIT_TARGETS=(default.target graphical-session.target cce-session.target)
 
 PREFIX="${CCE_PREFIX:-$HOME/.local}"
 BINDIR="$PREFIX/bin"
@@ -74,11 +83,14 @@ assert_packages() {
 user_units() {
     find "$WS" -maxdepth 3 -name '*.service' -not -path "$WS/target/*" 2>/dev/null \
         | while read -r unit; do
-            local crate
-            crate=$(basename "$(dirname "$unit")")
-            [ "$crate" = scripts ] && crate=$(basename "$(dirname "$(dirname "$unit")")")
-            case " ${SYSTEM_UNIT_CRATES[*]} " in *" $crate "*) continue ;; esac
-            printf '%s\n' "$unit"
+            local wanted
+            wanted=$(sed -n 's/^[[:space:]]*WantedBy[[:space:]]*=[[:space:]]*//p' "$unit" | tr -d '\r')
+            [ -n "$wanted" ] || continue
+            local t match=0
+            for t in $wanted; do
+                case " ${USER_UNIT_TARGETS[*]} " in *" $t "*) match=1 ;; esac
+            done
+            [ "$match" -eq 1 ] && printf '%s\n' "$unit"
           done
 }
 
