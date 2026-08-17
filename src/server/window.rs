@@ -962,6 +962,28 @@ impl Window {
                 _ => {}
             }
 
+            // Geometric promotion at restore time: a window whose saved
+            // geometry sits cell-aligned IS tiled, even if an older session
+            // saved it as Floating (pre-rework state, or a session that
+            // never touched it after it landed on the grid). Same test and
+            // lock as the op_end detection. No demotion here — a saved
+            // Tiled window off the current grid is re-snapped by the Tiled
+            // arrange arm instead.
+            if self.tiling_mode == crate::tiling::TilingMode::Floating {
+                let sp = (*self.server).wm.layout.snap_params();
+                if crate::policy::snap::is_cell_aligned(
+                    self.virtual_x,
+                    self.virtual_y,
+                    saved.width as f64,
+                    saved.height as f64,
+                    &sp,
+                    1.0,
+                ) {
+                    self.tiling_mode = crate::tiling::TilingMode::Tiled;
+                    self.mode_locked = true;
+                }
+            }
+
             self.restored = true;
             self.session_restored = from_session;
             // The saved `focused` flag only means something for the startup
