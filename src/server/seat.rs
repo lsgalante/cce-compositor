@@ -91,6 +91,14 @@ pub struct Seat {
     pub modifiers_old: u32,
     pub op: Option<SeatOp>,
     pub op_release: bool,
+    /// Overview-move displacement ledger: windows currently displaced out
+    /// of the way of the active move op, with their pre-displacement
+    /// virtual positions. While the button is held displacement is
+    /// PROVISIONAL — every motion re-evaluates each entry at the spot it
+    /// was pushed FROM, so a drag that moves away releases the window back
+    /// home. Cleared (finalizing the positions) in `op_end`. Lives on the
+    /// Seat because `SeatOp` is `Copy`.
+    pub overview_displaced: Vec<(*mut crate::window::Window, f64, f64)>,
     pub wm_sent_x: i32,
     pub wm_sent_y: i32,
 
@@ -132,6 +140,7 @@ impl Seat {
             modifiers_old: 0,
             op: None,
             op_release: false,
+            overview_displaced: Vec::new(),
             wm_sent_x: 0,
             wm_sent_y: 0,
             request_set_cursor: std::mem::zeroed(),
@@ -1233,6 +1242,7 @@ impl Seat {
                                     win,
                                     (virtual_dx, virtual_dy),
                                     &sp,
+                                    &mut self.overview_displaced,
                                 );
                             }
 
@@ -1381,6 +1391,8 @@ impl Seat {
     }
 
     pub unsafe fn op_end(&mut self) {
+        // Wherever everything sits now is final.
+        self.overview_displaced.clear();
         if let Some(op) = self.op.take() {
             log::debug!("end seat op");
             let wm = &mut (*self.server).wm;
@@ -1469,13 +1481,22 @@ impl Seat {
 /// threshold relocates to the side the drag vacated
 /// (`crate::policy::overview::displace`). Single-level on purpose — a
 /// displaced window does not cascade into a third.
+///
+/// Displacement is provisional while the button is held: `ledger` remembers
+/// every displaced window's pre-displacement position, and each motion
+/// re-evaluates the window AT THAT SPOT — a drag that stops covering it
+/// releases it back home. The ledger drops with the op on release, which
+/// finalizes wherever everything currently sits.
 unsafe fn displace_covered(
     server: *mut Server,
     win: *mut crate::window::Window,
     drag_delta: (f64, f64),
     sp: &crate::policy::snap::SnapParams,
+    ledger: &mut Vec<(*mut crate::window::Window, f64, f64)>,
 ) {
     let wm = &mut (*server).wm;
+    // A window can close mid-drag; drop its entry before any deref.
+    ledger.retain(|&(w, _, _)| wm.windows.iter().any(|&p| p == w));
     let moved = (
         (*win).virtual_x,
         (*win).virtual_y,
@@ -1500,29 +1521,54 @@ unsafe fn displace_covered(
         {
             continue;
         }
+        // Judge an already-displaced window at its ORIGINAL spot, not
+        // where it fled to.
+        let (ox, oy) = ledger
+            .iter()
+            .find(|&&(p, _, _)| p == w)
+            .map(|&(_, x, y)| (x, y))
+            .unwrap_or(((*w).virtual_x, (*w).virtual_y));
         ptrs.push(w);
         cands.push(crate::policy::overview::DisplaceCandidate {
-            x: (*w).virtual_x,
-            y: (*w).virtual_y,
+            x: ox,
+            y: oy,
             w: (*w).box_geom.width as f64,
             h: (*w).box_geom.height as f64,
             tiled: mode == crate::tiling::TilingMode::Tiled,
         });
     }
-    if cands.is_empty() {
-        return;
-    }
     let moves =
         crate::policy::overview::displace(moved, drag_delta, &cands, sp, sp.gap_width);
-    if moves.is_empty() {
-        return;
-    }
-    for (idx, (nx, ny)) in moves {
+
+    let mut changed = false;
+    let mut displaced_now: Vec<*mut crate::window::Window> = Vec::new();
+    for &(idx, (nx, ny)) in &moves {
         let w = ptrs[idx];
-        (*w).virtual_x = nx;
-        (*w).virtual_y = ny;
+        displaced_now.push(w);
+        if !ledger.iter().any(|&(p, _, _)| p == w) {
+            ledger.push((w, cands[idx].x, cands[idx].y));
+        }
+        if (*w).virtual_x != nx || (*w).virtual_y != ny {
+            (*w).virtual_x = nx;
+            (*w).virtual_y = ny;
+            changed = true;
+        }
     }
-    wm.dirty_windowing();
+    // No longer covered at its original spot: back home.
+    ledger.retain(|&(w, ox, oy)| {
+        if displaced_now.contains(&w) {
+            return true;
+        }
+        if !(*w).closed && ((*w).virtual_x != ox || (*w).virtual_y != oy) {
+            (*w).virtual_x = ox;
+            (*w).virtual_y = oy;
+            changed = true;
+        }
+        false
+    });
+    if changed {
+        wm.dirty_windowing();
+    }
 }
 
 unsafe extern "C" fn handle_request_set_cursor(
