@@ -143,6 +143,18 @@ pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
 unsafe extern "C" fn handle_destroy_toplevel_resource(resource: *mut ffi::wl_resource) {
     let data_ptr = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
     if !data_ptr.is_null() {
+        // Drop the tracking entry BEFORE the resource dies:
+        // send_grid_patch iterates `toplevels`, and a stale pointer there
+        // is a use-after-free on the next patch send — this crashed the
+        // session the first time the grid client was RESTARTED (the old
+        // entry lingered, the new instance's first patch dereferenced it).
+        let server = (*data_ptr).server;
+        if !server.is_null() {
+            (*server)
+                .cce_window_management
+                .toplevels
+                .retain(|&r| r != resource);
+        }
         let _ = Box::from_raw(data_ptr);
     }
 }
