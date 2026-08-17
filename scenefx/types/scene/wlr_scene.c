@@ -2279,11 +2279,17 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 
 		// TODO: Use the base wlr_render_pass_add_rect as a fast-path in the future
 		if (!fx_corner_radii_is_empty(&rect_corners) || scene_rect->fade_inset > 0) {
+			// fade_inset is wire-encoded as inset_px * 1000 + fade_mode:
+			// scale only the inset part — multiplying the whole encoding
+			// also multiplied the mode digit (quadratic became gaussian on
+			// a 2x output).
+			int fade_enc = scene_rect->fade_inset;
+			int fade_px = (int)((float)(fade_enc / 1000) * data->scale + 0.5f);
 			struct fx_render_rounded_rect_options rounded_rect_options = {
 				.base = rect_options.base,
 				.corners = fx_corner_radii_scale(rect_corners, data->scale),
 				.clipped_region = rect_options.clipped_region,
-				.fade_inset = scene_rect->fade_inset * data->scale,
+				.fade_inset = fade_px * 1000 + fade_enc % 1000,
 			};
 			fx_render_pass_add_rounded_rect(fx_pass, &rounded_rect_options);
 		} else {

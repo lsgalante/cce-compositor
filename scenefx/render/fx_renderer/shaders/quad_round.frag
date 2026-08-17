@@ -65,33 +65,27 @@ void main() {
 
 	vec4 final_color = v_color;
 	if (fade_inset > 0.0) {
-		// Calculate distance to closest vertical and horizontal edges
-		float dist_x = min(relative_pos.x + 0.5, size.x - 0.5 - relative_pos.x);
-		float dist_y = min(relative_pos.y + 0.5, size.y - 0.5 - relative_pos.y);
+		// Fade by distance to the ROUNDED outline — the same SDF that cuts
+		// the corners — not the straight edges. The old per-axis product
+		// formed a square-cornered onset at each corner that visually
+		// swamped the corner arcs whenever fade and radius were combined.
+		float edge_dist = -dist;
 
 		// Clamp to [0, fade_inset] and normalize
-		float factor_x = clamp(dist_x / fade_inset, 0.0, 1.0);
-		float factor_y = clamp(dist_y / fade_inset, 0.0, 1.0);
+		float factor = clamp(edge_dist / fade_inset, 0.0, 1.0);
 
-		// Apply fade mode to components individually for best S-curve transition
 		if (fade_mode == 1) {
-			factor_x = smoothstep(0.0, 1.0, factor_x);
-			factor_y = smoothstep(0.0, 1.0, factor_y);
+			factor = smoothstep(0.0, 1.0, factor);
 		} else if (fade_mode == 2) {
-			factor_x = factor_x * factor_x;
-			factor_y = factor_y * factor_y;
+			factor = factor * factor;
 		} else if (fade_mode == 3) {
-			factor_x = 0.5 - 0.5 * cos(factor_x * 3.14159265);
-			factor_y = 0.5 - 0.5 * cos(factor_y * 3.14159265);
+			factor = 0.5 - 0.5 * cos(factor * 3.14159265);
 		} else if (fade_mode == 4) {
-			float x = 1.0 - factor_x;
-			factor_x = clamp((exp(-3.0 * x * x) - 0.049) / 0.951, 0.0, 1.0);
-			float y = 1.0 - factor_y;
-			factor_y = clamp((exp(-3.0 * y * y) - 0.049) / 0.951, 0.0, 1.0);
+			float x = 1.0 - factor;
+			factor = clamp((exp(-3.0 * x * x) - 0.049) / 0.951, 0.0, 1.0);
 		}
 
-		float combined_factor = factor_x * factor_y;
-		final_color *= pow(combined_factor, 2.2);
+		final_color *= pow(factor, 2.2);
 	}
 
 	gl_FragColor = final_color * quad_corner_alpha * clip_corner_alpha;
