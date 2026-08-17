@@ -1512,7 +1512,7 @@ unsafe fn displace_covered(
         if !matches!((*w).state, crate::window::WindowState::Mapped) {
             continue;
         }
-        if (*w).is_status_bar() || (*w).is_wallpaper() {
+        if (*w).is_status_bar() || (*w).is_wallpaper() || (*w).is_grid() {
             continue;
         }
         let mode = wm.get_mode_for_window(w);

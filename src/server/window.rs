@@ -426,6 +426,17 @@ pub struct Window {
     pub saved_virtual_x: f64,
     pub saved_virtual_y: f64,
     pub was_tiled: bool,
+    /// Declared the desktop-grid layer via zcce_toplevel_v1.set_grid (the
+    /// app_id "cce-grid" convention also maps the role; the flag makes the
+    /// declaration explicit and app_id-independent).
+    pub grid_declared: bool,
+    /// Grid windows: patch sent to the client, awaiting ack_grid_patch.
+    pub grid_patch_pending: Option<(u32, crate::policy::api::GridPatch)>,
+    /// Acked patch awaiting the client's next commit (the rendered buffer).
+    pub grid_patch_acked: Option<(u32, crate::policy::api::GridPatch)>,
+    /// The patch the CURRENT buffer covers — what arrange anchors to.
+    pub grid_patch_current: Option<crate::policy::api::GridPatch>,
+    pub grid_patch_serial: u32,
     pub saved_floating_width: i32,
     pub saved_floating_height: i32,
     pub saved_floating_virtual_x: f64,
@@ -463,7 +474,14 @@ impl Window {
     }
 
     pub unsafe fn role(&self) -> crate::policy::api::WindowRole {
+        if self.grid_declared {
+            return crate::policy::api::WindowRole::Grid;
+        }
         crate::policy::api::WindowRole::from_app_id(self.get_app_id_string().as_deref())
+    }
+
+    pub unsafe fn is_grid(&self) -> bool {
+        self.role() == crate::policy::api::WindowRole::Grid
     }
 
     pub unsafe fn is_status_bar(&self) -> bool {
@@ -643,6 +661,11 @@ impl Window {
             saved_virtual_x: 0.0,
             saved_virtual_y: 0.0,
             was_tiled: false,
+            grid_declared: false,
+            grid_patch_pending: None,
+            grid_patch_acked: None,
+            grid_patch_current: None,
+            grid_patch_serial: 0,
             saved_floating_width: 0,
             saved_floating_height: 0,
             saved_floating_virtual_x: 0.0,
@@ -913,7 +936,11 @@ impl Window {
             return;
         }
         let app_id_str = self.get_app_id_string().unwrap_or_default();
-        if app_id_str.is_empty() || app_id_str.starts_with("cce-status") || app_id_str == "cce-wallpaper" {
+        if app_id_str.is_empty()
+            || app_id_str.starts_with("cce-status")
+            || app_id_str == "cce-wallpaper"
+            || app_id_str == "cce-grid"
+        {
             return;
         }
         let title_str = self.get_title_string().unwrap_or_default();

@@ -146,6 +146,15 @@ impl Scene {
 
             if let Some(scene_node_data) = SceneNodeData::from_node(node) {
                 if let SceneNodeDataVal::Window(window) = scene_node_data.data {
+                    // The grid layer is input-transparent: every input path
+                    // (clicks, hover, overview background-exit) sees what is
+                    // underneath it, exactly as if it were the backdrop.
+                    if (*window).is_grid() {
+                        let tree_node = (*window).tree as *mut ffi::wlr_scene_node;
+                        ffi::wlr_scene_node_set_enabled(tree_node, false);
+                        disabled_nodes.push(tree_node);
+                        continue;
+                    }
                     if (*window).rendering_requested.circular {
                         // Check if outside the circle
                         let w = (*window).box_geom.width as f64 * (*window).scale;

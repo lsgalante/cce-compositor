@@ -81,6 +81,9 @@ pub struct WindowManager {
     pub desk_pan_y: f64,
     pub desk_zoom: f64,
     pub mode: WindowManagerMode,
+    /// From the last arrange plan: false while a live grid client covers
+    /// the desktop, so `draw_grid` keeps only the backdrop (and labels).
+    pub grid_cells_enabled: bool,
     pub layout: crate::config::Layout,
     pub mode_rules: Vec<crate::config::ModeRule>,
     pub keybinds: Vec<crate::config::Keybind>,
@@ -272,6 +275,7 @@ impl WindowManager {
         self.pending_screenshot = None;
         self.pending_ipc_reply = None;
         self.mode = WindowManagerMode::Normal;
+        self.grid_cells_enabled = true;
         self.restore_queue = Vec::new();
         self.last_window_states = Vec::new();
         self.pending_placements = Vec::new();
@@ -366,11 +370,12 @@ impl WindowManager {
         self.global = ffi::wl_global_create(
             (*server).wl_server,
             &ffi::zcce_window_manager_v1_interface,
-            // 5 = set_utility exists on toplevels; clients feature-gate on
+            // 6 = grid support (toplevel v4: set_grid/grid_patch/ack);
+            // 5 = set_utility exists on toplevels. Clients feature-gate on
             // the negotiated version, so one launched into an older
-            // compositor degrades to a plain floating window instead of
-            // dying on an unknown opcode.
-            5,
+            // compositor degrades gracefully instead of dying on an
+            // unknown opcode.
+            6,
             self as *mut WindowManager as *mut _,
             Some(bind),
         );
@@ -613,7 +618,10 @@ impl WindowManager {
             if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                 continue;
             }
-            if (*w).is_status_bar() || (*w).is_wallpaper() {
+            // The grid layer is owned by its systemd unit and anchored by
+            // live patches — saving/restoring it would spawn a duplicate
+            // and dictate a stale geometry.
+            if (*w).is_status_bar() || (*w).is_wallpaper() || (*w).is_grid() {
                 continue;
             }
             // A Utility window owns its geometry entirely; saving it would
@@ -1222,12 +1230,14 @@ impl WindowManager {
             let overview_eligible = !(*w).minimized
                 && !is_status
                 && !is_wallpaper
+                && !(*w).is_grid()
                 && visible
                 && resolved_mode != crate::tiling::TilingMode::Popup
                 && resolved_mode != crate::tiling::TilingMode::Overlay;
             let focus_cyclable = rendered.contains(&(w as usize))
                 && !(*w).minimized
                 && !is_status
+                && !(*w).is_grid()
                 && !(*w).is_overlay_ui();
             windows.push(ActionWindow {
                 id: WindowId((*w).ref_key),
@@ -1930,7 +1940,97 @@ impl WindowManager {
 
 
 
+    /// Issue grid_patch events to grid clients whose current patch no
+    /// longer comfortably covers the viewport (or whose buffer resolution
+    /// has drifted more than 2x from the zoom). One patch in flight per
+    /// window; a failed send (no toplevel resource yet, old client) simply
+    /// retries on a later pass.
+    pub unsafe fn update_grid_patches(&mut self) {
+        let mut out_box: Option<ffi::wlr_box> = None;
+        let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                out_box = Some((*output).sent.box_layout());
+                break;
+            }
+            curr_out = (*curr_out).next;
+        }
+        let Some(out) = out_box else { return };
+        let zoom = crate::policy::background::sanitized_zoom(self.desk_zoom);
+        let vw = out.width as f64 / zoom;
+        let vh = out.height as f64 / zoom;
+        let (vx, vy) = (self.desk_pan_x, self.desk_pan_y);
+        // Buffer px per virtual unit: zoom quantized to a power of two so
+        // small zoom wobbles don't re-render the world.
+        let q = (2f64).powf(zoom.log2().round()).clamp(0.125, 2.0);
+        let period = self.layout.desktop_grid_scale
+            + (self.layout.desktop_gap_width as f64).max(0.0);
+        let covers = |p: &crate::policy::api::GridPatch| -> bool {
+            let mx = vw * 0.25;
+            let my = vh * 0.25;
+            p.x <= vx - mx
+                && p.y <= vy - my
+                && p.x + p.w >= vx + vw + mx
+                && p.y + p.h >= vy + vh + my
+                && (zoom / p.scale) > 0.5
+                && (zoom / p.scale) < 2.01
+        };
+        for &w in self.windows.iter() {
+            if w.is_null() || (*w).closed || !(*w).is_grid() {
+                continue;
+            }
+            if !matches!((*w).state, crate::window::WindowState::Mapped) {
+                continue;
+            }
+            if (*w).grid_patch_current.as_ref().map_or(false, &covers) {
+                continue;
+            }
+            if let Some((_, pending)) = &(*w).grid_patch_pending {
+                if covers(pending) {
+                    continue;
+                }
+            }
+            if let Some((serial, acked)) = &(*w).grid_patch_acked {
+                // Rendered but not yet committed: give it a frame.
+                let _ = (serial, acked);
+                continue;
+            }
+            // One viewport of margin per side, shrunk if the buffer would
+            // exceed the cap; then period-aligned outward so the client
+            // draws whole cells.
+            const MAX_BUF: f64 = 8192.0;
+            let m = (((MAX_BUF / q) - vw) / (2.0 * vw)).clamp(0.0, 1.0)
+                .min((((MAX_BUF / q) - vh) / (2.0 * vh)).clamp(0.0, 1.0));
+            let x0 = ((vx - m * vw) / period).floor() * period;
+            let y0 = ((vy - m * vh) / period).floor() * period;
+            let x1 = ((vx + (1.0 + m) * vw) / period).ceil() * period;
+            let y1 = ((vy + (1.0 + m) * vh) / period).ceil() * period;
+            let patch = crate::policy::api::GridPatch {
+                x: x0,
+                y: y0,
+                w: x1 - x0,
+                h: y1 - y0,
+                scale: q,
+            };
+            (*w).grid_patch_serial = (*w).grid_patch_serial.wrapping_add(1);
+            let serial = (*w).grid_patch_serial;
+            if (*self.server)
+                .cce_window_management
+                .send_grid_patch((*w).ref_key, serial, patch)
+            {
+                log::info!("[Grid] sent patch #{serial}: {:.0},{:.0} {:.0}x{:.0} @{:.3}",
+                    patch.x, patch.y, patch.w, patch.h, patch.scale);
+                (*w).grid_patch_pending = Some((serial, patch));
+            } else {
+                log::info!("[Grid] patch #{serial} not sent (no toplevel resource yet)");
+            }
+        }
+    }
+
     pub unsafe fn arrange_views(&mut self) {
+        self.update_grid_patches();
         self.update_restore_placeholders();
         if arrange_debug() {
             log::debug!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
@@ -2054,6 +2154,7 @@ impl WindowManager {
                 was_tiled: (*win_ptr).was_tiled,
                 saved_floating_size: ((*win_ptr).saved_floating_width, (*win_ptr).saved_floating_height),
                 saved_floating_virtual: ((*win_ptr).saved_floating_virtual_x, (*win_ptr).saved_floating_virtual_y),
+                grid_patch: (*win_ptr).grid_patch_current,
             });
             win_ptrs.push(win_ptr);
         }
@@ -2098,6 +2199,14 @@ impl WindowManager {
         for &output in &active_outputs {
             if !(*output).background_rect.is_null() {
                 ffi::wlr_scene_node_set_enabled((*output).background_rect as *mut ffi::wlr_scene_node, plan.background_rect_enabled);
+            }
+        }
+        if self.grid_cells_enabled != plan.grid_cells_enabled {
+            self.grid_cells_enabled = plan.grid_cells_enabled;
+            // The cell pools redraw only on structure changes; force one so
+            // the swap (client grid <-> compositor cells) is immediate.
+            for &output in &active_outputs {
+                (*output).grid_force_redraw_frames = 3;
             }
         }
 
@@ -2440,7 +2549,7 @@ impl WindowManager {
             let app_id = (*w).get_app_id_string();
             let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
             let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
-            !is_status_bar && !is_wallpaper
+            !is_status_bar && !is_wallpaper && !(*w).is_grid()
         };
         let candidate = |w: *mut Window| crate::policy::focus::FocusCandidate {
             id: crate::policy::api::WindowId((*w).ref_key),
@@ -2480,7 +2589,7 @@ impl WindowManager {
         }
         match (*w).get_app_id_string().as_deref() {
             Some(id) if id.starts_with("cce-status") => false,
-            Some("cce-wallpaper") | Some("cce-cloud") => false,
+            Some("cce-wallpaper") | Some("cce-cloud") | Some("cce-grid") => false,
             _ => true,
         }
     }

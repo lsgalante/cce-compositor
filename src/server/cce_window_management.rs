@@ -24,6 +24,52 @@ impl CceWindowManagement {
     }
 }
 
+/// Grid patch event opcode on zcce_toplevel_v1 (floating_state is 0).
+const ZCCE_TOPLEVEL_V1_GRID_PATCH: u32 = 1;
+
+/// Toplevel interface version that carries the grid requests/events.
+const GRID_SINCE: i32 = 4;
+
+fn to_fixed(v: f64) -> i32 {
+    (v * 256.0).round() as i32
+}
+
+impl CceWindowManagement {
+    /// Post a grid_patch event to the toplevel resource of `window_key`, if
+    /// the client bound a new-enough version. Returns whether it was sent.
+    pub unsafe fn send_grid_patch(
+        &self,
+        window_key: SlotMapKey,
+        serial: u32,
+        patch: crate::policy::api::GridPatch,
+    ) -> bool {
+        for &res in &self.toplevels {
+            if res.is_null() {
+                continue;
+            }
+            let data = ffi::wl_resource_get_user_data(res) as *mut CceToplevelData;
+            if data.is_null() || (*data).window_key != window_key {
+                continue;
+            }
+            if ffi::wl_resource_get_version(res) < GRID_SINCE {
+                return false;
+            }
+            ffi::wl_resource_post_event(
+                res,
+                ZCCE_TOPLEVEL_V1_GRID_PATCH,
+                serial,
+                to_fixed(patch.x),
+                to_fixed(patch.y),
+                to_fixed(patch.w),
+                to_fixed(patch.h),
+                to_fixed(patch.scale),
+            );
+            return true;
+        }
+        false
+    }
+}
+
 struct CceToplevelData {
     server: *mut Server,
     window_key: SlotMapKey,
@@ -306,6 +352,48 @@ unsafe extern "C" fn toplevel_unset_utility(
     }
 }
 
+unsafe extern "C" fn toplevel_set_grid(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+) {
+    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
+    if data.is_null() {
+        return;
+    }
+    let server = (*data).server;
+    let window_key = (*data).window_key;
+    if let Some(window) = resolve_window(server, window_key) {
+        log::info!("[Grid] set_grid declared");
+        (*window).grid_declared = true;
+        (*server).wm.dirty_windowing();
+    }
+}
+
+unsafe extern "C" fn toplevel_ack_grid_patch(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+    serial: u32,
+) {
+    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
+    if data.is_null() {
+        return;
+    }
+    let server = (*data).server;
+    let window_key = (*data).window_key;
+    if let Some(window) = resolve_window(server, window_key) {
+        // Only the latest outstanding patch can be acked; a stale serial
+        // (superseded patch) is ignored — the client should already be
+        // rendering the newer one.
+        if let Some((pending_serial, patch)) = (*window).grid_patch_pending {
+            log::info!("[Grid] ack #{serial} (pending #{pending_serial})");
+            if pending_serial == serial {
+                (*window).grid_patch_pending = None;
+                (*window).grid_patch_acked = Some((serial, patch));
+            }
+        }
+    }
+}
+
 static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_toplevel_v1_interface {
     destroy: Some(toplevel_destroy),
     set_floating: Some(toplevel_set_floating),
@@ -319,6 +407,8 @@ static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_tople
     unset_popup: Some(toplevel_unset_popup),
     set_utility: Some(toplevel_set_utility),
     unset_utility: Some(toplevel_unset_utility),
+    set_grid: Some(toplevel_set_grid),
+    ack_grid_patch: Some(toplevel_ack_grid_patch),
 };
 
 unsafe fn resolve_window(server: *mut Server, key: SlotMapKey) -> Option<*mut Window> {

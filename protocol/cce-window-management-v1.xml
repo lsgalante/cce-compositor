@@ -28,7 +28,7 @@
     "should", "should not", "recommended", "may", and "optional" in this
     document are to be interpreted as described in IETF RFC 2119.
   </description>
-  <interface name="zcce_window_manager_v1" version="5">
+  <interface name="zcce_window_manager_v1" version="6">
     <description summary="window manager global interface">
       This global interface should only be advertised to the window manager
       process. Only one window management client may be active at a time. The
@@ -1490,7 +1490,7 @@
       </description>
     </event>
   </interface>
-  <interface name="zcce_toplevel_v1" version="3">
+  <interface name="zcce_toplevel_v1" version="4">
     <description summary="toplevel window management controls">
       An interface to control and listen to CCE-specific window management states
       for a client surface.
@@ -1548,11 +1548,55 @@
         Request the compositor to return the window to normal tiling mode.
       </description>
     </request>
+    <request name="set_grid" since="4">
+      <description summary="declare the desktop-grid surface">
+        Declare this surface the desktop-grid layer. The compositor anchors
+        the surface to the virtual desktop: it is positioned and scaled with
+        the camera every frame, exactly like window content, so the client is
+        never part of the pan/zoom loop. The surface becomes
+        input-transparent, is stacked above the wallpaper and below all
+        windows, is excluded from focus, session save and the overview, and
+        the compositor stops dictating sizes to it.
+
+        The compositor tells the client WHAT to render via grid_patch
+        events; the surface stays unmapped-invisible until the first
+        acknowledged patch is committed.
+      </description>
+    </request>
+    <request name="ack_grid_patch" since="4">
+      <description summary="acknowledge a grid patch">
+        Acknowledge a grid_patch event. The next buffer the client commits
+        after this request is taken to be rendered for the acknowledged
+        patch: the compositor latches that patch's anchor rectangle at that
+        commit, so an in-flight older buffer is never shown at a new
+        anchor.
+      </description>
+      <arg name="serial" type="uint" summary="the serial from the grid_patch event"/>
+    </request>
     <event name="floating_state">
       <description summary="floating status event">
         Sent by the compositor to inform the client of its current floating status.
       </description>
       <arg name="state" type="uint" summary="1 if floating, 0 otherwise"/>
+    </event>
+    <event name="grid_patch" since="4">
+      <description summary="render this patch of the desktop grid">
+        Instructs the grid client what region of the virtual desktop to
+        render, and at what resolution. x/y/width/height are virtual-surface
+        coordinates; scale is buffer pixels per virtual unit, so the
+        expected buffer size is (width * scale) x (height * scale). The
+        client renders the region, sends ack_grid_patch with the serial, and
+        commits the new buffer.
+
+        A newer grid_patch supersedes an unacknowledged older one; the
+        client should render only the latest.
+      </description>
+      <arg name="serial" type="uint" summary="serial to pass to ack_grid_patch"/>
+      <arg name="x" type="fixed" summary="patch origin x, virtual units"/>
+      <arg name="y" type="fixed" summary="patch origin y, virtual units"/>
+      <arg name="width" type="fixed" summary="patch width, virtual units"/>
+      <arg name="height" type="fixed" summary="patch height, virtual units"/>
+      <arg name="scale" type="fixed" summary="buffer px per virtual unit"/>
     </event>
   </interface>
 </protocol>

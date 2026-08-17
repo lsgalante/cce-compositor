@@ -914,10 +914,13 @@ impl Output {
                 }
 
                 if force {
-                    // Backdrop in the gap color, then the cell lattice.
+                    // Backdrop in the gap color, then the cell lattice. The
+                    // backdrop always draws — while a grid client is live it
+                    // is the safety net beyond the patch edges during fast
+                    // pans; the CELLS yield to the client's rendering.
                     get_rect(frame.backdrop_w, frame.backdrop_h, grid.gap_color.0.as_ptr(), 0, 0, 0, 0);
 
-                    if let Some(cells) = &frame.cells {
+                    if let Some(cells) = frame.cells.as_ref().filter(|_| wm.grid_cells_enabled) {
                         // scenefx fade-inset wire encoding: inset px * 1000
                         // + fade-mode index; 0 disables the fade.
                         use crate::policy::api::GridFadeMode;

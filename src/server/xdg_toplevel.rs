@@ -531,6 +531,15 @@ unsafe extern "C" fn handle_ack_configure(
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, commit);
     let window = (*toplevel).window;
+    // Grid-patch latch: the first commit after ack_grid_patch carries the
+    // buffer rendered for that patch — anchor to it from this commit on.
+    // Latching here (not at ack time) means an in-flight older buffer is
+    // never shown at the new anchor.
+    if let Some((serial, patch)) = (*window).grid_patch_acked.take() {
+        log::info!("[Grid] latched patch #{serial} on commit");
+        (*window).grid_patch_current = Some(patch);
+        (*(*window).server).wm.dirty_windowing();
+    }
     let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
     let old_geometry = (*toplevel).geometry;
     let mut new_geometry = std::mem::zeroed();
