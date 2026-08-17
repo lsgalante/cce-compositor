@@ -809,7 +809,11 @@ impl Seat {
         if window.is_null()
             || !matches!(
                 (*window).tiling_mode,
-                crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Tiled
+                // Utility included: it pans on the virtual surface like any
+                // floating window, so focusing one off-view should bring it in.
+                crate::tiling::TilingMode::Floating
+                    | crate::tiling::TilingMode::Tiled
+                    | crate::tiling::TilingMode::Utility
             )
         {
             return;
@@ -1020,6 +1024,8 @@ impl Seat {
             if !win.is_null() && !(*win).closed {
                 if (*win).tiling_mode != crate::tiling::TilingMode::Floating
                     && (*win).tiling_mode != crate::tiling::TilingMode::Overlay
+                    // A drag moves a Utility window; it must not re-class it.
+                    && (*win).tiling_mode != crate::tiling::TilingMode::Utility
                 {
                     // Un-tile for the drag but KEEP the geometry (clearing
                     // was_tiled suppresses the arrange Exit restore);

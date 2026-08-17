@@ -265,6 +265,47 @@ unsafe extern "C" fn toplevel_unset_popup(
     }
 }
 
+unsafe extern "C" fn toplevel_set_utility(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+) {
+    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
+    if data.is_null() {
+        return;
+    }
+    let server = (*data).server;
+    let window_key = (*data).window_key;
+    if let Some(window) = resolve_window(server, window_key) {
+        // mode_locked is the "explicit beats heuristic" latch (same as
+        // set_popup): get_mode_for_window's app_id guessing stands down.
+        (*window).tiling_mode = crate::tiling::TilingMode::Utility;
+        (*window).mode_locked = true;
+        (*server).wm.dirty_windowing();
+    }
+}
+
+unsafe extern "C" fn toplevel_unset_utility(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+) {
+    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
+    if data.is_null() {
+        return;
+    }
+    let server = (*data).server;
+    let window_key = (*data).window_key;
+    if let Some(window) = resolve_window(server, window_key) {
+        // Unlike unset_popup, the raw field must be reset too: every Utility
+        // gate (resize rejection, save exclusion, the un-tile exemptions)
+        // reads `tiling_mode` directly, so leaving it at Utility with the
+        // lock cleared would keep the window un-resizable and unsaved while
+        // resolving Floating.
+        (*window).tiling_mode = crate::tiling::TilingMode::Floating;
+        (*window).mode_locked = false;
+        (*server).wm.dirty_windowing();
+    }
+}
+
 static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_toplevel_v1_interface {
     destroy: Some(toplevel_destroy),
     set_floating: Some(toplevel_set_floating),
@@ -276,6 +317,8 @@ static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_tople
     set_minimized: Some(toplevel_set_minimized),
     set_popup: Some(toplevel_set_popup),
     unset_popup: Some(toplevel_unset_popup),
+    set_utility: Some(toplevel_set_utility),
+    unset_utility: Some(toplevel_unset_utility),
 };
 
 unsafe fn resolve_window(server: *mut Server, key: SlotMapKey) -> Option<*mut Window> {

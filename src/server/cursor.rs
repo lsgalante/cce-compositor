@@ -1211,6 +1211,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Popup
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
                     && (*target_win).tiling_mode != crate::tiling::TilingMode::Overlay
+                    // A drag moves a Utility window; it must not re-class it.
+                    && (*target_win).tiling_mode != crate::tiling::TilingMode::Utility
                 {
                     // A tiled window un-tiles for the drag but keeps its
                     // cell-quantized geometry; landing grid-aligned re-tiles
@@ -1223,6 +1225,13 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 
                 let op_type = match pb.action {
                     crate::config::Action::Move => Some(crate::seat::PointerOpType::Move),
+                    // The modifier binding is a resize path the border zones
+                    // never see, so it carries its own Utility rejection.
+                    crate::config::Action::Resize
+                        if (*target_win).tiling_mode == crate::tiling::TilingMode::Utility =>
+                    {
+                        None
+                    }
                     crate::config::Action::Resize => {
                         let edges = get_closest_edges(target_win, lx, ly);
                         Some(crate::seat::PointerOpType::Resize { edges })
@@ -1306,6 +1315,11 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             match zone {
                 BorderZone::Resize(edges) => {
                     if (*event).button == 0x110 { // BTN_LEFT
+                        // Unreachable for Utility (get_border_zone maps its
+                        // whole band to Move), and gated here regardless.
+                        if initial_mode == crate::tiling::TilingMode::Utility {
+                            return;
+                        }
                         if initial_mode != crate::tiling::TilingMode::Floating {
                             // A tiled window un-tiles for the drag but keeps its
                             // cell-quantized geometry; landing grid-aligned re-tiles
@@ -1360,7 +1374,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         cursor.last_click_time = current_time;
                         cursor.last_click_window = border_target_win;
 
-                        if is_double_click {
+                        // A Utility window has no Tiled state to toggle;
+                        // the double-click falls through to an ordinary move.
+                        if is_double_click && initial_mode != crate::tiling::TilingMode::Utility {
                             if initial_mode == crate::tiling::TilingMode::Tiled {
                                 (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                                 (*border_target_win).mode_locked = true;
@@ -1377,6 +1393,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
 
                         if initial_mode != crate::tiling::TilingMode::Floating
                             && initial_mode != crate::tiling::TilingMode::Overlay
+                            // A drag moves a Utility window; it must not
+                            // re-class it.
+                            && initial_mode != crate::tiling::TilingMode::Utility
                         {
                             // A tiled window un-tiles for the drag but keeps its
                             // cell-quantized geometry; landing grid-aligned re-tiles
@@ -2595,6 +2614,11 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     {
         return BorderZone::None;
     }
+
+    // A Utility window is movable but never resizable, and its border is its
+    // ONLY grab surface — so instead of deadening the resize zones, the whole
+    // band (corners and side edges included) becomes a move handle.
+    let resize_allowed = (*window).tiling_mode != crate::tiling::TilingMode::Utility;
     
     if (*window).rendering_requested.circular {
         return BorderZone::None;
@@ -2650,6 +2674,9 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
         let near_bottom = dist_bottom < corner_len && dist_bottom < dist_top;
 
         if (near_left || near_right) && (near_top || near_bottom) {
+            if !resize_allowed {
+                return BorderZone::Move;
+            }
             return BorderZone::Resize(crate::window::Edges {
                 top: near_top,
                 bottom: near_bottom,
@@ -2669,6 +2696,9 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
             right: rx >= content_w,
         };
         if edges.bottom || edges.left || edges.right {
+            if !resize_allowed {
+                return BorderZone::Move;
+            }
             return BorderZone::Resize(edges);
         }
     }

@@ -459,9 +459,13 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
     let mut new_geometry = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
     (*toplevel).geometry = new_geometry;
-    let is_status = (*(*toplevel).window).tiling_mode == crate::tiling::TilingMode::Status || 
-                    (*(*toplevel).window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
-    if is_status {
+    // Status segments and Utility windows are SELF-sizing: their bounds
+    // track their own box, so the committed geometry is adopted as the box.
+    let is_self_sized = matches!(
+        (*(*toplevel).window).tiling_mode,
+        crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Utility
+    ) || (*(*toplevel).window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+    if is_self_sized {
         (*(*toplevel).window).box_geom.width = new_geometry.width;
         (*(*toplevel).window).box_geom.height = new_geometry.height;
         (*(*(*toplevel).window).server).wm.dirty_windowing();
@@ -511,9 +515,13 @@ unsafe extern "C" fn handle_ack_configure(
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
     (*toplevel).geometry = new_geometry;
 
-    let is_status = (*(*toplevel).window).tiling_mode == crate::tiling::TilingMode::Status || 
-                    (*(*toplevel).window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
-    if is_status {
+    // Status segments and Utility windows are SELF-sizing: their bounds
+    // track their own box, so the committed geometry is adopted as the box.
+    let is_self_sized = matches!(
+        (*(*toplevel).window).tiling_mode,
+        crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Utility
+    ) || (*(*toplevel).window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+    if is_self_sized {
         (*(*toplevel).window).box_geom.width = new_geometry.width;
         (*(*toplevel).window).box_geom.height = new_geometry.height;
         (*(*(*toplevel).window).server).wm.dirty_windowing();
@@ -655,9 +663,11 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
         (*toplevel).geometry = new_geometry;
 
-        let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status || 
-                        (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
-        if is_status {
+        let is_self_sized = matches!(
+            (*window).tiling_mode,
+            crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Utility
+        ) || (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+        if is_self_sized {
             (*window).box_geom.width = new_geometry.width;
             (*window).box_geom.height = new_geometry.height;
         }
@@ -677,7 +687,13 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     // here instead and move the border with it, in the same commit that puts the
     // new buffer on screen — waiting for the WM cycle (which round-trips out to
     // the external window-manager client) leaves the border a size behind.
-    if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
+    // Utility windows self-size the same way (the arrange pass only ever
+    // sends them the "you choose" 0x0, so every size change originates in a
+    // client commit like this one).
+    if matches!(
+        (*window).tiling_mode,
+        crate::tiling::TilingMode::Overlay | crate::tiling::TilingMode::Utility
+    ) {
         let mut live = std::mem::zeroed();
         ffi::river_wlr_xdg_surface_get_geometry(base, &mut live);
         if live.width > 0 && live.height > 0
@@ -741,7 +757,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             // Overlay included so its scheduled size tracks the client's own; the
             // border itself is handled by the live-geometry sync above.
             let is_overlay = (*window).tiling_mode == crate::tiling::TilingMode::Overlay;
-            if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status || is_overlay {
+            let is_utility = (*window).tiling_mode == crate::tiling::TilingMode::Utility;
+            if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status || is_overlay || is_utility {
                 (*window).set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
                 if is_status {
                     (*window).box_geom.width = new_geometry.width;
@@ -900,6 +917,13 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
     let toplevel = crate::container_of!(listener, XdgToplevel, request_maximize);
     let window = (*toplevel).window;
 
+    // A Utility window declared itself content-shaped; a maximize would hand
+    // sizing back to the compositor. Explicitly ignored, not just unmapped
+    // from any affordance.
+    if (*window).tiling_mode == crate::tiling::TilingMode::Utility {
+        return;
+    }
+
     if ffi::river_wlr_xdg_toplevel_get_requested_maximized((*toplevel).wlr_toplevel) {
         (*window).tiling_mode = crate::tiling::TilingMode::Tiled;
         (*window).mode_locked = true;
@@ -935,6 +959,8 @@ unsafe extern "C" fn handle_request_move(
             && initial_mode != crate::tiling::TilingMode::Popup
             && initial_mode != crate::tiling::TilingMode::Fullscreen
             && initial_mode != crate::tiling::TilingMode::Overlay
+            // A move must not cost a window its Utility mode.
+            && initial_mode != crate::tiling::TilingMode::Utility
         {
             (*window).tiling_mode = crate::tiling::TilingMode::Floating;
             (*window).mode_locked = true;
@@ -983,6 +1009,14 @@ unsafe extern "C" fn handle_request_resize(
     let toplevel = crate::container_of!(listener, XdgToplevel, request_resize);
     let event = data as *mut ffi::wlr_xdg_toplevel_resize_event;
     let window = (*toplevel).window;
+
+    // Nothing may interactively resize a Utility window — its size is the
+    // client's `settings()` data, not a drag. Rejected at the request, not
+    // just left without an affordance.
+    if (*window).tiling_mode == crate::tiling::TilingMode::Utility {
+        return;
+    }
+
     let seat = ffi::river_wlr_seat_get_data((*(*event).seat).seat) as *mut crate::seat::Seat;
 
     if ffi::wlr_seat_validate_pointer_grab_serial((*seat).wlr_seat, std::ptr::null_mut(), (*event).serial) {

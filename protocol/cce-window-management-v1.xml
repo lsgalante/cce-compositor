@@ -28,7 +28,7 @@
     "should", "should not", "recommended", "may", and "optional" in this
     document are to be interpreted as described in IETF RFC 2119.
   </description>
-  <interface name="zcce_window_manager_v1" version="4">
+  <interface name="zcce_window_manager_v1" version="5">
     <description summary="window manager global interface">
       This global interface should only be advertised to the window manager
       process. Only one window management client may be active at a time. The
@@ -1490,7 +1490,7 @@
       </description>
     </event>
   </interface>
-  <interface name="zcce_toplevel_v1" version="2">
+  <interface name="zcce_toplevel_v1" version="3">
     <description summary="toplevel window management controls">
       An interface to control and listen to CCE-specific window management states
       for a client surface.
@@ -1530,6 +1530,21 @@
     </request>
     <request name="unset_popup" since="2">
       <description summary="unset popup mode">
+        Request the compositor to return the window to normal tiling mode.
+      </description>
+    </request>
+    <request name="set_utility" since="3">
+      <description summary="request utility mode">
+        Declare the window a utility window: a tool whose shape is decided by
+        its contents. The compositor stops dictating a size to it (every
+        configure carries the "you choose" 0x0), offers no resize affordance,
+        and never saves geometry for it. The window still floats and moves
+        like an ordinary window. The declaration is explicit by design — the
+        compositor never infers utility mode from size hints.
+      </description>
+    </request>
+    <request name="unset_utility" since="3">
+      <description summary="unset utility mode">
         Request the compositor to return the window to normal tiling mode.
       </description>
     </request>

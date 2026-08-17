@@ -418,7 +418,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     }
 
     let is_tiled = unsafe {
-        (*window).wm_requested.tiled != 0 || !matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup)
+        (*window).wm_requested.tiled != 0 || !matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Utility)
     };
 
     let is_fullscreen = unsafe { (*window).is_fullscreen() };

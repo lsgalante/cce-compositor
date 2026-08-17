@@ -366,7 +366,11 @@ impl WindowManager {
         self.global = ffi::wl_global_create(
             (*server).wl_server,
             &ffi::zcce_window_manager_v1_interface,
-            4,
+            // 5 = set_utility exists on toplevels; clients feature-gate on
+            // the negotiated version, so one launched into an older
+            // compositor degrades to a plain floating window instead of
+            // dying on an unknown opcode.
+            5,
             self as *mut WindowManager as *mut _,
             Some(bind),
         );
@@ -610,6 +614,13 @@ impl WindowManager {
                 continue;
             }
             if (*w).is_status_bar() || (*w).is_wallpaper() {
+                continue;
+            }
+            // A Utility window owns its geometry entirely; saving it would
+            // let a later session restore a size over the client's request —
+            // the exact bug the mode deletes. (The clean-exit loops below do
+            // NOT skip it: it is a real window and must still be closed.)
+            if (*w).tiling_mode == crate::tiling::TilingMode::Utility {
                 continue;
             }
 

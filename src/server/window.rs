@@ -903,6 +903,15 @@ impl Window {
         if self.restored {
             return;
         }
+        // No geometry is ever saved for a Utility window, so none may be
+        // restored over it — a pre-Utility state.json entry for the same
+        // app_id would otherwise dictate a stale size to a self-sizing
+        // client. (Belt over suspenders: the arrange pass restates the
+        // "you choose" 0x0 for Utility anyway, so even a slipped-through
+        // restore heals on the client's next commit.)
+        if self.tiling_mode == crate::tiling::TilingMode::Utility {
+            return;
+        }
         let app_id_str = self.get_app_id_string().unwrap_or_default();
         if app_id_str.is_empty() || app_id_str.starts_with("cce-status") || app_id_str == "cce-wallpaper" {
             return;
@@ -970,7 +979,12 @@ impl Window {
     /// overridden — and marks `hint_placed` so the spawn viewport pan is
     /// skipped (the window is already under the user's pointer).
     unsafe fn try_hint_placement(&mut self) {
-        if self.tiling_mode != crate::tiling::TilingMode::Floating {
+        // Utility included: the hint moves only the POSITION, which a utility
+        // window does not own — only its size is the client's.
+        if !matches!(
+            self.tiling_mode,
+            crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Utility
+        ) {
             return;
         }
         let app_id = self.get_app_id_string().unwrap_or_default();
@@ -1320,7 +1334,8 @@ impl Window {
         if self.wm_sent.dimensions_hint != hint {
             // Overlay included: a self-sizing overlay (cce-cloud) changes its hint
             // on every resize, and skipping it meant no arrange pass was scheduled.
-            if matches!(self.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Overlay) {
+            // Utility for the same reason: it is self-sizing by definition.
+            if matches!(self.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Overlay | crate::tiling::TilingMode::Utility) {
                 (*self.server).wm.dirty_windowing();
             }
             self.wm_sent.dimensions_hint = hint;

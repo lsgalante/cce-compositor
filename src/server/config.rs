@@ -855,6 +855,7 @@ pub fn parse_tiling_mode(s: &str) -> TilingMode {
         "popup" => TilingMode::Popup,
         "sidepanel" | "side_panel" | "side-panel" | "pinned" | "overlay" => TilingMode::Overlay,
         "status" => TilingMode::Status,
+        "utility" => TilingMode::Utility,
         // "maximized" is the retired name for grid-locked windows.
         "tiled" | "maximized" => TilingMode::Tiled,
         // Everything else — including the retired "cascade"/"grid" layout
