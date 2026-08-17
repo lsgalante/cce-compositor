@@ -3603,11 +3603,6 @@ impl WindowManager {
                             self.layout.desktop_gap_width = v;
                         }
                     }
-                    "desktop_cell_corner_radius" => {
-                        if let Ok(v) = val.parse::<i32>() {
-                            self.layout.desktop_cell_corner_radius = v;
-                        }
-                    }
                     "desktop_cell_fade_inset" => {
                         if let Ok(v) = val.parse::<i64>() {
                             self.layout.desktop_cell_fade_inset = v;

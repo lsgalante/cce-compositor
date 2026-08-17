@@ -54,7 +54,6 @@ pub struct Layout {
     pub desktop_cell_color: [f32; 4],
     pub desktop_grid_scale: f64,
     pub desktop_gap_width: i32,
-    pub desktop_cell_corner_radius: i32,
     pub desktop_cell_fade_inset: i64,
     pub desktop_grid_fade_mode: String,
     /// Drop shadow under cce/ssd windows (scenefx box-shadow node).
@@ -121,7 +120,10 @@ impl Layout {
             cell_color: Rgba(self.desktop_cell_color),
             cell_size: self.desktop_grid_scale,
             gap_width: self.desktop_gap_width as f64,
-            cell_corner_radius: self.desktop_cell_corner_radius,
+            // Cells inherit the window backplate radius: a tiled window's
+            // content covers exactly the visible cell box, so its arc sits
+            // precisely on the cell's arc underneath.
+            cell_corner_radius: self.backplate_corner_radius,
             cell_fade_inset: self.desktop_cell_fade_inset as i32,
             fade_mode: GridFadeMode::from_name(&self.desktop_grid_fade_mode),
         })
@@ -182,7 +184,6 @@ impl Default for Layout {
             desktop_cell_color: [0.05, 0.05, 0.05, 0.05],
             desktop_grid_scale: 100.0,
             desktop_gap_width: 1,
-            desktop_cell_corner_radius: 0,
             desktop_cell_fade_inset: 0,
             desktop_grid_fade_mode: "linear".to_string(),
             bevel_enabled: true,
@@ -389,8 +390,6 @@ pub struct SurfaceConfig {
     pub desktop_grid_scale: i64,
     #[serde(default = "default_desktop_gap_width")]
     pub desktop_gap_width: i64,
-    #[serde(default = "default_desktop_cell_corner_radius")]
-    pub desktop_cell_corner_radius: i64,
     #[serde(default = "default_desktop_cell_fade_inset")]
     pub desktop_cell_fade_inset: i64,
     #[serde(default = "default_desktop_grid_fade_mode")]
@@ -497,7 +496,6 @@ impl Default for SurfaceConfig {
             desktop_cell_color: default_desktop_cell_color(),
             desktop_grid_scale: default_desktop_grid_scale(),
             desktop_gap_width: default_desktop_gap_width(),
-            desktop_cell_corner_radius: default_desktop_cell_corner_radius(),
             desktop_cell_fade_inset: default_desktop_cell_fade_inset(),
             desktop_grid_fade_mode: default_desktop_grid_fade_mode(),
             desktop_snap: default_desktop_snap(),
@@ -553,10 +551,6 @@ fn default_desktop_grid_scale() -> i64 {
 
 fn default_desktop_gap_width() -> i64 {
     1
-}
-
-fn default_desktop_cell_corner_radius() -> i64 {
-    0
 }
 
 fn default_desktop_cell_fade_inset() -> i64 {
@@ -1732,11 +1726,6 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.desktop_gap_width = val;
                                         }
                                     }
-                                    "cell_corner_radius" => {
-                                        if let Some(val) = entry.value().as_i64() {
-                                            surface.desktop_cell_corner_radius = val;
-                                        }
-                                    }
                                     "cell_fade_inset" => {
                                         if let Some(val) = entry.value().as_i64() {
                                             surface.desktop_cell_fade_inset = val;
@@ -1976,7 +1965,6 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.desktop_cell_color = get_child_arg_string(node, "desktop_cell_color", &default_desktop_cell_color());
             surface.desktop_grid_scale = get_child_arg_i64(node, "grid_cell_size", get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale()));
             surface.desktop_gap_width = get_child_arg_i64(node, "desktop_gap_width", default_desktop_gap_width());
-            surface.desktop_cell_corner_radius = get_child_arg_i64(node, "desktop_cell_corner_radius", default_desktop_cell_corner_radius());
             surface.desktop_cell_fade_inset = get_child_arg_i64(node, "desktop_cell_fade_inset", default_desktop_cell_fade_inset());
             surface.desktop_grid_fade_mode = get_child_arg_string(node, "grid_fade_mode", &default_desktop_grid_fade_mode());
             surface.desktop_snap = get_child_arg_bool(node, "desktop_snap", default_desktop_snap());
@@ -2163,7 +2151,6 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.desktop_edge_pan_band = config.surface.desktop_edge_pan_band.max(1) as f64;
     state.layout.desktop_edge_pan_speed = config.surface.desktop_edge_pan_speed.max(0) as f64;
     state.layout.desktop_gap_width = config.surface.desktop_gap_width as i32;
-    state.layout.desktop_cell_corner_radius = config.surface.desktop_cell_corner_radius as i32;
     state.layout.desktop_cell_fade_inset = config.surface.desktop_cell_fade_inset;
     state.layout.desktop_grid_fade_mode = config.surface.desktop_grid_fade_mode.clone();
 
@@ -2423,7 +2410,7 @@ mod tests {
             parse_config(&path, &mut server.wm).unwrap();
             assert!(!server.wm.layout.desktop_gap_color.is_empty());
             assert!(server.wm.layout.desktop_gap_width >= 0);
-            assert!(server.wm.layout.desktop_cell_corner_radius >= 0);
+            assert!(server.wm.layout.backplate_corner_radius >= 0);
             println!("TEST_WM_STARTUP: {:?}", server.wm.startup);
             println!("TEST_WM_PATH: {:?}", std::env::var("PATH"));
         }
