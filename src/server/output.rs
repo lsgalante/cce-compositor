@@ -827,7 +827,7 @@ impl Output {
         let mut pool_idx = 0;
 
         let layout = &wm.layout;
-        let bevel_on = layout.bevel_enabled && layout.bevel_thickness > 0.0;
+        let bevel_on = layout.bevel_enabled;
         // Light normalized exactly like the window bevels — the grid is lit
         // by the same lamp.
         let (bevel_lx, bevel_ly) = {
@@ -835,14 +835,11 @@ impl Output {
             let len = (lx * lx + ly * ly).sqrt();
             if len > 1e-6 { (lx / len, ly / len) } else { (-0.7071, -0.7071) }
         };
-        // Logical px pre-scaled by desk zoom, like the cell radius; output
-        // scale is applied by the scene render pass.
-        let bevel_thickness = (layout.bevel_thickness as f64 * zoom) as f32;
         let bevel_tree = self.grid_bevel_tree;
         let bevel_pool = &mut self.grid_bevel_pool;
         let mut bevel_idx = 0;
 
-        let mut get_bevel = |w: i32, h: i32, x: i32, y: i32, radius: i32| {
+        let mut get_bevel = |w: i32, h: i32, x: i32, y: i32, radius: i32, thickness: f32| {
             let bevel = if bevel_idx < bevel_pool.len() {
                 let node = bevel_pool[bevel_idx];
                 ffi::wlr_scene_node_set_enabled(&mut (*node).node as *mut ffi::wlr_scene_node, true);
@@ -858,7 +855,7 @@ impl Output {
             if !bevel.is_null() {
                 ffi::wlr_scene_node_set_position(&mut (*bevel).node as *mut ffi::wlr_scene_node, x, y);
                 ffi::wlr_scene_bevel_set_corner_radius(bevel, radius);
-                ffi::wlr_scene_bevel_set_thickness(bevel, bevel_thickness.max(1.0));
+                ffi::wlr_scene_bevel_set_thickness(bevel, thickness.max(1.0));
                 ffi::wlr_scene_bevel_set_light(
                     bevel,
                     bevel_lx,
@@ -936,6 +933,17 @@ impl Output {
                         } else {
                             0
                         };
+                        // Widened exactly like the windows' corner clip:
+                        // at corner_shape > 2 the superellipse hugs the
+                        // corner, so the raw radius reads nearly square —
+                        // and a tiled window's (widened) arc must land on
+                        // the cell's arc. The rim reaches as far as the
+                        // radius: the fillet is a full quarter-sweep a
+                        // window corner nests into.
+                        let cell_radius = crate::window::widen_corner_radius(
+                            cells.corner_radius_px, cells.cell_px, cells.cell_px,
+                        );
+                        let cell_bevel_thickness = cell_radius as f32;
                         // Cell positions from the EXACT period, rounded per
                         // cell: a rounded-period spacing drifts from the
                         // world-anchored windows at fractional zooms (the
@@ -945,13 +953,13 @@ impl Output {
                             let rel_x = (col as f64 * frame.period_px_exact).round() as i32;
                             for row in 0..=cells.rows {
                                 let rel_y = (row as f64 * frame.period_px_exact).round() as i32;
-                                get_rect(cells.cell_px, cells.cell_px, cells.color.0.as_ptr(), rel_x, rel_y, cells.corner_radius_px, inset_scaled);
+                                get_rect(cells.cell_px, cells.cell_px, cells.color.0.as_ptr(), rel_x, rel_y, cell_radius, inset_scaled);
                                 // The lit chamfer descending from the grid
                                 // lines into the cell — it wraps the corner
                                 // arcs, filling the corner cutout with the
                                 // fillet instead of flat gap color.
-                                if bevel_on {
-                                    get_bevel(cells.cell_px, cells.cell_px, rel_x, rel_y, cells.corner_radius_px);
+                                if bevel_on && cell_radius > 0 {
+                                    get_bevel(cells.cell_px, cells.cell_px, rel_x, rel_y, cell_radius, cell_bevel_thickness);
                                 }
                             }
                         }
