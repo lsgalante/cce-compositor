@@ -171,6 +171,18 @@ pub struct Output {
     /// grid tree.
     pub last_grid_spec: Option<crate::policy::api::BackgroundSpec>,
     pub grid_rect_pool: Vec<*mut ffi::wlr_scene_rect>,
+    /// Lit-chamfer rims over the grid cells — the same scenefx bevel node
+    /// the windows use, so the grid lines read as raised rails descending
+    /// into each cell through a shaded fillet that wraps the corner arcs.
+    /// Pooled like `grid_rect_pool`, but in their own subtree kept above
+    /// the rects: pool reuse must never stack a rim beneath a
+    /// later-created cell rect.
+    pub grid_bevel_pool: Vec<*mut ffi::wlr_scene_bevel>,
+    pub grid_bevel_tree: *mut ffi::wlr_scene_tree,
+    /// Bevel params the rims were last drawn with (enabled, thickness,
+    /// light x/y/intensity, shade, shoulder as bits) — the spec alone does
+    /// not cover them, and a live config reload must redraw the rims too.
+    pub last_grid_bevel: Option<[u32; 7]>,
     pub grid_force_redraw_frames: u8,
     /// Scene nodes for the per-square chess-style labels (overview only), and
     /// the rasterized glyph buffers behind them. Pooled exactly like
@@ -258,6 +270,8 @@ impl Output {
             self.object = std::ptr::null_mut();
             self.sent_wl_output = false;
             self.grid_rect_pool.clear();
+            self.grid_bevel_pool.clear();
+            self.grid_bevel_tree = std::ptr::null_mut();
         }
     }
 
@@ -344,6 +358,9 @@ impl Output {
                         self.grid_tree = std::ptr::null_mut();
                     }
                     self.grid_rect_pool.clear();
+                    // The bevel subtree died with grid_tree above.
+                    self.grid_bevel_pool.clear();
+                    self.grid_bevel_tree = std::ptr::null_mut();
 
                     if !self.adjust_tree.is_null() {
                         ffi::wlr_scene_node_destroy(self.adjust_tree as *mut ffi::wlr_scene_node);
@@ -438,6 +455,9 @@ impl Output {
             last_grid_zoom: 0.0,
             last_grid_spec: None,
             grid_rect_pool: Vec::new(),
+            grid_bevel_pool: Vec::new(),
+            grid_bevel_tree: std::ptr::null_mut(),
+            last_grid_bevel: None,
             grid_force_redraw_frames: 0,
             cell_label_pool: Vec::new(),
             cell_labels: Default::default(),
@@ -766,12 +786,22 @@ impl Output {
         let spec = wm.layout.background_spec();
         let zoom = crate::policy::background::sanitized_zoom(wm.desk_zoom);
 
-        // Spec/viewport/zoom changes force a redraw of the rect pool; pan
-        // alone only moves the grid tree.
+        // Spec/viewport/zoom/bevel changes force a redraw of the pools;
+        // pan alone only moves the grid tree.
+        let bevel_key = [
+            wm.layout.bevel_enabled as u32,
+            wm.layout.bevel_thickness.to_bits(),
+            wm.layout.bevel_light_x.to_bits(),
+            wm.layout.bevel_light_y.to_bits(),
+            wm.layout.bevel_light_intensity.to_bits(),
+            wm.layout.bevel_shade_intensity.to_bits(),
+            wm.layout.bevel_shoulder.to_bits(),
+        ];
         let structure_changed = self.last_grid_viewport_w != viewport_w
             || self.last_grid_viewport_h != viewport_h
             || self.last_grid_zoom != zoom
-            || self.last_grid_spec.as_ref() != Some(&spec);
+            || self.last_grid_spec.as_ref() != Some(&spec)
+            || self.last_grid_bevel != Some(bevel_key);
         if structure_changed {
             self.grid_force_redraw_frames = 3;
         }
@@ -782,11 +812,65 @@ impl Output {
             self.last_grid_viewport_h = viewport_h;
             self.last_grid_zoom = zoom;
             self.last_grid_spec = Some(spec.clone());
+            self.last_grid_bevel = Some(bevel_key);
         }
+
+        // The cell rims live in their own subtree kept above every pooled
+        // rect (incl. the backdrop), so reuse order can never bury one.
+        if self.grid_bevel_tree.is_null() {
+            self.grid_bevel_tree = ffi::wlr_scene_tree_create(self.grid_tree);
+        }
+        ffi::wlr_scene_node_raise_to_top(self.grid_bevel_tree as *mut ffi::wlr_scene_node);
 
         let grid_tree = self.grid_tree;
         let pool = &mut self.grid_rect_pool;
         let mut pool_idx = 0;
+
+        let layout = &wm.layout;
+        let bevel_on = layout.bevel_enabled && layout.bevel_thickness > 0.0;
+        // Light normalized exactly like the window bevels — the grid is lit
+        // by the same lamp.
+        let (bevel_lx, bevel_ly) = {
+            let (lx, ly) = (layout.bevel_light_x, layout.bevel_light_y);
+            let len = (lx * lx + ly * ly).sqrt();
+            if len > 1e-6 { (lx / len, ly / len) } else { (-0.7071, -0.7071) }
+        };
+        // Logical px pre-scaled by desk zoom, like the cell radius; output
+        // scale is applied by the scene render pass.
+        let bevel_thickness = (layout.bevel_thickness as f64 * zoom) as f32;
+        let bevel_tree = self.grid_bevel_tree;
+        let bevel_pool = &mut self.grid_bevel_pool;
+        let mut bevel_idx = 0;
+
+        let mut get_bevel = |w: i32, h: i32, x: i32, y: i32, radius: i32| {
+            let bevel = if bevel_idx < bevel_pool.len() {
+                let node = bevel_pool[bevel_idx];
+                ffi::wlr_scene_node_set_enabled(&mut (*node).node as *mut ffi::wlr_scene_node, true);
+                ffi::wlr_scene_bevel_set_size(node, w, h);
+                node
+            } else {
+                let node = ffi::wlr_scene_bevel_create(bevel_tree, w, h, 0, 0.0, layout.bevel_color.as_ptr());
+                if !node.is_null() {
+                    bevel_pool.push(node);
+                }
+                node
+            };
+            if !bevel.is_null() {
+                ffi::wlr_scene_node_set_position(&mut (*bevel).node as *mut ffi::wlr_scene_node, x, y);
+                ffi::wlr_scene_bevel_set_corner_radius(bevel, radius);
+                ffi::wlr_scene_bevel_set_thickness(bevel, bevel_thickness.max(1.0));
+                ffi::wlr_scene_bevel_set_light(
+                    bevel,
+                    bevel_lx,
+                    bevel_ly,
+                    layout.bevel_light_intensity,
+                    layout.bevel_shade_intensity,
+                );
+                ffi::wlr_scene_bevel_set_shoulder(bevel, layout.bevel_shoulder);
+                ffi::wlr_scene_bevel_set_color(bevel, layout.bevel_color.as_ptr());
+            }
+            bevel_idx += 1;
+        };
 
         // Helper closure to manage/reuse the pool of wlr_scene_rect elements.
         let mut get_rect = |w: i32, h: i32, color_ptr: *const f32, x: i32, y: i32, corner_r: i32, fade_i: i32| -> *mut ffi::wlr_scene_rect {
@@ -862,6 +946,13 @@ impl Output {
                             for row in 0..=cells.rows {
                                 let rel_y = (row as f64 * frame.period_px_exact).round() as i32;
                                 get_rect(cells.cell_px, cells.cell_px, cells.color.0.as_ptr(), rel_x, rel_y, cells.corner_radius_px, inset_scaled);
+                                // The lit chamfer descending from the grid
+                                // lines into the cell — it wraps the corner
+                                // arcs, filling the corner cutout with the
+                                // fillet instead of flat gap color.
+                                if bevel_on {
+                                    get_bevel(cells.cell_px, cells.cell_px, rel_x, rel_y, cells.corner_radius_px);
+                                }
                             }
                         }
                     }
@@ -883,6 +974,9 @@ impl Output {
             // Disable unused rects in the pool to release GPU/scene resources.
             for i in pool_idx..pool.len() {
                 ffi::wlr_scene_node_set_enabled(pool[i] as *mut ffi::wlr_scene_node, false);
+            }
+            for i in bevel_idx..bevel_pool.len() {
+                ffi::wlr_scene_node_set_enabled(&mut (*bevel_pool[i]).node as *mut ffi::wlr_scene_node, false);
             }
         }
 
