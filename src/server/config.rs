@@ -1741,6 +1741,15 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                     "line_relief" => {
                                         if let Some(val) = entry.value().as_i64() {
                                             surface.desktop_line_relief = val;
+                                        } else if let Some(s) = entry.value().as_string() {
+                                            // A (relief) value: the fallback
+                                            // honors its width — the client
+                                            // installs the full material,
+                                            // but the scenefx chamfer has no
+                                            // custom profile to install.
+                                            if let Some(spec) = cce_ui::relief_spec::ReliefSpec::parse(s) {
+                                                surface.desktop_line_relief = spec.width.round() as i64;
+                                            }
                                         }
                                     }
                                     "cell_fade_inset" => {
