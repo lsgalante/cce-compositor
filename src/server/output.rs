@@ -960,10 +960,16 @@ impl Output {
                         // rail, pre-scaled by zoom like every cell metric,
                         // so the rail reads as a flat face with a narrow
                         // lip at each sunken cell — not a full-ramp grout.
-                        // The ring expands the cell box by the roll, inner
-                        // edge concentric with the cell arc.
+                        // style.surface.desktop.line_relief overrides the
+                        // width outright (0 = no lip). The ring expands the
+                        // cell box by the roll, inner edge concentric with
+                        // the cell arc.
                         let gap_px = (frame.period_px_exact - cells.cell_px as f64).max(0.0);
-                        let roll = (layout.bevel_thickness as f64 * zoom).min(gap_px * 0.25).max(0.0);
+                        let roll = layout
+                            .desktop_line_relief
+                            .map(|v| v * zoom)
+                            .unwrap_or_else(|| (layout.bevel_thickness as f64 * zoom).min(gap_px * 0.25))
+                            .max(0.0);
                         let hg = roll.round() as i32;
                         let ring_px = cells.cell_px + 2 * hg;
                         let ring_radius = cell_radius + hg;

@@ -54,6 +54,9 @@ pub struct Layout {
     pub desktop_cell_color: [f32; 4],
     pub desktop_grid_scale: f64,
     pub desktop_gap_width: i32,
+    /// Grid-line lip width in logical px; None = follow the DE-wide relief
+    /// material (bevel_thickness clamped to the rail), 0 = no lip.
+    pub desktop_line_relief: Option<f64>,
     pub desktop_cell_fade_inset: i64,
     pub desktop_grid_fade_mode: String,
     /// Drop shadow under cce/ssd windows (scenefx box-shadow node).
@@ -184,6 +187,7 @@ impl Default for Layout {
             desktop_cell_color: [0.05, 0.05, 0.05, 0.05],
             desktop_grid_scale: 100.0,
             desktop_gap_width: 1,
+            desktop_line_relief: None,
             desktop_cell_fade_inset: 0,
             desktop_grid_fade_mode: "linear".to_string(),
             bevel_enabled: true,
@@ -390,6 +394,9 @@ pub struct SurfaceConfig {
     pub desktop_grid_scale: i64,
     #[serde(default = "default_desktop_gap_width")]
     pub desktop_gap_width: i64,
+    /// Negative = unset (follow the DE-wide relief material).
+    #[serde(default = "default_desktop_line_relief")]
+    pub desktop_line_relief: i64,
     #[serde(default = "default_desktop_cell_fade_inset")]
     pub desktop_cell_fade_inset: i64,
     #[serde(default = "default_desktop_grid_fade_mode")]
@@ -496,6 +503,7 @@ impl Default for SurfaceConfig {
             desktop_cell_color: default_desktop_cell_color(),
             desktop_grid_scale: default_desktop_grid_scale(),
             desktop_gap_width: default_desktop_gap_width(),
+            desktop_line_relief: default_desktop_line_relief(),
             desktop_cell_fade_inset: default_desktop_cell_fade_inset(),
             desktop_grid_fade_mode: default_desktop_grid_fade_mode(),
             desktop_snap: default_desktop_snap(),
@@ -551,6 +559,10 @@ fn default_desktop_grid_scale() -> i64 {
 
 fn default_desktop_gap_width() -> i64 {
     1
+}
+
+fn default_desktop_line_relief() -> i64 {
+    -1
 }
 
 fn default_desktop_cell_fade_inset() -> i64 {
@@ -1726,6 +1738,11 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.desktop_gap_width = val;
                                         }
                                     }
+                                    "line_relief" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.desktop_line_relief = val;
+                                        }
+                                    }
                                     "cell_fade_inset" => {
                                         if let Some(val) = entry.value().as_i64() {
                                             surface.desktop_cell_fade_inset = val;
@@ -2151,6 +2168,11 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.desktop_edge_pan_band = config.surface.desktop_edge_pan_band.max(1) as f64;
     state.layout.desktop_edge_pan_speed = config.surface.desktop_edge_pan_speed.max(0) as f64;
     state.layout.desktop_gap_width = config.surface.desktop_gap_width as i32;
+    state.layout.desktop_line_relief = if config.surface.desktop_line_relief < 0 {
+        None
+    } else {
+        Some(config.surface.desktop_line_relief as f64)
+    };
     state.layout.desktop_cell_fade_inset = config.surface.desktop_cell_fade_inset;
     state.layout.desktop_grid_fade_mode = config.surface.desktop_grid_fade_mode.clone();
 
