@@ -804,6 +804,10 @@ impl Output {
             || self.last_grid_bevel != Some(bevel_key);
         if structure_changed {
             self.grid_force_redraw_frames = 3;
+            // Fallback-grid structure (spec/zoom/viewport) is backdrop
+            // content in the optimized-blur capture set — same staleness
+            // rule as the client-grid latch.
+            ffi::river_scene_mark_optimized_blur_dirty((*self.server).scene.wlr_scene);
         }
         let force = self.grid_force_redraw_frames > 0;
         if force {
@@ -826,48 +830,13 @@ impl Output {
         let pool = &mut self.grid_rect_pool;
         let mut pool_idx = 0;
 
-        let layout = &wm.layout;
-        let bevel_on = layout.bevel_enabled;
-        // Light normalized exactly like the window bevels — the grid is lit
-        // by the same lamp.
-        let (bevel_lx, bevel_ly) = {
-            let (lx, ly) = (layout.bevel_light_x, layout.bevel_light_y);
-            let len = (lx * lx + ly * ly).sqrt();
-            if len > 1e-6 { (lx / len, ly / len) } else { (-0.7071, -0.7071) }
-        };
-        let bevel_tree = self.grid_bevel_tree;
+        // The cells are deliberately FLAT — no lit chamfer. The window-bevel
+        // treatment on grid cells fought the windows' own relief, and the
+        // cce-grid client draws its cells flat, so the fallback must too or
+        // the client latch visibly swaps the grid's material. The bevel pool
+        // survives only to disable nodes left by older sessions.
         let bevel_pool = &mut self.grid_bevel_pool;
-        let mut bevel_idx = 0;
-
-        let mut get_bevel = |w: i32, h: i32, x: i32, y: i32, radius: i32, thickness: f32| {
-            let bevel = if bevel_idx < bevel_pool.len() {
-                let node = bevel_pool[bevel_idx];
-                ffi::wlr_scene_node_set_enabled(&mut (*node).node as *mut ffi::wlr_scene_node, true);
-                ffi::wlr_scene_bevel_set_size(node, w, h);
-                node
-            } else {
-                let node = ffi::wlr_scene_bevel_create(bevel_tree, w, h, 0, 0.0, layout.bevel_color.as_ptr());
-                if !node.is_null() {
-                    bevel_pool.push(node);
-                }
-                node
-            };
-            if !bevel.is_null() {
-                ffi::wlr_scene_node_set_position(&mut (*bevel).node as *mut ffi::wlr_scene_node, x, y);
-                ffi::wlr_scene_bevel_set_corner_radius(bevel, radius);
-                ffi::wlr_scene_bevel_set_thickness(bevel, thickness.max(1.0));
-                ffi::wlr_scene_bevel_set_light(
-                    bevel,
-                    bevel_lx,
-                    bevel_ly,
-                    layout.bevel_light_intensity,
-                    layout.bevel_shade_intensity,
-                );
-                ffi::wlr_scene_bevel_set_shoulder(bevel, layout.bevel_shoulder);
-                ffi::wlr_scene_bevel_set_color(bevel, layout.bevel_color.as_ptr());
-            }
-            bevel_idx += 1;
-        };
+        let bevel_idx = 0;
 
         // Helper closure to manage/reuse the pool of wlr_scene_rect elements.
         let mut get_rect = |w: i32, h: i32, color_ptr: *const f32, x: i32, y: i32, corner_r: i32, fade_i: i32| -> *mut ffi::wlr_scene_rect {
@@ -940,13 +909,10 @@ impl Output {
                         // at corner_shape > 2 the superellipse hugs the
                         // corner, so the raw radius reads nearly square —
                         // and a tiled window's (widened) arc must land on
-                        // the cell's arc. The rim reaches as far as the
-                        // radius: the fillet is a full quarter-sweep a
-                        // window corner nests into.
+                        // the cell's arc.
                         let cell_radius = crate::window::widen_corner_radius(
                             cells.corner_radius_px, cells.cell_px, cells.cell_px,
                         );
-                        let cell_bevel_thickness = cell_radius as f32;
                         // Cell positions from the EXACT period, rounded per
                         // cell: a rounded-period spacing drifts from the
                         // world-anchored windows at fractional zooms (the
@@ -957,13 +923,6 @@ impl Output {
                             for row in 0..=cells.rows {
                                 let rel_y = (row as f64 * frame.period_px_exact).round() as i32;
                                 get_rect(cells.cell_px, cells.cell_px, cells.color.0.as_ptr(), rel_x, rel_y, cell_radius, inset_scaled);
-                                // The lit chamfer descending from the grid
-                                // lines into the cell — it wraps the corner
-                                // arcs, filling the corner cutout with the
-                                // fillet instead of flat gap color.
-                                if bevel_on && cell_radius > 0 {
-                                    get_bevel(cells.cell_px, cells.cell_px, rel_x, rel_y, cell_radius, cell_bevel_thickness);
-                                }
                             }
                         }
                     }

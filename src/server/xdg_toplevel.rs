@@ -538,6 +538,12 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     if let Some((serial, patch)) = (*window).grid_patch_acked.take() {
         log::info!("[Grid] latched patch #{serial} on commit");
         (*window).grid_patch_current = Some(patch);
+        // The grid sits in the optimized-blur capture set (backdrop layers):
+        // new patch content invalidates the shared blurred-backdrop cache,
+        // which nothing else re-bakes when the latch lands after the
+        // viewport has settled — translucent windows keep showing a blur of
+        // the pre-latch desktop.
+        ffi::river_scene_mark_optimized_blur_dirty((*(*window).server).scene.wlr_scene);
         (*(*window).server).wm.dirty_windowing();
     }
     let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);

@@ -1049,3 +1049,28 @@ struct wlr_buffer *river_data_buffer_create(int width, int height,
 	wlr_buffer_init(&buf->base, &cce_data_buffer_impl, width, height);
 	return &buf->base;
 }
+
+/* Mark every optimized-blur node in the scene dirty, forcing a re-bake of the
+ * shared blurred-backdrop cache on the next frame. The cache is otherwise
+ * invalidated only by blur-parameter setters and window blur RESIZES
+ * (optimized_blur_set_size marks dirty; a same-size re-enable does not), so
+ * backdrop CONTENT that changes without either — the grid client latching a
+ * new patch after the viewport has settled, or the client<->fallback grid
+ * swap — leaves every translucent window showing a stale bake. */
+static void mark_optimized_blur_dirty_rec(struct wlr_scene_node *node) {
+	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
+		wlr_scene_optimized_blur_mark_dirty(wlr_scene_optimized_blur_from_node(node));
+		return;
+	}
+	if (node->type == WLR_SCENE_NODE_TREE) {
+		struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
+		struct wlr_scene_node *child;
+		wl_list_for_each(child, &tree->children, link) {
+			mark_optimized_blur_dirty_rec(child);
+		}
+	}
+}
+
+void river_scene_mark_optimized_blur_dirty(struct wlr_scene *scene) {
+	mark_optimized_blur_dirty_rec(&scene->tree.node);
+}

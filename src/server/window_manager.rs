@@ -1941,36 +1941,44 @@ impl WindowManager {
     /// window; a failed send (no toplevel resource yet, old client) simply
     /// retries on a later pass.
     pub unsafe fn update_grid_patches(&mut self) {
-        let mut out_box: Option<ffi::wlr_box> = None;
+        let mut out_box: Option<(ffi::wlr_box, f64)> = None;
         let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
         let mut curr_out = (*outputs_list).next;
         while curr_out != outputs_list {
             let output = crate::container_of!(curr_out, crate::output::Output, link);
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                out_box = Some((*output).sent.box_layout());
+                out_box = Some(((*output).sent.box_layout(), (*output).sent.scale.max(1.0) as f64));
                 break;
             }
             curr_out = (*curr_out).next;
         }
-        let Some(out) = out_box else { return };
+        let Some((out, out_scale)) = out_box else { return };
         let zoom = crate::policy::background::sanitized_zoom(self.desk_zoom);
         let vw = out.width as f64 / zoom;
         let vh = out.height as f64 / zoom;
         let (vx, vy) = (self.desk_pan_x, self.desk_pan_y);
         // Buffer px per virtual unit: zoom quantized to a power of two so
-        // small zoom wobbles don't re-render the world.
-        let q = (2f64).powf(zoom.log2().round()).clamp(0.125, 2.0);
+        // small zoom wobbles don't re-render the world, times the output
+        // scale so a buffer px is a NATIVE px at the quantized zoom — at
+        // scale 2 an unscaled patch is magnified 2x on screen, which turns
+        // every cell edge into 2px staircase blocks.
+        let q = (2f64).powf(zoom.log2().round()).clamp(0.125, 2.0) * out_scale;
         let period = self.layout.desktop_grid_scale
             + (self.layout.desktop_gap_width as f64).max(0.0);
         let covers = |p: &crate::policy::api::GridPatch| -> bool {
             let mx = vw * 0.15;
             let my = vh * 0.15;
+            // Resolution drift is native px per buffer px, so the output
+            // scale belongs on the zoom side — measuring against zoom
+            // alone would reject every native-res patch on a scaled
+            // output (display factor 0.5 at scale 2) and repatch forever.
+            let disp = zoom * out_scale / p.scale;
             p.x <= vx - mx
                 && p.y <= vy - my
                 && p.x + p.w >= vx + vw + mx
                 && p.y + p.h >= vy + vh + my
-                && (zoom / p.scale) > 0.5
-                && (zoom / p.scale) < 2.01
+                && disp > 0.5
+                && disp < 2.01
         };
         for &w in self.windows.iter() {
             if w.is_null() || (*w).closed || !(*w).is_grid() {
@@ -1995,14 +2003,21 @@ impl WindowManager {
             // Half a viewport of margin per side, shrunk if the buffer
             // would exceed the cap; then period-aligned outward so the
             // client draws whole cells. Margin and cap are a MEMORY knob:
-            // at output scale 2 the client's framebuffer is
-            // (patch * q * 2)^2 * 4B per swapchain image — the original
+            // the client's framebuffer is (patch * q)^2 * 4B per swapchain
+            // image (q carries the output scale) — the original
             // 3x3-viewport margin cost ~340MB per image (gigabytes with
             // swapchain + staging), for scroll headroom that the 0.15
             // comfort margin above rarely used.
-            const MAX_BUF: f64 = 4096.0;
-            let m = (((MAX_BUF / q) - vw) / (2.0 * vw)).clamp(0.0, 0.5)
-                .min((((MAX_BUF / q) - vh) / (2.0 * vh)).clamp(0.0, 0.5));
+            // Scale-aware: at output scale 2 a native-res patch has 2x the
+            // buffer px per virtual unit, and a cap that ignored that would
+            // shrink the margin below the 0.15-viewport comfort band that
+            // covers() demands — a patch that can never cover is a repatch
+            // every arrange pass. 4096 * scale keeps the same VIRTUAL
+            // coverage (≈ 2x2 viewports) at every scale; the memory cost is
+            // the native-resolution pixels themselves.
+            let max_buf: f64 = 4096.0 * out_scale;
+            let m = (((max_buf / q) - vw) / (2.0 * vw)).clamp(0.0, 0.5)
+                .min((((max_buf / q) - vh) / (2.0 * vh)).clamp(0.0, 0.5));
             let x0 = ((vx - m * vw) / period).floor() * period;
             let y0 = ((vy - m * vh) / period).floor() * period;
             let x1 = ((vx + (1.0 + m) * vw) / period).ceil() * period;
@@ -2208,6 +2223,10 @@ impl WindowManager {
             for &output in &active_outputs {
                 (*output).grid_force_redraw_frames = 3;
             }
+            // The swap changes backdrop content under the optimized-blur
+            // capture set without any blur-node resize — re-bake or
+            // translucent windows keep blurring the pre-swap grid.
+            ffi::river_scene_mark_optimized_blur_dirty((*self.server).scene.wlr_scene);
         }
 
         for (&win_ptr, wp) in win_ptrs.iter().zip(plan.windows.iter()) {
