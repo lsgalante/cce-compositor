@@ -1968,8 +1968,8 @@ impl WindowManager {
         let period = self.layout.desktop_grid_scale
             + (self.layout.desktop_gap_width as f64).max(0.0);
         let covers = |p: &crate::policy::api::GridPatch| -> bool {
-            let mx = vw * 0.25;
-            let my = vh * 0.25;
+            let mx = vw * 0.15;
+            let my = vh * 0.15;
             p.x <= vx - mx
                 && p.y <= vy - my
                 && p.x + p.w >= vx + vw + mx
@@ -1997,12 +1997,17 @@ impl WindowManager {
                 let _ = (serial, acked);
                 continue;
             }
-            // One viewport of margin per side, shrunk if the buffer would
-            // exceed the cap; then period-aligned outward so the client
-            // draws whole cells.
-            const MAX_BUF: f64 = 8192.0;
-            let m = (((MAX_BUF / q) - vw) / (2.0 * vw)).clamp(0.0, 1.0)
-                .min((((MAX_BUF / q) - vh) / (2.0 * vh)).clamp(0.0, 1.0));
+            // Half a viewport of margin per side, shrunk if the buffer
+            // would exceed the cap; then period-aligned outward so the
+            // client draws whole cells. Margin and cap are a MEMORY knob:
+            // at output scale 2 the client's framebuffer is
+            // (patch * q * 2)^2 * 4B per swapchain image — the original
+            // 3x3-viewport margin cost ~340MB per image (gigabytes with
+            // swapchain + staging), for scroll headroom that the 0.15
+            // comfort margin above rarely used.
+            const MAX_BUF: f64 = 4096.0;
+            let m = (((MAX_BUF / q) - vw) / (2.0 * vw)).clamp(0.0, 0.5)
+                .min((((MAX_BUF / q) - vh) / (2.0 * vh)).clamp(0.0, 0.5));
             let x0 = ((vx - m * vw) / period).floor() * period;
             let y0 = ((vy - m * vh) / period).floor() * period;
             let x1 = ((vx + (1.0 + m) * vw) / period).ceil() * period;

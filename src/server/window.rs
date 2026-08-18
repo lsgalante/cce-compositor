@@ -1250,7 +1250,11 @@ impl Window {
                 }
             }
 
-            if should_focus {
+            // The grid layer never takes focus — it is desktop furniture,
+            // not a window (it is also input-transparent, so focus here
+            // would be unreachable-by-click and unswitchable-away for
+            // keyboard input).
+            if should_focus && !self.is_grid() {
                 let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
                 let mut curr = (*seats).next;
                 while curr != seats {
