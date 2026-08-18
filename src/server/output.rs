@@ -955,12 +955,16 @@ impl Output {
                         let cell_radius = crate::window::widen_corner_radius(
                             cells.corner_radius_px, cells.cell_px, cells.cell_px,
                         );
-                        // Half the rail width: the chamfer ring expands the
-                        // cell box by this on every side, crest on the rail
-                        // centerline, inner edge concentric with the cell
-                        // arc (radius offsets by the same amount).
-                        let half_gap = ((frame.period_px_exact - cells.cell_px as f64) / 2.0).max(0.0);
-                        let hg = half_gap.round() as i32;
+                        // The backplate-edge roll (mirroring cce-grid): the
+                        // bevel-width knob clamped to a fraction of the
+                        // rail, pre-scaled by zoom like every cell metric,
+                        // so the rail reads as a flat face with a narrow
+                        // lip at each sunken cell — not a full-ramp grout.
+                        // The ring expands the cell box by the roll, inner
+                        // edge concentric with the cell arc.
+                        let gap_px = (frame.period_px_exact - cells.cell_px as f64).max(0.0);
+                        let roll = (layout.bevel_thickness as f64 * zoom).min(gap_px * 0.25).max(0.0);
+                        let hg = roll.round() as i32;
                         let ring_px = cells.cell_px + 2 * hg;
                         let ring_radius = cell_radius + hg;
                         // Cell positions from the EXACT period, rounded per
@@ -974,7 +978,7 @@ impl Output {
                                 let rel_y = (row as f64 * frame.period_px_exact).round() as i32;
                                 get_rect(cells.cell_px, cells.cell_px, cells.color.0.as_ptr(), rel_x, rel_y, cell_radius, inset_scaled);
                                 if bevel_on && hg > 0 {
-                                    get_bevel(ring_px, ring_px, rel_x - hg, rel_y - hg, ring_radius, half_gap as f32);
+                                    get_bevel(ring_px, ring_px, rel_x - hg, rel_y - hg, ring_radius, roll as f32);
                                 }
                             }
                         }
