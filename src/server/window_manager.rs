@@ -1670,19 +1670,6 @@ impl WindowManager {
         let new_order_hash = hasher.finish();
         let reorder = self.rendering_requested.order_hash != new_order_hash;
         self.rendering_requested.order_hash = new_order_hash;
-        log::info!("[render_finish_loop] START - render_list={:p}", render_list);
-        let mut debug_curr = (*render_list).next;
-        let mut debug_idx = 0;
-        while debug_curr != render_list {
-            let node = crate::container_of!(debug_curr, crate::wm_node::WmNode, link);
-            if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
-                let app_id = (*window).get_app_id_string().unwrap_or_default();
-                log::info!("[render_finish_loop] List[{}] = app_id={} state={:?}", debug_idx, app_id, (*window).state);
-            }
-            debug_curr = (*debug_curr).next;
-            debug_idx += 1;
-        }
-
         let mut found_fullscreen = false;
         curr = (*render_list).next;
         while curr != render_list {
@@ -1705,6 +1692,14 @@ impl WindowManager {
                             // off-screen reveal delay in overview/zoom).
                             let layer = if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
                                 (*self.server).scene.layers.background
+                            } else if (*window).is_grid() {
+                                // The grid client is a desktop fixture: above
+                                // the native backdrop and fallback cells
+                                // (layers.background) but under every window.
+                                // Left to the generic wm arm it stacks by
+                                // render-list order, burying whichever windows
+                                // happened to map before it.
+                                (*self.server).scene.layers.bottom
                             } else if rendered_fullscreen(window) {
                                 (*self.server).scene.layers.fullscreen
                             } else if (*window).tiling_mode == crate::tiling::TilingMode::Popup {
