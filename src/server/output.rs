@@ -830,13 +830,55 @@ impl Output {
         let pool = &mut self.grid_rect_pool;
         let mut pool_idx = 0;
 
-        // The cells are deliberately FLAT — no lit chamfer. The window-bevel
-        // treatment on grid cells fought the windows' own relief, and the
-        // cce-grid client draws its cells flat, so the fallback must too or
-        // the client latch visibly swaps the grid's material. The bevel pool
-        // survives only to disable nodes left by older sessions.
+        let layout = &wm.layout;
+        // The relief lives on the LINES, never the cells (mirroring the
+        // cce-grid client, which must be able to latch without swapping the
+        // grid's material): each cell's chamfer box is expanded by the
+        // half-gap, so the lit wall occupies exactly the half-rail around
+        // the cell — a crest at the rail centerline descending to the cell
+        // edge — and neighboring rings abut without overlap. Cell floors
+        // stay flat.
+        let bevel_on = layout.bevel_enabled;
+        // Light normalized exactly like the window bevels — the grid is lit
+        // by the same lamp.
+        let (bevel_lx, bevel_ly) = {
+            let (lx, ly) = (layout.bevel_light_x, layout.bevel_light_y);
+            let len = (lx * lx + ly * ly).sqrt();
+            if len > 1e-6 { (lx / len, ly / len) } else { (-0.7071, -0.7071) }
+        };
+        let bevel_tree = self.grid_bevel_tree;
         let bevel_pool = &mut self.grid_bevel_pool;
-        let bevel_idx = 0;
+        let mut bevel_idx = 0;
+
+        let mut get_bevel = |w: i32, h: i32, x: i32, y: i32, radius: i32, thickness: f32| {
+            let bevel = if bevel_idx < bevel_pool.len() {
+                let node = bevel_pool[bevel_idx];
+                ffi::wlr_scene_node_set_enabled(&mut (*node).node as *mut ffi::wlr_scene_node, true);
+                ffi::wlr_scene_bevel_set_size(node, w, h);
+                node
+            } else {
+                let node = ffi::wlr_scene_bevel_create(bevel_tree, w, h, 0, 0.0, layout.bevel_color.as_ptr());
+                if !node.is_null() {
+                    bevel_pool.push(node);
+                }
+                node
+            };
+            if !bevel.is_null() {
+                ffi::wlr_scene_node_set_position(&mut (*bevel).node as *mut ffi::wlr_scene_node, x, y);
+                ffi::wlr_scene_bevel_set_corner_radius(bevel, radius);
+                ffi::wlr_scene_bevel_set_thickness(bevel, thickness.max(1.0));
+                ffi::wlr_scene_bevel_set_light(
+                    bevel,
+                    bevel_lx,
+                    bevel_ly,
+                    layout.bevel_light_intensity,
+                    layout.bevel_shade_intensity,
+                );
+                ffi::wlr_scene_bevel_set_shoulder(bevel, layout.bevel_shoulder);
+                ffi::wlr_scene_bevel_set_color(bevel, layout.bevel_color.as_ptr());
+            }
+            bevel_idx += 1;
+        };
 
         // Helper closure to manage/reuse the pool of wlr_scene_rect elements.
         let mut get_rect = |w: i32, h: i32, color_ptr: *const f32, x: i32, y: i32, corner_r: i32, fade_i: i32| -> *mut ffi::wlr_scene_rect {
@@ -913,6 +955,14 @@ impl Output {
                         let cell_radius = crate::window::widen_corner_radius(
                             cells.corner_radius_px, cells.cell_px, cells.cell_px,
                         );
+                        // Half the rail width: the chamfer ring expands the
+                        // cell box by this on every side, crest on the rail
+                        // centerline, inner edge concentric with the cell
+                        // arc (radius offsets by the same amount).
+                        let half_gap = ((frame.period_px_exact - cells.cell_px as f64) / 2.0).max(0.0);
+                        let hg = half_gap.round() as i32;
+                        let ring_px = cells.cell_px + 2 * hg;
+                        let ring_radius = cell_radius + hg;
                         // Cell positions from the EXACT period, rounded per
                         // cell: a rounded-period spacing drifts from the
                         // world-anchored windows at fractional zooms (the
@@ -923,6 +973,9 @@ impl Output {
                             for row in 0..=cells.rows {
                                 let rel_y = (row as f64 * frame.period_px_exact).round() as i32;
                                 get_rect(cells.cell_px, cells.cell_px, cells.color.0.as_ptr(), rel_x, rel_y, cell_radius, inset_scaled);
+                                if bevel_on && hg > 0 {
+                                    get_bevel(ring_px, ring_px, rel_x - hg, rel_y - hg, ring_radius, half_gap as f32);
+                                }
                             }
                         }
                     }
