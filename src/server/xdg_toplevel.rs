@@ -673,6 +673,10 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
 
     if ffi::river_wlr_xdg_surface_get_initial_commit(base) {
         assert!((*window).state != crate::window::WindowState::Ready);
+        if (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+            log::debug!("[LinkDbg] initial commit -> ready app={:?} was_state={:?} linked={}",
+                (*window).get_app_id_string(), (*window).state, (*window).is_linked());
+        }
         (*window).state = crate::window::WindowState::Ready;
         let mut new_geometry = std::mem::zeroed();
         ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);

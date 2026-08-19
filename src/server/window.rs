@@ -1088,6 +1088,10 @@ impl Window {
 
     pub unsafe fn map(&mut self) -> Result<(), &'static str> {
         log::debug!("window '{:?}' mapped", self.get_title());
+        if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+            log::debug!("[LinkDbg] map app={:?} was_state={:?} linked={}",
+                self.get_app_id_string(), self.state, self.is_linked());
+        }
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
         assert_eq!(self.state, WindowState::Initialized);
         self.state = WindowState::Mapped;
@@ -1272,6 +1276,10 @@ impl Window {
 
     pub unsafe fn set_closing(&mut self) {
         if self.state != WindowState::Closing {
+            if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                log::debug!("[LinkDbg] set_closing app={:?} was_state={:?} was_linked={}",
+                    self.get_app_id_string(), self.state, self.is_linked());
+            }
             self.state = WindowState::Closing;
             if self.is_linked() {
                 wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
@@ -1281,6 +1289,10 @@ impl Window {
 
     pub unsafe fn unmap(&mut self) {
         log::debug!("window '{:?}' unmapped", self.get_title());
+        if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+            log::debug!("[LinkDbg] unmap app={:?} state={:?} linked={}",
+                self.get_app_id_string(), self.state, self.is_linked());
+        }
         if self.state != WindowState::Mapped {
             return;
         }
@@ -1486,6 +1498,10 @@ impl Window {
         match self.state {
             WindowState::Init => {}
             WindowState::Closing => {
+                if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                    log::debug!("[LinkDbg] manage_start closing->init app={:?} was_linked={}",
+                        self.get_app_id_string(), self.is_linked());
+                }
                 self.state = WindowState::Init;
                 self.wm_sent = WmSentState {
                     dimensions_hint: DimensionsHint { min_width: 0, min_height: 0, max_width: 0, max_height: 0 },
@@ -1532,6 +1548,10 @@ impl Window {
                 if wm_v1.is_null() {
                     let is_linked = self.is_linked();
                     if !is_linked {
+                        if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                            log::debug!("[LinkDbg] manage_start LINK app={:?} state={:?}",
+                                self.get_app_id_string(), self.state);
+                        }
                         if !self.node.link.prev.is_null() && !self.node.link.next.is_null() {
                             wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
                         }
@@ -1805,6 +1825,10 @@ impl Window {
             WindowState::Ready => {
                 if self.wm_requested.dimensions.is_none() && self.wm_requested.fullscreen.is_null() {
                     return false;
+                }
+                if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                    log::debug!("[LinkDbg] manage_finish ready->initialized app={:?} linked={}",
+                        self.get_app_id_string(), self.is_linked());
                 }
                 self.state = WindowState::Initialized;
             }

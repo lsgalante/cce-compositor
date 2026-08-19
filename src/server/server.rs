@@ -211,6 +211,13 @@ pub unsafe fn wl_list_insert(list: *mut WlList, elm: *mut WlList) {
         log::error!("wl_list_insert: elm is null!");
         return;
     }
+    if list == elm {
+        // Inserting a node after itself severs it into a self-loop while
+        // outside pointers may still reference it — always a caller bug
+        // (reachable when a stale head.prev names the node being inserted).
+        log::error!("wl_list_insert: elm == list, refusing self-insert");
+        return;
+    }
     (*elm).prev = list;
     (*elm).next = (*list).next;
     (*(*list).next).prev = elm;
@@ -218,8 +225,21 @@ pub unsafe fn wl_list_insert(list: *mut WlList, elm: *mut WlList) {
 }
 
 pub unsafe fn wl_list_remove(elm: *mut WlList) {
+    // Upstream libwayland nulls the removed element's pointers; this port
+    // originally left them stale, so a second remove — or any later
+    // tail/linked check against them — wrote through pointers into whatever
+    // list the node USED to be in, silently corrupting live members. That
+    // corruption class is how a status segment ended up self-looped and
+    // invisible to every re-link heal (the tray parked outside the right
+    // group after bar restarts). Match C semantics: null after unlinking,
+    // and no-op an already-removed node instead of dereferencing null.
+    if (*elm).prev.is_null() || (*elm).next.is_null() {
+        return;
+    }
     (*(*elm).next).prev = (*elm).prev;
     (*(*elm).prev).next = (*elm).next;
+    (*elm).prev = std::ptr::null_mut();
+    (*elm).next = std::ptr::null_mut();
 }
 
 pub unsafe fn wl_list_remove_and_reinit(elm: *mut WlList) {

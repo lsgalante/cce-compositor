@@ -53,7 +53,12 @@ fn ipc_server_main(tx: mpsc::Sender<IpcRequest>, display_socket: Option<String>)
                 });
             }
             Err(e) => {
+                // EMFILE and friends leave the socket readable, so a bare
+                // continue spins this thread at 100% and floods the log
+                // (167GB observed under fd exhaustion). Back off instead —
+                // the session is degraded but stays diagnosable.
                 log::error!("[ipc] accept error: {}", e);
+                thread::sleep(std::time::Duration::from_millis(100));
             }
         }
     }

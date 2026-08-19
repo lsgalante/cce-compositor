@@ -1476,6 +1476,7 @@ impl WindowManager {
         let mt_seats = mt0.map(|s| s.elapsed().as_micros());
 
         self.arrange_views();
+        self.debug_check_unlinked_status("manage_start end");
 
         if let (Some(s), Some(a), Some(o), Some(w), Some(t)) =
             (mt0, mt_auto, mt_outputs, mt_windows, mt_seats)
@@ -1492,6 +1493,74 @@ impl WindowManager {
             self.start_timeout_timer(3000);
         } else {
             self.manage_finish();
+        }
+    }
+
+    /// Wedge tracer: a Mapped status window outside the render list is
+    /// invisible to configures and render_finish — exactly the tray
+    /// mis-slot wedge. Silent unless one exists.
+    unsafe fn debug_check_unlinked_status(&self, phase: &str) {
+        for &w in self.windows.iter() {
+            if w.is_null() || (*w).closed {
+                continue;
+            }
+            if !matches!((*w).state, crate::window::WindowState::Mapped) {
+                continue;
+            }
+            if (*w).is_linked() {
+                continue;
+            }
+            if (*w).get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                log::info!("[LinkDbg] UNLINKED-MAPPED at {}: app={:?} link.prev_self={} link.prev_null={}",
+                    phase,
+                    (*w).get_app_id_string(),
+                    (*w).node.link.prev == &(*w).node.link as *const ffi::wl_list as *mut ffi::wl_list,
+                    (*w).node.link.prev.is_null());
+            }
+        }
+        self.debug_check_render_list(phase);
+    }
+
+    /// Structural check of rendering_requested.list: every member's neighbor
+    /// pointers must agree, and every Mapped status window must be reachable
+    /// from the head. Silent when consistent.
+    unsafe fn debug_check_render_list(&self, phase: &str) {
+        let head = &self.rendering_requested.list as *const ffi::wl_list as *mut WlList;
+        let mut members: Vec<*mut WlList> = Vec::new();
+        let mut curr = (*head).next;
+        let mut steps = 0;
+        while curr != head {
+            if curr.is_null() {
+                log::info!("[LinkDbg] LIST BROKEN at {}: null next after {} steps", phase, steps);
+                return;
+            }
+            if (*(*curr).next).prev != curr {
+                log::info!("[LinkDbg] LIST INCONSISTENT at {}: member {:p} next.prev mismatch", phase, curr);
+            }
+            members.push(curr);
+            curr = (*curr).next;
+            steps += 1;
+            if steps > 10000 {
+                log::info!("[LinkDbg] LIST CYCLE at {}: >10000 members", phase);
+                return;
+            }
+        }
+        for &w in self.windows.iter() {
+            if w.is_null() || (*w).closed {
+                continue;
+            }
+            if !matches!((*w).state, crate::window::WindowState::Mapped) {
+                continue;
+            }
+            if !(*w).get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                continue;
+            }
+            let node = &(*w).node.link as *const ffi::wl_list as *mut WlList;
+            let reachable = members.contains(&node);
+            if (*w).is_linked() && !reachable {
+                log::info!("[LinkDbg] ORPHAN-RING at {}: app={:?} is_linked=true but unreachable from head",
+                    phase, (*w).get_app_id_string());
+            }
         }
     }
 
@@ -1534,6 +1603,7 @@ impl WindowManager {
 
         if let WindowManagerState::InflightConfigures(count) = self.state {
             log::debug!("sent {} tracked configure(s)", count);
+            self.debug_check_unlinked_status("manage_finish end");
             if count > 0 {
                 self.start_timeout_timer(100);
             } else {
@@ -1800,6 +1870,7 @@ impl WindowManager {
         (*self.server).idle_inhibit_manager.check_active();
 
         log::debug!("finished committing transaction");
+        self.debug_check_unlinked_status("render_finish end");
 
         if self.scheduled.dirty || self.scheduled.dirty_lazy || self.rendering_scheduled.dirty {
             self.add_dirty_idle();
@@ -2292,11 +2363,29 @@ impl WindowManager {
             }
         }
 
-        // Force configure for all status bar windows so they receive the new geometry immediately
+        // Force configure for all status bar windows so they receive the new
+        // geometry immediately, and apply the planned position DIRECTLY.
+        // Positions normally land in render_finish, which only reaches
+        // windows linked into rendering_requested.list — a segment that
+        // dropped out of that list (the reconnect-churn wedge) kept its
+        // stale slot through every later arrange while the plan held the
+        // correct one. The arrange pass is the authority on segment slots,
+        // so make every pass re-slot every segment except one the user is
+        // dragging (the seat op owns its position until release).
         for &win_ptr in self.windows.iter() {
             if !win_ptr.is_null() && !(*win_ptr).closed && (*win_ptr).is_status_bar() {
                 if (*win_ptr).wm_requested.dimensions.is_some() {
                     (*win_ptr).manage_finish();
+                }
+                if matches!((*win_ptr).state, crate::window::WindowState::Mapped)
+                    && !self.is_window_being_moved(win_ptr)
+                {
+                    let x = (*win_ptr).rendering_requested.x;
+                    let y = (*win_ptr).rendering_requested.y;
+                    (*win_ptr).box_geom.x = x;
+                    (*win_ptr).box_geom.y = y;
+                    ffi::river_scene_node_set_position_if_changed((*win_ptr).tree as *mut ffi::wlr_scene_node, x, y);
+                    ffi::river_scene_node_set_position_if_changed((*win_ptr).popup_tree as *mut ffi::wlr_scene_node, x, y);
                 }
             }
         }
@@ -2782,15 +2871,25 @@ impl WindowManager {
             let node_link = &mut (*win_ptr).node.link as *mut ffi::wl_list as *mut WlList;
             let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
             if !node_link.is_null() && !list_head.is_null() {
-                if (*node_link).next != list_head {
-                    if (*win_ptr).is_linked() {
-                        crate::server::wl_list_remove_and_reinit(node_link);
-                    }
-                    let last = (*list_head).prev;
-                    if !last.is_null() {
-                        crate::server::wl_list_insert(last, node_link);
-                    }
+                // Unconditional remove+reinsert, not a `next != head` tail
+                // check: a node with a stale next that happened to equal the
+                // head skipped the move here AND read as linked to
+                // manage_start, so nothing ever re-attached it — the segment
+                // froze at its last applied position (the tray mis-slot
+                // wedge). The final order is identical (each Mapped status
+                // window moves to the tail in windows order) and the
+                // primitives no-op cleanly on every unlinked pointer state.
+                if !(*win_ptr).is_linked() {
+                    log::info!("[LinkDbg] keep_on_top healing unlinked app={:?}",
+                        (*win_ptr).get_app_id_string());
                 }
+                crate::server::wl_list_remove_and_reinit(node_link);
+                let last = (*list_head).prev;
+                // head.prev can only name this node via pre-existing
+                // corruption (a dangling backpointer); fall back to the head
+                // so the node still rejoins the list.
+                let after = if last.is_null() || last == node_link { list_head } else { last };
+                crate::server::wl_list_insert(after, node_link);
             }
         }
     }
@@ -2802,14 +2901,16 @@ impl WindowManager {
         let node_link = &mut (*window).node.link as *mut ffi::wl_list as *mut WlList;
         let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
         if !node_link.is_null() && !list_head.is_null() {
-            if (*node_link).next != list_head {
-                if (*window).is_linked() {
-                    crate::server::wl_list_remove_and_reinit(node_link);
-                }
+            // Same shape as keep_status_bar_on_top: no `next != head` tail
+            // check (stale pointers made it lie), just a safe move-to-tail.
+            // A window that isn't Mapped stays out of the render list — its
+            // linking is manage_start's job, and force-inserting a
+            // Closing/Init window here would resurrect it for one frame.
+            if (*window).is_linked() || matches!((*window).state, crate::window::WindowState::Mapped) {
+                crate::server::wl_list_remove_and_reinit(node_link);
                 let last = (*list_head).prev;
-                if !last.is_null() {
-                    crate::server::wl_list_insert(last, node_link);
-                }
+                let after = if last.is_null() || last == node_link { list_head } else { last };
+                crate::server::wl_list_insert(after, node_link);
             }
         }
         self.keep_status_bar_on_top();
@@ -3064,6 +3165,52 @@ impl WindowManager {
                         Some(dump_iter),
                         &mut out as *mut String as *mut std::ffi::c_void,
                     );
+                }
+                return out;
+            }
+            // WM introspection: one line per window with the fields the
+            // arrange pass keys on (state, render-list linkage, status edge,
+            // seat-op move, requested vs applied position, configure state).
+            // Found the tray segment mis-slot wedge; kept as a debugging tool.
+            "debug-windows" => {
+                let mut out = format!(
+                    "wm state={:?} dirty={} dirty_lazy={} rendering_dirty={} dirty_idle_armed={} wm_object={}\n",
+                    self.state,
+                    self.scheduled.dirty,
+                    self.scheduled.dirty_lazy,
+                    self.rendering_scheduled.dirty,
+                    !self.dirty_idle.is_null(),
+                    !self.object.is_null(),
+                );
+                for &w in self.windows.iter() {
+                    if w.is_null() {
+                        continue;
+                    }
+                    let cfg = match (*w).impl_type {
+                        crate::window::WindowImpl::Toplevel(t) if !t.is_null() => {
+                            format!("{:?}", (*t).configure_state)
+                        }
+                        _ => "-".to_string(),
+                    };
+                    out.push_str(&format!(
+                        "window id={} app_id={:?} state={:?} closed={} linked={} mode={:?} edge={:?} moved={} req_pos=({},{}) box=({},{},{}x{}) collapsed_len={} cfg={}\n",
+                        (*w).ref_key.index,
+                        (*w).get_app_id_string().unwrap_or_default(),
+                        (*w).state,
+                        (*w).closed,
+                        (*w).is_linked(),
+                        (*w).tiling_mode,
+                        (*w).status_edge,
+                        self.is_window_being_moved(w),
+                        (*w).rendering_requested.x,
+                        (*w).rendering_requested.y,
+                        (*w).box_geom.x,
+                        (*w).box_geom.y,
+                        (*w).box_geom.width,
+                        (*w).box_geom.height,
+                        (*w).status_collapsed_len,
+                        cfg,
+                    ));
                 }
                 return out;
             }

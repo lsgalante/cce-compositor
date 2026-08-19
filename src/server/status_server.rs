@@ -163,9 +163,50 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, display_socket: Option<Stri
                     break;
                 }
                 Err(e) => {
+                    // EMFILE and friends: the socket stays readable, so
+                    // without a pause this loop (and its log line) spins the
+                    // thread at 100% — observed as a 167GB log once dead
+                    // subscribers had exhausted the fd table.
                     log::error!("[status] accept error: {}", e);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                     break;
                 }
+            }
+        }
+
+        // Reap dead subscribers by reading: a subscriber never sends after
+        // its subscription line, so a successful zero-byte read is EOF (the
+        // client vanished). Waiting for a WRITE to fail leaked them instead
+        // — last_line dedup means a quiet topic may never write again, and
+        // every bar restart stranded its whole subscriber set. Enough
+        // restarts exhausted the fd table and took the session down.
+        {
+            let mut buf = [0u8; 64];
+            let mut dead_clients = Vec::new();
+            for (i, client) in clients.iter_mut().enumerate() {
+                loop {
+                    use std::io::Read;
+                    match client.stream.read(&mut buf) {
+                        Ok(0) => {
+                            log::info!(
+                                "[status] client {:?} disconnected (eof)",
+                                client.subscription
+                            );
+                            dead_clients.push(i);
+                            break;
+                        }
+                        // Unexpected chatter: drain and keep the client.
+                        Ok(_) => continue,
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(_) => {
+                            dead_clients.push(i);
+                            break;
+                        }
+                    }
+                }
+            }
+            for i in dead_clients.into_iter().rev() {
+                clients.remove(i);
             }
         }
 

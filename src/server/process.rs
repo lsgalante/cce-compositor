@@ -22,7 +22,12 @@ pub fn setup() {
             rlim_max: max,
         });
 
-        let new_cur = std::cmp::min(4096, max);
+        // A compositor's legitimate fd usage scales with clients × buffers
+        // (every imported dmabuf holds one), and hitting the ceiling turns
+        // accept() into an EMFILE spin that takes the session down — 4096
+        // proved reachable under client-reconnect churn. Children get the
+        // original limit back via cleanup_child.
+        let new_cur = std::cmp::min(65536, max);
         if let Err(e) = setrlimit(Resource::RLIMIT_NOFILE, new_cur, max) {
             log::error!("setrlimit failed: {}, using system default limit of {}", e, cur);
         } else {
