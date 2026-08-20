@@ -1736,46 +1736,16 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     // Restore original tiling mode & lock status
                     (*win_ptr).tiling_mode = op.start_tiling_mode;
                     (*win_ptr).mode_locked = op.start_mode_locked;
-                    
+
                     let server = seat.server;
                     if !(*win_ptr).closed && !(*win_ptr).is_status_bar() && !(*win_ptr).is_wallpaper() {
-                        let mut viewport_w = 1920.0;
-                        let mut viewport_h = 1080.0;
-                        let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                        let mut curr_out = (*outputs_list).next;
-                        while curr_out != outputs_list {
-                            let output = crate::container_of!(curr_out, crate::output::Output, link);
-                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                                let wlr_box = (*output).sent.box_layout();
-                                viewport_w = wlr_box.width as f64;
-                                viewport_h = wlr_box.height as f64;
-                                break;
-                            }
-                            curr_out = (*curr_out).next;
-                        }
-
-                        let win_w = if (*win_ptr).box_geom.width > 0 { (*win_ptr).box_geom.width as f64 } else { 800.0 };
-                        let win_h = if (*win_ptr).box_geom.height > 0 { (*win_ptr).box_geom.height as f64 } else { 600.0 };
-
-                        let center_x = (*win_ptr).virtual_x + win_w / 2.0;
-                        let center_y = (*win_ptr).virtual_y + win_h / 2.0;
-
-                        (*server).wm.desk_zoom = 1.0;
-                        (*server).wm.mode = crate::window_manager::WindowManagerMode::Normal;
-                        (*server).wm.desk_pan_x = center_x - viewport_w / 2.0;
-                        (*server).wm.desk_pan_y = center_y - viewport_h / 2.0;
-
-                        seat.focus(Focus::Window(win_ptr));
-                        if !seat.object.is_null() && !(*win_ptr).object.is_null() {
-                            ffi::wl_resource_post_event(seat.object, 4, (*win_ptr).object);
-                        }
-
-                        (*server).wm.stop_panning_animation();
-                        if matches!((*server).wm.state, crate::window_manager::WindowManagerState::Idle) {
-                            (*server).wm.update_viewport_local();
-                        } else {
-                            (*server).wm.dirty_windowing();
-                        }
+                        // The Overview toggle's exit path: it centers on the
+                        // HOVERED window (the cursor is on the clicked one),
+                        // focuses it, and ANIMATES the camera home along the
+                        // configured overview ramp — the same flight the
+                        // background-click exit takes, instead of the
+                        // instant cut this block used to hand-roll.
+                        (*server).wm.execute_action(&crate::config::Action::Overview, None);
                     }
                 }
             }
