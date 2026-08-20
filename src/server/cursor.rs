@@ -74,6 +74,14 @@ pub struct Cursor {
     pub gesture_scale: f64,
     pub gesture_triggered: bool,
     pub panning_gesture_active: bool,
+    /// A pinch that began over the desktop background zooms the camera
+    /// continuously instead of forwarding to a client or matching gesture
+    /// binds. Decided once at pinch begin; update/end must follow the same
+    /// branch so the client protocol never sees an update without a begin.
+    pub pinch_zoom_active: bool,
+    /// Camera zoom captured at pinch begin: libinput's pinch `scale` is
+    /// absolute w.r.t. the gesture start, so every update maps off this.
+    pub pinch_start_zoom: f64,
     pub last_click_time: u32,
     pub last_click_window: *mut crate::window::Window,
     /// Window whose border currently draws highlighted, kept to un-highlight
@@ -134,6 +142,8 @@ impl Default for Cursor {
             gesture_scale: 1.0,
             gesture_triggered: false,
             panning_gesture_active: false,
+            pinch_zoom_active: false,
+            pinch_start_zoom: 1.0,
             last_click_time: 0,
             last_click_window: std::ptr::null_mut(),
             hovered_border_window: std::ptr::null_mut(),
@@ -2446,6 +2456,32 @@ unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listener, data: *
     cursor.gesture_triggered = false;
 
     let server = seat.server;
+
+    // A pinch starting over the desktop background (wallpaper or bare
+    // desktop, same test as the right-click context menu) zooms the camera
+    // for the whole gesture. Clients never see a begin, so update/end stay
+    // ours too.
+    let mut on_background = true;
+    if let Some(result) = (*server).scene.at(cursor.x(), cursor.y()) {
+        match result.data {
+            SceneNodeDataVal::Window(window) => {
+                if !(*window).is_wallpaper() {
+                    on_background = false;
+                }
+            }
+            SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                on_background = false;
+            }
+        }
+    }
+    if on_background {
+        let wm = &mut (*server).wm;
+        wm.stop_panning_animation();
+        cursor.pinch_zoom_active = true;
+        cursor.pinch_start_zoom = wm.desk_zoom;
+        return;
+    }
+
     let pointer_gestures = (*server).input_manager.pointer_gestures;
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_pinch_begin(
@@ -2468,6 +2504,42 @@ unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: 
         return;
     }
     seat.handle_activity();
+
+    if cursor.pinch_zoom_active {
+        let wm = &mut (*seat.server).wm;
+        let old_zoom = wm.desk_zoom;
+        let new_zoom = crate::policy::camera::pinch_zoom(cursor.pinch_start_zoom, (*event).scale);
+        if new_zoom != old_zoom {
+            let cx = cursor.x();
+            let cy = cursor.y();
+            let wlr_output = (*(*seat).server).om.output_at(cx, cy);
+            let (phys_x, phys_y) = if !wlr_output.is_null() {
+                let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+                ffi::wlr_output_layout_get_box((*(*seat).server).om.output_layout, wlr_output, &mut output_box);
+                (output_box.x as f64, output_box.y as f64)
+            } else {
+                (0.0, 0.0)
+            };
+            // Like the wheel, pinch pivots about the cursor: the virtual
+            // point under it stays put on screen.
+            let cam = crate::policy::camera::zoom_about_anchor(
+                wm.camera(),
+                cx - phys_x,
+                cy - phys_y,
+                new_zoom,
+            );
+            wm.desk_pan_x = cam.pan_x;
+            wm.desk_pan_y = cam.pan_y;
+            wm.desk_zoom = cam.zoom;
+            wm.mode = if crate::policy::camera::is_overview(cam.zoom) { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal };
+            if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
+                wm.update_viewport_local();
+            } else {
+                wm.dirty_windowing();
+            }
+        }
+        return;
+    }
 
     if cursor.gesture_triggered {
         return;
@@ -2542,6 +2614,13 @@ unsafe extern "C" fn handle_pinch_end(listener: *mut ffi::wl_listener, data: *mu
         return;
     }
     seat.handle_activity();
+
+    if cursor.pinch_zoom_active {
+        // Camera zoom consumed the whole gesture; clients got no begin, so
+        // they get no end. The camera simply stays where the fingers left it.
+        cursor.pinch_zoom_active = false;
+        return;
+    }
 
     if cursor.gesture_triggered {
         cursor.gesture_triggered = false;
