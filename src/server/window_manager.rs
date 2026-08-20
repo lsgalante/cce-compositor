@@ -2035,16 +2035,22 @@ impl WindowManager {
         let win_h = if (*win).box_geom.height > 0 { (*win).box_geom.height as f64 } else { 600.0 };
         let center_x = (*win).virtual_x + win_w / 2.0;
         let center_y = (*win).virtual_y + win_h / 2.0;
-        self.desk_zoom = 1.0;
-        self.mode = WindowManagerMode::Normal;
-        self.desk_pan_x = center_x - viewport_w / 2.0;
-        self.desk_pan_y = center_y - viewport_h / 2.0;
+        // Same animated flight as the Overview toggle's exit: SetCamera
+        // owns the ramp/target bookkeeping and flips the mode by fiat.
         self.stop_panning_animation();
-        if matches!(self.state, WindowManagerState::Idle) {
-            self.update_viewport_local();
-        } else {
-            self.dirty_windowing();
-        }
+        crate::policy::api::Compositor::apply(
+            self,
+            &crate::policy::api::Command::SetCamera {
+                camera: crate::policy::camera::Camera {
+                    pan_x: center_x - viewport_w / 2.0,
+                    pan_y: center_y - viewport_h / 2.0,
+                    zoom: 1.0,
+                },
+                overview: Some(false),
+                animate: true,
+            },
+        );
+        crate::policy::api::Compositor::apply(self, &crate::policy::api::Command::RefreshCamera);
     }
 
     /// Issue grid_patch events to grid clients whose current patch no
