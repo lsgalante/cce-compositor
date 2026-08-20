@@ -974,7 +974,11 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             SceneNodeDataVal::Window(window) => {
                 if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                     is_app_surface = true;
-                    if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
+                    // Popup counts as chrome like Overlay: the cce-cloud
+                    // launcher must keep receiving clicks in overview.
+                    if (*window).tiling_mode == crate::tiling::TilingMode::Overlay
+                        || (*window).tiling_mode == crate::tiling::TilingMode::Popup
+                    {
                         is_overlay_window = true;
                     }
                 }
@@ -1110,6 +1114,16 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             // border path below (move/resize by zone, zoom-aware) — the
             // resize controls work at any zoom. Content presses grab the
             // whole window; true background presses exit overview.
+            //
+            // Chrome windows (Overlay docks, Popup surfaces like the
+            // cce-cloud launcher) are neither: they stay interactive UI
+            // during overview, so their presses fall through to the normal
+            // path (focus + delivery to the app) and overview stays up.
+            let overview_chrome = !clicked_win.is_null()
+                && matches!(
+                    (*clicked_win).tiling_mode,
+                    crate::tiling::TilingMode::Overlay | crate::tiling::TilingMode::Popup
+                );
             let overview_win_valid = !clicked_win.is_null()
                 && !(*clicked_win).is_status_bar()
                 && !(*clicked_win).is_wallpaper();
@@ -1118,7 +1132,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             } else {
                 BorderZone::None
             };
-            if overview_win_valid && matches!(overview_border_zone, BorderZone::None) {
+            if overview_chrome {
+                // fall through
+            } else if overview_win_valid && matches!(overview_border_zone, BorderZone::None) {
                 (*server).wm.stop_panning_animation();
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
@@ -2097,7 +2113,11 @@ unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *m
             SceneNodeDataVal::Window(window) => {
                 if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                     is_app_surface = true;
-                    if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
+                    // Popup counts as chrome like Overlay: the cce-cloud
+                    // launcher must keep receiving clicks in overview.
+                    if (*window).tiling_mode == crate::tiling::TilingMode::Overlay
+                        || (*window).tiling_mode == crate::tiling::TilingMode::Popup
+                    {
                         is_overlay_window = true;
                     }
                 }

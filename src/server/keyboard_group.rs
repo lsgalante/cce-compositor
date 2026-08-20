@@ -443,7 +443,12 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         KeyConsumer::Focus => {
             let is_overlay_mode = if let crate::seat::Focus::Window(fw) = (*group.seat).focused {
                 if !fw.is_null() {
+                    // Overlay AND Popup: desktop chrome (docks, the
+                    // cce-cloud launcher) stays keyboard-interactive in
+                    // overview — only world windows (spatial thumbnails)
+                    // have their presses eaten.
                     (*fw).tiling_mode == crate::tiling::TilingMode::Overlay
+                        || (*fw).tiling_mode == crate::tiling::TilingMode::Popup
                 } else {
                     false
                 }
