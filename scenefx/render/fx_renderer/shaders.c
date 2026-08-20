@@ -117,10 +117,19 @@ float fx_corner_shape(void) {
 
 void uniform_corner_radii_set(const struct shader_corner_radii *uniform,
 		const struct fx_corner_fradii *corners) {
-	glUniform1f(uniform->top_left, corners->top_left);
-	glUniform1f(uniform->top_right, corners->top_right);
-	glUniform1f(uniform->bottom_left, corners->bottom_left);
-	glUniform1f(uniform->bottom_right, corners->bottom_right);
+	/* The corner-SDF shaders flip Y (relative_pos.y = size.y - y) on top of
+	 * an already top-down gl_FragCoord in this renderer's FBO setup, so a
+	 * radius bound to the shader's "top" slots renders at the SCREEN bottom
+	 * and vice versa. Every symmetric consumer (grid cells, window
+	 * backgrounds — equal radii on all four corners) masked this for years;
+	 * the border corner pieces are the first per-corner-asymmetric rects
+	 * and rendered vertically mirrored (arc at the wrong end of the L, the
+	 * clip hole's rounding on the wrong corner). Swap the vertical pairs at
+	 * upload so scene-space corners land where they say. */
+	glUniform1f(uniform->top_left, corners->bottom_left);
+	glUniform1f(uniform->top_right, corners->bottom_right);
+	glUniform1f(uniform->bottom_left, corners->top_left);
+	glUniform1f(uniform->bottom_right, corners->top_right);
 	glUniform1f(uniform->shape, global_corner_shape);
 }
 // Shaders
