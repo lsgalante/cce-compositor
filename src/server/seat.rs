@@ -91,6 +91,13 @@ pub struct Seat {
     pub modifiers_old: u32,
     pub op: Option<SeatOp>,
     pub op_release: bool,
+    /// One-shot focus-follow-pan suppression, set around refocuses caused
+    /// by a window GOING AWAY (close/unmap/minimize): the camera stays
+    /// where the user left it instead of chasing the fallback focus.
+    /// Explicit focus changes (clicks, directional focus, the switcher)
+    /// pan as always. Set-call-clear by the caller so a blocked focus
+    /// can't leak the flag into a later, legitimate pan.
+    pub suppress_focus_pan: bool,
     /// Overview-move displacement ledger: windows currently displaced out
     /// of the way of the active move op, with their pre-displacement
     /// virtual positions. While the button is held displacement is
@@ -140,6 +147,7 @@ impl Seat {
             modifiers_old: 0,
             op: None,
             op_release: false,
+            suppress_focus_pan: false,
             overview_displaced: Vec::new(),
             wm_sent_x: 0,
             wm_sent_y: 0,
@@ -815,6 +823,9 @@ impl Seat {
     /// not desk citizens, so other modes no-op, as do cce-cloud and windows
     /// already fully visible.
     pub unsafe fn focus_follow_pan(&mut self, window: *mut crate::window::Window) {
+        if self.suppress_focus_pan {
+            return;
+        }
         if window.is_null()
             || !matches!(
                 (*window).tiling_mode,

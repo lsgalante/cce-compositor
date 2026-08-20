@@ -315,6 +315,11 @@ pub struct WindowManagerConfig {
     /// Whether a newly spawned window pulls the viewport over to it. `None` = the default,
     /// which is to centre (what the compositor has always done).
     pub center_on_spawn: Option<bool>,
+    /// Camera reaction when the focused window goes away (app exit, close,
+    /// minimize): "focus_previous" (pan to the fallback focus — the historic
+    /// behavior), "overview", or "none". Menu-typed in config.kdl so the
+    /// settings tree renders a dropdown.
+    pub on_app_exit: Option<String>,
     /// Corner-shape exponent for scenefx's rounded-corner cuts (window
     /// surfaces, blur, shadows' clip): 2 = circular arc, > 2 = superellipse
     /// squircle. The same `window_manager.corner_shape` key the cce-ui
@@ -853,6 +858,28 @@ pub fn parse_hex_color_rgba(hex_str: &str) -> [f32; 4] {
         }
     }
     [0.05, 0.05, 0.05, 0.05] // fallback default (5% white)
+}
+
+/// Camera reaction when the focused window goes away — see
+/// `WindowManager::focus_next_visible_window`. The fallback focus itself
+/// always transfers (keyboard input needs a live target); this only decides
+/// what the CAMERA does about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnAppExit {
+    /// Pan to the fallback-focused window (the historic behavior).
+    FocusPrevious,
+    /// Enter overview instead of chasing any one window.
+    Overview,
+    /// The camera stays exactly where the user left it.
+    Nothing,
+}
+
+pub fn parse_on_app_exit(s: &str) -> OnAppExit {
+    match s.to_lowercase().as_str() {
+        "focus_previous" => OnAppExit::FocusPrevious,
+        "overview" => OnAppExit::Overview,
+        _ => OnAppExit::Nothing,
+    }
 }
 
 pub fn parse_tiling_mode(s: &str) -> TilingMode {
@@ -2023,10 +2050,11 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let window_switcher = get_child_arg_string_opt(node, "window_switcher");
         let window_switcher_prev = get_child_arg_string_opt(node, "window_switcher_prev");
         let center_on_spawn = get_child_arg_bool_opt(node, "center_on_spawn");
+        let on_app_exit = get_child_arg_string_opt(node, "on_app_exit");
         let corner_shape = get_child_arg_f64_opt(node, "corner_shape");
         let rounded_apps = get_child_args_string_vec_opt(node, "rounded_apps");
         let bevel_apps = get_child_args_string_vec_opt(node, "bevel_apps");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, corner_shape, rounded_apps, bevel_apps });
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, on_app_exit, corner_shape, rounded_apps, bevel_apps });
     }
 
     Ok(Config {
@@ -2083,6 +2111,12 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
 
     state.output_scale = 1.0f32;
     state.display = config.display.clone();
+    state.on_app_exit = config
+        .window_manager
+        .as_ref()
+        .and_then(|wm| wm.on_app_exit.as_deref())
+        .map(parse_on_app_exit)
+        .unwrap_or(OnAppExit::FocusPrevious);
     state.center_on_spawn = config
         .window_manager
         .as_ref()

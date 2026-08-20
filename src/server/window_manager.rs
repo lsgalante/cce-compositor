@@ -81,6 +81,9 @@ pub struct WindowManager {
     pub desk_pan_y: f64,
     pub desk_zoom: f64,
     pub mode: WindowManagerMode,
+    /// Camera reaction when the focused window goes away (config
+    /// `window_manager.on_app_exit`).
+    pub on_app_exit: crate::config::OnAppExit,
     /// From the last arrange plan: false while a live grid client covers
     /// the desktop, so `draw_grid` keeps only the backdrop (and labels).
     pub grid_cells_enabled: bool,
@@ -275,6 +278,7 @@ impl WindowManager {
         self.pending_screenshot = None;
         self.pending_ipc_reply = None;
         self.mode = WindowManagerMode::Normal;
+        self.on_app_exit = crate::config::OnAppExit::FocusPrevious;
         self.grid_cells_enabled = true;
         self.restore_queue = Vec::new();
         self.last_window_states = Vec::new();
@@ -2678,10 +2682,23 @@ impl WindowManager {
         let next = crate::policy::focus::next_visible_focus(&history, &windows)
             .and_then(|id| self.windows.get(id.0).copied())
             .unwrap_or(std::ptr::null_mut());
+        // The window the user was looking at went away. The fallback focus
+        // always transfers (keyboard input needs a live target); what the
+        // CAMERA does about it is the on_app_exit choice: pan to the
+        // fallback (the historic behavior), jump to overview, or stay
+        // exactly where the user left it.
+        let behavior = self.on_app_exit;
+        (*seat).suppress_focus_pan = behavior != crate::config::OnAppExit::FocusPrevious;
         if !next.is_null() {
             (*seat).focus(crate::seat::Focus::Window(next));
         } else {
             (*seat).focus(crate::seat::Focus::None);
+        }
+        (*seat).suppress_focus_pan = false;
+        if behavior == crate::config::OnAppExit::Overview
+            && self.mode == WindowManagerMode::Normal
+        {
+            self.execute_action(&crate::config::Action::Overview, None);
         }
     }
 
