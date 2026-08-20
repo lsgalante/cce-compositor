@@ -97,6 +97,33 @@ user_units() {
           done
 }
 
+# System unit files: same per-file [Install] WantedBy classification as
+# user_units(), inverted — anything wanted by a non-session target
+# (graphical.target, multi-user.target) is root-owned and belongs in
+# /etc/systemd/system. Installed by install-system only, never here.
+system_units() {
+    find "$WS" -maxdepth 3 -name '*.service' -not -path "$WS/target/*" 2>/dev/null \
+        | while read -r unit; do
+            local wanted
+            wanted=$(sed -n 's/^[[:space:]]*WantedBy[[:space:]]*=[[:space:]]*//p' "$unit" | tr -d '\r')
+            [ -n "$wanted" ] || continue
+            local t match=0
+            for t in $wanted; do
+                case " ${USER_UNIT_TARGETS[*]} " in *" $t "*) match=1 ;; esac
+            done
+            [ "$match" -eq 0 ] && printf '%s\n' "$unit"
+          done
+}
+
+# PAM service files a crate ships in its pam/ dir, for /etc/pam.d. These were
+# hand-installed (`sudo install -m644 pam/* /etc/pam.d/`), which is the same
+# drift-by-hand failure as everything else this script absorbs: the /etc copy
+# quietly stops matching the repo the first time someone forgets the command.
+pam_files() {
+    find "$WS" -mindepth 3 -maxdepth 3 -path '*/pam/*' -type f \
+        -not -path "$WS/target/*" 2>/dev/null
+}
+
 # Helper scripts a crate ships in its own scripts/ dir. Not just this crate's:
 # a script belongs in the repo whose code it is about (cce-keyring-selftest
 # reports on the keyring chain, so it lives with it in cce-display-manager), and
@@ -526,12 +553,36 @@ cmd_install_system() {
         bin=${entry%%:*}; dest=${entry#*:}
         [ -f "$WS/target/release/$bin" ] || die "$bin not built — run: ccebuild build"
         [ -e "$dest" ] || { printf 'ccebuild: %s absent, skipping\n' "$dest"; continue; }
+        if cmp -s "$WS/target/release/$bin" "$dest"; then continue; fi
         printf '  %s -> %s\n' "$bin" "$dest"
         sudo cp -a "$dest" "$dest.bak-$stamp"
         # `install` unlinks first: safe even though these are running as root.
         sudo install -m 755 "$WS/target/release/$bin" "$dest"
     done
-    printf '==> system binaries updated (takes effect at next login; nothing restarted)\n'
+
+    # System units and PAM stacks ship from the crates too (discovered, not
+    # hand-listed). Backups only when the content actually changed, so a no-op
+    # run does not accrete .bak files.
+    local file reload=0
+    while read -r file; do
+        dest="/etc/systemd/system/$(basename "$file")"
+        if [ -e "$dest" ] && cmp -s "$file" "$dest"; then continue; fi
+        printf '  %s -> %s\n' "$(basename "$file")" "$dest"
+        [ -e "$dest" ] && sudo cp -a "$dest" "$dest.bak-$stamp"
+        sudo install -m 644 "$file" "$dest"
+        reload=1
+    done < <(system_units)
+    if [ "$reload" -eq 1 ]; then sudo systemctl daemon-reload; fi
+
+    while read -r file; do
+        dest="/etc/pam.d/$(basename "$file")"
+        if [ -e "$dest" ] && cmp -s "$file" "$dest"; then continue; fi
+        printf '  %s -> %s\n' "$(basename "$file")" "$dest"
+        [ -e "$dest" ] && sudo cp -a "$dest" "$dest.bak-$stamp"
+        sudo install -m 644 "$file" "$dest"
+    done < <(pam_files)
+
+    printf '==> system artifacts updated (binaries take effect at next login; nothing restarted)\n'
 }
 
 usage() {
@@ -547,8 +598,9 @@ usage: ccebuild <command>
                         (--all: every running cce service). Never the compositor.
   prune [--apply]       delete target/ artifacts of crates cargo no longer
                         knows about (renamed/retired); dry-run by default
-  install-system        update the root-owned binaries (needs sudo); backs up
-                        each and restarts nothing
+  install-system        update the root-owned artifacts: binaries, system
+                        units, /etc/pam.d stacks (needs sudo); backs up each
+                        changed file and restarts nothing
 
 environment:
   CCE_WORKSPACE  workspace root (default: located from the current directory)
