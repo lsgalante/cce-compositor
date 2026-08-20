@@ -1259,6 +1259,27 @@ impl Window {
                 }
             }
 
+            // A WORLD window spawning during overview pulls the session
+            // out of it, landing at zoom 1 on the new window — the user
+            // asked for it (launcher pick, spawn keybind). Chrome
+            // (Popup/Overlay), status, wallpaper and the grid spawn without
+            // disturbing the overview. Before the focus loop, so the
+            // focus-follow pan sees the settled zoom-1 camera and no-ops.
+            if should_focus
+                && (*self.server).wm.mode == crate::window_manager::WindowManagerMode::Overview
+                && !self.is_grid()
+                && !self.is_status_bar()
+                && !self.is_wallpaper()
+            {
+                let resolved = (*self.server).wm.get_mode_for_window(self as *mut Window);
+                if !matches!(
+                    resolved,
+                    crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
+                ) {
+                    (*self.server).wm.exit_overview_to_window(self as *mut Window);
+                }
+            }
+
             // The grid layer never takes focus — it is desktop furniture,
             // not a window (it is also input-transparent, so focus here
             // would be unreachable-by-click and unswitchable-away for

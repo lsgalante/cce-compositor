@@ -2010,6 +2010,43 @@ impl WindowManager {
 
 
 
+    /// Snap the camera out of overview and onto `win`: zoom 1, centered,
+    /// mode Normal. The overview click-release path in cursor.rs does the
+    /// same dance inline (plus its focus/seat-event bookkeeping); this is
+    /// the map-time variant for windows SPAWNED during overview.
+    pub unsafe fn exit_overview_to_window(&mut self, win: *mut Window) {
+        if win.is_null() {
+            return;
+        }
+        let (mut viewport_w, mut viewport_h) = (1920.0_f64, 1080.0_f64);
+        let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                let wlr_box = (*output).sent.box_layout();
+                viewport_w = wlr_box.width as f64;
+                viewport_h = wlr_box.height as f64;
+                break;
+            }
+            curr_out = (*curr_out).next;
+        }
+        let win_w = if (*win).box_geom.width > 0 { (*win).box_geom.width as f64 } else { 800.0 };
+        let win_h = if (*win).box_geom.height > 0 { (*win).box_geom.height as f64 } else { 600.0 };
+        let center_x = (*win).virtual_x + win_w / 2.0;
+        let center_y = (*win).virtual_y + win_h / 2.0;
+        self.desk_zoom = 1.0;
+        self.mode = WindowManagerMode::Normal;
+        self.desk_pan_x = center_x - viewport_w / 2.0;
+        self.desk_pan_y = center_y - viewport_h / 2.0;
+        self.stop_panning_animation();
+        if matches!(self.state, WindowManagerState::Idle) {
+            self.update_viewport_local();
+        } else {
+            self.dirty_windowing();
+        }
+    }
+
     /// Issue grid_patch events to grid clients whose current patch no
     /// longer comfortably covers the viewport (or whose buffer resolution
     /// has drifted more than 2x from the zoom). One patch in flight per
