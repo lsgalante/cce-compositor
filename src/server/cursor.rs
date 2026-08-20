@@ -2757,9 +2757,18 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
         // resize on both adjacent edges, so the top corners still resize.
         // Derived in unscaled units (both inputs are unscaled), then brought
         // into screen space alongside the band.
+        // Same silhouette-derived outer-arc radius as draw_borders, so the
+        // pointer's corner squares track the visual corner rings exactly.
+        let r_in = crate::window::widen_corner_radius(
+            (*window).backplate_radius_base(),
+            geom.width,
+            geom.height,
+        ) as f64;
+        let r_out = if r_in > 0.0 { r_in + bw_unscaled } else { 0.0 };
         let corner_len = crate::window::border_corner_len(
             bw_unscaled,
             (*(*window).server).wm.layout.border_corner_length,
+            r_out,
         ) * scale;
 
         let dist_left = rx + bw;

@@ -180,9 +180,13 @@ pub struct FsAnim {
 /// Shared by the visual segments (draw_borders) and the pointer zones
 /// (cursor.rs get_border_zone) so they always agree. `configured` comes from
 /// `border { corner_length= }`; 0 picks the auto formula. Never shorter than
-/// the band width, so a corner is at least its diagonal square.
-pub fn border_corner_len(bw: f64, configured: i32) -> f64 {
-    if configured > 0 {
+/// the band width, so a corner is at least its diagonal square. `r_out` is
+/// the corner ring's OUTER arc radius (the window silhouette radius plus the
+/// band; 0 for square windows): the zone must reach past the arc plus half a
+/// band of straight arm, or the widened window corners (~35 logical px)
+/// overflow the corner piece and the arc gets truncated mid-sweep.
+pub fn border_corner_len(bw: f64, configured: i32, r_out: f64) -> f64 {
+    let cl = if configured > 0 {
         // Configured lengths predate the band doubling — scale them the same
         // way, and keep at least half a band of straight arm (arm = cl − bw)
         // so a corner can never collapse to a bare square. (corner_length=16
@@ -192,7 +196,8 @@ pub fn border_corner_len(bw: f64, configured: i32) -> f64 {
         // 3× band: the corner arms reach well down each edge (they also
         // carry the rounded-corner arc, which eats into the straight run).
         (3.0 * bw).max(24.0)
-    }
+    };
+    cl.max(r_out + 0.5 * bw)
 }
 
 /// Floor on the border grab/reveal band, in unscaled layout pixels. Borders
@@ -3167,7 +3172,15 @@ impl Window {
 
             let bw = band;
             let layout = &(*self.server).wm.layout;
-            let cl = border_corner_len(bw as f64, layout.border_corner_length) as i32;
+            // The corner ring follows the WINDOW's silhouette: the widened
+            // backplate radius the corner clip and background plate use
+            // (bg_radius above) — not the retired border{corner_radius=}
+            // key, whose separate (much tighter) arc rounded only the
+            // corner piece's outermost tip while the window curved away
+            // underneath it.
+            let r_in = bg_radius;
+            let r_out = if r_in > 0 { r_in + bw } else { 0 };
+            let cl = border_corner_len(bw as f64, layout.border_corner_length, r_out as f64) as i32;
             let g = layout.border_segment_gap;
             let arm = cl - bw;
             // Edge bars span between the corner zones, inset by the gap.
@@ -3239,8 +3252,6 @@ impl Window {
             // PHYSICAL px on the final (foam-clipped) box; r_in == 0
             // degenerates to the old square L.
             let rr = |v: f64| -> u16 { (v.max(0.0) as i32).clamp(0, u16::MAX as i32) as u16 };
-            let r_in = border.corner_radius as i32;
-            let r_out = if r_in > 0 { r_in + bw } else { 0 };
             let s = self.scale;
             let ri = rr(r_in as f64 * s);
             let ro = rr(r_out as f64 * s);
