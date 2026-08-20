@@ -2687,7 +2687,22 @@ impl WindowManager {
         // CAMERA does about it is the on_app_exit choice: pan to the
         // fallback (the historic behavior), jump to overview, or stay
         // exactly where the user left it.
-        let behavior = self.on_app_exit;
+        //
+        // Chrome departing is not an app exit: dismissing the cce-cloud
+        // launcher (Popup) or an Overlay dock must never fire the camera
+        // reaction — those close as part of using them.
+        let departing_chrome = match (*seat).focused {
+            crate::seat::Focus::Window(w) if !w.is_null() => matches!(
+                (*w).tiling_mode,
+                crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
+            ),
+            _ => false,
+        };
+        let behavior = if departing_chrome {
+            crate::config::OnAppExit::Nothing
+        } else {
+            self.on_app_exit
+        };
         (*seat).suppress_focus_pan = behavior != crate::config::OnAppExit::FocusPrevious;
         if !next.is_null() {
             (*seat).focus(crate::seat::Focus::Window(next));
