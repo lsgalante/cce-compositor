@@ -1274,7 +1274,9 @@ impl WindowManager {
             cursor_y,
             hovered,
             focused,
-            grid_period: self.layout.desktop_grid_scale.max(5.0)
+            grid_period_x: self.layout.desktop_cell_width.max(5.0)
+                + self.layout.desktop_gap_width.max(0) as f64,
+            grid_period_y: self.layout.desktop_cell_height.max(5.0)
                 + self.layout.desktop_gap_width.max(0) as f64,
             windows,
         }
@@ -1976,11 +1978,11 @@ impl WindowManager {
                         let sp = self.layout.snap_params().for_zoom(self.desk_zoom);
                         let new_w = crate::policy::snap::resize_axis(
                             op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
-                            edges.left, edges.right, 50.0, &sp,
+                            edges.left, edges.right, 50.0, &sp.x(),
                         ) as u32;
                         let new_h = crate::policy::snap::resize_axis(
                             op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
-                            edges.top, edges.bottom, 50.0, &sp,
+                            edges.top, edges.bottom, 50.0, &sp.y(),
                         ) as u32;
                         return Some((new_w, new_h));
                     }
@@ -2122,7 +2124,9 @@ impl WindowManager {
         while zoom * out_scale / q > 2.0 && q < q_max {
             q = (q * 2.0).min(q_max);
         }
-        let period = self.layout.desktop_grid_scale
+        let period_x = self.layout.desktop_cell_width
+            + (self.layout.desktop_gap_width as f64).max(0.0);
+        let period_y = self.layout.desktop_cell_height
             + (self.layout.desktop_gap_width as f64).max(0.0);
 
         // Target viewport (virtual units), for the union coverage below.
@@ -2269,10 +2273,10 @@ impl WindowManager {
             }
             let m = (((max_buf / q) - uw) / (2.0 * uw)).clamp(0.0, 0.5)
                 .min((((max_buf / q) - uh) / (2.0 * uh)).clamp(0.0, 0.5));
-            let x0 = ((ux0 - m * uw) / period).floor() * period;
-            let y0 = ((uy0 - m * uh) / period).floor() * period;
-            let x1 = ((ux1 + m * uw) / period).ceil() * period;
-            let y1 = ((uy1 + m * uh) / period).ceil() * period;
+            let x0 = ((ux0 - m * uw) / period_x).floor() * period_x;
+            let y0 = ((uy0 - m * uh) / period_y).floor() * period_y;
+            let x1 = ((ux1 + m * uw) / period_x).ceil() * period_x;
+            let y1 = ((uy1 + m * uh) / period_y).ceil() * period_y;
             let patch = crate::policy::api::GridPatch {
                 x: x0,
                 y: y0,
@@ -2451,7 +2455,8 @@ impl WindowManager {
                 gap_right: self.layout.gap_right,
                 gap_top: self.layout.gap_top,
                 cloud_position_default: self.layout.cloud_position_default,
-                desktop_grid_scale: self.layout.desktop_grid_scale,
+                desktop_cell_w: self.layout.desktop_cell_width,
+                desktop_cell_h: self.layout.desktop_cell_height,
                 desktop_gap_width: self.layout.desktop_gap_width as f64,
                 desktop_cell_inset: self.layout.desktop_cell_fade_inset as f64,
             },
@@ -3770,7 +3775,8 @@ impl WindowManager {
                 let (x, y, _, _) = crate::policy::cells::square_rect(
                     col,
                     row,
-                    sp.cell_size,
+                    sp.cell_w,
+                    sp.cell_h,
                     sp.gap_width,
                     sp.cell_inset,
                 );
@@ -3788,7 +3794,8 @@ impl WindowManager {
                     y,
                     (*target).box_geom.width as f64,
                     (*target).box_geom.height as f64,
-                    sp.cell_size,
+                    sp.cell_w,
+                    sp.cell_h,
                     sp.gap_width,
                 );
                 format!("ok cell={} vx={:.1} vy={:.1}\n", cell, x, y)
@@ -4009,7 +4016,8 @@ impl WindowManager {
                             (*w).virtual_y,
                             (*w).box_geom.width as f64,
                             (*w).box_geom.height as f64,
-                            sp.cell_size,
+                            sp.cell_w,
+                            sp.cell_h,
                             sp.gap_width,
                         );
                         if as_json {
@@ -4086,9 +4094,20 @@ impl WindowManager {
                     "desktop_cell_color" => {
                         self.layout.desktop_cell_color = crate::config::parse_hex_color_rgba(val);
                     }
-                    "desktop_grid_scale" => {
+                    "desktop_grid_scale" | "grid_cell_size" => {
                         if let Ok(v) = val.parse::<f64>() {
-                            self.layout.desktop_grid_scale = v;
+                            self.layout.desktop_cell_width = v;
+                            self.layout.desktop_cell_height = v;
+                        }
+                    }
+                    "grid_cell_width" => {
+                        if let Ok(v) = val.parse::<f64>() {
+                            self.layout.desktop_cell_width = v;
+                        }
+                    }
+                    "grid_cell_height" => {
+                        if let Ok(v) = val.parse::<f64>() {
+                            self.layout.desktop_cell_height = v;
                         }
                     }
                     "desktop_gap_width" => {

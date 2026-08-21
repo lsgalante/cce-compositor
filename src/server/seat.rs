@@ -1320,11 +1320,11 @@ impl Seat {
                         // through snap::resize_axis.
                         let new_w = crate::policy::snap::resize_axis(
                             op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
-                            edges.left, edges.right, 50.0, &sp,
+                            edges.left, edges.right, 50.0, &sp.x(),
                         ) as u32;
                         let new_h = crate::policy::snap::resize_axis(
                             op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
-                            edges.top, edges.bottom, 50.0, &sp,
+                            edges.top, edges.bottom, 50.0, &sp.y(),
                         ) as u32;
 
                         (*win).virtual_x = vx;

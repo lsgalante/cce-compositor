@@ -52,7 +52,11 @@ pub struct Layout {
     pub transparency_opacity: f32,
     pub window_opacity: bool,
     pub desktop_cell_color: [f32; 4],
-    pub desktop_grid_scale: f64,
+    /// Desktop grid cell width/height in virtual units (each axis's period
+    /// is cell + gap). Config: `grid_cell_width` / `grid_cell_height`, with
+    /// the legacy `grid_cell_size` setting both.
+    pub desktop_cell_width: f64,
+    pub desktop_cell_height: f64,
     pub desktop_gap_width: i32,
     /// Grid-line lip width in logical px; None = follow the DE-wide relief
     /// material (bevel_thickness clamped to the rail), 0 = no lip.
@@ -121,7 +125,8 @@ impl Layout {
         BackgroundSpec::Grid(GridSpec {
             gap_color: Rgba(parse_hex_color_rgba(&self.desktop_gap_color)),
             cell_color: Rgba(self.desktop_cell_color),
-            cell_size: self.desktop_grid_scale,
+            cell_w: self.desktop_cell_width,
+            cell_h: self.desktop_cell_height,
             gap_width: self.desktop_gap_width as f64,
             // Cells inherit the window backplate radius: a tiled window's
             // content covers exactly the visible cell box, so its arc sits
@@ -136,7 +141,8 @@ impl Layout {
     /// disabled) makes every snap function a no-op.
     pub fn snap_params(&self) -> crate::policy::snap::SnapParams {
         crate::policy::snap::SnapParams {
-            cell_size: self.desktop_grid_scale,
+            cell_w: self.desktop_cell_width,
+            cell_h: self.desktop_cell_height,
             gap_width: self.desktop_gap_width as f64,
             cell_inset: self.desktop_cell_fade_inset as f64,
             threshold: if self.desktop_snap { self.desktop_snap_threshold } else { 0.0 },
@@ -185,7 +191,8 @@ impl Default for Layout {
             transparency_opacity: 0.9,
             window_opacity: true,
             desktop_cell_color: [0.05, 0.05, 0.05, 0.05],
-            desktop_grid_scale: 100.0,
+            desktop_cell_width: 100.0,
+            desktop_cell_height: 100.0,
             desktop_gap_width: 1,
             desktop_line_relief: None,
             desktop_cell_fade_inset: 0,
@@ -397,6 +404,12 @@ pub struct SurfaceConfig {
     pub desktop_cell_color: String,
     #[serde(default = "default_desktop_grid_scale")]
     pub desktop_grid_scale: i64,
+    /// Per-axis cell sizes; None falls back to `desktop_grid_scale`
+    /// (the legacy square `grid_cell_size`).
+    #[serde(default)]
+    pub grid_cell_width: Option<i64>,
+    #[serde(default)]
+    pub grid_cell_height: Option<i64>,
     #[serde(default = "default_desktop_gap_width")]
     pub desktop_gap_width: i64,
     /// Negative = unset (follow the DE-wide relief material).
@@ -507,6 +520,8 @@ impl Default for SurfaceConfig {
             desktop_gap_color: default_desktop_gap_color(),
             desktop_cell_color: default_desktop_cell_color(),
             desktop_grid_scale: default_desktop_grid_scale(),
+            grid_cell_width: None,
+            grid_cell_height: None,
             desktop_gap_width: default_desktop_gap_width(),
             desktop_line_relief: default_desktop_line_relief(),
             desktop_cell_fade_inset: default_desktop_cell_fade_inset(),
@@ -1794,6 +1809,16 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.desktop_grid_scale = val;
                                         }
                                     }
+                                    "grid_cell_width" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.grid_cell_width = Some(val);
+                                        }
+                                    }
+                                    "grid_cell_height" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.grid_cell_height = Some(val);
+                                        }
+                                    }
                                     "snap" => {
                                         if let Some(val) = entry.value().as_bool() {
                                             surface.desktop_snap = val;
@@ -2017,6 +2042,14 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.desktop_gap_color = get_child_arg_string(node, "desktop_gap_color", &default_desktop_gap_color());
             surface.desktop_cell_color = get_child_arg_string(node, "desktop_cell_color", &default_desktop_cell_color());
             surface.desktop_grid_scale = get_child_arg_i64(node, "grid_cell_size", get_child_arg_i64(node, "desktop_grid_scale", default_desktop_grid_scale()));
+            surface.grid_cell_width = match get_child_arg_i64(node, "grid_cell_width", i64::MIN) {
+                i64::MIN => None,
+                v => Some(v),
+            };
+            surface.grid_cell_height = match get_child_arg_i64(node, "grid_cell_height", i64::MIN) {
+                i64::MIN => None,
+                v => Some(v),
+            };
             surface.desktop_gap_width = get_child_arg_i64(node, "desktop_gap_width", default_desktop_gap_width());
             surface.desktop_cell_fade_inset = get_child_arg_i64(node, "desktop_cell_fade_inset", default_desktop_cell_fade_inset());
             surface.desktop_grid_fade_mode = get_child_arg_string(node, "grid_fade_mode", &default_desktop_grid_fade_mode());
@@ -2193,7 +2226,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.background_a = 0xFFFFFFFF;
 
     state.layout.desktop_cell_color = parse_hex_color_rgba(&config.surface.desktop_cell_color);
-    state.layout.desktop_grid_scale = config.surface.desktop_grid_scale as f64;
+    state.layout.desktop_cell_width =
+        config.surface.grid_cell_width.unwrap_or(config.surface.desktop_grid_scale) as f64;
+    state.layout.desktop_cell_height =
+        config.surface.grid_cell_height.unwrap_or(config.surface.desktop_grid_scale) as f64;
     state.layout.desktop_snap = config.surface.desktop_snap;
     state.layout.overview_anim = if config.surface.desktop_overview_ramp.is_empty() {
         None

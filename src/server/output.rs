@@ -953,7 +953,7 @@ impl Output {
                         // and a tiled window's (widened) arc must land on
                         // the cell's arc.
                         let cell_radius = crate::window::widen_corner_radius(
-                            cells.corner_radius_px, cells.cell_px, cells.cell_px,
+                            cells.corner_radius_px, cells.cell_w_px, cells.cell_h_px,
                         );
                         // The backplate-edge roll (mirroring cce-grid): the
                         // bevel-width knob clamped to a fraction of the
@@ -964,14 +964,17 @@ impl Output {
                         // width outright (0 = no lip). The ring expands the
                         // cell box by the roll, inner edge concentric with
                         // the cell arc.
-                        let gap_px = (frame.period_px_exact - cells.cell_px as f64).max(0.0);
+                        let gap_px = (frame.period_px_exact_x - cells.cell_w_px as f64)
+                            .min(frame.period_px_exact_y - cells.cell_h_px as f64)
+                            .max(0.0);
                         let roll = layout
                             .desktop_line_relief
                             .map(|v| v * zoom)
                             .unwrap_or_else(|| (layout.bevel_thickness as f64 * zoom).min(gap_px * 0.25))
                             .max(0.0);
                         let hg = roll.round() as i32;
-                        let ring_px = cells.cell_px + 2 * hg;
+                        let ring_w_px = cells.cell_w_px + 2 * hg;
+                        let ring_h_px = cells.cell_h_px + 2 * hg;
                         let ring_radius = cell_radius + hg;
                         // Cell positions from the EXACT period, rounded per
                         // cell: a rounded-period spacing drifts from the
@@ -979,12 +982,12 @@ impl Output {
                         // grid visibly slides against window edges when
                         // panning).
                         for col in 0..=cells.cols {
-                            let rel_x = (col as f64 * frame.period_px_exact).round() as i32;
+                            let rel_x = (col as f64 * frame.period_px_exact_x).round() as i32;
                             for row in 0..=cells.rows {
-                                let rel_y = (row as f64 * frame.period_px_exact).round() as i32;
-                                get_rect(cells.cell_px, cells.cell_px, cells.color.0.as_ptr(), rel_x, rel_y, cell_radius, inset_scaled);
+                                let rel_y = (row as f64 * frame.period_px_exact_y).round() as i32;
+                                get_rect(cells.cell_w_px, cells.cell_h_px, cells.color.0.as_ptr(), rel_x, rel_y, cell_radius, inset_scaled);
                                 if bevel_on && hg > 0 {
-                                    get_bevel(ring_px, ring_px, rel_x - hg, rel_y - hg, ring_radius, roll as f32);
+                                    get_bevel(ring_w_px, ring_h_px, rel_x - hg, rel_y - hg, ring_radius, roll as f32);
                                 }
                             }
                         }
@@ -1061,8 +1064,9 @@ impl Output {
         // A fixed fraction of the on-screen cell, clamped so labels stay
         // readable when zoomed far out and don't swell into billboards when
         // near. Below the floor there is no room for glyphs at all.
-        let px = ((cells.cell_px as f32) * 0.16).clamp(9.0, 40.0);
-        if px * 3.0 > cells.cell_px as f32 {
+        let min_cell_px = cells.cell_w_px.min(cells.cell_h_px);
+        let px = ((min_cell_px as f32) * 0.16).clamp(9.0, 40.0);
+        if px * 3.0 > min_cell_px as f32 {
             self.disable_cell_labels();
             return;
         }
@@ -1078,12 +1082,12 @@ impl Output {
             }
         }
 
-        let inset = (cells.cell_px as f64 * 0.06).round() as i32;
+        let inset = (min_cell_px as f64 * 0.06).round() as i32;
         let mut idx = 0usize;
         for col in 0..=cells.cols {
-            let rel_x = (col as f64 * frame.period_px_exact).round() as i32;
+            let rel_x = (col as f64 * frame.period_px_exact_x).round() as i32;
             for row in 0..=cells.rows {
-                let rel_y = (row as f64 * frame.period_px_exact).round() as i32;
+                let rel_y = (row as f64 * frame.period_px_exact_y).round() as i32;
                 let text = crate::policy::cells::square_label(
                     frame.first_col + col,
                     frame.first_row + row,
