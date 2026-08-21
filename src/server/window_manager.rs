@@ -4073,6 +4073,7 @@ impl WindowManager {
                 if parts.len() < 3 { return "error: missing layout key or value\n".to_string(); }
                 let key = parts[1];
                 let val = parts[2];
+                let old_sp = self.layout.snap_params();
                 match key {
                     "desktop_gap_color" => {
                         self.layout.desktop_gap_color = val.to_string();
@@ -4139,6 +4140,7 @@ impl WindowManager {
                     "side_panel_border_gap" | "pinned_border_gap" | "overlay_border_gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.overlay_border_gap = v; } }
                     _ => return format!("error: unknown layout key: {}\n", key),
                 }
+                self.retile_for_grid_change(old_sp);
                 self.dirty_windowing();
                 "ok\n".to_string()
             }
@@ -4454,8 +4456,60 @@ impl WindowManager {
         }
     }
 
+    /// Re-tile every Tiled window after a grid-geometry change (cell
+    /// sizes, gap, or fade inset): each window keeps its BLOCK of squares
+    /// (`cells::remap_block`), so it resizes with the grid instead of
+    /// keeping its old pixel box and later spanning whatever new cells that
+    /// box happens to touch. A window under an active seat op is left
+    /// alone — the op owns its geometry until release. No-op when the
+    /// geometry is unchanged.
+    pub unsafe fn retile_for_grid_change(&mut self, old: crate::policy::snap::SnapParams) {
+        let new = self.layout.snap_params();
+        if old.cell_w == new.cell_w
+            && old.cell_h == new.cell_h
+            && old.gap_width == new.gap_width
+            && old.cell_inset == new.cell_inset
+        {
+            return;
+        }
+        let op_win = self
+            .first_seat()
+            .and_then(|s| (*s).op.as_ref().map(|op| op.window_ptr))
+            .unwrap_or(std::ptr::null_mut());
+        let wins: Vec<*mut crate::window::Window> = self.windows.iter().copied().collect();
+        for w in wins {
+            if w.is_null() || (*w).closed || w == op_win {
+                continue;
+            }
+            if !matches!((*w).state, crate::window::WindowState::Mapped) {
+                continue;
+            }
+            if self.get_mode_for_window(w) != crate::tiling::TilingMode::Tiled {
+                continue;
+            }
+            let (nx, ny, nw, nh) = crate::policy::cells::remap_block(
+                (*w).virtual_x,
+                (*w).virtual_y,
+                (*w).box_geom.width as f64,
+                (*w).box_geom.height as f64,
+                &old,
+                &new,
+            );
+            (*w).virtual_x = nx;
+            (*w).virtual_y = ny;
+            (*w).box_geom.width = nw.round() as i32;
+            (*w).box_geom.height = nh.round() as i32;
+            // The saved floating spot follows like move-window: a later
+            // Tiled -> Floating exit restores at the remapped square rather
+            // than yanking the window back across the resized grid.
+            (*w).saved_floating_virtual_x = nx;
+            (*w).saved_floating_virtual_y = ny;
+        }
+    }
+
     pub unsafe fn reload_config(&mut self) -> Result<(), String> {
         if let Some(path) = crate::config::default_config_path() {
+            let old_sp = self.layout.snap_params();
             let old_pids = std::mem::take(&mut self.startup_pids);
             match crate::config::parse_config(&path, self) {
                 Ok(()) => {
@@ -4479,6 +4533,7 @@ impl WindowManager {
                         link = (*link).next;
                     }
 
+                    self.retile_for_grid_change(old_sp);
                     self.dirty_windowing();
 
                     // Process old PIDs
