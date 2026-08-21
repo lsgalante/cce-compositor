@@ -826,6 +826,13 @@ impl Seat {
         if self.suppress_focus_pan {
             return;
         }
+        // While a camera ramp owns the camera (an overview enter/exit
+        // flight), the current camera is a mid-flight sample — any pan
+        // target computed from it is stale by construction. Never retarget
+        // out from under the ramp.
+        if (*self.server).wm.camera_ramp_anim.is_some() {
+            return;
+        }
         if window.is_null()
             || !matches!(
                 (*window).tiling_mode,
@@ -886,10 +893,11 @@ impl Seat {
 
             let wm = &mut (*self.server).wm;
             let cam = wm.camera();
-            // fw/fh are screen px; the window's virtual
-            // footprint is that over zoom.
-            let vw_w = fw / cam.zoom;
-            let vw_h = fh / cam.zoom;
+            // box_geom is already virtual units (its screen footprint is
+            // box_geom * zoom) — dividing by zoom here inflated the window
+            // whenever zoom != 1 and mistargeted the pan.
+            let vw_w = fw;
+            let vw_h = fh;
             let visible = crate::policy::camera::visible_fraction(
                 (*window).virtual_x,
                 (*window).virtual_y,
@@ -1471,10 +1479,13 @@ impl Seat {
                 // sliver at the screen edge, it is easy to land on the
                 // border band instead, focus the window, and see nothing
                 // happen. Restore the pan for taps; real drags (any actual
-                // motion) keep the camera still.
+                // motion) keep the camera still. An overview tap is
+                // excluded: its release already launched the exit flight
+                // centered on this window, and a second pan computed from
+                // the still-overview camera drags that flight off target.
                 let dx = (op.x - op.start_x).abs();
                 let dy = (op.y - op.start_y).abs();
-                if dx < 4 && dy < 4 {
+                if dx < 4 && dy < 4 && !op.started_in_overview {
                     self.focus_follow_pan(win);
                 }
             }
