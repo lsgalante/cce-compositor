@@ -952,6 +952,22 @@ unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, dat
     cursor.passthrough((*event).time_msec);
 }
 
+/// True when the layer surface's namespace marks it as cce-cloud chrome —
+/// the launcher and the desktop/app context menus. These are screen-anchored
+/// popups that stay interactive during overview and dismiss on click-away.
+unsafe fn is_cloud_layer(layer_surface: *mut crate::layer_shell::LayerSurface) -> bool {
+    if layer_surface.is_null() {
+        return false;
+    }
+    let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
+    if wlr_layer_surface.is_null() || (*wlr_layer_surface).namespace.is_null() {
+        return false;
+    }
+    std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace)
+        .to_string_lossy()
+        .starts_with("cce-cloud")
+}
+
 unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, button_listener);
     let event = data as *mut ffi::wlr_pointer_button_event;
@@ -986,12 +1002,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             SceneNodeDataVal::LayerSurface(layer_surface) => {
                 if !layer_surface.is_null() {
                     is_app_surface = true;
-                    let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
-                    if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
-                        let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-                        if ns.starts_with("cce-cloud") {
-                            is_overlay_window = true;
-                        }
+                    if is_cloud_layer(layer_surface) {
+                        is_overlay_window = true;
                     }
                 }
             }
@@ -1104,9 +1116,14 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         // --- ZOOMED OUT CLICK HANDLING ---
         if (*event).button == 0x110 && (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
             let mut clicked_win: *mut crate::window::Window = std::ptr::null_mut();
+            let mut clicked_cloud_layer = false;
             if let Some(result) = (*server).scene.at(lx, ly) {
-                if let SceneNodeDataVal::Window(window) = result.data {
-                    clicked_win = window;
+                match result.data {
+                    SceneNodeDataVal::Window(window) => clicked_win = window,
+                    SceneNodeDataVal::LayerSurface(layer_surface) => {
+                        clicked_cloud_layer = is_cloud_layer(layer_surface);
+                    }
+                    _ => {}
                 }
             }
 
@@ -1116,14 +1133,17 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             // whole window; true background presses exit overview.
             //
             // Chrome windows (Overlay docks, Popup surfaces like the
-            // cce-cloud launcher) are neither: they stay interactive UI
-            // during overview, so their presses fall through to the normal
-            // path (focus + delivery to the app) and overview stays up.
-            let overview_chrome = !clicked_win.is_null()
-                && matches!(
-                    (*clicked_win).tiling_mode,
-                    crate::tiling::TilingMode::Overlay | crate::tiling::TilingMode::Popup
-                );
+            // cce-cloud launcher) and cce-cloud layer surfaces (launcher,
+            // desktop/app context menus) are neither: they stay
+            // interactive UI during overview, so their presses fall
+            // through to the normal path (focus + delivery to the app)
+            // and overview stays up.
+            let overview_chrome = clicked_cloud_layer
+                || (!clicked_win.is_null()
+                    && matches!(
+                        (*clicked_win).tiling_mode,
+                        crate::tiling::TilingMode::Overlay | crate::tiling::TilingMode::Popup
+                    ));
             let overview_win_valid = !clicked_win.is_null()
                 && !(*clicked_win).is_status_bar()
                 && !(*clicked_win).is_wallpaper();
@@ -1165,6 +1185,23 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
                 return;
             } else if !overview_win_valid {
+                // Click-away with a cce-cloud popup open (desktop context
+                // menu, launcher): the press dismisses the popup and does
+                // nothing else — overview stays up. Dropping keyboard focus
+                // IS the dismissal: cce-cloud closes itself on keyboard
+                // leave, the same signal a normal-mode click-away produces
+                // through its focus change.
+                if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) =
+                    seat.layer_shell.scheduled_focus
+                {
+                    if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
+                        if is_cloud_layer(layer_surface) {
+                            seat.focus(Focus::None);
+                            cursor.pressed.insert((*event).button, None);
+                            return;
+                        }
+                    }
+                }
                 cursor.left_click_on_bg_in_overview = true;
                 (*server).wm.execute_action(&crate::config::Action::Overview, None);
                 cursor.pressed.insert((*event).button, None);
@@ -2095,12 +2132,8 @@ unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *m
             SceneNodeDataVal::LayerSurface(layer_surface) => {
                 if !layer_surface.is_null() {
                     is_app_surface = true;
-                    let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
-                    if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
-                        let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-                        if ns.starts_with("cce-cloud") {
-                            is_overlay_window = true;
-                        }
+                    if is_cloud_layer(layer_surface) {
+                        is_overlay_window = true;
                     }
                 }
             }
