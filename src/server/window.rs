@@ -381,9 +381,10 @@ pub struct Window {
     pub mode_locked: bool,
     pub is_new: bool,
     pub restored: bool,
-    /// Placed at map by a one-shot `place-next` hint (widget-spawned picker
-    /// opening at its control): suppresses the spawn viewport pan — the
-    /// window is already where the user is looking.
+    /// Position was decided at map time rather than by history: a one-shot
+    /// `place-next` hint (widget-spawned picker opening at its control) or a
+    /// view-centered session modal. Either way it suppresses the spawn
+    /// viewport pan — the window is already where the user is looking.
     pub hint_placed: bool,
     /// True only when the restored geometry came out of the startup restore queue
     /// (`state.json`'s window list). A window reopened later in the session matches
@@ -1032,6 +1033,42 @@ impl Window {
     /// `try_restore` so the remembered SIZE is kept — only the position is
     /// overridden — and marks `hint_placed` so the spawn viewport pan is
     /// skipped (the window is already under the user's pointer).
+    /// Layout box of the first enabled output — `(phys_x, phys_y, width,
+    /// height)`, the viewport every placement decision is measured against.
+    /// Falls back to a 1920x1080 box at the origin before any output is up.
+    unsafe fn first_enabled_output_box(&self) -> (f64, f64, f64, f64) {
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                let b = (*output).sent.box_layout();
+                return (b.x as f64, b.y as f64, b.width as f64, b.height as f64);
+            }
+            curr_out = (*curr_out).next;
+        }
+        (0.0, 0.0, 1920.0, 1080.0)
+    }
+
+    /// Best-known window size in VIRTUAL units at map time. `box_geom` is the
+    /// render pass's size and is only filled in once a frame has been drawn
+    /// (or by `try_restore` from the saved geometry), so a first-ever launch
+    /// falls back to the client's committed toplevel geometry.
+    unsafe fn mapped_size_hint(&self) -> (f64, f64) {
+        if self.box_geom.width > 0 && self.box_geom.height > 0 {
+            return (self.box_geom.width as f64, self.box_geom.height as f64);
+        }
+        if let WindowImpl::Toplevel(toplevel) = self.impl_type {
+            if !toplevel.is_null() {
+                let g = (*toplevel).geometry;
+                if g.width > 0 && g.height > 0 {
+                    return (g.width as f64, g.height as f64);
+                }
+            }
+        }
+        (400.0, 400.0)
+    }
+
     unsafe fn try_hint_placement(&mut self) {
         // Utility included: the hint moves only the POSITION, which a utility
         // window does not own — only its size is the client's.
@@ -1049,45 +1086,88 @@ impl Window {
             return;
         };
 
-        // First enabled output's layout box (the center-window fallback).
-        let (mut vp_w, mut vp_h) = (1920.0_f64, 1080.0_f64);
-        let (mut phys_x, mut phys_y) = (0i32, 0i32);
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-        while curr_out != outputs_list {
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                let wlr_box = (*output).sent.box_layout();
-                vp_w = wlr_box.width as f64;
-                vp_h = wlr_box.height as f64;
-                phys_x = wlr_box.x;
-                phys_y = wlr_box.y;
-                break;
-            }
-            curr_out = (*curr_out).next;
-        }
+        let (phys_x, phys_y, vp_w, vp_h) = self.first_enabled_output_box();
 
         let wm = &(*self.server).wm;
         let zoom = wm.desk_zoom.max(0.01);
-        let w = if self.box_geom.width > 0 { self.box_geom.width as f64 } else { 400.0 } * zoom;
-        let h = if self.box_geom.height > 0 { self.box_geom.height as f64 } else { 400.0 } * zoom;
+        let (vw, vh) = self.mapped_size_hint();
+        let (w, h) = (vw * zoom, vh * zoom);
 
         const OFFSET: f64 = 12.0; // context-menu-style drop below-right of the control
         const MARGIN: f64 = 8.0;
         let sx = (hx + OFFSET)
-            .min(phys_x as f64 + vp_w - w - MARGIN)
-            .max(phys_x as f64 + MARGIN);
+            .min(phys_x + vp_w - w - MARGIN)
+            .max(phys_x + MARGIN);
         let sy = (hy + OFFSET)
-            .min(phys_y as f64 + vp_h - h - MARGIN)
-            .max(phys_y as f64 + MARGIN);
+            .min(phys_y + vp_h - h - MARGIN)
+            .max(phys_y + MARGIN);
 
         // screen = phys + (virtual - desk_pan) * zoom  →  invert for virtual.
-        self.virtual_x = wm.desk_pan_x + (sx - phys_x as f64) / zoom;
-        self.virtual_y = wm.desk_pan_y + (sy - phys_y as f64) / zoom;
+        self.virtual_x = wm.desk_pan_x + (sx - phys_x) / zoom;
+        self.virtual_y = wm.desk_pan_y + (sy - phys_y) / zoom;
         self.hint_placed = true;
         log::info!(
             "place-next hint applied: app_id={} screen=({:.0},{:.0}) virtual=({:.1},{:.1})",
             app_id, sx, sy, self.virtual_x, self.virtual_y
+        );
+    }
+
+    /// Open a session modal in the middle of what the user is looking at,
+    /// ignoring wherever it last sat.
+    ///
+    /// On a panning desktop a remembered position is actively wrong for these
+    /// windows: the camera has almost always moved since the last time, so
+    /// the window maps somewhere off-view and the prompt reads as never
+    /// having appeared — which for the polkit agent means the privileged
+    /// action silently times out.
+    ///
+    /// Runs after `try_restore`, so the remembered SIZE is still available
+    /// and only the position is overridden — the same split
+    /// `try_hint_placement` uses — and marks `hint_placed` so the spawn
+    /// viewport pan is skipped: the window is already centered in view, and
+    /// panning the camera to it would move the desktop out from under the
+    /// user for a dialog that is about to close again.
+    /// Windows that open centered on the current view rather than wherever
+    /// they last were: DE session modals whose whole job is to interrupt, and
+    /// which the user must be able to answer immediately.
+    ///
+    /// Hardcoded by app_id like the compositor's other DE-internal window
+    /// classes (`cce-status*`/`cce-wallpaper`/`cce-grid` in `try_restore`,
+    /// `cce-notifier`/`cce-cloud` in `get_mode_for_window`). The config's
+    /// per-app window rules assign a tiling MODE, not a placement, so there
+    /// is nothing there to hang this off yet.
+    fn is_view_centered_modal(app_id: &str) -> bool {
+        app_id == "cce-authenticator"
+    }
+
+    unsafe fn try_center_on_view(&mut self) {
+        let app_id = self.get_app_id_string().unwrap_or_default();
+        if !Self::is_view_centered_modal(&app_id) {
+            return;
+        }
+
+        // Whatever history says, a modal has to be visible and free-floating:
+        // a restored Tiled mode would re-snap it onto a grid cell (undoing
+        // the centering) and a restored `minimized` would hide the prompt
+        // outright. `mode_locked` is the "explicit beats heuristic" latch, so
+        // the arrange pass cannot geometrically re-promote it either.
+        self.tiling_mode = crate::tiling::TilingMode::Floating;
+        self.mode_locked = true;
+        self.minimized = false;
+
+        let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
+        let wm = &(*self.server).wm;
+        let zoom = wm.desk_zoom.max(0.01);
+        let (w, h) = self.mapped_size_hint();
+
+        // Policy owns the camera math; the output's origin cancels out of the
+        // centering, so only the extent is needed per axis.
+        self.virtual_x = crate::policy::camera::centered_window_origin(wm.desk_pan_x, vp_w, zoom, w);
+        self.virtual_y = crate::policy::camera::centered_window_origin(wm.desk_pan_y, vp_h, zoom, h);
+        self.hint_placed = true;
+        log::info!(
+            "view-centered modal: app_id={} size=({:.0}x{:.0}) zoom={:.2} virtual=({:.1},{:.1})",
+            app_id, w, h, zoom, self.virtual_x, self.virtual_y
         );
     }
 
@@ -1103,6 +1183,9 @@ impl Window {
 
         self.try_restore();
         self.try_hint_placement();
+        // Last: a session modal's placement is not negotiable, so it wins
+        // over both the remembered geometry and any stale place-next hint.
+        self.try_center_on_view();
 
         let surface = self.root_surface();
         if !surface.is_null() {
