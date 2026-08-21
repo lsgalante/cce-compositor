@@ -2080,9 +2080,38 @@ impl WindowManager {
         // scale so a buffer px is a NATIVE px at the quantized zoom — at
         // scale 2 an unscaled patch is magnified 2x on screen, which turns
         // every cell edge into 2px staircase blocks.
-        let q = (2f64).powf(zoom.log2().round()).clamp(0.125, 2.0) * out_scale;
+        //
+        // Quantized from the DESTINATION zoom while a camera flight is in
+        // progress: quantizing from the interpolated zoom issued the
+        // mid-flight patch at the flight's own resolution (overview exit
+        // crossed the drift ceiling near zoom 0.5 → a q=1 patch) which then
+        // RESTED at display factor 2.0 — just inside the permissive drift
+        // window — so the grid stayed 2x-magnified after every overview
+        // round trip, and the latch landing at the animation's end read as
+        // the grid "readjusting". A target-quantized patch still swaps
+        // mid-flight, but lands the final content once, and enter flights
+        // reach the overview resolution in one hop instead of two.
+        let q_zoom = crate::policy::background::sanitized_zoom(
+            self.camera_ramp_anim
+                .as_ref()
+                .map(|a| a.target.zoom)
+                .or(self.target_desk_zoom)
+                .unwrap_or(self.desk_zoom),
+        );
+        let q = (2f64).powf(q_zoom.log2().round()).clamp(0.125, 2.0) * out_scale;
         let period = self.layout.desktop_grid_scale
             + (self.layout.desktop_gap_width as f64).max(0.0);
+        // Resolution drift tolerance: permissive while the camera is moving
+        // (a giant re-render per animation frame would be worse than a bit
+        // of scaling), but at REST the patch must sit within the pow2
+        // half-step band around exact — the safety net that re-patches any
+        // path that settles mis-resolved. The band includes 1.414 (a zoom
+        // exactly on a half-step boundary re-quantizes to the same q), so
+        // a settled repatch can never loop.
+        let in_flight = self.viewport_is_active
+            || self.camera_ramp_anim.is_some()
+            || self.target_desk_zoom.is_some();
+        let (disp_lo, disp_hi) = if in_flight { (0.5, 2.01) } else { (0.70, 1.42) };
         let covers = |p: &crate::policy::api::GridPatch| -> bool {
             let mx = vw * 0.15;
             let my = vh * 0.15;
@@ -2095,8 +2124,8 @@ impl WindowManager {
                 && p.y <= vy - my
                 && p.x + p.w >= vx + vw + mx
                 && p.y + p.h >= vy + vh + my
-                && disp > 0.5
-                && disp < 2.01
+                && disp > disp_lo
+                && disp < disp_hi
         };
         for &w in self.windows.iter() {
             if w.is_null() || (*w).closed || !(*w).is_grid() {
