@@ -538,6 +538,42 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     if let Some((serial, patch)) = (*window).grid_patch_acked.take() {
         log::info!("[Grid] latched patch #{serial} on commit");
         (*window).grid_patch_current = Some(patch);
+        // The commit swaps the BUFFER in the scene immediately, but the
+        // anchor (position/scale/box) otherwise waits for the next arrange
+        // pass — up to a frame of the new buffer drawn at the OLD patch's
+        // anchor, the occasional one-frame cell flicker at a patch swap.
+        // Apply the new anchor inline, mirroring the arrange Grid arm
+        // exactly (virtual_to_screen's truncating cast included); the next
+        // arrange re-affirms the same values.
+        {
+            let wm = &(*(*window).server).wm;
+            let zoom = crate::policy::background::sanitized_zoom(wm.desk_zoom);
+            let (mut ox, mut oy) = (0i32, 0i32);
+            let outputs_list = &(*(*window).server).om.outputs as *const ffi::wl_list
+                as *mut WlList;
+            let mut curr_out = (*outputs_list).next;
+            while curr_out != outputs_list {
+                let output = crate::container_of!(curr_out, crate::output::Output, link);
+                if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                    let b = (*output).sent.box_layout();
+                    ox = b.x;
+                    oy = b.y;
+                    break;
+                }
+                curr_out = (*curr_out).next;
+            }
+            if patch.scale > 0.0 {
+                let sx = ox + ((patch.x - wm.desk_pan_x) * zoom) as i32;
+                let sy = oy + ((patch.y - wm.desk_pan_y) * zoom) as i32;
+                (*window).rendering_requested.x = sx;
+                (*window).rendering_requested.y = sy;
+                (*window).scale = zoom / patch.scale;
+                (*window).box_geom.x = sx;
+                (*window).box_geom.y = sy;
+                (*window).box_geom.width = (patch.w * patch.scale).round() as i32;
+                (*window).box_geom.height = (patch.h * patch.scale).round() as i32;
+            }
+        }
         // The grid sits in the optimized-blur capture set (backdrop layers):
         // new patch content invalidates the shared blurred-backdrop cache,
         // which nothing else re-bakes when the latch lands after the

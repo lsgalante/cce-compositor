@@ -2075,57 +2075,142 @@ impl WindowManager {
         let vw = out.width as f64 / zoom;
         let vh = out.height as f64 / zoom;
         let (vx, vy) = (self.desk_pan_x, self.desk_pan_y);
-        // Buffer px per virtual unit: zoom quantized to a power of two so
-        // small zoom wobbles don't re-render the world, times the output
-        // scale so a buffer px is a NATIVE px at the quantized zoom — at
-        // scale 2 an unscaled patch is magnified 2x on screen, which turns
-        // every cell edge into 2px staircase blocks.
-        //
-        // Quantized from the DESTINATION zoom while a camera flight is in
-        // progress: quantizing from the interpolated zoom issued the
-        // mid-flight patch at the flight's own resolution (overview exit
-        // crossed the drift ceiling near zoom 0.5 → a q=1 patch) which then
-        // RESTED at display factor 2.0 — just inside the permissive drift
-        // window — so the grid stayed 2x-magnified after every overview
-        // round trip, and the latch landing at the animation's end read as
-        // the grid "readjusting". A target-quantized patch still swaps
-        // mid-flight, but lands the final content once, and enter flights
-        // reach the overview resolution in one hop instead of two.
+
+        // The camera flight's destination, if one is running: the ramp
+        // animation's target (overview enter/exit), else the exponential
+        // pan/zoom targets. Patches anticipate the destination — coverage
+        // spans the union of the current and target viewports, and the
+        // resolution quantizes for the destination — so a flight needs ONE
+        // patch that is already correct when it lands, instead of chasing
+        // the interpolated camera (which exposed cell-less backdrop at the
+        // leading edge of an overview enter, and left overview exits
+        // resting 2x-magnified with the swap landing at the animation's
+        // end as a visible readjust).
+        let target_cam: Option<crate::policy::camera::Camera> = self
+            .camera_ramp_anim
+            .as_ref()
+            .map(|a| a.target)
+            .or_else(|| {
+                if self.target_desk_pan_x.is_some()
+                    || self.target_desk_pan_y.is_some()
+                    || self.target_desk_zoom.is_some()
+                {
+                    Some(crate::policy::camera::Camera {
+                        pan_x: self.target_desk_pan_x.unwrap_or(self.desk_pan_x),
+                        pan_y: self.target_desk_pan_y.unwrap_or(self.desk_pan_y),
+                        zoom: crate::policy::background::sanitized_zoom(
+                            self.target_desk_zoom.unwrap_or(self.desk_zoom),
+                        ),
+                    })
+                } else {
+                    None
+                }
+            });
+        let in_flight = self.viewport_is_active || target_cam.is_some();
+
+        // Buffer px per virtual unit: the DESTINATION zoom quantized to a
+        // power of two (small zoom wobbles don't re-render the world),
+        // times the output scale so a buffer px is a NATIVE px at that
+        // zoom — then raised in pow2 steps until the patch is also
+        // displayable at the CURRENT zoom without exceeding 2x
+        // magnification, so the swap moment never pops visibly soft.
         let q_zoom = crate::policy::background::sanitized_zoom(
-            self.camera_ramp_anim
-                .as_ref()
-                .map(|a| a.target.zoom)
-                .or(self.target_desk_zoom)
-                .unwrap_or(self.desk_zoom),
+            target_cam.map(|c| c.zoom).unwrap_or(self.desk_zoom),
         );
-        let q = (2f64).powf(q_zoom.log2().round()).clamp(0.125, 2.0) * out_scale;
+        let mut q = (2f64).powf(q_zoom.log2().round()).clamp(0.125, 2.0) * out_scale;
+        let q_max = 2.0 * out_scale;
+        while zoom * out_scale / q > 2.0 && q < q_max {
+            q = (q * 2.0).min(q_max);
+        }
         let period = self.layout.desktop_grid_scale
             + (self.layout.desktop_gap_width as f64).max(0.0);
+
+        // Target viewport (virtual units), for the union coverage below.
+        let target_rect = target_cam.map(|c| {
+            let tw = out.width as f64 / c.zoom;
+            let th = out.height as f64 / c.zoom;
+            (c.pan_x, c.pan_y, tw, th, c.zoom)
+        });
+
         // Resolution drift tolerance: permissive while the camera is moving
         // (a giant re-render per animation frame would be worse than a bit
-        // of scaling), but at REST the patch must sit within the pow2
-        // half-step band around exact — the safety net that re-patches any
-        // path that settles mis-resolved. The band includes 1.414 (a zoom
-        // exactly on a half-step boundary re-quantizes to the same q), so
-        // a settled repatch can never loop.
-        let in_flight = self.viewport_is_active
-            || self.camera_ramp_anim.is_some()
-            || self.target_desk_zoom.is_some();
-        let (disp_lo, disp_hi) = if in_flight { (0.5, 2.01) } else { (0.70, 1.42) };
+        // of scaling), but at REST the patch must sit within a band around
+        // exact — the safety net that re-patches any path that settles
+        // mis-resolved. The band includes 1.414 (a zoom exactly on a pow2
+        // half-step boundary re-quantizes to the same q, so a settled
+        // repatch can never loop) and reaches down to 0.45: an OVERSAMPLED
+        // patch renders sharp and is only a memory cost, so a flight's
+        // union patch may rest through a whole overview visit.
+        // No lower bound in flight: oversampling renders sharp (memory-only
+        // cost), and an exit-union patch is necessarily oversampled for
+        // most of the flight (issued at destination resolution while the
+        // zoom is still far out) — any in-flight floor re-sends the very
+        // patch it just issued, every animation frame, until the zoom
+        // crosses it. The rest band keeps a floor purely as the memory
+        // trigger that swaps an oversized flight patch for a right-sized
+        // one after landing somewhere it no longer suits.
+        let (disp_lo, disp_hi) = if in_flight { (0.0, 2.01) } else { (0.40, 1.42) };
         let covers = |p: &crate::policy::api::GridPatch| -> bool {
-            let mx = vw * 0.15;
-            let my = vh * 0.15;
+            // Mid-flight the comfort demand on the CURRENT viewport drops
+            // to near-bare: an exit union barely fits the buffer cap (zero
+            // slack margin), and a 0.15-viewport demand poking past it
+            // re-patched every animation frame — a 13-patch storm per
+            // overview exit. The destination side of the union carries its
+            // own comfort for the landing; full comfort applies at rest.
+            let (mx, my) = if in_flight {
+                (vw * 0.02, vh * 0.02)
+            } else {
+                (vw * 0.15, vh * 0.15)
+            };
             // Resolution drift is native px per buffer px, so the output
             // scale belongs on the zoom side — measuring against zoom
             // alone would reject every native-res patch on a scaled
             // output (display factor 0.5 at scale 2) and repatch forever.
             let disp = zoom * out_scale / p.scale;
-            p.x <= vx - mx
+            let now_ok = p.x <= vx - mx
                 && p.y <= vy - my
                 && p.x + p.w >= vx + vw + mx
                 && p.y + p.h >= vy + vh + my
                 && disp > disp_lo
-                && disp < disp_hi
+                && disp < disp_hi;
+            // Mid-flight the patch must also suit the DESTINATION (small
+            // 0.05 comfort — the union patch is sized with 0.10, so this
+            // demand always fits what was sent). A patch that fails only
+            // here keeps displaying while its replacement renders.
+            let target_ok = target_rect.map_or(true, |(tx, ty, tw, th, tz)| {
+                let tmx = tw * 0.05;
+                let tmy = th * 0.05;
+                let tdisp = tz * out_scale / p.scale;
+                // Wide lower bound: the issuance q may be raised well above
+                // the target's nominal for current-zoom displayability
+                // (deep overview enters), and a bound that rejects the
+                // patch we just issued is a re-send storm. Long-term
+                // oversampling is corrected once by the rest band.
+                p.x <= tx - tmx
+                    && p.y <= ty - tmy
+                    && p.x + p.w >= tx + tw + tmx
+                    && p.y + p.h >= ty + th + tmy
+                    && tdisp > 0.15
+                    && tdisp < 1.42
+            });
+            now_ok && target_ok
+        };
+        let explain = |tag: &str, p: &crate::policy::api::GridPatch| {
+            if std::env::var("CCE_GRID_DEBUG").is_err() {
+                return;
+            }
+            let mx = vw * 0.02;
+            let disp = zoom * out_scale / p.scale;
+            log::info!(
+                "[GridDbg] {tag} fails: z={zoom:.3} patch=({:.0},{:.0} {:.0}x{:.0} @{:.2}) now_area={} disp={disp:.2} tgt={:?}",
+                p.x, p.y, p.w, p.h, p.scale,
+                p.x <= vx - mx && p.x + p.w >= vx + vw + mx && p.y <= vy - vh * 0.02 && p.y + p.h >= vy + vh * 1.02,
+                target_rect.map(|(tx, ty, tw, th, tz)| {
+                    (p.x <= tx - tw * 0.05 && p.x + p.w >= tx + tw * 1.05
+                        && p.y <= ty - th * 0.05 && p.y + p.h >= ty + th * 1.05,
+                     tz * out_scale / p.scale)
+                }),
+            );
         };
         for &w in self.windows.iter() {
             if w.is_null() || (*w).closed || !(*w).is_grid() {
@@ -2137,38 +2222,57 @@ impl WindowManager {
             if (*w).grid_patch_current.as_ref().map_or(false, &covers) {
                 continue;
             }
+            if let Some(cur) = &(*w).grid_patch_current {
+                explain("current", cur);
+            }
             if let Some((_, pending)) = &(*w).grid_patch_pending {
                 if covers(pending) {
                     continue;
                 }
+                explain("pending", pending);
             }
             if let Some((serial, acked)) = &(*w).grid_patch_acked {
                 // Rendered but not yet committed: give it a frame.
                 let _ = (serial, acked);
                 continue;
             }
-            // Half a viewport of margin per side, shrunk if the buffer
-            // would exceed the cap; then period-aligned outward so the
-            // client draws whole cells. Margin and cap are a MEMORY knob:
-            // the client's framebuffer is (patch * q)^2 * 4B per swapchain
-            // image (q carries the output scale) — the original
-            // 3x3-viewport margin cost ~340MB per image (gigabytes with
-            // swapchain + staging), for scroll headroom that the 0.15
-            // comfort margin above rarely used.
-            // Scale-aware: at output scale 2 a native-res patch has 2x the
-            // buffer px per virtual unit, and a cap that ignored that would
-            // shrink the margin below the 0.15-viewport comfort band that
-            // covers() demands — a patch that can never cover is a repatch
-            // every arrange pass. 4096 * scale keeps the same VIRTUAL
-            // coverage (≈ 2x2 viewports) at every scale; the memory cost is
-            // the native-resolution pixels themselves.
+            // Coverage: the current viewport, unioned with the flight's
+            // destination viewport (+0.10 comfort) when one is known. Then
+            // the remaining buffer budget spreads as margin per side and
+            // the rect period-aligns outward so the client draws whole
+            // cells. Margin and cap are a MEMORY knob: the client's
+            // framebuffer is (patch * q)^2 * 4B per swapchain image (q
+            // carries the output scale) — the original 3x3-viewport margin
+            // cost ~340MB per image, for scroll headroom that the 0.15
+            // comfort margin rarely used. The cap is scale-aware (4096 *
+            // out_scale keeps the same VIRTUAL coverage at every scale) so
+            // margins can never shrink below what covers() demands.
+            let mut ux0 = vx;
+            let mut uy0 = vy;
+            let mut ux1 = vx + vw;
+            let mut uy1 = vy + vh;
+            if let Some((tx, ty, tw, th, _)) = target_rect {
+                ux0 = ux0.min(tx - 0.10 * tw);
+                uy0 = uy0.min(ty - 0.10 * th);
+                ux1 = ux1.max(tx + 1.10 * tw);
+                uy1 = uy1.max(ty + 1.10 * th);
+            }
+            let uw = ux1 - ux0;
+            let uh = uy1 - uy0;
             let max_buf: f64 = 4096.0 * out_scale;
-            let m = (((max_buf / q) - vw) / (2.0 * vw)).clamp(0.0, 0.5)
-                .min((((max_buf / q) - vh) / (2.0 * vh)).clamp(0.0, 0.5));
-            let x0 = ((vx - m * vw) / period).floor() * period;
-            let y0 = ((vy - m * vh) / period).floor() * period;
-            let x1 = ((vx + (1.0 + m) * vw) / period).ceil() * period;
-            let y1 = ((vy + (1.0 + m) * vh) / period).ceil() * period;
+            if uw * q > max_buf || uh * q > max_buf {
+                // The union doesn't fit yet (an overview exit while still
+                // zoomed far out needs a native-res patch bigger than the
+                // cap): keep displaying the old patch and retry as the
+                // viewport shrinks toward the destination.
+                continue;
+            }
+            let m = (((max_buf / q) - uw) / (2.0 * uw)).clamp(0.0, 0.5)
+                .min((((max_buf / q) - uh) / (2.0 * uh)).clamp(0.0, 0.5));
+            let x0 = ((ux0 - m * uw) / period).floor() * period;
+            let y0 = ((uy0 - m * uh) / period).floor() * period;
+            let x1 = ((ux1 + m * uw) / period).ceil() * period;
+            let y1 = ((uy1 + m * uh) / period).ceil() * period;
             let patch = crate::policy::api::GridPatch {
                 x: x0,
                 y: y0,
@@ -2363,8 +2467,18 @@ impl WindowManager {
                 ffi::wlr_scene_node_set_enabled((*output).background_rect as *mut ffi::wlr_scene_node, plan.background_rect_enabled);
             }
         }
-        if self.grid_cells_enabled != plan.grid_cells_enabled {
-            self.grid_cells_enabled = plan.grid_cells_enabled;
+        // During a camera flight the native cell lattice draws even while a
+        // client patch is latched: the fallback renders BELOW the grid
+        // client's surface, so it only shows through wherever the viewport
+        // outruns the patch — filling the leading edge of an overview enter
+        // with real cells for the frame or two the client needs to render
+        // the flight's replacement patch (backdrop-only exposure was the
+        // "cells at the bottom appear late" gap).
+        let cells_wanted = plan.grid_cells_enabled
+            || self.camera_ramp_anim.is_some()
+            || self.target_desk_zoom.is_some();
+        if self.grid_cells_enabled != cells_wanted {
+            self.grid_cells_enabled = cells_wanted;
             // The cell pools redraw only on structure changes; force one so
             // the swap (client grid <-> compositor cells) is immediate.
             for &output in &active_outputs {
