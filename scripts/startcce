@@ -23,12 +23,33 @@ export WLR_DRM_DEVICES=/dev/dri/card1
 export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.json
 
 # The compositor binary this session runs, resolved once so the server launch
-# and the client launcher written into /tmp cannot disagree. Absolute rather
-# than leaning on the PATH set above: this is the one process a session cannot
+# and the generated client launcher cannot disagree. Absolute rather than
+# leaning on the PATH set above: this is the one process a session cannot
 # recover from failing to find. $HOME is guaranteed — cce-display-manager sets
 # it explicitly when it execs this script, and the config read below already
 # depends on it.
 CCE_BIN="$HOME/.local/bin/cce"
+
+# Session runtime files: per-user, not /tmp. In /tmp these were a single path
+# every user of the machine raced for — whoever logged in first owned
+# /tmp/cce.log, and /tmp's sticky bit then denied everyone else, so a second
+# user's session logged nothing (or failed to write its launcher at all).
+# XDG_RUNTIME_DIR is /run/user/UID, 0700, exported just above. It is cleared
+# at logout, which costs nothing here: the compositor log is truncated on
+# every login anyway, and a start failure is tailed to the console below
+# while the directory still exists.
+CCE_RUN="$XDG_RUNTIME_DIR/cce"
+if ! mkdir -p "$CCE_RUN" 2>/dev/null; then
+    # Gate on the failure itself, not on a guess about when it can happen:
+    # pam_systemd normally creates /run/user/UID before this script runs, but
+    # if it is missing or unwritable the launcher below cannot be written and
+    # the session comes up with no client at all. /tmp is worse but it works.
+    echo "startcce: $CCE_RUN unusable, falling back to /tmp" >&2
+    CCE_RUN=/tmp
+fi
+CCE_LOG="$CCE_RUN/cce.log"
+CCE_CLIENT_LOG="$CCE_RUN/cce-client.log"
+CCE_LAUNCH="$CCE_RUN/launch.sh"
 
 # The DE's default terminal (config.kdl `default_terminal`, set from the
 # settings app) becomes $TERMINAL for the whole session, so non-cce tools
@@ -58,23 +79,23 @@ if [ "$DEBUG" = true ]; then
     DEBUG_FLAG="WAYLAND_DEBUG=1 "
 fi
 
-# Unquoted delimiter on purpose: $DEBUG_FLAG, $TERMINAL and $CCE_BIN expand
-# HERE, so the generated script carries concrete values and depends on none of
-# this environment. Quoting LAUNCH_EOF would ship the literal '$CCE_BIN' and
-# the client would never start.
-cat > /tmp/cce-launch.sh << LAUNCH_EOF
+# Unquoted delimiter on purpose: $DEBUG_FLAG, $TERMINAL, $CCE_BIN and
+# $CCE_CLIENT_LOG expand HERE, so the generated script carries concrete values
+# and depends on none of this environment. Quoting LAUNCH_EOF would ship the
+# literal '$CCE_BIN' and the client would never start.
+cat > "$CCE_LAUNCH" << LAUNCH_EOF
 #!/bin/sh
 systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_ID XDG_RUNTIME_DIR GNOME_KEYRING_CONTROL SSH_AUTH_SOCK${TERMINAL:+ TERMINAL}
 systemctl --user start cce-session.target
-${DEBUG_FLAG}exec "$CCE_BIN" client 2>/tmp/cce-client.log
+${DEBUG_FLAG}exec "$CCE_BIN" client 2>"$CCE_CLIENT_LOG"
 LAUNCH_EOF
-chmod +x /tmp/cce-launch.sh
+chmod +x "$CCE_LAUNCH"
 
 LOG_LEVEL_FLAG=""
 if [ "$LOGGING" = true ] || [ "$DEBUG" = true ]; then
     LOG_LEVEL_FLAG="--log-level debug"
     echo "Starting cce-server with cce..."
-    echo "  Logs: /tmp/cce.log + /tmp/cce-client.log"
+    echo "  Logs: $CCE_LOG + $CCE_CLIENT_LOG"
     if [ "$DEBUG" = true ]; then
         echo "  Wayland debug logging enabled (WAYLAND_DEBUG=1)"
     fi
@@ -85,10 +106,10 @@ if [ "$DEBUG" = true ]; then
 fi
 
 # Clear out any old log file so we only see errors from this run
-> /tmp/cce.log
+> "$CCE_LOG"
 
 # Run CCE in the background so we can check if it exits immediately
-"$CCE_BIN" ${LOG_LEVEL_FLAG} -c /tmp/cce-launch.sh 2>>/tmp/cce.log &
+"$CCE_BIN" ${LOG_LEVEL_FLAG} -c "$CCE_LAUNCH" 2>>"$CCE_LOG" &
 CCE_PID=$!
 
 # Wait briefly to verify it launched successfully
@@ -98,9 +119,9 @@ if ! kill -0 $CCE_PID 2>/dev/null; then
     EXIT_CODE=$?
     echo ""
     echo "Error: cce failed to start (exited with code $EXIT_CODE)."
-    echo "Showing last 15 lines of /tmp/cce.log:"
+    echo "Showing last 15 lines of $CCE_LOG:"
     echo "----------------------------------------"
-    tail -n 15 /tmp/cce.log
+    tail -n 15 "$CCE_LOG"
     echo "----------------------------------------"
     exit $EXIT_CODE
 fi
