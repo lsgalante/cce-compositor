@@ -14,13 +14,21 @@ done
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export XDG_CURRENT_DESKTOP=cce
 export XDG_SESSION_TYPE=wayland
-export PATH="/home/lsgalante/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
 export XCURSOR_THEME="cce"
 export XCURSOR_SIZE=24
-export XCURSOR_PATH="/home/lsgalante/.local/share/icons:/home/lsgalante/.icons:/usr/share/icons"
+export XCURSOR_PATH="${XDG_DATA_HOME:-$HOME/.local/share}/icons:$HOME/.icons:/usr/share/icons"
 export WLR_NO_HARDWARE_CURSORS=1
 export WLR_DRM_DEVICES=/dev/dri/card1
 export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.json
+
+# The compositor binary this session runs, resolved once so the server launch
+# and the client launcher written into /tmp cannot disagree. Absolute rather
+# than leaning on the PATH set above: this is the one process a session cannot
+# recover from failing to find. $HOME is guaranteed — cce-display-manager sets
+# it explicitly when it execs this script, and the config read below already
+# depends on it.
+CCE_BIN="$HOME/.local/bin/cce"
 
 # The DE's default terminal (config.kdl `default_terminal`, set from the
 # settings app) becomes $TERMINAL for the whole session, so non-cce tools
@@ -50,11 +58,15 @@ if [ "$DEBUG" = true ]; then
     DEBUG_FLAG="WAYLAND_DEBUG=1 "
 fi
 
+# Unquoted delimiter on purpose: $DEBUG_FLAG, $TERMINAL and $CCE_BIN expand
+# HERE, so the generated script carries concrete values and depends on none of
+# this environment. Quoting LAUNCH_EOF would ship the literal '$CCE_BIN' and
+# the client would never start.
 cat > /tmp/cce-launch.sh << LAUNCH_EOF
 #!/bin/sh
 systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_ID XDG_RUNTIME_DIR GNOME_KEYRING_CONTROL SSH_AUTH_SOCK${TERMINAL:+ TERMINAL}
 systemctl --user start cce-session.target
-${DEBUG_FLAG}exec /home/lsgalante/.local/bin/cce client 2>/tmp/cce-client.log
+${DEBUG_FLAG}exec "$CCE_BIN" client 2>/tmp/cce-client.log
 LAUNCH_EOF
 chmod +x /tmp/cce-launch.sh
 
@@ -76,7 +88,7 @@ fi
 > /tmp/cce.log
 
 # Run CCE in the background so we can check if it exits immediately
-/home/lsgalante/.local/bin/cce ${LOG_LEVEL_FLAG} -c /tmp/cce-launch.sh 2>>/tmp/cce.log &
+"$CCE_BIN" ${LOG_LEVEL_FLAG} -c /tmp/cce-launch.sh 2>>/tmp/cce.log &
 CCE_PID=$!
 
 # Wait briefly to verify it launched successfully
