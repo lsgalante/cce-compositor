@@ -468,6 +468,9 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
     if is_self_sized {
         (*(*toplevel).window).box_geom.width = new_geometry.width;
         (*(*toplevel).window).box_geom.height = new_geometry.height;
+        // A view-centered modal that is ALSO self-sizing was centered at map
+        // against a size it had not committed yet; redo it now that it has.
+        (*(*toplevel).window).take_pending_view_center();
         (*(*(*toplevel).window).server).wm.dirty_windowing();
     }
 }
@@ -524,6 +527,9 @@ unsafe extern "C" fn handle_ack_configure(
     if is_self_sized {
         (*(*toplevel).window).box_geom.width = new_geometry.width;
         (*(*toplevel).window).box_geom.height = new_geometry.height;
+        // A view-centered modal that is ALSO self-sizing was centered at map
+        // against a size it had not committed yet; redo it now that it has.
+        (*(*toplevel).window).take_pending_view_center();
         (*(*(*toplevel).window).server).wm.dirty_windowing();
     }
 }

@@ -386,6 +386,12 @@ pub struct Window {
     /// view-centered session modal. Either way it suppresses the spawn
     /// viewport pan — the window is already where the user is looking.
     pub hint_placed: bool,
+    /// A view-centering that ran before the window's real size was known and
+    /// must be redone once it lands. Only self-sizing modals set it: their
+    /// geometry arrives on a commit, well after `map()`, so the centering at
+    /// map sees `mapped_size_hint`'s fallback and misses by half the
+    /// difference between that and the truth.
+    pub pending_view_center: bool,
     /// True only when the restored geometry came out of the startup restore queue
     /// (`state.json`'s window list). A window reopened later in the session matches
     /// `last_window_states` instead and leaves this false, so it still counts as a
@@ -640,6 +646,7 @@ impl Window {
             is_new: true,
             restored: false,
             hint_placed: false,
+            pending_view_center: false,
             session_restored: false,
             restored_focused: false,
             closed: false,
@@ -1151,10 +1158,41 @@ impl Window {
         // the centering) and a restored `minimized` would hide the prompt
         // outright. `mode_locked` is the "explicit beats heuristic" latch, so
         // the arrange pass cannot geometrically re-promote it either.
-        self.tiling_mode = crate::tiling::TilingMode::Floating;
+        //
+        // Utility is exempt from the mode forcing ONLY — like
+        // `try_hint_placement`, this owns the window's POSITION, never its
+        // size. A Utility window already satisfies everything the forcing is
+        // for: it always floats, never tiles, and both the grid snap and the
+        // overview displacement skip it. Overwriting the field would silently
+        // strip the mode — `set_utility` arrives before map, and every Utility
+        // gate reads `tiling_mode` RAW — leaving the modal resizable, its
+        // geometry saved, and a stale size restored over it next time.
+        if self.tiling_mode != crate::tiling::TilingMode::Utility {
+            self.tiling_mode = crate::tiling::TilingMode::Floating;
+        }
         self.mode_locked = true;
         self.minimized = false;
 
+        // A self-sizing modal has not committed its geometry yet, so
+        // `mapped_size_hint` here is still the 400x400 floor — centering
+        // against that misses by half the difference from the real size (a
+        // 640x360 prompt landed 120px right and 20px high). Center anyway so
+        // the first frame is not wildly off, and latch a redo for the commit
+        // that brings the truth.
+        //
+        // Utility only, because it is the only mode whose size arrives after
+        // map — and so the only one the commit path will ever consume this
+        // for. A Floating modal either has restored geometry (`try_restore`
+        // filled `box_geom` before we got here) or is being given a size by
+        // the arrange pass rather than reporting one.
+        self.pending_view_center = self.tiling_mode == crate::tiling::TilingMode::Utility
+            && (self.box_geom.width <= 0 || self.box_geom.height <= 0);
+        self.apply_view_centering();
+    }
+
+    /// The centering itself, split out so the self-sizing commit path can redo
+    /// it once the client's real size lands.
+    unsafe fn apply_view_centering(&mut self) {
         let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
         let wm = &(*self.server).wm;
         let zoom = wm.desk_zoom.max(0.01);
@@ -1167,8 +1205,20 @@ impl Window {
         self.hint_placed = true;
         log::info!(
             "view-centered modal: app_id={} size=({:.0}x{:.0}) zoom={:.2} virtual=({:.1},{:.1})",
-            app_id, w, h, zoom, self.virtual_x, self.virtual_y
+            self.get_app_id_string().unwrap_or_default(),
+            w, h, zoom, self.virtual_x, self.virtual_y
         );
+    }
+
+    /// Redo a latched view-centering now that a self-sizing modal's real
+    /// geometry has arrived. One-shot: a later commit (or a user dragging the
+    /// window) must not snap it back to the middle.
+    pub unsafe fn take_pending_view_center(&mut self) {
+        if !self.pending_view_center || self.box_geom.width <= 0 || self.box_geom.height <= 0 {
+            return;
+        }
+        self.pending_view_center = false;
+        self.apply_view_centering();
     }
 
     pub unsafe fn map(&mut self) -> Result<(), &'static str> {
