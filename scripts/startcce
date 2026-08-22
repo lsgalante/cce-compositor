@@ -1,0 +1,99 @@
+#!/bin/sh
+# Launch cce-server with cce-client
+# Usage: startcce [--logging] [--debug]
+
+LOGGING=false
+DEBUG=false
+for arg in "$@"; do
+    case "$arg" in
+        --logging) LOGGING=true ;;
+        --debug) DEBUG=true ;;
+    esac
+done
+
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+export XDG_CURRENT_DESKTOP=cce
+export XDG_SESSION_TYPE=wayland
+export PATH="/home/lsgalante/.local/bin:$PATH"
+export XCURSOR_THEME="cce"
+export XCURSOR_SIZE=24
+export XCURSOR_PATH="/home/lsgalante/.local/share/icons:/home/lsgalante/.icons:/usr/share/icons"
+export WLR_NO_HARDWARE_CURSORS=1
+export WLR_DRM_DEVICES=/dev/dri/card1
+export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.json
+
+# The DE's default terminal (config.kdl `default_terminal`, set from the
+# settings app) becomes $TERMINAL for the whole session, so non-cce tools
+# that honor the convention agree with the launcher. A crude KDL read, but
+# the key is a single top-level string node.
+TERMINAL_CFG=$(sed -n 's/^[[:space:]]*default_terminal[[:space:]]*"\([^"]*\)".*/\1/p' "$HOME/.config/cce/config.kdl" 2>/dev/null | head -n 1)
+if [ -n "$TERMINAL_CFG" ] && command -v "$TERMINAL_CFG" >/dev/null 2>&1; then
+    export TERMINAL="$TERMINAL_CFG"
+fi
+
+# Kill any stale processes to ensure DRM master and sockets are released.
+# killall matches on comm (argv[0]'s basename), which reflects how a process
+# was started, not which binary it is: started through the `cce` symlink comm
+# is "cce", but a compositor left over from `make run` / `cargo run --bin
+# cce-fx` has comm "cce-fx" and would survive this sweep still holding DRM
+# master. So name both. ("cce-client" sat here for years and never matched
+# anything: there is no such binary — the client is the subcommand
+# `cce client`, whose comm is also "cce", already covered.)
+killall -q cce cce-fx 2>/dev/null
+# pkill -9 -f antigravity 2>/dev/null
+# pkill -9 -f language_server 2>/dev/null
+
+
+# Create the cce-client launch script
+DEBUG_FLAG=""
+if [ "$DEBUG" = true ]; then
+    DEBUG_FLAG="WAYLAND_DEBUG=1 "
+fi
+
+cat > /tmp/cce-launch.sh << LAUNCH_EOF
+#!/bin/sh
+systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_ID XDG_RUNTIME_DIR GNOME_KEYRING_CONTROL SSH_AUTH_SOCK${TERMINAL:+ TERMINAL}
+systemctl --user start cce-session.target
+${DEBUG_FLAG}exec /home/lsgalante/.local/bin/cce client 2>/tmp/cce-client.log
+LAUNCH_EOF
+chmod +x /tmp/cce-launch.sh
+
+LOG_LEVEL_FLAG=""
+if [ "$LOGGING" = true ] || [ "$DEBUG" = true ]; then
+    LOG_LEVEL_FLAG="--log-level debug"
+    echo "Starting cce-server with cce..."
+    echo "  Logs: /tmp/cce.log + /tmp/cce-client.log"
+    if [ "$DEBUG" = true ]; then
+        echo "  Wayland debug logging enabled (WAYLAND_DEBUG=1)"
+    fi
+fi
+
+if [ "$DEBUG" = true ]; then
+    export WAYLAND_DEBUG=1
+fi
+
+# Clear out any old log file so we only see errors from this run
+> /tmp/cce.log
+
+# Run CCE in the background so we can check if it exits immediately
+/home/lsgalante/.local/bin/cce ${LOG_LEVEL_FLAG} -c /tmp/cce-launch.sh 2>>/tmp/cce.log &
+CCE_PID=$!
+
+# Wait briefly to verify it launched successfully
+sleep 1.2
+if ! kill -0 $CCE_PID 2>/dev/null; then
+    wait $CCE_PID
+    EXIT_CODE=$?
+    echo ""
+    echo "Error: cce failed to start (exited with code $EXIT_CODE)."
+    echo "Showing last 15 lines of /tmp/cce.log:"
+    echo "----------------------------------------"
+    tail -n 15 /tmp/cce.log
+    echo "----------------------------------------"
+    exit $EXIT_CODE
+fi
+
+# If it runs fine, wait on it to finish
+wait $CCE_PID
+systemctl --user stop cce-session.target
+
