@@ -103,16 +103,42 @@ machine. It is the replacement for the nested (wayland-backend) approach, which
 needed a visible window and had to be re-centred before every capture.
 
 ```sh
-cce-shadow start [--fresh|--restore|--scale N|--gpu PATH|--exec CMD]
+cce-shadow [--instance NAME] start [--new|--fresh|--restore|--scale N|--gpu PATH|--exec CMD]
 cce-shadow ctl windows          # ccectl against the shadow
 cce-shadow spawn cce-files
 cce-shadow shot [name]          # PNG path on stdout
-cce-shadow status | logs | run <cmd> | env | stop
+cce-shadow list | prune         # instances; reclaim stopped agent-N trees
+cce-shadow status | logs | run <cmd> | env | stop [--all]
 ```
 
-Everything lives under `$CCE_SHADOW_DIR` (default
-`~/.local/state/cce-shadow`). Four things there are load-bearing, and each was a
-bug before it was a feature:
+**Instances — how two agents share the machine.** Several shadows run at once,
+selected by `--instance NAME` or `CCE_SHADOW_INSTANCE`; each is a directory
+under `$CCE_SHADOW_BASE` (default `~/.local/state/cce-shadow`), and the default
+name is `default`. `start --new` claims an unused `agent-N` and prints it — the
+opening move for an agent that must not disturb another's run. The isolation
+falls out of that one directory: separate homes mean separate windows, and a
+`stop` sweep that cannot see the other session's clients. The display is not a
+collision point either, since `cce-fx` picks its socket with
+`wl_display_add_socket_auto` and the script reads the name back out of the log,
+so the second compositor lands on a different one unprompted.
+
+Without this, two agents share one session, and each one's `stop` — or plain
+`start`, which clears saved window state — tears down the other's run *silently*,
+because `start` reports an existing session as success. `prune` exists for the
+same reason in reverse: an agent that dies never calls `stop`, and a leaked
+headless compositor runs forever. It deletes stopped `agent-N` trees only;
+instances named by hand are left alone, since pruning takes their `shots/` too.
+What stays global across instances is the D-Bus name claims in the script's "Do
+not run" list — those are one-at-a-time for the whole machine.
+
+`CCE_SHADOW_DIR` still overrides the tree wholesale, bypassing instance
+resolution. A pre-instance tree (`home/` `run/` `shots/` directly under the
+base) is migrated into `default` on first use — but *not* while it is still
+running, since its pidfile is at the old path and moving it would strand a live
+compositor no command could reach again.
+
+Four things in the tree are load-bearing, and each was a bug before it was a
+feature:
 
 - **`HOME` is isolated** because screenshots go to a hardcoded
   `$HOME/Pictures/screenshots` and ignore XDG entirely.

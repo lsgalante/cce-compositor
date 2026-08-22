@@ -29,16 +29,30 @@
 # real user-owned dir, and the display name already differs) and the D-Bus
 # session bus (unavoidable, and harmless as long as the shadow does not run the
 # apps that *claim* a name — see "Do not run" below).
+#
+# Several shadows can run at once, because every path above derives from one
+# directory: --instance <name> (or CCE_SHADOW_INSTANCE) gives each its own tree
+# under $CCE_SHADOW_BASE, hence its own HOME, its own windows, and its own
+# client sweep. The display is not a collision point either — cce-fx picks its
+# socket with wl_display_add_socket_auto and start() reads the name back out of
+# the log, so a second compositor lands on a different one unprompted, and the
+# /tmp/cce-<display>.sock IPC sockets follow it.
+#
+# That separation is the point: without it, two agents share one session, and
+# each one's `stop` (or plain `start`, which clears saved state) tears down the
+# other's run — silently, because `start` reports an existing session as
+# success. What stays global across instances is the D-Bus name claims in "Do
+# not run" below: those are one-at-a-time for the whole machine, not per
+# instance.
 
 set -euo pipefail
 
-SHADOW_DIR="${CCE_SHADOW_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/cce-shadow}"
-SHADOW_HOME="$SHADOW_DIR/home"
-RUN_DIR="$SHADOW_DIR/run"
-PIDFILE="$RUN_DIR/cce-fx.pid"
-DISPLAY_FILE="$RUN_DIR/display"
-LOG="$RUN_DIR/cce-fx.log"
-SHOTS="$SHADOW_DIR/shots"
+SHADOW_BASE="${CCE_SHADOW_BASE:-${XDG_STATE_HOME:-$HOME/.local/state}/cce-shadow}"
+INSTANCE="${CCE_SHADOW_INSTANCE:-default}"
+
+# All set by resolve_paths(), once the instance name is settled.
+SHADOW_DIR=""; SHADOW_HOME=""; RUN_DIR=""
+PIDFILE=""; DISPLAY_FILE=""; LOG=""; SHOTS=""
 
 # Resolved before any override, so seeding reads the user's real config.
 REAL_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/cce"
@@ -48,11 +62,109 @@ START_TIMEOUT_MS=15000
 die()  { printf 'cce-shadow: %s\n' "$*" >&2; exit 1; }
 note() { printf '==> %s\n' "$*"; }
 
+# ── instances ────────────────────────────────────────────────────────────────
+# An instance is just a directory: $SHADOW_BASE/<name>, holding the home/, run/
+# and shots/ that used to sit at $SHADOW_BASE itself. Everything else follows
+# from it, which is why one variable is enough to keep two sessions apart.
+
+# Before instances existed, the single session lived directly at $SHADOW_BASE.
+# Such a tree would be orphaned by the move — and a *running* one would become
+# unreachable, since its pidfile is at the old path and nothing would ever stop
+# it again. Both cases are handled: a stopped legacy tree is migrated into the
+# "default" instance, and a live one keeps the old path for as long as it runs.
+legacy_live() { pid_from "$SHADOW_BASE/run/cce-fx.pid"; }
+
+# Returns non-zero when a live legacy session must keep the old layout.
+migrate_legacy() {
+    [ -d "$SHADOW_BASE/run" ] || return 0
+    [ -e "$SHADOW_BASE/default" ] && return 0
+    legacy_live >/dev/null && return 1
+    mkdir -p "$SHADOW_BASE/default"
+    local d
+    for d in home run shots; do
+        if [ -e "$SHADOW_BASE/$d" ]; then mv "$SHADOW_BASE/$d" "$SHADOW_BASE/default/$d"; fi
+    done
+    # stderr, not stdout: `env` is eval'd and `shot` is parsed by the caller.
+    printf '==> migrated the pre-instance shadow tree into instance %s\n' "'default'" >&2
+    return 0
+}
+
+resolve_paths() {
+    if [ -n "${CCE_SHADOW_DIR:-}" ]; then
+        SHADOW_DIR="$CCE_SHADOW_DIR"
+    else
+        case "$INSTANCE" in
+            ''|.|..|*/*)   die "bad instance name: '$INSTANCE'" ;;
+            home|run|shots) die "'$INSTANCE' is reserved (it is a directory inside an instance)" ;;
+        esac
+        if [ "$INSTANCE" = default ] && ! migrate_legacy; then
+            SHADOW_DIR="$SHADOW_BASE"
+        else
+            SHADOW_DIR="$SHADOW_BASE/$INSTANCE"
+        fi
+    fi
+    SHADOW_HOME="$SHADOW_DIR/home"
+    RUN_DIR="$SHADOW_DIR/run"
+    PIDFILE="$RUN_DIR/cce-fx.pid"
+    DISPLAY_FILE="$RUN_DIR/display"
+    LOG="$RUN_DIR/cce-fx.log"
+    SHOTS="$SHADOW_DIR/shots"
+}
+
+# How the caller should address this instance in the commands that follow.
+addr() {
+    if [ -z "${CCE_SHADOW_DIR:-}" ] && [ "$INSTANCE" != default ]; then
+        printf 'cce-shadow --instance %s' "$INSTANCE"
+    else
+        printf 'cce-shadow'
+    fi
+}
+
+# Claim a name no other instance holds. mkdir is the atomic part: two agents
+# racing on --new cannot come away with the same one. Names are not recycled
+# while the directory exists, so a finished run leaves a stopped instance
+# behind — `prune` is what reclaims those.
+alloc_instance() {
+    local n=1
+    mkdir -p "$SHADOW_BASE"
+    while [ "$n" -le 99 ]; do
+        if mkdir "$SHADOW_BASE/agent-$n" 2>/dev/null; then
+            printf 'agent-%s\n' "$n"
+            return
+        fi
+        n=$((n + 1))
+    done
+    die "no free instance name (agent-1..agent-99 all exist); try: cce-shadow prune"
+}
+
+# Every instance that exists, one per line. A live legacy tree has no directory
+# of its own, but "default" is the name that reaches it, so it is listed too.
+instance_names() {
+    local d name
+    if [ ! -e "$SHADOW_BASE/default" ] && legacy_live >/dev/null; then
+        printf 'default\n'
+    fi
+    for d in "$SHADOW_BASE"/*/; do
+        [ -d "$d" ] || continue
+        name=$(basename "$d")
+        case "$name" in home|run|shots) continue ;; esac
+        printf '%s\n' "$name"
+    done
+    return 0
+}
+
 usage() {
     cat <<'EOF'
-usage: cce-shadow <command> [args...]
+usage: cce-shadow [--instance <name>] <command> [args...]
+
+Instances let several sessions run at once — one per agent — each with its own
+tree, HOME, windows and display, so neither can stop or reset the other. The
+default instance is "default"; CCE_SHADOW_INSTANCE sets it for a whole shell.
 
   start [opts]        start the invisible session (no-op if already running)
+      --instance <n>    the global option, also accepted here
+      --new             claim an unused instance (agent-N) and start in it;
+                        prints the name it took
       --fresh           discard the existing shadow home and reseed it
       --restore         keep saved window state (default: start empty, so
                         runs do not inherit the previous one's windows)
@@ -62,7 +174,11 @@ usage: cce-shadow <command> [args...]
                         node, because window capture fails on NVIDIA);
                         --gpu none leaves the choice to wlroots
       --bin <path>      cce-fx to run (default: PATH, then target/release)
-  stop                stop it and clean up its sockets
+  stop [--all]        stop it and clean up its sockets
+      --all             every instance, not just this one
+  list                every instance, running or not
+  prune               delete stopped agent-N instances, and their shots;
+                      instances you named yourself are never touched
   status              is it running, on which display, with what in it
   ctl <args...>       run ccectl against it   (e.g. ctl windows)
   spawn <cmd>         launch a client inside it
@@ -127,16 +243,18 @@ find_bin() {
 # live session is also a cce-fx, and killing the wrong one ends the user's
 # desktop. `ccebuild install` unlinks before writing, so a running binary's exe
 # often reads "<path> (deleted)" — strip that before comparing.
-shadow_pid() {
-    local pid exe
-    [ -f "$PIDFILE" ] || return 1
-    pid=$(cat "$PIDFILE" 2>/dev/null) || return 1
+pid_from() {
+    local file=$1 pid exe
+    [ -f "$file" ] || return 1
+    pid=$(cat "$file" 2>/dev/null) || return 1
     [ -n "$pid" ] && [ -d "/proc/$pid" ] || return 1
     exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || return 1
     exe=${exe% (deleted)}
     case "${exe##*/}" in cce-fx|cce) ;; *) return 1 ;; esac
     printf '%s\n' "$pid"
 }
+
+shadow_pid() { pid_from "$PIDFILE"; }
 
 shadow_display() { cat "$DISPLAY_FILE" 2>/dev/null || true; }
 
@@ -150,14 +268,25 @@ shadow_display() { cat "$DISPLAY_FILE" 2>/dev/null || true; }
 # this sweep the clients survive `stop`, and because the next `start` reuses the
 # same display name they reattach to the new compositor — which looks exactly
 # like session restore gone wrong (15 windows from one spawn).
-shadow_children() {
-    local pid comp=${1:-}
+# Taking the home as an argument is what lets `list` report on instances other
+# than the resolved one — and it is also why instances cannot bleed into each
+# other: two shadows have two homes, so neither sweep can see the other's
+# clients.
+children_of() {
+    local pid home=$1 comp=${2:-}
     for pid in /proc/[0-9]*; do
         pid=${pid#/proc/}
         [ "$pid" = "$comp" ] && continue
-        grep -qz "^HOME=$SHADOW_HOME$" "/proc/$pid/environ" 2>/dev/null && printf '%s\n' "$pid"
+        grep -qz "^HOME=$home$" "/proc/$pid/environ" 2>/dev/null && printf '%s\n' "$pid"
     done
+    # The loop almost always ends on a process whose environ this user cannot
+    # read, where grep exits 2 — and as the last command that becomes the
+    # function's status. With `set -o pipefail` on, `x=$(children_of ... | wc -l)`
+    # then fails the assignment and `set -e` kills the script with no message.
+    return 0
 }
+
+shadow_children() { children_of "$SHADOW_HOME" "${1:-}"; }
 
 require_running() {
     shadow_pid >/dev/null || die "not running — start it with: cce-shadow start"
@@ -258,9 +387,11 @@ seed_config() {
 
 # ── commands ─────────────────────────────────────────────────────────────────
 cmd_start() {
-    local fresh=0 restore=0 exec_cmd=':' scale=1 gpu="${CCE_SHADOW_GPU:-}" bin=""
+    local fresh=0 restore=0 exec_cmd=':' scale=1 gpu="${CCE_SHADOW_GPU:-}" bin="" new=0
     while [ $# -gt 0 ]; do
         case "$1" in
+            --new)   new=1; shift ;;
+            --instance) INSTANCE=${2:?--instance needs a name}; resolve_paths; shift 2 ;;
             --fresh) fresh=1; shift ;;
             --restore) restore=1; shift ;;
             --exec)  exec_cmd=${2:?--exec needs a command}; shift 2 ;;
@@ -271,9 +402,20 @@ cmd_start() {
         esac
     done
 
+    if [ "$new" = 1 ]; then
+        [ -n "${CCE_SHADOW_DIR:-}" ] && die "--new cannot be combined with CCE_SHADOW_DIR"
+        INSTANCE=$(alloc_instance)
+        resolve_paths
+        note "claimed instance '$INSTANCE'"
+    fi
+
+    # Attaching to a session that is already up is the intended no-op, but say
+    # whose it is: the reason to name instances at all is that this line used to
+    # be the last thing between an agent and someone else's windows.
     local pid
     if pid=$(shadow_pid); then
-        note "already running (pid $pid, display $(shadow_display))"
+        note "instance '$INSTANCE' already running (pid $pid, display $(shadow_display))"
+        note "drive it with: $(addr) ctl windows"
         return 0
     fi
 
@@ -343,11 +485,13 @@ cmd_start() {
     [ -n "$display" ] || { rm -f "$PIDFILE"; die "no display socket after $((START_TIMEOUT_MS / 1000))s; see $LOG"; }
 
     printf '%s\n' "$display" > "$DISPLAY_FILE"
-    note "up on $display (pid $started)"
-    note "drive it with: cce-shadow ctl windows"
+    note "instance '$INSTANCE' up on $display (pid $started)"
+    note "drive it with: $(addr) ctl windows"
 }
 
 cmd_stop() {
+    if [ "${1:-}" = --all ]; then cmd_stop_all; return; fi
+
     local pid display
     pid=$(shadow_pid) || pid=""
     display=$(shadow_display)
@@ -392,14 +536,87 @@ cmd_stop() {
     note "stopped (was $display, pid $pid)"
 }
 
+cmd_stop_all() {
+    [ -n "${CCE_SHADOW_DIR:-}" ] && die "--all is meaningless with CCE_SHADOW_DIR set"
+    local name n=0
+    while read -r name; do
+        [ -n "$name" ] || continue
+        INSTANCE=$name
+        resolve_paths
+        note "instance '$name'"
+        cmd_stop
+        n=$((n + 1))
+    done < <(instance_names)
+    [ "$n" = 0 ] && note "no instances"
+    return 0
+}
+
+# One row of `list`. The pid may be passed in for a live legacy tree, whose
+# pidfile is not where an instance's would be.
+list_row() {
+    local name=$1 dir=$2 pid=${3:-}
+    local status=stopped disp="" up="" kids=0
+    [ -n "$pid" ] || pid=$(pid_from "$dir/run/cce-fx.pid") || pid=""
+    if [ -n "$pid" ]; then
+        status=running
+        disp=$(cat "$dir/run/display" 2>/dev/null || true)
+        up=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')
+        kids=$(children_of "$dir/home" "$pid" | wc -l)
+    fi
+    printf '%-12s %-8s %-8s %-11s %-9s %s\n' \
+        "$name" "$status" "${pid:--}" "${disp:--}" "${up:--}" "$kids"
+}
+
+cmd_list() {
+    local name dir legacy="" found=0
+    printf '%-12s %-8s %-8s %-11s %-9s %s\n' \
+        INSTANCE STATUS PID DISPLAY UPTIME CLIENTS
+    legacy=$(legacy_live 2>/dev/null || true)
+    while read -r name; do
+        [ -n "$name" ] || continue
+        found=1
+        dir="$SHADOW_BASE/$name"
+        if [ ! -d "$dir" ] && [ -n "$legacy" ]; then
+            list_row "$name" "$SHADOW_BASE" "$legacy"
+        else
+            list_row "$name" "$dir"
+        fi
+    done < <(instance_names)
+    [ "$found" = 0 ] && printf '(none)\n'
+    return 0
+}
+
+# Only agent-N instances, the ones --new hands out: an agent that dies never
+# calls stop, and a leaked headless compositor runs forever. Instances someone
+# named by hand are left alone, because pruning takes their shots/ with them and
+# a name chosen deliberately is not garbage.
+cmd_prune() {
+    [ -n "${CCE_SHADOW_DIR:-}" ] && die "prune is meaningless with CCE_SHADOW_DIR set"
+    local name dir n=0
+    while read -r name; do
+        case "$name" in agent-[0-9]*) ;; *) continue ;; esac
+        dir="$SHADOW_BASE/$name"
+        [ -d "$dir" ] || continue
+        if pid_from "$dir/run/cce-fx.pid" >/dev/null; then
+            note "keeping '$name' — still running"
+            continue
+        fi
+        rm -rf "$dir"
+        note "removed '$name'"
+        n=$((n + 1))
+    done < <(instance_names)
+    note "pruned $n instance(s)"
+}
+
 cmd_status() {
     local pid
     if ! pid=$(shadow_pid); then
-        printf 'stopped\n'
+        printf 'stopped    (instance %s)\n' "$INSTANCE"
         [ -f "$PIDFILE" ] && printf 'note: stale pidfile at %s\n' "$PIDFILE"
         return 0
     fi
     printf 'running   pid %s on %s\n' "$pid" "$(shadow_display)"
+    printf 'instance  %s\n' "$INSTANCE"
     printf 'home      %s\n' "$SHADOW_HOME"
     printf 'log       %s\n' "$LOG"
     printf 'uptime    %s\n' "$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')"
@@ -472,7 +689,22 @@ cmd_logs() {
 
 cmd_env() { require_running; shadow_env | sed 's/^/export /'; }
 
-case "${1:-}" in
+# --instance is global: it applies to every command, so it is parsed before the
+# command word and the paths are resolved from it once, here.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --instance)   INSTANCE=${2:?--instance needs a name}; shift 2 ;;
+        --instance=*) INSTANCE=${1#*=}; shift ;;
+        *) break ;;
+    esac
+done
+
+# Before resolve_paths, so that plain `help` neither migrates nor creates.
+case "${1:-}" in -h|--help|help|"") usage; exit 0 ;; esac
+
+resolve_paths
+
+case "$1" in
     start)        shift; cmd_start "$@" ;;
     stop)         shift; cmd_stop "$@" ;;
     status)       shift; cmd_status "$@" ;;
@@ -483,6 +715,7 @@ case "${1:-}" in
     run)          shift; cmd_run "$@" ;;
     logs)         shift; cmd_logs "$@" ;;
     env)          shift; cmd_env "$@" ;;
-    -h|--help|help|"") usage ;;
+    list)         shift; cmd_list "$@" ;;
+    prune)        shift; cmd_prune "$@" ;;
     *) die "unknown command: $1 (try: cce-shadow help)" ;;
 esac
