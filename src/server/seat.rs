@@ -88,6 +88,10 @@ pub struct Seat {
     pub xkb_bindings: ffi::wl_list,
     pub pointer_bindings: ffi::wl_list,
     pub keyboard_groups: ffi::wl_list,
+    /// A device-less keyboard group, created on demand by
+    /// [`Seat::ensure_synthetic_keyboard`] when the backend supplies no
+    /// keyboard at all. Null on any seat that has a real one.
+    pub synthetic_keyboard: *mut crate::keyboard_group::KeyboardGroup,
     pub modifiers_old: u32,
     pub op: Option<SeatOp>,
     pub op_release: bool,
@@ -144,6 +148,7 @@ impl Seat {
             xkb_bindings: std::mem::zeroed(),
             pointer_bindings: std::mem::zeroed(),
             keyboard_groups: std::mem::zeroed(),
+            synthetic_keyboard: std::ptr::null_mut(),
             modifiers_old: 0,
             op: None,
             op_release: false,
@@ -246,6 +251,15 @@ impl Seat {
         }
 
         (*seat).cursor.deinit();
+
+        // The synthetic keyboard has no device to outlive, so nothing else
+        // will ever drop its reference — and the assert below requires the
+        // group list to be empty by now.
+        if !(*seat).synthetic_keyboard.is_null() {
+            let group = (*seat).synthetic_keyboard;
+            (*seat).synthetic_keyboard = std::ptr::null_mut();
+            (*group).unref(&[]);
+        }
 
         // Verify keyboard_groups is empty
         let groups_head = &mut (*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
@@ -603,6 +617,63 @@ impl Seat {
         }
         let target_surface = new_focus.surface();
         self.relay.focus(target_surface);
+    }
+
+    /// Give this seat a keyboard if the backend never supplied one, so that
+    /// synthetic keys have somewhere to land. Returns false only when no
+    /// keymap is configured, leaving nothing worth attaching.
+    ///
+    /// The seat advertises `WL_SEAT_CAPABILITY_KEYBOARD` unconditionally (see
+    /// `update_capabilities`), so a client always binds `wl_keyboard`. But the
+    /// keymap reaches that client from `wlr_seat_set_keyboard`, which only ever
+    /// ran from `attach_device` — i.e. only once a real keyboard device
+    /// existed. On the headless backend there is no keyboard device, so no
+    /// keymap was ever sent, and a client with no keymap cannot turn a keycode
+    /// into a keysym: `wlr_seat_keyboard_notify_key` delivered events that were
+    /// silently dropped. That is why injected keys did nothing in a shadow
+    /// session while injected pointer events worked.
+    ///
+    /// A real keyboard always wins — this is a no-op the moment the seat has
+    /// one, so a normal session never reaches the creation path.
+    pub unsafe fn ensure_synthetic_keyboard(&mut self) -> bool {
+        if !ffi::river_wlr_seat_get_keyboard(self.wlr_seat).is_null() {
+            return true;
+        }
+
+        let keymap = (*self.server).xkb_config.default_keymap;
+        if keymap.is_null() {
+            log::warn!("[seat] no keymap configured; synthetic keys cannot be delivered");
+            return false;
+        }
+
+        // `KeyboardGroup::create` takes its own keymap reference and does the
+        // `wlr_keyboard_init`/`set_keymap` wiring, so this borrows the group
+        // machinery whole rather than hand-rolling a bare wlr_keyboard — which
+        // would also leave `river_wlr_keyboard_get_data` null and cost
+        // `keyboard_notify_enter` its pressed-key tracking.
+        let config = crate::keyboard::KeyboardConfig {
+            keymap,
+            repeat_rate: 40,
+            repeat_delay: 400,
+        };
+        match crate::keyboard_group::KeyboardGroup::create(self, config, true) {
+            Ok(group) => {
+                self.synthetic_keyboard = group;
+                // set_keyboard is what pushes the keymap out to every bound
+                // client; the enter re-announces focus with it in place.
+                ffi::wlr_seat_set_keyboard(self.wlr_seat, &mut (*group).wlr_keyboard);
+                let focused = ffi::river_wlr_seat_get_keyboard_focused_surface(self.wlr_seat);
+                if !focused.is_null() {
+                    self.keyboard_notify_enter(focused);
+                }
+                log::info!("[seat] no keyboard device on this backend — created a synthetic one so injected keys reach clients");
+                true
+            }
+            Err(err) => {
+                log::error!("[seat] failed to create synthetic keyboard: {}", err);
+                false
+            }
+        }
     }
 
     pub unsafe fn keyboard_notify_enter(&mut self, wlr_surface: *mut ffi::wlr_surface) {

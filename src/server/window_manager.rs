@@ -4304,6 +4304,7 @@ impl WindowManager {
                     while curr_seat != seats_list {
                         let next_seat = (*curr_seat).next;
                         let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+                        (*seat).ensure_synthetic_keyboard();
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, crate::util::msec_timestamp(), keycode, state);
                         if let Some(name) = mod_name {
                             let kb = ffi::river_wlr_seat_get_keyboard((*seat).wlr_seat);
@@ -4339,6 +4340,10 @@ impl WindowManager {
                     while curr_seat != seats_list {
                         let next_seat = (*curr_seat).next;
                         let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+                        // A backend with no keyboard device leaves clients
+                        // without a keymap, and a keymap-less client drops
+                        // every key we notify. Attach one first.
+                        (*seat).ensure_synthetic_keyboard();
                         let time = crate::util::msec_timestamp();
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time + 1, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);
