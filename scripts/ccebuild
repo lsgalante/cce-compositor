@@ -82,14 +82,49 @@ assert_packages() {
     done
 }
 
+# Every systemd unit a crate ships, of any type. Units are NOT only .service:
+# cce-session.target is the session root — startcce starts and stops it, and
+# cce-grid/cce-remote are WantedBy it — and it sat unversioned for months partly
+# because a .service-only glob could not see it, so versioning it would have
+# deployed nothing. One helper feeds both classifiers so their globs cannot
+# drift apart.
+#
+# dbus/ is excluded outright: D-Bus activation files share the .service
+# extension but are not units (see dbus_services()). That used to be implicit —
+# they carry no [Install] WantedBy, so the old classifiers skipped them — but
+# the no-[Install] fallback below would otherwise adopt one.
+unit_files() {
+    find "$WS" -maxdepth 3 \
+         \( -name '*.service' -o -name '*.target' -o -name '*.timer' \
+            -o -name '*.socket' -o -name '*.path' \) \
+         -not -path "$WS/target/*" -not -path '*/dbus/*' 2>/dev/null
+}
+
+# The unit's [Install] WantedBy list; empty when it has no [Install] section.
+unit_wanted_by() {
+    sed -n 's/^[[:space:]]*WantedBy[[:space:]]*=[[:space:]]*//p' "$1" | tr -d '\r'
+}
+
 # User-session unit files shipped by crates (system units excluded — see above).
 user_units() {
-    find "$WS" -maxdepth 3 -name '*.service' -not -path "$WS/target/*" 2>/dev/null \
-        | while read -r unit; do
-            local wanted
-            wanted=$(sed -n 's/^[[:space:]]*WantedBy[[:space:]]*=[[:space:]]*//p' "$unit" | tr -d '\r')
-            [ -n "$wanted" ] || continue
-            local t match=0
+    local unit wanted t match
+    unit_files | while read -r unit; do
+            wanted=$(unit_wanted_by "$unit")
+            if [ -z "$wanted" ]; then
+                # No [Install] at all: a static unit, pulled in by a dependency
+                # or started by hand (cce-session.target — startcce starts it
+                # explicitly). There is no WantedBy to classify on, so default
+                # to the USER side, which is the direction that fails safe: the
+                # worst case is an inert file in ~/.config/systemd/user, whereas
+                # defaulting to the system side would write to /etc as root.
+                # .service is deliberately NOT eligible for this fallback —
+                # still requiring WantedBy there keeps the classification of
+                # every unit shipped today bit-for-bit unchanged.
+                case "$unit" in *.service) continue ;; esac
+                printf '%s\n' "$unit"
+                continue
+            fi
+            match=0
             for t in $wanted; do
                 case " ${USER_UNIT_TARGETS[*]} " in *" $t "*) match=1 ;; esac
             done
@@ -102,12 +137,14 @@ user_units() {
 # (graphical.target, multi-user.target) is root-owned and belongs in
 # /etc/systemd/system. Installed by install-system only, never here.
 system_units() {
-    find "$WS" -maxdepth 3 -name '*.service' -not -path "$WS/target/*" 2>/dev/null \
-        | while read -r unit; do
-            local wanted
-            wanted=$(sed -n 's/^[[:space:]]*WantedBy[[:space:]]*=[[:space:]]*//p' "$unit" | tr -d '\r')
+    local unit wanted t match
+    unit_files | while read -r unit; do
+            wanted=$(unit_wanted_by "$unit")
+            # A unit with no [Install] is never installed to /etc from here:
+            # root deployment must be explicit, so it gets no fallback. See the
+            # note in user_units().
             [ -n "$wanted" ] || continue
-            local t match=0
+            match=0
             for t in $wanted; do
                 case " ${USER_UNIT_TARGETS[*]} " in *" $t "*) match=1 ;; esac
             done
@@ -254,7 +291,11 @@ cmd_install() {
     local s scripts=0
     while read -r s; do
         [ -n "$s" ] || continue
-        case "$s" in *.service) continue ;; esac
+        # Units living in a scripts/ dir (gpu-watcher.service) are installed by
+        # user_units() to a different directory — never as an executable here.
+        # Every unit extension, not just .service: a .target landing in BINDIR
+        # would be an unexecutable "helper script" on PATH.
+        case "$s" in *.service|*.target|*.timer|*.socket|*.path) continue ;; esac
         # Same filtered install as the units and desktop entries below.
         if [ ${#pkgs[@]} -gt 0 ]; then
             crate_selected "$(file_crate_dir "$s")" "${pkgs[@]}" || continue

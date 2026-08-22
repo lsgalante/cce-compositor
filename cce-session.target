@@ -1,0 +1,11 @@
+[Unit]
+Description=CCE Session
+# The session root. `startcce` starts this target after the compositor is up and
+# stops it on the way out, so it is the thing user units hang off to mean "runs
+# for the life of a cce session" — cce-grid and cce-remote are WantedBy it.
+# It is deliberately static (no [Install]): nothing enables it, startcce starts
+# it by name.
+BindsTo=graphical-session.target
+Before=graphical-session.target
+RefuseManualStart=no
+RefuseManualStop=no
