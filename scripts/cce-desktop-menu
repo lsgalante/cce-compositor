@@ -36,7 +36,7 @@ json_layout='{
         { "type": "button", "text": "Data Editor", "id": "data_editor" },
         { "type": "button", "text": "Applications", "id": "apps" },
         { "type": "button", "text": "System Settings", "id": "settings" },
-        { "type": "button", "text": "Expose Windows", "id": "expose" },
+        { "type": "button", "text": "Overview", "id": "overview" },
         { "type": "button", "text": "Reload Config", "id": "reload" },
         { "type": "button", "text": "Logout", "id": "exit" }
       ]
@@ -73,8 +73,8 @@ case "$btn" in
         # Run settings interface
         "$HOME"/.local/bin/cce-system-interface &
         ;;
-    "expose")
-        $CCE_CTL expose
+    "overview")
+        $CCE_CTL overview
         ;;
     "reload")
         $CCE_CTL reload
