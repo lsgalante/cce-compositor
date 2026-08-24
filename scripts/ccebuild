@@ -527,9 +527,28 @@ cmd_prune() {
 #
 # The compositor is deliberately unreachable here: it is not a user unit (it is
 # started by startcce), and restarting it would tear down the session.
+#
+# `restart PKG...` scopes the sweep to units whose unit files live in the named
+# crates (same crate_selected/file_crate_dir mapping as the filtered install).
+# This is the multi-session-safe form: several agents work in sibling crates
+# concurrently, and an unscoped restart bounces services another session has
+# installed but is not ready to restart (WORKSPACE.md "Concurrent sessions").
 cmd_restart() {
     local all=0
-    [ "${1:-}" = --all ] && all=1
+    [ "${1:-}" = --all ] && { all=1; shift; }
+    local pkgs=("$@")
+    [ ${#pkgs[@]} -gt 0 ] && assert_packages "${pkgs[@]}"
+
+    # Crate scope: unit-file basenames belonging to the named packages.
+    local scoped="" u
+    if [ ${#pkgs[@]} -gt 0 ]; then
+        while read -r u; do
+            [ -n "$u" ] || continue
+            crate_selected "$(file_crate_dir "$u")" "${pkgs[@]}" || continue
+            scoped="$scoped $(basename "$u")"
+        done < <(user_units)
+        [ -n "$scoped" ] || { printf 'ccebuild: no user units belong to: %s\n' "${pkgs[*]}"; return; }
+    fi
 
     systemctl --user daemon-reload 2>/dev/null || true
 
@@ -539,6 +558,12 @@ cmd_restart() {
     [ -n "$units" ] || { printf 'ccebuild: no cce user services running\n'; return; }
 
     for unit in $units; do
+        if [ -n "$scoped" ]; then
+            case " $scoped " in
+                *" $unit "*) ;;
+                *) continue ;;
+            esac
+        fi
         if [ "$all" -eq 1 ]; then
             want+=("$unit")
             continue
@@ -550,7 +575,11 @@ cmd_restart() {
     done
 
     if [ ${#want[@]} -eq 0 ]; then
-        printf 'ccebuild: every running cce service is already on its current binary\n'
+        if [ ${#pkgs[@]} -gt 0 ]; then
+            printf 'ccebuild: no running service of %s is on a replaced binary\n' "${pkgs[*]}"
+        else
+            printf 'ccebuild: every running cce service is already on its current binary\n'
+        fi
         return
     fi
 
@@ -635,8 +664,11 @@ usage: ccebuild <command>
                         and user unit (derived from cargo metadata)
   status                show built-vs-installed drift, and running processes
                         that are not on their installed binary
-  restart [--all]       restart user services still running a replaced binary
-                        (--all: every running cce service). Never the compositor.
+  restart [--all] [PKG...]
+                        restart user services still running a replaced binary
+                        (--all: regardless of binary state; PKG...: only units
+                        belonging to those crates — the safe form when other
+                        sessions are working). Never the compositor.
   prune [--apply]       delete target/ artifacts of crates cargo no longer
                         knows about (renamed/retired); dry-run by default
   install-system        update the root-owned artifacts: binaries, system

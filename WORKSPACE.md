@@ -256,9 +256,11 @@ the others. The rules:
   including another session's half-finished work. A concurrent build blocking
   on cargo's build-directory lock ("Blocking waiting for file lock") is
   normal — wait it out; don't kill it or conclude the build is broken.
-- **Never `ccebuild restart`.** It is unscoped: it restarts every user service
-  running a replaced binary, including apps another session has installed but
-  is not ready to restart. Restart only your own app by name
+- **Restart with `ccebuild restart <crate>`, never the bare form.** Bare
+  `ccebuild restart` is unscoped: it restarts every user service running a
+  replaced binary, including apps another session has installed but is not
+  ready to restart. The per-crate form restarts only units shipped by the
+  named crate(s). Apps that are not services restart by name
   (`pkill -x <bin>`, relaunch detached).
 - **Shared crates are exclusive.** Before editing `cce-ui`,
   `cce-window-manager`, or `cce-icons`, run `git status` there. Foreign dirt
