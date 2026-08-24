@@ -242,3 +242,34 @@ The repo root and `cce-compositor/scratch/` are littered with **ad-hoc debugging
 and one-off `*.py` inspection scripts (`patch*.py`, `scan_*.py`, `inspect_*.py`). These
 are **not part of the build**. Don't treat them as source, and don't add more to the
 root; use the scratchpad directory for temporary files.
+
+## Concurrent sessions (multiple agents in this workspace)
+
+Several Claude Code sessions may be working in sibling crates **at the same
+time**. The workspace shares one `target/`, one `~/.local/bin`, and one live
+compositor session between them, so an unscoped command in one session damages
+the others. The rules:
+
+- **Scope builds and installs to your crate.** `cargo build --release -p
+  <crate>` and `ccebuild install --no-build <crate>` — never a bare
+  `ccebuild install`, which deploys *every* crate's most recent build,
+  including another session's half-finished work. A concurrent build blocking
+  on cargo's build-directory lock ("Blocking waiting for file lock") is
+  normal — wait it out; don't kill it or conclude the build is broken.
+- **Never `ccebuild restart`.** It is unscoped: it restarts every user service
+  running a replaced binary, including apps another session has installed but
+  is not ready to restart. Restart only your own app by name
+  (`pkill -x <bin>`, relaunch detached).
+- **Shared crates are exclusive.** Before editing `cce-ui`,
+  `cce-window-manager`, or `cce-icons`, run `git status` there. Foreign dirt
+  means another session owns that crate right now — coordinate or stop; don't
+  edit around it. Commit your own crate's work promptly so other sessions
+  always see clean repos.
+- **Verify in your own shadow session.** `cce-shadow start --new` gives each
+  agent a private headless compositor. Driving the *live* session (`ccectl`
+  pointer injection, screenshots, app restarts) is only safe when you know
+  you are the sole session doing so — two agents share one pointer and one
+  screen, and each contaminates the other's observations.
+- **Coordinate through the harness.** `ListAgents` shows the other local
+  Claude sessions; `SendMessage` reaches them. Before touching a shared crate
+  that shows foreign dirt, ask the session that owns it instead of guessing.
