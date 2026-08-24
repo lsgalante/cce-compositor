@@ -21,6 +21,12 @@ export XCURSOR_PATH="${XDG_DATA_HOME:-$HOME/.local/share}/icons:$HOME/.icons:/us
 export WLR_NO_HARDWARE_CURSORS=1
 export WLR_DRM_DEVICES=/dev/dri/card1
 export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.json
+# Mesa's rusticl exposes NO OpenCL devices unless enabled per driver — without
+# this the session has zero OpenCL platforms (the other vendor ICD is a stale
+# opencl-nvidia with no NVIDIA hardware behind it), and every OpenCL consumer
+# fails quietly: the designer's kernel-generated geometry (the default
+# project's sphere) simply never appears.
+export RUSTICL_ENABLE=iris
 
 # The compositor binary this session runs, resolved once so the server launch
 # and the generated client launcher cannot disagree. Absolute rather than
@@ -85,7 +91,7 @@ fi
 # literal '$CCE_BIN' and the client would never start.
 cat > "$CCE_LAUNCH" << LAUNCH_EOF
 #!/bin/sh
-systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_ID XDG_RUNTIME_DIR GNOME_KEYRING_CONTROL SSH_AUTH_SOCK${TERMINAL:+ TERMINAL}
+systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_ID XDG_RUNTIME_DIR GNOME_KEYRING_CONTROL SSH_AUTH_SOCK RUSTICL_ENABLE${TERMINAL:+ TERMINAL}
 systemctl --user start cce-session.target
 ${DEBUG_FLAG}exec "$CCE_BIN" client 2>"$CCE_CLIENT_LOG"
 LAUNCH_EOF
