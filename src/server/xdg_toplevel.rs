@@ -472,6 +472,17 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
         // against a size it had not committed yet; redo it now that it has.
         (*(*toplevel).window).take_pending_view_center();
         (*(*(*toplevel).window).server).wm.dirty_windowing();
+    } else if (*(*toplevel).window).pending_view_center
+        && new_geometry.width > 0
+        && new_geometry.height > 0
+    {
+        // A view-centered FLOATING window whose first size just arrived (the
+        // file chooser): adopt the geometry and redo the centering, or the
+        // map-time 400x400-floor placement stands for a 900x500 dialog.
+        (*(*toplevel).window).box_geom.width = new_geometry.width;
+        (*(*toplevel).window).box_geom.height = new_geometry.height;
+        (*(*toplevel).window).take_pending_view_center();
+        (*(*(*toplevel).window).server).wm.dirty_windowing();
     }
 }
 
@@ -529,6 +540,17 @@ unsafe extern "C" fn handle_ack_configure(
         (*(*toplevel).window).box_geom.height = new_geometry.height;
         // A view-centered modal that is ALSO self-sizing was centered at map
         // against a size it had not committed yet; redo it now that it has.
+        (*(*toplevel).window).take_pending_view_center();
+        (*(*(*toplevel).window).server).wm.dirty_windowing();
+    } else if (*(*toplevel).window).pending_view_center
+        && new_geometry.width > 0
+        && new_geometry.height > 0
+    {
+        // A view-centered FLOATING window whose first size just arrived (the
+        // file chooser): adopt the geometry and redo the centering, or the
+        // map-time 400x400-floor placement stands for a 900x500 dialog.
+        (*(*toplevel).window).box_geom.width = new_geometry.width;
+        (*(*toplevel).window).box_geom.height = new_geometry.height;
         (*(*toplevel).window).take_pending_view_center();
         (*(*(*toplevel).window).server).wm.dirty_windowing();
     }

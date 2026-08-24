@@ -1144,7 +1144,12 @@ impl Window {
     /// per-app window rules assign a tiling MODE, not a placement, so there
     /// is nothing there to hang this off yet.
     fn is_view_centered_modal(app_id: &str) -> bool {
-        app_id == "cce-authenticator"
+        // The polkit prompt, and the file chooser cce-files runs in --select/
+        // --save mode: both are spawned BY an action in the current view and
+        // must be answered immediately — a remembered position is actively
+        // wrong for them (the chooser used to map wherever the file manager
+        // was last used, squares away from the app that opened it).
+        app_id == "cce-authenticator" || app_id == "cce-filesystem-chooser"
     }
 
     unsafe fn try_center_on_view(&mut self) {
@@ -1180,13 +1185,14 @@ impl Window {
         // the first frame is not wildly off, and latch a redo for the commit
         // that brings the truth.
         //
-        // Utility only, because it is the only mode whose size arrives after
-        // map — and so the only one the commit path will ever consume this
-        // for. A Floating modal either has restored geometry (`try_restore`
-        // filled `box_geom` before we got here) or is being given a size by
-        // the arrange pass rather than reporting one.
-        self.pending_view_center = self.tiling_mode == crate::tiling::TilingMode::Utility
-            && (self.box_geom.width <= 0 || self.box_geom.height <= 0);
+        // Any mode with unknown geometry latches the redo — not Utility only.
+        // The file chooser disproved the old Utility-only reasoning: a
+        // FLOATING self-sizer on its first ever run has no restored geometry
+        // and no arrange-given size either, so it was centered against the
+        // 400x400 floor and stuck there, ~250px off for a 900x500 dialog.
+        // A Floating modal with restored geometry still skips the latch
+        // (box_geom is already filled by the time we run).
+        self.pending_view_center = self.box_geom.width <= 0 || self.box_geom.height <= 0;
         self.apply_view_centering();
     }
 
