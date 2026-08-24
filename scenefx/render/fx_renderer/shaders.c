@@ -19,6 +19,7 @@
 #include "tex_frag_src.h"
 #include "box_shadow_frag_src.h"
 #include "bevel_frag_src.h"
+#include "droplet_frag_src.h"
 #include "blur1_frag_src.h"
 #include "blur2_frag_src.h"
 #include "blur_effects_frag_src.h"
@@ -367,6 +368,30 @@ bool link_bevel_program(struct bevel_shader *shader) {
 	shader->light_intensity = glGetUniformLocation(prog, "light_intensity");
 	shader->shade_intensity = glGetUniformLocation(prog, "shade_intensity");
 	shader->shoulder = glGetUniformLocation(prog, "shoulder");
+
+	return true;
+}
+
+bool link_droplet_program(struct droplet_shader *shader) {
+	GLuint prog;
+	shader->program = prog = link_program(droplet_frag_src);
+	if (!shader->program) {
+		return false;
+	}
+	shader->proj = glGetUniformLocation(prog, "proj");
+	shader->pos_attrib = glGetAttribLocation(prog, "pos");
+	shader->tex = glGetUniformLocation(prog, "tex");
+	shader->tex_size = glGetUniformLocation(prog, "tex_size");
+	shader->position = glGetUniformLocation(prog, "position");
+	shader->size = glGetUniformLocation(prog, "size");
+	shader->attach_r = glGetUniformLocation(prog, "attach_r");
+	shader->sheet_r = glGetUniformLocation(prog, "sheet_r");
+	shader->bow_rise = glGetUniformLocation(prog, "bow_rise");
+	shader->blend_k = glGetUniformLocation(prog, "blend_k");
+	shader->curve = glGetUniformLocation(prog, "curve");
+	shader->band_px = glGetUniformLocation(prog, "band_px");
+	shader->refr = glGetUniformLocation(prog, "refr");
+	shader->ghost = glGetUniformLocation(prog, "ghost");
 
 	return true;
 }

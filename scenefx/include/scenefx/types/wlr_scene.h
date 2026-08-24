@@ -62,6 +62,7 @@ enum wlr_scene_node_type {
 	WLR_SCENE_NODE_BUFFER,
 	WLR_SCENE_NODE_SHADOW,
 	WLR_SCENE_NODE_BEVEL,
+	WLR_SCENE_NODE_DROPLET,
 	WLR_SCENE_NODE_OPTIMIZED_BLUR,
 	WLR_SCENE_NODE_BLUR,
 };
@@ -172,6 +173,24 @@ struct wlr_scene_shadow {
 };
 
 /** A lit chamfer around the inside of a rounded rect. */
+/** A water-drop backdrop lens for a status segment: refracts (and ghosts)
+ * the unblurred below-layer snapshot inside the drop's silhouette. Drawn
+ * BENEATH the segment's surface; the client's translucent drop composites
+ * on top. All silhouette/refraction fields are logical px (scaled with the
+ * output at render time). */
+struct wlr_scene_droplet {
+	struct wlr_scene_node node;
+	int width, height;
+	float attach_r;
+	float sheet_r;
+	float bow_rise;
+	float blend_k;
+	float curve;
+	float band_px;
+	float refr;
+	float ghost;
+};
+
 struct wlr_scene_bevel {
 	struct wlr_scene_node node;
 	int width, height;
@@ -541,6 +560,11 @@ struct wlr_scene_shadow *wlr_scene_shadow_from_node(struct wlr_scene_node *node)
  */
 struct wlr_scene_bevel *wlr_scene_bevel_from_node(struct wlr_scene_node *node);
 
+/**
+ * If this node represents a wlr_scene_droplet, that structure is returned.
+ */
+struct wlr_scene_droplet *wlr_scene_droplet_from_node(struct wlr_scene_node *node);
+
 struct wlr_scene_blur *wlr_scene_blur_from_node(struct wlr_scene_node *node);
 
 /**
@@ -627,6 +651,16 @@ void wlr_scene_bevel_set_thickness(struct wlr_scene_bevel *bevel, float thicknes
 void wlr_scene_bevel_set_light(struct wlr_scene_bevel *bevel, float dir_x, float dir_y,
 	float light_intensity, float shade_intensity);
 void wlr_scene_bevel_set_shoulder(struct wlr_scene_bevel *bevel, float shoulder);
+
+struct wlr_scene_droplet *wlr_scene_droplet_create(struct wlr_scene_tree *parent,
+		int width, int height);
+void wlr_scene_droplet_set_size(struct wlr_scene_droplet *droplet, int width, int height);
+/** Silhouette: top/bottom corner radii, bottom-arc rise, blend, exponent. */
+void wlr_scene_droplet_set_silhouette(struct wlr_scene_droplet *droplet,
+		float attach_r, float sheet_r, float bow_rise, float blend_k, float curve);
+/** Lens: falloff band px, rim refraction px, inverted-ghost strength 0-1. */
+void wlr_scene_droplet_set_lens(struct wlr_scene_droplet *droplet,
+		float band_px, float refr, float ghost);
 void wlr_scene_bevel_set_color(struct wlr_scene_bevel *bevel, const float color[static 4]);
 
 /**

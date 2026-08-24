@@ -96,6 +96,7 @@ static inline void free_shaders(struct fx_renderer *renderer) {
 	glDeleteProgram(renderer->shaders.tex_effects_ext.program);
 	glDeleteProgram(renderer->shaders.box_shadow.program);
 	glDeleteProgram(renderer->shaders.bevel.program);
+	glDeleteProgram(renderer->shaders.droplet.program);
 	glDeleteProgram(renderer->shaders.blur1.program);
 	glDeleteProgram(renderer->shaders.blur2.program);
 	glDeleteProgram(renderer->shaders.blur_effects.program);
@@ -426,6 +427,12 @@ static bool link_shaders(struct fx_renderer *renderer) {
 	// bevel shader
 	if (!link_bevel_program(&renderer->shaders.bevel)) {
 		wlr_log(WLR_ERROR, "Could not link bevel shader");
+		goto error;
+	}
+
+	// droplet backdrop-refraction shader
+	if (!link_droplet_program(&renderer->shaders.droplet)) {
+		wlr_log(WLR_ERROR, "Could not link droplet shader");
 		goto error;
 	}
 

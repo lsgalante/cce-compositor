@@ -201,6 +201,7 @@ struct fx_renderer {
 
 		struct box_shadow_shader box_shadow;
 		struct bevel_shader bevel;
+		struct droplet_shader droplet;
 		struct blur_shader blur1;
 		struct blur_shader blur2;
 		struct blur_effects_shader blur_effects;

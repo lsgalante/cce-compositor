@@ -113,6 +113,11 @@ pub struct Layout {
     /// (`~/.config/cce/cce-status-interface/config.kdl`, `module { spacing }`)
     /// overrides the shared `style { status module_spacing }`.
     pub status_module_spacing: i64,
+    /// The bar's `module { droplet }` spec string when present — the water-
+    /// drop module style. The compositor drives a scenefx droplet node
+    /// (backdrop refraction) per status segment from the SAME spec the bar
+    /// draws its drops from, so the two silhouettes cannot drift.
+    pub status_droplet: Option<String>,
     pub cloud_position_default: Option<[i32; 2]>,
 }
 
@@ -221,6 +226,7 @@ impl Default for Layout {
             window_backdrop_blur_ignore_transparent: true,
             status_module_hide_mode_preview: 4,
             status_module_spacing: 12,
+            status_droplet: None,
             cloud_position_default: None,
         }
     }
@@ -755,6 +761,11 @@ pub struct LayoutConfig {
     pub status_module_hide_mode_preview: i64,
     #[serde(default = "default_status_module_spacing")]
     pub status_module_spacing: i64,
+    /// The bar's `module { droplet }` spec string (presence enables the
+    /// droplet style; the compositor's per-segment backdrop-refraction node
+    /// reads the same spec the bar draws from).
+    #[serde(default)]
+    pub status_droplet: Option<String>,
 }
 
 impl Default for LayoutConfig {
@@ -781,6 +792,7 @@ impl Default for LayoutConfig {
             window_backdrop_blur_ignore_transparent: default_window_backdrop_blur_ignore_transparent(),
             status_module_hide_mode_preview: default_status_module_hide_mode_preview(),
             status_module_spacing: default_status_module_spacing(),
+            status_droplet: None,
         }
     }
 }
@@ -1447,6 +1459,25 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                     if let Some(i) = module_i64("height") {
                         layout.bar_height = i;
                     }
+                    // The droplet spec string (presence enables the style;
+                    // empty = all defaults). Same either-spelling lookup.
+                    let module_str = |key: &str| -> Option<String> {
+                        module
+                            .entries()
+                            .iter()
+                            .find(|e| e.name().map(|id| id.value()) == Some(key))
+                            .map(|e| e.value())
+                            .or_else(|| {
+                                module.children().and_then(|c| {
+                                    c.nodes()
+                                        .iter()
+                                        .find(|n| n.name().value() == key)
+                                        .and_then(|n| n.entries().first().map(|e| e.value()))
+                                })
+                            })
+                            .and_then(|v| v.as_string().map(|s| s.to_string()))
+                    };
+                    layout.status_droplet = module_str("droplet");
                 }
             }
         }
@@ -2275,6 +2306,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
     state.layout.status_module_hide_mode_preview = config.layout.status_module_hide_mode_preview;
     state.layout.status_module_spacing = config.layout.status_module_spacing;
+    state.layout.status_droplet = config.layout.status_droplet.clone();
     state.layout.cloud_position_default = config.surface.cloud_position_default;
     state.layout.shadow_enabled = config.surface.shadow_enabled;
     state.layout.shadow_sigma = config.surface.shadow_sigma.max(0.0) as f32;

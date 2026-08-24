@@ -101,6 +101,26 @@ struct fx_render_bevel_options {
 	struct wlr_render_color color;
 };
 
+struct fx_render_droplet_options {
+	struct wlr_box box;
+	/* Clip region, leave NULL to disable clipping */
+	const pixman_region32_t *clip;
+
+	/* Silhouette, all px at output scale: top/bottom corner radii, the
+	 * bottom-arc edge rise (0 = flat run), the smooth-intersection blend,
+	 * and the corner-shape exponent (2 = circular). */
+	float attach_r;
+	float sheet_r;
+	float bow_rise;
+	float blend_k;
+	float curve;
+	/* Refraction: falloff band px, rim offset px (sign flips direction),
+	 * inverted-lens ghost strength 0-1. */
+	float band_px;
+	float refr;
+	float ghost;
+};
+
 struct fx_render_blur_pass_options {
 	struct fx_render_texture_options tex_options;
 	struct fx_framebuffer *current_buffer;
@@ -162,6 +182,14 @@ void fx_render_pass_add_box_shadow(struct fx_gles_render_pass *pass,
  */
 void fx_render_pass_add_bevel(struct fx_gles_render_pass *pass,
 		const struct fx_render_bevel_options *options);
+
+/**
+ * Render a droplet backdrop: the unblurred below-layer snapshot re-rendered
+ * through a water drop's lens (rim refraction + inverted ghost) inside the
+ * drop's silhouette. No-op when the snapshot buffer does not exist.
+ */
+void fx_render_pass_add_droplet(struct fx_gles_render_pass *pass,
+		const struct fx_render_droplet_options *options);
 
 /**
  * Render blur.

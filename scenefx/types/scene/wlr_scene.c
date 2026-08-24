@@ -88,6 +88,12 @@ struct wlr_scene_bevel *wlr_scene_bevel_from_node(struct wlr_scene_node *node) {
 	return bevel;
 }
 
+struct wlr_scene_droplet *wlr_scene_droplet_from_node(struct wlr_scene_node *node) {
+	assert(node->type == WLR_SCENE_NODE_DROPLET);
+	struct wlr_scene_droplet *droplet = wl_container_of(node, droplet, node);
+	return droplet;
+}
+
 struct wlr_scene_blur *wlr_scene_blur_from_node(struct wlr_scene_node *node) {
 	assert(node->type == WLR_SCENE_NODE_BLUR);
 	struct wlr_scene_blur *blur = wl_container_of(node, blur, node);
@@ -287,6 +293,7 @@ static bool _scene_nodes_in_box(struct wlr_scene_node *node, struct wlr_box *box
 	case WLR_SCENE_NODE_BUFFER:
 	case WLR_SCENE_NODE_SHADOW:
 	case WLR_SCENE_NODE_BEVEL:
+	case WLR_SCENE_NODE_DROPLET:
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:
 	case WLR_SCENE_NODE_BLUR:;
 		struct wlr_box node_box = { .x = lx, .y = ly };
@@ -399,9 +406,11 @@ static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
 		// TODO: test & handle case of blur sigma = 0 and color[3] = 1?
 		return;
 	} else if (node->type == WLR_SCENE_NODE_BEVEL
+			|| node->type == WLR_SCENE_NODE_DROPLET
 			|| node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR
 			|| node->type == WLR_SCENE_NODE_BLUR) {
-		// Always transparent
+		// Always transparent (the droplet is opaque inside its silhouette
+		// but never box-shaped, so it must not occlude as a box).
 		return;
 	}
 
@@ -1184,6 +1193,60 @@ void wlr_scene_bevel_set_shoulder(struct wlr_scene_bevel *bevel, float shoulder)
 	scene_node_update(&bevel->node, NULL);
 }
 
+struct wlr_scene_droplet *wlr_scene_droplet_create(struct wlr_scene_tree *parent,
+		int width, int height) {
+	struct wlr_scene_droplet *droplet = calloc(1, sizeof(*droplet));
+	if (droplet == NULL) {
+		return NULL;
+	}
+	assert(parent);
+	scene_node_init(&droplet->node, WLR_SCENE_NODE_DROPLET, parent);
+
+	droplet->width = width;
+	droplet->height = height;
+	droplet->curve = 2.0f;
+
+	scene_node_update(&droplet->node, NULL);
+
+	return droplet;
+}
+
+void wlr_scene_droplet_set_size(struct wlr_scene_droplet *droplet, int width, int height) {
+	if (droplet->width == width && droplet->height == height) {
+		return;
+	}
+	droplet->width = width;
+	droplet->height = height;
+	scene_node_update(&droplet->node, NULL);
+}
+
+void wlr_scene_droplet_set_silhouette(struct wlr_scene_droplet *droplet,
+		float attach_r, float sheet_r, float bow_rise, float blend_k, float curve) {
+	if (droplet->attach_r == attach_r && droplet->sheet_r == sheet_r
+			&& droplet->bow_rise == bow_rise && droplet->blend_k == blend_k
+			&& droplet->curve == curve) {
+		return;
+	}
+	droplet->attach_r = attach_r;
+	droplet->sheet_r = sheet_r;
+	droplet->bow_rise = bow_rise;
+	droplet->blend_k = blend_k;
+	droplet->curve = curve;
+	scene_node_update(&droplet->node, NULL);
+}
+
+void wlr_scene_droplet_set_lens(struct wlr_scene_droplet *droplet,
+		float band_px, float refr, float ghost) {
+	if (droplet->band_px == band_px && droplet->refr == refr
+			&& droplet->ghost == ghost) {
+		return;
+	}
+	droplet->band_px = band_px;
+	droplet->refr = refr;
+	droplet->ghost = ghost;
+	scene_node_update(&droplet->node, NULL);
+}
+
 void wlr_scene_bevel_set_color(struct wlr_scene_bevel *bevel, const float color[static 4]) {
 	if (memcmp(bevel->color, color, sizeof(bevel->color)) == 0) {
 		return;
@@ -1958,6 +2021,11 @@ void scene_node_get_size(struct wlr_scene_node *node, int *width, int *height) {
 		*width = scene_bevel->width;
 		*height = scene_bevel->height;
 		break;
+	case WLR_SCENE_NODE_DROPLET:;
+		struct wlr_scene_droplet *scene_droplet = wlr_scene_droplet_from_node(node);
+		*width = scene_droplet->width;
+		*height = scene_droplet->height;
+		break;
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:;
 		struct wlr_scene_optimized_blur *scene_blur =
 			wlr_scene_optimized_blur_from_node(node);
@@ -2153,6 +2221,7 @@ static bool scene_node_at_iterator(struct wlr_scene_node *node,
 		}
 	} else if (node->type == WLR_SCENE_NODE_SHADOW
 			|| node->type == WLR_SCENE_NODE_BEVEL
+			|| node->type == WLR_SCENE_NODE_DROPLET
 			|| node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR
 			|| node->type == WLR_SCENE_NODE_BLUR) {
 		// Disable interaction
@@ -2458,6 +2527,23 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.clip = &render_region,
 		};
 		fx_render_pass_add_bevel(fx_pass, &bevel_options);
+		break;
+	case WLR_SCENE_NODE_DROPLET:;
+		struct wlr_scene_droplet *scene_droplet = wlr_scene_droplet_from_node(node);
+
+		struct fx_render_droplet_options droplet_options = {
+			.box = dst_box,
+			.attach_r = scene_droplet->attach_r * data->scale,
+			.sheet_r = scene_droplet->sheet_r * data->scale,
+			.bow_rise = scene_droplet->bow_rise * data->scale,
+			.blend_k = scene_droplet->blend_k * data->scale,
+			.curve = scene_droplet->curve,
+			.band_px = scene_droplet->band_px * data->scale,
+			.refr = scene_droplet->refr * data->scale,
+			.ghost = scene_droplet->ghost,
+			.clip = &render_region,
+		};
+		fx_render_pass_add_droplet(fx_pass, &droplet_options);
 		break;
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:;
 		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);

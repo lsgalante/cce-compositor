@@ -359,6 +359,11 @@ pub struct Window {
     /// the rim overlays the client's outermost pixels. Null if creation
     /// failed (the effect is then simply absent).
     pub bevel: *mut ffi::wlr_scene_bevel,
+    /// scenefx droplet node: for droplet-styled status segments, the
+    /// backdrop refracted through the drop's lens. Created BEFORE the
+    /// surfaces so it draws beneath the client's translucent drop. Null if
+    /// creation failed (the effect is then simply absent).
+    pub droplet: *mut ffi::wlr_scene_droplet,
     pub decorations_below: ffi::wl_list,
     pub decorations_below_tree: *mut ffi::wlr_scene_tree,
     pub surfaces: crate::scene::SaveableSurfaces,
@@ -547,6 +552,14 @@ impl Window {
             ffi::wlr_scene_node_set_enabled(&mut (*shadow).node, false);
         }
 
+        // Beneath the surfaces like the shadow: the refracted backdrop must
+        // render under the client's translucent drop, not over it. Synced in
+        // update_droplet; enabled only for droplet-styled status segments.
+        let droplet = ffi::wlr_scene_droplet_create(tree, 0, 0);
+        if !droplet.is_null() {
+            ffi::wlr_scene_node_set_enabled(&mut (*droplet).node, false);
+        }
+
         let black_color = [0.0f32, 0.0f32, 0.0f32, 1.0f32];
         let fullscreen_background = ffi::wlr_scene_rect_create(tree, 0, 0, black_color.as_ptr());
         if fullscreen_background.is_null() {
@@ -623,6 +636,7 @@ impl Window {
             window_background,
             shadow,
             bevel,
+            droplet,
             decorations_below: std::mem::zeroed(),
             decorations_below_tree,
             surfaces,
@@ -2295,7 +2309,7 @@ impl Window {
             let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                             app_id.starts_with("cce-status");
             let is_decorated = (*self.server).wm.is_decorated_app(&app_id);
-            let blur_enabled = requested.blur && (self.wm_requested.ssd || is_decorated || is_status);
+            let blur_enabled = requested.blur && (self.wm_requested.ssd || is_decorated || is_status) && !self.droplet_backdrop_on();
             let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
             if is_status {
                 ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
@@ -2393,6 +2407,7 @@ impl Window {
                     && (*self.server).wm.is_beveled_app(&app_id);
             self.update_shadow(width, height, radius, want_shadow);
                 self.update_bevel(width, height, radius, want_bevel);
+                self.update_droplet(width, height);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
             // Device px, like the blur radius above: the surface content is
@@ -2771,7 +2786,7 @@ impl Window {
                 let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                                 app_id.starts_with("cce-status");
                 let is_decorated = (*self.server).wm.is_decorated_app(&app_id);
-                let blur_enabled = requested.blur && (self.wm_requested.ssd || is_decorated || is_status);
+                let blur_enabled = requested.blur && (self.wm_requested.ssd || is_decorated || is_status) && !self.droplet_backdrop_on();
                 let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
                 if is_status {
                     ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
@@ -2863,6 +2878,7 @@ impl Window {
                     && (*self.server).wm.is_beveled_app(&app_id);
                 self.update_shadow(width, height, radius, want_shadow);
                 self.update_bevel(width, height, radius, want_bevel);
+                self.update_droplet(width, height);
             }
 
             self.scale_only_render_finish();
@@ -2991,6 +3007,75 @@ impl Window {
         ffi::wlr_scene_bevel_set_color(self.bevel, layout.bevel_color.as_ptr());
         ffi::river_scene_node_set_position_if_changed(node, 0, 0);
     }
+    /// Sync the droplet backdrop-refraction node for a droplet-styled status
+    /// segment. Called from BOTH render paths, like update_bevel — one-path
+    /// effects freeze at the pre-gesture zoom (the shadow's old trap).
+    pub unsafe fn update_droplet(&self, width: i32, height: i32) {
+        if self.droplet.is_null() {
+            return;
+        }
+        let node = &mut (*self.droplet).node as *mut ffi::wlr_scene_node;
+        let layout = &(*self.server).wm.layout;
+        let is_status = self.tiling_mode == crate::tiling::TilingMode::Status;
+        // Only bar-strip segments: an expanded (menu) segment is taller than
+        // the bar and draws its own grown drop client-side — refracting the
+        // collapsed silhouette beneath it would be wrong.
+        let enabled = is_status
+            && layout.status_droplet.is_some()
+            && width > 0
+            && height > 0
+            && height <= layout.bar_height as i32;
+        if !enabled {
+            ffi::wlr_scene_node_set_enabled(node, false);
+            return;
+        }
+        let spec = cce_ui::scene::paint::DropletSpec::parse(
+            layout.status_droplet.as_deref().unwrap_or(""),
+        );
+        if spec.refr <= 0.0 && spec.ghost <= 0.0 {
+            ffi::wlr_scene_node_set_enabled(node, false);
+            return;
+        }
+        ffi::wlr_scene_node_set_enabled(node, true);
+
+        // Match the client's drop box: inset 1px from the surface bottom.
+        // Camera-zoom scaling like the bevel; output scale is applied by the
+        // render pass itself.
+        let w = width as f32;
+        let h = (height as f32 - 1.0).max(1.0);
+        let (sr, ar, bow) = spec.resolve_silhouette(w, h);
+        let k = (spec.blend.max(0.0) * h).max(1.0);
+        let band = (spec.band.max(0.05) * h).max(1.0);
+        let zs = self.scale as f32;
+        ffi::wlr_scene_droplet_set_size(self.droplet, width, height);
+        ffi::wlr_scene_droplet_set_silhouette(
+            self.droplet,
+            ar * zs,
+            sr * zs,
+            bow * zs,
+            k * zs,
+            spec.curve.clamp(2.0, 6.0),
+        );
+        ffi::wlr_scene_droplet_set_lens(self.droplet, band * zs, spec.refr * zs, spec.ghost.clamp(0.0, 1.0));
+        ffi::river_scene_node_set_position_if_changed(node, 0, 0);
+    }
+    /// True when this status segment's droplet backdrop node is live. The
+    /// per-window blur must yield to it: the blur pass would composite the
+    /// UNREFRACTED cached backdrop over the lens output.
+    pub unsafe fn droplet_backdrop_on(&self) -> bool {
+        if self.droplet.is_null() || self.tiling_mode != crate::tiling::TilingMode::Status {
+            return false;
+        }
+        match (*self.server).wm.layout.status_droplet.as_deref() {
+            Some(raw) => {
+                let spec = cce_ui::scene::paint::DropletSpec::parse(raw);
+                spec.refr > 0.0 || spec.ghost > 0.0
+            }
+            None => false,
+        }
+    }
+
+
 
     /// Advance the hover fade one tick. Every zone eases toward 1.0 if it is
     /// the one under the pointer and 0.0 otherwise. Returns true while any
@@ -4291,7 +4376,7 @@ impl Decoration {
             ignore_transparent = (*server).wm.layout.status_backdrop_blur_ignore_transparent;
         }
         let is_decorated = (*server).wm.is_decorated_app(&app_id);
-        let blur_enabled = self.rendering_requested.blur && ((*self.window).wm_requested.ssd || is_decorated || is_status);
+        let blur_enabled = self.rendering_requested.blur && ((*self.window).wm_requested.ssd || is_decorated || is_status) && !(*self.window).droplet_backdrop_on();
         // Radius 0 preserves existing behaviour on the layer-surface path (see layer_shell.rs)
         // — it never had a blur radius applied, and this fix is scoped to toplevels.
         ffi::river_scene_node_enable_blur(self.surfaces.tree as *mut ffi::wlr_scene_node, blur_enabled, (*server).wm.layout.scenefx_optimized_blur, ignore_transparent, 0, 0, 0, 0, 0);

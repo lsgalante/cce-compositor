@@ -1164,6 +1164,76 @@ void fx_render_pass_add_bevel(struct fx_gles_render_pass *pass,
 	pop_fx_debug(renderer);
 }
 
+void fx_render_pass_add_droplet(struct fx_gles_render_pass *pass,
+		const struct fx_render_droplet_options *options) {
+	struct fx_renderer *renderer = pass->buffer->renderer;
+
+	struct wlr_box box = options->box;
+	assert(box.width > 0 && box.height > 0);
+
+	// The lens samples the UNBLURRED snapshot of everything beneath the bar
+	// layer — the same capture the optimized blur bakes from. Without it
+	// (blur disabled DE-wide) there is nothing to refract; the client's own
+	// translucent drop still renders, so skipping is a graceful degrade.
+	if (pass->fx_offscreen_buffers == NULL) {
+		return;
+	}
+	struct fx_framebuffer *snap = pass->fx_offscreen_buffers->optimized_no_blur_buffer;
+	if (snap == NULL || snap->buffer == NULL) {
+		return;
+	}
+	struct wlr_texture *wlr_texture =
+		fx_texture_from_buffer(&renderer->wlr_renderer, snap->buffer);
+	if (wlr_texture == NULL) {
+		return;
+	}
+	struct fx_texture *texture = fx_get_texture(wlr_texture);
+
+	pixman_region32_t clip_region;
+	if (options->clip) {
+		pixman_region32_init(&clip_region);
+		pixman_region32_copy(&clip_region, options->clip);
+	} else {
+		pixman_region32_init_rect(&clip_region, box.x, box.y, box.width, box.height);
+	}
+
+	push_fx_debug(renderer);
+
+	// The refracted backdrop is opaque inside the silhouette (it REPLACES
+	// what the drop covers); the feathered rim blends source-over.
+	setup_blending(WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
+
+	struct droplet_shader *shader = &renderer->shaders.droplet;
+	glUseProgram(shader->program);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(texture->target, texture->tex);
+	glTexParameteri(texture->target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(texture->target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	set_proj_matrix(shader->proj, pass->projection_matrix, &box);
+	glUniform1i(shader->tex, 0);
+	glUniform2f(shader->tex_size, snap->buffer->width, snap->buffer->height);
+	glUniform2f(shader->position, box.x, box.y);
+	glUniform2f(shader->size, box.width, box.height);
+	glUniform1f(shader->attach_r, options->attach_r);
+	glUniform1f(shader->sheet_r, options->sheet_r);
+	glUniform1f(shader->bow_rise, options->bow_rise);
+	glUniform1f(shader->blend_k, options->blend_k);
+	glUniform1f(shader->curve, options->curve);
+	glUniform1f(shader->band_px, options->band_px);
+	glUniform1f(shader->refr, options->refr);
+	glUniform1f(shader->ghost, options->ghost);
+
+	render(&box, &clip_region, shader->pos_attrib);
+
+	glBindTexture(texture->target, 0);
+	pixman_region32_fini(&clip_region);
+	wlr_texture_destroy(wlr_texture);
+
+	pop_fx_debug(renderer);
+}
+
 void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 		struct fx_render_blur_pass_options *fx_options) {
 	if (pass->fx_offscreen_buffers == NULL) {

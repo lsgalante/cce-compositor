@@ -179,6 +179,26 @@ struct bevel_shader {
 
 bool link_bevel_program(struct bevel_shader *shader);
 
+struct droplet_shader {
+	GLuint program;
+	GLint proj;
+	GLint pos_attrib;
+	GLint tex;
+	GLint tex_size;
+	GLint position;
+	GLint size;
+	GLint attach_r;
+	GLint sheet_r;
+	GLint bow_rise;
+	GLint blend_k;
+	GLint curve;
+	GLint band_px;
+	GLint refr;
+	GLint ghost;
+};
+
+bool link_droplet_program(struct droplet_shader *shader);
+
 struct blur_shader {
 	GLuint program;
 	GLint proj;
