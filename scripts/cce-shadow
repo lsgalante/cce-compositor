@@ -153,6 +153,79 @@ instance_names() {
     return 0
 }
 
+# ── ownership ────────────────────────────────────────────────────────────────
+# Named instances stop two sessions from *accidentally* sharing one shadow, but
+# not from deliberately cleaning up: `stop --all` and `prune` would otherwise
+# reach across and kill or delete an instance another agent is mid-run in. So
+# an instance records who started it, and those two commands leave other
+# people's alone.
+#
+# The token names the session that drives this instance, and has to stay the
+# same across the many short-lived shells one session spawns. Neither the
+# script nor its parent will do: each invocation is a fresh setsid'd session
+# leader, and $PPID is the throwaway shell of a single tool call, which is dead
+# by the next one — an instance would read as an orphan to the very session
+# that started it. So walk up past the shells to the first process that is not
+# one: an agent's `claude`, or a human's terminal emulator behind their
+# interactive shell. Both are stable for as long as the session lasts. A bare
+# pid would be reusable once that process exits, so the token carries its start
+# time too.
+owner_pid() {
+    local pid=$PPID depth=0 comm
+    while [ "$pid" -gt 1 ] && [ "$depth" -lt 10 ]; do
+        comm=$(tr -d '\0' < "/proc/$pid/comm" 2>/dev/null) || break
+        case "$comm" in
+            sh|bash|zsh|dash|ksh|fish|busybox) ;;
+            *) break ;;
+        esac
+        pid=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $2}')
+        [ -n "$pid" ] || return 1
+        depth=$((depth + 1))
+    done
+    printf '%s\n' "$pid"
+}
+
+owner_token() {
+    if [ -n "${CCE_SHADOW_OWNER:-}" ]; then
+        printf '%s\n' "$CCE_SHADOW_OWNER"
+        return
+    fi
+    local pid; pid=$(owner_pid) || pid=$PPID
+    printf '%s:%s\n' "$pid" "$(proc_starttime "$pid")"
+}
+
+# Field 22 of /proc/<pid>/stat, reached by cutting past the comm field first:
+# comm is parenthesised and may contain spaces, which would shift every
+# positional field after it. What remains starts at field 3, so 22 is 20 there.
+proc_starttime() {
+    sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'
+}
+
+owner_alive() {
+    local token=$1 pid start
+    case "$token" in
+        [0-9]*:[0-9]*) pid=${token%%:*}; start=${token#*:} ;;
+        # Not <pid>:<starttime> — an explicit CCE_SHADOW_OWNER string, whose
+        # liveness cannot be checked. Call it live: declining to delete what we
+        # cannot prove is dead is the safe direction, and --force is the way out.
+        *) return 0 ;;
+    esac
+    [ -d "/proc/$pid" ] || return 1
+    [ "$(proc_starttime "$pid")" = "$start" ]
+}
+
+# me | other | orphan | none — for the instance whose paths are resolved, or
+# for the directory passed as $1.
+instance_ownership() {
+    local dir=${1:-$SHADOW_DIR} token
+    token=$(cat "$dir/run/owner" 2>/dev/null) || token=""
+    [ -n "$token" ] || { printf 'none\n'; return; }
+    if [ "$token" = "$(owner_token)" ]; then printf 'me\n'
+    elif owner_alive "$token";           then printf 'other\n'
+    else                                      printf 'orphan\n'
+    fi
+}
+
 usage() {
     cat <<'EOF'
 usage: cce-shadow [--instance <name>] <command> [args...]
@@ -176,9 +249,12 @@ default instance is "default"; CCE_SHADOW_INSTANCE sets it for a whole shell.
       --bin <path>      cce-fx to run (default: PATH, then target/release)
   stop [--all]        stop it and clean up its sockets
       --all             every instance, not just this one
-  list                every instance, running or not
-  prune               delete stopped agent-N instances, and their shots;
-                      instances you named yourself are never touched
+      --force           with --all: include instances another live session
+                        started (they are skipped by default)
+  list                every instance, running or not, and who owns it
+  prune [--force]     delete stopped agent-N instances, and their shots;
+                      instances you named yourself are never touched, nor
+                      are ones another live session started
   status              is it running, on which display, with what in it
   ctl <args...>       run ccectl against it   (e.g. ctl windows)
   spawn <cmd>         launch a client inside it
@@ -458,6 +534,10 @@ cmd_start() {
             "WLR_HEADLESS_OUTPUTS=1")
     [ -n "$gpu" ] && env_args+=("WLR_RENDER_DRM_DEVICE=$gpu")
 
+    # Written before the launch, so an instance is attributable even if the
+    # compositor dies during startup and leaves the tree behind.
+    owner_token > "$RUN_DIR/owner"
+
     note "starting $cce_fx (headless)"
     env "${env_args[@]}" setsid nohup \
         "$cce_fx" --no-xwayland --log-level info -c "$exec_cmd" \
@@ -490,7 +570,7 @@ cmd_start() {
 }
 
 cmd_stop() {
-    if [ "${1:-}" = --all ]; then cmd_stop_all; return; fi
+    if [ "${1:-}" = --all ]; then shift; cmd_stop_all "$@"; return; fi
 
     local pid display
     pid=$(shadow_pid) || pid=""
@@ -538,16 +618,25 @@ cmd_stop() {
 
 cmd_stop_all() {
     [ -n "${CCE_SHADOW_DIR:-}" ] && die "--all is meaningless with CCE_SHADOW_DIR set"
-    local name n=0
+    local force=0
+    [ "${1:-}" = --force ] && force=1
+    local name n=0 skipped=0
     while read -r name; do
         [ -n "$name" ] || continue
         INSTANCE=$name
         resolve_paths
+        # Never silently: an instance that survives --all has to say why, or
+        # the next reading is "stop --all left something running".
+        if [ "$force" = 0 ] && [ "$(instance_ownership)" = other ]; then
+            note "skipping '$name' — another live session started it (--force overrides)"
+            skipped=$((skipped + 1))
+            continue
+        fi
         note "instance '$name'"
         cmd_stop
         n=$((n + 1))
     done < <(instance_names)
-    [ "$n" = 0 ] && note "no instances"
+    [ "$n" = 0 ] && [ "$skipped" = 0 ] && note "no instances"
     return 0
 }
 
@@ -563,14 +652,15 @@ list_row() {
         up=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')
         kids=$(children_of "$dir/home" "$pid" | wc -l)
     fi
-    printf '%-12s %-8s %-8s %-11s %-9s %s\n' \
-        "$name" "$status" "${pid:--}" "${disp:--}" "${up:--}" "$kids"
+    printf '%-12s %-8s %-8s %-11s %-9s %-8s %s\n' \
+        "$name" "$status" "${pid:--}" "${disp:--}" "${up:--}" "$kids" \
+        "$(instance_ownership "$dir")"
 }
 
 cmd_list() {
     local name dir legacy="" found=0
-    printf '%-12s %-8s %-8s %-11s %-9s %s\n' \
-        INSTANCE STATUS PID DISPLAY UPTIME CLIENTS
+    printf '%-12s %-8s %-8s %-11s %-9s %-8s %s\n' \
+        INSTANCE STATUS PID DISPLAY UPTIME CLIENTS OWNER
     legacy=$(legacy_live 2>/dev/null || true)
     while read -r name; do
         [ -n "$name" ] || continue
@@ -592,6 +682,8 @@ cmd_list() {
 # a name chosen deliberately is not garbage.
 cmd_prune() {
     [ -n "${CCE_SHADOW_DIR:-}" ] && die "prune is meaningless with CCE_SHADOW_DIR set"
+    local force=0
+    [ "${1:-}" = --force ] && force=1
     local name dir n=0
     while read -r name; do
         case "$name" in agent-[0-9]*) ;; *) continue ;; esac
@@ -599,6 +691,14 @@ cmd_prune() {
         [ -d "$dir" ] || continue
         if pid_from "$dir/run/cce-fx.pid" >/dev/null; then
             note "keeping '$name' — still running"
+            continue
+        fi
+        # A stopped instance is still someone's workspace: its shots and its
+        # seeded config are what they come back to. Only reclaim what is mine,
+        # unowned, or orphaned — an owner whose process is gone is exactly the
+        # leak this command exists for.
+        if [ "$force" = 0 ] && [ "$(instance_ownership "$dir")" = other ]; then
+            note "keeping '$name' — another live session started it (--force overrides)"
             continue
         fi
         rm -rf "$dir"

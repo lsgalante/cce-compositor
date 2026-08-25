@@ -128,6 +128,25 @@ because `start` reports an existing session as success. `prune` exists for the
 same reason in reverse: an agent that dies never calls `stop`, and a leaked
 headless compositor runs forever. It deletes stopped `agent-N` trees only;
 instances named by hand are left alone, since pruning takes their `shots/` too.
+
+**Ownership** closes the other half. Naming instances stops two sessions
+sharing one by accident, but not `stop --all` and `prune` reaching across
+deliberately — an `agent-1` did vanish mid-verification, tree and all, with
+three sessions live on the machine. So `start` records who started the
+instance in `run/owner`, and those two commands skip anything a *different
+live* session owns, saying so rather than passing over it in silence.
+`--force` overrides; targeting an instance by name is never restricted, since
+that is deliberate. `list` shows the verdict as `me` / `other` / `orphan` /
+`none`.
+
+The token is `<pid>:<starttime>` of the first ancestor that is not a shell —
+an agent's `claude`, or a human's terminal emulator. Neither the script nor
+its parent works: each invocation is a fresh setsid'd session leader, and
+`$PPID` is the throwaway shell of one tool call, dead by the next, so an
+instance would read as an orphan to the very session that started it. The
+start time is what stops a recycled pid from inheriting someone's ownership.
+An unowned instance (one from before this change) or an orphaned one is fair
+game — that is the leak `prune` is for.
 What stays global across instances is the D-Bus name claims in the script's "Do
 not run" list — those are one-at-a-time for the whole machine.
 
