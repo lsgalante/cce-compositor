@@ -221,6 +221,59 @@ pub(crate) fn manage_debug() -> bool {
     *FLAG.get_or_init(|| std::env::var_os("CCE_MANAGE_DEBUG").is_some())
 }
 
+/// Does a `rounded_apps` / `bevel_apps` config pattern match this app_id?
+///
+/// Case-insensitive, and a pattern containing `*` is a glob (`*` stands for any
+/// run of characters, including none). A pattern without `*` is still an exact
+/// comparison, so existing configs keep working unchanged.
+///
+/// Both of those exist because **an app_id is not a stable identifier**, and an
+/// exact allowlist fails silently when one changes. Claude Desktop shipped as
+/// `claude-desktop` and renamed itself to `com.anthropic.Claude`; the config
+/// entry stopped matching, and the window lost its rounded corners, blur,
+/// shadow and bevel at once — with no error, no log line, and nothing in
+/// `ccectl windows` to point at. `rounded_apps "*claude*"` survives that rename,
+/// and the `decorated=`/`beveled=` fields in `windows` make the outcome
+/// visible either way.
+///
+/// Deliberately NOT a general glob: no `?`, no character classes. An app_id is
+/// a flat identifier and `*` covers the rename cases; the rest is surface for
+/// a pattern to match something nobody intended.
+pub fn app_id_matches(pattern: &str, app_id: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern.eq_ignore_ascii_case(app_id);
+    }
+    let pattern = pattern.to_ascii_lowercase();
+    let app_id = app_id.to_ascii_lowercase();
+    // Segments between the stars. The first and last are anchored to the ends
+    // of the app_id; the ones between float, consuming left to right.
+    let segments: Vec<&str> = pattern.split('*').collect();
+    let last = segments.len() - 1;
+    let mut rest = app_id.as_str();
+    for (i, seg) in segments.iter().enumerate() {
+        if seg.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            match rest.strip_prefix(seg) {
+                Some(r) => rest = r,
+                None => return false,
+            }
+        } else if i == last {
+            // ends_with on what is LEFT, not on the whole app_id: an anchored
+            // tail must not re-consume characters an earlier segment already
+            // matched ("ab*ab" must not match "ab").
+            return rest.ends_with(seg);
+        } else {
+            match rest.find(seg) {
+                Some(at) => rest = &rest[at + seg.len()..],
+                None => return false,
+            }
+        }
+    }
+    true
+}
+
 impl WindowManager {
     pub unsafe fn init(&mut self) -> Result<(), ()> {
         // This is a stub for the 0-arg struct instantiation.
@@ -837,7 +890,7 @@ impl WindowManager {
     /// predicate behind every radius/blur/shadow decision — the mirrored
     /// render sites must all agree or the effects visibly disagree per pass.
     pub fn is_decorated_app(&self, app_id: &str) -> bool {
-        app_id.starts_with("cce-") || self.rounded_apps.iter().any(|a| a == app_id)
+        app_id.starts_with("cce-") || self.rounded_apps.iter().any(|a| app_id_matches(a, app_id))
     }
 
     /// Should the compositor draw an edge bevel on this app? Unlike
@@ -846,7 +899,7 @@ impl WindowManager {
     /// the rim. Only apps named in `bevel_apps` (defaulting to `rounded_apps`)
     /// get one.
     pub fn is_beveled_app(&self, app_id: &str) -> bool {
-        self.bevel_apps.iter().any(|a| a == app_id)
+        self.bevel_apps.iter().any(|a| app_id_matches(a, app_id))
     }
 
     pub unsafe fn match_and_remove_restore_state(&mut self, app_id: &str, title: &str) -> Option<SavedWindowState> {
@@ -4037,11 +4090,19 @@ impl WindowManager {
                                 "has_parent": (*w).has_parent,
                                 "focused": w == focused_window,
                                 "ssd": (*w).wm_requested.ssd,
+                                // Why a window has (or lacks) rounded corners,
+                                // blur and shadow. Without it the only way to
+                                // tell is a full-output screenshot: a
+                                // per-window capture reads the client's
+                                // dmabuf, which is pre-composite and never
+                                // shows the compositor's clip.
+                                "decorated": self.is_decorated_app(&app_id),
+                                "beveled": self.is_beveled_app(&app_id),
                             }).to_string());
                             out.push('\n');
                         } else {
                             out.push_str(&format!(
-                                "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} cell={} minimized={} has_parent={} focused={} ssd={}\n",
+                                "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} cell={} minimized={} has_parent={} focused={} ssd={} decorated={} beveled={}\n",
                                 (*w).ref_key.index,
                                 app_id,
                                 title,
@@ -4057,6 +4118,8 @@ impl WindowManager {
                                 (*w).has_parent,
                                 w == focused_window,
                                 (*w).wm_requested.ssd,
+                                self.is_decorated_app(&app_id),
+                                self.is_beveled_app(&app_id),
                             ));
                         }
                     }
@@ -5389,6 +5452,55 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_id_matches_is_exact_without_a_star() {
+        assert!(app_id_matches("claude-desktop", "claude-desktop"));
+        assert!(!app_id_matches("claude-desktop", "com.anthropic.Claude"));
+        // An exact pattern must not match a longer id that merely contains it,
+        // or `rounded_apps "foot"` would take in "footbar".
+        assert!(!app_id_matches("foot", "footbar"));
+        assert!(!app_id_matches("oot", "foot"));
+    }
+
+    #[test]
+    fn app_id_matches_ignores_case() {
+        assert!(app_id_matches("com.anthropic.claude", "com.anthropic.Claude"));
+        assert!(app_id_matches("*CLAUDE*", "com.anthropic.Claude"));
+    }
+
+    /// The regression this matcher exists for: one pattern spanning an app's
+    /// rename, so the window does not silently lose its decoration.
+    #[test]
+    fn app_id_matches_spans_a_rename() {
+        for id in ["claude-desktop", "com.anthropic.Claude", "Claude"] {
+            assert!(app_id_matches("*claude*", id), "{id} should match *claude*");
+        }
+        assert!(!app_id_matches("*claude*", "org.inkscape.Inkscape"));
+    }
+
+    #[test]
+    fn app_id_matches_anchors_the_ends() {
+        assert!(app_id_matches("com.anthropic.*", "com.anthropic.Claude"));
+        assert!(!app_id_matches("com.anthropic.*", "org.example.anthropic"));
+        assert!(app_id_matches("*.Claude", "com.anthropic.Claude"));
+        assert!(!app_id_matches("*.Claude", "com.anthropic.ClaudeX"));
+        // A trailing anchor may not re-consume what the leading one took.
+        assert!(!app_id_matches("ab*ab", "ab"));
+        assert!(app_id_matches("ab*ab", "abab"));
+    }
+
+    #[test]
+    fn app_id_matches_handles_degenerate_patterns() {
+        assert!(app_id_matches("*", "anything"));
+        assert!(app_id_matches("*", ""));
+        assert!(app_id_matches("**", "anything"));
+        assert!(!app_id_matches("", "anything"));
+        assert!(app_id_matches("", ""));
+        // Interior segments consume left to right and may repeat.
+        assert!(app_id_matches("a*b*c", "axxbyyc"));
+        assert!(!app_id_matches("a*b*c", "acb"));
+    }
 
     #[test]
     #[allow(invalid_value)]

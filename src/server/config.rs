@@ -340,14 +340,21 @@ pub struct WindowManagerConfig {
     pub corner_shape: Option<f64>,
     /// Extra app_ids (beyond cce-* apps and SSD requesters) that get the full
     /// decorated-window treatment: rounded corner clip, blur-behind, shadow.
-    /// KDL: `rounded_apps "claude-desktop" "org.example.App"`.
+    /// KDL: `rounded_apps "*claude*" "org.example.App"`.
+    ///
+    /// Entries are matched case-insensitively by `app_id_matches`, and one
+    /// containing `*` is a glob. Prefer a glob for anything third-party: an
+    /// app_id is not a stable identifier, and an exact entry that stops
+    /// matching after a rename takes the corners, blur, shadow and bevel with
+    /// it in silence. `ccectl windows` reports the outcome as `decorated=`.
     pub rounded_apps: Option<Vec<String>>,
     /// Which apps the compositor draws an edge BEVEL on. Separate from
     /// `rounded_apps` because drawing one is only right for apps that do not
     /// bevel themselves — every cce-ui app already draws its own, so beveling
     /// them compositor-side doubles the rim. Unset falls back to
     /// `rounded_apps` (never the implicit cce-* set).
-    /// KDL: `bevel_apps "claude-desktop"`.
+    /// KDL: `bevel_apps "*claude*"`. Globbed like `rounded_apps`; reported by
+    /// `ccectl windows` as `beveled=`.
     pub bevel_apps: Option<Vec<String>>,
 }
 
