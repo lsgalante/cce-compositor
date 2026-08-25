@@ -1171,17 +1171,37 @@ void fx_render_pass_add_droplet(struct fx_gles_render_pass *pass,
 	struct wlr_box box = options->box;
 	assert(box.width > 0 && box.height > 0);
 
-	// The lens samples the UNBLURRED snapshot of everything beneath the bar
-	// layer — the same capture the optimized blur bakes from. Without it
-	// (blur disabled DE-wide) there is nothing to refract; the client's own
-	// translucent drop still renders, so skipping is a graceful degrade.
+	// The lens samples the FRAME-SO-FAR — everything already rendered below
+	// this node (desktop, windows, all of it), copied 1:1 into the saved-
+	// pixels buffer just before the draw, because GL cannot sample the
+	// framebuffer it is rendering into. The optimized-blur bake is NOT used:
+	// it captures bottom layers only (that's the DE's frost design), so a
+	// drop over a window would refract the desktop hiding behind that
+	// window instead of the window itself. Without offscreen buffers there
+	// is nothing to refract; the client's own translucent drop still
+	// renders, so skipping is a graceful degrade.
 	if (pass->fx_offscreen_buffers == NULL) {
 		return;
 	}
-	struct fx_framebuffer *snap = pass->fx_offscreen_buffers->optimized_no_blur_buffer;
+	struct fx_framebuffer *snap = pass->fx_offscreen_buffers->blur_saved_pixels_buffer;
 	if (snap == NULL || snap->buffer == NULL) {
 		return;
 	}
+
+	// Copy the drop's neighborhood: the box grown by the refraction reach
+	// and the inverted ghost's sampling span (0.35 x the box about its
+	// center), clamped to the buffer.
+	int margin = (int)(options->refr + 1.0f
+			+ 0.35f * (float)(box.width > box.height ? box.width : box.height));
+	pixman_region32_t copy_region;
+	pixman_region32_init_rect(&copy_region,
+			box.x - margin, box.y - margin,
+			box.width + 2 * margin, box.height + 2 * margin);
+	pixman_region32_intersect_rect(&copy_region, &copy_region,
+			0, 0, pass->buffer->buffer->width, pass->buffer->buffer->height);
+	fx_render_pass_read_to_buffer(pass, &copy_region, snap, pass->buffer);
+	pixman_region32_fini(&copy_region);
+
 	struct wlr_texture *wlr_texture =
 		fx_texture_from_buffer(&renderer->wlr_renderer, snap->buffer);
 	if (wlr_texture == NULL) {

@@ -74,9 +74,14 @@ float drop_dist(vec2 p) {
 }
 
 void main() {
-	// Box-local coords with y down, mirroring the corner shaders' transform.
+	// Box-local coords with y down. NOTE: deliberately NOT the corner
+	// shaders' extra y flip — that transform is unverifiable from the
+	// symmetric shapes that use it (equal radii look the same flipped), and
+	// with this drop's asymmetric silhouette it rendered the attach taper at
+	// the BOTTOM (live bug: black flipped boxes behind the modules).
+	// gl_FragCoord minus the box position is already top-down box-local
+	// here.
 	vec2 rel = gl_FragCoord.xy - position;
-	rel.y = size.y - rel.y;
 
 	float d = drop_dist(rel);
 	float aa = clamp(-d + 0.5, 0.0, 1.0);
@@ -94,11 +99,12 @@ void main() {
 	float t = clamp(-d / max(band_px, 1.0), 0.0, 1.0);
 	float lens = (1.0 - t) * (1.0 - t);
 
-	// Refraction: offset the sample along the gradient (scene y-down offsets
-	// negate y into gl_FragCoord space). Positive refr samples outward — the
-	// background bends around the drop edge.
+	// Refraction: offset the sample along the gradient. gl_FragCoord shares
+	// the box-local frame's orientation (see `rel` above), so the offset
+	// applies directly. Positive refr samples outward — the background bends
+	// around the drop edge.
 	vec2 off = grad * (refr * lens);
-	vec2 uv = (gl_FragCoord.xy + vec2(off.x, -off.y)) / tex_size;
+	vec2 uv = (gl_FragCoord.xy + off) / tex_size;
 	vec4 col = texture2D(tex, clamp(uv, vec2(0.0), vec2(1.0)));
 
 	// Inverted lens ghost: the belly shows a faint upside-down, minified
