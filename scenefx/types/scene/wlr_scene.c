@@ -606,10 +606,18 @@ static void update_node_update_outputs(struct wlr_scene_node *node,
 		}
 	}
 
-	if (old_primary_output != scene_buffer->primary_output) {
-		scene_buffer->prev_feedback_options =
-			(struct wlr_linux_dmabuf_feedback_v1_init_options){0};
-	}
+	// NOT cleared on a primary_output change (cce): clearing it defeats the
+	// duplicate-suppression memcmp in scene_buffer_send_dmabuf_feedback, and
+	// the options it compares already carry everything a change here could
+	// affect — main_renderer and scanout_primary_output. Composition feedback
+	// is {renderer, NULL} whichever output is primary, so clearing only ever
+	// forced a byte-identical resend.
+	//
+	// Each resend costs the client a format-table fd, and Mesa parks those on
+	// its private WSI queues until the next acquire/present — so an idle,
+	// damage-driven window banks one per resend and never drains. Measured on
+	// a live session before this change: one enter+exit of the overview added
+	// 67 fds to every long-lived client at once, against a 1024 soft limit.
 
 	uint64_t old_active = scene_buffer->active_outputs;
 	scene_buffer->active_outputs = active_outputs;
@@ -3116,6 +3124,12 @@ static void scene_buffer_send_dmabuf_feedback(const struct wlr_scene *scene,
 	}
 
 	scene_buffer->prev_feedback_options = *options;
+
+	// One line per feedback that actually goes out (the memcmp above having
+	// found a real change). Each carries an fd to the client, so a burst here
+	// is the fd-exhaustion signature: `grep -c 'dmabuf feedback sent'`.
+	wlr_log(WLR_DEBUG, "dmabuf feedback sent (scanout_output=%p)",
+		(void *)options->scanout_primary_output);
 
 	struct wlr_linux_dmabuf_feedback_v1 feedback = {0};
 	if (!wlr_linux_dmabuf_feedback_v1_init_with_options(&feedback, options)) {
