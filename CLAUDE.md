@@ -91,6 +91,32 @@ script and the `.desktop` entries above both started out.
 `ccebuild restart` deliberately cannot reach the compositor: `cce-fx` is not a user
 unit (startcce launches it), and restarting it would tear down the session.
 
+**A change to `cce-ui` reaches a client only when that client is rebuilt.** The
+toolkit is a static Rust library, so committing and installing `cce-ui` itself
+changes nothing about the ~20 crates that link it — each has to be rebuilt and
+reinstalled before it carries the change. `ccebuild status` will not flag this:
+those binaries are not stale against *their own* sources, only against a
+dependency, which is exactly the case it cannot see.
+
+Then there is a second step: a **running** process keeps its old inode until it
+is relaunched (that is the `(deleted)` exe `status` and `restart` key on), and
+`cce-fx` itself keeps its own until the next login. So a toolkit fix lands in
+three stages — commit, rebuild dependents, relaunch — and it is the middle one
+that gets skipped.
+
+Learned from cce-ui@2416904, which raised each client's `RLIMIT_NOFILE`: the
+fix was committed and cce-ui installed, yet every client still ran at the old
+limit until its own crate was rebuilt. Sweep with one cargo invocation over the
+dependents (`cargo build --release -p ... -p ...`, one shape — alternating with
+a bare `--workspace` build re-resolves features and invalidates crates), then
+`ccebuild install --no-build <crate>` for each. Verify by looking *inside* the
+installed binary for something the change introduced, e.g.
+`strings ~/.local/bin/<crate> | grep -q '<new log string>'`, rather than
+trusting that the build ran. **Leave `cce-browser` out of such a sweep unless
+asked** — it builds Servo, which costs far more than the rest of the workspace
+combined; it keeps whatever toolkit version it was last built against until
+someone decides that trade is worth making.
+
 Building emits a harmless warning that per-package `[profile.*]` in this `Cargo.toml`
 is ignored because profiles are only honored at the workspace root.
 
