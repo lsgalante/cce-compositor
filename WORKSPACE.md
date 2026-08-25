@@ -138,6 +138,32 @@ Because `install` unlinks before writing, a process still on the old inode repor
 exe as `(deleted)`, which is how both `status` and `restart` detect drift. It also
 catches apps launched straight out of `target/` rather than `~/.local/bin`.
 
+**But it cannot see a client that is stale against `cce-ui`.** The toolkit is a
+static Rust library, so committing and installing `cce-ui` itself changes nothing
+about the ~20 crates that link it — each has to be rebuilt and reinstalled before
+it carries the change. `status` compares each binary's mtime in `target/release`
+against the one in `~/.local/bin`, so a client nobody rebuilt has both old and
+equal and reads as up to date. It is stale against a *dependency*, the one kind of
+staleness that check has no notion of.
+
+Then a **running** process keeps its old inode until it is relaunched, and
+`cce-fx` keeps its own until the next login. So a toolkit fix lands in three
+stages — commit, rebuild dependents, relaunch — and it is the middle one that
+gets skipped. Learned from cce-ui@2416904, which raised each client's
+`RLIMIT_NOFILE`: the fix was committed and cce-ui installed, and every client
+still ran at the old limit until its own crate was rebuilt, thirteen of them.
+
+Sweep with one cargo invocation over the dependents (`cargo build --release -p …
+-p …` — one shape, since alternating with a bare `--workspace` build re-resolves
+features and invalidates crates, as below), then `ccebuild install
+--no-build <crate>` for each. Verify by looking *inside* the installed binary for
+something the change introduced — `strings ~/.local/bin/<crate> | grep -q
+'<new log string>'` — rather than trusting that the build ran. **Leave
+`cce-browser` out of such a sweep unless asked**: it builds Servo, which costs
+more than the rest of the workspace combined, so it keeps whatever toolkit
+version it was last built against until someone decides that trade is worth
+making.
+
 For plain cargo work:
 
 ```sh
