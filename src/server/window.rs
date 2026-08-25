@@ -404,6 +404,9 @@ pub struct Window {
     pub session_restored: bool,
     pub restored_focused: bool,
     pub closed: bool,
+    /// Set when the compositor asks this window to close, so `unmap` can tell
+    /// a departure someone requested from a client that simply vanished.
+    pub close_requested: bool,
     pub has_parent: bool,
     pub minimized: bool,
     /// While Some, the window is mid fullscreen-toggle: its on-screen rect is
@@ -664,6 +667,7 @@ impl Window {
             session_restored: false,
             restored_focused: false,
             closed: false,
+            close_requested: false,
             has_parent: false,
             minimized: false,
             fs_anim: None,
@@ -1412,6 +1416,23 @@ impl Window {
                 }
             }
 
+            // A client whose connection broke rebuilds its surface from
+            // scratch (cce-ui window_runner::run) and maps again seconds
+            // later. The user never asked for that window, so it must not
+            // take focus from whatever they moved on to.
+            //
+            // Keyed on the previous window vanishing WITHOUT a requested
+            // close — not on matching saved state, which a mid-session spawn
+            // does too and which must still focus and spawn-pan normally.
+            if should_focus {
+                if let Some(app_id) = self.get_app_id_string() {
+                    if (*self.server).wm.take_recent_vanish(&app_id) {
+                        log::info!("[FocusRestore] Blocking focus steal by reconnecting client {:?} ({})", self.get_title(), app_id);
+                        should_focus = false;
+                    }
+                }
+            }
+
             // A WORLD window spawning during overview pulls the session
             // out of it, landing at zoom 1 on the new window — the user
             // asked for it (launcher pick, spawn keybind). Chrome
@@ -1475,6 +1496,14 @@ impl Window {
         if self.state != WindowState::Mapped {
             return;
         }
+        // Nobody asked this window to go: either its program exited on its
+        // own or — the case this feeds — its Wayland connection broke and
+        // cce-ui is about to rebuild the surface on a fresh one.
+        if !self.close_requested {
+            if let Some(app_id) = self.get_app_id_string() {
+                (*self.server).wm.note_vanished(app_id);
+            }
+        }
         wl_listener_remove_safe(&mut self.commit);
         self.surfaces.save();
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
@@ -1494,6 +1523,7 @@ impl Window {
     }
 
     pub unsafe fn close(&mut self) {
+        self.close_requested = true;
         match self.impl_type {
             WindowImpl::Toplevel(toplevel) => {
                 if !toplevel.is_null() {
