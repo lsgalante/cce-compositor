@@ -3336,6 +3336,21 @@ static bool should_blur_node_extend_damage(struct wlr_scene_node *node,
 			return false;
 		}
 		break;
+	case WLR_SCENE_NODE_DROPLET:;
+		// The droplet lens samples the frame-so-far around itself, so it has
+		// the same stale-sample problem the blur comment below describes:
+		// partial damage under or NEAR the drop leaves neighboring pixels
+		// holding last frame's final composite (including the drop's own
+		// output), and re-rendering only the damaged sliver bakes those into
+		// part of the lens while the rest keeps the old frame — which is
+		// exactly the visible/invisible flashing on segments whose text
+		// ticks (clock, battery). Whole-node re-render, independent of the
+		// scene blur config.
+		struct wlr_scene_droplet *droplet_node = wlr_scene_droplet_from_node(node);
+		if (droplet_node->refr <= 0.0f && droplet_node->ghost <= 0.0f) {
+			return false;
+		}
+		return true;
 	default:
 		return false;
 	}
@@ -3347,7 +3362,16 @@ static bool apply_blur_region(struct wlr_scene_node *node, struct blur_data *blu
 		struct render_data *render_data, struct wlr_output_state *output_state,
 		const pixman_region32_t *original_damage, pixman_region32_t *blur_padding_region) {
 	bool should_compensate_blur = false;
-	const int sample_size = blur_data_calc_size(blur_data);
+	int sample_size = blur_data_calc_size(blur_data);
+	if (node->type == WLR_SCENE_NODE_DROPLET) {
+		// The droplet's sampling reach: rim refraction plus the inverted
+		// ghost's span (0.35 x the box about its center) — the same margin
+		// fx_render_pass_add_droplet copies. Node fields are logical px.
+		struct wlr_scene_droplet *droplet = wlr_scene_droplet_from_node(node);
+		int dim = droplet->width > droplet->height ? droplet->width : droplet->height;
+		sample_size = (int)((droplet->refr + 1.0f + 0.35f * (float)dim)
+				* render_data->scale) + 1;
+	}
 
 	pixman_region32_t node_visible_region;
 	pixman_region32_init(&node_visible_region);
