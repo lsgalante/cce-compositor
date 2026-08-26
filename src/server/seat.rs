@@ -347,8 +347,17 @@ impl Seat {
 
     pub unsafe fn focus(&mut self, new_focus: Focus) {
         if let Focus::Window(window) = new_focus {
-            if !window.is_null() && ((*window).is_status_bar() || (*window).is_wallpaper()) {
-                log::info!("[FocusDebug] Seat::focus blocking focus to status bar/wallpaper window");
+            // The grid is the canvas, not a window: it must never take focus.
+            // It became clickable when it started advertising an input region
+            // for its desktop items, and the click path focuses whatever it
+            // hits — which handed focus to a surface the size of the whole
+            // patch and then let focus-follow pan the camera to "reveal" it,
+            // so every press on an item dragged the desktop out from under
+            // the pointer.
+            if !window.is_null()
+                && ((*window).is_status_bar() || (*window).is_wallpaper() || (*window).is_grid())
+            {
+                log::info!("[FocusDebug] Seat::focus blocking focus to status bar/wallpaper/grid window");
                 return;
             }
         }
