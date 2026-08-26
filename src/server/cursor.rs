@@ -787,27 +787,11 @@ impl Cursor {
         // it, and only while the pointer is over the background, so clicks,
         // hover and the overview background-exit are untouched.
         if (*self.seat).drag != crate::seat::DragState::None {
-            if let Some(result) = (*server).scene.at_including_grid(lx, ly) {
-                if !result.surface.is_null() {
-                    if let SceneNodeDataVal::Window(window) = result.data {
-                        if (*window).is_grid() {
-                            log::debug!("[drag] focus -> grid at ({lx:.0}, {ly:.0})");
-                            ffi::wlr_seat_pointer_notify_enter(
-                                (*self.seat).wlr_seat,
-                                result.surface,
-                                result.sx,
-                                result.sy,
-                            );
-                            ffi::wlr_seat_pointer_notify_motion(
-                                (*self.seat).wlr_seat,
-                                time_msec,
-                                result.sx,
-                                result.sy,
-                            );
-                            return;
-                        }
-                    }
-                }
+            if let Some((surface, sx, sy)) = grid_surface_at(server, lx, ly) {
+                log::debug!("[drag] focus -> grid at ({lx:.0}, {ly:.0})");
+                ffi::wlr_seat_pointer_notify_enter((*self.seat).wlr_seat, surface, sx, sy);
+                ffi::wlr_seat_pointer_notify_motion((*self.seat).wlr_seat, time_msec, sx, sy);
+                return;
             }
         }
 
@@ -1184,9 +1168,13 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         (*clicked_win).tiling_mode,
                         crate::tiling::TilingMode::Overlay | crate::tiling::TilingMode::Popup
                     ));
+            // The grid counts as background in overview: a press on it must
+            // exit overview like any desktop press, never grab the canvas
+            // itself as if it were a window.
             let overview_win_valid = !clicked_win.is_null()
                 && !(*clicked_win).is_status_bar()
-                && !(*clicked_win).is_wallpaper();
+                && !(*clicked_win).is_wallpaper()
+                && !(*clicked_win).is_grid();
             let overview_border_zone = if overview_win_valid {
                 get_border_zone(clicked_win, lx, ly)
             } else {
@@ -1395,7 +1383,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             }
         }
 
-        if !border_target_win.is_null() && !(*border_target_win).is_status_bar() && !(*border_target_win).is_wallpaper() && (
+        if !border_target_win.is_null() && !(*border_target_win).is_status_bar() && !(*border_target_win).is_wallpaper() && !(*border_target_win).is_grid() && (
             (*border_target_win).tiling_mode != crate::tiling::TilingMode::Popup
             && (*border_target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
         ) {
@@ -2748,6 +2736,49 @@ pub enum BorderZone {
 }
 
 pub use crate::window::HOVER_BAND_MIN;
+
+/// The grid client's surface and the surface-local coordinates of a layout
+/// point, ignoring the input region.
+///
+/// Hit-testing cannot be used for this: the grid's input region covers only
+/// its desktop items, so a point over bare canvas — where drops mostly land —
+/// misses it by design. A drop target does not need to be hit-testable, only
+/// named, so the surface is resolved directly and the point is mapped through
+/// the surface node's own layout origin and the window's display scale, which
+/// is the same pair the renderer draws with.
+pub unsafe fn grid_surface_at(
+    server: *mut crate::server::Server,
+    lx: f64,
+    ly: f64,
+) -> Option<(*mut ffi::wlr_surface, f64, f64)> {
+    for &w in (*server).wm.windows.iter() {
+        if w.is_null() || (*w).closed || !(*w).is_grid() {
+            continue;
+        }
+        if !matches!((*w).state, crate::window::WindowState::Mapped) {
+            continue;
+        }
+        let surface = (*w).root_surface();
+        if surface.is_null() {
+            continue;
+        }
+        let node = (*w).surfaces.tree as *mut ffi::wlr_scene_node;
+        let (mut nx, mut ny) = (0, 0);
+        if !ffi::wlr_scene_node_coords(node, &mut nx, &mut ny) {
+            continue;
+        }
+        let scale = if (*w).scale > 0.0 { (*w).scale } else { 1.0 };
+        let (sx, sy) = ((lx - nx as f64) / scale, (ly - ny as f64) / scale);
+        // Only claim points that actually fall on the grid's patch. box_geom
+        // is the surface's own logical size, which is the space sx/sy are in.
+        let (bw, bh) = ((*w).box_geom.width as f64, (*w).box_geom.height as f64);
+        if sx < 0.0 || sy < 0.0 || (bw > 0.0 && sx >= bw) || (bh > 0.0 && sy >= bh) {
+            continue;
+        }
+        return Some((surface, sx, sy));
+    }
+    None
+}
 
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
     if (*window).tiling_mode == crate::tiling::TilingMode::Popup
