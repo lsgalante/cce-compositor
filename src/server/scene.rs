@@ -126,6 +126,20 @@ impl Scene {
     pub unsafe fn deinit(&mut self) {}
 
     pub unsafe fn at(&self, lx: f64, ly: f64) -> Option<AtResult> {
+        self.at_impl(lx, ly, false)
+    }
+
+    /// `at`, but the grid layer participates like any other surface. The only
+    /// caller is the drag path: the grid client is the desktop's drop target
+    /// (it draws the canvas, so it owns what "dropped here" means), and this
+    /// resolves the drop point through wlroots so the surface-local
+    /// coordinates account for the grid's buffer scale — hand-deriving them
+    /// from box_geom would drift the moment the camera zoomed.
+    pub unsafe fn at_including_grid(&self, lx: f64, ly: f64) -> Option<AtResult> {
+        self.at_impl(lx, ly, true)
+    }
+
+    unsafe fn at_impl(&self, lx: f64, ly: f64, include_grid: bool) -> Option<AtResult> {
         let mut disabled_nodes = Vec::new();
         let mut result = None;
 
@@ -149,7 +163,7 @@ impl Scene {
                     // The grid layer is input-transparent: every input path
                     // (clicks, hover, overview background-exit) sees what is
                     // underneath it, exactly as if it were the backdrop.
-                    if (*window).is_grid() {
+                    if !include_grid && (*window).is_grid() {
                         let tree_node = (*window).tree as *mut ffi::wlr_scene_node;
                         ffi::wlr_scene_node_set_enabled(tree_node, false);
                         disabled_nodes.push(tree_node);

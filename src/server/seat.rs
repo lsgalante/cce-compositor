@@ -1738,6 +1738,7 @@ unsafe extern "C" fn handle_start_drag(
 
     assert!(seat.drag == DragState::None);
     let grab_type = ffi::river_wlr_drag_get_grab_type(wlr_drag);
+    log::debug!("[drag] started (grab type {grab_type})");
     match grab_type {
         ffi::wlr_drag_grab_type_WLR_DRAG_GRAB_KEYBOARD_POINTER => {
             seat.drag = DragState::Pointer;

@@ -689,7 +689,12 @@ impl Cursor {
         // outside the window. Focus is neither re-evaluated nor cleared until
         // the last such button releases; wlroots nulls the focused surface if
         // it is destroyed mid-grab, which falls through to normal dispatch.
-        if !self.notified_pressed.is_empty() {
+        // A DRAG supersedes the implicit grab: wlroots' drag grab owns pointer
+        // focus for its duration, and the whole point is that focus follows
+        // the pointer onto whatever it is dragged over. Holding focus on the
+        // source here means the drag target never changes, so no drop is ever
+        // delivered anywhere — the source keeps receiving motion instead.
+        if !self.notified_pressed.is_empty() && (*self.seat).drag == crate::seat::DragState::None {
             let focused =
                 ffi::river_wlr_seat_get_pointer_focused_surface((*self.seat).wlr_seat);
             if !focused.is_null() {
@@ -768,6 +773,41 @@ impl Cursor {
                 ffi::wlr_seat_pointer_notify_enter((*self.seat).wlr_seat, result.surface, result.sx, result.sy);
                 ffi::wlr_seat_pointer_notify_motion((*self.seat).wlr_seat, time_msec, result.sx, result.sy);
                 return;
+            }
+        }
+
+        // Nothing under the pointer: the desktop background. A DRAG in
+        // progress is the one case that still needs a surface here — Wayland
+        // delivers drops to surfaces, and the background is not one, so
+        // without this every drag onto the desktop is cancelled on release.
+        // The grid client stands in as the desktop's drop target: it already
+        // covers the canvas and renders it, so it is the thing that can say
+        // what "dropped at this spot" means. It stays input-transparent for
+        // every other purpose (see `Scene::at`) — only the drag resolves onto
+        // it, and only while the pointer is over the background, so clicks,
+        // hover and the overview background-exit are untouched.
+        if (*self.seat).drag != crate::seat::DragState::None {
+            if let Some(result) = (*server).scene.at_including_grid(lx, ly) {
+                if !result.surface.is_null() {
+                    if let SceneNodeDataVal::Window(window) = result.data {
+                        if (*window).is_grid() {
+                            log::debug!("[drag] focus -> grid at ({lx:.0}, {ly:.0})");
+                            ffi::wlr_seat_pointer_notify_enter(
+                                (*self.seat).wlr_seat,
+                                result.surface,
+                                result.sx,
+                                result.sy,
+                            );
+                            ffi::wlr_seat_pointer_notify_motion(
+                                (*self.seat).wlr_seat,
+                                time_msec,
+                                result.sx,
+                                result.sy,
+                            );
+                            return;
+                        }
+                    }
+                }
             }
         }
 
