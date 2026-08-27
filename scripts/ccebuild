@@ -24,7 +24,7 @@ EXCLUDE=(vk-smoke)
 # whole crate, so its user units silently never installed — the same
 # hand-maintained-list failure this script exists to avoid. Matching is exact:
 # graphical.target and graphical-session.target are different targets.
-USER_UNIT_TARGETS=(default.target graphical-session.target cce-session.target)
+USER_UNIT_TARGETS=(default.target graphical-session.target cce-session.target timers.target)
 
 PREFIX="${CCE_PREFIX:-$HOME/.local}"
 BINDIR="$PREFIX/bin"
@@ -107,7 +107,7 @@ unit_wanted_by() {
 
 # User-session unit files shipped by crates (system units excluded — see above).
 user_units() {
-    local unit wanted t match
+    local unit wanted t match base
     unit_files | while read -r unit; do
             wanted=$(unit_wanted_by "$unit")
             if [ -z "$wanted" ]; then
@@ -120,7 +120,21 @@ user_units() {
                 # .service is deliberately NOT eligible for this fallback —
                 # still requiring WantedBy there keeps the classification of
                 # every unit shipped today bit-for-bit unchanged.
-                case "$unit" in *.service) continue ;; esac
+                # .service is deliberately NOT eligible for this fallback,
+                # with ONE exception: a service activated by a sibling
+                # .timer/.socket/.path. That pair is how a scheduled or
+                # socket-activated job is expressed and the service half
+                # legitimately carries no [Install] — without this, shipping a
+                # timer installed the timer and silently dropped the unit it
+                # triggers. Keyed on the sibling so a stray service file is
+                # still skipped.
+                case "$unit" in
+                    *.service)
+                        base=${unit%.service}
+                        [ -f "$base.timer" ] || [ -f "$base.socket" ] \
+                            || [ -f "$base.path" ] || continue
+                        ;;
+                esac
                 printf '%s\n' "$unit"
                 continue
             fi
