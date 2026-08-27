@@ -63,7 +63,7 @@ impl Rect {
     }
 
     /// Overlap area with `other`, in px².
-    fn intersect_area(&self, other: &Rect) -> i64 {
+    pub fn intersect_area(&self, other: &Rect) -> i64 {
         let w = (self.right().min(other.right()) - self.x.max(other.x)).max(0) as i64;
         let h = (self.bottom().min(other.bottom()) - self.y.max(other.y)).max(0) as i64;
         w * h
@@ -71,6 +71,15 @@ impl Rect {
 
     pub fn intersects(&self, other: &Rect) -> bool {
         self.intersect_area(other) > 0
+    }
+
+    /// The overlapping rect, or None when they do not meet.
+    pub fn intersection(&self, other: &Rect) -> Option<Rect> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let w = self.right().min(other.right()) - x;
+        let h = self.bottom().min(other.bottom()) - y;
+        (w > 0 && h > 0).then_some(Rect { x, y, w, h })
     }
 }
 
@@ -153,6 +162,62 @@ fn cell_coverage(frame: &GridFrame, rect: &Rect) -> f32 {
     (covered as f32 / area as f32).clamp(0.0, 1.0)
 }
 
+/// Measure a block of RGBA pixels — the window-content path, where the
+/// backdrop is not derivable geometry and has to be looked at.
+///
+/// Spread comes from the 10th and 90th luminance percentiles rather than the
+/// full range, so one stray highlight (a cursor, an icon, an anti-aliased
+/// edge) does not report a whole terminal as high-variance. It is the same
+/// quantity the grid path computes analytically: how far apart the light and
+/// dark parts of this patch are.
+pub fn measure_pixels(rgba: &[u8]) -> Option<BackdropSample> {
+    let n = rgba.len() / 4;
+    if n == 0 {
+        return None;
+    }
+    let mut lumas: Vec<f32> = Vec::with_capacity(n);
+    let mut sum = 0.0f32;
+    for px in rgba.chunks_exact(4) {
+        let l = relative_luminance([px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0]);
+        sum += l;
+        lumas.push(l);
+    }
+    lumas.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p10 = lumas[n / 10];
+    let p90 = lumas[n - 1 - n / 10];
+    Some(BackdropSample {
+        luma: ((sum / n as f32).clamp(0.0, 1.0) * 100.0).round() as u8,
+        spread: ((p90 - p10).clamp(0.0, 1.0) * 100.0).round() as u8,
+    })
+}
+
+/// Fold a window-content sample covering `coverage` (0-1) of a segment into
+/// the desktop sample for the rest of it.
+///
+/// The third spread term is the one that is easy to miss: two patches can each
+/// be perfectly uniform and still leave the text straddling a hard edge
+/// between them — a black terminal ending halfway across a segment that sits
+/// on a light gap. That boundary is exactly as unreadable as a busy texture,
+/// and only the difference between the two means shows it.
+pub fn blend(desktop: BackdropSample, window: BackdropSample, coverage: f32) -> BackdropSample {
+    let c = coverage.clamp(0.0, 1.0);
+    let dl = desktop.luma as f32 / 100.0;
+    let wl = window.luma as f32 / 100.0;
+    let luma = c * wl + (1.0 - c) * dl;
+    let edge = 2.0 * c.min(1.0 - c) * (wl - dl).abs();
+    let spread = (desktop.spread as f32 / 100.0)
+        .max(window.spread as f32 / 100.0)
+        .max(edge);
+    BackdropSample {
+        luma: (luma.clamp(0.0, 1.0) * 100.0).round() as u8,
+        spread: (spread.clamp(0.0, 1.0) * 100.0).round() as u8,
+    }
+}
+
+/// What a segment reports when its backdrop cannot be determined at all —
+/// mid luminance, full spread, which drives the outline.
+pub const UNKNOWN: BackdropSample = BackdropSample { luma: 50, spread: 100 };
+
 /// Measure the backdrop under `rect`.
 ///
 /// `base` is the opaque desktop background color the grid is drawn onto (the
@@ -165,7 +230,7 @@ fn cell_coverage(frame: &GridFrame, rect: &Rect) -> f32 {
 /// what the text sits on.
 pub fn measure(frame: &GridFrame, spec_gap: Rgba, base: [f32; 3], rect: Rect, occluded: bool) -> BackdropSample {
     if occluded {
-        return BackdropSample { luma: 50, spread: 100 };
+        return UNKNOWN;
     }
 
     let gap_rgb = over(spec_gap, base);
@@ -311,6 +376,72 @@ mod tests {
         let s = measure(&frame, WHITE, [1.0, 1.0, 1.0], Rect { x: 1000, y: 1000, w: 40, h: 27 }, false);
         // Beyond cols/rows (8), so no cell reaches it — pure gap.
         assert_eq!(s.luma, 100);
+    }
+
+    fn solid(luma_byte: u8, n: usize) -> Vec<u8> {
+        std::iter::repeat([luma_byte, luma_byte, luma_byte, 255]).take(n).flatten().collect()
+    }
+
+    #[test]
+    fn a_flat_patch_of_pixels_has_no_spread() {
+        let s = measure_pixels(&solid(0, 1000)).unwrap();
+        assert_eq!(s.luma, 0);
+        assert_eq!(s.spread, 0);
+        let s = measure_pixels(&solid(255, 1000)).unwrap();
+        assert_eq!(s.luma, 100);
+        assert_eq!(s.spread, 0);
+    }
+
+    #[test]
+    fn half_black_half_white_pixels_report_full_spread() {
+        let mut px = solid(0, 500);
+        px.extend(solid(255, 500));
+        let s = measure_pixels(&px).unwrap();
+        assert!(s.spread > 95, "spread was {}", s.spread);
+        assert!((45..=55).contains(&s.luma), "luma was {}", s.luma);
+    }
+
+    #[test]
+    fn a_lone_highlight_does_not_read_as_a_busy_backdrop() {
+        // A cursor or an icon on an otherwise flat terminal. The percentile
+        // spread is what keeps a handful of bright pixels from pinning the
+        // outline on over content the text reads fine against.
+        let mut px = solid(0, 990);
+        px.extend(solid(255, 10));
+        let s = measure_pixels(&px).unwrap();
+        assert_eq!(s.spread, 0, "spread was {}", s.spread);
+    }
+
+    #[test]
+    fn measure_pixels_rejects_an_empty_read() {
+        assert!(measure_pixels(&[]).is_none());
+    }
+
+    #[test]
+    fn blending_a_window_over_part_of_a_segment_moves_the_luma() {
+        let desktop = BackdropSample { luma: 0, spread: 0 };
+        let window = BackdropSample { luma: 100, spread: 0 };
+        assert_eq!(blend(desktop, window, 0.0).luma, 0);
+        assert_eq!(blend(desktop, window, 1.0).luma, 100);
+        assert_eq!(blend(desktop, window, 0.5).luma, 50);
+    }
+
+    #[test]
+    fn a_hard_edge_between_two_flat_patches_is_itself_spread() {
+        // A black terminal ending halfway across a segment that sits on a
+        // light gap: both halves uniform, the text across the seam is not.
+        let desktop = BackdropSample { luma: 100, spread: 0 };
+        let window = BackdropSample { luma: 0, spread: 0 };
+        assert_eq!(blend(desktop, window, 0.5).spread, 100);
+        // ...and at the edges of coverage there is no seam to worry about.
+        assert_eq!(blend(desktop, window, 0.02).spread, 4);
+    }
+
+    #[test]
+    fn blending_keeps_the_worse_of_the_two_spreads() {
+        let desktop = BackdropSample { luma: 50, spread: 10 };
+        let window = BackdropSample { luma: 50, spread: 80 };
+        assert_eq!(blend(desktop, window, 0.5).spread, 80);
     }
 
     #[test]

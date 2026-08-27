@@ -301,11 +301,22 @@ Persistent window state is saved to **`~/.local/state/cce/state.json`**
   Lines are `<luma> <spread>` (0-100 each) or `unknown`. It answers a question a
   Wayland client cannot: what its translucent module boxes are composited *over*,
   so it can raise its text contrast to match. The measurement is geometry, not a
-  readback — the desktop background is drawn from a declarative spec, so
-  `backdrop.rs` computes cell-vs-gap coverage under each segment rect on the CPU
-  (`Output::measure_status_backdrops`, per frame, gated by `update_status`'s
-  equality check). A window overlapping a segment reports maximum spread, since
-  its pixels are not knowable from here.
+  readback where it can be — the desktop background is drawn from a declarative
+  spec, so `backdrop.rs` computes cell-vs-gap coverage under each segment rect
+  on the CPU (`Output::measure_status_backdrops`, per frame, gated by
+  `update_status`'s equality check).
+
+  A window covering part of a segment is the case that has to be *read*:
+  `Output::read_window_region` composites that window's surfaces (subsurfaces
+  included) over just the overlapping strip via
+  `screenshot::read_texture_region`, and `backdrop::blend` folds the result
+  into the desktop measurement for the rest of the segment. Two gates keep that
+  readback off the render thread's back, and the second one matters more than
+  the first: a 250ms throttle, and a check that the window's summed surface
+  commit sequence changed at all (`river_wlr_surface_current_seq`). A window
+  nobody is typing in is read exactly once. Content that still cannot be read —
+  no committed buffer, an unsupported read format, an implausibly large strip —
+  falls back to `backdrop::UNKNOWN`.
 
 ## Conventions
 

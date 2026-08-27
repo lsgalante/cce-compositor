@@ -136,6 +136,23 @@ pub struct RenderingState {
     pub tearing: bool,
 }
 
+/// One cached window-content reading — see `Output::status_win_samples`.
+pub struct StatusWinSample {
+    /// The occluding window's slotmap index.
+    pub win: u32,
+    /// The region sampled, in layout px. Part of the key: a segment that
+    /// moves, or a window that slides, is looking at different pixels.
+    pub region: crate::backdrop::Rect,
+    /// When the readback actually ran.
+    pub at: std::time::Instant,
+    /// Commit sequences of the window's surfaces, summed. A window that has
+    /// not committed cannot have changed what it is showing, so this is what
+    /// keeps a still terminal from being re-read four times a second forever.
+    pub seq: u32,
+    /// None when the content could not be read at all.
+    pub sample: Option<crate::backdrop::BackdropSample>,
+}
+
 pub struct Output {
     pub server: *mut Server,
     pub wlr_output: *mut ffi::wlr_output,
@@ -195,6 +212,13 @@ pub struct Output {
     pub cell_labels: crate::text::LabelCache,
     /// Label point size actually in use, so a zoom change can re-rasterize.
     pub last_label_px: u32,
+    /// Throttle+cache for the window-content half of the backdrop measurement.
+    /// Unlike the grid half, which is arithmetic, this one costs a texture
+    /// readback and a GPU sync, so it is re-taken at most every
+    /// `WIN_SAMPLE_MS` per segment AND only when the window has actually
+    /// committed something since. A window whose content changes faster than
+    /// that is not something the text contrast should be chasing anyway.
+    pub status_win_samples: Vec<StatusWinSample>,
 
     pub destroy: ffi::wl_listener,
     pub request_state: ffi::wl_listener,
@@ -462,6 +486,7 @@ impl Output {
             cell_label_pool: Vec::new(),
             cell_labels: Default::default(),
             last_label_px: 0,
+            status_win_samples: Vec::new(),
             destroy: std::mem::zeroed(),
             request_state: std::mem::zeroed(),
             frame: std::mem::zeroed(),
@@ -758,8 +783,8 @@ impl Output {
     }
 
     /// The half of [`Self::measure_status_backdrops`] that walks the windows:
-    /// each status segment on this output measured against `frame`, anything
-    /// else on screen treated as an occluder whose pixels are unknowable.
+    /// each status segment on this output measured against `frame`, with any
+    /// window covering part of it sampled for its actual content and folded in.
     unsafe fn store_backdrops(
         &mut self,
         frame: &crate::policy::background::GridFrame,
@@ -783,6 +808,7 @@ impl Output {
         };
 
         let mut mine: Vec<(String, u8, u8)> = Vec::new();
+        let mut live_keys: Vec<(u32, crate::backdrop::Rect)> = Vec::new();
         for &seg in wm.windows.iter() {
             if !visible(seg) || !(*seg).is_status_bar() {
                 continue;
@@ -795,9 +821,15 @@ impl Output {
                 continue;
             };
 
-            // Anything that is not desktop furniture and overlaps the segment
-            // is content this side cannot read — see the module docs.
-            let mut occluded = false;
+            let desktop = crate::backdrop::measure(frame, gap, base, seg_rect, false);
+
+            // The window covering the most of this segment, if any. Stacking
+            // order is deliberately not consulted: the compositor's own
+            // hit-test answers with the segment itself (it is on top of
+            // whatever it is asking about), and where two windows both reach
+            // under one segment the larger share is the better guess at what
+            // the text is actually over.
+            let mut best: Option<(*mut crate::window::Window, i64)> = None;
             for &other in wm.windows.iter() {
                 if other == seg || !visible(other) {
                     continue;
@@ -805,15 +837,40 @@ impl Output {
                 if (*other).is_status_bar() || (*other).is_wallpaper() || (*other).is_grid() {
                     continue;
                 }
-                if rect_of(other).intersects(&seg_rect) {
-                    occluded = true;
-                    break;
+                let area = rect_of(other).intersect_area(&seg_rect);
+                if area > 0 && best.map_or(true, |(_, a)| area > a) {
+                    best = Some((other, area));
                 }
             }
 
-            let s = crate::backdrop::measure(frame, gap, base, seg_rect, occluded);
-            mine.push((app_id, s.luma, s.spread));
+            let sample = match best {
+                None => desktop,
+                Some((win, area)) => {
+                    let region = rect_of(win).intersection(&seg_rect).unwrap_or(seg_rect);
+                    let key = ((*win).ref_key.index, region);
+                    live_keys.push(key);
+                    match self.window_backdrop_sample(win, region) {
+                        // Blended, not replaced: a window covering half a
+                        // segment leaves the other half on the desktop, and
+                        // the seam between them is its own legibility problem.
+                        Some(w) => {
+                            let coverage = area as f32 / (seg_rect.w as f32 * seg_rect.h as f32).max(1.0);
+                            crate::backdrop::blend(desktop, w, coverage)
+                        }
+                        // Unreadable content (no committed buffer yet, an
+                        // unsupported read format): the honest answer is still
+                        // "unknown", exactly as before this path existed.
+                        None => crate::backdrop::UNKNOWN,
+                    }
+                }
+            };
+            mine.push((app_id, sample.luma, sample.spread));
         }
+
+        // Drop cache entries for segment/window pairs that no longer exist,
+        // so a closed window or a moved segment cannot pin a stale reading.
+        self.status_win_samples
+            .retain(|e| live_keys.iter().any(|(k, r)| *k == e.win && *r == e.region));
 
         {
             let mut store = wm.status_backdrops.borrow_mut();
@@ -826,6 +883,185 @@ impl Output {
         }
 
         wm.update_status();
+    }
+
+    /// The window-content half of the backdrop measurement: what `win` is
+    /// actually showing inside `region` (layout px), or None when it cannot be
+    /// read.
+    ///
+    /// Throttled and cached per (window, region) — this is the one part of the
+    /// measurement that costs a texture readback and its GPU sync, and it runs
+    /// inside the render path.
+    unsafe fn window_backdrop_sample(
+        &mut self,
+        win: *mut crate::window::Window,
+        region: crate::backdrop::Rect,
+    ) -> Option<crate::backdrop::BackdropSample> {
+        /// Re-read a window's content at most this often, per segment.
+        const WIN_SAMPLE_MS: u128 = 250;
+        /// Refuse to read back more than this many pixels in one sample. A bar
+        /// strip is naturally short, so this only trips on an implausibly wide
+        /// segment at a high buffer scale — where reporting "unknown" and
+        /// wearing the outline beats stalling the render thread.
+        const MAX_SAMPLE_PX: i64 = 512 * 1024;
+
+        let id = (*win).ref_key.index;
+        let now = std::time::Instant::now();
+        let seq = Self::surface_content_seq((*win).root_surface());
+        if let Some(hit) = self
+            .status_win_samples
+            .iter()
+            .find(|e| e.win == id && e.region == region)
+        {
+            // Two gates, and the content one is the load-bearing half: a
+            // window nobody is typing in never gets read a second time.
+            if hit.seq == seq || now.duration_since(hit.at).as_millis() < WIN_SAMPLE_MS {
+                return hit.sample;
+            }
+        }
+
+        let fresh = self.read_window_region(win, region, MAX_SAMPLE_PX);
+        match self
+            .status_win_samples
+            .iter_mut()
+            .find(|e| e.win == id && e.region == region)
+        {
+            Some(slot) => {
+                slot.at = now;
+                slot.seq = seq;
+                slot.sample = fresh;
+            }
+            None => self.status_win_samples.push(StatusWinSample {
+                win: id,
+                region,
+                at: now,
+                seq,
+                sample: fresh,
+            }),
+        }
+        fresh
+    }
+
+    /// Commit sequences of a surface tree, summed — a cheap "has this window
+    /// drawn anything new?" key. Walks subsurfaces too, because a toolkit that
+    /// renders into one can leave the root's own sequence untouched for the
+    /// life of the window.
+    unsafe fn surface_content_seq(root: *mut ffi::wlr_surface) -> u32 {
+        if root.is_null() {
+            return 0;
+        }
+        unsafe extern "C" fn sum_cb(
+            surface: *mut ffi::wlr_surface,
+            _sx: std::os::raw::c_int,
+            _sy: std::os::raw::c_int,
+            data: *mut std::ffi::c_void,
+        ) {
+            let total = &mut *(data as *mut u32);
+            *total = total.wrapping_add(ffi::river_wlr_surface_current_seq(surface));
+        }
+        let mut total: u32 = 0;
+        ffi::wlr_surface_for_each_surface(
+            root,
+            Some(sum_cb),
+            &mut total as *mut u32 as *mut std::ffi::c_void,
+        );
+        total
+    }
+
+    /// Read `region` (layout px) out of a window's committed surfaces and
+    /// measure it. Subsurfaces are composited in, because a toolkit that puts
+    /// its content in one would otherwise be measured as its blank root.
+    unsafe fn read_window_region(
+        &self,
+        win: *mut crate::window::Window,
+        region: crate::backdrop::Rect,
+        max_px: i64,
+    ) -> Option<crate::backdrop::BackdropSample> {
+        let root = (*win).root_surface();
+        if root.is_null() {
+            return None;
+        }
+        let (mut bw, mut bh) = (0i32, 0i32);
+        ffi::river_wlr_surface_get_buffer_size(root, &mut bw, &mut bh);
+        if bw <= 0 || bh <= 0 {
+            return None;
+        }
+        // Two scales stack here: the window's own render scale maps layout px
+        // to surface-logical px, and the buffer scale maps those to the
+        // physical pixels a texture read is addressed in.
+        let logical_w = ffi::river_wlr_surface_get_width(root).max(1);
+        let buf_scale = bw as f64 / logical_w as f64;
+        let win_scale = if (*win).scale > 0.0 { (*win).scale } else { 1.0 };
+        let to_buf = buf_scale / win_scale;
+
+        let rx = (((region.x - (*win).box_geom.x) as f64) * to_buf).round() as i32;
+        let ry = (((region.y - (*win).box_geom.y) as f64) * to_buf).round() as i32;
+        let rw = ((region.w as f64) * to_buf).round() as i32;
+        let rh = ((region.h as f64) * to_buf).round() as i32;
+        if rw <= 0 || rh <= 0 || (rw as i64) * (rh as i64) > max_px {
+            return None;
+        }
+
+        struct Collect {
+            list: Vec<(*mut ffi::wlr_surface, i32, i32)>,
+        }
+        unsafe extern "C" fn collect_cb(
+            surface: *mut ffi::wlr_surface,
+            sx: std::os::raw::c_int,
+            sy: std::os::raw::c_int,
+            data: *mut std::ffi::c_void,
+        ) {
+            let collect = &mut *(data as *mut Collect);
+            collect.list.push((surface, sx, sy));
+        }
+        let mut collect = Collect { list: Vec::new() };
+        ffi::wlr_surface_for_each_surface(
+            root,
+            Some(collect_cb),
+            &mut collect as *mut Collect as *mut std::ffi::c_void,
+        );
+
+        let mut canvas = vec![0u8; (rw as usize) * (rh as usize) * 4];
+        let mut composited = 0usize;
+        for (surface, sx, sy) in collect.list {
+            let texture = ffi::wlr_surface_get_texture(surface);
+            if texture.is_null() {
+                continue;
+            }
+            let (mut sw, mut sh) = (0i32, 0i32);
+            ffi::river_wlr_surface_get_buffer_size(surface, &mut sw, &mut sh);
+            if sw <= 0 || sh <= 0 {
+                continue;
+            }
+            // Subsurface offsets are surface-logical; buffers are physical.
+            let off_x = (sx as f64 * buf_scale).round() as i32;
+            let off_y = (sy as f64 * buf_scale).round() as i32;
+            let x0 = off_x.max(rx);
+            let y0 = off_y.max(ry);
+            let x1 = (off_x + sw).min(rx + rw);
+            let y1 = (off_y + sh).min(ry + rh);
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
+            let src = ffi::wlr_box {
+                x: x0 - off_x,
+                y: y0 - off_y,
+                width: x1 - x0,
+                height: y1 - y0,
+            };
+            let Some((pixels, format)) =
+                crate::screenshot::read_texture_region(texture, src, x1 - x0, y1 - y0)
+            else {
+                continue;
+            };
+            let Some(rgba) = crate::screenshot::to_rgba(pixels, format) else { continue };
+            crate::screenshot::blit(&mut canvas, rw, rh, &rgba, x1 - x0, y1 - y0, x0 - rx, y0 - ry);
+            composited += 1;
+        }
+        if composited == 0 {
+            return None;
+        }
+        crate::backdrop::measure_pixels(&canvas)
     }
 
     pub unsafe fn draw_adjust_overlay(&mut self) {

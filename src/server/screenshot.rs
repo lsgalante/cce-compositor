@@ -197,10 +197,42 @@ unsafe fn read_texture(texture: *mut ffi::wlr_texture, w: i32, h: i32) -> Option
     Some((data, format))
 }
 
+/// Read back only `src` (in buffer px) of a texture, into a `w`×`h` buffer.
+///
+/// The full-texture [`read_texture`] is fine for a screenshot, which wants
+/// every pixel anyway; it is not fine for the backdrop sampler, which wants a
+/// bar-height strip out of a window that may be 4K — 33MB copied per sample to
+/// look at 0.3% of it.
+pub(crate) unsafe fn read_texture_region(
+    texture: *mut ffi::wlr_texture,
+    src: ffi::wlr_box,
+    w: i32,
+    h: i32,
+) -> Option<(Vec<u8>, u32)> {
+    if texture.is_null() || w <= 0 || h <= 0 || src.width <= 0 || src.height <= 0 {
+        return None;
+    }
+    let format = ffi::wlr_texture_preferred_read_format(texture);
+    let bpp = bytes_per_pixel(format)?;
+    let mut data = vec![0u8; (w as usize) * (h as usize) * bpp];
+    let options = ffi::wlr_texture_read_pixels_options {
+        data: data.as_mut_ptr() as *mut std::ffi::c_void,
+        format,
+        stride: (w as u32) * bpp as u32,
+        dst_x: 0,
+        dst_y: 0,
+        src_box: src,
+    };
+    if !ffi::wlr_texture_read_pixels(texture, &options) {
+        return None;
+    }
+    Some((data, format))
+}
+
 /// Convert read-back pixels to RGBA. Alpha is forced opaque — the X-variants
 /// carry garbage alpha, the 24-bit formats carry none at all, and screenshots
 /// should not be translucent.
-fn to_rgba(mut pixels: Vec<u8>, format: u32) -> Option<Vec<u8>> {
+pub(crate) fn to_rgba(mut pixels: Vec<u8>, format: u32) -> Option<Vec<u8>> {
     match format {
         DRM_FORMAT_XRGB8888 | DRM_FORMAT_ARGB8888 => {
             for px in pixels.chunks_exact_mut(4) {
@@ -370,7 +402,7 @@ pub unsafe fn capture_window_rgba(window: *mut crate::window::Window) -> Result<
 }
 
 /// Copy `src` (sw×sh RGBA) into `dst` (dw×dh RGBA) at (dx, dy), clipped.
-fn blit(dst: &mut [u8], dw: i32, dh: i32, src: &[u8], sw: i32, sh: i32, dx: i32, dy: i32) {
+pub(crate) fn blit(dst: &mut [u8], dw: i32, dh: i32, src: &[u8], sw: i32, sh: i32, dx: i32, dy: i32) {
     for sy in 0..sh {
         let ty = dy + sy;
         if ty < 0 || ty >= dh {

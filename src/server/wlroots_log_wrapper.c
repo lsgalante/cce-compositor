@@ -629,6 +629,13 @@ int river_wlr_surface_get_height(struct wlr_surface *surface) {
 	return surface->current.height;
 }
 
+// Commit sequence of a surface's current state. Cheap "has this drawn
+// anything new?" key for the status-bar backdrop sampler, which is trying
+// hard NOT to read back a texture it has already read.
+uint32_t river_wlr_surface_current_seq(struct wlr_surface *surface) {
+	return surface->current.seq;
+}
+
 void river_wlr_surface_get_buffer_size(struct wlr_surface *surface, int *width, int *height) {
 	*width = surface->current.buffer_width;
 	*height = surface->current.buffer_height;
