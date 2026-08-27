@@ -1157,6 +1157,85 @@ impl Window {
         );
     }
 
+    /// Step a freshly-spawned TILED window off any tiled window it would open
+    /// on top of, keeping its size and staying as close to its intended spot
+    /// as possible (`policy::spawn::nearest_free`).
+    ///
+    /// The remembered-position path has no idea whether that position is still
+    /// free — it was when the window closed, and something else may have taken
+    /// it since. Two tiled windows stacked on the same squares is never what
+    /// was meant: tiled windows are the ones laid out to sit side by side.
+    ///
+    /// Deliberately narrow:
+    /// - Only TILED windows are moved, and only tiled windows count as
+    ///   obstacles. Floating windows overlap by nature; that is the difference
+    ///   between the two modes, not a fault to correct.
+    /// - Session restore is exempt. A restored layout is a layout the user
+    ///   arranged and saved, and mapping order is arbitrary, so nudging there
+    ///   would rearrange a deliberate desktop at every login.
+    unsafe fn avoid_tiled_overlap(&mut self) {
+        if self.session_restored || self.tiling_mode != crate::tiling::TilingMode::Tiled {
+            return;
+        }
+        let wm = &(*self.server).wm;
+        let sp = wm.layout.snap_params();
+        if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
+            return;
+        }
+        let (vw, vh) = self.mapped_size_hint();
+        if vw <= 0.0 || vh <= 0.0 {
+            return;
+        }
+        let (c0, r0, c1, r1) = crate::policy::cells::window_span(
+            self.virtual_x, self.virtual_y, vw, vh, sp.cell_w, sp.cell_h, sp.gap_width,
+        );
+        let want = crate::policy::spawn::CellBlock::new(c0, r0, c1, r1);
+
+        let mut occupied = Vec::new();
+        for &w in wm.windows.iter() {
+            if w.is_null() || w == (self as *mut Window) || (*w).closed || (*w).minimized {
+                continue;
+            }
+            if !matches!((*w).state, WindowState::Mapped) {
+                continue;
+            }
+            if (*w).tiling_mode != crate::tiling::TilingMode::Tiled {
+                continue;
+            }
+            let (ow, oh) = ((*w).box_geom.width as f64, (*w).box_geom.height as f64);
+            if ow <= 0.0 || oh <= 0.0 {
+                continue;
+            }
+            let (oc0, or0, oc1, or1) = crate::policy::cells::window_span(
+                (*w).virtual_x, (*w).virtual_y, ow, oh, sp.cell_w, sp.cell_h, sp.gap_width,
+            );
+            occupied.push(crate::policy::spawn::CellBlock::new(oc0, or0, oc1, or1));
+        }
+        if occupied.is_empty() {
+            return;
+        }
+
+        // Bounded: a window that cannot find room nearby stays put rather than
+        // being flung to an empty region of a desktop that has no edges.
+        const SEARCH_SQUARES: i32 = 12;
+        let free = crate::policy::spawn::nearest_free(want, &occupied, SEARCH_SQUARES);
+        if free == want {
+            return;
+        }
+        let (bx, by, _, _) = crate::policy::cells::block_rect(
+            free.col0, free.row0, free.col1, free.row1,
+            sp.cell_w, sp.cell_h, sp.gap_width, sp.cell_inset,
+        );
+        log::info!(
+            "spawn overlap: {} would open on a tiled window at {} -> moved to {}",
+            self.get_app_id_string().unwrap_or_default(),
+            crate::policy::cells::span_label(want.col0, want.row0, want.col1, want.row1),
+            crate::policy::cells::span_label(free.col0, free.row0, free.col1, free.row1),
+        );
+        self.virtual_x = bx;
+        self.virtual_y = by;
+    }
+
     /// Place this window on the grid square the user invoked it from, keeping
     /// its remembered SIZE and growing away from the windows already there
     /// (`policy::spawn::place_at_cell`).
@@ -1371,6 +1450,11 @@ impl Window {
         // Last: a session modal's placement is not negotiable, so it wins
         // over both the remembered geometry and any stale place-next hint.
         self.try_center_on_view();
+        // After every placement decision, including the invocation-square one:
+        // whichever chose this spot, a tiled window must not open stacked on
+        // another. The anchor rule already avoids that when any corner is
+        // clear, so this only acts when none was.
+        self.avoid_tiled_overlap();
 
         let surface = self.root_surface();
         if !surface.is_null() {
