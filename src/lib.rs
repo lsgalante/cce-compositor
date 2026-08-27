@@ -27,6 +27,8 @@ pub mod text;
 // `crate::policy::…` / `crate::tiling` / `crate::slotmap` paths working.
 pub use cce_window_manager as policy;
 pub use cce_window_manager::tiling;
+#[path = "server/backdrop.rs"]
+pub mod backdrop;
 #[path = "server/config.rs"]
 pub mod config;
 #[path = "server/ipc_server.rs"]

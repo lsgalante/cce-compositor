@@ -118,6 +118,11 @@ pub struct WindowManager {
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
     pub input_config: crate::config::InputConfig,
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
+    /// What each status segment is composited over, by app_id — measured in
+    /// the output's render pass (`Output::measure_status_backdrops`, which is
+    /// where the frame's grid geometry already is) and read back out by
+    /// `build_status_update`. See [`crate::backdrop`].
+    pub status_backdrops: std::cell::RefCell<Vec<(String, u8, u8)>>,
     pub status_hide_mode: bool,
     pub adjust_position_mode: bool,
     /// xkb modifier mask currently held via injected `key-down` (see the ipc handler):
@@ -379,6 +384,7 @@ impl WindowManager {
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
         self.last_status_update = std::cell::RefCell::new(None);
+        self.status_backdrops = std::cell::RefCell::new(Vec::new());
         self.status_hide_mode = false;
         self.adjust_position_mode = false;
         self.injected_key_mods = 0;

@@ -510,6 +510,11 @@ impl Output {
         // Update grid node positions and parameters first, which marks the scene output as damaged if changed
         self.draw_grid();
         self.draw_adjust_overlay();
+        // Right after draw_grid, whose geometry this reuses, and BEFORE the
+        // needs-frame early-out: a camera pan slides the lattice under a
+        // segment that has no damage of its own, and the bar still has to
+        // hear about it.
+        self.measure_status_backdrops();
 
         // A parked `ccectl screenshot` targeting this output forces a render
         // even without damage so there is a fresh buffer to read back.
@@ -685,6 +690,142 @@ impl Output {
             ];
             ffi::wlr_scene_rect_set_color(self.background_rect, color.as_ptr());
         }
+    }
+
+    /// Measure what each status segment on this output is composited over
+    /// and push the result to the bar (see [`crate::backdrop`] for why this
+    /// is geometry rather than a readback).
+    ///
+    /// Runs per frame. The cost is a handful of rect intersections per
+    /// segment; the resend gate is `update_status`'s equality check against
+    /// the last update, which the whole-percent quantization makes stick —
+    /// so a still desktop pushes nothing however many frames go by.
+    pub unsafe fn measure_status_backdrops(&mut self) {
+        let wm = &(*self.server).wm;
+        if wm.status_sender.is_none() {
+            return;
+        }
+
+        let (viewport_w, viewport_h) = self.current.dimensions();
+        let out_rect = crate::backdrop::Rect {
+            x: self.sent.x,
+            y: self.sent.y,
+            w: viewport_w,
+            h: viewport_h,
+        };
+
+        // The opaque ground the grid is drawn onto, so a gap or cell color
+        // carrying alpha resolves against what the screen actually shows.
+        let base = [
+            (wm.layout.background_r as f64 / u32::MAX as f64) as f32,
+            (wm.layout.background_g as f64 / u32::MAX as f64) as f32,
+            (wm.layout.background_b as f64 / u32::MAX as f64) as f32,
+        ];
+
+        let spec = wm.layout.background_spec();
+        let grid = match &spec {
+            crate::policy::api::BackgroundSpec::Grid(g) => g,
+            // No lattice: every segment sits on the flat background color,
+            // which `measure` still reports correctly through an empty frame.
+            _ => {
+                let flat = crate::policy::background::GridFrame {
+                    tree_pos: None,
+                    period_px_x: 0,
+                    period_px_y: 0,
+                    period_px_exact_x: 0.0,
+                    period_px_exact_y: 0.0,
+                    backdrop_w: 0,
+                    backdrop_h: 0,
+                    cells: None,
+                    first_col: 0,
+                    first_row: 0,
+                };
+                self.store_backdrops(&flat, crate::policy::api::Rgba([base[0], base[1], base[2], 1.0]), base, out_rect);
+                return;
+            }
+        };
+
+        let frame = crate::policy::background::grid_frame(
+            grid,
+            wm.camera(),
+            viewport_w,
+            viewport_h,
+            self.sent.x,
+            self.sent.y,
+        );
+        let gap = grid.gap_color;
+        self.store_backdrops(&frame, gap, base, out_rect);
+    }
+
+    /// The half of [`Self::measure_status_backdrops`] that walks the windows:
+    /// each status segment on this output measured against `frame`, anything
+    /// else on screen treated as an occluder whose pixels are unknowable.
+    unsafe fn store_backdrops(
+        &mut self,
+        frame: &crate::policy::background::GridFrame,
+        gap: crate::policy::api::Rgba,
+        base: [f32; 3],
+        out_rect: crate::backdrop::Rect,
+    ) {
+        let wm = &(*self.server).wm;
+
+        let visible = |w: *mut crate::window::Window| -> bool {
+            !w.is_null()
+                && !(*w).closed
+                && !(*w).minimized
+                && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init)
+        };
+        let rect_of = |w: *mut crate::window::Window| crate::backdrop::Rect {
+            x: (*w).box_geom.x,
+            y: (*w).box_geom.y,
+            w: (*w).box_geom.width,
+            h: (*w).box_geom.height,
+        };
+
+        let mut mine: Vec<(String, u8, u8)> = Vec::new();
+        for &seg in wm.windows.iter() {
+            if !visible(seg) || !(*seg).is_status_bar() {
+                continue;
+            }
+            let seg_rect = rect_of(seg);
+            if !seg_rect.intersects(&out_rect) {
+                continue;
+            }
+            let Some(app_id) = (*seg).get_app_id_string() else {
+                continue;
+            };
+
+            // Anything that is not desktop furniture and overlaps the segment
+            // is content this side cannot read — see the module docs.
+            let mut occluded = false;
+            for &other in wm.windows.iter() {
+                if other == seg || !visible(other) {
+                    continue;
+                }
+                if (*other).is_status_bar() || (*other).is_wallpaper() || (*other).is_grid() {
+                    continue;
+                }
+                if rect_of(other).intersects(&seg_rect) {
+                    occluded = true;
+                    break;
+                }
+            }
+
+            let s = crate::backdrop::measure(frame, gap, base, seg_rect, occluded);
+            mine.push((app_id, s.luma, s.spread));
+        }
+
+        {
+            let mut store = wm.status_backdrops.borrow_mut();
+            // Replace only this output's segments; another output's entries
+            // are its own to maintain. Sorted so a reordering of the window
+            // list cannot, by itself, look like a change worth resending.
+            store.retain(|(id, _, _)| !mine.iter().any(|(m, _, _)| m == id));
+            store.extend(mine);
+            store.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+
+        wm.update_status();
     }
 
     pub unsafe fn draw_adjust_overlay(&mut self) {

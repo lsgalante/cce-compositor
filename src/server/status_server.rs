@@ -20,6 +20,14 @@ pub struct StatusUpdate {
     pub title_text: String,
     /// Plain text for modifiers subscriber
     pub modifiers_text: String,
+    /// What each status segment is composited OVER, by app_id — see
+    /// [`crate::backdrop`]. Unlike the other topics this one is
+    /// per-subscriber: a segment gets only its own entry, since the whole
+    /// point is that the far ends of a bar sit over different things.
+    /// Quantized to whole percent, which is what keeps this struct `Eq` and
+    /// therefore keeps `update_status`'s resend gate working while the
+    /// camera pans.
+    pub backdrops: Vec<(String, u8, u8)>,
 }
 
 /// A message from the main loop to the server thread: either a new state
@@ -34,19 +42,32 @@ pub enum StatusMsg {
 }
 
 /// Subscription types that the status bar script can request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Not `Copy`: `Backdrop` names the segment doing the asking, because it is
+/// the one topic whose value differs per subscriber.
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Subscription {
     Layout,
     Title,
     Modifiers,
     /// One-shot menu-dismiss events only — never receives state pushes.
     Dismiss,
+    /// `backdrop <app_id>` — what THIS segment is composited over, so it can
+    /// adapt its own text contrast. Lines are `<luma> <spread>`, both 0-100.
+    Backdrop(String),
     Unknown,
 }
 
 impl Subscription {
     fn from_str(s: &str) -> Self {
-        match s.trim() {
+        let s = s.trim();
+        // The one topic that takes an argument. A bare `backdrop` is
+        // accepted and simply never matches a segment, which reads as a
+        // permanently unknown backdrop rather than as an error.
+        if let Some(app_id) = s.strip_prefix("backdrop") {
+            return Subscription::Backdrop(app_id.trim().to_string());
+        }
+        match s {
             "layout" => Subscription::Layout,
             "title" => Subscription::Title,
             "modifiers" => Subscription::Modifiers,
@@ -272,7 +293,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, display_socket: Option<Stri
                     if client.subscription == Subscription::Dismiss {
                         continue;
                     }
-                    let msg = format_for_subscription(client.subscription, update);
+                    let msg = format_for_subscription(&client.subscription, update);
                     // Only lines that changed for THIS topic go out (see
                     // Client::last_line); a fresh client always gets one.
                     if client.last_line.as_deref() == Some(msg.as_str()) {
@@ -336,11 +357,21 @@ fn read_subscription(stream: &UnixStream) -> Subscription {
     }
 }
 
-fn format_for_subscription(sub: Subscription, update: &StatusUpdate) -> String {
+fn format_for_subscription(sub: &Subscription, update: &StatusUpdate) -> String {
     match sub {
         Subscription::Layout => update.layout_text.clone(),
         Subscription::Title => update.title_text.clone(),
         Subscription::Modifiers => update.modifiers_text.clone(),
+        Subscription::Backdrop(app_id) => {
+            // A segment the compositor has no sample for (not mapped yet, or
+            // its app_id does not match a window) is told so explicitly
+            // rather than left to time out: "unknown" is a state the bar
+            // renders for, not an absence.
+            match update.backdrops.iter().find(|(id, _, _)| id == app_id) {
+                Some((_, luma, spread)) => format!("{} {}", luma, spread),
+                None => "unknown".to_string(),
+            }
+        }
         Subscription::Dismiss | Subscription::Unknown => String::new(),
     }
 }
@@ -419,5 +450,9 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
         layout_text,
         title_text,
         modifiers_text,
+        // Measured in the render pass (see `Output::measure_status_backdrops`)
+        // because that is where the frame's grid geometry already lives;
+        // here it is only carried.
+        backdrops: wm.status_backdrops.borrow().clone(),
     }
 }

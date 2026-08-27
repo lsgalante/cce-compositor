@@ -257,9 +257,12 @@ Clients and compositor communicate over Unix sockets keyed by `$WAYLAND_DISPLAY`
 - **Control**: `/tmp/cce-{WAYLAND_DISPLAY}.sock` — line-oriented request/reply. The
   `ccectl` binary (in `cce-compositor/`) is the CLI client; run `ccectl` with no args for the
   command list.
-- **Status**: `/tmp/cce-status-{WAYLAND_DISPLAY}.sock` — subscribe to `viewport` /
-  `layout` / `title` / `modifiers` and receive push updates. This feeds
-  `cce-status-interface` (the status bar).
+- **Status**: `/tmp/cce-status-{WAYLAND_DISPLAY}.sock` — subscribe to `layout` /
+  `title` / `modifiers` / `dismiss` / `backdrop <app_id>` and receive push updates.
+  This feeds `cce-status-interface` (the status bar). `backdrop` is the odd one
+  out: it takes the asking segment's app_id and reports what that segment is
+  composited over, which is the one thing a Wayland client can never see for
+  itself. (The `viewport` topic went with the viewport-tag feature.)
 
 ## Repo hygiene
 

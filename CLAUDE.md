@@ -292,9 +292,20 @@ Persistent window state is saved to **`~/.local/state/cce/state.json`**
   request/reply over a Unix socket. `ccectl` / `cce_ctl.rs` is the client.
 - **Status socket** `/tmp/cce-status-{WAYLAND_DISPLAY}.sock` (`status_server.rs`): runs
   on its own thread; a client sends one subscription line (`layout`, `title`,
-  `modifiers`, or `dismiss`) and receives text lines on every change. This feeds the
-  status bar (`cce-status-interface`). The main loop pushes updates through a
-  `StatusSender` mpsc handle.
+  `modifiers`, `dismiss`, or `backdrop <app_id>`) and receives text lines on every
+  change. This feeds the status bar (`cce-status-interface`). The main loop pushes
+  updates through a `StatusSender` mpsc handle.
+
+  **`backdrop` is the one per-subscriber topic** — it names the asking segment,
+  because the whole point is that the two ends of a bar sit over different things.
+  Lines are `<luma> <spread>` (0-100 each) or `unknown`. It answers a question a
+  Wayland client cannot: what its translucent module boxes are composited *over*,
+  so it can raise its text contrast to match. The measurement is geometry, not a
+  readback — the desktop background is drawn from a declarative spec, so
+  `backdrop.rs` computes cell-vs-gap coverage under each segment rect on the CPU
+  (`Output::measure_status_backdrops`, per frame, gated by `update_status`'s
+  equality check). A window overlapping a segment reports maximum spread, since
+  its pixels are not knowable from here.
 
 ## Conventions
 
