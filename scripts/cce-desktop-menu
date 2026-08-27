@@ -54,8 +54,17 @@ btn=$(echo "$selected" | python3 -c "import sys, json; print(json.load(sys.stdin
 
 case "$btn" in
     "terminal")
-        # Run terminal
-        foot &
+        # The DE's default terminal, resolved like the launcher: $TERMINAL
+        # (session env, exported by startcce) → config.kdl `default_terminal`
+        # (the settings app's Default Apps pick) → foot.
+        term="$TERMINAL"
+        if [[ -z "$term" ]] || ! command -v "$term" >/dev/null 2>&1; then
+            term=$(sed -n 's/^[[:space:]]*default_terminal[[:space:]]*"\([^"]*\)".*/\1/p' "$HOME/.config/cce/config.kdl" 2>/dev/null | head -n 1)
+        fi
+        if [[ -z "$term" ]] || ! command -v "$term" >/dev/null 2>&1; then
+            term=foot
+        fi
+        "$term" &
         ;;
     "files")
         # Run files
