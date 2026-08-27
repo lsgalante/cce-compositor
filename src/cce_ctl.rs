@@ -55,6 +55,8 @@ fn usage(name: &str, to_stderr: bool) {
     print("  center-window [<app_id>]   # pan focused/named window on-screen; replies x= y= w= h=");
     print("  move-window <square> [<app_id>] # put focused/named window on a desktop square (e.g. C-9)");
     print("  place-next <app_id> <x> <y> # one-shot: next map of app_id lands near this layout pos");
+    print("  place-next-cell <app_id> <x> <y> # one-shot: next map covers the grid square at this pos,");
+    print("                              # keeping its size and growing away from its neighbours");
     print("  overview");
     print("  windows [--json]           # list windows; --json emits one JSON object per line");
     print("  status-hide-mode [true|false]");

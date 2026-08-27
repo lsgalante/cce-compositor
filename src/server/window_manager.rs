@@ -139,7 +139,11 @@ pub struct WindowManager {
     /// given layout position instead of its remembered spot — widget-spawned
     /// pickers open at the control that launched them. (app_id, screen x/y,
     /// registered-at; entries expire unconsumed after a few seconds.)
-    pub pending_placements: Vec<(String, f64, f64, std::time::Instant)>,
+    /// One-shot placement hints: `(key, x, y, cell_anchored, when)`. `key` is
+    /// matched loosely against a mapping window's app_id (see
+    /// `take_pending_placement`), because a launcher knows the command it ran,
+    /// not the app_id the client will choose.
+    pub pending_placements: Vec<(String, f64, f64, bool, std::time::Instant)>,
     pub shutting_down: bool,
     pub target_desk_pan_x: Option<f64>,
     pub target_desk_pan_y: Option<f64>,
@@ -975,12 +979,30 @@ impl WindowManager {
 
     /// Consume the placement hint for `app_id`, if one was registered in the
     /// last few seconds (stale hints — a spawn that never mapped — are purged).
-    pub fn take_pending_placement(&mut self, app_id: &str) -> Option<(f64, f64)> {
+    /// Claim a pending placement for a window that is mapping.
+    ///
+    /// Matching is exact first, then the loose app_id rule `Action::Toggle`
+    /// already uses (case-insensitive, either side containing the other): a
+    /// menu or launcher knows the COMMAND it ran — `foot`, `cce-files` — while
+    /// the client picks its own app_id, and the two agree often but not
+    /// always. An exact pass first keeps a specific hint from being stolen by
+    /// a loosely-matching one.
+    pub fn take_pending_placement(&mut self, app_id: &str) -> Option<(f64, f64, bool)> {
         const HINT_TTL: std::time::Duration = std::time::Duration::from_secs(10);
-        self.pending_placements.retain(|(_, _, _, at)| at.elapsed() < HINT_TTL);
-        let idx = self.pending_placements.iter().position(|(id, _, _, _)| id == app_id)?;
-        let (_, x, y, _) = self.pending_placements.remove(idx);
-        Some((x, y))
+        self.pending_placements.retain(|(_, _, _, _, at)| at.elapsed() < HINT_TTL);
+        let lower = app_id.to_lowercase();
+        let idx = self
+            .pending_placements
+            .iter()
+            .position(|(id, _, _, _, _)| id == app_id)
+            .or_else(|| {
+                self.pending_placements.iter().position(|(id, _, _, _, _)| {
+                    let k = id.to_lowercase();
+                    !k.is_empty() && (lower.contains(&k) || k.contains(&lower))
+                })
+            })?;
+        let (_, x, y, cell, _) = self.pending_placements.remove(idx);
+        Some((x, y, cell))
     }
 
     pub unsafe fn spawn_restored_windows(&mut self) {
@@ -4360,8 +4382,28 @@ impl WindowManager {
                     _ => return "error: x/y must be numbers\n".to_string(),
                 };
                 let app_id = parts[1].to_string();
-                self.pending_placements.retain(|(id, _, _, _)| id != &app_id);
-                self.pending_placements.push((app_id, x, y, std::time::Instant::now()));
+                self.pending_placements.retain(|(id, _, _, _, _)| id != &app_id);
+                self.pending_placements.push((app_id, x, y, false, std::time::Instant::now()));
+                "ok\n".to_string()
+            }
+            "place-next-cell" => {
+                // place-next-cell <app_id|command> <x> <y>: the next map of a
+                // matching window covers the GRID SQUARE containing this
+                // layout point, keeping its remembered size and growing away
+                // from whatever already occupies the neighbouring squares.
+                // What the desktop menu and the launcher send: you asked for
+                // the window somewhere, so it opens there rather than wherever
+                // it happened to be last time.
+                if parts.len() < 4 {
+                    return "error: usage: place-next-cell <app_id> <x> <y>\n".to_string();
+                }
+                let (x, y) = match (parts[2].parse::<f64>(), parts[3].parse::<f64>()) {
+                    (Ok(x), Ok(y)) => (x, y),
+                    _ => return "error: x/y must be numbers\n".to_string(),
+                };
+                let app_id = parts[1].to_string();
+                self.pending_placements.retain(|(id, _, _, _, _)| id != &app_id);
+                self.pending_placements.push((app_id, x, y, true, std::time::Instant::now()));
                 "ok\n".to_string()
             }
             "pointer-location" => {

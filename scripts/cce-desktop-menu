@@ -7,16 +7,29 @@ CLEAR_CLOUD="$HOME/.local/bin/cce-cloud"
 # Default to empty coordinates if not provided
 x_arg=""
 y_arg=""
+x_val=""
+y_val=""
+
+# Open the app WHERE THE MENU WAS OPENED: the next window matching $1 covers
+# the grid square under the click, keeping the size it had last time and
+# growing away from whatever already occupies the neighbouring squares. You
+# asked for it here, so it opens here — rather than wherever it happened to be
+# when you last closed it. The key is the command name; the compositor matches
+# it loosely against the app_id the client picks.
+place_at() {
+    [[ -n "$x_val" && -n "$y_val" ]] || return 0
+    "$CCE_CTL" place-next-cell "$1" "$x_val" "$y_val" >/dev/null 2>&1 || true
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -x|--x-pos)
             # A flag with no value must still consume itself: bare `shift 2`
             # is a no-op when one arg remains, and the loop spins forever.
-            if [[ $# -ge 2 ]]; then x_arg="-x $2"; shift 2; else shift; fi
+            if [[ $# -ge 2 ]]; then x_arg="-x $2"; x_val="$2"; shift 2; else shift; fi
             ;;
         -y|--y-pos)
-            if [[ $# -ge 2 ]]; then y_arg="-y $2"; shift 2; else shift; fi
+            if [[ $# -ge 2 ]]; then y_arg="-y $2"; y_val="$2"; shift 2; else shift; fi
             ;;
         *)
             shift
@@ -64,22 +77,28 @@ case "$btn" in
         if [[ -z "$term" ]] || ! command -v "$term" >/dev/null 2>&1; then
             term=foot
         fi
+        place_at "$term"
         "$term" &
         ;;
     "files")
         # Run files
+        place_at cce-files
         "$HOME"/.local/bin/cce-files &
         ;;
     "data_editor")
         # Run data editor
+        place_at cce-data-editor
         "$HOME"/.local/bin/cce-data-editor &
         ;;
     "apps")
-        # Run applications search/list
-        $CLEAR_CLOUD --mode apps &
+        # Run applications search/list, AT the click: the launcher passes the
+        # position on to whatever it launches, so picking an app from here
+        # opens it on this square too.
+        $CLEAR_CLOUD --mode apps $x_arg $y_arg &
         ;;
     "settings")
         # Run settings interface
+        place_at cce-system-interface
         "$HOME"/.local/bin/cce-system-interface &
         ;;
     "overview")

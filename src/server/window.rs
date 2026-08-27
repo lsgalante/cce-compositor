@@ -1095,6 +1095,33 @@ impl Window {
     }
 
     unsafe fn try_hint_placement(&mut self) {
+        let app_id = self.get_app_id_string().unwrap_or_default();
+        if app_id.is_empty() {
+            return;
+        }
+        // Claimed before the mode is judged, so a hint aimed at this window
+        // does not linger and land on the next one to open.
+        let Some((hx, hy, cell_anchored)) = (*self.server).wm.take_pending_placement(&app_id)
+        else {
+            return;
+        };
+        if cell_anchored {
+            // TILED IS THE POINT here, unlike the position-only hint below: a
+            // window that reopens filling four squares is exactly the case
+            // this exists for. Only the modes that do not own a position at
+            // all are excluded.
+            if matches!(
+                self.tiling_mode,
+                crate::tiling::TilingMode::Fullscreen
+                    | crate::tiling::TilingMode::Popup
+                    | crate::tiling::TilingMode::Overlay
+                    | crate::tiling::TilingMode::Status
+            ) {
+                return;
+            }
+            self.place_on_invocation_cell(&app_id, hx, hy);
+            return;
+        }
         // Utility included: the hint moves only the POSITION, which a utility
         // window does not own — only its size is the client's.
         if !matches!(
@@ -1103,13 +1130,6 @@ impl Window {
         ) {
             return;
         }
-        let app_id = self.get_app_id_string().unwrap_or_default();
-        if app_id.is_empty() {
-            return;
-        }
-        let Some((hx, hy)) = (*self.server).wm.take_pending_placement(&app_id) else {
-            return;
-        };
 
         let (phys_x, phys_y, vp_w, vp_h) = self.first_enabled_output_box();
 
@@ -1134,6 +1154,97 @@ impl Window {
         log::info!(
             "place-next hint applied: app_id={} screen=({:.0},{:.0}) virtual=({:.1},{:.1})",
             app_id, sx, sy, self.virtual_x, self.virtual_y
+        );
+    }
+
+    /// Place this window on the grid square the user invoked it from, keeping
+    /// its remembered SIZE and growing away from the windows already there
+    /// (`policy::spawn::place_at_cell`).
+    ///
+    /// The size comes from the remembered geometry `try_restore` just applied,
+    /// measured in whole squares: a window last seen filling four squares
+    /// opens filling four squares, at the corner of the invocation square that
+    /// leaves it clear of its neighbours.
+    unsafe fn place_on_invocation_cell(&mut self, app_id: &str, hx: f64, hy: f64) {
+        let wm = &(*self.server).wm;
+        let sp = wm.layout.snap_params();
+        if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
+            return;
+        }
+        let (phys_x, phys_y, vp_w, vp_h) = self.first_enabled_output_box();
+        let zoom = wm.desk_zoom.max(0.01);
+        // The hint is a layout point; the grid is in virtual coordinates.
+        let inv_vx = wm.desk_pan_x + (hx - phys_x) / zoom;
+        let inv_vy = wm.desk_pan_y + (hy - phys_y) / zoom;
+        let col = crate::policy::cells::cell_index(inv_vx, sp.cell_w, sp.gap_width);
+        let row = crate::policy::cells::cell_index(inv_vy, sp.cell_h, sp.gap_width);
+
+        // Size in squares, from the geometry `try_restore` left in place.
+        let (vw, vh) = self.mapped_size_hint();
+        let (c0, r0, c1, r1) = crate::policy::cells::window_span(
+            0.0, 0.0, vw, vh, sp.cell_w, sp.cell_h, sp.gap_width,
+        );
+        let (cols, rows) = (c1 - c0 + 1, r1 - r0 + 1);
+
+        // Everything else already on the desktop, in squares. Chrome and the
+        // canvas itself are not obstacles.
+        let mut occupied = Vec::new();
+        for &w in wm.windows.iter() {
+            if w.is_null() || w == (self as *mut Window) || (*w).closed || (*w).minimized {
+                continue;
+            }
+            if !matches!((*w).state, WindowState::Mapped) {
+                continue;
+            }
+            if (*w).is_status_bar() || (*w).is_wallpaper() || (*w).is_grid() {
+                continue;
+            }
+            let (ow, oh) = ((*w).box_geom.width as f64, (*w).box_geom.height as f64);
+            if ow <= 0.0 || oh <= 0.0 {
+                continue;
+            }
+            let (oc0, or0, oc1, or1) = crate::policy::cells::window_span(
+                (*w).virtual_x, (*w).virtual_y, ow, oh, sp.cell_w, sp.cell_h, sp.gap_width,
+            );
+            occupied.push(crate::policy::spawn::CellBlock::new(oc0, or0, oc1, or1));
+        }
+
+        // Visible squares, so a tie between two clear corners goes to the one
+        // on screen.
+        let view = {
+            let (vx0, vy0) = (wm.desk_pan_x, wm.desk_pan_y);
+            let (vx1, vy1) = (vx0 + vp_w / zoom, vy0 + vp_h / zoom);
+            let c0 = crate::policy::cells::cell_index(vx0, sp.cell_w, sp.gap_width);
+            let r0 = crate::policy::cells::cell_index(vy0, sp.cell_h, sp.gap_width);
+            let c1 = crate::policy::cells::cell_index(vx1, sp.cell_w, sp.gap_width);
+            let r1 = crate::policy::cells::cell_index(vy1, sp.cell_h, sp.gap_width);
+            crate::policy::spawn::CellBlock::new(c0, r0, c1, r1)
+        };
+
+        let block = crate::policy::spawn::place_at_cell(col, row, cols, rows, &occupied, Some(view));
+        let (bx, by, bw, bh) = crate::policy::cells::block_rect(
+            block.col0, block.row0, block.col1, block.row1,
+            sp.cell_w, sp.cell_h, sp.gap_width, sp.cell_inset,
+        );
+        self.virtual_x = bx;
+        self.virtual_y = by;
+        // A window that was filling whole squares keeps doing so — it is the
+        // same window, in the same shape, somewhere else. One that was not
+        // keeps its own size and simply starts at the square's corner.
+        if self.tiling_mode == crate::tiling::TilingMode::Tiled {
+            self.box_geom.width = bw.round() as i32;
+            self.box_geom.height = bh.round() as i32;
+            self.wm_requested.dimensions = Some(crate::window::Dimensions {
+                width: bw.round() as u32,
+                height: bh.round() as u32,
+            });
+        }
+        self.hint_placed = true;
+        log::info!(
+            "place-next-cell: {} -> {} ({}x{} squares) at virtual ({:.0}, {:.0})",
+            app_id,
+            crate::policy::cells::span_label(block.col0, block.row0, block.col1, block.row1),
+            cols, rows, bx, by
         );
     }
 
