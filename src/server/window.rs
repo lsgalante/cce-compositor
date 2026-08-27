@@ -2631,7 +2631,7 @@ impl Window {
                     && !self.is_fullscreen()
                     && (*self.server).wm.is_beveled_app(&app_id);
             self.update_shadow(width, height, radius, want_shadow);
-                self.update_bevel(width, height, radius, want_bevel);
+                self.update_bevel(width, height, radius, want_bevel, want_shadow);
                 self.update_droplet(width, height);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
@@ -3102,7 +3102,7 @@ impl Window {
                     && !self.is_fullscreen()
                     && (*self.server).wm.is_beveled_app(&app_id);
                 self.update_shadow(width, height, radius, want_shadow);
-                self.update_bevel(width, height, radius, want_bevel);
+                self.update_bevel(width, height, radius, want_bevel, want_shadow);
                 self.update_droplet(width, height);
             }
 
@@ -3190,13 +3190,35 @@ impl Window {
     /// The light direction is the DE's convention — the same top-left source
     /// the drop shadow is offset away from — so a window reads as a slab lit
     /// from the same place as everything else on the desktop.
-    pub unsafe fn update_bevel(&self, width: i32, height: i32, radius: i32, want: bool) {
+    pub unsafe fn update_bevel(&self, width: i32, height: i32, radius: i32, want: bool, want_focus: bool) {
         if self.bevel.is_null() {
             return;
         }
         let node = &mut (*self.bevel).node as *mut ffi::wlr_scene_node;
         let layout = &(*self.server).wm.layout;
-        let enabled = want
+        // Focused-window treatment: the rim highlight wraps all four sides
+        // in the accent (the DE focus glint). Focus is read off the seats —
+        // the window's `activated` field is a configure-time snapshot, not
+        // live state — and this runs on both render paths, so a focus switch
+        // restyles on the next frame. A focused window that is NOT in the
+        // bevel app list still enables the node: the shader's focus branch
+        // draws ONLY the glint, so it lays cleanly over a cce-ui app's own
+        // client-side bevel instead of doubling its shading.
+        let mut focused = false;
+        {
+            let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+            let mut curr = (*seats).next;
+            while curr != seats {
+                let seat = crate::container_of!(curr, crate::seat::Seat, link);
+                if let crate::seat::Focus::Window(w) = (*seat).focused {
+                    if w == self as *const Window as *mut Window {
+                        focused = true;
+                    }
+                }
+                curr = (*curr).next;
+            }
+        }
+        let enabled = (want || (focused && want_focus))
             && layout.bevel_enabled
             && layout.bevel_thickness > 0.0
             && width > 0
@@ -3230,6 +3252,11 @@ impl Window {
         );
         ffi::wlr_scene_bevel_set_shoulder(self.bevel, layout.bevel_shoulder);
         ffi::wlr_scene_bevel_set_color(self.bevel, layout.bevel_color.as_ptr());
+        ffi::wlr_scene_bevel_set_focus(
+            self.bevel,
+            if focused { 1.0 } else { 0.0 },
+            layout.bevel_focus_color.as_ptr(),
+        );
         ffi::river_scene_node_set_position_if_changed(node, 0, 0);
     }
     /// Sync the droplet backdrop-refraction node for a droplet-styled status

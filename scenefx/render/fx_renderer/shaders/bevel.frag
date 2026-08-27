@@ -29,6 +29,12 @@ uniform float shade_intensity;
 // Shoulder: how much of the rim is the rounded roll-off vs the flat face.
 // 0 = a hard flat chamfer, 1 = fully rounded shoulder.
 uniform float shoulder;
+// Focus treatment: > 0 wraps the highlight around all four sides in
+// focus_color — the DE's focused-plate glint on the window edge. The azimuth
+// mask against the light drops, so every edge shades as the lit one; the
+// shade term goes with it (an all-around light casts no rim shadow).
+uniform float focus;
+uniform vec3 focus_color;
 
 // Defined in corner_alpha.frag, which is concatenated after this source (the
 // same way box_shadow.frag gets it). Using the shared routine rather than a
@@ -81,6 +87,20 @@ void main() {
     // chamfer's tilt is what varies; the face itself is flat-on).
     float facing = dot(grad, normalize(light_dir + vec2(1e-6)));
 
+    // Feather the very outer pixel so the rim doesn't alias against the
+    // window's own rounded edge.
+    float edge_aa = clamp(-dist, 0.0, 1.0);
+
+    if (focus > 0.5) {
+        // Focused window: the familiar lit-edge highlight, wrapped — every
+        // edge shades as the one facing the light, in the accent color, no
+        // shade side. Same slope profile, so band width and shoulder match
+        // the unfocused rim exactly.
+        float h = light_intensity * slope;
+        gl_FragColor = vec4(focus_color * h, h) * v_color.a * edge_aa;
+        return;
+    }
+
     // Positive = lit side, negative = shaded side.
     float lit = max(facing, 0.0) * light_intensity;
     float shade = max(-facing, 0.0) * shade_intensity;
@@ -92,10 +112,6 @@ void main() {
     // the tint (and its alpha scales the whole effect).
     vec3 rgb = v_color.rgb * highlight;
     float alpha = highlight + shadow;
-
-    // Feather the very outer pixel so the rim doesn't alias against the
-    // window's own rounded edge.
-    float edge_aa = clamp(-dist, 0.0, 1.0);
 
     gl_FragColor = vec4(rgb, alpha) * v_color.a * edge_aa;
 }

@@ -205,6 +205,13 @@ struct wlr_scene_bevel {
 	float shoulder;
 	/** Highlight tint; alpha scales the whole effect. */
 	float color[4];
+	/**
+	 * Focus treatment: > 0 wraps the rim highlight around all four sides
+	 * (the azimuth mask against the light drops) in focus_color — the DE's
+	 * focused-plate glint, on the window edge. 0 = the ordinary lit chamfer.
+	 */
+	float focus;
+	float focus_color[3];
 };
 
 struct wlr_scene_blur {
@@ -662,6 +669,8 @@ void wlr_scene_droplet_set_silhouette(struct wlr_scene_droplet *droplet,
 void wlr_scene_droplet_set_lens(struct wlr_scene_droplet *droplet,
 		float band_px, float refr, float ghost);
 void wlr_scene_bevel_set_color(struct wlr_scene_bevel *bevel, const float color[static 4]);
+void wlr_scene_bevel_set_focus(struct wlr_scene_bevel *bevel, float focus,
+	const float color[static 3]);
 
 /**
  * Change the corner radius of an existing shadow node.

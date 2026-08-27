@@ -89,6 +89,9 @@ pub struct Layout {
     pub bevel_shoulder: f32,
     /// Highlight tint, premultiplied RGBA; alpha scales the whole effect.
     pub bevel_color: [f32; 4],
+    /// Focused-window rim accent: the bevel highlight wraps all four sides
+    /// in this color for the focused window (the DE focus glint).
+    pub bevel_focus_color: [f32; 3],
     /// Magnetic grid snap for interactive move/resize.
     pub desktop_snap: bool,
     /// Speed ramp + duration (ms) for the overview enter/exit transition.
@@ -210,6 +213,7 @@ impl Default for Layout {
             bevel_shade_intensity: 0.5,
             bevel_shoulder: 0.55,
             bevel_color: [1.0, 1.0, 1.0, 1.0],
+            bevel_focus_color: [0.35, 0.78, 0.78],
             shadow_enabled: true,
             shadow_sigma: 22.0,
             shadow_color: [0.0, 0.0, 0.0, 0.55],
@@ -495,6 +499,8 @@ pub struct SurfaceConfig {
     pub bevel_shoulder: f64,
     #[serde(default = "default_bevel_color")]
     pub bevel_color: String,
+    #[serde(default = "default_bevel_focus_color")]
+    pub bevel_focus_color: String,
 }
 
 fn default_shadow_enabled() -> bool { true }
@@ -510,6 +516,7 @@ fn default_bevel_light_intensity() -> f64 { 0.6 }
 fn default_bevel_shade_intensity() -> f64 { 0.5 }
 fn default_bevel_shoulder() -> f64 { 0.55 }
 fn default_bevel_color() -> String { "#ffffffff".to_string() }
+fn default_bevel_focus_color() -> String { "#59c7c7".to_string() }
 
 /// Map a compass point to a unit vector pointing TOWARD the light, in screen
 /// space (y down). Anything unrecognized keeps the DE's top-left default.
@@ -569,6 +576,7 @@ impl Default for SurfaceConfig {
             bevel_shade_intensity: default_bevel_shade_intensity(),
             bevel_shoulder: default_bevel_shoulder(),
             bevel_color: default_bevel_color(),
+            bevel_focus_color: default_bevel_focus_color(),
         }
      }
 }
@@ -2037,6 +2045,11 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.bevel_color = val.to_string();
                                         }
                                     }
+                                    "focus_color" => {
+                                        if let Some(val) = entry.value().as_string() {
+                                            surface.bevel_focus_color = val.to_string();
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -2344,6 +2357,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.bevel_shade_intensity = config.surface.bevel_shade_intensity.clamp(0.0, 1.0) as f32;
     state.layout.bevel_shoulder = config.surface.bevel_shoulder.clamp(0.0, 1.0) as f32;
     state.layout.bevel_color = parse_hex_color_rgba(&config.surface.bevel_color);
+    let fc = parse_hex_color_rgba(&config.surface.bevel_focus_color);
+    state.layout.bevel_focus_color = [fc[0], fc[1], fc[2]];
 
     for (key, val) in &config.env {
         let expanded = expand_env_vars(val);

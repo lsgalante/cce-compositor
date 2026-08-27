@@ -1263,6 +1263,17 @@ void wlr_scene_bevel_set_color(struct wlr_scene_bevel *bevel, const float color[
 	scene_node_update(&bevel->node, NULL);
 }
 
+void wlr_scene_bevel_set_focus(struct wlr_scene_bevel *bevel, float focus,
+		const float color[static 3]) {
+	if (bevel->focus == focus &&
+			memcmp(bevel->focus_color, color, sizeof(bevel->focus_color)) == 0) {
+		return;
+	}
+	bevel->focus = focus;
+	memcpy(bevel->focus_color, color, sizeof(bevel->focus_color));
+	scene_node_update(&bevel->node, NULL);
+}
+
 void wlr_scene_shadow_set_size(struct wlr_scene_shadow *shadow, int width, int height) {
 	if (shadow->width == width && shadow->height == height) {
 		return;
@@ -2526,6 +2537,12 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.light_intensity = scene_bevel->light_intensity,
 			.shade_intensity = scene_bevel->shade_intensity,
 			.shoulder = scene_bevel->shoulder,
+			.focus = scene_bevel->focus,
+			.focus_color = {
+				scene_bevel->focus_color[0],
+				scene_bevel->focus_color[1],
+				scene_bevel->focus_color[2],
+			},
 			.color = {
 				.r = scene_bevel->color[0],
 				.g = scene_bevel->color[1],

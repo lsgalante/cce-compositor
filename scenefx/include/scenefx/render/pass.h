@@ -97,6 +97,10 @@ struct fx_render_bevel_options {
 	float shade_intensity;
 	/* 0 = hard flat chamfer, 1 = fully rounded shoulder. */
 	float shoulder;
+	/* Focus treatment: > 0 wraps the rim highlight around all four sides
+	 * in focus_color (the DE's focused-plate glint). */
+	float focus;
+	float focus_color[3];
 	/* Tint of the highlight; alpha scales the whole effect. */
 	struct wlr_render_color color;
 };

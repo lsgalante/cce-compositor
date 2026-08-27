@@ -1155,6 +1155,9 @@ void fx_render_pass_add_bevel(struct fx_gles_render_pass *pass,
 	glUniform1f(renderer->shaders.bevel.light_intensity, options->light_intensity);
 	glUniform1f(renderer->shaders.bevel.shade_intensity, options->shade_intensity);
 	glUniform1f(renderer->shaders.bevel.shoulder, options->shoulder);
+	glUniform1f(renderer->shaders.bevel.focus, options->focus);
+	glUniform3f(renderer->shaders.bevel.focus_color,
+			options->focus_color[0], options->focus_color[1], options->focus_color[2]);
 
 	render(&box, &clip_region, renderer->shaders.bevel.pos_attrib);
 	pixman_region32_fini(&clip_region);
