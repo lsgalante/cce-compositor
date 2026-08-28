@@ -177,6 +177,7 @@ struct bevel_shader {
 	GLint shoulder;
 	GLint focus;
 	GLint focus_color;
+	GLint focus_sharpness;
 };
 
 bool link_bevel_program(struct bevel_shader *shader);

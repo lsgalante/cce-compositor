@@ -212,6 +212,8 @@ struct wlr_scene_bevel {
 	 */
 	float focus;
 	float focus_color[3];
+	/** Falloff exponent of the focus glint across the rim; 1 = linear. */
+	float focus_sharpness;
 };
 
 struct wlr_scene_blur {
@@ -669,7 +671,7 @@ void wlr_scene_droplet_set_silhouette(struct wlr_scene_droplet *droplet,
 void wlr_scene_droplet_set_lens(struct wlr_scene_droplet *droplet,
 		float band_px, float refr, float ghost);
 void wlr_scene_bevel_set_color(struct wlr_scene_bevel *bevel, const float color[static 4]);
-void wlr_scene_bevel_set_focus(struct wlr_scene_bevel *bevel, float focus,
+void wlr_scene_bevel_set_focus(struct wlr_scene_bevel *bevel, float focus, float sharpness,
 	const float color[static 3]);
 
 /**

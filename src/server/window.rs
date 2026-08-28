@@ -3255,6 +3255,7 @@ impl Window {
         ffi::wlr_scene_bevel_set_focus(
             self.bevel,
             if focused { 1.0 } else { 0.0 },
+            layout.bevel_focus_sharpness,
             layout.bevel_focus_color.as_ptr(),
         );
         ffi::river_scene_node_set_position_if_changed(node, 0, 0);

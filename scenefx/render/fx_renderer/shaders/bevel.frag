@@ -42,9 +42,10 @@ uniform vec3 focus_color;
 // inside t=0 and is feathered by edge_aa, so it is already below 1.0 and the
 // power pushes it down (measured peak, green channel: 242 at 1.0, 222 at 3.0,
 // 198 at 6.0, 168 at 12.0). Past ~12 the curve stops narrowing and only dims:
-// 12 and 24 differ by 2/255. 3.0 keeps a defined edge without washing the
-// accent out to white.
-#define FOCUS_SHARPNESS 3.0
+// 12 and 24 differ by 2/255. The DE default is 3.0 — a defined edge without
+// washing the accent out to white — set by `bevel focus_sharpness=` in
+// config.kdl. Only the focus branch reads it.
+uniform float focus_sharpness;
 
 // Defined in corner_alpha.frag, which is concatenated after this source (the
 // same way box_shadow.frag gets it). Using the shared routine rather than a
@@ -114,7 +115,7 @@ void main() {
         // power keeps the peak at the silhouette and falls away fast, which
         // is what makes cce-ui's plate line read as a glint rather than a
         // glow (shader2d.wgsl raises its profile to `shininess`).
-        float h = light_intensity * pow(slope, FOCUS_SHARPNESS);
+        float h = light_intensity * pow(slope, max(focus_sharpness, 0.01));
         // ADDITIVE: alpha 0 with premultiplied colour gives dst + rgb under
         // the pass's GL_ONE/GL_ONE_MINUS_SRC_ALPHA blend, so the glint ADDS
         // light to the window instead of cross-fading toward the accent.

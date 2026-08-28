@@ -92,6 +92,12 @@ pub struct Layout {
     /// Focused-window rim accent: the bevel highlight wraps all four sides
     /// in this color for the focused window (the DE focus glint).
     pub bevel_focus_color: [f32; 3],
+    /// How sharply the focused rim's glint falls off across the bevel:
+    /// the exponent on the rim slope. 1 is a linear ramp over the whole
+    /// thickness (reads as a wash); higher concentrates the light at the
+    /// silhouette, at some cost in peak brightness, since the outermost
+    /// rendered sample is already below 1.0. Past ~12 it only dims.
+    pub bevel_focus_sharpness: f32,
     /// Magnetic grid snap for interactive move/resize.
     pub desktop_snap: bool,
     /// Speed ramp + duration (ms) for the overview enter/exit transition.
@@ -214,6 +220,7 @@ impl Default for Layout {
             bevel_shoulder: 0.55,
             bevel_color: [1.0, 1.0, 1.0, 1.0],
             bevel_focus_color: [0.35, 0.78, 0.78],
+            bevel_focus_sharpness: 3.0,
             shadow_enabled: true,
             shadow_sigma: 22.0,
             shadow_color: [0.0, 0.0, 0.0, 0.55],
@@ -501,6 +508,8 @@ pub struct SurfaceConfig {
     pub bevel_color: String,
     #[serde(default = "default_bevel_focus_color")]
     pub bevel_focus_color: String,
+    #[serde(default = "default_bevel_focus_sharpness")]
+    pub bevel_focus_sharpness: f64,
 }
 
 fn default_shadow_enabled() -> bool { true }
@@ -517,6 +526,7 @@ fn default_bevel_shade_intensity() -> f64 { 0.5 }
 fn default_bevel_shoulder() -> f64 { 0.55 }
 fn default_bevel_color() -> String { "#ffffffff".to_string() }
 fn default_bevel_focus_color() -> String { "#59c7c7".to_string() }
+fn default_bevel_focus_sharpness() -> f64 { 3.0 }
 
 /// Map a compass point to a unit vector pointing TOWARD the light, in screen
 /// space (y down). Anything unrecognized keeps the DE's top-left default.
@@ -577,6 +587,7 @@ impl Default for SurfaceConfig {
             bevel_shoulder: default_bevel_shoulder(),
             bevel_color: default_bevel_color(),
             bevel_focus_color: default_bevel_focus_color(),
+            bevel_focus_sharpness: default_bevel_focus_sharpness(),
         }
      }
 }
@@ -2045,6 +2056,13 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.bevel_color = val.to_string();
                                         }
                                     }
+                                    "focus_sharpness" => {
+                                        if let Some(val) = entry.value().as_f64() {
+                                            surface.bevel_focus_sharpness = val;
+                                        } else if let Some(val) = entry.value().as_i64() {
+                                            surface.bevel_focus_sharpness = val as f64;
+                                        }
+                                    }
                                     "focus_color" => {
                                         if let Some(val) = entry.value().as_string() {
                                             surface.bevel_focus_color = val.to_string();
@@ -2359,6 +2377,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.bevel_color = parse_hex_color_rgba(&config.surface.bevel_color);
     let fc = parse_hex_color_rgba(&config.surface.bevel_focus_color);
     state.layout.bevel_focus_color = [fc[0], fc[1], fc[2]];
+    // Clamped low at 1: below that the glint would spread WIDER than the
+    // rim's own slope, which is what `thickness` is for.
+    state.layout.bevel_focus_sharpness =
+        config.surface.bevel_focus_sharpness.clamp(1.0, 64.0) as f32;
 
     for (key, val) in &config.env {
         let expanded = expand_env_vars(val);

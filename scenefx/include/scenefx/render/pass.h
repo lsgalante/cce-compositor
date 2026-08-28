@@ -101,6 +101,8 @@ struct fx_render_bevel_options {
 	 * in focus_color (the DE's focused-plate glint). */
 	float focus;
 	float focus_color[3];
+	/* Falloff exponent of the focus glint across the rim; 1 = linear. */
+	float focus_sharpness;
 	/* Tint of the highlight; alpha scales the whole effect. */
 	struct wlr_render_color color;
 };

@@ -369,6 +369,7 @@ bool link_bevel_program(struct bevel_shader *shader) {
 	shader->shade_intensity = glGetUniformLocation(prog, "shade_intensity");
 	shader->focus = glGetUniformLocation(prog, "focus");
 	shader->focus_color = glGetUniformLocation(prog, "focus_color");
+	shader->focus_sharpness = glGetUniformLocation(prog, "focus_sharpness");
 	shader->shoulder = glGetUniformLocation(prog, "shoulder");
 
 	return true;
