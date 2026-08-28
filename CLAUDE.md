@@ -107,6 +107,7 @@ cce-shadow [--instance NAME] start [--new|--fresh|--restore|--scale N|--gpu PATH
 cce-shadow ctl windows          # ccectl against the shadow
 cce-shadow spawn cce-files
 cce-shadow shot [name]          # PNG path on stdout
+cce-shadow shot-window [name]   # one window rather than the whole output
 cce-shadow list | prune         # instances; reclaim stopped agent-N trees
 cce-shadow status | logs | run <cmd> | env | stop [--all]
 ```
@@ -205,9 +206,13 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Tests are sparse (unit tests in `config.rs`, `window_manager.rs`; the arrange/slotmap
-tests live in the sibling `cce-window-manager` crate — run them with
-`cargo test -p cce-window-manager`). The library crate name is `cce_fx` (underscored).
+Six modules carry unit tests — `backdrop.rs` (the most of any, covering the
+measurement and the desktop/window blend), `config.rs`, `window_manager.rs`,
+`screenshot.rs`, `migrate_input.rs`, `text.rs`. They cluster where the logic is
+pure and the FFI is not, which is the only kind of thing testable in a crate
+this deep in wlroots. The arrange/slotmap tests live in the sibling
+`cce-window-manager` crate — run them with `cargo test -p cce-window-manager`.
+The library crate name is `cce_fx` (underscored).
 
 ```sh
 cargo test --lib                  # all library tests
@@ -250,19 +255,25 @@ treats them as opaque.
   server, loads config + persisted state, adds the wayland socket, spawns the init
   program (`~/.config/cce/init` via `sh -c`) and the IPC + status servers, then
   `wl_display_run`.
-- **`window_manager.rs`** (~3900 lines) — the heart of the mechanism side. Holds the
+- **`window_manager.rs`** (~5.7k lines) — the heart of the mechanism side. Holds the
   WM state, the camera fields, window lists, the IPC command dispatcher
   `process_ipc_command()`, the `Policy::action` snapshot builder
   (`build_action_ctx`) and the `Compositor` command applier. IPC requests arrive on
   an mpsc channel drained by a wlroots event-loop timer (`handle_ipc_timer`) so all
   mutation happens on the main thread. Decision logic (camera math, action
   dispatch, snapping, refocus, grid geometry) lives in `cce-window-manager`.
-- **`window.rs`** (~3900 lines) — per-window model and rendering (borders, blur,
+- **`window.rs`** (~4.9k lines) — per-window model and rendering (borders, blur,
   viewport transforms).
 - **`crate::tiling`** (from `cce-window-manager`) — `TilingMode` enum: `Floating`,
   `Tiled` (grid-aligned; the window reports xdg maximized), `Fullscreen`,
-  `Popup`, `Overlay`, `Status`. Tiled-ness is geometric: the seat op's end
-  (`seat.rs::op_end`) promotes/demotes via `policy::snap::is_cell_aligned`.
+  `Popup`, `Overlay`, `Status`, `Utility`. Tiled-ness is geometric: the seat
+  op's end (`seat.rs::op_end`) promotes/demotes via
+  `policy::snap::is_cell_aligned`. `Utility` is the one mode a client asks for
+  outright — `cce_window_management.rs` sets it on `set_utility` — and it is a
+  self-sizing float: no resize affordance, no saved geometry (see
+  `xdg_toplevel.rs`, which sizes it and `Status` from their own content, and
+  `xwayland_window.rs`, which excludes it from the tiled report alongside
+  `Floating`/`Popup`).
 - Input stack: `input_manager.rs`, `seat.rs`, `cursor.rs`, `keyboard*.rs`,
   `xkb_*.rs`, `libinput_*.rs`, `pointer_*.rs`, `tablet*.rs`, `text_input.rs`,
   `input_relay.rs`/`input_popup.rs` (IME).
