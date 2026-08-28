@@ -36,6 +36,16 @@ uniform float shoulder;
 uniform float focus;
 uniform vec3 focus_color;
 
+// Falloff exponent for the focus glint. 1.0 is a linear ramp across the whole
+// rim, which reads as a wash; higher concentrates the light at the silhouette.
+// Costs peak brightness as it rises — the outermost RENDERED sample sits just
+// inside t=0 and is feathered by edge_aa, so it is already below 1.0 and the
+// power pushes it down (measured peak, green channel: 242 at 1.0, 222 at 3.0,
+// 198 at 6.0, 168 at 12.0). Past ~12 the curve stops narrowing and only dims:
+// 12 and 24 differ by 2/255. 3.0 keeps a defined edge without washing the
+// accent out to white.
+#define FOCUS_SHARPNESS 3.0
+
 // Defined in corner_alpha.frag, which is concatenated after this source (the
 // same way box_shadow.frag gets it). Using the shared routine rather than a
 // private circular SDF is the whole point: at corner_shape > 2 the DE's
@@ -99,7 +109,12 @@ void main() {
         // edge shades as the one facing the light, in the accent color, no
         // shade side. Same slope profile, so band width and shoulder match
         // the unfocused rim exactly.
-        float h = light_intensity * slope;
+        // Concentrate the band toward the outer edge. The linear ramp
+        // spreads the glint over the whole rim, which reads as a wash; a
+        // power keeps the peak at the silhouette and falls away fast, which
+        // is what makes cce-ui's plate line read as a glint rather than a
+        // glow (shader2d.wgsl raises its profile to `shininess`).
+        float h = light_intensity * pow(slope, FOCUS_SHARPNESS);
         // ADDITIVE: alpha 0 with premultiplied colour gives dst + rgb under
         // the pass's GL_ONE/GL_ONE_MINUS_SRC_ALPHA blend, so the glint ADDS
         // light to the window instead of cross-fading toward the accent.
