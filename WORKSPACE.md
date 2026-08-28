@@ -164,6 +164,23 @@ more than the rest of the workspace combined, so it keeps whatever toolkit
 version it was last built against until someone decides that trade is worth
 making.
 
+**A hit proves freshness; a miss proves nothing.** Not every string literal in
+the source survives into the binary, and the two cases are not distinguishable
+from the outside. Measured against a current `cce-fx` on 2026-08-28: the live
+`Action` names `mode_next_shared` and `toggle_overview` appear (twice and once),
+while `overlay_right`, `brightness_down` and `focus_up` — same file, same kind
+of literal, all reachable in `cce-window-manager/src/api.rs` — report zero.
+Probably link-time constant merging; recorded as observed, not explained. So
+prefer a long distinctive log string over a short match-arm literal, and never
+read a zero as "the build didn't take" — that false negative has already cost a
+session an afternoon of chasing a build that had worked.
+
+When the answer actually matters, test the behavior instead of a proxy for it:
+put a deliberately bogus value where the real one goes (a made-up action name in
+a shadow session's `input.kdl`) and watch for the code path that rejects it —
+the compositor's "unknown window-manager action" warning firing for the bogus
+name and staying quiet for yours proves the running binary knows yours.
+
 For plain cargo work:
 
 ```sh
