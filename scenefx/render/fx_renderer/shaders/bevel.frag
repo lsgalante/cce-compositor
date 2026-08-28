@@ -91,13 +91,27 @@ void main() {
     // window's own rounded edge.
     float edge_aa = clamp(-dist, 0.0, 1.0);
 
+    // Overall scale on the effect: the tint's alpha times the outer feather.
+    float k = v_color.a * edge_aa;
+
     if (focus > 0.5) {
         // Focused window: the familiar lit-edge highlight, wrapped — every
         // edge shades as the one facing the light, in the accent color, no
         // shade side. Same slope profile, so band width and shoulder match
         // the unfocused rim exactly.
         float h = light_intensity * slope;
-        gl_FragColor = vec4(focus_color * h, h) * v_color.a * edge_aa;
+        // ADDITIVE: alpha 0 with premultiplied colour gives dst + rgb under
+        // the pass's GL_ONE/GL_ONE_MINUS_SRC_ALPHA blend, so the glint ADDS
+        // light to the window instead of cross-fading toward the accent.
+        // Two reasons that matters. A cross-fade ceilings the whole effect at
+        // focus_color and DARKENS the rim wherever it crosses client pixels
+        // brighter than the accent, which is why the old rim dipped below the
+        // window's own value. And the alpha term is gone, so the intensity is
+        // linear in h rather than squared — h peaked at light_intensity (0.6),
+        // so squaring cost the highlight nearly two thirds of its strength.
+        // This is what cce-ui's plate does: shader2d.wgsl adds its specular on
+        // top of the lit fill rather than blending toward it.
+        gl_FragColor = vec4(focus_color * h * k, 0.0);
         return;
     }
 
@@ -112,6 +126,7 @@ void main() {
     // the tint (and its alpha scales the whole effect).
     vec3 rgb = v_color.rgb * highlight;
     float alpha = highlight + shadow;
+    float a = alpha * k;
 
-    gl_FragColor = vec4(rgb, alpha) * v_color.a * edge_aa;
+    gl_FragColor = vec4(rgb * k * a, a);
 }

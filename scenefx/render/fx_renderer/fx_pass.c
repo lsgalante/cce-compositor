@@ -1134,9 +1134,13 @@ void fx_render_pass_add_bevel(struct fx_gles_render_pass *pass,
 	push_fx_debug(renderer);
 
 	// The highlight adds light and the shade subtracts it, both premultiplied
-	// into the same draw — ordinary source-over blending.
+	// into the same draw — ordinary source-over blending. The src factor is
+	// GL_ONE because the shader emits premultiplied colour: with GL_SRC_ALPHA
+	// the blend multiplied by alpha a SECOND time, squaring the rim's
+	// intensity, and left no way for a branch to composite additively (alpha
+	// 0 zeroed the whole contribution instead of adding it).
 	setup_blending(WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
-	glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+	glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
 
 	glUseProgram(renderer->shaders.bevel.program);
 
