@@ -3,9 +3,12 @@
 // of a picture frame.
 //
 // The ring is cut into eight zones — four corner pieces and four edge bars —
-// separated by `gap`. A corner piece keeps the thin `band_min` thickness for
-// `corner_len` along each of its two sides; an edge bar runs from there to
-// the side's midpoint, easing from `band_min` up to `band`.
+// separated by `gap`, but the THICKNESS is one continuous profile per side,
+// independent of that cut: `band_min` at the very corner easing to `band` at
+// the side's midpoint. The corner pieces are part of the same curve rather
+// than a flat run, so the swell reads as moulding carried right around the
+// frame instead of a bar that steps up between two constant corners.
+// `corner_len` therefore places the gaps; it no longer bounds the swell.
 //
 // Why a shader rather than rects: the swell is continuous along a side, and
 // a scene rect can only approximate it with a clipped region whose corner
@@ -88,30 +91,29 @@ void main() {
     // Distance from the nearer end of that side.
     float u = min(along, len - along);
 
-    // Thickness profile and zone.
-    float thickness;
+    // Thickness: one curve over the whole half-side, corner pieces included.
+    // Spreading it across the full run rather than only the bar is what makes
+    // the swell gradual; smoothstep flattens the curve at both ends, so it
+    // leaves no crease where the two halves meet at the midpoint and none
+    // where it starts at the corner.
+    float half_side = max(0.5 * len, 1e-3);
+    float t = clamp(u / half_side, 0.0, 1.0);
+    float thickness = mix(band_min, band, smoothstep(0.0, 1.0, t));
+
+    // The cut into zones is separate from the profile: it decides where the
+    // gaps fall and which zone the pointer is over, nothing about thickness.
     float zone;
     if (u <= corner_len) {
-        // Corner piece: thin, and constant for its whole run.
-        thickness = band_min;
         bool left = dl <= dr;
         bool top = dt <= db;
         zone = top ? (left ? ZONE_TL : ZONE_TR) : (left ? ZONE_BL : ZONE_BR);
     } else if (u <= corner_len + gap) {
         // The gap between a corner piece and its neighbouring bar.
         discard;
+    } else if (vertical) {
+        zone = (dl <= dr) ? ZONE_LEFT : ZONE_RIGHT;
     } else {
-        // Edge bar: eased from band_min at the corner end to band at the
-        // side's midpoint. smoothstep rather than a straight ramp so the
-        // join at either end has no visible crease.
-        float run = max(0.5 * len - corner_len - gap, 1e-3);
-        float v = clamp((u - corner_len - gap) / run, 0.0, 1.0);
-        thickness = mix(band_min, band, smoothstep(0.0, 1.0, v));
-        if (vertical) {
-            zone = (dl <= dr) ? ZONE_LEFT : ZONE_RIGHT;
-        } else {
-            zone = (dt <= db) ? ZONE_TOP : ZONE_BOTTOM;
-        }
+        zone = (dt <= db) ? ZONE_TOP : ZONE_BOTTOM;
     }
 
     if (depth > thickness) {
