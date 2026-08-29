@@ -1915,7 +1915,7 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
                     wm.desk_pan_x = cam.pan_x;
                     wm.desk_pan_y = cam.pan_y;
                     wm.desk_zoom = cam.zoom;
-                    wm.mode = if crate::policy::camera::is_overview(cam.zoom) { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal };
+                    wm.set_mode(if crate::policy::camera::is_overview(cam.zoom) { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal });
                     if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
                         wm.update_viewport_local();
                     } else {
@@ -2582,7 +2582,7 @@ unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: 
             wm.desk_pan_x = cam.pan_x;
             wm.desk_pan_y = cam.pan_y;
             wm.desk_zoom = cam.zoom;
-            wm.mode = if crate::policy::camera::is_overview(cam.zoom) { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal };
+            wm.set_mode(if crate::policy::camera::is_overview(cam.zoom) { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal });
             if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
                 wm.update_viewport_local();
             } else {
@@ -2780,28 +2780,31 @@ pub unsafe fn grid_surface_at(
     None
 }
 
+/// Where a layout point falls on a window's interactive band.
+///
+/// The band lives INSIDE the content rect — an inset ring hugging the
+/// window's own edges — and exists only in overview mode. Two consequences
+/// worth stating, because both are deliberate:
+///
+///   - In normal mode there is no band at all, so a window cannot be moved
+///     or resized with the pointer. The keyboard and IPC paths
+///     (`move_window_*`, `ccectl move-window`, a client repositioning
+///     itself) are untouched; this is only about dragging.
+///   - Inside the ring, all four edges RESIZE, the top included. Moving is
+///     what dragging the window's body already does in overview, so the top
+///     edge does not have to be spent on it the way the old outside band
+///     did.
+///
+/// `window.rs`'s `draw_borders` draws the handles from the same band width
+/// and corner length, so the zones and the visuals cannot drift.
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
-    if (*window).tiling_mode == crate::tiling::TilingMode::Popup
-        || (*window).tiling_mode == crate::tiling::TilingMode::Fullscreen
-        || (*window).tiling_mode == crate::tiling::TilingMode::Status
-    {
+    if (*(*window).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+        return BorderZone::None;
+    }
+    if !crate::window::window_takes_handles(window) {
         return BorderZone::None;
     }
 
-    // A Utility window is movable but never resizable, and its border is its
-    // ONLY grab surface — so instead of deadening the resize zones, the whole
-    // band (corners and side edges included) becomes a move handle.
-    let resize_allowed = (*window).tiling_mode != crate::tiling::TilingMode::Utility;
-    
-    if (*window).rendering_requested.circular {
-        return BorderZone::None;
-    }
-
-    // The shared band formula (doubled width, floored) — matching
-    // draw_borders' catchers and segments, so the zones and the visuals
-    // cannot drift. Foam ownership between neighboring windows needs no
-    // handling here: the catchers are clipped at the walls, so the scene
-    // hit-test already hands each half of a shared gap to the nearer window.
     let bw_unscaled = crate::window::border_band_width((*window).rendering_requested.border.width);
     if bw_unscaled <= 0.0 {
         return BorderZone::None;
@@ -2816,76 +2819,47 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     let geom = (*window).box_geom;
     let rx = lx - geom.x as f64;
     let ry = ly - geom.y as f64;
-
     let content_w = geom.width as f64 * scale;
     let content_h = geom.height as f64 * scale;
 
-    if rx >= 0.0 && rx < content_w && ry >= 0.0 && ry < content_h {
+    // Outside the window entirely, or in the body beyond the ring: not ours.
+    // The body case is what leaves overview's drag-to-move working.
+    if rx < 0.0 || rx >= content_w || ry < 0.0 || ry >= content_h {
+        return BorderZone::None;
+    }
+    let (near_l, near_r) = (rx < bw, rx >= content_w - bw);
+    let (near_t, near_b) = (ry < bw, ry >= content_h - bw);
+    if !(near_l || near_r || near_t || near_b) {
         return BorderZone::None;
     }
 
-    if rx >= -bw && rx < content_w + bw && ry >= -bw && ry < content_h + bw {
-        // The border band splits by direction, not by depth: the top edge
-        // moves the window, everything else resizes. Corner squares of
-        // `corner_len` (measured from the outer corners along the band)
-        // resize on both adjacent edges, so the top corners still resize.
-        // Derived in unscaled units (both inputs are unscaled), then brought
-        // into screen space alongside the band.
-        // Same silhouette-derived outer-arc radius as draw_borders, so the
-        // pointer's corner squares track the visual corner rings exactly.
-        let r_in = crate::window::widen_corner_radius(
-            (*window).backplate_radius_base(),
-            geom.width,
-            geom.height,
-        ) as f64;
-        let r_out = if r_in > 0.0 { r_in + bw_unscaled } else { 0.0 };
-        let corner_len = crate::window::border_corner_len(
-            bw_unscaled,
-            (*(*window).server).wm.layout.border_corner_length,
-            r_out,
-        ) * scale;
+    // Corner squares of `corner_len`, measured from the content corners —
+    // the same length draw_borders gives the corner handles.
+    let corner_len = crate::window::border_corner_len(
+        bw_unscaled,
+        (*(*window).server).wm.layout.border_corner_length,
+        0.0,
+    ) * scale;
+    let corner_l = rx < corner_len;
+    let corner_r = rx >= content_w - corner_len;
+    let corner_t = ry < corner_len;
+    let corner_b = ry >= content_h - corner_len;
 
-        let dist_left = rx + bw;
-        let dist_right = (content_w + bw) - rx;
-        let dist_top = ry + bw;
-        let dist_bottom = (content_h + bw) - ry;
-
-        let near_left = dist_left < corner_len && dist_left <= dist_right;
-        let near_right = dist_right < corner_len && dist_right < dist_left;
-        let near_top = dist_top < corner_len && dist_top <= dist_bottom;
-        let near_bottom = dist_bottom < corner_len && dist_bottom < dist_top;
-
-        if (near_left || near_right) && (near_top || near_bottom) {
-            if !resize_allowed {
-                return BorderZone::Move;
-            }
-            return BorderZone::Resize(crate::window::Edges {
-                top: near_top,
-                bottom: near_bottom,
-                left: near_left,
-                right: near_right,
-            });
-        }
-
-        if ry < 0.0 {
-            return BorderZone::Move;
-        }
-
-        let edges = crate::window::Edges {
-            top: false,
-            bottom: ry >= content_h,
-            left: rx < 0.0,
-            right: rx >= content_w,
-        };
-        if edges.bottom || edges.left || edges.right {
-            if !resize_allowed {
-                return BorderZone::Move;
-            }
-            return BorderZone::Resize(edges);
-        }
+    if (corner_l || corner_r) && (corner_t || corner_b) {
+        return BorderZone::Resize(crate::window::Edges {
+            top: corner_t,
+            bottom: corner_b && !corner_t,
+            left: corner_l,
+            right: corner_r && !corner_l,
+        });
     }
 
-    BorderZone::None
+    BorderZone::Resize(crate::window::Edges {
+        top: near_t,
+        bottom: near_b && !near_t,
+        left: near_l,
+        right: near_r && !near_l,
+    })
 }
 
 /// Map a resize zone's edges to the border element that should highlight.

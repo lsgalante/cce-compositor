@@ -306,6 +306,38 @@ treats them as opaque.
 - Output: `output.rs`, `output_manager.rs`. Session: `lock_manager.rs`,
   `idle_inhibit_manager.rs`. Rendering: `scene.rs`, `scene_node_data.rs`.
 
+### Window move/resize handles
+
+Pointer move and resize exist **only in overview mode**, and their band is
+**inside** the content rect — an inset ring hugging the window's own edges,
+where the old band sat outside them.
+
+- `cursor::get_border_zone` is the hit test: it returns `BorderZone::None`
+  outright unless `wm.mode == Overview`, so in normal mode a window cannot be
+  dragged or resized at all. Only the pointer is gated — `move_window_*`,
+  `ccectl move-window`, and a client repositioning itself all still work in
+  normal mode.
+- Inside the ring, **all four edges resize**, the top included. Dragging the
+  window's body is what moves it in overview, so the top edge no longer has
+  to be spent on moving the way the outside band's did.
+- `window::draw_borders` draws the handles from the same band width and
+  corner length the hit test uses, and `window::window_takes_handles` is the
+  single predicate for which windows get them (excluding Popup, Fullscreen,
+  Status, Utility, circular, hidden). Keep those in step: a handle that is
+  drawn but not honoured — or honoured but not drawn — is the failure mode
+  this arrangement exists to prevent.
+- Handles are shown for **every** eligible window the whole time overview is
+  on, not just the hovered one, via the `all_on` branch in
+  `step_border_fade`; hover still reads through as `hover_color`. Because
+  that fade is timer-driven, every site that flips the mode goes through
+  `WindowManager::set_mode`, which arms it — assigning `self.mode` directly
+  would leave the handles waiting for an unrelated redraw.
+- The per-side foam clipping the outside band carried is gone: it split a gap
+  SHARED with a neighbouring window, and an inside ring shares nothing.
+
+None of this is policy — `cce-window-manager` was untouched. The mode is
+already in `ActionCtx`, but what a *pointer* may grab is mechanism.
+
 ### Config
 
 Loaded on startup from **`$XDG_CONFIG_HOME/cce/config.kdl`** (falls back to

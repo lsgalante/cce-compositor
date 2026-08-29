@@ -478,7 +478,7 @@ impl WindowManager {
                 self.desk_pan_x = state.desk_pan_x;
                 self.desk_pan_y = state.desk_pan_y;
                 self.desk_zoom = state.desk_zoom;
-                self.mode = if (state.desk_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
+                self.set_mode(if (state.desk_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal });
                 self.restore_queue = state.windows;
                 self.last_window_states = state.last_window_states;
                 self.has_restored_focused_window = self.restore_queue.iter().any(|w| w.focused);
@@ -1450,6 +1450,21 @@ impl WindowManager {
 
     /// Start the border hover fade if it isn't already running. Idempotent —
     /// re-arming mid-fade would restart the timer and step it twice as fast.
+/// Switch overview on or off, arming the handle fade on a real change.
+    ///
+    /// Every site that flips the mode goes through here. Resize handles only
+    /// exist in overview (`window::draw_borders`), so the transition has to
+    /// start the fade timer or they would pop in on the next unrelated
+    /// redraw instead of easing — and the zoom paths that set the mode do it
+    /// every frame, hence the equality guard.
+    pub unsafe fn set_mode(&mut self, mode: WindowManagerMode) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        self.arm_border_fade();
+    }
+
     pub unsafe fn arm_border_fade(&mut self) {
         if self.border_fade_running || self.border_fade_timer.is_null() {
             return;
@@ -3677,7 +3692,7 @@ impl WindowManager {
                     self.desk_pan_x = cx - (viewport_w / 2.0) / new_zoom;
                     self.desk_pan_y = cy - (viewport_h / 2.0) / new_zoom;
                     self.desk_zoom = new_zoom;
-                    self.mode = if (new_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
+                    self.set_mode(if (new_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal });
                     self.dirty_windowing();
                     return "ok\n".to_string();
                 }
@@ -5231,7 +5246,7 @@ impl crate::policy::api::Compositor for WindowManager {
                     // The mode flips immediately either way, so a re-toggle
                     // mid-flight exits/enters rather than re-entering.
                     if let Some(overview) = overview {
-                        self.mode = if overview { WindowManagerMode::Overview } else { WindowManagerMode::Normal };
+                        self.set_mode(if overview { WindowManagerMode::Overview } else { WindowManagerMode::Normal });
                     }
                     if animate {
                         if let Some((_, duration_ms)) = self.layout.overview_anim {

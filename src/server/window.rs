@@ -3336,9 +3336,15 @@ impl Window {
     pub unsafe fn step_border_fade(&mut self) -> bool {
         let mut moving = false;
         let mut changed = false;
+        // In overview every handle is shown for as long as the mode is on,
+        // not just the one under the pointer: the point is to see what is
+        // grabbable at a glance. Hover still reads through, as `color_for`
+        // paints the hovered zone in hover_color over the same full reveal.
+        let all_on = (*self.server).wm.mode == crate::window_manager::WindowManagerMode::Overview
+            && window_takes_handles(self as *mut Window);
         for elem in BorderElement::ALL {
             let i = elem.index();
-            let target = if self.hovered_border_element == Some(elem) { 1.0 } else { 0.0 };
+            let target = if all_on || self.hovered_border_element == Some(elem) { 1.0 } else { 0.0 };
             let delta = target - self.border_reveal[i];
             if delta.abs() <= BORDER_FADE_EPSILON {
                 if self.border_reveal[i] != target {
@@ -3540,7 +3546,33 @@ impl Window {
         [ext[0] / scale, ext[1] / scale, ext[2] / scale, ext[3] / scale]
     }
 
+    }
+
+/// Does this window get resize handles at all?
+///
+/// The single answer for both halves — `cursor::get_border_zone`'s hit test
+/// and `draw_borders`' visuals — so a window can never show a handle it
+/// would not honour, or honour one it does not show. Excluded: the internal
+/// roles that are not user-geometry (Popup, Fullscreen, Status), Utility
+/// (self-sizing by definition — the client owns its size), circular windows
+/// (no rectangular ring to hug), and hidden ones.
+pub unsafe fn window_takes_handles(window: *mut Window) -> bool {
+    !matches!(
+        (*window).tiling_mode,
+        crate::tiling::TilingMode::Popup
+            | crate::tiling::TilingMode::Fullscreen
+            | crate::tiling::TilingMode::Status
+            | crate::tiling::TilingMode::Utility
+    ) && !(*window).rendering_requested.circular
+        && !(*window).rendering_requested.hidden
+}
+
+impl Window {
     pub unsafe fn draw_borders(&mut self) {
+        // Taken before `requested` borrows self: `window_takes_handles` is
+        // the shared predicate with cursor::get_border_zone and must not be
+        // duplicated here just to satisfy borrowck.
+        let self_ptr = self as *mut Window;
         let requested = &self.rendering_requested;
 
         let border = &requested.border;
@@ -3609,15 +3641,12 @@ impl Window {
         let clip_empty = requested.content_clip.width == 0 && requested.content_clip.height == 0;
         if clip_empty || ffi::wlr_box_intersection(&mut intersect, &content, &requested.content_clip) {
             let border = &requested.border;
-            // The interactive band (doubled configured width, floored), foam-
-            // clipped per side against neighboring windows' bands. Clipping
-            // the CATCHERS too is what routes the shared half of a gap to the
-            // nearer window in the scene hit-test.
+            // The interactive band (doubled configured width, floored). The
+            // per-side foam clipping this used to carry is gone with the
+            // outside band: it split a gap SHARED with a neighbouring window,
+            // and the inside ring shares nothing.
             let band_f = border_band_width(border.width);
             let band = band_f as i32;
-            let ext = self.border_side_extents(band_f);
-            let (ext_l, ext_r, ext_t, ext_b) =
-                (ext[0] as i32, ext[1] as i32, ext[2] as i32, ext[3] as i32);
             let transparent = [0.0f32; 4];
 
             // The rounded-frame path used to leave radius/clip state on the
@@ -3650,66 +3679,56 @@ impl Window {
                 ffi::wlr_scene_rect_set_color(rect, color.as_ptr());
             };
 
-            // Full-band hit catchers (foam-clipped): sides span the corners
-            // vertically.
-            let b = ffi::wlr_box { x: -ext_l, y: -ext_t, width: ext_l, height: content.height + ext_t + ext_b };
-            apply(self.border.left, b, &transparent, true);
-            let b = ffi::wlr_box { x: content.width, y: -ext_t, width: ext_r, height: content.height + ext_t + ext_b };
-            apply(self.border.right, b, &transparent, true);
-            let b = ffi::wlr_box { x: 0, y: -ext_t, width: content.width, height: ext_t };
-            apply(self.border.top, b, &transparent, true);
-            let b = ffi::wlr_box { x: 0, y: content.height, width: content.width, height: ext_b };
-            apply(self.border.bottom, b, &transparent, true);
-
-            if is_virtual_border {
+            // Handles live INSIDE the content rect, and only in overview
+            // mode — see `cursor::get_border_zone`, which hit-tests the same
+            // ring from the same band width and corner length. In normal
+            // mode there is nothing to grab, so the catchers and the visible
+            // segments are both disabled outright. The window's own border
+            // (`window_background`, above) is untouched in either mode: this
+            // moved the HANDLES inward, not the border.
+            let in_overview = (*self.server).wm.mode
+                == crate::window_manager::WindowManagerMode::Overview;
+            let bw = band;
+            let (cw, ch) = (content.width, content.height);
+            // A window thinner than two bands has no interior left for a
+            // ring; drawing one would be a solid block over the whole window.
+            let handles_on = in_overview
+                && window_takes_handles(self_ptr)
+                && !is_virtual_border
+                && bw > 0
+                && cw >= 2 * bw
+                && ch >= 2 * bw;
+            if !handles_on {
+                for r in [self.border.left, self.border.right, self.border.top, self.border.bottom] {
+                    ffi::wlr_scene_node_set_enabled(r as *mut ffi::wlr_scene_node, false);
+                }
                 for &seg in self.border.segments.iter() {
                     ffi::wlr_scene_node_set_enabled(seg as *mut ffi::wlr_scene_node, false);
                 }
                 return;
             }
 
-            let bw = band;
-            let layout = &(*self.server).wm.layout;
-            // The corner ring follows the WINDOW's silhouette: the widened
-            // backplate radius the corner clip and background plate use
-            // (bg_radius above) — not the retired border{corner_radius=}
-            // key, whose separate (much tighter) arc rounded only the
-            // corner piece's outermost tip while the window curved away
-            // underneath it.
-            let r_in = bg_radius;
-            let r_out = if r_in > 0 { r_in + bw } else { 0 };
-            let cl = border_corner_len(bw as f64, layout.border_corner_length, r_out as f64) as i32;
-            let g = layout.border_segment_gap;
-            let arm = cl - bw;
-            // Edge bars span between the corner zones, inset by the gap.
-            let bar_x = cl - bw + g;
-            let bar_w = content.width + 2 * bw - 2 * cl - 2 * g;
-            let bar_y = cl - bw + g;
-            let bar_h = content.height + 2 * bw - 2 * cl - 2 * g;
+            // Hit catchers: the inside ring, sides spanning the full height
+            // so the corners belong to them. No foam clipping — that exists
+            // to split a gap SHARED with a neighbouring window, and an inside
+            // ring shares nothing.
+            let b = ffi::wlr_box { x: 0, y: 0, width: bw, height: ch };
+            apply(self.border.left, b, &transparent, true);
+            let b = ffi::wlr_box { x: cw - bw, y: 0, width: bw, height: ch };
+            apply(self.border.right, b, &transparent, true);
+            let b = ffi::wlr_box { x: bw, y: 0, width: cw - 2 * bw, height: bw };
+            apply(self.border.top, b, &transparent, true);
+            let b = ffi::wlr_box { x: bw, y: ch - bw, width: cw - 2 * bw, height: bw };
+            apply(self.border.bottom, b, &transparent, true);
 
-            // Foam clip for a visible segment: shave each outward flank the
-            // segment occupies back to that side's allowed extent. (l/r shift
-            // or shrink horizontally, t/b vertically; apply() drops boxes
-            // that clip away entirely.)
-            let clip_seg = |mut bx: ffi::wlr_box, l: bool, r: bool, t: bool, b: bool| -> ffi::wlr_box {
-                if l {
-                    let d = bw - ext_l;
-                    bx.x += d;
-                    bx.width -= d;
-                }
-                if r {
-                    bx.width -= bw - ext_r;
-                }
-                if t {
-                    let d = bw - ext_t;
-                    bx.y += d;
-                    bx.height -= d;
-                }
-                if b {
-                    bx.height -= bw - ext_b;
-                }
-                bx
-            };
+            let layout = &(*self.server).wm.layout;
+            // The ring hugs the window's own silhouette, so its outer arc IS
+            // the window's content radius (the widened backplate radius the
+            // corner clip uses) rather than that plus a band, as the outside
+            // border's was.
+            let r_in = bg_radius;
+            let cl = border_corner_len(bw as f64, layout.border_corner_length, r_in as f64) as i32;
+            let g = layout.border_segment_gap;
 
             // Borders rest invisible; a zone is drawn only as far as its
             // reveal factor has faded in. Channels are premultiplied alpha, so
@@ -3726,47 +3745,45 @@ impl Window {
             let e = &border.edges;
             use BorderElement::*;
 
-            // Edge bars: box, element, edge-enable, then which outward flank
-            // each occupies (left, right, top, bottom) for the foam clip.
+            // Edge bars, spanning between the corner zones and inset by the
+            // segment gap.
+            let (bar_x, bar_w) = (cl + g, cw - 2 * cl - 2 * g);
+            let (bar_y, bar_h) = (cl + g, ch - 2 * cl - 2 * g);
             #[rustfmt::skip]
-            let bars: [(usize, ffi::wlr_box, BorderElement, bool, (bool, bool, bool, bool)); 4] = [
-                (SEG_TOP, ffi::wlr_box { x: bar_x, y: -bw, width: bar_w, height: bw }, Top, e.top, (false, false, true, false)),
-                (SEG_BOTTOM, ffi::wlr_box { x: bar_x, y: content.height, width: bar_w, height: bw }, Bottom, e.bottom, (false, false, false, true)),
-                (SEG_LEFT, ffi::wlr_box { x: -bw, y: bar_y, width: bw, height: bar_h }, Left, e.left, (true, false, false, false)),
-                (SEG_RIGHT, ffi::wlr_box { x: content.width, y: bar_y, width: bw, height: bar_h }, Right, e.right, (false, true, false, false)),
+            let bars: [(usize, ffi::wlr_box, BorderElement, bool); 4] = [
+                (SEG_TOP, ffi::wlr_box { x: bar_x, y: 0, width: bar_w, height: bw }, Top, e.top),
+                (SEG_BOTTOM, ffi::wlr_box { x: bar_x, y: ch - bw, width: bar_w, height: bw }, Bottom, e.bottom),
+                (SEG_LEFT, ffi::wlr_box { x: 0, y: bar_y, width: bw, height: bar_h }, Left, e.left),
+                (SEG_RIGHT, ffi::wlr_box { x: cw - bw, y: bar_y, width: bw, height: bar_h }, Right, e.right),
             ];
-            for (idx, bx, elem, enabled, (fl, fr, ft, fb)) in bars {
+            for (idx, bx, elem, enabled) in bars {
                 // A fully-faded-out zone is disabled outright rather than
                 // drawn transparent, so it costs nothing while at rest.
                 let enabled = enabled && self.border_reveal[elem.index()] > 0.0;
-                apply(self.border.segments[idx], clip_seg(bx, fl, fr, ft, fb), &color_for(elem), enabled);
+                apply(self.border.segments[idx], bx, &color_for(elem), enabled);
             }
 
-            // Corner zones: one rounded-L rect per corner (the legacy
-            // two-rect L's V slots are retired). The outer corner carries
-            // radius r_in + bw — concentric with the window's own rounding —
-            // and the content quadrant is clipped away at r_in, so the band
-            // follows the rounded window corner. Radii and clip are set in
-            // PHYSICAL px on the final (foam-clipped) box; r_in == 0
-            // degenerates to the old square L.
+            // Corner zones: a cl x cl square per corner with the INNER
+            // quadrant clipped away, leaving an L whose outer arc follows the
+            // window's rounded corner and whose inner arc is that radius less
+            // the band.
             let rr = |v: f64| -> u16 { (v.max(0.0) as i32).clamp(0, u16::MAX as i32) as u16 };
             let s = self.scale;
-            let ri = rr(r_in as f64 * s);
-            let ro = rr(r_out as f64 * s);
+            let ro = rr(r_in as f64 * s);
+            let ri = rr((r_in - bw).max(0) as f64 * s);
             let no_radii = ffi::fx_corner_radii { top_left: 0, top_right: 0, bottom_right: 0, bottom_left: 0 };
 
-            // (visible slot, retired slot, element, enabled, box,
-            //  corner index: 0=TL 1=TR 2=BR 3=BL)
+            // (slot, retired slot, element, enabled, box, corner: 0=TL 1=TR 2=BR 3=BL)
             #[rustfmt::skip]
             let corners: [(usize, usize, BorderElement, bool, ffi::wlr_box, usize); 4] = [
                 (SEG_TL_H, SEG_TL_V, TopLeft, e.top && e.left,
-                 ffi::wlr_box { x: -ext_l, y: -ext_t, width: cl - bw + ext_l, height: cl - bw + ext_t }, 0),
+                 ffi::wlr_box { x: 0, y: 0, width: cl, height: cl }, 0),
                 (SEG_TR_H, SEG_TR_V, TopRight, e.top && e.right,
-                 ffi::wlr_box { x: content.width + bw - cl, y: -ext_t, width: cl - bw + ext_r, height: cl - bw + ext_t }, 1),
+                 ffi::wlr_box { x: cw - cl, y: 0, width: cl, height: cl }, 1),
                 (SEG_BR_H, SEG_BR_V, BottomRight, e.bottom && e.right,
-                 ffi::wlr_box { x: content.width + bw - cl, y: content.height - arm, width: cl - bw + ext_r, height: arm + ext_b }, 2),
+                 ffi::wlr_box { x: cw - cl, y: ch - cl, width: cl, height: cl }, 2),
                 (SEG_BL_H, SEG_BL_V, BottomLeft, e.bottom && e.left,
-                 ffi::wlr_box { x: -ext_l, y: content.height - arm, width: cl - bw + ext_l, height: arm + ext_b }, 3),
+                 ffi::wlr_box { x: 0, y: ch - cl, width: cl, height: cl }, 3),
             ];
             for (slot, retired, elem, enabled, bx, which) in corners {
                 ffi::wlr_scene_node_set_enabled(self.border.segments[retired] as *mut ffi::wlr_scene_node, false);
@@ -3776,18 +3793,15 @@ impl Window {
                 if !enabled || bx.width <= 0 || bx.height <= 0 {
                     continue;
                 }
-                let (pw, ph) = ((bx.width as f64 * s) as i32, (bx.height as f64 * s) as i32);
-                // The content quadrant, rect-local physical px: from the
-                // content edges to the box's far sides.
-                let (cx, cy) = match which {
-                    0 => (ext_l, ext_t), // content corner sits ext in from the box origin
-                    1 => (0, ext_t),
+                // The inner quadrant to cut, rect-local physical px: the
+                // band's thickness in from whichever two sides are outer.
+                let (qx, qy) = match which {
+                    0 => (bw, bw),
+                    1 => (0, bw),
                     2 => (0, 0),
-                    _ => (ext_l, 0),
+                    _ => (bw, 0),
                 };
-                let (cx, cy) = ((cx as f64 * s) as i32, (cy as f64 * s) as i32);
-                let sub_w = match which { 0 | 3 => pw - cx, _ => pw - ((ext_r as f64 * s) as i32) };
-                let sub_h = match which { 0 | 1 => ph - cy, _ => ph - ((ext_b as f64 * s) as i32) };
+                let side = ((cl - bw).max(0) as f64 * s) as i32;
                 let mut outer = no_radii;
                 let mut inner = no_radii;
                 match which {
@@ -3798,7 +3812,12 @@ impl Window {
                 }
                 ffi::wlr_scene_rect_set_corner_radii(rect, outer);
                 ffi::wlr_scene_rect_set_clipped_region(rect, ffi::clipped_region {
-                    area: ffi::wlr_box { x: cx, y: cy, width: sub_w.max(0), height: sub_h.max(0) },
+                    area: ffi::wlr_box {
+                        x: (qx as f64 * s) as i32,
+                        y: (qy as f64 * s) as i32,
+                        width: side,
+                        height: side,
+                    },
                     corners: inner,
                 });
             }
