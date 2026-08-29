@@ -2811,10 +2811,13 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     }
 
     // box_geom holds the UNSCALED content size; on screen the window covers
-    // `size * scale` (as scene::at accounts for). Without this the band sits
-    // in the wrong place at any zoom other than 1.0.
+    // `size * scale`, and lx/ly are layout px — so the CONTENT extents scale
+    // but the band does NOT. The grab width is a screen width, matching what
+    // draw_borders draws: overview is zoomed out, and a band that shrank with
+    // the window would be thinnest exactly where it is the only way to
+    // resize. Keep the two in step.
     let scale = if (*window).scale > 0.0 { (*window).scale } else { 1.0 };
-    let bw = bw_unscaled * scale;
+    let bw = bw_unscaled.max(crate::window::HOVER_BAND_MIN);
 
     let geom = (*window).box_geom;
     let rx = lx - geom.x as f64;
@@ -2835,11 +2838,12 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
 
     // Corner squares of `corner_len`, measured from the content corners —
     // the same length draw_borders gives the corner handles.
-    let corner_len = crate::window::border_corner_len(
+    let corner_len = (crate::window::border_corner_len(
         bw_unscaled,
         (*(*window).server).wm.layout.border_corner_length,
         0.0,
-    ) * scale;
+    ) * scale)
+        .max(bw);
     let corner_l = rx < corner_len;
     let corner_r = rx >= content_w - corner_len;
     let corner_t = ry < corner_len;

@@ -329,6 +329,14 @@ where the old band sat outside them.
   change (tens of px) while a side is hundreds long, so it reads as a bump
   near the centre rather than a swell. `border.segments`' 12 rects are what it
   replaced; they stay allocated but disabled.
+- **The ring's thickness is a SCREEN width, not a world one**, floored at
+  `HOVER_BAND_MIN`. Handles exist only in overview, which is zoomed *out*, so
+  a band that scaled with the window would be at its thinnest exactly where it
+  is the only way to resize: 16px renders as 7 at a typical overview zoom and
+  the thin corners as 2.5, which is neither visible nor clickable. The lengths
+  along a side (`corner_len`, `gap`) still scale, so the composition holds at
+  any zoom — only the thickness is pinned. `draw_borders` and
+  `cursor::get_border_zone` each derive it the same way and must stay in step.
 - Two knobs shape it, both under `border` in config.kdl: `corner_length` sets
   how far the thin corner run extends before the swell begins, and `taper`
   (new) is the corner thickness as a fraction of the middle's — 1.0 is an even

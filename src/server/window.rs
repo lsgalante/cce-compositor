@@ -3720,6 +3720,7 @@ impl Window {
             let in_overview = (*self.server).wm.mode
                 == crate::window_manager::WindowManagerMode::Overview;
             let bw = band;
+            let sc = if self.scale > 0.0 { self.scale } else { 1.0 };
             let (cw, ch) = (content.width, content.height);
             // A window thinner than two bands has no interior left for a
             // ring; drawing one would be a solid block over the whole window.
@@ -3727,8 +3728,8 @@ impl Window {
                 && window_takes_handles(self_ptr)
                 && !is_virtual_border
                 && bw > 0
-                && cw >= 2 * bw
-                && ch >= 2 * bw;
+                && (cw as f64 * sc) >= 4.0 * band_f.max(crate::window::HOVER_BAND_MIN)
+                && (ch as f64 * sc) >= 4.0 * band_f.max(crate::window::HOVER_BAND_MIN);
             if !handles_on {
                 for r in [self.border.left, self.border.right, self.border.top, self.border.bottom] {
                     ffi::wlr_scene_node_set_enabled(r as *mut ffi::wlr_scene_node, false);
@@ -3743,17 +3744,28 @@ impl Window {
                 return;
             }
 
+            // The band is a SCREEN width, not a world one. Handles exist only
+            // in overview, which is zoomed OUT, so a band that scaled with the
+            // window would be at its thinnest exactly where it is the only way
+            // to resize — 16px becomes 7 at a typical overview zoom, and the
+            // thin corners 2.5. `apply` scales the boxes it is given, so the
+            // catchers are sized in unscaled units that come back to
+            // `band_screen` on screen. cursor::get_border_zone measures the
+            // same width in layout px; the two must agree.
+            let band_screen = (band_f).max(crate::window::HOVER_BAND_MIN);
+            let bw_u = (band_screen / sc).round().max(1.0) as i32;
+
             // Hit catchers: the inside ring, sides spanning the full height
             // so the corners belong to them. No foam clipping — that exists
             // to split a gap SHARED with a neighbouring window, and an inside
             // ring shares nothing.
-            let b = ffi::wlr_box { x: 0, y: 0, width: bw, height: ch };
+            let b = ffi::wlr_box { x: 0, y: 0, width: bw_u, height: ch };
             apply(self.border.left, b, &transparent, true);
-            let b = ffi::wlr_box { x: cw - bw, y: 0, width: bw, height: ch };
+            let b = ffi::wlr_box { x: cw - bw_u, y: 0, width: bw_u, height: ch };
             apply(self.border.right, b, &transparent, true);
-            let b = ffi::wlr_box { x: bw, y: 0, width: cw - 2 * bw, height: bw };
+            let b = ffi::wlr_box { x: bw_u, y: 0, width: cw - 2 * bw_u, height: bw_u };
             apply(self.border.top, b, &transparent, true);
-            let b = ffi::wlr_box { x: bw, y: ch - bw, width: cw - 2 * bw, height: bw };
+            let b = ffi::wlr_box { x: bw_u, y: ch - bw_u, width: cw - 2 * bw_u, height: bw_u };
             apply(self.border.bottom, b, &transparent, true);
 
             let layout = &(*self.server).wm.layout;
@@ -3772,10 +3784,6 @@ impl Window {
             let a = self.border_reveal[BorderElement::Top.index()].clamp(0.0, 1.0);
             let premul = |c: &[f32; 4]| [c[0] * a, c[1] * a, c[2] * a, c[3] * a];
 
-            // Device px throughout, the same space `apply` put the rects in:
-            // box_geom is the UNSCALED content size and the window covers
-            // `size * scale` on screen.
-            let sc = self.scale;
             let px = |v: i32| (v as f64 * sc) as i32;
             ffi::wlr_scene_frame_set_size(self.border.frame, px(cw), px(ch));
             ffi::wlr_scene_frame_set_corner_radius(self.border.frame, px(r_in));
@@ -3784,9 +3792,9 @@ impl Window {
             // middle of a side without letting them vanish at small sizes.
             ffi::wlr_scene_frame_set_shape(
                 self.border.frame,
-                px(bw) as f32,
-                (px(bw) as f32 * layout.border_taper.clamp(0.0, 1.0)).max(1.0),
-                px(cl) as f32,
+                band_screen as f32,
+                (band_screen as f32 * layout.border_taper.clamp(0.0, 1.0)).max(2.0),
+                (px(cl) as f32).max(band_screen as f32),
                 px(g) as f32,
             );
             ffi::wlr_scene_frame_set_color(self.border.frame, premul(&border_color).as_ptr());
