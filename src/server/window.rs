@@ -3805,6 +3805,7 @@ impl Window {
                 (band_screen as f32 * layout.border_taper.clamp(0.0, 1.0)).max(2.0),
                 (px(cl) as f32).max(band_screen as f32),
                 px(g) as f32,
+                layout.border_swell_curve,
             );
             ffi::wlr_scene_frame_set_color(self.border.frame, premul(&border_color).as_ptr());
             let hovered = self

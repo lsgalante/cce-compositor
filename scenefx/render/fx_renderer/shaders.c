@@ -401,6 +401,7 @@ bool link_frame_program(struct frame_shader *shader) {
 	shader->gap = glGetUniformLocation(prog, "gap");
 	shader->hovered = glGetUniformLocation(prog, "hovered");
 	shader->hover_color = glGetUniformLocation(prog, "hover_color");
+	shader->swell_curve = glGetUniformLocation(prog, "swell_curve");
 
 	return true;
 }

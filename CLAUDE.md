@@ -340,7 +340,14 @@ where the old band sat outside them.
   along a side (`corner_len`, `gap`) still scale, so the composition holds at
   any zoom — only the thickness is pinned. `draw_borders` and
   `cursor::get_border_zone` each derive it the same way and must stay in step.
-- Three knobs shape it, all under `border` in config.kdl. `handle_width` is
+- `swell_curve` shapes the profile: below 1 the ring gains its thickness
+  early — a corner that visibly swells, then a long creep to the peak at the
+  midpoint — and above 1 does the reverse. It matters more than it sounds,
+  because a plain eased ramp is nearly FLAT across a corner piece: a corner
+  spanning an eighth of a side only reaches t=0.13, where smoothstep is 0.04,
+  under a pixel of the whole range. That is why the corners read as a constant
+  thin run without it, however long `corner_length` makes them.
+- Four knobs shape it, all under `border` in config.kdl. `handle_width` is
   the thickness at the middle of a side in screen px — **its own key, not
   derived from `width`**, because the ring must be thick enough to see and hit
   while the desktop is zoomed out, while the window's visible border is a much

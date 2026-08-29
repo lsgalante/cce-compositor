@@ -126,6 +126,8 @@ struct fx_render_frame_options {
 	/* Zone under the pointer (compositor BorderElement index), < 0 none. */
 	float hovered;
 	float hover_color[4];
+	/* Shape of the swell; < 1 gains thickness early, > 1 late. */
+	float swell_curve;
 	struct wlr_render_color color;
 };
 

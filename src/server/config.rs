@@ -38,6 +38,11 @@ pub struct Layout {
     /// ring has to be thick enough to see and hit while the desktop is zoomed
     /// out, and the window's visible border is a much finer line than that.
     pub border_handle_width: f32,
+    /// Shape of the handle ring's swell along a side. Below 1 the ring gains
+    /// its thickness early — a corner that visibly swells, then a long slow
+    /// approach to the middle. Above 1 stays thin near the corner and gains
+    /// late. 1.0 is the plain eased ramp.
+    pub border_swell_curve: f32,
     /// Corner zone length measured from the outer corner along each band;
     /// 0 = auto (max(2 * width, 16)).
     pub border_corner_length: i32,
@@ -195,6 +200,7 @@ impl Default for Layout {
             border_segment_gap: 4,
             border_taper: 0.35,
             border_handle_width: 32.0,
+            border_swell_curve: 0.45,
             border_corner_length: 0,
             background_r: 0x1C1C1C1Cu32,
             background_g: 0x20202020u32,
@@ -492,6 +498,8 @@ pub struct SurfaceConfig {
     pub border_taper: f64,
     #[serde(default = "default_border_handle_width")]
     pub border_handle_width: f64,
+    #[serde(default = "default_border_swell_curve")]
+    pub border_swell_curve: f64,
     /// 0 = auto (max(2 * width, 16)).
     #[serde(default)]
     pub border_corner_length: i64,
@@ -589,6 +597,7 @@ impl Default for SurfaceConfig {
             border_segment_gap: default_border_segment_gap(),
             border_taper: default_border_taper(),
             border_handle_width: default_border_handle_width(),
+            border_swell_curve: default_border_swell_curve(),
             border_corner_length: 0,
             cloud_position_default: default_cloud_position_default(),
             shadow_enabled: default_shadow_enabled(),
@@ -692,6 +701,7 @@ fn default_border_corner_radius() -> i64 {
 
 fn default_border_taper() -> f64 { 0.35 }
 fn default_border_handle_width() -> f64 { 32.0 }
+fn default_border_swell_curve() -> f64 { 0.45 }
 
 fn default_border_segment_gap() -> i64 {
     4
@@ -2038,6 +2048,13 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.border_handle_width = val as f64;
                                         }
                                     }
+                                    "swell_curve" => {
+                                        if let Some(val) = entry.value().as_f64() {
+                                            surface.border_swell_curve = val;
+                                        } else if let Some(val) = entry.value().as_i64() {
+                                            surface.border_swell_curve = val as f64;
+                                        }
+                                    }
                                     "corner_length" => {
                                         if let Some(val) = entry.value().as_i64() {
                                             surface.border_corner_length = val;
@@ -2337,6 +2354,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     // which is the moulding inside out.
     state.layout.border_taper = config.surface.border_taper.clamp(0.05, 1.0) as f32;
     state.layout.border_handle_width = config.surface.border_handle_width.max(4.0) as f32;
+    state.layout.border_swell_curve = config.surface.border_swell_curve.clamp(0.1, 6.0) as f32;
     state.layout.border_corner_length = config.surface.border_corner_length.max(0) as i32;
 
     state.layout.desktop_gap_color = config.surface.desktop_gap_color.clone();

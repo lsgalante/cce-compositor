@@ -35,6 +35,10 @@ uniform float band_min;
 // separates it from the neighbouring edge bar.
 uniform float corner_len;
 uniform float gap;
+// Shape of the swell along a side. Below 1 the ring gains its thickness
+// early and then creeps toward the peak — a corner that visibly swells and a
+// long slow approach to the middle. Above 1 does the reverse.
+uniform float swell_curve;
 // Zone under the pointer (see ZONE_* below), or < 0 for none.
 uniform float hovered;
 uniform vec4 hover_color;
@@ -92,13 +96,17 @@ void main() {
     float u = min(along, len - along);
 
     // Thickness: one curve over the whole half-side, corner pieces included.
-    // Spreading it across the full run rather than only the bar is what makes
-    // the swell gradual; smoothstep flattens the curve at both ends, so it
-    // leaves no crease where the two halves meet at the midpoint and none
-    // where it starts at the corner.
+    // smoothstep first, so the curve is flat where the two halves meet at the
+    // midpoint and where it starts at the corner — no crease at either. Then
+    // `swell_curve` reshapes it: below 1 pulls the gain earlier, which is what
+    // makes the corner swell visible at all. Plain smoothstep is nearly flat
+    // across a corner piece (a corner spanning an eighth of the side reaches
+    // t=0.13, where smoothstep is 0.04 — under a pixel of the whole range),
+    // which is why the corners read as a constant thin run without this.
     float half_side = max(0.5 * len, 1e-3);
     float t = clamp(u / half_side, 0.0, 1.0);
-    float thickness = mix(band_min, band, smoothstep(0.0, 1.0, t));
+    float s = pow(smoothstep(0.0, 1.0, t), max(swell_curve, 0.01));
+    float thickness = mix(band_min, band, s);
 
     // The cut into zones is separate from the profile: it decides where the
     // gaps fall and which zone the pointer is over, nothing about thickness.
