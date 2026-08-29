@@ -33,6 +33,11 @@ pub struct Layout {
     /// its thickness at the middle of a side. 1.0 is an even ring; smaller
     /// values swell the middle of each side, like a picture-frame moulding.
     pub border_taper: f32,
+    /// Thickness of the resize-handle ring at the middle of a side, in SCREEN
+    /// px. Deliberately its own knob rather than derived from `width`: the
+    /// ring has to be thick enough to see and hit while the desktop is zoomed
+    /// out, and the window's visible border is a much finer line than that.
+    pub border_handle_width: f32,
     /// Corner zone length measured from the outer corner along each band;
     /// 0 = auto (max(2 * width, 16)).
     pub border_corner_length: i32,
@@ -189,6 +194,7 @@ impl Default for Layout {
             border_corner_radius: 0,
             border_segment_gap: 4,
             border_taper: 0.35,
+            border_handle_width: 32.0,
             border_corner_length: 0,
             background_r: 0x1C1C1C1Cu32,
             background_g: 0x20202020u32,
@@ -484,6 +490,8 @@ pub struct SurfaceConfig {
     pub border_segment_gap: i64,
     #[serde(default = "default_border_taper")]
     pub border_taper: f64,
+    #[serde(default = "default_border_handle_width")]
+    pub border_handle_width: f64,
     /// 0 = auto (max(2 * width, 16)).
     #[serde(default)]
     pub border_corner_length: i64,
@@ -580,6 +588,7 @@ impl Default for SurfaceConfig {
             border_corner_radius: default_border_corner_radius(),
             border_segment_gap: default_border_segment_gap(),
             border_taper: default_border_taper(),
+            border_handle_width: default_border_handle_width(),
             border_corner_length: 0,
             cloud_position_default: default_cloud_position_default(),
             shadow_enabled: default_shadow_enabled(),
@@ -682,6 +691,7 @@ fn default_border_corner_radius() -> i64 {
 }
 
 fn default_border_taper() -> f64 { 0.35 }
+fn default_border_handle_width() -> f64 { 32.0 }
 
 fn default_border_segment_gap() -> i64 {
     4
@@ -2021,6 +2031,13 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.border_taper = val as f64;
                                         }
                                     }
+                                    "handle_width" => {
+                                        if let Some(val) = entry.value().as_f64() {
+                                            surface.border_handle_width = val;
+                                        } else if let Some(val) = entry.value().as_i64() {
+                                            surface.border_handle_width = val as f64;
+                                        }
+                                    }
                                     "corner_length" => {
                                         if let Some(val) = entry.value().as_i64() {
                                             surface.border_corner_length = val;
@@ -2319,6 +2336,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     // Clamped at 1: past that the corners would be THICKER than the middle,
     // which is the moulding inside out.
     state.layout.border_taper = config.surface.border_taper.clamp(0.05, 1.0) as f32;
+    state.layout.border_handle_width = config.surface.border_handle_width.max(4.0) as f32;
     state.layout.border_corner_length = config.surface.border_corner_length.max(0) as i32;
 
     state.layout.desktop_gap_color = config.surface.desktop_gap_color.clone();

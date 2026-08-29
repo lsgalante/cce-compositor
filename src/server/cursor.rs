@@ -2817,13 +2817,17 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     // the window would be thinnest exactly where it is the only way to
     // resize. Keep the two in step.
     let scale = if (*window).scale > 0.0 { (*window).scale } else { 1.0 };
-    let bw = bw_unscaled.max(crate::window::HOVER_BAND_MIN);
-
     let geom = (*window).box_geom;
     let rx = lx - geom.x as f64;
     let ry = ly - geom.y as f64;
     let content_w = geom.width as f64 * scale;
     let content_h = geom.height as f64 * scale;
+
+    let bw = ((*(*window).server).wm.layout.border_handle_width as f64)
+        .max(crate::window::HOVER_BAND_MIN)
+        // The same fifth-of-the-short-side cap draw_borders applies, so the
+        // grab zone never outgrows the ring the user can see.
+        .min(content_w.min(content_h).max(1.0) * 0.2);
 
     // Outside the window entirely, or in the body beyond the ring: not ours.
     // The body case is what leaves overview's drag-to-move working.

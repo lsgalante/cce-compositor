@@ -337,11 +337,20 @@ where the old band sat outside them.
   along a side (`corner_len`, `gap`) still scale, so the composition holds at
   any zoom — only the thickness is pinned. `draw_borders` and
   `cursor::get_border_zone` each derive it the same way and must stay in step.
-- Two knobs shape it, both under `border` in config.kdl: `corner_length` sets
-  how far the thin corner run extends before the swell begins, and `taper`
-  (new) is the corner thickness as a fraction of the middle's — 1.0 is an even
-  ring, and it is clamped to (0, 1] because past 1 the corners would be
-  thicker than the middle, which is the moulding inside out.
+- Three knobs shape it, all under `border` in config.kdl. `handle_width` is
+  the thickness at the middle of a side in screen px — **its own key, not
+  derived from `width`**, because the ring must be thick enough to see and hit
+  while the desktop is zoomed out, while the window's visible border is a much
+  finer line; deriving one from the other meant you could not thicken the grip
+  without thickening every border. `corner_length` sets how far the thin
+  corner run extends before the swell begins, and `taper` is the corner
+  thickness as a fraction of the middle's — 1.0 is an even ring, clamped to
+  (0, 1] because past 1 the corners would be thicker than the middle, which is
+  the moulding inside out.
+- The thickness is capped at a fifth of the window's shorter on-screen side,
+  so a zoomed-out window is never mostly ring. That cap replaced a hard
+  cutoff which disabled the handles below a size threshold: a window you
+  cannot resize at all is worse than one with a slimmer grip.
 - The shader's zone numbering MUST match `BorderElement::index()`; it is what
   the hovered-zone uniform selects on.
 - `window::window_takes_handles` is the single predicate for which windows get

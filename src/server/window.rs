@@ -3720,6 +3720,7 @@ impl Window {
             let in_overview = (*self.server).wm.mode
                 == crate::window_manager::WindowManagerMode::Overview;
             let bw = band;
+            let layout_handle_w = (*self.server).wm.layout.border_handle_width;
             let sc = if self.scale > 0.0 { self.scale } else { 1.0 };
             let (cw, ch) = (content.width, content.height);
             // A window thinner than two bands has no interior left for a
@@ -3728,8 +3729,8 @@ impl Window {
                 && window_takes_handles(self_ptr)
                 && !is_virtual_border
                 && bw > 0
-                && (cw as f64 * sc) >= 4.0 * band_f.max(crate::window::HOVER_BAND_MIN)
-                && (ch as f64 * sc) >= 4.0 * band_f.max(crate::window::HOVER_BAND_MIN);
+                && (cw as f64 * sc) >= 12.0
+                && (ch as f64 * sc) >= 12.0;
             if !handles_on {
                 for r in [self.border.left, self.border.right, self.border.top, self.border.bottom] {
                     ffi::wlr_scene_node_set_enabled(r as *mut ffi::wlr_scene_node, false);
@@ -3752,7 +3753,15 @@ impl Window {
             // catchers are sized in unscaled units that come back to
             // `band_screen` on screen. cursor::get_border_zone measures the
             // same width in layout px; the two must agree.
-            let band_screen = (band_f).max(crate::window::HOVER_BAND_MIN);
+            // Screen thickness, but never more than a fifth of the smaller
+            // on-screen side: a zoomed-out window would otherwise be mostly
+            // ring. Shrinking beats the old hard cutoff, which dropped the
+            // handles altogether below a threshold — a window you cannot
+            // resize at all is worse than one with a slimmer grip.
+            let short_side = (cw.min(ch) as f64 * sc).max(1.0);
+            let band_screen = (layout_handle_w as f64)
+                .max(crate::window::HOVER_BAND_MIN)
+                .min(short_side * 0.2);
             let bw_u = (band_screen / sc).round().max(1.0) as i32;
 
             // Hit catchers: the inside ring, sides spanning the full height
