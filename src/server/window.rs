@@ -1020,6 +1020,26 @@ impl Window {
                 _ => {}
             }
 
+            // A restored non-Floating mode is EXPLICIT state, and has to be
+            // latched to survive. `get_mode_for_window` returns the window's own
+            // mode only when `mode_locked`; unlocked, it resolves from the config
+            // rules and falls through to Floating — and the arrange pass writes
+            // that resolution straight back into `tiling_mode`
+            // (`window_manager.rs`, the `wp.tiling_mode` apply). So a window
+            // restored Tiled but unlocked was demoted by the very next arrange,
+            // which is why a relaunched app came back floating however exactly
+            // its geometry had been restored: position, size and cell were all
+            // right, and the mode was gone before the first frame.
+            //
+            // Both sibling promotions already pair the mode with the lock — the
+            // seat's op_end detection, and the geometric one just below, which is
+            // why a window saved Floating-but-aligned survived while one saved
+            // Tiled did not. Only Floating is left unlatched here, so a window
+            // with no explicit mode still resolves from the rules as before.
+            if saved.tiling_mode != crate::tiling::TilingMode::Floating {
+                self.mode_locked = true;
+            }
+
             // Geometric promotion at restore time: a window whose saved
             // geometry sits cell-aligned IS tiled, even if an older session
             // saved it as Floating (pre-rework state, or a session that
