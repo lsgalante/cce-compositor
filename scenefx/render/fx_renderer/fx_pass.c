@@ -1116,6 +1116,52 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
 	return fx_options->current_buffer;
 }
 
+void fx_render_pass_add_frame(struct fx_gles_render_pass *pass,
+		const struct fx_render_frame_options *options) {
+	struct fx_renderer *renderer = pass->buffer->renderer;
+
+	struct wlr_box box = options->box;
+	assert(box.width > 0 && box.height > 0);
+
+	pixman_region32_t clip_region;
+	if (options->clip) {
+		pixman_region32_init(&clip_region);
+		pixman_region32_copy(&clip_region, options->clip);
+	} else {
+		pixman_region32_init_rect(&clip_region, box.x, box.y, box.width, box.height);
+	}
+
+	push_fx_debug(renderer);
+
+	// Premultiplied source-over: the shader emits colour already scaled by
+	// its coverage, the same convention the bevel pass settled on.
+	setup_blending(WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
+	glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+
+	glUseProgram(renderer->shaders.frame.program);
+
+	const struct wlr_render_color *color = &options->color;
+	set_proj_matrix(renderer->shaders.frame.proj, pass->projection_matrix, &box);
+	glUniform4f(renderer->shaders.frame.color, color->r, color->g, color->b, color->a);
+	glUniform2f(renderer->shaders.frame.size, box.width, box.height);
+	glUniform2f(renderer->shaders.frame.position, box.x, box.y);
+	glUniform1f(renderer->shaders.frame.corner_radius, options->corner_radius);
+	glUniform1f(renderer->shaders.frame.corner_shape, fx_corner_shape());
+	glUniform1f(renderer->shaders.frame.band, options->band);
+	glUniform1f(renderer->shaders.frame.band_min, options->band_min);
+	glUniform1f(renderer->shaders.frame.corner_len, options->corner_len);
+	glUniform1f(renderer->shaders.frame.gap, options->gap);
+	glUniform1f(renderer->shaders.frame.hovered, options->hovered);
+	glUniform4f(renderer->shaders.frame.hover_color,
+			options->hover_color[0], options->hover_color[1],
+			options->hover_color[2], options->hover_color[3]);
+
+	render(&box, &clip_region, renderer->shaders.frame.pos_attrib);
+	pixman_region32_fini(&clip_region);
+
+	pop_fx_debug(renderer);
+}
+
 void fx_render_pass_add_bevel(struct fx_gles_render_pass *pass,
 		const struct fx_render_bevel_options *options) {
 	struct fx_renderer *renderer = pass->buffer->renderer;

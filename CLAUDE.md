@@ -320,12 +320,29 @@ where the old band sat outside them.
 - Inside the ring, **all four edges resize**, the top included. Dragging the
   window's body is what moves it in overview, so the top edge no longer has
   to be spent on moving the way the outside band's did.
-- `window::draw_borders` draws the handles from the same band width and
-  corner length the hit test uses, and `window::window_takes_handles` is the
-  single predicate for which windows get them (excluding Popup, Fullscreen,
-  Status, Utility, circular, hidden). Keep those in step: a handle that is
-  drawn but not honoured — or honoured but not drawn — is the failure mode
-  this arrangement exists to prevent.
+- The ring is drawn by **one scenefx node**, `wlr_scene_frame`
+  (`scenefx/render/fx_renderer/shaders/frame.frag`), not by rects. Its
+  thickness swells from `band_min` at the corners to `band` at the middle of
+  each side — a picture-frame moulding — and that profile is continuous along
+  a side, which a rect cannot express: its only shaping tool is a clipped
+  region whose corner radius is a single scalar, capped by the thickness
+  change (tens of px) while a side is hundreds long, so it reads as a bump
+  near the centre rather than a swell. `border.segments`' 12 rects are what it
+  replaced; they stay allocated but disabled.
+- Two knobs shape it, both under `border` in config.kdl: `corner_length` sets
+  how far the thin corner run extends before the swell begins, and `taper`
+  (new) is the corner thickness as a fraction of the middle's — 1.0 is an even
+  ring, and it is clamped to (0, 1] because past 1 the corners would be
+  thicker than the middle, which is the moulding inside out.
+- The shader's zone numbering MUST match `BorderElement::index()`; it is what
+  the hovered-zone uniform selects on.
+- `window::window_takes_handles` is the single predicate for which windows get
+  handles (excluding Popup, Fullscreen, Status, Utility, circular, hidden),
+  used by both the hit test and the drawing. Keep those in step: a handle that
+  is drawn but not honoured — or honoured but not drawn — is the failure mode
+  this arrangement exists to prevent. Note the *grab* zone stays the full
+  even band (the four catcher rects) even where the ring is drawn thin: the
+  swell is ornament, and a corner you can see but not grab would be worse.
 - Handles are shown for **every** eligible window the whole time overview is
   on, not just the hovered one, via the `all_on` branch in
   `step_border_fade`; hover still reads through as `hover_color`. Because

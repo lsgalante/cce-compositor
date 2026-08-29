@@ -182,6 +182,26 @@ struct bevel_shader {
 
 bool link_bevel_program(struct bevel_shader *shader);
 
+struct frame_shader {
+	GLuint program;
+	GLint proj;
+	GLint color;
+	GLint pos_attrib;
+	GLint position;
+	GLint size;
+	GLint corner_radius;
+	GLint corner_shape;
+	// Thickness at a side's midpoint and at the corner pieces.
+	GLint band;
+	GLint band_min;
+	GLint corner_len;
+	GLint gap;
+	GLint hovered;
+	GLint hover_color;
+};
+
+bool link_frame_program(struct frame_shader *shader);
+
 struct droplet_shader {
 	GLuint program;
 	GLint proj;

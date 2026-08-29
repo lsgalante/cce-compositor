@@ -107,6 +107,28 @@ struct fx_render_bevel_options {
 	struct wlr_render_color color;
 };
 
+/* A resize-handle frame: a ring inside a rounded rect, cut into four corner
+ * pieces and four edge bars, whose thickness swells from `band_min` at the
+ * corners to `band` at each side's midpoint. */
+struct fx_render_frame_options {
+	struct wlr_box box;
+	/* Clip region, leave NULL to disable clipping */
+	const pixman_region32_t *clip;
+
+	int corner_radius;
+	/* Thickness at a side's midpoint, and along the corner pieces. */
+	float band;
+	float band_min;
+	/* How far a corner piece runs along each of its sides, and the gap
+	 * separating it from the neighbouring bar. */
+	float corner_len;
+	float gap;
+	/* Zone under the pointer (compositor BorderElement index), < 0 none. */
+	float hovered;
+	float hover_color[4];
+	struct wlr_render_color color;
+};
+
 struct fx_render_droplet_options {
 	struct wlr_box box;
 	/* Clip region, leave NULL to disable clipping */
@@ -186,6 +208,9 @@ void fx_render_pass_add_box_shadow(struct fx_gles_render_pass *pass,
 /**
  * Render an edge bevel: a lit chamfer around the inside of a rounded rect.
  */
+void fx_render_pass_add_frame(struct fx_gles_render_pass *pass,
+	const struct fx_render_frame_options *options);
+
 void fx_render_pass_add_bevel(struct fx_gles_render_pass *pass,
 		const struct fx_render_bevel_options *options);
 

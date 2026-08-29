@@ -12,6 +12,7 @@ shaders = [
 	'tex.frag',
 	'box_shadow.frag',
 	'bevel.frag',
+	'frame.frag',
 	'droplet.frag',
 	'blur1.frag',
 	'blur2.frag',

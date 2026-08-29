@@ -19,6 +19,7 @@
 #include "tex_frag_src.h"
 #include "box_shadow_frag_src.h"
 #include "bevel_frag_src.h"
+#include "frame_frag_src.h"
 #include "droplet_frag_src.h"
 #include "blur1_frag_src.h"
 #include "blur2_frag_src.h"
@@ -371,6 +372,35 @@ bool link_bevel_program(struct bevel_shader *shader) {
 	shader->focus_color = glGetUniformLocation(prog, "focus_color");
 	shader->focus_sharpness = glGetUniformLocation(prog, "focus_sharpness");
 	shader->shoulder = glGetUniformLocation(prog, "shoulder");
+
+	return true;
+}
+
+bool link_frame_program(struct frame_shader *shader) {
+	// Paired with the shared corner routine, like bevel: the ring traces the
+	// same superellipse every other corner cut does.
+	GLchar frame_src[16384];
+	snprintf(frame_src, sizeof(frame_src), "%s\n%s", frame_frag_src,
+		corner_alpha_frag_src);
+
+	GLuint prog;
+	shader->program = prog = link_program(frame_src);
+	if (!shader->program) {
+		return false;
+	}
+	shader->proj = glGetUniformLocation(prog, "proj");
+	shader->color = glGetUniformLocation(prog, "color");
+	shader->pos_attrib = glGetAttribLocation(prog, "pos");
+	shader->position = glGetUniformLocation(prog, "position");
+	shader->size = glGetUniformLocation(prog, "size");
+	shader->corner_radius = glGetUniformLocation(prog, "corner_radius");
+	shader->corner_shape = glGetUniformLocation(prog, "corner_shape");
+	shader->band = glGetUniformLocation(prog, "band");
+	shader->band_min = glGetUniformLocation(prog, "band_min");
+	shader->corner_len = glGetUniformLocation(prog, "corner_len");
+	shader->gap = glGetUniformLocation(prog, "gap");
+	shader->hovered = glGetUniformLocation(prog, "hovered");
+	shader->hover_color = glGetUniformLocation(prog, "hover_color");
 
 	return true;
 }

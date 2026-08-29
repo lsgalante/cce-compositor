@@ -62,6 +62,7 @@ enum wlr_scene_node_type {
 	WLR_SCENE_NODE_BUFFER,
 	WLR_SCENE_NODE_SHADOW,
 	WLR_SCENE_NODE_BEVEL,
+	WLR_SCENE_NODE_FRAME,
 	WLR_SCENE_NODE_DROPLET,
 	WLR_SCENE_NODE_OPTIMIZED_BLUR,
 	WLR_SCENE_NODE_BLUR,
@@ -189,6 +190,26 @@ struct wlr_scene_droplet {
 	float band_px;
 	float refr;
 	float ghost;
+};
+
+/** A resize-handle frame: a ring inside a rounded rect, cut into four corner
+ * pieces and four edge bars, thickening from the corners toward the middle of
+ * each side. */
+struct wlr_scene_frame {
+	struct wlr_scene_node node;
+	int width, height;
+	int corner_radius;
+	/** Thickness at a side's midpoint, and along the corner pieces. */
+	float band;
+	float band_min;
+	/** How far a corner piece runs along each side, and the gap that
+	 * separates it from the neighbouring bar. */
+	float corner_len;
+	float gap;
+	/** Zone under the pointer (BorderElement index), or < 0 for none. */
+	float hovered;
+	float hover_color[4];
+	float color[4];
 };
 
 struct wlr_scene_bevel {
@@ -570,6 +591,11 @@ struct wlr_scene_shadow *wlr_scene_shadow_from_node(struct wlr_scene_node *node)
 struct wlr_scene_bevel *wlr_scene_bevel_from_node(struct wlr_scene_node *node);
 
 /**
+ * If this node represents a wlr_scene_frame, that structure is returned.
+ */
+struct wlr_scene_frame *wlr_scene_frame_from_node(struct wlr_scene_node *node);
+
+/**
  * If this node represents a wlr_scene_droplet, that structure is returned.
  */
 struct wlr_scene_droplet *wlr_scene_droplet_from_node(struct wlr_scene_node *node);
@@ -652,6 +678,16 @@ void wlr_scene_shadow_set_size(struct wlr_scene_shadow *shadow, int width, int h
  */
 struct wlr_scene_bevel *wlr_scene_bevel_create(struct wlr_scene_tree *parent,
 	int width, int height, int corner_radius, float thickness,
+	const float color[static 4]);
+
+struct wlr_scene_frame *wlr_scene_frame_create(struct wlr_scene_tree *parent,
+	int width, int height, int corner_radius, const float color[static 4]);
+void wlr_scene_frame_set_size(struct wlr_scene_frame *frame, int width, int height);
+void wlr_scene_frame_set_corner_radius(struct wlr_scene_frame *frame, int radius);
+void wlr_scene_frame_set_shape(struct wlr_scene_frame *frame, float band,
+	float band_min, float corner_len, float gap);
+void wlr_scene_frame_set_color(struct wlr_scene_frame *frame, const float color[static 4]);
+void wlr_scene_frame_set_hover(struct wlr_scene_frame *frame, float hovered,
 	const float color[static 4]);
 
 void wlr_scene_bevel_set_size(struct wlr_scene_bevel *bevel, int width, int height);

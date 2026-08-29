@@ -82,6 +82,12 @@ struct wlr_scene_shadow *wlr_scene_shadow_from_node(struct wlr_scene_node *node)
 	return shadow;
 }
 
+struct wlr_scene_frame *wlr_scene_frame_from_node(struct wlr_scene_node *node) {
+	assert(node->type == WLR_SCENE_NODE_FRAME);
+	struct wlr_scene_frame *frame = wl_container_of(node, frame, node);
+	return frame;
+}
+
 struct wlr_scene_bevel *wlr_scene_bevel_from_node(struct wlr_scene_node *node) {
 	assert(node->type == WLR_SCENE_NODE_BEVEL);
 	struct wlr_scene_bevel *bevel = wl_container_of(node, bevel, node);
@@ -293,6 +299,7 @@ static bool _scene_nodes_in_box(struct wlr_scene_node *node, struct wlr_box *box
 	case WLR_SCENE_NODE_BUFFER:
 	case WLR_SCENE_NODE_SHADOW:
 	case WLR_SCENE_NODE_BEVEL:
+	case WLR_SCENE_NODE_FRAME:
 	case WLR_SCENE_NODE_DROPLET:
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:
 	case WLR_SCENE_NODE_BLUR:;
@@ -406,6 +413,7 @@ static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
 		// TODO: test & handle case of blur sigma = 0 and color[3] = 1?
 		return;
 	} else if (node->type == WLR_SCENE_NODE_BEVEL
+			|| node->type == WLR_SCENE_NODE_FRAME
 			|| node->type == WLR_SCENE_NODE_DROPLET
 			|| node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR
 			|| node->type == WLR_SCENE_NODE_BLUR) {
@@ -1125,6 +1133,81 @@ struct wlr_scene_shadow *wlr_scene_shadow_create(struct wlr_scene_tree *parent,
 	scene_node_update(&scene_shadow->node, NULL);
 
 	return scene_shadow;
+}
+
+struct wlr_scene_frame *wlr_scene_frame_create(struct wlr_scene_tree *parent,
+		int width, int height, int corner_radius, const float color[static 4]) {
+	struct wlr_scene_frame *scene_frame = calloc(1, sizeof(*scene_frame));
+	if (scene_frame == NULL) {
+		return NULL;
+	}
+	scene_node_init(&scene_frame->node, WLR_SCENE_NODE_FRAME, parent);
+
+	scene_frame->width = width;
+	scene_frame->height = height;
+	scene_frame->corner_radius = corner_radius;
+	// Shape defaults to a plain even ring; the compositor sets the real
+	// profile every frame through wlr_scene_frame_set_shape.
+	scene_frame->band = 0.0f;
+	scene_frame->band_min = 0.0f;
+	scene_frame->corner_len = 0.0f;
+	scene_frame->gap = 0.0f;
+	scene_frame->hovered = -1.0f;
+	memcpy(scene_frame->color, color, sizeof(scene_frame->color));
+	memcpy(scene_frame->hover_color, color, sizeof(scene_frame->hover_color));
+
+	scene_node_update(&scene_frame->node, NULL);
+
+	return scene_frame;
+}
+
+void wlr_scene_frame_set_size(struct wlr_scene_frame *frame, int width, int height) {
+	if (frame->width == width && frame->height == height) {
+		return;
+	}
+	frame->width = width;
+	frame->height = height;
+	scene_node_update(&frame->node, NULL);
+}
+
+void wlr_scene_frame_set_corner_radius(struct wlr_scene_frame *frame, int radius) {
+	if (frame->corner_radius == radius) {
+		return;
+	}
+	frame->corner_radius = radius;
+	scene_node_update(&frame->node, NULL);
+}
+
+void wlr_scene_frame_set_shape(struct wlr_scene_frame *frame, float band,
+		float band_min, float corner_len, float gap) {
+	if (frame->band == band && frame->band_min == band_min
+			&& frame->corner_len == corner_len && frame->gap == gap) {
+		return;
+	}
+	frame->band = band;
+	frame->band_min = band_min;
+	frame->corner_len = corner_len;
+	frame->gap = gap;
+	scene_node_update(&frame->node, NULL);
+}
+
+void wlr_scene_frame_set_color(struct wlr_scene_frame *frame, const float color[static 4]) {
+	if (memcmp(frame->color, color, sizeof(frame->color)) == 0) {
+		return;
+	}
+	memcpy(frame->color, color, sizeof(frame->color));
+	scene_node_update(&frame->node, NULL);
+}
+
+void wlr_scene_frame_set_hover(struct wlr_scene_frame *frame, float hovered,
+		const float color[static 4]) {
+	if (frame->hovered == hovered
+			&& memcmp(frame->hover_color, color, sizeof(frame->hover_color)) == 0) {
+		return;
+	}
+	frame->hovered = hovered;
+	memcpy(frame->hover_color, color, sizeof(frame->hover_color));
+	scene_node_update(&frame->node, NULL);
 }
 
 struct wlr_scene_bevel *wlr_scene_bevel_create(struct wlr_scene_tree *parent,
@@ -2041,6 +2124,11 @@ void scene_node_get_size(struct wlr_scene_node *node, int *width, int *height) {
 		*width = scene_bevel->width;
 		*height = scene_bevel->height;
 		break;
+	case WLR_SCENE_NODE_FRAME:;
+		struct wlr_scene_frame *scene_frame_sz = wlr_scene_frame_from_node(node);
+		*width = scene_frame_sz->width;
+		*height = scene_frame_sz->height;
+		break;
 	case WLR_SCENE_NODE_DROPLET:;
 		struct wlr_scene_droplet *scene_droplet = wlr_scene_droplet_from_node(node);
 		*width = scene_droplet->width;
@@ -2241,6 +2329,7 @@ static bool scene_node_at_iterator(struct wlr_scene_node *node,
 		}
 	} else if (node->type == WLR_SCENE_NODE_SHADOW
 			|| node->type == WLR_SCENE_NODE_BEVEL
+			|| node->type == WLR_SCENE_NODE_FRAME
 			|| node->type == WLR_SCENE_NODE_DROPLET
 			|| node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR
 			|| node->type == WLR_SCENE_NODE_BLUR) {
@@ -2505,6 +2594,33 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.clip = &render_region,
 		};
 		fx_render_pass_add_box_shadow(fx_pass, &shadow_options);
+		break;
+	case WLR_SCENE_NODE_FRAME:;
+		struct wlr_scene_frame *scene_frame = wlr_scene_frame_from_node(node);
+
+		struct fx_render_frame_options frame_options = {
+			.box = dst_box,
+			.corner_radius = scene_frame->corner_radius,
+			.band = scene_frame->band,
+			.band_min = scene_frame->band_min,
+			.corner_len = scene_frame->corner_len,
+			.gap = scene_frame->gap,
+			.hovered = scene_frame->hovered,
+			.hover_color = {
+				scene_frame->hover_color[0],
+				scene_frame->hover_color[1],
+				scene_frame->hover_color[2],
+				scene_frame->hover_color[3],
+			},
+			.color = {
+				.r = scene_frame->color[0],
+				.g = scene_frame->color[1],
+				.b = scene_frame->color[2],
+				.a = scene_frame->color[3],
+			},
+			.clip = &render_region,
+		};
+		fx_render_pass_add_frame(fx_pass, &frame_options);
 		break;
 	case WLR_SCENE_NODE_BEVEL:;
 		struct wlr_scene_bevel *scene_bevel = wlr_scene_bevel_from_node(node);
@@ -3032,6 +3148,10 @@ static bool scene_node_invisible(struct wlr_scene_node *node) {
 		struct wlr_scene_bevel *bevel = wlr_scene_bevel_from_node(node);
 
 		return bevel->color[3] == 0.f || bevel->thickness <= 0.f;
+	} else if (node->type == WLR_SCENE_NODE_FRAME) {
+		struct wlr_scene_frame *frame = wlr_scene_frame_from_node(node);
+
+		return frame->color[3] == 0.f || frame->band <= 0.f;
 	}
 
 	return false;

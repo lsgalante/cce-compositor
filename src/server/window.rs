@@ -235,8 +235,11 @@ pub struct BorderRects {
     pub right: *mut ffi::wlr_scene_rect,
     pub top: *mut ffi::wlr_scene_rect,
     pub bottom: *mut ffi::wlr_scene_rect,
-    /// The visible zone segments, indexed by the SEG_* constants.
+    /// The visible zone segments, indexed by the SEG_* constants. Retired by
+    /// the frame node below and kept disabled; see the creation site.
     pub segments: [*mut ffi::wlr_scene_rect; 12],
+    /// The resize-handle ring: all eight zones in one shader-drawn node.
+    pub frame: *mut ffi::wlr_scene_frame,
     /// Parent of `segments`, living in the global border overlay layer rather
     /// than in the window tree. Tracks the window tree's position so the
     /// segments keep their window-local coordinates.
@@ -624,6 +627,13 @@ impl Window {
         for seg in border_segments.iter_mut() {
             *seg = ffi::wlr_scene_rect_create(border_tree, 0, 0, clear_color.as_ptr());
         }
+        // The resize-handle ring. One node draws all eight zones, because the
+        // thickness swells continuously along each side and rects cannot
+        // (see scenefx frame.frag). The 12 segment rects above are what it
+        // replaced; they stay allocated but disabled — the status-bar code
+        // still reaches for the array, and freeing them would be a wider
+        // change than this.
+        let border_frame = ffi::wlr_scene_frame_create(border_tree, 0, 0, 0, clear_color.as_ptr());
 
         let decorations_above_tree = ffi::wlr_scene_tree_create(tree);
 
@@ -649,6 +659,7 @@ impl Window {
                 top: border_top,
                 bottom: border_bottom,
                 segments: border_segments,
+                frame: border_frame,
                 tree: border_tree,
             },
             hovered_border_element: None,
@@ -3725,6 +3736,10 @@ impl Window {
                 for &seg in self.border.segments.iter() {
                     ffi::wlr_scene_node_set_enabled(seg as *mut ffi::wlr_scene_node, false);
                 }
+                ffi::wlr_scene_node_set_enabled(
+                    &mut (*self.border.frame).node as *mut ffi::wlr_scene_node,
+                    false,
+                );
                 return;
             }
 
@@ -3744,102 +3759,58 @@ impl Window {
             let layout = &(*self.server).wm.layout;
             // The ring hugs the window's own silhouette, so its outer arc IS
             // the window's content radius (the widened backplate radius the
-            // corner clip uses) rather than that plus a band, as the outside
-            // border's was.
+            // corner clip uses) rather than that plus a band.
             let r_in = bg_radius;
             let cl = border_corner_len(bw as f64, layout.border_corner_length, r_in as f64) as i32;
             let g = layout.border_segment_gap;
 
-            // Borders rest invisible; a zone is drawn only as far as its
-            // reveal factor has faded in. Channels are premultiplied alpha, so
-            // scaling all four by the factor is the correct fade.
-            let color_for = |elem: BorderElement| -> [f32; 4] {
-                let base = if self.hovered_border_element == Some(elem) {
-                    border.hover_color
-                } else {
-                    border_color
-                };
-                let a = self.border_reveal[elem.index()].clamp(0.0, 1.0);
-                [base[0] * a, base[1] * a, base[2] * a, base[3] * a]
-            };
-            let e = &border.edges;
-            use BorderElement::*;
+            // Handles rest invisible and fade in with the mode; one alpha for
+            // the whole ring now that every zone reveals together in overview
+            // (`step_border_fade`'s all_on branch). The Top slot carries it —
+            // they are all equal while the ring is up, and taking one keeps
+            // the fade a single number.
+            let a = self.border_reveal[BorderElement::Top.index()].clamp(0.0, 1.0);
+            let premul = |c: &[f32; 4]| [c[0] * a, c[1] * a, c[2] * a, c[3] * a];
 
-            // Edge bars, spanning between the corner zones and inset by the
-            // segment gap.
-            let (bar_x, bar_w) = (cl + g, cw - 2 * cl - 2 * g);
-            let (bar_y, bar_h) = (cl + g, ch - 2 * cl - 2 * g);
-            #[rustfmt::skip]
-            let bars: [(usize, ffi::wlr_box, BorderElement, bool); 4] = [
-                (SEG_TOP, ffi::wlr_box { x: bar_x, y: 0, width: bar_w, height: bw }, Top, e.top),
-                (SEG_BOTTOM, ffi::wlr_box { x: bar_x, y: ch - bw, width: bar_w, height: bw }, Bottom, e.bottom),
-                (SEG_LEFT, ffi::wlr_box { x: 0, y: bar_y, width: bw, height: bar_h }, Left, e.left),
-                (SEG_RIGHT, ffi::wlr_box { x: cw - bw, y: bar_y, width: bw, height: bar_h }, Right, e.right),
-            ];
-            for (idx, bx, elem, enabled) in bars {
-                // A fully-faded-out zone is disabled outright rather than
-                // drawn transparent, so it costs nothing while at rest.
-                let enabled = enabled && self.border_reveal[elem.index()] > 0.0;
-                apply(self.border.segments[idx], bx, &color_for(elem), enabled);
-            }
-
-            // Corner zones: a cl x cl square per corner with the INNER
-            // quadrant clipped away, leaving an L whose outer arc follows the
-            // window's rounded corner and whose inner arc is that radius less
-            // the band.
-            let rr = |v: f64| -> u16 { (v.max(0.0) as i32).clamp(0, u16::MAX as i32) as u16 };
-            let s = self.scale;
-            let ro = rr(r_in as f64 * s);
-            let ri = rr((r_in - bw).max(0) as f64 * s);
-            let no_radii = ffi::fx_corner_radii { top_left: 0, top_right: 0, bottom_right: 0, bottom_left: 0 };
-
-            // (slot, retired slot, element, enabled, box, corner: 0=TL 1=TR 2=BR 3=BL)
-            #[rustfmt::skip]
-            let corners: [(usize, usize, BorderElement, bool, ffi::wlr_box, usize); 4] = [
-                (SEG_TL_H, SEG_TL_V, TopLeft, e.top && e.left,
-                 ffi::wlr_box { x: 0, y: 0, width: cl, height: cl }, 0),
-                (SEG_TR_H, SEG_TR_V, TopRight, e.top && e.right,
-                 ffi::wlr_box { x: cw - cl, y: 0, width: cl, height: cl }, 1),
-                (SEG_BR_H, SEG_BR_V, BottomRight, e.bottom && e.right,
-                 ffi::wlr_box { x: cw - cl, y: ch - cl, width: cl, height: cl }, 2),
-                (SEG_BL_H, SEG_BL_V, BottomLeft, e.bottom && e.left,
-                 ffi::wlr_box { x: 0, y: ch - cl, width: cl, height: cl }, 3),
-            ];
-            for (slot, retired, elem, enabled, bx, which) in corners {
-                ffi::wlr_scene_node_set_enabled(self.border.segments[retired] as *mut ffi::wlr_scene_node, false);
-                let rect = self.border.segments[slot];
-                let enabled = enabled && self.border_reveal[elem.index()] > 0.0;
-                apply(rect, bx, &color_for(elem), enabled);
-                if !enabled || bx.width <= 0 || bx.height <= 0 {
-                    continue;
-                }
-                // The inner quadrant to cut, rect-local physical px: the
-                // band's thickness in from whichever two sides are outer.
-                let (qx, qy) = match which {
-                    0 => (bw, bw),
-                    1 => (0, bw),
-                    2 => (0, 0),
-                    _ => (bw, 0),
-                };
-                let side = ((cl - bw).max(0) as f64 * s) as i32;
-                let mut outer = no_radii;
-                let mut inner = no_radii;
-                match which {
-                    0 => { outer.top_left = ro; inner.top_left = ri; }
-                    1 => { outer.top_right = ro; inner.top_right = ri; }
-                    2 => { outer.bottom_right = ro; inner.bottom_right = ri; }
-                    _ => { outer.bottom_left = ro; inner.bottom_left = ri; }
-                }
-                ffi::wlr_scene_rect_set_corner_radii(rect, outer);
-                ffi::wlr_scene_rect_set_clipped_region(rect, ffi::clipped_region {
-                    area: ffi::wlr_box {
-                        x: (qx as f64 * s) as i32,
-                        y: (qy as f64 * s) as i32,
-                        width: side,
-                        height: side,
-                    },
-                    corners: inner,
-                });
+            // Device px throughout, the same space `apply` put the rects in:
+            // box_geom is the UNSCALED content size and the window covers
+            // `size * scale` on screen.
+            let sc = self.scale;
+            let px = |v: i32| (v as f64 * sc) as i32;
+            ffi::wlr_scene_frame_set_size(self.border.frame, px(cw), px(ch));
+            ffi::wlr_scene_frame_set_corner_radius(self.border.frame, px(r_in));
+            // band_min is the thin corner thickness the swell rises from;
+            // half the band keeps the corner pieces clearly lighter than the
+            // middle of a side without letting them vanish at small sizes.
+            ffi::wlr_scene_frame_set_shape(
+                self.border.frame,
+                px(bw) as f32,
+                (px(bw) as f32 * layout.border_taper.clamp(0.0, 1.0)).max(1.0),
+                px(cl) as f32,
+                px(g) as f32,
+            );
+            ffi::wlr_scene_frame_set_color(self.border.frame, premul(&border_color).as_ptr());
+            let hovered = self
+                .hovered_border_element
+                .map(|e| e.index() as f32)
+                .unwrap_or(-1.0);
+            ffi::wlr_scene_frame_set_hover(
+                self.border.frame,
+                hovered,
+                premul(&border.hover_color).as_ptr(),
+            );
+            ffi::river_scene_node_set_position_if_changed(
+                &mut (*self.border.frame).node as *mut ffi::wlr_scene_node,
+                0,
+                0,
+            );
+            ffi::wlr_scene_node_set_enabled(
+                &mut (*self.border.frame).node as *mut ffi::wlr_scene_node,
+                a > 0.0,
+            );
+            // The rects the ring replaced.
+            for &seg in self.border.segments.iter() {
+                ffi::wlr_scene_node_set_enabled(seg as *mut ffi::wlr_scene_node, false);
             }
         }
     }
