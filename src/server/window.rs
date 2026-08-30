@@ -3818,6 +3818,7 @@ impl Window {
                 (px(cl) as f32).max(band_screen as f32),
                 px(g) as f32,
                 layout.border_swell_curve,
+                (layout.border_corner_bulge as f64).min(short_side * 0.3) as f32,
             );
             ffi::wlr_scene_frame_set_color(self.border.frame, premul(&border_color).as_ptr());
             let hovered = self

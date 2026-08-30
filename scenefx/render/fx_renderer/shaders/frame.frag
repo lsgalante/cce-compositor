@@ -2,14 +2,12 @@
 // swells from the corners toward the middle of each side, like the moulding
 // of a picture frame.
 //
-// The ring is cut into eight pieces — four corner pieces and four edge bars —
-// separated by `gap`, and EVERY piece is its own swell: `band_min` at its two
-// ends by the gaps, `band` at its middle. For an edge bar the middle is the
-// side's midpoint; for a corner piece it is the corner apex, where the piece
-// wraps the arc — so the corners carry a boss of their own, like the corner
-// blocks of an ornamental frame, instead of being the one place the moulding
-// runs thin. `corner_len` sets a corner boss's extent along each side and
-// places the gaps.
+// Two elements make the frame. The BAND runs `band_min` at the corners,
+// easing to `band` at each side's midpoint — the moulding. And a round BULGE
+// sits on each corner: a disc smooth-unioned onto the ring, so the inner
+// boundary bows inward there like a bead. The band deliberately thins toward
+// the corner so the bulge reads as its own rounded pad on a slender moulding,
+// not as more band. `corner_len` places the gaps and the corner zones.
 //
 // Why a shader rather than rects: the swell is continuous along a side, and
 // a scene rect can only approximate it with a clipped region whose corner
@@ -37,9 +35,10 @@ uniform float band_min;
 uniform float corner_len;
 uniform float gap;
 // Shape of the swell along a side. Below 1 the ring gains its thickness
-// early and then creeps toward the peak — a corner that visibly swells and a
-// long slow approach to the middle. Above 1 does the reverse.
+// early and then creeps toward the peak; above 1 does the reverse.
 uniform float swell_curve;
+// Radius of the round pad on each corner, 0 to disable.
+uniform float bulge;
 // Zone under the pointer (see ZONE_* below), or < 0 for none.
 uniform float hovered;
 uniform vec4 hover_color;
@@ -69,8 +68,10 @@ const float ZONE_BR = 7.0;
 
 void main() {
     float dist = ring_dist(vec2(0.0));
-    // Outside the rect, or deeper in than the thickest the ring ever gets.
-    if (dist > 0.0 || dist < -band) {
+    // Outside the rect, or deeper in than anything here reaches: the band at
+    // its thickest, or a corner bulge (its centre already sits corner_radius
+    // in from the silhouette).
+    if (dist > 0.0 || dist < -(max(band, bulge + corner_radius) + 1.0)) {
         discard;
     }
     float depth = -dist; // 0 at the silhouette, growing inward
@@ -96,34 +97,39 @@ void main() {
     // Distance from the nearer end of that side.
     float u = min(along, len - along);
 
-    // Per-piece swell: v runs 0 at a piece's ends to 1 at its peak. A corner
-    // piece peaks at u=0 — the apex, where the two sides' fragments meet on
-    // the diagonal; u is the same distance for both there, so the profile is
-    // continuous across it, and smoothstep's flat top leaves no crease. An
-    // edge bar peaks at the side's midpoint. Both ends of every piece sit at
-    // band_min, so each gap separates two thin tips — a scalloped frame.
-    // `swell_curve` reshapes every swell the same way: below 1 gains early
-    // and creeps to the peak.
+    // The band: thin at the corners, swelling to the side's midpoint, with
+    // swell_curve pulling the gain early (below 1) or late (above 1).
     float half_side = max(0.5 * len, 1e-3);
-    float v;
-    if (u <= corner_len) {
-        v = 1.0 - u / max(corner_len, 1e-3);
-    } else {
-        float run = max(half_side - corner_len - gap, 1e-3);
-        v = clamp((u - corner_len - gap) / run, 0.0, 1.0);
-    }
-    float s = pow(smoothstep(0.0, 1.0, v), max(swell_curve, 0.01));
+    float t = clamp(u / half_side, 0.0, 1.0);
+    float s = pow(smoothstep(0.0, 1.0, t), max(swell_curve, 0.01));
     float thickness = mix(band_min, band, s);
+    float f_ring = thickness - depth;
 
-    // The cut into zones is separate from the profile: it decides where the
-    // gaps fall and which zone the pointer is over, nothing about thickness.
+    // The corner bulge: a disc centred on the corner ARC's centre, so it sits
+    // flush behind the silhouette and pokes inward by its radius. Positive
+    // inside, like f_ring.
+    bool left = dl <= dr;
+    bool top = dt <= db;
+    vec2 arc_c = vec2(left ? corner_radius : size.x - corner_radius,
+                      top ? corner_radius : size.y - corner_radius);
+    float f_disc = bulge - length(p - arc_c);
+
+    // Smooth union of band and bulge: the pad flows into the moulding with a
+    // fillet instead of a notch. Blend radius scales with the pad.
+    float k = max(0.35 * bulge, 1.0);
+    float h = clamp(0.5 + 0.5 * (f_disc - f_ring) / k, 0.0, 1.0);
+    float f = mix(f_ring, f_disc, h) + k * h * (1.0 - h);
+
+    // Zones: anything on the pad is its corner's, then the band cut as
+    // before. The gap only severs the BAND — a groove across the pad would
+    // read as damage, so it skips fragments the disc owns.
     float zone;
-    if (u <= corner_len) {
-        bool left = dl <= dr;
-        bool top = dt <= db;
+    if (u <= corner_len || f_disc > 0.0) {
         zone = top ? (left ? ZONE_TL : ZONE_TR) : (left ? ZONE_BL : ZONE_BR);
+        if (u > corner_len && u <= corner_len + gap && f_disc <= 0.0) {
+            discard;
+        }
     } else if (u <= corner_len + gap) {
-        // The gap between a corner piece and its neighbouring bar.
         discard;
     } else if (vertical) {
         zone = (dl <= dr) ? ZONE_LEFT : ZONE_RIGHT;
@@ -131,13 +137,13 @@ void main() {
         zone = (dt <= db) ? ZONE_TOP : ZONE_BOTTOM;
     }
 
-    if (depth > thickness) {
+    if (f <= 0.0) {
         discard;
     }
 
     // Feather both flanks by a pixel: the silhouette side against the
-    // window's own rounded edge, the inner side against its content.
-    float aa = clamp(depth, 0.0, 1.0) * clamp(thickness - depth, 0.0, 1.0);
+    // window's own rounded edge, the inner side along the unioned boundary.
+    float aa = clamp(depth, 0.0, 1.0) * clamp(f, 0.0, 1.0);
 
     vec4 base = (hovered >= 0.0 && abs(hovered - zone) < 0.5) ? hover_color : v_color;
     // Premultiplied, like every other rect this renderer draws.

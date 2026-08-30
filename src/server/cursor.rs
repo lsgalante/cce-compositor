@@ -2863,6 +2863,25 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     if rx < 0.0 || rx >= content_w || ry < 0.0 || ry >= content_h {
         return BorderZone::None;
     }
+    // The corner pads reach further inward than the band (their radius plus
+    // the corner arc), and what is drawn must grab: a point within a pad's
+    // radius of its corner resizes on that corner's two edges.
+    let pad = ((*(*window).server).wm.layout.border_corner_bulge as f64)
+        .min(content_w.min(content_h) * 0.3);
+    if pad > 0.0 {
+        let cx = if rx < content_w / 2.0 { 0.0 } else { content_w };
+        let cy = if ry < content_h / 2.0 { 0.0 } else { content_h };
+        let (dx, dy) = (rx - cx, ry - cy);
+        if (dx * dx + dy * dy).sqrt() < pad {
+            return BorderZone::Resize(crate::window::Edges {
+                top: cy == 0.0,
+                bottom: cy > 0.0,
+                left: cx == 0.0,
+                right: cx > 0.0,
+            });
+        }
+    }
+
     let (near_l, near_r) = (rx < bw, rx >= content_w - bw);
     let (near_t, near_b) = (ry < bw, ry >= content_h - bw);
     if !(near_l || near_r || near_t || near_b) {

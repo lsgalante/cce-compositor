@@ -1154,6 +1154,7 @@ struct wlr_scene_frame *wlr_scene_frame_create(struct wlr_scene_tree *parent,
 	scene_frame->gap = 0.0f;
 	scene_frame->hovered = -1.0f;
 	scene_frame->swell_curve = 1.0f;
+	scene_frame->bulge = 0.0f;
 	memcpy(scene_frame->color, color, sizeof(scene_frame->color));
 	memcpy(scene_frame->hover_color, color, sizeof(scene_frame->hover_color));
 
@@ -1180,13 +1181,14 @@ void wlr_scene_frame_set_corner_radius(struct wlr_scene_frame *frame, int radius
 }
 
 void wlr_scene_frame_set_shape(struct wlr_scene_frame *frame, float band,
-		float band_min, float corner_len, float gap, float swell_curve) {
+		float band_min, float corner_len, float gap, float swell_curve, float bulge) {
 	if (frame->band == band && frame->band_min == band_min
 			&& frame->corner_len == corner_len && frame->gap == gap
-			&& frame->swell_curve == swell_curve) {
+			&& frame->swell_curve == swell_curve && frame->bulge == bulge) {
 		return;
 	}
 	frame->swell_curve = swell_curve;
+	frame->bulge = bulge;
 	frame->band = band;
 	frame->band_min = band_min;
 	frame->corner_len = corner_len;
@@ -2610,6 +2612,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.gap = scene_frame->gap,
 			.hovered = scene_frame->hovered,
 			.swell_curve = scene_frame->swell_curve,
+			.bulge = scene_frame->bulge,
 			.hover_color = {
 				scene_frame->hover_color[0],
 				scene_frame->hover_color[1],

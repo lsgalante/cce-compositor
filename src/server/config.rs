@@ -43,6 +43,9 @@ pub struct Layout {
     /// approach to the middle. Above 1 stays thin near the corner and gains
     /// late. 1.0 is the plain eased ramp.
     pub border_swell_curve: f32,
+    /// Radius of the round pad on each corner of the handle ring, in screen
+    /// px. 0 disables the pads and leaves the plain moulding.
+    pub border_corner_bulge: f32,
     /// Corner zone length measured from the outer corner along each band;
     /// 0 = auto (max(2 * width, 16)).
     pub border_corner_length: i32,
@@ -201,6 +204,7 @@ impl Default for Layout {
             border_taper: 0.35,
             border_handle_width: 32.0,
             border_swell_curve: 0.45,
+            border_corner_bulge: 48.0,
             border_corner_length: 0,
             background_r: 0x1C1C1C1Cu32,
             background_g: 0x20202020u32,
@@ -500,6 +504,8 @@ pub struct SurfaceConfig {
     pub border_handle_width: f64,
     #[serde(default = "default_border_swell_curve")]
     pub border_swell_curve: f64,
+    #[serde(default = "default_border_corner_bulge")]
+    pub border_corner_bulge: f64,
     /// 0 = auto (max(2 * width, 16)).
     #[serde(default)]
     pub border_corner_length: i64,
@@ -598,6 +604,7 @@ impl Default for SurfaceConfig {
             border_taper: default_border_taper(),
             border_handle_width: default_border_handle_width(),
             border_swell_curve: default_border_swell_curve(),
+            border_corner_bulge: default_border_corner_bulge(),
             border_corner_length: 0,
             cloud_position_default: default_cloud_position_default(),
             shadow_enabled: default_shadow_enabled(),
@@ -702,6 +709,7 @@ fn default_border_corner_radius() -> i64 {
 fn default_border_taper() -> f64 { 0.35 }
 fn default_border_handle_width() -> f64 { 32.0 }
 fn default_border_swell_curve() -> f64 { 0.45 }
+fn default_border_corner_bulge() -> f64 { 48.0 }
 
 fn default_border_segment_gap() -> i64 {
     4
@@ -2055,6 +2063,13 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.border_swell_curve = val as f64;
                                         }
                                     }
+                                    "bulge" => {
+                                        if let Some(val) = entry.value().as_f64() {
+                                            surface.border_corner_bulge = val;
+                                        } else if let Some(val) = entry.value().as_i64() {
+                                            surface.border_corner_bulge = val as f64;
+                                        }
+                                    }
                                     "corner_length" => {
                                         if let Some(val) = entry.value().as_i64() {
                                             surface.border_corner_length = val;
@@ -2355,6 +2370,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.border_taper = config.surface.border_taper.clamp(0.05, 1.0) as f32;
     state.layout.border_handle_width = config.surface.border_handle_width.max(4.0) as f32;
     state.layout.border_swell_curve = config.surface.border_swell_curve.clamp(0.1, 6.0) as f32;
+    state.layout.border_corner_bulge = config.surface.border_corner_bulge.max(0.0) as f32;
     state.layout.border_corner_length = config.surface.border_corner_length.max(0) as i32;
 
     state.layout.desktop_gap_color = config.surface.desktop_gap_color.clone();

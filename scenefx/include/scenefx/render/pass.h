@@ -128,6 +128,8 @@ struct fx_render_frame_options {
 	float hover_color[4];
 	/* Shape of the swell; < 1 gains thickness early, > 1 late. */
 	float swell_curve;
+	/* Radius of the round pad on each corner, 0 to disable. */
+	float bulge;
 	struct wlr_render_color color;
 };
 

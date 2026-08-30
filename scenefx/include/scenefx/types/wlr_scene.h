@@ -211,6 +211,8 @@ struct wlr_scene_frame {
 	float hover_color[4];
 	/** Shape of the swell; < 1 gains thickness early, > 1 late. */
 	float swell_curve;
+	/** Radius of the round pad on each corner, 0 to disable. */
+	float bulge;
 	float color[4];
 };
 
@@ -687,7 +689,7 @@ struct wlr_scene_frame *wlr_scene_frame_create(struct wlr_scene_tree *parent,
 void wlr_scene_frame_set_size(struct wlr_scene_frame *frame, int width, int height);
 void wlr_scene_frame_set_corner_radius(struct wlr_scene_frame *frame, int radius);
 void wlr_scene_frame_set_shape(struct wlr_scene_frame *frame, float band,
-	float band_min, float corner_len, float gap, float swell_curve);
+	float band_min, float corner_len, float gap, float swell_curve, float bulge);
 void wlr_scene_frame_set_color(struct wlr_scene_frame *frame, const float color[static 4]);
 void wlr_scene_frame_set_hover(struct wlr_scene_frame *frame, float hovered,
 	const float color[static 4]);
