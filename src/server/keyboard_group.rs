@@ -276,7 +276,7 @@ impl KeyboardGroup {
     }
 }
 
-unsafe fn handle_builtin_binding(seat: *mut Seat, keysym: u32) -> bool {
+unsafe fn handle_builtin_binding(seat: *mut Seat, keysym: u32, modifiers: u32) -> bool {
     match keysym {
         ffi::XKB_KEY_XF86Switch_VT_1..=ffi::XKB_KEY_XF86Switch_VT_12 => {
             log::debug!("switch VT keysym received");
@@ -286,6 +286,24 @@ unsafe fn handle_builtin_binding(seat: *mut Seat, keysym: u32) -> bool {
                 let vt = keysym - ffi::XKB_KEY_XF86Switch_VT_1 + 1;
                 log::info!("switching to VT {}", vt);
                 ffi::wlr_session_change_vt(session, vt);
+            }
+            true
+        }
+        // Plain Escape closes any open in-surface status menu — the keyboard
+        // twin of the click-away dismiss in cursor.rs, consumed the same way
+        // a builtin is (the release is eaten with the press via the consumer
+        // map), so the focused window never sees it. Gated on a menu
+        // actually being open and on NO modifiers: a chorded Escape stays a
+        // bindable/forwardable key, and with nothing expanded this arm never
+        // fires at all.
+        ffi::XKB_KEY_Escape if modifiers == 0 => {
+            let server = (*seat).server;
+            if !(*server).wm.any_expanded_status_segment(std::ptr::null_mut()) {
+                return false;
+            }
+            log::debug!("Escape dismisses the open status menu");
+            if let Some(ref sender) = (*server).wm.status_sender {
+                sender.send_menu_dismiss("-");
             }
             true
         }
@@ -354,7 +372,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             let syms = std::slice::from_raw_parts(syms_ptr, num_syms as usize);
             for &sym in syms {
                 log::debug!("  keysym={:#x}", sym);
-                if handle_builtin_binding(group.seat, sym) {
+                if handle_builtin_binding(group.seat, sym, modifiers) {
                     matched_builtin = true;
                     break;
                 }

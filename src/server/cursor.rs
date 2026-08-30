@@ -1081,23 +1081,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     }
                 }
             }
-            let bar_h = (*server).wm.layout.bar_height;
-            let any_other_expanded = (*server).wm.windows.iter().any(|&w| {
-                !w.is_null()
-                    && !(*w).closed
-                    && w != target_status
-                    && (*w).is_status_bar()
-                    && matches!((*w).state, crate::window::WindowState::Mapped)
-                    && {
-                        let bg = (*w).box_geom;
-                        let thickness = match (*w).status_edge {
-                            crate::policy::arrange::StatusEdge::Left
-                            | crate::policy::arrange::StatusEdge::Right => bg.width,
-                            _ => bg.height,
-                        };
-                        thickness > bar_h
-                    }
-            });
+            let any_other_expanded = (*server).wm.any_expanded_status_segment(target_status);
             if any_other_expanded {
                 let except = if target_status.is_null() {
                     "-".to_string()

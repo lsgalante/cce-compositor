@@ -2902,6 +2902,34 @@ impl WindowManager {
     }
 
 
+    /// Whether any mapped status segment is currently expanded past the bar
+    /// strip — i.e. an in-surface menu is open. `except` (null = none) exempts
+    /// one segment, for the click-away path where a press ON an expanded
+    /// segment must not dismiss that segment's own menu. Expanded is DEFINED
+    /// as thicker than the configured bar height, which is also how the
+    /// arrange pass recognizes an expanded segment. Shared by the click-away
+    /// dismiss (cursor.rs) and the Escape dismiss (keyboard_group.rs) so the
+    /// two triggers can never disagree about what counts as open.
+    pub unsafe fn any_expanded_status_segment(&self, except: *mut crate::window::Window) -> bool {
+        let bar_h = self.layout.bar_height;
+        self.windows.iter().any(|&w| {
+            !w.is_null()
+                && !(*w).closed
+                && w != except
+                && (*w).is_status_bar()
+                && matches!((*w).state, crate::window::WindowState::Mapped)
+                && {
+                    let bg = (*w).box_geom;
+                    let thickness = match (*w).status_edge {
+                        crate::policy::arrange::StatusEdge::Left
+                        | crate::policy::arrange::StatusEdge::Right => bg.width,
+                        _ => bg.height,
+                    };
+                    thickness > bar_h
+                }
+        })
+    }
+
     pub unsafe fn update_status(&self) {
         if let Some(ref sender) = self.status_sender {
             let update = crate::status_server::build_status_update(self);
