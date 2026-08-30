@@ -322,12 +322,14 @@ where the old band sat outside them.
   to be spent on moving the way the outside band's did.
 - The ring is drawn by **one scenefx node**, `wlr_scene_frame`
   (`scenefx/render/fx_renderer/shaders/frame.frag`), not by rects. Its
-  two elements make the frame. The BAND runs thin at the corners and swells
-  to `band` at each side's midpoint; a round PAD (`bulge`, screen px, 0
-  disables) sits on each corner — a disc centred on the corner arc's centre,
-  smooth-unioned onto the ring so its inner boundary bows inward with a
-  fillet where it meets the moulding. The band deliberately thins toward the
-  corner so the pad reads as a bead on a slender moulding, not as more band.
+  two elements make the frame. The BAND is thinnest at the SEAMS — the gaps
+  between corner and edge pieces — and swells away from them both ways: an
+  edge bar to `band` at its side's midpoint, a corner arm back toward the
+  apex, where it flows into the round PAD (`bulge`, screen px, 0 disables) —
+  a disc centred on the corner arc's centre, smooth-unioned onto the ring so
+  its inner boundary bows inward with a fillet where it meets the moulding.
+  Each gap therefore separates two thin tips: the frame pinches at every
+  join and thickens toward every piece's middle.
   The gap notches sever only the band; a groove across a pad would read as
   damage. Both `get_border_zone` and the drawing treat a pad as its corner's
   zone — its tip reaches past the band, so the hit test carries a matching

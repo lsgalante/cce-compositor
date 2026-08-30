@@ -2,12 +2,14 @@
 // swells from the corners toward the middle of each side, like the moulding
 // of a picture frame.
 //
-// Two elements make the frame. The BAND runs `band_min` at the corners,
-// easing to `band` at each side's midpoint — the moulding. And a round BULGE
-// sits on each corner: a disc smooth-unioned onto the ring, so the inner
-// boundary bows inward there like a bead. The band deliberately thins toward
-// the corner so the bulge reads as its own rounded pad on a slender moulding,
-// not as more band. `corner_len` places the gaps and the corner zones.
+// Two elements make the frame. The BAND is thinnest at the SEAMS — the gaps
+// between corner and edge pieces — and swells away from them in both
+// directions: an edge bar rises to `band` at its side's midpoint, a corner
+// arm rises back toward the apex, where it flows into the round BULGE that
+// sits on each corner (a disc smooth-unioned onto the ring, its inner
+// boundary bowing inward like a bead). So each gap separates two thin tips,
+// and every piece thickens toward its own middle. `corner_len` places the
+// seams and the corner zones.
 //
 // Why a shader rather than rects: the swell is continuous along a side, and
 // a scene rect can only approximate it with a clipped region whose corner
@@ -97,11 +99,24 @@ void main() {
     // Distance from the nearer end of that side.
     float u = min(along, len - along);
 
-    // The band: thin at the corners, swelling to the side's midpoint, with
-    // swell_curve pulling the gain early (below 1) or late (above 1).
+    // The corner run, clamped against ITS OWN side (see the zone comment
+    // below); the band profile and the zone cut share it so the thickness
+    // minimum lands exactly on the seam.
+    float cl = min(corner_len, 0.45 * len);
+
+    // The band: band_min at the seams, swelling away from them both ways —
+    // an edge bar to `band` at the side's midpoint, a corner arm back toward
+    // the apex, where the pad's union takes over. v is 0 at a seam and 1 at
+    // a piece's peak; swell_curve pulls the gain early (below 1) or late.
     float half_side = max(0.5 * len, 1e-3);
-    float t = clamp(u / half_side, 0.0, 1.0);
-    float s = pow(smoothstep(0.0, 1.0, t), max(swell_curve, 0.01));
+    float v;
+    if (u <= cl) {
+        v = 1.0 - u / max(cl, 1e-3);
+    } else {
+        float run = max(half_side - cl - gap, 1e-3);
+        v = clamp((u - cl - gap) / run, 0.0, 1.0);
+    }
+    float s = pow(smoothstep(0.0, 1.0, v), max(swell_curve, 0.01));
     float thickness = mix(band_min, band, s);
     float f_ring = thickness - depth;
 
@@ -123,11 +138,9 @@ void main() {
     // Zones: anything on the pad is its corner's, then the band cut as
     // before. The gap only severs the BAND — a groove across the pad would
     // read as damage, so it skips fragments the disc owns.
-    // The corner run clamps against ITS OWN side: two corner zones on one
-    // side must never meet, or the side's midpoint would resize diagonally —
-    // and clamping per side rather than to the window's short side lets a
-    // long side carry the full configured run while a short one shortens.
-    float cl = min(corner_len, 0.45 * len);
+    // The corner run clamps per side because two corner zones on one side
+    // must never meet — past that, the side's midpoint would resize
+    // diagonally.
     float zone;
     if (u <= cl || f_disc > 0.0) {
         zone = top ? (left ? ZONE_TL : ZONE_TR) : (left ? ZONE_BL : ZONE_BR);
