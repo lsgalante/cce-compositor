@@ -158,11 +158,11 @@ Sweep with one cargo invocation over the dependents (`cargo build --release -p �
 features and invalidates crates, as below), then `ccebuild install
 --no-build <crate>` for each. Verify by looking *inside* the installed binary for
 something the change introduced — `strings ~/.local/bin/<crate> | grep -q
-'<new log string>'` — rather than trusting that the build ran. **Leave
-`cce-browser` out of such a sweep unless asked**: it builds Servo, which costs
-more than the rest of the workspace combined, so it keeps whatever toolkit
-version it was last built against until someone decides that trade is worth
-making.
+'<new log string>'` — rather than trusting that the build ran. (`cce-browser` belongs in the sweep
+too these days: since it moved to the crates.io `servo 0.4` package —
+user-confirmed 2026-08-29 — it rebuilds in seconds. The old rule to leave it
+out dated from when it vendored the Servo engine, which cost more than the
+rest of the workspace combined.)
 
 **A hit proves freshness; a miss proves nothing.** Not every string literal in
 the source survives into the binary, and the two cases are not distinguishable
