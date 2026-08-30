@@ -1017,9 +1017,11 @@ impl WindowManager {
         std::thread::spawn(move || {
             // Clients that reach for the Secret Service on startup start last,
             // behind the keyring barrier: launched into a still-locked keyring
-            // they either fail outright or hang on KeePassXC's modal unlock
-            // prompt — which in turn delays the D-Bus unlock they are waiting
-            // for. Everything else starts immediately.
+            // they either fail outright or quietly fall back to plaintext
+            // credential storage. gnome-keyring now comes up already unlocked
+            // in ~1.3s, so the wait is short — but it is not zero, and losing
+            // that race downgrades an app's storage without saying so.
+            // Everything else starts immediately.
             let (secret_gated, immediate): (Vec<_>, Vec<_>) = restored
                 .into_iter()
                 .partition(|w| Self::needs_secret_service(&w.cmdline));
@@ -1130,14 +1132,6 @@ impl WindowManager {
                 w.app_id,
                 cmd_trimmed
             );
-            return;
-        }
-        // The Secret Service provider is owned by cce-keepassxc.service so it
-        // comes up with the session rather than from the middle of this queue;
-        // respawning it here would just race that unit.
-        if std::path::Path::new(cmd_trimmed).file_name().and_then(|f| f.to_str()) == Some("keepassxc")
-        {
-            log::info!("Skipping {cmd_trimmed}: started by cce-keepassxc.service");
             return;
         }
         if w.cmdline.is_empty() {
@@ -5677,8 +5671,9 @@ mod tests {
         assert!(!WindowManager::needs_secret_service(
             "some-app --password-store=basic"
         ));
-        // Everything else starts immediately — including the provider itself,
-        // which must never wait on the barrier it is supposed to satisfy.
+        // Everything else starts immediately. KeePassXC is an ordinary app now
+        // that gnome-keyring provides the Secret Service — it reaches for no
+        // keyring of its own at startup, so it is not gated.
         assert!(!WindowManager::needs_secret_service("/usr/bin/keepassxc"));
         assert!(!WindowManager::needs_secret_service(
             "/home/lsgalante/.local/bin/cce-terminal"
