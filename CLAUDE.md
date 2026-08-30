@@ -329,7 +329,11 @@ where the old band sat outside them.
   a disc centred on the corner arc's centre, smooth-unioned onto the ring so
   its inner boundary bows inward with a fillet where it meets the moulding.
   Each gap therefore separates two thin tips: the frame pinches at every
-  join and thickens toward every piece's middle.
+  join and thickens toward every piece's middle. ONE curve serves both sides
+  of a seam, over the same pixel length on each side (the shorter of the two
+  runs; the longer piece plateaus at full band beyond it), so the waist is
+  mirror-symmetric — normalizing each piece to its own length made the
+  shorter side leave the join visibly steeper.
   The gap notches sever only the band; a groove across a pad would read as
   damage. Both `get_border_zone` and the drawing treat a pad as its corner's
   zone — its tip reaches past the band, so the hit test carries a matching

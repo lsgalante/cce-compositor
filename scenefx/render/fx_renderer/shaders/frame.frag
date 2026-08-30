@@ -104,18 +104,23 @@ void main() {
     // minimum lands exactly on the seam.
     float cl = min(corner_len, 0.45 * len);
 
-    // The band: band_min at the seams, swelling away from them both ways —
-    // an edge bar to `band` at the side's midpoint, a corner arm back toward
-    // the apex, where the pad's union takes over. v is 0 at a seam and 1 at
-    // a piece's peak; swell_curve pulls the gain early (below 1) or late.
+    // The band: band_min at the seams, swelling away from them both ways.
+    // ONE curve serves both sides of every seam, over the same pixel length
+    // L on each side — the shorter of the corner arm and the edge run — so
+    // the profile is mirror-symmetric across the gap: the two pieces leave
+    // the waist at equal and opposite slopes and read as one moulding
+    // pinched, not two different curves butted together. (Normalizing each
+    // piece to its own length made the shorter side climb that much steeper
+    // at the join — a visibly lopsided waist.) Whichever piece is longer
+    // plateaus at full band past L: under the pad for a corner arm, through
+    // the middle for a long bar. smoothstep's flat top keeps the plateau
+    // joins and the midpoint crease-free; swell_curve pulls the gain early
+    // (below 1) or late.
     float half_side = max(0.5 * len, 1e-3);
-    float v;
-    if (u <= cl) {
-        v = 1.0 - u / max(cl, 1e-3);
-    } else {
-        float run = max(half_side - cl - gap, 1e-3);
-        v = clamp((u - cl - gap) / run, 0.0, 1.0);
-    }
+    float run = max(half_side - cl - gap, 1e-3);
+    float L = max(min(cl, run), 1e-3);
+    float d = (u <= cl) ? (cl - u) : max(u - cl - gap, 0.0);
+    float v = clamp(d / L, 0.0, 1.0);
     float s = pow(smoothstep(0.0, 1.0, v), max(swell_curve, 0.01));
     float thickness = mix(band_min, band, s);
     float f_ring = thickness - depth;
