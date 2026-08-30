@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# escape-dismiss-test — behavioral test for the Escape-closes-status-menus arm
+# in keyboard_group.rs::handle_builtin_binding (7db8c03), driven end to end
+# through the virtual-keyboard path (fdd1209).
+#
+# Setup: a private cce-shadow instance, with status-stub mapped as a status
+# segment 400px tall — geometrically "expanded", i.e. an open in-surface menu.
+# The stub subscribes to the `dismiss` topic and shrinks to a bar strip on the
+# first push, printing one line per push. vkey injects Escape through
+# zwp_virtual_keyboard_v1. Three assertions, one per gate of the arm:
+#
+#   1. Ctrl+Escape while expanded  -> no dismiss   (modifiers == 0 gate)
+#   2. plain Escape while expanded -> one dismiss, stub shrinks below
+#                                     bar_height   (the dismissal itself)
+#   3. plain Escape after shrink   -> no dismiss   (any_expanded_status_segment
+#                                                   gate, now closed)
+#
+# The compositor binary is whatever cce-shadow resolves (installed first, then
+# the workspace target/release); extra args are passed to `cce-shadow start`,
+# so `escape-dismiss-test --bin path/to/cce-fx` pins one explicitly.
+
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(dirname "$here")
+shadow="$repo/scripts/cce-shadow"
+out=$(mktemp -d)
+inst=""
+
+cleanup() {
+    [ -n "$inst" ] && "$shadow" --instance "$inst" stop >/dev/null 2>&1 || true
+    rm -rf "$out"
+}
+trap cleanup EXIT
+
+fail() {
+    echo "FAIL: $*" >&2
+    echo "--- stub log ---" >&2
+    cat "$out/stub.log" >&2 || true
+    echo "--- compositor log tail ---" >&2
+    [ -n "$inst" ] && "$shadow" --instance "$inst" logs 2>/dev/null | tail -20 >&2 || true
+    exit 1
+}
+
+echo "==> building test clients"
+cargo build --quiet --manifest-path "$here/clients/Cargo.toml"
+bin="$here/clients/target/debug"
+
+echo "==> starting shadow instance"
+inst=$("$shadow" start --new "$@" 2>&1 | sed -n "s/.*claimed instance '\([^']*\)'.*/\1/p")
+[ -n "$inst" ] || fail "could not claim a shadow instance"
+sc() { "$shadow" --instance "$inst" "$@"; }
+
+stub_h() {
+    sc ctl windows --json 2>/dev/null \
+        | jq -r 'select(.app_id == "cce-status-teststub") | .h' | head -1
+}
+dismisses() { grep -c '^dismiss' "$out/stub.log" 2>/dev/null || true; }
+
+# Predicates for wait_for. They must be functions, not `test "$(...)" = x`
+# inline: a command substitution in wait_for's arguments would be expanded
+# once at call time, and the loop would poll a constant.
+stub_h_is() { [ "$(stub_h)" = "$1" ]; }
+dismiss_count_is() { [ "$(dismisses)" = "$1" ]; }
+
+wait_for() { # <description> <timeout-seconds> <predicate...>
+    local desc=$1 timeout=$2 i=0
+    shift 2
+    until "$@"; do
+        i=$((i + 1))
+        [ "$i" -ge $((timeout * 5)) ] && fail "timed out waiting for $desc"
+        sleep 0.2
+    done
+}
+
+echo "==> mapping expanded status stub"
+sc run "$bin/status-stub" >"$out/stub.log" 2>&1 &
+wait_for "stub mapped expanded (h=400)" 10 stub_h_is 400
+
+echo "==> gate 1: Ctrl+Escape while expanded must not dismiss"
+sc run "$bin/vkey" mod:4 1 mod:0 >/dev/null
+sleep 1
+[ "$(dismisses)" = 0 ] || fail "chorded Escape dismissed the menu (got $(dismisses) dismiss lines)"
+[ "$(stub_h)" = 400 ] || fail "stub shrank on chorded Escape"
+
+echo "==> gate 2: plain Escape while expanded must dismiss exactly once"
+sc run "$bin/vkey" 1 >/dev/null
+wait_for "dismiss push to reach the stub" 5 dismiss_count_is 1
+wait_for "stub to shrink below bar_height" 5 stub_h_is 8
+
+echo "==> gate 3: plain Escape with no expanded segment must stay quiet"
+sc run "$bin/vkey" 1 >/dev/null
+sleep 1
+[ "$(dismisses)" = 1 ] || fail "Escape dismissed with no menu open (got $(dismisses) dismiss lines)"
+
+echo "PASS: all three gates of the Escape-dismiss arm behave"

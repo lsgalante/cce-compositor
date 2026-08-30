@@ -1,0 +1,25 @@
+[package]
+name = "cce-verify-clients"
+version = "0.1.0"
+edition = "2021"
+description = "Wayland test clients for behavioral verification in cce-shadow sessions"
+
+[[bin]]
+name = "vkey"
+path = "src/bin/vkey.rs"
+
+[[bin]]
+name = "status-stub"
+path = "src/bin/status_stub.rs"
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+xkbcommon = "0.8"
+libc = "0.2"
+
+# Deliberately NOT a member of the cce workspace: these are test clients built
+# on demand by verify/ scripts, invisible to ccebuild and `cargo build` at the
+# workspace root. The empty table severs workspace resolution.
+[workspace]

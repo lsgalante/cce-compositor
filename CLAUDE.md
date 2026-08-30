@@ -220,6 +220,34 @@ cargo test --lib <name>           # single test by (substring) name
 cargo test --lib config::         # tests in the config module
 ```
 
+### `verify/` — behavioral tests in a shadow session
+
+For behavior the unit tests cannot reach (it needs a running compositor),
+`verify/` holds self-contained test drivers that start a private `cce-shadow`
+instance, drive it with real Wayland clients, and assert on what the
+compositor observably does. `verify/clients/` is the shared client crate —
+deliberately **not** a workspace member (severed with an empty `[workspace]`,
+own `target/`, invisible to ccebuild), built on demand by the drivers:
+
+- **`vkey`** — injects key events through `zwp_virtual_keyboard_v1`
+  (wtype-style; evdev keycodes plus `mod:MASK` args for held modifiers).
+  This exercises the same `KeyboardGroup::handle_group_key` path hardware
+  keys take, so keybindings and builtins fire for injected keys.
+- **`status-stub`** — maps an xdg toplevel with a `cce-status*` app_id 400px
+  tall, which `any_expanded_status_segment` reads as an open in-surface menu
+  (expanded is geometric: thicker than `layout.bar_height`). It subscribes to
+  the status socket's `dismiss` topic, prints one line per push, and shrinks
+  to a bar strip on the first one — reacting the way the real bar does.
+
+`./verify/escape-dismiss-test` composes the two to prove all three gates of
+the Escape-closes-status-menus arm (`handle_builtin_binding`): a chorded
+Escape stays out of the arm, a plain Escape while expanded pushes exactly one
+dismiss (and the stub's shrink is visible in `ctl windows`), and a plain
+Escape with nothing expanded stays quiet. The compositor binary is whatever
+`cce-shadow` resolves (installed first, then `target/release`); extra args
+pass through to `cce-shadow start`, so `--bin ../target/release/cce-fx` pins
+the tree's own build.
+
 ## Build pipeline (`build.rs`)
 
 `build.rs` does a lot before Rust compiles:
