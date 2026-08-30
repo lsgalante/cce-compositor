@@ -434,6 +434,11 @@ impl Seat {
         }
 
         self.focused = new_focus;
+        // The overview resize ring is drawn on the focused window only and
+        // eases in and out through the border fade — a focus change has to
+        // arm that timer or the old ring lingers and the new one waits for an
+        // unrelated redraw (the same reason WindowManager::set_mode arms it).
+        (*self.server).wm.arm_border_fade();
         if let Focus::Window(window) = new_focus {
             if !window.is_null() {
                 (*self.server).wm.record_focus(window);

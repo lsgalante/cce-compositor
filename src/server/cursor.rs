@@ -725,10 +725,12 @@ impl Cursor {
             }
 
             let mut is_window = false;
+            let mut hovered_toplevel: *mut crate::window::Window = std::ptr::null_mut();
             match result.data {
                 SceneNodeDataVal::Window(window) => {
                     if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                         is_window = true;
+                        hovered_toplevel = window;
                     }
                     // No mode gate: the band scales with the window
                     // (get_border_zone is zoom-aware), so the resize/move
@@ -765,6 +767,25 @@ impl Cursor {
             self.set_border_hover(std::ptr::null_mut(), None);
 
             if is_window && (*server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
+                // Focus follows the pointer in overview: the ring is drawn on
+                // the focused window only, so hovering is how it moves between
+                // windows without a click. Guarded on an actual change —
+                // seat.focus raises a Floating window BEFORE its same-focus
+                // short-circuit, so an unguarded call would raise and relayout
+                // on every motion event. And with the pan suppressed: hovering
+                // must not move the camera, only the click and keyboard paths
+                // may. (Zoom was never at stake — focus_follow_pan pans at the
+                // current zoom — but a partially visible window would still
+                // get dragged on-screen mid-hover.)
+                if !hovered_toplevel.is_null()
+                    && (*self.seat).focused
+                        != crate::seat::Focus::Window(hovered_toplevel)
+                {
+                    let prev = (*self.seat).suppress_focus_pan;
+                    (*self.seat).suppress_focus_pan = true;
+                    (*self.seat).focus(crate::seat::Focus::Window(hovered_toplevel));
+                    (*self.seat).suppress_focus_pan = prev;
+                }
                 self.clear_focus();
                 return;
             }
@@ -2802,6 +2823,14 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
         return BorderZone::None;
     }
     if !crate::window::window_takes_handles(window) {
+        return BorderZone::None;
+    }
+    // Focused window only, matching what draw_borders draws. Unfocused
+    // windows show no ring, and a grab that is not drawn is the failure mode
+    // this file keeps warning about; hover-to-focus (the motion path) means
+    // reaching a window's edge focuses it on the way, so its band is live by
+    // the time the pointer arrives.
+    if !(*window).is_seat_focused() {
         return BorderZone::None;
     }
 

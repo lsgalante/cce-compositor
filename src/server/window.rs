@@ -3221,6 +3221,24 @@ impl Window {
     /// The light direction is the DE's convention — the same top-left source
     /// the drop shadow is offset away from — so a window reads as a slab lit
     /// from the same place as everything else on the desktop.
+    /// Is this window any seat's keyboard focus? The window's `activated`
+    /// field is a configure-time snapshot, not live state, so live answers
+    /// come from the seats.
+    pub unsafe fn is_seat_focused(&self) -> bool {
+        let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*seats).next;
+        while curr != seats {
+            let seat = crate::container_of!(curr, crate::seat::Seat, link);
+            if let crate::seat::Focus::Window(w) = (*seat).focused {
+                if w == self as *const Window as *mut Window {
+                    return true;
+                }
+            }
+            curr = (*curr).next;
+        }
+        false
+    }
+
     pub unsafe fn update_bevel(&self, width: i32, height: i32, radius: i32, want: bool, want_focus: bool) {
         if self.bevel.is_null() {
             return;
@@ -3235,20 +3253,7 @@ impl Window {
         // bevel app list still enables the node: the shader's focus branch
         // draws ONLY the glint, so it lays cleanly over a cce-ui app's own
         // client-side bevel instead of doubling its shading.
-        let mut focused = false;
-        {
-            let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-            let mut curr = (*seats).next;
-            while curr != seats {
-                let seat = crate::container_of!(curr, crate::seat::Seat, link);
-                if let crate::seat::Focus::Window(w) = (*seat).focused {
-                    if w == self as *const Window as *mut Window {
-                        focused = true;
-                    }
-                }
-                curr = (*curr).next;
-            }
-        }
+        let focused = self.is_seat_focused();
         let enabled = (want || (focused && want_focus))
             && layout.bevel_enabled
             && layout.bevel_thickness > 0.0
@@ -3367,12 +3372,15 @@ impl Window {
     pub unsafe fn step_border_fade(&mut self) -> bool {
         let mut moving = false;
         let mut changed = false;
-        // In overview every handle is shown for as long as the mode is on,
-        // not just the one under the pointer: the point is to see what is
-        // grabbable at a glance. Hover still reads through, as `color_for`
-        // paints the hovered zone in hover_color over the same full reveal.
+        // In overview the FOCUSED window shows its whole ring for as long as
+        // the mode is on; other windows show nothing. Hover-to-focus in the
+        // motion path means the ring follows the pointer from window to
+        // window, each swap easing through this same fade. Hover still reads
+        // through on the focused ring, as `color_for` paints the hovered
+        // zone in hover_color over the full reveal.
         let all_on = (*self.server).wm.mode == crate::window_manager::WindowManagerMode::Overview
-            && window_takes_handles(self as *mut Window);
+            && window_takes_handles(self as *mut Window)
+            && self.is_seat_focused();
         for elem in BorderElement::ALL {
             let i = elem.index();
             let target = if all_on || self.hovered_border_element == Some(elem) { 1.0 } else { 0.0 };
@@ -3727,6 +3735,10 @@ impl Window {
             // ring; drawing one would be a solid block over the whole window.
             let handles_on = in_overview
                 && window_takes_handles(self_ptr)
+                // Focused-only, like the reveal in step_border_fade: without
+                // this the invisible catcher rects would keep intercepting
+                // scene hits on windows whose ring is not even drawn.
+                && self.is_seat_focused()
                 && !is_virtual_border
                 && bw > 0
                 && (cw as f64 * sc) >= 12.0

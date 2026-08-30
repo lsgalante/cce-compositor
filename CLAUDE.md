@@ -370,12 +370,19 @@ where the old band sat outside them.
   this arrangement exists to prevent. Note the *grab* zone stays the full
   even band (the four catcher rects) even where the ring is drawn thin: the
   swell is ornament, and a corner you can see but not grab would be worse.
-- Handles are shown for **every** eligible window the whole time overview is
-  on, not just the hovered one, via the `all_on` branch in
-  `step_border_fade`; hover still reads through as `hover_color`. Because
-  that fade is timer-driven, every site that flips the mode goes through
-  `WindowManager::set_mode`, which arms it — assigning `self.mode` directly
-  would leave the handles waiting for an unrelated redraw.
+- Handles are shown on the **focused window only**, for as long as overview
+  is on (`step_border_fade`'s `all_on` branch, gated on
+  `Window::is_seat_focused`). **Focus follows the pointer in overview**: the
+  motion path focuses the hovered toplevel — guarded on an actual change,
+  because `seat.focus` raises a Floating window *before* its same-focus
+  short-circuit, so an unguarded call would raise and relayout on every
+  motion event — and with `suppress_focus_pan` set, so hovering never moves
+  the camera; only clicks and the keyboard may. The ring's fade is
+  timer-driven, so both `WindowManager::set_mode` and `seat.focus` arm it —
+  assigning `self.mode` or `self.focused` directly would leave the ring
+  waiting for an unrelated redraw. The hit test and the invisible catcher
+  rects are focused-gated too; hover-to-focus is what keeps that workable,
+  since reaching a window's edge focuses it on the way.
 - The per-side foam clipping the outside band carried is gone: it split a gap
   SHARED with a neighbouring window, and an inside ring shares nothing.
 
