@@ -27,6 +27,7 @@ pub struct InputManager {
     pub new_text_input: ffi::wl_listener,
     pub new_input_method: ffi::wl_listener,
     pub new_virtual_pointer_listener: ffi::wl_listener,
+    pub new_virtual_keyboard_listener: ffi::wl_listener,
 
     /// Pending deferred pointer-focus re-evaluation (see
     /// [`InputManager::schedule_pointer_refresh`]); null when none. One idle
@@ -103,6 +104,11 @@ impl InputManager {
         let new_virtual_pointer_ptr = &mut self.new_virtual_pointer_listener as *mut ffi::wl_listener as *mut WlListener;
         (*new_virtual_pointer_ptr).notify = Some(handle_new_virtual_pointer);
         wl_signal_add(&mut (*self.virtual_pointer_manager).events.new_virtual_pointer, &mut self.new_virtual_pointer_listener);
+
+        // Connect new_virtual_keyboard listener
+        let new_virtual_keyboard_ptr = &mut self.new_virtual_keyboard_listener as *mut ffi::wl_listener as *mut WlListener;
+        (*new_virtual_keyboard_ptr).notify = Some(handle_new_virtual_keyboard);
+        wl_signal_add(&mut (*self.virtual_keyboard_manager).events.new_virtual_keyboard, &mut self.new_virtual_keyboard_listener);
 
         Ok(())
     }
@@ -188,6 +194,7 @@ impl InputManager {
         wl_listener_remove(&mut self.new_text_input);
         wl_listener_remove(&mut self.new_input_method);
         wl_listener_remove(&mut self.new_virtual_pointer_listener);
+        wl_listener_remove(&mut self.new_virtual_keyboard_listener);
         log::info!("[deinit] InputManager::deinit finished");
     }
 }
@@ -432,6 +439,29 @@ unsafe extern "C" fn handle_new_virtual_pointer(listener: *mut ffi::wl_listener,
 
     // Attach device to the default seat
     (*im.default_seat).attach_device(device);
+}
+
+unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+    let im = &mut *crate::container_of!(listener, InputManager, new_virtual_keyboard_listener);
+    let virtual_keyboard = data as *mut ffi::wlr_virtual_keyboard_v1;
+
+    log::info!("new virtual keyboard device connected");
+
+    let wlr_device = &mut (*virtual_keyboard).keyboard.base as *mut ffi::wlr_input_device;
+
+    // Honor the seat the client bound the virtual keyboard to, like input
+    // methods do; fall back to the default seat if it carries no Seat data.
+    let mut seat = ffi::river_wlr_seat_get_data((*virtual_keyboard).seat) as *mut Seat;
+    if seat.is_null() {
+        seat = im.default_seat;
+    }
+
+    let device = crate::input_device::InputDevice::new(seat, wlr_device, true);
+    crate::keyboard::Keyboard::create(device);
+
+    // Same path a hardware keyboard takes: attach_device puts the keyboard in
+    // a (private, virtual) KeyboardGroup, so compositor keybindings apply.
+    (*seat).attach_device(device);
 }
 
 unsafe extern "C" fn handle_pointer_refresh_idle(data: *mut std::ffi::c_void) {

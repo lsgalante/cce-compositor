@@ -19,6 +19,10 @@ pub struct Keyboard {
     pub wlr_keyboard: *mut ffi::wlr_keyboard,
     pub key_listener: ffi::wl_listener,
     pub modifiers_listener: ffi::wl_listener,
+    /// Registered for virtual keyboards only: their keymap arrives from the
+    /// client *after* creation (the zwp_virtual_keyboard_v1 keymap request),
+    /// so it must be forwarded to the group once it lands.
+    pub keymap_listener: ffi::wl_listener,
     pub pressed: HashSet<u32>,
     pub group: *mut KeyboardGroup,
     pub group_link: ffi::wl_list,
@@ -50,6 +54,7 @@ impl Keyboard {
             wlr_keyboard,
             key_listener: std::mem::zeroed(),
             modifiers_listener: std::mem::zeroed(),
+            keymap_listener: std::mem::zeroed(),
             pressed: HashSet::new(),
             group: std::ptr::null_mut(),
             group_link: std::mem::zeroed(),
@@ -75,6 +80,13 @@ impl Keyboard {
         let modifiers_signal = ffi::river_wlr_keyboard_get_modifiers_signal(wlr_keyboard);
         wl_signal_add(modifiers_signal, &mut (*keyboard).modifiers_listener);
 
+        if virtual_device {
+            let keymap_listener_ptr = &mut (*keyboard).keymap_listener as *mut ffi::wl_listener as *mut WlListener;
+            (*keymap_listener_ptr).notify = Some(handle_keymap);
+            let keymap_signal = ffi::river_wlr_keyboard_get_keymap_signal(wlr_keyboard);
+            wl_signal_add(keymap_signal, &mut (*keyboard).keymap_listener);
+        }
+
         if !virtual_device && should_set_keymap((*(*device).seat).server) {
             if !keymap.is_null() {
                 ffi::wlr_keyboard_set_keymap(wlr_keyboard, keymap);
@@ -90,6 +102,10 @@ impl Keyboard {
     pub unsafe fn destroy(keyboard: *mut Self) {
         wl_listener_remove(&mut (*keyboard).key_listener);
         wl_listener_remove(&mut (*keyboard).modifiers_listener);
+        // destroy_fn runs before the InputDevice is freed, so device is valid.
+        if (*(*keyboard).device).virtual_device {
+            wl_listener_remove(&mut (*keyboard).keymap_listener);
+        }
 
         if !(*keyboard).group.is_null() {
             let keys: Vec<u32> = (*keyboard).pressed.iter().cloned().collect();
@@ -114,6 +130,13 @@ impl Keyboard {
             while curr != seat_groups_head {
                 let next = (*curr).next;
                 let group = crate::container_of!(curr, KeyboardGroup, link);
+                // A virtual keyboard's group is private to it (its keymap can
+                // change under it, and its IME grab is disabled) — hardware
+                // keyboards must never join one.
+                if (*group).virtual_device {
+                    curr = next;
+                    continue;
+                }
                 let config_ptr = &mut self.config as *mut KeyboardConfig;
                 if (*group).match_config(config_ptr) {
                     self.group = (*group).ref_group();
@@ -243,6 +266,38 @@ unsafe extern "C" fn handle_key(listener: *mut ffi::wl_listener, data: *mut std:
 
     if !keyboard.group.is_null() {
         (*keyboard.group).process_key(event);
+    }
+}
+
+/// Virtual keyboards only. The client's keymap request lands after the group
+/// already exists, and the group's own wlr_keyboard is what processes keys —
+/// with no keymap it has no xkb_state and every key is dropped. The group is
+/// private to this keyboard (see set_group), so its config can be rewritten
+/// in place instead of regrouping.
+unsafe extern "C" fn handle_keymap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    let keyboard = &mut *crate::container_of!(listener, Keyboard, keymap_listener);
+    let keymap = ffi::river_wlr_keyboard_get_keymap(keyboard.wlr_keyboard);
+
+    if !keymap.is_null() {
+        ffi::xkb_keymap_ref(keymap);
+    }
+    if !keyboard.config.keymap.is_null() {
+        ffi::xkb_keymap_unref(keyboard.config.keymap);
+    }
+    keyboard.config.keymap = keymap;
+
+    if !keyboard.group.is_null() {
+        let group = &mut *keyboard.group;
+        if !keymap.is_null() {
+            ffi::xkb_keymap_ref(keymap);
+        }
+        if !group.config.keymap.is_null() {
+            ffi::xkb_keymap_unref(group.config.keymap);
+        }
+        group.config.keymap = keymap;
+        if !keymap.is_null() {
+            group.process_keymap(keymap);
+        }
     }
 }
 
