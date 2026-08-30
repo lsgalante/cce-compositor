@@ -123,13 +123,18 @@ void main() {
     // Zones: anything on the pad is its corner's, then the band cut as
     // before. The gap only severs the BAND — a groove across the pad would
     // read as damage, so it skips fragments the disc owns.
+    // The corner run clamps against ITS OWN side: two corner zones on one
+    // side must never meet, or the side's midpoint would resize diagonally —
+    // and clamping per side rather than to the window's short side lets a
+    // long side carry the full configured run while a short one shortens.
+    float cl = min(corner_len, 0.45 * len);
     float zone;
-    if (u <= corner_len || f_disc > 0.0) {
+    if (u <= cl || f_disc > 0.0) {
         zone = top ? (left ? ZONE_TL : ZONE_TR) : (left ? ZONE_BL : ZONE_BR);
-        if (u > corner_len && u <= corner_len + gap && f_disc <= 0.0) {
+        if (u > cl && u <= cl + gap && f_disc <= 0.0) {
             discard;
         }
-    } else if (u <= corner_len + gap) {
+    } else if (u <= cl + gap) {
         discard;
     } else if (vertical) {
         zone = (dl <= dr) ? ZONE_LEFT : ZONE_RIGHT;

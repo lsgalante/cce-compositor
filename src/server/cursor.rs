@@ -2890,16 +2890,21 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
 
     // Corner squares of `corner_len`, measured from the content corners —
     // the same length draw_borders gives the corner handles.
+    // Floored at the band, then clamped per AXIS to 0.45 of that side, the
+    // same rule the shader draws with: two corner runs on one side must
+    // never meet, or its midpoint would resize diagonally.
     let corner_len = (crate::window::border_corner_len(
         bw_unscaled,
         (*(*window).server).wm.layout.border_corner_length,
         0.0,
     ) * scale)
         .max(bw);
-    let corner_l = rx < corner_len;
-    let corner_r = rx >= content_w - corner_len;
-    let corner_t = ry < corner_len;
-    let corner_b = ry >= content_h - corner_len;
+    let cl_x = corner_len.min(content_w * 0.45);
+    let cl_y = corner_len.min(content_h * 0.45);
+    let corner_l = rx < cl_x;
+    let corner_r = rx >= content_w - cl_x;
+    let corner_t = ry < cl_y;
+    let corner_b = ry >= content_h - cl_y;
 
     if (corner_l || corner_r) && (corner_t || corner_b) {
         return BorderZone::Resize(crate::window::Edges {

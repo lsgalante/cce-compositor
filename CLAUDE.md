@@ -331,7 +331,11 @@ where the old band sat outside them.
   The gap notches sever only the band; a groove across a pad would read as
   damage. Both `get_border_zone` and the drawing treat a pad as its corner's
   zone — its tip reaches past the band, so the hit test carries a matching
-  corner-disc check. The profile is continuous along
+  corner-disc check. The corner run (`corner_length`) clamps PER SIDE at 0.45
+  of that side's length, in the shader and the hit test alike: two corner
+  zones on one side must never meet, or its midpoint would resize diagonally
+  — and per-side (rather than against the window's short side) lets a long
+  side carry the full configured run while a short one shortens. The profile is continuous along
   a side, which a rect cannot express: its only shaping tool is a clipped
   region whose corner radius is a single scalar, capped by the thickness
   change (tens of px) while a side is hundreds long, so it reads as a bump

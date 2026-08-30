@@ -3815,7 +3815,11 @@ impl Window {
                 self.border.frame,
                 band_screen as f32,
                 (band_screen as f32 * layout.border_taper.clamp(0.0, 1.0)).max(2.0),
-                (px(cl) as f32).max(band_screen as f32),
+                // Floored at the band; the shader clamps the run per SIDE
+                // (0.45 of that side), so a long side carries the full
+                // configured length while a short one shortens. The hit test
+                // applies the same per-axis clamp.
+                (px(cl) as f64).max(band_screen) as f32,
                 px(g) as f32,
                 layout.border_swell_curve,
                 (layout.border_corner_bulge as f64).min(short_side * 0.3) as f32,
