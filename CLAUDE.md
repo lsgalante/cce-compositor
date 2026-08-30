@@ -322,11 +322,12 @@ where the old band sat outside them.
   to be spent on moving the way the outside band's did.
 - The ring is drawn by **one scenefx node**, `wlr_scene_frame`
   (`scenefx/render/fx_renderer/shaders/frame.frag`), not by rects. Its
-  thickness swells from `band_min` at the very corner to `band` at the middle
-  of each side — a picture-frame moulding. The profile is ONE curve per side,
-  independent of the eight-zone cut: the corner pieces ride the same swell
-  rather than holding a flat thin run, and `corner_length` places the gaps
-  without bounding the curve. That profile is continuous along
+  every piece is its own swell — `band_min` at its two ends by the gaps,
+  `band` at its middle. An edge bar peaks at the side's midpoint; a corner
+  piece peaks at the corner APEX, wrapping the arc like the corner block of
+  an ornamental frame, so the corners are bosses rather than the one place
+  the moulding runs thin. `corner_length` sets a corner boss's extent and
+  places the gaps. The profile is continuous along
   a side, which a rect cannot express: its only shaping tool is a clipped
   region whose corner radius is a single scalar, capped by the thickness
   change (tens of px) while a side is hundreds long, so it reads as a bump

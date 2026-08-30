@@ -2,13 +2,14 @@
 // swells from the corners toward the middle of each side, like the moulding
 // of a picture frame.
 //
-// The ring is cut into eight zones — four corner pieces and four edge bars —
-// separated by `gap`, but the THICKNESS is one continuous profile per side,
-// independent of that cut: `band_min` at the very corner easing to `band` at
-// the side's midpoint. The corner pieces are part of the same curve rather
-// than a flat run, so the swell reads as moulding carried right around the
-// frame instead of a bar that steps up between two constant corners.
-// `corner_len` therefore places the gaps; it no longer bounds the swell.
+// The ring is cut into eight pieces — four corner pieces and four edge bars —
+// separated by `gap`, and EVERY piece is its own swell: `band_min` at its two
+// ends by the gaps, `band` at its middle. For an edge bar the middle is the
+// side's midpoint; for a corner piece it is the corner apex, where the piece
+// wraps the arc — so the corners carry a boss of their own, like the corner
+// blocks of an ornamental frame, instead of being the one place the moulding
+// runs thin. `corner_len` sets a corner boss's extent along each side and
+// places the gaps.
 //
 // Why a shader rather than rects: the swell is continuous along a side, and
 // a scene rect can only approximate it with a clipped region whose corner
@@ -95,17 +96,23 @@ void main() {
     // Distance from the nearer end of that side.
     float u = min(along, len - along);
 
-    // Thickness: one curve over the whole half-side, corner pieces included.
-    // smoothstep first, so the curve is flat where the two halves meet at the
-    // midpoint and where it starts at the corner — no crease at either. Then
-    // `swell_curve` reshapes it: below 1 pulls the gain earlier, which is what
-    // makes the corner swell visible at all. Plain smoothstep is nearly flat
-    // across a corner piece (a corner spanning an eighth of the side reaches
-    // t=0.13, where smoothstep is 0.04 — under a pixel of the whole range),
-    // which is why the corners read as a constant thin run without this.
+    // Per-piece swell: v runs 0 at a piece's ends to 1 at its peak. A corner
+    // piece peaks at u=0 — the apex, where the two sides' fragments meet on
+    // the diagonal; u is the same distance for both there, so the profile is
+    // continuous across it, and smoothstep's flat top leaves no crease. An
+    // edge bar peaks at the side's midpoint. Both ends of every piece sit at
+    // band_min, so each gap separates two thin tips — a scalloped frame.
+    // `swell_curve` reshapes every swell the same way: below 1 gains early
+    // and creeps to the peak.
     float half_side = max(0.5 * len, 1e-3);
-    float t = clamp(u / half_side, 0.0, 1.0);
-    float s = pow(smoothstep(0.0, 1.0, t), max(swell_curve, 0.01));
+    float v;
+    if (u <= corner_len) {
+        v = 1.0 - u / max(corner_len, 1e-3);
+    } else {
+        float run = max(half_side - corner_len - gap, 1e-3);
+        v = clamp((u - corner_len - gap) / run, 0.0, 1.0);
+    }
+    float s = pow(smoothstep(0.0, 1.0, v), max(swell_curve, 0.01));
     float thickness = mix(band_min, band, s);
 
     // The cut into zones is separate from the profile: it decides where the
