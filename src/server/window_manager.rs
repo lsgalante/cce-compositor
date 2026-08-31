@@ -482,6 +482,17 @@ impl WindowManager {
                 self.set_mode(if (state.desk_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal });
                 self.restore_queue = state.windows;
                 self.last_window_states = state.last_window_states;
+                // Geometry in the file was measured under the grid it
+                // records; if this session's grid differs, put every Tiled
+                // entry back on ITS SQUARES now, before placeholders and
+                // restores consume the pixels. A pre-field file (grid: None)
+                // has nothing to remap from and loads as-is.
+                if let Some(g) = state.grid {
+                    let current = self.layout.snap_params();
+                    if !g.matches(&current) {
+                        self.remap_saved_entries(&g.to_params(&current));
+                    }
+                }
                 self.has_restored_focused_window = self.restore_queue.iter().any(|w| w.focused);
                 self.restored_focused_window_mapped = false;
                 log::info!(
@@ -820,6 +831,11 @@ impl WindowManager {
             desk_zoom: self.desk_zoom,
             windows: saved_wins,
             last_window_states: self.last_window_states.clone(),
+            // The grid these geometries were measured under, so a later
+            // session under a different grid can keep each Tiled entry on
+            // its squares (remap_saved_entries) instead of re-deriving the
+            // span from stale pixels.
+            grid: Some(crate::policy::state::SavedGrid::from_params(&self.layout.snap_params())),
         };
         
         if let Ok(json_str) = serde_json::to_string_pretty(&state) {
@@ -4320,6 +4336,7 @@ impl WindowManager {
                     _ => return format!("error: unknown layout key: {}\n", key),
                 }
                 self.retile_for_grid_change(old_sp);
+                self.remap_saved_entries(&old_sp);
                 self.dirty_windowing();
                 "ok\n".to_string()
             }
@@ -4660,6 +4677,40 @@ impl WindowManager {
         }
     }
 
+    /// Re-tile the SAVED Tiled entries (restore queue + last-window
+    /// states) from `old` grid params onto the current grid — the
+    /// stateful sibling of `retile_for_grid_change`, which can only reach
+    /// mapped windows. Without this, a window closed under one grid and
+    /// reopened under another restores misaligned pixels, touches extra
+    /// cells, and the tiled snap grows it by a cell.
+    pub unsafe fn remap_saved_entries(&mut self, old: &crate::policy::snap::SnapParams) {
+        let new = self.layout.snap_params();
+        for entry in self
+            .restore_queue
+            .iter_mut()
+            .chain(self.last_window_states.iter_mut())
+        {
+            if entry.tiling_mode != crate::tiling::TilingMode::Tiled {
+                continue;
+            }
+            if entry.width == 0 || entry.height == 0 {
+                continue;
+            }
+            let (nx, ny, nw, nh) = crate::policy::cells::remap_block(
+                entry.virtual_x,
+                entry.virtual_y,
+                entry.width as f64,
+                entry.height as f64,
+                old,
+                &new,
+            );
+            entry.virtual_x = nx;
+            entry.virtual_y = ny;
+            entry.width = nw.round() as u32;
+            entry.height = nh.round() as u32;
+        }
+    }
+
     /// Re-tile every Tiled window after a grid-geometry change (cell
     /// sizes, gap, or fade inset): each window keeps its BLOCK of squares
     /// (`cells::remap_block`), so it resizes with the grid instead of
@@ -4738,6 +4789,10 @@ impl WindowManager {
                     }
 
                     self.retile_for_grid_change(old_sp);
+                    // The saved entries hold geometry from before the
+                    // reload too — closed windows must reopen on their
+                    // squares, not their stale pixels.
+                    self.remap_saved_entries(&old_sp);
                     self.dirty_windowing();
 
                     // Process old PIDs
