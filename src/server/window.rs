@@ -428,6 +428,11 @@ pub struct Window {
     pub resize_start_w: u32,
     pub resize_start_h: u32,
     pub resize_edges: Option<Edges>,
+    /// Client hint: an in-surface popover (menu/dropdown) covers this rect,
+    /// surface-local logical px (zcce set_popover_region). The overview
+    /// resize ring is clipped away beneath it and its band does not grab
+    /// there — the menu reads as in front of the chrome.
+    pub popover_region: Option<ffi::wlr_box>,
     /// The client resized itself and the new-size buffer is already on screen, so
     /// `render_finish` must take the size from the live commit rather than the
     /// render-start snapshot (`rendering_sent`), which still holds the previous
@@ -693,6 +698,7 @@ impl Window {
             resize_start_w: 0,
             resize_start_h: 0,
             resize_edges: None,
+            popover_region: None,
             self_resized: false,
             status_collapsed_len: 0,
             stream_dirty: true,
@@ -3824,6 +3830,19 @@ impl Window {
                 layout.border_swell_curve,
                 (layout.border_corner_bulge as f64).min(short_side * 0.3) as f32,
             );
+            // The popover hint arrives in surface-local LOGICAL px; the node
+            // space is zoom-scaled device px like everything else here, so it
+            // takes the same px() mapping. Zeroed when clear.
+            let ex = match self.popover_region {
+                Some(r) => [
+                    px(r.x) as f32,
+                    px(r.y) as f32,
+                    px(r.width) as f32,
+                    px(r.height) as f32,
+                ],
+                None => [0.0; 4],
+            };
+            ffi::wlr_scene_frame_set_exclusion(self.border.frame, ex.as_ptr());
             ffi::wlr_scene_frame_set_color(self.border.frame, premul(&border_color).as_ptr());
             let hovered = self
                 .hovered_border_element

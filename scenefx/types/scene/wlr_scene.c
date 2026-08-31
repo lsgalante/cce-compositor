@@ -1196,6 +1196,15 @@ void wlr_scene_frame_set_shape(struct wlr_scene_frame *frame, float band,
 	scene_node_update(&frame->node, NULL);
 }
 
+void wlr_scene_frame_set_exclusion(struct wlr_scene_frame *frame,
+		const float rect[static 4]) {
+	if (memcmp(frame->exclusion, rect, sizeof(frame->exclusion)) == 0) {
+		return;
+	}
+	memcpy(frame->exclusion, rect, sizeof(frame->exclusion));
+	scene_node_update(&frame->node, NULL);
+}
+
 void wlr_scene_frame_set_color(struct wlr_scene_frame *frame, const float color[static 4]) {
 	if (memcmp(frame->color, color, sizeof(frame->color)) == 0) {
 		return;
@@ -2613,6 +2622,12 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.hovered = scene_frame->hovered,
 			.swell_curve = scene_frame->swell_curve,
 			.bulge = scene_frame->bulge,
+			.exclusion = {
+				scene_frame->exclusion[0] * data->scale,
+				scene_frame->exclusion[1] * data->scale,
+				scene_frame->exclusion[2] * data->scale,
+				scene_frame->exclusion[3] * data->scale,
+			},
 			.hover_color = {
 				scene_frame->hover_color[0],
 				scene_frame->hover_color[1],

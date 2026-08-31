@@ -130,6 +130,8 @@ struct fx_render_frame_options {
 	float swell_curve;
 	/* Radius of the round pad on each corner, 0 to disable. */
 	float bulge;
+	/* Box-local rect the ring must not draw over; w/h <= 0 disables. */
+	float exclusion[4];
 	struct wlr_render_color color;
 };
 

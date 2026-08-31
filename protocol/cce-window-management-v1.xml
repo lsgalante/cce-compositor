@@ -28,7 +28,7 @@
     "should", "should not", "recommended", "may", and "optional" in this
     document are to be interpreted as described in IETF RFC 2119.
   </description>
-  <interface name="zcce_window_manager_v1" version="6">
+  <interface name="zcce_window_manager_v1" version="7">
     <description summary="window manager global interface">
       This global interface should only be advertised to the window manager
       process. Only one window management client may be active at a time. The
@@ -1490,7 +1490,7 @@
       </description>
     </event>
   </interface>
-  <interface name="zcce_toplevel_v1" version="4">
+  <interface name="zcce_toplevel_v1" version="5">
     <description summary="toplevel window management controls">
       An interface to control and listen to CCE-specific window management states
       for a client surface.
@@ -1579,6 +1579,27 @@
       </description>
       <arg name="state" type="uint" summary="1 if floating, 0 otherwise"/>
     </event>
+    <request name="set_popover_region" since="5">
+      <description summary="hint where an in-surface popover is drawn">
+        Tell the compositor that the client is drawing a popover (menu,
+        dropdown, context menu) into its own surface at this rect, in
+        surface-local logical coordinates. The compositor keeps its
+        window chrome — the overview resize ring — from drawing over
+        that rect, so the menu reads as being in front of it. With more
+        than one popover open, send the union. A zero width or height
+        clears the hint; closing the last popover must send that clear,
+        or the chrome stays cut where the menu used to be.
+
+        This is a rendering hint only: it moves no window, changes no
+        input routing, and carries no promise the compositor draws
+        anything differently at all.
+      </description>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+
     <event name="grid_patch" since="4">
       <description summary="render this patch of the desktop grid">
         Instructs the grid client what region of the virtual desktop to

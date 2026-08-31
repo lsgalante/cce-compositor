@@ -403,6 +403,7 @@ bool link_frame_program(struct frame_shader *shader) {
 	shader->hover_color = glGetUniformLocation(prog, "hover_color");
 	shader->swell_curve = glGetUniformLocation(prog, "swell_curve");
 	shader->bulge = glGetUniformLocation(prog, "bulge");
+	shader->exclusion = glGetUniformLocation(prog, "exclusion");
 
 	return true;
 }

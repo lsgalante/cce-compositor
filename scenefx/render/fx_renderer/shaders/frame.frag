@@ -41,6 +41,10 @@ uniform float gap;
 uniform float swell_curve;
 // Radius of the round pad on each corner, 0 to disable.
 uniform float bulge;
+// Node-local rect (x, y, w, h) the ring must not draw over — the client is
+// drawing an in-surface popover there and the menu must read as in FRONT of
+// the chrome. w or h <= 0 disables.
+uniform vec4 exclusion;
 // Zone under the pointer (see ZONE_* below), or < 0 for none.
 uniform float hovered;
 uniform vec4 hover_color;
@@ -83,6 +87,19 @@ void main() {
     // Without the flip the zone logic is upside down relative to the SDF.
     vec2 p = gl_FragCoord.xy - position;
     p.y = size.y - p.y;
+
+    // A client popover owns this rect; the ring yields to it wholesale.
+    // The rect arrives top-left-origin (y down); p here is y-UP — the flip
+    // above mirrors gl_FragCoord's orientation rather than cancelling it —
+    // so the rect's y converts. (Found empirically: an un-flipped compare
+    // cut the bottom-left when the menu was top-left, with x exact.)
+    if (exclusion.z > 0.0 && exclusion.w > 0.0
+            && p.x >= exclusion.x && p.x < exclusion.x + exclusion.z) {
+        float ey = size.y - exclusion.y - exclusion.w;
+        if (p.y >= ey && p.y < ey + exclusion.w) {
+            discard;
+        }
+    }
 
     // Which side owns this fragment: whichever edge it sits nearer. The
     // comparison is on distance to the edge, so the split runs along the

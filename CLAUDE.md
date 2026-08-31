@@ -422,6 +422,13 @@ where the old band sat outside them.
   waiting for an unrelated redraw. The hit test and the invisible catcher
   rects are focused-gated too; hover-to-focus is what keeps that workable,
   since reaching a window's edge focuses it on the way.
+- A client drawing an in-surface popover (a cce-ui menu — one buffer with
+  the window since cce-ui's Phase 6x) hints its rect via
+  `zcce_toplevel_v1.set_popover_region` (manager v7); the ring is clipped
+  away beneath it (shader `exclusion`) and its band does not grab there, so
+  the menu reads as in front of the chrome. The protocol XML lives in BOTH
+  repos — cce-ui's copy strips the `enum="river_output_v1..."` attribute its
+  scanner cannot resolve; never sync the file over it wholesale.
 - The per-side foam clipping the outside band carried is gone: it split a gap
   SHARED with a neighbouring window, and an inside ring shares nothing.
 

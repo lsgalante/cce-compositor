@@ -406,6 +406,33 @@ unsafe extern "C" fn toplevel_ack_grid_patch(
     }
 }
 
+unsafe extern "C" fn toplevel_set_popover_region(
+    _client: *mut ffi::wl_client,
+    resource: *mut ffi::wl_resource,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) {
+    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
+    if data.is_null() {
+        return;
+    }
+    let server = (*data).server;
+    let window_key = (*data).window_key;
+    if let Some(window) = resolve_window(server, window_key) {
+        // Surface-local LOGICAL px; the consumers scale it themselves. No
+        // dirty_windowing: this changes no geometry, and the commit that
+        // drew the popover already schedules the frame that will redraw
+        // the ring through draw_borders.
+        (*window).popover_region = if width > 0 && height > 0 {
+            Some(ffi::wlr_box { x, y, width, height })
+        } else {
+            None
+        };
+    }
+}
+
 static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_toplevel_v1_interface {
     destroy: Some(toplevel_destroy),
     set_floating: Some(toplevel_set_floating),
@@ -421,6 +448,7 @@ static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_tople
     unset_utility: Some(toplevel_unset_utility),
     set_grid: Some(toplevel_set_grid),
     ack_grid_patch: Some(toplevel_ack_grid_patch),
+    set_popover_region: Some(toplevel_set_popover_region),
 };
 
 unsafe fn resolve_window(server: *mut Server, key: SlotMapKey) -> Option<*mut Window> {

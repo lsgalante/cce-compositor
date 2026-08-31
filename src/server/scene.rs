@@ -103,9 +103,13 @@ impl Scene {
         self.layers.top = ffi::wlr_scene_tree_create(normal_tree);
         self.layers.fullscreen = ffi::wlr_scene_tree_create(normal_tree);
         self.layers.overlay = ffi::wlr_scene_tree_create(normal_tree);
+        // Window decorations (the resize ring) sit above every window but
+        // BELOW popups: a cce-ui dropdown is a separate Popup-mode window in
+        // layers.popups, and a menu must never be drawn under the chrome of
+        // the window that opened it. Creation order is stacking order.
+        self.layers.border_overlay = ffi::wlr_scene_tree_create(normal_tree);
         self.layers.popups = ffi::wlr_scene_tree_create(normal_tree);
         self.layers.override_redirect = ffi::wlr_scene_tree_create(normal_tree);
-        self.layers.border_overlay = ffi::wlr_scene_tree_create(normal_tree);
 
         if self.layers.border_overlay.is_null()
             || self.layers.background.is_null()

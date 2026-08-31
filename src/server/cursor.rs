@@ -2847,6 +2847,17 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     if rx < 0.0 || rx >= content_w || ry < 0.0 || ry >= content_h {
         return BorderZone::None;
     }
+    // A client popover (set_popover_region) owns its rect outright: the menu
+    // reads as in front of the chrome, so nothing under it may grab. Checked
+    // before the pads and the band — it beats both.
+    if let Some(r) = (*window).popover_region {
+        let (ex, ey) = (r.x as f64 * scale, r.y as f64 * scale);
+        let (ew, eh) = (r.width as f64 * scale, r.height as f64 * scale);
+        if rx >= ex && rx < ex + ew && ry >= ey && ry < ey + eh {
+            return BorderZone::None;
+        }
+    }
+
     // The corner pads reach further inward than the band (their radius plus
     // the corner arc), and what is drawn must grab: a point within a pad's
     // radius of its corner resizes on that corner's two edges.

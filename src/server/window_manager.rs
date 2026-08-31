@@ -450,12 +450,13 @@ impl WindowManager {
         self.global = ffi::wl_global_create(
             (*server).wl_server,
             &ffi::zcce_window_manager_v1_interface,
-            // 6 = grid support (toplevel v4: set_grid/grid_patch/ack);
-            // 5 = set_utility exists on toplevels. Clients feature-gate on
-            // the negotiated version, so one launched into an older
-            // compositor degrades gracefully instead of dying on an
-            // unknown opcode.
-            6,
+            // 7 = set_popover_region on toplevels (the in-surface menu
+            // hint); 6 = grid support (toplevel v4: set_grid/grid_patch/
+            // ack); 5 = set_utility exists on toplevels. Clients
+            // feature-gate on the negotiated version, so one launched into
+            // an older compositor degrades gracefully instead of dying on
+            // an unknown opcode.
+            7,
             self as *mut WindowManager as *mut _,
             Some(bind),
         );

@@ -200,6 +200,7 @@ struct frame_shader {
 	GLint hover_color;
 	GLint swell_curve;
 	GLint bulge;
+	GLint exclusion;
 };
 
 bool link_frame_program(struct frame_shader *shader);
