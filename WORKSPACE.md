@@ -208,8 +208,8 @@ crates (~11s). Pick one shape and stay with it.
 
 Binary names do not reliably match the crate: `cce-fx` lives in `cce-compositor/`,
 `cce-system-interface` and `cce-files` declare explicit `[[bin]]` names, and several
-crates ship extra bins (`cce-ui` → `cce-ramp`/`cce-relief`, `cce-compositor` → `ccectl`,
-`cce-display-manager` → three keyring helpers). Ask cargo rather than guessing:
+crates ship extra bins (`cce-ui` → `cce-ramp`/`cce-relief`, `cce-compositor` →
+`ccectl`). Ask cargo rather than guessing:
 `cargo metadata --no-deps --format-version 1 | jq -r '.packages[].targets[] | select(.kind|index("bin")) | .name'`.
 
 ## The `cce-ui` toolkit (start here for any client work)

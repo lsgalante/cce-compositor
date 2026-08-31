@@ -18,9 +18,9 @@ EXCLUDE=(vk-smoke)
 # installed here.
 #
 # Classified per FILE, from the unit's own [Install] WantedBy, because a crate
-# can legitimately ship both: cce-display-manager has the root unlock daemon
-# (multi-user.target) next to the per-session unlock client and KeePassXC units
-# (graphical-session.target). The old per-crate exclusion list swallowed the
+# can legitimately ship both: cce-display-manager once had the root unlock
+# daemon (multi-user.target) next to the per-session unlock client and KeePassXC
+# units (graphical-session.target). The old per-crate exclusion list swallowed the
 # whole crate, so its user units silently never installed — the same
 # hand-maintained-list failure this script exists to avoid. Matching is exact:
 # graphical.target and graphical-session.target are different targets.
@@ -189,7 +189,8 @@ crate_scripts() {
 # D-Bus activation files a crate ships in its dbus/ dir, installed to
 # ~/.local/share/dbus-1/services where they shadow /usr/share ones by basename
 # (that shadowing is the mechanism: org.freedesktop.secrets.service overrides
-# gnome-keyring's with KeePassXC's unit). Same .service extension as systemd
+# the stock gnome-keyring activation with the TPM-unlocking unit's). Same
+# .service extension as systemd
 # units, but user_units() cannot mistake one for a unit: it keys on [Install]
 # WantedBy, which D-Bus files don't have.
 dbus_services() {
@@ -629,8 +630,6 @@ cmd_install_system() {
     fi
     local pairs=(
         "cce-display-manager:/usr/bin/cce-display-manager"
-        "cce-keyring-unlockd:/usr/local/sbin/cce-keyring-unlockd"
-        "cce-keyring-unlock-setup:/usr/local/sbin/cce-keyring-unlock-setup"
     )
     local entry bin dest
     for entry in "${pairs[@]}"; do
