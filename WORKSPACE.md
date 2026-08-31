@@ -159,10 +159,17 @@ features and invalidates crates, as below), then `ccebuild install
 --no-build <crate>` for each. Verify by looking *inside* the installed binary for
 something the change introduced — `strings ~/.local/bin/<crate> | grep -q
 '<new log string>'` — rather than trusting that the build ran. (`cce-browser` belongs in the sweep
-too these days: since it moved to the crates.io `servo 0.4` package —
-user-confirmed 2026-08-29 — it rebuilds in seconds. The old rule to leave it
-out dated from when it vendored the Servo engine, which cost more than the
-rest of the workspace combined.)
+too, but for a different reason than previously recorded here: since
+2026-08-30 its **default build is WPE WebKit** against the system
+`libWPEWebKit` — seconds, ~14 MB, no Servo compiled at all. The old
+leave-it-out rule dated from Servo being the default engine — always the
+crates.io package, never vendored — which cost more than the rest of the
+workspace combined; that backend still exists behind `--no-default-features
+--features servo` and is still that expensive, so only build it deliberately.
+The default flip is itself a lesson for sweeps: while WPE was opt-in, a
+featureless sweep rebuild silently reverted the installed browser to the
+wrong engine. Defaults are what sweeps build; an opt-in variant of a binary
+does not survive one.)
 
 **A hit proves freshness; a miss proves nothing.** Not every string literal in
 the source survives into the binary, and the two cases are not distinguishable
