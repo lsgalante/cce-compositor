@@ -2328,6 +2328,32 @@ static bool scene_node_at_iterator(struct wlr_scene_node *node,
 	if (node->type == WLR_SCENE_NODE_BUFFER) {
 		struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_from_node(node);
 
+		// A dest-scaled surface buffer occupies dst_width x dst_height in
+		// layout space while its input region (and the coordinates its
+		// client expects) live in SURFACE-LOCAL logical space. Map the
+		// node-local point between the two before the region check, or a
+		// buffer resting at a display ratio != 1 (the desktop grid's
+		// patch, whenever the camera zoom sits off the pow2 quantization)
+		// hit-tests and reports coordinates displaced by exactly that
+		// ratio — which is how a click on a desktop item read as
+		// background, and how the press position disagreed with the drag
+		// deltas hard enough to fling the item across the canvas.
+		// Buffers displayed at their natural size (every window at rest)
+		// scale by exactly 1 here and are untouched.
+		if (scene_buffer->dst_width > 0 && scene_buffer->dst_height > 0) {
+			struct wlr_scene_surface *scene_surface =
+				wlr_scene_surface_try_from_buffer(scene_buffer);
+			if (scene_surface != NULL && scene_surface->surface != NULL) {
+				int sw = scene_surface->surface->current.width;
+				int sh = scene_surface->surface->current.height;
+				if (sw > 0 && sh > 0 && (sw != scene_buffer->dst_width ||
+						sh != scene_buffer->dst_height)) {
+					rx = rx * sw / scene_buffer->dst_width;
+					ry = ry * sh / scene_buffer->dst_height;
+				}
+			}
+		}
+
 		if (scene_buffer->point_accepts_input &&
 				!scene_buffer->point_accepts_input(scene_buffer, &rx, &ry)) {
 			return false;
