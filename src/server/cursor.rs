@@ -698,6 +698,26 @@ impl Cursor {
             let focused =
                 ffi::river_wlr_seat_get_pointer_focused_surface((*self.seat).wlr_seat);
             if !focused.is_null() {
+                // A grab held on the GRID maps through the surface node like
+                // the drop path below, not through the fixed origin: the
+                // offset formula assumes an unscaled surface, and the grid
+                // displays at the patch's resolution ratio — near 1, but off
+                // it whenever the zoom sits between pow2 quantization steps
+                // (most of overview) — so offset deltas would drag the item
+                // faster or slower than the pointer by exactly that ratio.
+                // A patch re-latch mid-drag moves the node under the pointer;
+                // the client's delta re-baselining absorbs that step.
+                if let Some((gsurf, gsx, gsy)) = grid_surface_at(server, lx, ly) {
+                    if gsurf == focused {
+                        ffi::wlr_seat_pointer_notify_motion(
+                            (*self.seat).wlr_seat,
+                            time_msec,
+                            gsx,
+                            gsy,
+                        );
+                        return;
+                    }
+                }
                 ffi::wlr_seat_pointer_notify_motion(
                     (*self.seat).wlr_seat,
                     time_msec,
@@ -728,7 +748,16 @@ impl Cursor {
             let mut hovered_toplevel: *mut crate::window::Window = std::ptr::null_mut();
             match result.data {
                 SceneNodeDataVal::Window(window) => {
-                    if !(*window).is_status_bar() && !(*window).is_wallpaper() {
+                    // The grid is not a toplevel for hover purposes: hitting it
+                    // means the pointer is on a desktop item (its input region
+                    // covers nothing else), and the item drag needs the
+                    // enter/motion delivery below — in overview too, where the
+                    // is_window branch would clear pointer focus and try to
+                    // focus-follow onto a surface seat.focus refuses.
+                    if !(*window).is_status_bar()
+                        && !(*window).is_wallpaper()
+                        && !(*window).is_grid()
+                    {
                         is_window = true;
                         hovered_toplevel = window;
                     }
@@ -1033,7 +1062,14 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
     if let Some(result) = (*server).scene.at(lx, ly) {
         match result.data {
             SceneNodeDataVal::Window(window) => {
-                if !(*window).is_status_bar() && !(*window).is_wallpaper() {
+                // The grid does not block: hitting it means the press is on a
+                // desktop item (its input region covers nothing else), and
+                // the item drag needs the press delivered in overview like
+                // any chrome click.
+                if !(*window).is_status_bar()
+                    && !(*window).is_wallpaper()
+                    && !(*window).is_grid()
+                {
                     is_app_surface = true;
                     // Popup counts as chrome like Overlay: the cce-cloud
                     // launcher must keep receiving clicks in overview.
@@ -1173,19 +1209,26 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         (*clicked_win).tiling_mode,
                         crate::tiling::TilingMode::Overlay | crate::tiling::TilingMode::Popup
                     ));
-            // The grid counts as background in overview: a press on it must
-            // exit overview like any desktop press, never grab the canvas
-            // itself as if it were a window.
+            // Hitting the grid means the press landed on a DESKTOP ITEM —
+            // its input region covers the item rects and nothing else — so
+            // it is chrome-like: fall through to normal delivery and the
+            // grid client starts its item drag, in overview exactly as in
+            // normal mode. Bare canvas misses the grid entirely (that is
+            // the input region again) and still exits overview below.
+            let clicked_grid = !clicked_win.is_null() && (*clicked_win).is_grid();
+            // The bare canvas counts as background in overview: a press on
+            // it must exit overview like any desktop press, never grab the
+            // canvas itself as if it were a window.
             let overview_win_valid = !clicked_win.is_null()
                 && !(*clicked_win).is_status_bar()
                 && !(*clicked_win).is_wallpaper()
-                && !(*clicked_win).is_grid();
+                && !clicked_grid;
             let overview_border_zone = if overview_win_valid {
                 get_border_zone(clicked_win, lx, ly)
             } else {
                 BorderZone::None
             };
-            if overview_chrome {
+            if overview_chrome || clicked_grid {
                 // fall through
             } else if overview_win_valid && matches!(overview_border_zone, BorderZone::None) {
                 (*server).wm.stop_panning_animation();
