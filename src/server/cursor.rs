@@ -93,6 +93,14 @@ pub struct Cursor {
     pub right_click_on_bg: bool,
     pub right_click_on_border: bool,
     pub left_click_on_bg_in_overview: bool,
+    /// The grid surface's node mapping — (node_x, node_y, scale) — FROZEN at
+    /// the start of an implicit grab that landed on the grid, cleared when
+    /// the grab's last button releases. Motion during the grab is mapped
+    /// against these values, never the live node: the camera moves the node
+    /// per frame, and a flight mid-grab (overview enter/exit) read as
+    /// thousands of px of "pointer motion" under a live mapping — one click
+    /// on a desktop item during a flight flung it off the canvas.
+    pub grab_grid: Option<(f64, f64, f64)>,
 }
 
 impl Default for Cursor {
@@ -151,6 +159,7 @@ impl Default for Cursor {
             right_click_on_bg: false,
             right_click_on_border: false,
             left_click_on_bg_in_overview: false,
+            grab_grid: None,
         }
     }
 }
@@ -698,24 +707,34 @@ impl Cursor {
             let focused =
                 ffi::river_wlr_seat_get_pointer_focused_surface((*self.seat).wlr_seat);
             if !focused.is_null() {
-                // A grab held on the GRID maps through the surface node like
-                // the drop path below, not through the fixed origin: the
-                // offset formula assumes an unscaled surface, and the grid
-                // displays at the patch's resolution ratio — near 1, but off
-                // it whenever the zoom sits between pow2 quantization steps
-                // (most of overview) — so offset deltas would drag the item
-                // faster or slower than the pointer by exactly that ratio.
-                // A patch re-latch mid-drag moves the node under the pointer;
-                // the client's delta re-baselining absorbs that step.
-                if let Some((gsurf, gsx, gsy)) = grid_surface_at(server, lx, ly) {
-                    if gsurf == focused {
-                        ffi::wlr_seat_pointer_notify_motion(
-                            (*self.seat).wlr_seat,
-                            time_msec,
-                            gsx,
-                            gsy,
-                        );
-                        return;
+                // A grab held on the GRID maps through the surface node, not
+                // through the fixed origin: the offset formula assumes an
+                // unscaled surface, and the grid displays at the patch's
+                // resolution ratio — near 1, but off it whenever the zoom
+                // sits between pow2 quantization steps (most of overview) —
+                // so offset deltas would drag the item faster or slower than
+                // the pointer by exactly that ratio. The mapping is the one
+                // FROZEN at press time (`grab_grid`), never the live node:
+                // the camera moves the node per frame while the patch stays
+                // put, so a flight mid-grab (overview enter/exit — union
+                // patches are pre-issued, so the client's origin-change
+                // re-baseline never fires) read as the whole flight distance
+                // of "pointer motion" under a live mapping and flung the
+                // grabbed item off the canvas.
+                if let Some((nx, ny, scale)) = self.grab_grid {
+                    // Still guarded on the grid owning the focus: if the
+                    // grid remapped mid-grab (client restart), the frozen
+                    // values must not map points for its replacement.
+                    if let Some((gsurf, ..)) = grid_node_info(server) {
+                        if gsurf == focused {
+                            ffi::wlr_seat_pointer_notify_motion(
+                                (*self.seat).wlr_seat,
+                                time_msec,
+                                (lx - nx) / scale,
+                                (ly - ny) / scale,
+                            );
+                            return;
+                        }
                     }
                 }
                 ffi::wlr_seat_pointer_notify_motion(
@@ -1607,6 +1626,21 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 if let Some(result) = (*seat.server).scene.at(glx, gly) {
                     cursor.grab_origin = (glx - result.sx, gly - result.sy);
                 }
+                // A grab that starts on the grid freezes its node mapping
+                // here instead of using grab_origin: passthrough maps motion
+                // against these values for the whole grab, so camera motion
+                // (which moves the node every frame) reads as nothing rather
+                // than as pointer motion. See the grab branch in passthrough.
+                cursor.grab_grid = None;
+                let grab_focused =
+                    ffi::river_wlr_seat_get_pointer_focused_surface(seat.wlr_seat);
+                if !grab_focused.is_null() {
+                    if let Some((gsurf, nx, ny, scale, _, _)) = grid_node_info(seat.server) {
+                        if gsurf == grab_focused {
+                            cursor.grab_grid = Some((nx, ny, scale));
+                        }
+                    }
+                }
             }
         }
 
@@ -1664,6 +1698,11 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 (*event).button,
                 (*event).state,
             );
+        }
+        // The implicit grab ends with its last button; the frozen grid
+        // mapping must not outlive it into the next grab.
+        if cursor.notified_pressed.is_empty() {
+            cursor.grab_grid = None;
         }
         if seat.op.is_some() {
             let cursor_x = (*cursor.wlr_cursor).x;
@@ -2799,6 +2838,24 @@ pub unsafe fn grid_surface_at(
     lx: f64,
     ly: f64,
 ) -> Option<(*mut ffi::wlr_surface, f64, f64)> {
+    let (surface, nx, ny, scale, bw, bh) = grid_node_info(server)?;
+    let (sx, sy) = ((lx - nx) / scale, (ly - ny) / scale);
+    // Only claim points that actually fall on the grid's patch. box_geom
+    // is the surface's own logical size, which is the space sx/sy are in.
+    if sx < 0.0 || sy < 0.0 || (bw > 0.0 && sx >= bw) || (bh > 0.0 && sy >= bh) {
+        return None;
+    }
+    Some((surface, sx, sy))
+}
+
+/// The grid window's surface plus the raw mapping ingredients: its surface
+/// tree's layout origin, its display scale, and its logical size. This is
+/// the node state a caller may need to FREEZE (the implicit-grab path
+/// captures it at press time), which is why it is exposed separately from
+/// the point mapping above.
+pub unsafe fn grid_node_info(
+    server: *mut crate::server::Server,
+) -> Option<(*mut ffi::wlr_surface, f64, f64, f64, f64, f64)> {
     for &w in (*server).wm.windows.iter() {
         if w.is_null() || (*w).closed || !(*w).is_grid() {
             continue;
@@ -2816,14 +2873,14 @@ pub unsafe fn grid_surface_at(
             continue;
         }
         let scale = if (*w).scale > 0.0 { (*w).scale } else { 1.0 };
-        let (sx, sy) = ((lx - nx as f64) / scale, (ly - ny as f64) / scale);
-        // Only claim points that actually fall on the grid's patch. box_geom
-        // is the surface's own logical size, which is the space sx/sy are in.
-        let (bw, bh) = ((*w).box_geom.width as f64, (*w).box_geom.height as f64);
-        if sx < 0.0 || sy < 0.0 || (bw > 0.0 && sx >= bw) || (bh > 0.0 && sy >= bh) {
-            continue;
-        }
-        return Some((surface, sx, sy));
+        return Some((
+            surface,
+            nx as f64,
+            ny as f64,
+            scale,
+            (*w).box_geom.width as f64,
+            (*w).box_geom.height as f64,
+        ));
     }
     None
 }
