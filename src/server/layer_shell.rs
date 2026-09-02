@@ -549,14 +549,46 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
             if let crate::seat::Focus::LayerSurface(surface) = (*seat).focused {
                 if surface == (*wlr_layer_surface).surface {
                     (*seat).focus(crate::seat::Focus::None);
+                    // cce-cloud surfaces skip the focus_next fallback: the bare
+                    // launcher is about to be replaced by whatever it spawned,
+                    // and refocusing the old window first would fight the new
+                    // map. But a PARENTED popup ("cce-cloud:<app-id>", e.g. the
+                    // designer's add-node palette) is chrome OF that app —
+                    // closing it must hand the keyboard straight back to its
+                    // parent, not leave the seat focused on nothing.
                     let mut is_cce_cloud = false;
+                    let mut cloud_parent: Option<String> = None;
                     if !(*wlr_layer_surface).namespace.is_null() {
                         let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
                         if ns.starts_with("cce-cloud") {
                             is_cce_cloud = true;
+                            cloud_parent = ns.strip_prefix("cce-cloud:").map(str::to_string);
                         }
                     }
-                    if !is_cce_cloud {
+                    if let Some(parent_app_id) = cloud_parent {
+                        // Status modules parent their submenus too; the bar is
+                        // never a keyboard-focus target, so those keep the old
+                        // leave-it-unfocused behavior.
+                        if !parent_app_id.starts_with("cce-status") {
+                            for &win_ptr in (*server).wm.windows.iter() {
+                                if win_ptr.is_null()
+                                    || (*win_ptr).closed
+                                    || (*win_ptr).minimized
+                                    || !matches!((*win_ptr).state, crate::window::WindowState::Mapped)
+                                {
+                                    continue;
+                                }
+                                if (*win_ptr).get_app_id_string().as_deref() == Some(parent_app_id.as_str()) {
+                                    // Dismissing chrome, not switching windows:
+                                    // the camera stays where the user left it.
+                                    (*seat).suppress_focus_pan = true;
+                                    (*seat).focus(crate::seat::Focus::Window(win_ptr));
+                                    (*seat).suppress_focus_pan = false;
+                                    break;
+                                }
+                            }
+                        }
+                    } else if !is_cce_cloud {
                         (*server).wm.focus_next_visible_window(seat);
                     }
                 }
