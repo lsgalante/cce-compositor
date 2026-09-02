@@ -313,8 +313,14 @@ the others. The rules:
   `ccebuild restart` is unscoped: it restarts every user service running a
   replaced binary, including apps another session has installed but is not
   ready to restart. The per-crate form restarts only units shipped by the
-  named crate(s). Apps that are not services restart by name
-  (`pkill -x <bin>`, relaunch detached).
+  named crate(s). Apps that are not services restart by pid, not name:
+  `pkill -x` matches the kernel comm name, which is truncated to 15
+  characters, so it silently matches NOTHING for most `cce-*` binary
+  names ("cce-status-interface" is 20) — a "kill then relaunch" built on
+  it relaunches beside the survivor and doubles the app. Find the pid
+  with `ps -eo pid,ppid,cmd`, confirm it is yours via
+  `/proc/<pid>/cgroup` (a unit's processes name their unit), `kill` it
+  explicitly, then relaunch detached.
 - **Shared crates are exclusive.** Before editing `cce-ui`,
   `cce-window-manager`, or `cce-icons`, run `git status` there. Foreign dirt
   means another session owns that crate right now — coordinate or stop; don't
