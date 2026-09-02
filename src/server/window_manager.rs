@@ -3861,6 +3861,40 @@ impl WindowManager {
                 self.execute_action(&crate::config::Action::ModeNextShared, None);
                 "ok\n".to_string()
             }
+            "set-mode" => {
+                // set-mode <floating|tiled|fullscreen> [app_id|id] — set one
+                // window's mode outright (the focused window when unnamed),
+                // through the same SetWindowMode + Relayout pair the
+                // mode_next action produces, so the geometry transitions
+                // (tiled grid snap, fullscreen sizing, floating restore)
+                // come from the arrange pass exactly as they do for the key.
+                // The internal roles (popup/overlay/status/utility) are
+                // deliberately not settable here; `mode` rules cover those.
+                if parts.len() < 2 {
+                    return "error: usage: set-mode <floating|tiled|fullscreen> [app_id|id]\n".to_string();
+                }
+                let mode = match parts[1].to_lowercase().as_str() {
+                    "floating" => crate::tiling::TilingMode::Floating,
+                    "tiled" => crate::tiling::TilingMode::Tiled,
+                    "fullscreen" => crate::tiling::TilingMode::Fullscreen,
+                    other => return format!("error: unknown mode: {} (floating|tiled|fullscreen)\n", other),
+                };
+                let target = if parts.len() >= 3 {
+                    self.find_window_by_query(&parts[2..].join(" "))
+                } else {
+                    self.focused_window()
+                };
+                if target.is_null() {
+                    return "error: no target window\n".to_string();
+                }
+                {
+                    use crate::policy::api::{Command, Compositor, WindowId};
+                    let id = WindowId((*target).ref_key);
+                    self.apply(&Command::SetWindowMode { id, mode, locked: true });
+                    self.apply(&Command::Relayout);
+                }
+                "ok\n".to_string()
+            }
             "focus-window" => {
                 if parts.len() < 2 { return "error: missing app_id/id\n".to_string(); }
                 if let Some(seat) = self.first_seat() {

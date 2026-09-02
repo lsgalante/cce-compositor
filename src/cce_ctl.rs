@@ -41,6 +41,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  fullscreen");
     print("  mode-next");
     print("  mode-next-shared");
+    print("  set-mode <floating|tiled|fullscreen> [app_id|id]  # set a window's mode (focused if omitted)");
     print("  zoom-in");
     print("  zoom-out");
     print("  zoom-reset");
