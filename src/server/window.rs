@@ -496,6 +496,15 @@ impl Window {
         false
     }
 
+    /// The `surface { shadow tiled=false }` switch: a Tiled window (which is
+    /// also what Maximized resolves to) casts no drop shadow when it is off.
+    /// Floating, popup and every other mode are unaffected. Evaluated on both
+    /// render paths, so a float/tile toggle restyles on the next arrange.
+    pub unsafe fn wants_tiled_shadow(&self) -> bool {
+        (*self.server).wm.layout.shadow_tiled
+            || self.tiling_mode != crate::tiling::TilingMode::Tiled
+    }
+
     pub unsafe fn is_fullscreen(&self) -> bool {
         self.tiling_mode == crate::tiling::TilingMode::Fullscreen
             || !self.wm_requested.fullscreen.is_null()
@@ -2660,7 +2669,10 @@ impl Window {
                 // (cf. the window_background rect, which scales it the same way).
                 (radius as f64 * self.scale) as i32,
             );
-            let want_shadow = !is_status && (self.wm_requested.ssd || is_decorated) && !self.is_fullscreen();
+            // The decorated-window predicate feeds two things: the shadow, and
+            // the bevel's focus glint. Only the shadow honours the tiled switch.
+            let want_decor = !is_status && (self.wm_requested.ssd || is_decorated) && !self.is_fullscreen();
+            let want_shadow = want_decor && self.wants_tiled_shadow();
                 // The bevel keys on its OWN app list, not on is_decorated:
                 // every cce-ui app draws its own bevel, so a compositor one
                 // would sit on top of it.
@@ -2668,7 +2680,7 @@ impl Window {
                     && !self.is_fullscreen()
                     && (*self.server).wm.is_beveled_app(&app_id);
             self.update_shadow(width, height, radius, want_shadow);
-                self.update_bevel(width, height, radius, want_bevel, want_shadow);
+                self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
 
@@ -3131,7 +3143,10 @@ impl Window {
                 // the motion path touches them. Left stale they keep the scale
                 // from before the gesture, so the punch-out overruns the shrunken
                 // window and swallows the shadow whole.
-                let want_shadow = !is_status && (self.wm_requested.ssd || is_decorated) && !self.is_fullscreen();
+                // The decorated-window predicate feeds two things: the shadow, and
+                // the bevel's focus glint. Only the shadow honours the tiled switch.
+                let want_decor = !is_status && (self.wm_requested.ssd || is_decorated) && !self.is_fullscreen();
+                let want_shadow = want_decor && self.wants_tiled_shadow();
                 // The bevel keys on its OWN app list, not on is_decorated:
                 // every cce-ui app draws its own bevel, so a compositor one
                 // would sit on top of it.
@@ -3139,7 +3154,7 @@ impl Window {
                     && !self.is_fullscreen()
                     && (*self.server).wm.is_beveled_app(&app_id);
                 self.update_shadow(width, height, radius, want_shadow);
-                self.update_bevel(width, height, radius, want_bevel, want_shadow);
+                self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
             }
 

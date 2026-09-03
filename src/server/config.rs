@@ -90,6 +90,10 @@ pub struct Layout {
     /// `light_source_position` (down-right for the default top-left light).
     pub shadow_offset_x: i32,
     pub shadow_offset_y: i32,
+    /// Whether tiled (and maximized — an alias of Tiled) windows cast the
+    /// shadow at all. Off leaves shadows to floating windows only, so a
+    /// tiled layout reads as a flat sheet with no smearing across cell gaps.
+    pub shadow_tiled: bool,
     /// Edge bevel: a lit chamfer drawn around the INSIDE of a decorated
     /// window's edge (scenefx bevel node), lit from `bevel_light_*` — the
     /// same top-left source the drop shadow is offset away from.
@@ -247,6 +251,7 @@ impl Default for Layout {
             shadow_color: [0.0, 0.0, 0.0, 0.55],
             shadow_offset_x: 7,
             shadow_offset_y: 7,
+            shadow_tiled: true,
             desktop_snap: true,
             overview_anim: None,
             desktop_snap_threshold: 24.0,
@@ -521,6 +526,8 @@ pub struct SurfaceConfig {
     pub shadow_offset_x: i64,
     #[serde(default = "default_shadow_offset_y")]
     pub shadow_offset_y: i64,
+    #[serde(default = "default_shadow_tiled")]
+    pub shadow_tiled: bool,
     #[serde(default = "default_bevel_enabled")]
     pub bevel_enabled: bool,
     #[serde(default = "default_bevel_thickness")]
@@ -546,6 +553,7 @@ fn default_shadow_sigma() -> f64 { 22.0 }
 fn default_shadow_color() -> String { "#0000008c".to_string() }
 fn default_shadow_offset_x() -> i64 { 7 }
 fn default_shadow_offset_y() -> i64 { 7 }
+fn default_shadow_tiled() -> bool { true }
 fn default_bevel_enabled() -> bool { true }
 fn default_bevel_thickness() -> f64 { 10.0 }
 /// Compass point the light comes FROM, matching the shadow's top-left source.
@@ -612,6 +620,7 @@ impl Default for SurfaceConfig {
             shadow_color: default_shadow_color(),
             shadow_offset_x: default_shadow_offset_x(),
             shadow_offset_y: default_shadow_offset_y(),
+            shadow_tiled: default_shadow_tiled(),
             bevel_enabled: default_bevel_enabled(),
             bevel_thickness: default_bevel_thickness(),
             bevel_light: default_bevel_light(),
@@ -2172,6 +2181,11 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.shadow_offset_y = val;
                                         }
                                     }
+                                    "tiled" => {
+                                        if let Some(val) = entry.value().as_bool() {
+                                            surface.shadow_tiled = val;
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -2438,6 +2452,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.shadow_color = parse_hex_color_rgba(&config.surface.shadow_color);
     state.layout.shadow_offset_x = config.surface.shadow_offset_x as i32;
     state.layout.shadow_offset_y = config.surface.shadow_offset_y as i32;
+    state.layout.shadow_tiled = config.surface.shadow_tiled;
     state.layout.bevel_enabled = config.surface.bevel_enabled;
     state.layout.bevel_thickness = config.surface.bevel_thickness.max(0.0) as f32;
     let (bevel_lx, bevel_ly) = parse_light_direction(&config.surface.bevel_light);
