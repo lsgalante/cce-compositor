@@ -257,7 +257,8 @@ Config is **KDL** (`kdl` crate), loaded from `~/.config/cce/` (honoring
   domain-scoped (`cce-ui/src/input.rs`): top-level nodes are domains
   (`cce-window-manager` for compositor actions, `cce-ui` for toolkit-wide widget
   defaults, `cce-<app>` for per-app bindings), children are `name "chord"`
-  bindings. Resolution for an app is `<app>.<name>` → `cce-ui.<name>`; the
+  bindings. Resolution for an app is `<app>.<name>` → `cce-ui.<name>` (the
+  toolkit-wide `undo` / `redo` chords live here — `cce-ui/src/history.rs`); the
   compositor maps its domain onto `cce-window-manager::api::Action` via the
   policy crate's `bindings` module. Legacy keybind entries in `config.kdl` still
   load; `input.kdl` wins on conflict. `ccectl migrate-input` extracts config.kdl
