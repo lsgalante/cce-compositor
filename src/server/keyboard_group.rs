@@ -459,32 +459,10 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             }
         }
         KeyConsumer::Focus => {
-            let is_overlay_mode = if let crate::seat::Focus::Window(fw) = (*group.seat).focused {
-                if !fw.is_null() {
-                    // Overlay AND Popup: desktop chrome (docks, the
-                    // cce-cloud launcher) stays keyboard-interactive in
-                    // overview — only world windows (spatial thumbnails)
-                    // have their presses eaten.
-                    (*fw).tiling_mode == crate::tiling::TilingMode::Overlay
-                        || (*fw).tiling_mode == crate::tiling::TilingMode::Popup
-                } else {
-                    false
-                }
-            } else if let crate::seat::Focus::LayerSurface(focused_layer) = (*group.seat).focused {
-                if !focused_layer.is_null() {
-                    let wlr_layer_surface = crate::ffi::wlr_layer_surface_v1_try_from_wlr_surface(focused_layer);
-                    if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
-                        let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-                        ns.starts_with("cce-cloud")
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
+            // Overlay AND Popup: desktop chrome (docks, the cce-cloud
+            // launcher) stays keyboard-interactive in overview — only world
+            // windows (spatial thumbnails) have their presses eaten.
+            let is_overlay_mode = (*group.seat).focus_is_chrome();
 
             if (*(*group.seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview
                 || is_overlay_mode

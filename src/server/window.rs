@@ -1769,8 +1769,18 @@ impl Window {
         }
         // Nobody asked this window to go: either its program exited on its
         // own or — the case this feeds — its Wayland connection broke and
-        // cce-ui is about to rebuild the surface on a fresh one.
-        if !self.close_requested {
+        // cce-ui is about to rebuild the surface on a fresh one. Chrome is
+        // the exception: a Popup (the cce-cloud launcher) or an Overlay dock
+        // closes itself as part of being used — Escape, a pick, a click-away,
+        // a keyboard leave — and the next super+d inside the grace is a
+        // deliberate relaunch that must focus, not a crashed client
+        // reconnecting. Counting it left the reopened launcher unfocused.
+        if !self.close_requested
+            && !matches!(
+                self.tiling_mode,
+                crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
+            )
+        {
             if let Some(app_id) = self.get_app_id_string() {
                 (*self.server).wm.note_vanished(app_id);
             }

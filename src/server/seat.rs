@@ -902,6 +902,32 @@ impl Seat {
     }
 
 
+    /// Is this seat's keyboard focus desktop chrome — a Popup/Overlay window
+    /// (the cce-cloud launcher, a dock) or a cce-cloud layer surface (a
+    /// context menu)? Chrome stays keyboard-interactive in overview and is
+    /// dismissed by using it (Escape, a pick, a click-away), so the
+    /// overview-mode key and hover paths consult this before treating the
+    /// focus as a world window's: keys are delivered rather than eaten, and
+    /// hover-to-focus leaves the ring where it is instead of pulling the
+    /// keyboard out from under the launcher.
+    pub unsafe fn focus_is_chrome(&self) -> bool {
+        match self.focused {
+            Focus::Window(w) if !w.is_null() => matches!(
+                (*w).tiling_mode,
+                crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
+            ),
+            Focus::LayerSurface(s) if !s.is_null() => {
+                let wlr_layer_surface = ffi::wlr_layer_surface_v1_try_from_wlr_surface(s);
+                !wlr_layer_surface.is_null()
+                    && !(*wlr_layer_surface).namespace.is_null()
+                    && std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace)
+                        .to_string_lossy()
+                        .starts_with("cce-cloud")
+            }
+            _ => false,
+        }
+    }
+
     /// Focus-follow: pan the camera to a focused Floating/Maximized window —
     /// centering when it is mostly hidden, nudging a clipped edge into view
     /// otherwise. Fullscreen is pinned to an output and popups/overlays are

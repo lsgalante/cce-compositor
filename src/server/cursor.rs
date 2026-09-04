@@ -831,8 +831,15 @@ impl Cursor {
                 // must not move the camera, only the click and keyboard paths
                 // may. (Zoom was never at stake — focus_follow_pan pans at the
                 // current zoom — but a partially visible window would still
-                // get dragged on-screen mid-hover.)
+                // get dragged on-screen mid-hover.) And never while chrome
+                // holds the keyboard: the cce-cloud launcher closes itself on
+                // keyboard leave, and this path runs not only on real motion
+                // but on the idle pointer refresh a commit schedules — the
+                // launcher's own first configure — so a stationary pointer
+                // resting on a world window was refocusing that window and
+                // dismissing the launcher the instant it mapped.
                 if !hovered_toplevel.is_null()
+                    && !(*self.seat).focus_is_chrome()
                     && (*self.seat).focused
                         != crate::seat::Focus::Window(hovered_toplevel)
                 {
