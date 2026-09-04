@@ -3079,9 +3079,15 @@ impl Window {
             ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
             ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
 
-            // Disable backdrop blur during active viewport zoom/pan for maximum performance,
-            // EXCEPT for cce-* apps, which we keep blurred during the pan so their translucent
-            // backgrounds don't flicker as blur toggles on/off across motion frames.
+            // Blur stays on through a pan for every window. Non-cce windows
+            // used to have their blur nodes DESTROYED on the first motion
+            // frame and rebuilt 120ms after the gesture — a visible pop at
+            // the end of every pan — on the theory that per-frame blur was
+            // too expensive to keep during motion. Since the scene freezes
+            // its optimized-blur caches for the duration of the motion
+            // (river_scene_set_blur_frozen), a blurred window costs one
+            // cached-texture sample per frame while moving, so the same
+            // treatment cce apps always had now applies to all.
             // The geometry below is computed for EVERY window regardless: the drop
             // shadow has to track the zoom even where live blur does not (see the
             // update_shadow call at the end of the block).
@@ -3151,22 +3157,17 @@ impl Window {
                 let radius = if requested.circular { radius } else { widen_corner_radius(radius, actual_w as i32, actual_h as i32) };
                 let width = (actual_w as f64 * self.scale) as i32;
                 let height = (actual_h as f64 * self.scale) as i32;
-                if app_id.starts_with("cce-") {
-                    ffi::river_scene_node_enable_blur(
-                        self.tree as *mut ffi::wlr_scene_node,
-                        blur_enabled,
-                        use_optimized,
-                        ignore_transparent,
-                        0,
-                        0,
-                        width,
-                        height,
-                        (radius as f64 * self.scale) as i32,
-                    );
-                } else {
-                    // Tearing the blur down: radius is irrelevant, the nodes are destroyed.
-                    ffi::river_scene_node_enable_blur(self.tree as *mut ffi::wlr_scene_node, false, (*self.server).wm.layout.scenefx_optimized_blur, true, 0, 0, 0, 0, 0);
-                }
+                ffi::river_scene_node_enable_blur(
+                    self.tree as *mut ffi::wlr_scene_node,
+                    blur_enabled,
+                    use_optimized,
+                    ignore_transparent,
+                    0,
+                    0,
+                    width,
+                    height,
+                    (radius as f64 * self.scale) as i32,
+                );
                 // Every window, blurred or not: the shadow's size, blur sigma,
                 // offset and — critically — the clipped region that punches the
                 // window out of it are all scale-dependent, and nothing else on
