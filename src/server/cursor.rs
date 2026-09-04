@@ -2594,6 +2594,13 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
             }
         }
 
+        // The overview toggle lands on the hovered window, else on the
+        // FOCUSED one — never on the empty desktop under the pointer.
+        let matched_action = if matched_action == crate::config::Action::Overview {
+            (*seat.server).wm.overview_action_for_gesture()
+        } else {
+            matched_action
+        };
         (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref());
 
         let pointer_gestures = (*seat.server).input_manager.pointer_gestures;
@@ -2786,6 +2793,13 @@ unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: 
 
     if matched_action != crate::config::Action::None {
         cursor.gesture_triggered = true;
+        // The overview toggle lands on the hovered window, else on the
+        // FOCUSED one — never on the empty desktop under the pointer.
+        let matched_action = if matched_action == crate::config::Action::Overview {
+            (*seat.server).wm.overview_action_for_gesture()
+        } else {
+            matched_action
+        };
         (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref());
 
         let pointer_gestures = (*seat.server).input_manager.pointer_gestures;

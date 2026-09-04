@@ -432,8 +432,18 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         KeyConsumer::Builtin => {}
         KeyConsumer::CceBinding(kb) => {
             if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED {
-                log::info!("executing CCE monolithic action: {:?}", kb.action);
-                (*(*group.seat).server).wm.execute_action(&kb.action, kb.command.as_deref());
+                let wm = &mut (*(*group.seat).server).wm;
+                // A key carries no pointer position: the overview toggle's
+                // exit must land on the focused window, not on whatever the
+                // pointer was left hovering (or the empty desktop under it).
+                // Same substitution the control socket makes.
+                let action = if kb.action == crate::config::Action::Overview {
+                    wm.overview_action_pointerless()
+                } else {
+                    kb.action
+                };
+                log::info!("executing CCE monolithic action: {:?}", action);
+                wm.execute_action(&action, kb.command.as_deref());
             }
         }
         KeyConsumer::Binding(binding) => {

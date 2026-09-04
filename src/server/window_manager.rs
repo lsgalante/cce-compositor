@@ -3627,14 +3627,37 @@ impl WindowManager {
         self.keep_status_bar_on_top();
     }
 
-    /// The overview action a socket command stands for: the keyed
-    /// (focused-window) exit when in overview, else the enter. See the
-    /// "overview" arm of the control handler for why not the toggle.
-    fn overview_action_for_socket(&self) -> crate::config::Action {
+    /// The overview action a POINTER-LESS toggle stands for — a key press
+    /// or a socket command: the keyed (focused-window) exit when in
+    /// overview, else the enter. `Action::Overview` itself is the
+    /// cursor-driven toggle, whose exit lands on the hovered window or
+    /// else on the virtual point under the pointer; that is right for the
+    /// sources that ARE the pointer (the background click, the click
+    /// release, the gesture binding, a pointer-button binding) and wrong
+    /// for the ones that are not, where the pointer is wherever it was
+    /// last left. See the "overview" arm of the control handler.
+    pub fn overview_action_pointerless(&self) -> crate::config::Action {
         if self.mode == WindowManagerMode::Overview {
             crate::config::Action::OverviewExit
         } else {
             crate::config::Action::OverviewEnter
+        }
+    }
+
+    /// The overview action a GESTURE toggle stands for. A swipe or pinch
+    /// is pointer-located, so exiting onto the hovered window is the
+    /// point — but with nothing under the pointer the cursor-driven exit
+    /// lands on the empty desktop there, and the pointer was not aimed at
+    /// anything: the focused window is what the user was working in, so
+    /// the keyed exit takes over. Enter is the toggle's own.
+    pub unsafe fn overview_action_for_gesture(&mut self) -> crate::config::Action {
+        if self.mode != WindowManagerMode::Overview {
+            return crate::config::Action::OverviewEnter;
+        }
+        if self.build_action_ctx().hovered.is_some() {
+            crate::config::Action::Overview
+        } else {
+            crate::config::Action::OverviewExit
         }
     }
 
@@ -4120,7 +4143,7 @@ impl WindowManager {
             // nothing is focused; the enter half is identical to the
             // toggle's.
             "overview" | "expose" => {
-                self.execute_action(&self.overview_action_for_socket(), None);
+                self.execute_action(&self.overview_action_pointerless(), None);
                 "ok\n".to_string()
             }
             "wm-mode" => {
