@@ -181,6 +181,11 @@ pub struct WindowManager {
     /// live: `step_camera_frame` advances it once per output frame, and the
     /// watchdog timer keeps frames coming while it is set.
     pub camera_anim_active: bool,
+    /// Camera pan the frozen blur bake is valid for (the last rendered
+    /// camera when motion began). The per-frame freeze offset is the screen
+    /// delta from it; a zoom change thaws instead, since a scale change
+    /// cannot be compensated by shifting the bake.
+    pub blur_freeze_base: Option<(f64, f64)>,
     /// Finger-pan motion (virtual units, `[x, y]`) queued since the last
     /// frame. Trackpad axis events used to relayout the desktop per event
     /// (twice per sample for a diagonal); they now accumulate here and are
@@ -376,6 +381,7 @@ impl WindowManager {
         self.pan_finger_v = [0.0, 0.0];
         self.camera_anim_active = false;
         self.pan_pending = [0.0, 0.0];
+        self.blur_freeze_base = None;
         self.animation_timer = std::ptr::null_mut();
         self.edge_pan_vx = 0.0;
         self.edge_pan_vy = 0.0;
@@ -3032,6 +3038,8 @@ impl WindowManager {
         let zoom_changed = self.desk_zoom != self.last_viewport_zoom;
         let pan_changed = self.desk_pan_x != self.last_viewport_pan_x || self.desk_pan_y != self.last_viewport_pan_y;
         let moved = zoom_changed || pan_changed;
+        // The camera the last frame rendered (and baked its blurs) with.
+        let prev_pan = (self.last_viewport_pan_x, self.last_viewport_pan_y);
 
         self.last_viewport_zoom = self.desk_zoom;
         self.last_viewport_pan_x = self.desk_pan_x;
@@ -3059,9 +3067,26 @@ impl WindowManager {
             self.viewport_is_active = true;
             // Every motion frame moves the screen-sized backdrop under every
             // blurred window; without this, scenefx re-bakes every optimized
-            // blur every frame of the pan. Frozen blurs go slightly stale
-            // during the gesture and re-bake once at settle.
-            ffi::river_scene_set_blur_frozen((*self.server).scene.wlr_scene, true);
+            // blur every frame of the pan. Through a pure pan the bakes are
+            // frozen and sampled at the desktop's screen delta since the
+            // freeze, so each window keeps reading exactly its own bake —
+            // correct, not stale, because the backdrop moved with it. A zoom
+            // changes the scale under the window, which no shift can
+            // compensate: the caches thaw (re-bake per frame) for its
+            // duration and re-freeze on the next pure-pan frame.
+            let scene = (*self.server).scene.wlr_scene;
+            if zoom_changed {
+                ffi::river_scene_set_blur_frozen(scene, false);
+                self.blur_freeze_base = None;
+            } else {
+                let (bx, by) = *self.blur_freeze_base.get_or_insert(prev_pan);
+                ffi::river_scene_set_blur_frozen(scene, true);
+                ffi::river_scene_set_blur_freeze_offset(
+                    scene,
+                    (-(self.desk_pan_x - bx) * self.desk_zoom).round() as i32,
+                    (-(self.desk_pan_y - by) * self.desk_zoom).round() as i32,
+                );
+            }
             for &window in self.windows.iter() {
                 if !window.is_null() {
                     (*window).render_viewport_update();
@@ -3147,6 +3172,7 @@ impl WindowManager {
         // Thaw the blur caches (marks them all dirty once) so the settled
         // frame re-bakes against the final backdrop.
         ffi::river_scene_set_blur_frozen((*self.server).scene.wlr_scene, false);
+        self.blur_freeze_base = None;
         for &window in self.windows.iter() {
             if !window.is_null() {
                 (*window).render_finish();

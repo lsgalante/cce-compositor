@@ -1370,10 +1370,13 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 		stencil_mask_close(true);
 	}
 
-	// Draw the blurred texture
+	// Draw the blurred texture. Sampled straight from the shared cache
+	// (optimized, full strength) it may be shifted by the scene's freeze
+	// offset; a freshly blurred buffer is always in place.
+	const bool direct_cache = fx_options->use_optimized_blur && !has_strength;
 	tex_options->base.dst_box = (struct wlr_box) {
-		.x = 0,
-		.y = 0,
+		.x = direct_cache ? fx_options->sample_offset_x : 0,
+		.y = direct_cache ? fx_options->sample_offset_y : 0,
 		.width = buffer->buffer->width,
 		.height = buffer->buffer->height,
 	};

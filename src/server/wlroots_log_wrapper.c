@@ -1091,7 +1091,16 @@ void river_scene_set_blur_frozen(struct wlr_scene *scene, bool frozen) {
 		return;
 	}
 	scene->blur_frozen = frozen;
+	scene->blur_freeze_dx = 0;
+	scene->blur_freeze_dy = 0;
 	if (!frozen) {
 		mark_optimized_blur_dirty_rec(&scene->tree.node);
 	}
+}
+
+/* The screen delta (layout px) the desktop has moved since the freeze —
+ * what every frozen blur samples its bake at. */
+void river_scene_set_blur_freeze_offset(struct wlr_scene *scene, int dx, int dy) {
+	scene->blur_freeze_dx = dx;
+	scene->blur_freeze_dy = dy;
 }

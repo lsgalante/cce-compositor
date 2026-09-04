@@ -2854,6 +2854,13 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.blur_data = &scene->blur_data,
 			.ignore_transparent = mask != NULL,
 			.blur_strength = blur->strength,
+			// Frozen cache: sample at the desktop's screen delta since the
+			// freeze (layout px -> buffer px). Only meaningful for an
+			// untransformed output; a rotated one gets the unshifted cache.
+			.sample_offset_x = (scene->blur_frozen && data->transform == WL_OUTPUT_TRANSFORM_NORMAL)
+				? (int)round(scene->blur_freeze_dx * data->scale) : 0,
+			.sample_offset_y = (scene->blur_frozen && data->transform == WL_OUTPUT_TRANSFORM_NORMAL)
+				? (int)round(scene->blur_freeze_dy * data->scale) : 0,
 		};
 		fx_render_pass_add_blur(fx_pass, &blur_options);
 		break;

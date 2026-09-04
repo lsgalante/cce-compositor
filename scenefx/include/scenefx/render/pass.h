@@ -164,6 +164,13 @@ struct fx_render_blur_pass_options {
 	float blur_strength;
 	struct fx_corner_fradii corners;
 	struct clipped_fregion clipped_region;
+	/**
+	 * Buffer-px offset at which the cached optimized-blur buffer is sampled
+	 * (only when it is sampled directly, i.e. optimized and full strength).
+	 * Zero normally; the scene's blur freeze sets it to the desktop's
+	 * screen delta so a moved window keeps reading its own bake.
+	 */
+	int sample_offset_x, sample_offset_y;
 };
 
 struct fx_gles_render_pass *fx_get_render_pass(struct wlr_render_pass *render_pass);
