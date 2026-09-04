@@ -2772,6 +2772,12 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			bool result = fx_render_pass_add_optimized_blur(fx_pass, &blur_options);
 			if (result) {
 				scene_blur->dirty = false;
+				int bx, by;
+				if (wlr_scene_node_coords(node, &bx, &by)) {
+					scene_blur->baked = true;
+					scene_blur->baked_x = bx;
+					scene_blur->baked_y = by;
+				}
 			}
 		}
 		break;
@@ -2834,6 +2840,30 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		struct fx_corner_radii blur_corners = blur->corners;
 		fx_corner_radii_transform(node_transform, &blur_corners);
 
+		// Frozen scene: sample the shared cache where this node's own bake
+		// lives — the sibling optimized node's coordinates at its last bake
+		// — rather than at the node's current position.
+		int freeze_dx = 0, freeze_dy = 0;
+		if (scene->blur_frozen && blur->should_only_blur_bottom_layer &&
+				data->transform == WL_OUTPUT_TRANSFORM_NORMAL && node->parent) {
+			struct wlr_scene_node *sib;
+			wl_list_for_each(sib, &node->parent->children, link) {
+				if (sib->type != WLR_SCENE_NODE_OPTIMIZED_BLUR) {
+					continue;
+				}
+				struct wlr_scene_optimized_blur *opt = wlr_scene_optimized_blur_from_node(sib);
+				int cur_x, cur_y;
+				if (opt->baked && wlr_scene_node_coords(sib, &cur_x, &cur_y)) {
+					// The cache is drawn shifted by the node's travel since
+					// the bake: screen pixel s then shows cache pixel
+					// s - travel, i.e. the bake's own pixel for that spot.
+					freeze_dx = cur_x - opt->baked_x;
+					freeze_dy = cur_y - opt->baked_y;
+				}
+				break;
+			}
+		}
+
 		struct fx_render_blur_pass_options blur_options = {
 			.tex_options = {
 				.base = (struct wlr_render_texture_options) {
@@ -2854,13 +2884,12 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.blur_data = &scene->blur_data,
 			.ignore_transparent = mask != NULL,
 			.blur_strength = blur->strength,
-			// Frozen cache: sample at the desktop's screen delta since the
-			// freeze (layout px -> buffer px). Only meaningful for an
-			// untransformed output; a rotated one gets the unshifted cache.
-			.sample_offset_x = (scene->blur_frozen && data->transform == WL_OUTPUT_TRANSFORM_NORMAL)
-				? (int)round(scene->blur_freeze_dx * data->scale) : 0,
-			.sample_offset_y = (scene->blur_frozen && data->transform == WL_OUTPUT_TRANSFORM_NORMAL)
-				? (int)round(scene->blur_freeze_dy * data->scale) : 0,
+			// Frozen cache: sample at this node's own delta since the freeze
+			// (layout px -> buffer px), so it reads its own bake. Only
+			// meaningful for an untransformed output; a rotated one gets
+			// the unshifted cache.
+			.sample_offset_x = (int)round(freeze_dx * data->scale),
+			.sample_offset_y = (int)round(freeze_dy * data->scale),
 		};
 		fx_render_pass_add_blur(fx_pass, &blur_options);
 		break;

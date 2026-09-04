@@ -1086,21 +1086,16 @@ void river_scene_mark_optimized_blur_dirty(struct wlr_scene *scene) {
  * invalidation for the duration of a camera pan. Thawing marks every
  * optimized blur dirty once so the settled frame re-bakes against the
  * final backdrop. */
+/* See wlr_scene.blur_frozen. While frozen each blur samples the shared
+ * cache where its own bake lives (wlr_scene_optimized_blur.baked_x/y), so
+ * nothing needs snapshotting here; thawing marks every bake dirty once so
+ * the settled frame re-bakes against the final backdrop. */
 void river_scene_set_blur_frozen(struct wlr_scene *scene, bool frozen) {
 	if (scene->blur_frozen == frozen) {
 		return;
 	}
 	scene->blur_frozen = frozen;
-	scene->blur_freeze_dx = 0;
-	scene->blur_freeze_dy = 0;
 	if (!frozen) {
 		mark_optimized_blur_dirty_rec(&scene->tree.node);
 	}
-}
-
-/* The screen delta (layout px) the desktop has moved since the freeze —
- * what every frozen blur samples its bake at. */
-void river_scene_set_blur_freeze_offset(struct wlr_scene *scene, int dx, int dy) {
-	scene->blur_freeze_dx = dx;
-	scene->blur_freeze_dy = dy;
 }

@@ -126,14 +126,6 @@ struct wlr_scene {
 	 * Explicit wlr_scene_optimized_blur_mark_dirty() calls still apply.
 	 */
 	bool blur_frozen;
-	/**
-	 * While frozen, the layout-px offset the frozen backdrop bake is
-	 * sampled at: the screen delta the desktop has moved since the freeze.
-	 * A window that moved with the desktop then samples exactly its own
-	 * pre-freeze bake, so the blur stays correct through a pure pan instead
-	 * of sliding into whatever the shared cache holds at its new position.
-	 */
-	int blur_freeze_dx, blur_freeze_dy;
 
 	struct {
 		struct wl_listener linux_dmabuf_v1_destroy;
@@ -283,6 +275,18 @@ struct wlr_scene_optimized_blur {
 	int width, height;
 
 	bool dirty;
+
+	/**
+	 * Layout coordinates the node had when it last baked into the shared
+	 * cache — where its bake lives. While the scene's blur is frozen (see
+	 * wlr_scene.blur_frozen) the sibling wlr_scene_blur samples the cache
+	 * at (baked - current), so a node that moved keeps reading exactly its
+	 * own bake, per node, honoring its own pixel rounding; and a bake that
+	 * does re-run mid-freeze (an explicit mark_dirty) simply re-anchors
+	 * itself. Unset until the first bake.
+	 */
+	bool baked;
+	int baked_x, baked_y;
 };
 
 struct wlr_scene_outputs_update_event {
