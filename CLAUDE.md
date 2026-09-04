@@ -350,16 +350,22 @@ where the old band sat outside them.
   to be spent on moving the way the outside band's did.
 - The ring is drawn by **one scenefx node**, `wlr_scene_frame`
   (`scenefx/render/fx_renderer/shaders/frame.frag`), not by rects. Its
-  two elements make the frame. The BAND is thinnest at the SEAMS — the gaps
-  between corner and edge pieces — and swells away from them both ways: an
-  edge bar to `band` at its side's midpoint, a corner arm back toward the
-  apex, where it flows into the round PAD (`bulge`, screen px, 0 disables) —
-  a disc centred on the corner arc's centre, smooth-unioned onto the ring so
-  its inner boundary bows inward with a fillet where it meets the moulding.
-  Each gap therefore separates two thin tips: the frame pinches at every
-  join and thickens toward every piece's middle.
-  The gap notches sever only the band; a groove across a pad would read as
-  damage. The shader's zone logic works in TOP-DOWN box-local coordinates
+  inner edge is a WAVE of eight hills and eight valleys: a hill in the
+  middle of each side, a hill on each corner, a valley between every two.
+  The valleys sit `R` in from every corner — a quarter of the window's
+  SHORTER side, on screen — and are `band_min` thick. Between a side's two
+  valleys the band swells to `band` at the midpoint along a raised cosine
+  (shaped by `swell_curve`). Between the two valleys flanking a corner the
+  inner edge is a SUPERELLIPSE arc — a squircle corner of radius
+  R − band_min, tangent to both valleys — whose exponent the shader solves
+  so its deepest point, on the corner's 45° diagonal, is exactly `band` in
+  from the silhouette: the corner hill peaks on the diagonal at the same
+  height as the side hills, and meets the valleys with no crease. The
+  earlier profile (edge bars and corner arms pinching to seams at
+  `corner_length`, with gap notches and a round `bulge` pad on each corner)
+  is gone; those three keys still parse and are passed to the node, and
+  the shader ignores them.
+  The shader's zone logic works in TOP-DOWN box-local coordinates
   (`gl_FragCoord` minus the box position, unflipped): the `corner_dist` SDF
   flips its own copy, and mirroring the zone coordinate the same way once
   swapped every zone label vertically — the top edge lit the bottom. And a
@@ -367,43 +373,41 @@ where the old band sat outside them.
   ring is already fully revealed, so `step_border_fade` compares the hovered
   zone against the one last drawn (`border_hover_drawn`), or the shader
   keeps showing the previous zone until an unrelated commit repaints.
-  Both `get_border_zone` and the drawing treat a pad as its corner's
-  zone — its tip reaches past the band, so the hit test carries a matching
-  corner-disc check. The corner run (`corner_length`) clamps PER SIDE at 0.45
-  of that side's length, in the shader and the hit test alike: two corner
-  zones on one side must never meet, or its midpoint would resize diagonally
-  — and per-side (rather than against the window's short side) lets a long
-  side carry the full configured run while a short one shortens. The profile is continuous along
-  a side, which a rect cannot express: its only shaping tool is a clipped
-  region whose corner radius is a single scalar, capped by the thickness
-  change (tens of px) while a side is hundreds long, so it reads as a bump
-  near the centre rather than a swell. `border.segments`' 12 rects are what it
-  replaced; they stay allocated but disabled.
+  The valleys are the zone seams: in the shader, a fragment belongs to the
+  side it is nearest (so the split runs along the diagonals) and is a
+  corner zone when it lies within R of that side's end; in
+  `get_border_zone` the corner zones are the R×R squares at the content
+  corners. Both derive R the same way and must stay in step. The profile
+  is continuous along a side, which a rect cannot express: its only shaping
+  tool is a clipped region whose corner radius is a single scalar, capped by
+  the thickness change (tens of px) while a side is hundreds long, so it
+  reads as a bump near the centre rather than a swell. `border.segments`'
+  12 rects are what it replaced; they stay allocated but disabled.
 - **The ring's thickness is a SCREEN width, not a world one**, floored at
   `HOVER_BAND_MIN`. Handles exist only in overview, which is zoomed *out*, so
   a band that scaled with the window would be at its thinnest exactly where it
   is the only way to resize: 16px renders as 7 at a typical overview zoom and
-  the thin corners as 2.5, which is neither visible nor clickable. The lengths
-  along a side (`corner_len`, `gap`) still scale, so the composition holds at
-  any zoom — only the thickness is pinned. `draw_borders` and
+  the thin corners as 2.5, which is neither visible nor clickable. R, the
+  valley position, is a fraction of the on-screen window, so the composition
+  holds at any zoom — only the thickness is pinned. `draw_borders` and
   `cursor::get_border_zone` each derive it the same way and must stay in step.
-- `swell_curve` shapes the profile: below 1 the ring gains its thickness
-  early — a corner that visibly swells, then a long creep to the peak at the
-  midpoint — and above 1 does the reverse. It matters more than it sounds,
-  because a plain eased ramp is nearly FLAT across a corner piece: a corner
-  spanning an eighth of a side only reaches t=0.13, where smoothstep is 0.04,
-  under a pixel of the whole range. That is why the corners read as a constant
-  thin run without it, however long `corner_length` makes them.
-- Four knobs shape it, all under `border` in config.kdl. `handle_width` is
-  the thickness at the middle of a side in screen px — **its own key, not
-  derived from `width`**, because the ring must be thick enough to see and hit
-  while the desktop is zoomed out, while the window's visible border is a much
-  finer line; deriving one from the other meant you could not thicken the grip
-  without thickening every border. `corner_length` sets how far the thin
-  corner run extends before the swell begins, and `taper` is the corner
-  thickness as a fraction of the middle's — 1.0 is an even ring, clamped to
-  (0, 1] because past 1 the corners would be thicker than the middle, which is
-  the moulding inside out.
+- `swell_curve` shapes the SIDE hills: the raised cosine's height, 0 at the
+  valleys and 1 at the midpoint, is raised to this power. Below 1 broadens
+  the hill (a flatter top, tighter valleys); above 1 sharpens it. The shader
+  floors it at 0.6 — below 0.5 the valleys turn into cusps. The corner
+  hills' shape is the superellipse's own and does not take it.
+- Three knobs shape it, all under `border` in config.kdl. `handle_width` is
+  the hill height — the thickness at the middle of a side and on each
+  corner's diagonal — in screen px, **its own key, not derived from
+  `width`**, because the ring must be thick enough to see and hit while the
+  desktop is zoomed out, while the window's visible border is a much finer
+  line; deriving one from the other meant you could not thicken the grip
+  without thickening every border. `taper` is the valley thickness as a
+  fraction of the hill's — 1.0 is an even ring, clamped to (0, 1] because
+  past 1 the valleys would be thicker than the hills, which is the moulding
+  inside out. `swell_curve` is above. `corner_length`, `segment_gap` and
+  `bulge` belonged to the retired seam-and-pad profile: still parsed, no
+  longer drawn.
 - The thickness is capped at a fifth of the window's shorter on-screen side,
   so a zoomed-out window is never mostly ring. That cap replaced a hard
   cutoff which disabled the handles below a size threshold: a window you

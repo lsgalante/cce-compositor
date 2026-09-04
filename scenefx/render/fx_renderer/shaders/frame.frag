@@ -1,21 +1,24 @@
-// Window resize-handle frame: a ring inside a rounded rect whose thickness
-// swells from the corners toward the middle of each side, like the moulding
-// of a picture frame.
+// Window resize-handle frame: a ring inside a rounded rect whose INNER
+// edge is a wave of eight hills and eight valleys — a hill in the middle
+// of each side and one on each corner, with a valley between every two.
+// The corner hills are domes whose apex sits on the corner's 45° diagonal,
+// pointing into the window, at the same height as the side hills.
 //
-// Two elements make the frame. The BAND is thinnest at the SEAMS — the gaps
-// between corner and edge pieces — and swells away from them in both
-// directions: an edge bar rises to `band` at its side's midpoint, a corner
-// arm rises back toward the apex, where it flows into the round BULGE that
-// sits on each corner (a disc smooth-unioned onto the ring, its inner
-// boundary bowing inward like a bead). So each gap separates two thin tips,
-// and every piece thickens toward its own middle. `corner_len` places the
-// seams and the corner zones.
+// The ring is `band_min` thick at the valleys, which sit `R` (a quarter of
+// the shorter side) in from every corner. Between the two valleys of a
+// side, the band swells to `band` at the midpoint with a raised cosine.
+// Between the two valleys that flank a corner, the ring's inner edge is a
+// SUPERELLIPSE arc — a squircle corner of radius R − band_min, tangent to
+// both valleys — whose exponent is solved so that its deepest point, on
+// the diagonal, is exactly `band` in from the silhouette. That arc is the
+// corner hill: it rises from each valley, peaks on the diagonal, and, being
+// tangent at both ends, meets the side hills' flat valleys with no crease.
 //
-// Why a shader rather than rects: the swell is continuous along a side, and
-// a scene rect can only approximate it with a clipped region whose corner
-// radius is one scalar. That fillet is capped by the thickness change (tens
-// of px) while a side is hundreds long, so it reads as a bump near the
-// centre rather than a swell along the whole run.
+// Why a shader rather than rects: the swell is continuous along a side,
+// and a scene rect can only approximate it with a clipped region whose
+// corner radius is one scalar. That fillet is capped by the thickness
+// change (tens of px) while a side is hundreds long, so it reads as a bump
+// near the centre rather than a swell along the whole run.
 
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -29,18 +32,21 @@ varying vec2 v_texcoord;
 uniform vec2 position;
 uniform vec2 size;
 uniform float corner_radius;
-// Thickness at a side's midpoint, and at the corner pieces.
+// Thickness at a hill's apex, and at a valley.
 uniform float band;
 uniform float band_min;
-// How far a corner piece runs along each of its sides, and the gap that
-// separates it from the neighbouring edge bar.
+// Retired by the wave profile and ignored: the valleys place the zone
+// seams now, and the corner hill's size and height follow from `band`
+// and the window's shorter side. Kept so the node API and its callers
+// need not change.
 uniform float corner_len;
 uniform float gap;
-// Shape of the swell along a side. Below 1 the ring gains its thickness
-// early and then creeps toward the peak; above 1 does the reverse.
-uniform float swell_curve;
-// Radius of the round pad on each corner, 0 to disable.
 uniform float bulge;
+// Shape of each SIDE hill: the raised cosine's [0,1] height to this power.
+// Below 1 broadens the hill (flatter top, tighter valleys); above 1
+// sharpens it. Floored at 0.6 in the shader — below 0.5 the valleys would
+// turn into cusps. The corner hills' shape is the superellipse's own.
+uniform float swell_curve;
 // Node-local rect (x, y, w, h) the ring must not draw over — the client is
 // drawing an in-surface popover there and the menu must read as in FRONT of
 // the chrome. w or h <= 0 disables.
@@ -72,27 +78,50 @@ const float ZONE_TR = 5.0;
 const float ZONE_BL = 6.0;
 const float ZONE_BR = 7.0;
 
+const float PI = 3.14159265359;
+const float LN2 = 0.69314718056;
+
+// Height, 0..1, of a side's hill at distance `x` along it: a raised cosine
+// peaking at the midpoint and reaching zero — with zero slope — at the two
+// valleys, `R` in from either end. Zero beyond them.
+float side_hill(float x, float len, float R) {
+    float half_span = max(0.5 * len - R, 1e-3);
+    float d = abs(x - 0.5 * len);
+    if (d >= half_span) {
+        return 0.0;
+    }
+    float h = 0.5 * (1.0 + cos(PI * d / half_span));
+    return pow(h, max(swell_curve, 0.6));
+}
+
 void main() {
     float dist = ring_dist(vec2(0.0));
-    // Outside the rect, or deeper in than anything here reaches: the band at
-    // its thickest, or a corner bulge (its centre already sits corner_radius
-    // in from the silhouette).
-    if (dist > 0.0 || dist < -(max(band, bulge + corner_radius) + 1.0)) {
-        discard;
-    }
-    float depth = -dist; // 0 at the silhouette, growing inward
-
     // Rect-local position, TOP-DOWN: gl_FragCoord minus the box position is
     // already y-down box-local here (the pass renders under a FLIPPED_180
     // projection, so fragment row 0 is the top of the buffer — see the same
-    // note in droplet.frag). Everything below that names a side — dt/db,
-    // the corner pads, the zones — reads y as "distance from the top", so
-    // this must NOT be flipped the way corner_dist flips its own copy: the
-    // SDF is symmetric under that flip (one radius for all four corners),
-    // but the zone labels are not, and flipping here mirrored them
-    // vertically — hovering the top edge lit the bottom one, and each top
-    // corner lit the corner below it.
+    // note in droplet.frag). Everything below that names a side reads y as
+    // "distance from the top", so this must NOT be flipped the way
+    // corner_dist flips its own copy: the SDF is symmetric under that flip
+    // (one radius for all four corners), but the zone labels are not.
     vec2 p = gl_FragCoord.xy - position;
+
+    // Distances to the four sides, and which of each pair is nearer.
+    float dl = p.x;
+    float dr = size.x - p.x;
+    float dt = p.y;
+    float db = size.y - p.y;
+    bool left = dl <= dr;
+    bool top = dt <= db;
+    float dv = left ? dl : dr;
+    float dh = top ? dt : db;
+
+    // The valleys sit R in from every corner; nothing reaches deeper than
+    // that, so anything past it is interior.
+    float R = 0.25 * min(size.x, size.y);
+    if (dist > 0.0 || dist < -(R + 2.0)) {
+        discard;
+    }
+    float depth = -dist; // 0 at the silhouette, growing inward
 
     // A client popover owns this rect; the ring yields to it wholesale. The
     // rect arrives top-left-origin (y down), the same space as p.
@@ -102,83 +131,51 @@ void main() {
         discard;
     }
 
-    // Which side owns this fragment: whichever edge it sits nearer. The
-    // comparison is on distance to the edge, so the split runs along the
-    // diagonals and every corner is shared consistently by its two sides.
-    float dl = p.x;
-    float dr = size.x - p.x;
-    float dt = p.y;
-    float db = size.y - p.y;
-    bool vertical = min(dl, dr) < min(dt, db);
+    float A = max(band - band_min, 0.0);
+    // The inner superellipse's radius, and the exponent that puts its
+    // diagonal point — R - Rp * 2^(-1/n) in from each side — at `band`.
+    // Clamped to a circle at the low end (a window too small for the
+    // solve gets a taller corner rather than a concave one).
+    float Rp = max(R - band_min, 1e-3);
+    float ratio = clamp(1.0 - A / Rp, 0.05, 0.9999); // 2^(-1/n)
+    float n = clamp(-LN2 / log(ratio), 2.0, 12.0);
 
-    // `along` is the coordinate down the owning side, `len` its full length.
-    float along = vertical ? p.y : p.x;
-    float len = vertical ? size.y : size.x;
-    // Distance from the nearer end of that side.
-    float u = min(along, len - along);
-
-    // The corner run, clamped against ITS OWN side (see the zone comment
-    // below); the band profile and the zone cut share it so the thickness
-    // minimum lands exactly on the seam.
-    float cl = min(corner_len, 0.45 * len);
-
-    // The band: band_min at the seams, swelling away from them both ways —
-    // an edge bar to `band` at the side's midpoint, a corner arm back toward
-    // the apex, where the pad's union takes over. v is 0 at a seam and 1 at
-    // a piece's peak; swell_curve pulls the gain early (below 1) or late.
-    float half_side = max(0.5 * len, 1e-3);
-    float v;
-    if (u <= cl) {
-        v = 1.0 - u / max(cl, 1e-3);
+    // Signed distance to the interior, positive in the ring: in a corner
+    // square, the superellipse (its implicit function scaled by its
+    // gradient, exact where it matters — at the edge); elsewhere, how far
+    // short of the nearer inner edges the fragment falls.
+    float f;
+    if (dv < R && dh < R) {
+        vec2 c = max(vec2(R - dv, R - dh) / Rp, 0.0);
+        vec2 cn = pow(c, vec2(n));
+        float F = cn.x + cn.y - 1.0;
+        vec2 grad = n * pow(c, vec2(n - 1.0)) / Rp;
+        f = F / max(length(grad), 1e-4);
     } else {
-        float run = max(half_side - cl - gap, 1e-3);
-        v = clamp((u - cl - gap) / run, 0.0, 1.0);
+        float t_h = band_min + A * side_hill(p.x, size.x, R);
+        float t_v = band_min + A * side_hill(p.y, size.y, R);
+        f = max(t_h - dh, t_v - dv);
     }
-    float s = pow(smoothstep(0.0, 1.0, v), max(swell_curve, 0.01));
-    float thickness = mix(band_min, band, s);
-    float f_ring = thickness - depth;
-
-    // The corner bulge: a disc centred on the corner ARC's centre, so it sits
-    // flush behind the silhouette and pokes inward by its radius. Positive
-    // inside, like f_ring.
-    bool left = dl <= dr;
-    bool top = dt <= db;
-    vec2 arc_c = vec2(left ? corner_radius : size.x - corner_radius,
-                      top ? corner_radius : size.y - corner_radius);
-    float f_disc = bulge - length(p - arc_c);
-
-    // Smooth union of band and bulge: the pad flows into the moulding with a
-    // fillet instead of a notch. Blend radius scales with the pad.
-    float k = max(0.35 * bulge, 1.0);
-    float h = clamp(0.5 + 0.5 * (f_disc - f_ring) / k, 0.0, 1.0);
-    float f = mix(f_ring, f_disc, h) + k * h * (1.0 - h);
-
-    // Zones: anything on the pad is its corner's, then the band cut as
-    // before. The gap only severs the BAND — a groove across the pad would
-    // read as damage, so it skips fragments the disc owns.
-    // The corner run clamps per side because two corner zones on one side
-    // must never meet — past that, the side's midpoint would resize
-    // diagonally.
-    float zone;
-    if (u <= cl || f_disc > 0.0) {
-        zone = top ? (left ? ZONE_TL : ZONE_TR) : (left ? ZONE_BL : ZONE_BR);
-        if (u > cl && u <= cl + gap && f_disc <= 0.0) {
-            discard;
-        }
-    } else if (u <= cl + gap) {
-        discard;
-    } else if (vertical) {
-        zone = (dl <= dr) ? ZONE_LEFT : ZONE_RIGHT;
-    } else {
-        zone = (dt <= db) ? ZONE_TOP : ZONE_BOTTOM;
-    }
-
     if (f <= 0.0) {
         discard;
     }
 
+    // Zones: the side the fragment is nearer to owns it, so the split runs
+    // along the diagonals; along that side, everything within R of an end
+    // — the corner hill, valley to valley — is the corner zone.
+    bool vertical = dv < dh;
+    float from_end = vertical ? dh : dv;
+    float zone;
+    if (from_end < R) {
+        zone = top ? (left ? ZONE_TL : ZONE_TR) : (left ? ZONE_BL : ZONE_BR);
+    } else if (vertical) {
+        zone = left ? ZONE_LEFT : ZONE_RIGHT;
+    } else {
+        zone = top ? ZONE_TOP : ZONE_BOTTOM;
+    }
+
     // Feather both flanks by a pixel: the silhouette side against the
-    // window's own rounded edge, the inner side along the unioned boundary.
+    // window's own rounded edge, the inner side along the wave.
     float aa = clamp(depth, 0.0, 1.0) * clamp(f, 0.0, 1.0);
 
     vec4 base = (hovered >= 0.0 && abs(hovered - zone) < 0.5) ? hover_color : v_color;

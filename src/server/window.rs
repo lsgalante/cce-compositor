@@ -3872,6 +3872,9 @@ impl Window {
             // the window's content radius (the widened backplate radius the
             // corner clip uses) rather than that plus a band.
             let r_in = bg_radius;
+            // corner_len and gap are retired by the wave profile (the
+            // valleys place the seams now, a quarter along each side) and
+            // ignored by the shader; still passed so the node API holds.
             let cl = border_corner_len(bw as f64, layout.border_corner_length, r_in as f64) as i32;
             let g = layout.border_segment_gap;
 
@@ -3886,17 +3889,12 @@ impl Window {
             let px = |v: i32| (v as f64 * sc) as i32;
             ffi::wlr_scene_frame_set_size(self.border.frame, px(cw), px(ch));
             ffi::wlr_scene_frame_set_corner_radius(self.border.frame, px(r_in));
-            // band_min is the thin corner thickness the swell rises from;
-            // half the band keeps the corner pieces clearly lighter than the
-            // middle of a side without letting them vanish at small sizes.
+            // band is the hill height, band_min (taper × band) the valley
+            // floor; bulge is the fillet radius that domes each corner hill.
             ffi::wlr_scene_frame_set_shape(
                 self.border.frame,
                 band_screen as f32,
                 (band_screen as f32 * layout.border_taper.clamp(0.0, 1.0)).max(2.0),
-                // Floored at the band; the shader clamps the run per SIDE
-                // (0.45 of that side), so a long side carries the full
-                // configured length while a short one shortens. The hit test
-                // applies the same per-axis clamp.
                 (px(cl) as f64).max(band_screen) as f32,
                 px(g) as f32,
                 layout.border_swell_curve,
