@@ -2068,6 +2068,7 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
                     cursor.pan_vel[axis] * 0.65 + sample * 0.35
                 };
                 cursor.pan_last_msec[axis] = now_ms;
+                wm.pan_finger_v[axis] = cursor.pan_vel[axis];
                 if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
                     wm.update_viewport_local();
                 } else {
@@ -2089,6 +2090,7 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
                 }
                 cursor.pan_vel = [0.0, 0.0];
                 cursor.pan_last_msec = [0, 0];
+                wm.pan_finger_v = [0.0, 0.0];
                 if wm.kinetic_scroll() && (vx != 0.0 || vy != 0.0) {
                     wm.pan_coast_vx = vx;
                     wm.pan_coast_vy = vy;

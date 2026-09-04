@@ -438,6 +438,7 @@ struct scene_update_data {
 #if WLR_HAS_XWAYLAND
 	struct wlr_xwayland_surface *restack_above;
 #endif
+	bool blur_frozen;
 };
 
 static uint32_t region_area(const pixman_region32_t *region) {
@@ -778,7 +779,8 @@ static bool scene_node_update_iterator(struct wlr_scene_node *node,
 
 	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
 		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
-		if (data->updated_node && scene_node_is_below(data->updated_node, node)) {
+		if (data->updated_node && !data->blur_frozen &&
+				scene_node_is_below(data->updated_node, node)) {
 			scene_blur->dirty = true;
 		}
 		if (scene_blur->dirty) {
@@ -875,6 +877,7 @@ static void scene_update_region(struct wlr_scene *scene,
 		.outputs = &scene->outputs,
 		.calculate_visibility = scene->calculate_visibility,
 		.restack_xwayland_surfaces = scene->restack_xwayland_surfaces,
+		.blur_frozen = scene->blur_frozen,
 	};
 
 	// update node visibility and output enter/leave events

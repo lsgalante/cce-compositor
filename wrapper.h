@@ -264,6 +264,7 @@ void river_wlr_keyboard_init(struct wlr_keyboard *keyboard, void (*led_update)(s
 void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, bool optimized, bool ignore_transparent, int x, int y, int width, int height, int corner_radius);
 
 void river_scene_mark_optimized_blur_dirty(struct wlr_scene *scene);
+void river_scene_set_blur_frozen(struct wlr_scene *scene, bool frozen);
 
 void river_scene_node_set_opacity(struct wlr_scene_node *node, float opacity);
 

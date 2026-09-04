@@ -117,6 +117,16 @@ struct wlr_scene {
 
 	bool restack_xwayland_surfaces;
 
+	/**
+	 * While set, a node moving underneath an optimized-blur node does NOT
+	 * mark that blur dirty. The compositor sets it for the duration of a
+	 * camera pan (every frame moves the screen-sized backdrop under every
+	 * blurred window, which otherwise re-bakes every blur every frame) and
+	 * clears it — marking all blurs dirty once — when the camera settles.
+	 * Explicit wlr_scene_optimized_blur_mark_dirty() calls still apply.
+	 */
+	bool blur_frozen;
+
 	struct {
 		struct wl_listener linux_dmabuf_v1_destroy;
 		struct wl_listener gamma_control_manager_v1_destroy;

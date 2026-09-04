@@ -173,6 +173,10 @@ pub struct WindowManager {
     /// wheel zoom): each step re-derives the pan so the virtual point under
     /// the cursor stays put throughout, not just at the end.
     pub zoom_anchor: Option<(f64, f64)>,
+    /// Live finger-pan velocity (virtual units/s, `[x, y]`) while a trackpad
+    /// gesture is panning the desktop; zero otherwise. Grid patches use it
+    /// to prefetch toward where the gesture is heading.
+    pub pan_finger_v: [f64; 2],
     pub animation_timer: *mut ffi::wl_event_source,
     /// Edge auto-pan velocity during an interactive move/resize, in SCREEN
     /// px/s (the tick divides by zoom). Written by `Seat::update_edge_pan`
@@ -359,6 +363,7 @@ impl WindowManager {
         self.pan_coast_vx = 0.0;
         self.pan_coast_vy = 0.0;
         self.zoom_anchor = None;
+        self.pan_finger_v = [0.0, 0.0];
         self.animation_timer = std::ptr::null_mut();
         self.edge_pan_vx = 0.0;
         self.edge_pan_vy = 0.0;
@@ -2272,6 +2277,26 @@ impl WindowManager {
                 } else {
                     None
                 }
+            })
+            .or_else(|| {
+                // No explicit destination: predict one from the kinetic
+                // coast (an exponential decay travels v/friction more) or a
+                // live finger gesture (~0.3s of its current velocity), so the
+                // patch is issued toward where the pan is heading before the
+                // viewport reaches the current patch's edge.
+                let (vx_, vy_) = if self.pan_coast_vx != 0.0 || self.pan_coast_vy != 0.0 {
+                    let f = self.scroll_friction();
+                    (self.pan_coast_vx / f, self.pan_coast_vy / f)
+                } else if self.pan_finger_v != [0.0, 0.0] {
+                    (self.pan_finger_v[0] * 0.3, self.pan_finger_v[1] * 0.3)
+                } else {
+                    return None;
+                };
+                Some(crate::policy::camera::Camera {
+                    pan_x: self.desk_pan_x + vx_,
+                    pan_y: self.desk_pan_y + vy_,
+                    zoom: crate::policy::background::sanitized_zoom(self.desk_zoom),
+                })
             });
         let in_flight = self.viewport_is_active || target_cam.is_some();
 
@@ -2441,19 +2466,39 @@ impl WindowManager {
                 // viewport shrinks toward the destination.
                 continue;
             }
-            let m = (((max_buf / q) - uw) / (2.0 * uw)).clamp(0.0, 0.5)
-                .min((((max_buf / q) - uh) / (2.0 * uh)).clamp(0.0, 0.5));
-            let x0 = ((ux0 - m * uw) / period_x).floor() * period_x;
-            let y0 = ((uy0 - m * uh) / period_y).floor() * period_y;
-            let x1 = ((ux1 + m * uw) / period_x).ceil() * period_x;
-            let y1 = ((uy1 + m * uh) / period_y).ceil() * period_y;
-            let patch = crate::policy::api::GridPatch {
-                x: x0,
-                y: y0,
-                w: x1 - x0,
-                h: y1 - y0,
-                scale: q,
+            // The patch is a FIXED size for a given resolution: the largest
+            // whole-period rect within the buffer cap, centered on the union
+            // and period-aligned. Consecutive patches during a pan then have
+            // identical buffer extents, so the client's swapchain survives
+            // the swap — the old outward-aligned rect varied by a couple of
+            // periods between patches, and every size change rebuilt a
+            // 200MB swapchain and dropped a frame mid-gesture. (It also
+            // overran the cap by up to two periods.)
+            let fw = ((max_buf / q) / period_x).floor().max(1.0) * period_x;
+            let fh = ((max_buf / q) / period_y).floor().max(1.0) * period_y;
+            let place = |u0: f64, u1: f64, f: f64, period: f64| -> Option<f64> {
+                let center = (u0 + u1) * 0.5;
+                let mut p0 = ((center - f * 0.5) / period).floor() * period;
+                if p0 + f < u1 {
+                    p0 += period;
+                }
+                (p0 <= u0 && p0 + f >= u1).then_some(p0)
             };
+            let (x0, y0, pw, ph) = match (place(ux0, ux1, fw, period_x), place(uy0, uy1, fh, period_y)) {
+                (Some(x0), Some(y0)) => (x0, y0, fw, fh),
+                _ => {
+                    // The union nearly fills the cap (an overview flight's
+                    // union): the legacy outward alignment, exact-fit.
+                    let m = (((max_buf / q) - uw) / (2.0 * uw)).clamp(0.0, 0.5)
+                        .min((((max_buf / q) - uh) / (2.0 * uh)).clamp(0.0, 0.5));
+                    let x0 = ((ux0 - m * uw) / period_x).floor() * period_x;
+                    let y0 = ((uy0 - m * uh) / period_y).floor() * period_y;
+                    let x1 = ((ux1 + m * uw) / period_x).ceil() * period_x;
+                    let y1 = ((uy1 + m * uh) / period_y).ceil() * period_y;
+                    (x0, y0, x1 - x0, y1 - y0)
+                }
+            };
+            let patch = crate::policy::api::GridPatch { x: x0, y: y0, w: pw, h: ph, scale: q };
             (*w).grid_patch_serial = (*w).grid_patch_serial.wrapping_add(1);
             let serial = (*w).grid_patch_serial;
             if (*self.server)
@@ -2666,9 +2711,13 @@ impl WindowManager {
         // with real cells for the frame or two the client needs to render
         // the flight's replacement patch (backdrop-only exposure was the
         // "cells at the bottom appear late" gap).
+        // A pure pan counts too: a fast trackpad flick or wheel run can
+        // outrun the client's patch, and without the fallback the leading
+        // edge showed bare backdrop until the next patch latched.
         let cells_wanted = plan.grid_cells_enabled
             || self.camera_ramp_anim.is_some()
-            || self.target_desk_zoom.is_some();
+            || self.target_desk_zoom.is_some()
+            || self.viewport_is_active;
         if self.grid_cells_enabled != cells_wanted {
             self.grid_cells_enabled = cells_wanted;
             // The cell pools redraw only on structure changes; force one so
@@ -2823,6 +2872,11 @@ impl WindowManager {
         // was the flicker of the blurred desktop grid behind transparent windows.
         if moved {
             self.viewport_is_active = true;
+            // Every motion frame moves the screen-sized backdrop under every
+            // blurred window; without this, scenefx re-bakes every optimized
+            // blur every frame of the pan. Frozen blurs go slightly stale
+            // during the gesture and re-bake once at settle.
+            ffi::river_scene_set_blur_frozen((*self.server).scene.wlr_scene, true);
             for &window in self.windows.iter() {
                 if !window.is_null() {
                     (*window).render_viewport_update();
@@ -2905,6 +2959,9 @@ impl WindowManager {
             return;
         }
         self.viewport_is_active = false;
+        // Thaw the blur caches (marks them all dirty once) so the settled
+        // frame re-bakes against the final backdrop.
+        ffi::river_scene_set_blur_frozen((*self.server).scene.wlr_scene, false);
         for &window in self.windows.iter() {
             if !window.is_null() {
                 (*window).render_finish();

@@ -1081,3 +1081,17 @@ static void mark_optimized_blur_dirty_rec(struct wlr_scene_node *node) {
 void river_scene_mark_optimized_blur_dirty(struct wlr_scene *scene) {
 	mark_optimized_blur_dirty_rec(&scene->tree.node);
 }
+
+/* See wlr_scene.blur_frozen: suspend the moved-node-below blur
+ * invalidation for the duration of a camera pan. Thawing marks every
+ * optimized blur dirty once so the settled frame re-bakes against the
+ * final backdrop. */
+void river_scene_set_blur_frozen(struct wlr_scene *scene, bool frozen) {
+	if (scene->blur_frozen == frozen) {
+		return;
+	}
+	scene->blur_frozen = frozen;
+	if (!frozen) {
+		mark_optimized_blur_dirty_rec(&scene->tree.node);
+	}
+}
