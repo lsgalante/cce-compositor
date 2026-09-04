@@ -2104,7 +2104,8 @@ impl WindowManager {
                             op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
                             edges.top, edges.bottom, 50.0, &sp.y(),
                         ) as u32;
-                        return Some((new_w, new_h));
+                        // Same clamp as the seat op (see its Resize arm).
+                        return Some((*win_ptr).wm_scheduled.dimensions_hint.clamp(new_w, new_h));
                     }
                 }
             }

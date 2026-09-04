@@ -1411,6 +1411,11 @@ impl Seat {
                             op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
                             edges.top, edges.bottom, 50.0, &sp.y(),
                         ) as u32;
+                        // The client's xdg min/max size is a contract, not a
+                        // suggestion: a configure below it is applied by
+                        // cce-ui as-is, and a layout with less room than its
+                        // fixed parts panicked cce-data-editor mid-drag.
+                        let (new_w, new_h) = (*win).wm_scheduled.dimensions_hint.clamp(new_w, new_h);
 
                         (*win).virtual_x = vx;
                         (*win).virtual_y = vy;

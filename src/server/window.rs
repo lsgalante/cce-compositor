@@ -50,6 +50,30 @@ pub struct DimensionsHint {
     pub max_height: u32,
 }
 
+impl DimensionsHint {
+    /// Clamp a requested content size to the client's declared range; a
+    /// zero bound is "unset" (xdg-shell's convention) and leaves that side
+    /// alone. A max below the min is the client's own contradiction and
+    /// the min wins.
+    pub fn clamp(&self, width: u32, height: u32) -> (u32, u32) {
+        let mut w = width;
+        let mut h = height;
+        if self.max_width > 0 {
+            w = w.min(self.max_width);
+        }
+        if self.max_height > 0 {
+            h = h.min(self.max_height);
+        }
+        if self.min_width > 0 {
+            w = w.max(self.min_width);
+        }
+        if self.min_height > 0 {
+            h = h.max(self.min_height);
+        }
+        (w, h)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Edges {
     pub top: bool,
