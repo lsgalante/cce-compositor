@@ -160,6 +160,19 @@ pub struct WindowManager {
     /// `desktop { overview_ramp= overview_ms= }` speed profile. When active
     /// it owns the camera; the exponential targets above stay clear.
     pub camera_ramp_anim: Option<CameraRampAnim>,
+    /// When the camera animation last stepped — the exponential eases below
+    /// are frame-rate independent, so a late timer tick takes a
+    /// proportionally larger step instead of a stutter. `None` while the
+    /// timer is idle, so the first step after arming measures from the arm.
+    pub anim_last_tick: Option<std::time::Instant>,
+    /// Kinetic desktop pan after a trackpad flick: virtual units/s, decayed
+    /// by `input.scroll_friction` each tick until it stalls. Zero = no coast.
+    pub pan_coast_vx: f64,
+    pub pan_coast_vy: f64,
+    /// Output-local point a `target_desk_zoom` glide pivots on (ctrl+super
+    /// wheel zoom): each step re-derives the pan so the virtual point under
+    /// the cursor stays put throughout, not just at the end.
+    pub zoom_anchor: Option<(f64, f64)>,
     pub animation_timer: *mut ffi::wl_event_source,
     /// Edge auto-pan velocity during an interactive move/resize, in SCREEN
     /// px/s (the tick divides by zoom). Written by `Seat::update_edge_pan`
@@ -342,6 +355,10 @@ impl WindowManager {
         self.target_desk_pan_y = None;
         self.target_desk_zoom = None;
         self.camera_ramp_anim = None;
+        self.anim_last_tick = None;
+        self.pan_coast_vx = 0.0;
+        self.pan_coast_vy = 0.0;
+        self.zoom_anchor = None;
         self.animation_timer = std::ptr::null_mut();
         self.edge_pan_vx = 0.0;
         self.edge_pan_vy = 0.0;
@@ -1234,6 +1251,30 @@ impl WindowManager {
         self.target_desk_pan_y = None;
         self.target_desk_zoom = None;
         self.camera_ramp_anim = None;
+        self.pan_coast_vx = 0.0;
+        self.pan_coast_vy = 0.0;
+        self.zoom_anchor = None;
+    }
+
+    /// Wheel-glide rate for the desktop camera, 1/s (`input { scroll_ease }`).
+    pub fn scroll_ease_rate(&self) -> f64 {
+        self.input_config
+            .scroll_ease
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(12.0)
+    }
+
+    /// Whether a trackpad flick coasts the desktop (`input { kinetic_scroll }`).
+    pub fn kinetic_scroll(&self) -> bool {
+        self.input_config.kinetic_scroll.unwrap_or(true)
+    }
+
+    /// Coast decay, 1/s (`input { scroll_friction }`).
+    pub fn scroll_friction(&self) -> f64 {
+        self.input_config
+            .scroll_friction
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(6.0)
     }
 
     /// The current camera as the policy crate's plain-data snapshot.
@@ -1423,6 +1464,9 @@ impl WindowManager {
             );
         }
         if !self.animation_timer.is_null() {
+            if self.anim_last_tick.is_none() {
+                self.anim_last_tick = Some(std::time::Instant::now());
+            }
             ffi::wl_event_source_timer_update(self.animation_timer, 16);
         }
     }
@@ -5586,7 +5630,17 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
     }
 
     let mut done = true;
-    let factor = 0.15;
+    // Frame-rate independent exponential approach: the same fraction of the
+    // remaining distance per unit time whatever the timer's actual cadence
+    // (a 16ms timer under load fires late; the old fixed 0.15/tick then
+    // stuttered). dt is clamped so a stalled loop cannot leap.
+    let now = std::time::Instant::now();
+    let dt = (*wm)
+        .anim_last_tick
+        .map_or(0.016, |t| now.duration_since(t).as_secs_f64())
+        .clamp(0.0, 0.1);
+    (*wm).anim_last_tick = Some(now);
+    let factor = 1.0 - (-(*wm).scroll_ease_rate() * dt).exp();
 
     // Ramp-driven transition: position is a pure function of elapsed time,
     // so a stalled tick (busy frame) never changes where the camera lands.
@@ -5641,12 +5695,42 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
     if let Some(target_zoom) = (*wm).target_desk_zoom {
         let cur = (*wm).desk_zoom.max(1e-6);
         let log_delta = (target_zoom / cur).ln();
-        if log_delta.abs() > 0.001 {
-            (*wm).desk_zoom = cur * (log_delta * factor).exp();
+        let new_zoom = if log_delta.abs() > 0.001 {
             done = false;
+            cur * (log_delta * factor).exp()
         } else {
-            (*wm).desk_zoom = target_zoom;
             (*wm).target_desk_zoom = None;
+            target_zoom
+        };
+        // An anchored zoom (wheel zoom about the cursor) re-derives the pan
+        // from the anchor every step, so the pivot never wanders mid-glide.
+        if let Some((ax, ay)) = (*wm).zoom_anchor {
+            let cam = crate::policy::camera::zoom_about_anchor((*wm).camera(), ax, ay, new_zoom);
+            (*wm).desk_pan_x = cam.pan_x;
+            (*wm).desk_pan_y = cam.pan_y;
+            (*wm).desk_zoom = cam.zoom;
+            if (*wm).target_desk_zoom.is_none() {
+                (*wm).zoom_anchor = None;
+            }
+        } else {
+            (*wm).desk_zoom = new_zoom;
+        }
+    }
+
+    // Kinetic pan: a trackpad flick's velocity carries the desktop on,
+    // decaying under friction; it stalls below one screen pixel per frame.
+    if (*wm).pan_coast_vx != 0.0 || (*wm).pan_coast_vy != 0.0 {
+        (*wm).desk_pan_x += (*wm).pan_coast_vx * dt;
+        (*wm).desk_pan_y += (*wm).pan_coast_vy * dt;
+        let decay = (-(*wm).scroll_friction() * dt).exp();
+        (*wm).pan_coast_vx *= decay;
+        (*wm).pan_coast_vy *= decay;
+        let screen_speed = ((*wm).pan_coast_vx.hypot((*wm).pan_coast_vy)) * (*wm).desk_zoom;
+        if screen_speed < 5.0 {
+            (*wm).pan_coast_vx = 0.0;
+            (*wm).pan_coast_vy = 0.0;
+        } else {
+            done = false;
         }
     }
 
@@ -5660,6 +5744,8 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
         if !(*wm).animation_timer.is_null() {
             ffi::wl_event_source_timer_update((*wm).animation_timer, 16);
         }
+    } else {
+        (*wm).anim_last_tick = None;
     }
     0
 }

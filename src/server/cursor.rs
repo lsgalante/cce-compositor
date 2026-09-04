@@ -74,6 +74,11 @@ pub struct Cursor {
     pub gesture_scale: f64,
     pub gesture_triggered: bool,
     pub panning_gesture_active: bool,
+    /// Finger-pan velocity estimate per axis (`[x, y]`, virtual units/s) and
+    /// the hardware timestamp of each axis's last finger event, for the
+    /// kinetic desktop coast on the lift.
+    pub pan_vel: [f64; 2],
+    pub pan_last_msec: [u32; 2],
     /// A pinch that began over the desktop background zooms the camera
     /// continuously instead of forwarding to a client or matching gesture
     /// binds. Decided once at pinch begin; update/end must follow the same
@@ -150,6 +155,8 @@ impl Default for Cursor {
             gesture_scale: 1.0,
             gesture_triggered: false,
             panning_gesture_active: false,
+            pan_vel: [0.0, 0.0],
+            pan_last_msec: [0, 0],
             pinch_zoom_active: false,
             pinch_start_zoom: 1.0,
             last_click_time: 0,
@@ -1977,10 +1984,13 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
         if (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL {
             if delta != 0.0 {
                 let wm = &mut (*seat.server).wm;
-                wm.stop_panning_animation();
-                let old_zoom = wm.desk_zoom;
-                let new_zoom = crate::policy::camera::wheel_zoom(old_zoom, delta);
-                if new_zoom != old_zoom {
+                // Each notch advances the zoom TARGET (successive notches
+                // accumulate into one glide); the animation tick eases the
+                // zoom there in log space, pivoting about the cursor every
+                // step. A pan glide or coast in flight yields to the zoom.
+                let base = wm.target_desk_zoom.unwrap_or(wm.desk_zoom);
+                let new_zoom = crate::policy::camera::wheel_zoom(base, delta);
+                if new_zoom != base {
                     let cx = cursor.x();
                     let cy = cursor.y();
                     let wlr_output = (*(*seat).server).om.output_at(cx, cy);
@@ -1991,23 +2001,11 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
                     } else {
                         (0.0, 0.0)
                     };
-                    // Wheel zoom pivots about the cursor: the virtual point
-                    // under it stays put on screen.
-                    let cam = crate::policy::camera::zoom_about_anchor(
-                        wm.camera(),
-                        cx - phys_x,
-                        cy - phys_y,
-                        new_zoom,
-                    );
-                    wm.desk_pan_x = cam.pan_x;
-                    wm.desk_pan_y = cam.pan_y;
-                    wm.desk_zoom = cam.zoom;
-                    wm.set_mode(if crate::policy::camera::is_overview(cam.zoom) { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal });
-                    if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
-                        wm.update_viewport_local();
-                    } else {
-                        wm.dirty_windowing();
-                    }
+                    wm.stop_panning_animation();
+                    wm.target_desk_zoom = Some(new_zoom);
+                    wm.zoom_anchor = Some((cx - phys_x, cy - phys_y));
+                    wm.set_mode(if crate::policy::camera::is_overview(new_zoom) { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal });
+                    wm.start_panning_animation();
                 }
             }
         }
@@ -2050,23 +2048,60 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
         let vertical =
             (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
         if is_finger {
-            // Finger/continuous scroll tracks 1:1 — the surface follows the
-            // gesture directly, no easing between the two.
-            wm.stop_panning_animation();
-            if vertical {
-                wm.desk_pan_y += step;
-            } else {
-                wm.desk_pan_x += step;
-            }
-            if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
-                wm.update_viewport_local();
-            } else {
-                wm.dirty_windowing();
+            let axis = if vertical { 1 } else { 0 };
+            let now_ms = (*event).time_msec;
+            if delta != 0.0 {
+                // Finger/continuous scroll tracks 1:1 — the surface follows
+                // the gesture directly, no easing between the two — while a
+                // velocity estimate is kept for the coast on the lift.
+                wm.stop_panning_animation();
+                if vertical {
+                    wm.desk_pan_y += step;
+                } else {
+                    wm.desk_pan_x += step;
+                }
+                let dt_ms = now_ms.wrapping_sub(cursor.pan_last_msec[axis]).clamp(4, 100) as f64;
+                let sample = step / (dt_ms / 1000.0);
+                cursor.pan_vel[axis] = if cursor.pan_last_msec[axis] == 0 {
+                    sample
+                } else {
+                    cursor.pan_vel[axis] * 0.65 + sample * 0.35
+                };
+                cursor.pan_last_msec[axis] = now_ms;
+                if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
+                    wm.update_viewport_local();
+                } else {
+                    wm.dirty_windowing();
+                }
+            } else if was_panning {
+                // The lift (libinput's zero-delta finger event): fling on the
+                // estimated velocity unless the finger had come to rest first
+                // or kinetic scrolling is off. Both axes launch together on
+                // the first lift event; the second axis's lift finds them
+                // already cleared.
+                let mut vx = cursor.pan_vel[0];
+                let mut vy = cursor.pan_vel[1];
+                for (a, v) in [(0usize, &mut vx), (1usize, &mut vy)] {
+                    let rest_ms = now_ms.wrapping_sub(cursor.pan_last_msec[a]);
+                    if cursor.pan_last_msec[a] == 0 || rest_ms > 80 {
+                        *v = 0.0;
+                    }
+                }
+                cursor.pan_vel = [0.0, 0.0];
+                cursor.pan_last_msec = [0, 0];
+                if wm.kinetic_scroll() && (vx != 0.0 || vy != 0.0) {
+                    wm.pan_coast_vx = vx;
+                    wm.pan_coast_vy = vy;
+                    wm.start_panning_animation();
+                }
             }
         } else {
             // Discrete wheel clicks glide: each click advances the pan
             // animation target, so successive clicks accumulate into one
-            // smooth run instead of a stutter of jumps.
+            // smooth run instead of a stutter of jumps. A coast in flight
+            // yields to the click.
+            wm.pan_coast_vx = 0.0;
+            wm.pan_coast_vy = 0.0;
             if vertical {
                 let base = wm.target_desk_pan_y.unwrap_or(wm.desk_pan_y);
                 wm.target_desk_pan_y = Some(base + step);

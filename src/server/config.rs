@@ -436,6 +436,16 @@ pub struct InputConfig {
     pub accel_speed: Option<f64>,
     pub accel_profile: Option<String>,
     pub scroll_factor: Option<f64>,
+    /// Desktop-pan smooth scrolling (the compositor's own consumption of the
+    /// wheel: background/overview/super pans and ctrl+super zoom). Same keys
+    /// and defaults as cce-ui's `widget::scroll_motion`, so a wheel notch
+    /// glides the same way over a list and over the desktop.
+    /// `scroll_ease`: wheel-glide rate, 1/s (default 12).
+    pub scroll_ease: Option<f64>,
+    /// `kinetic_scroll`: a trackpad flick keeps panning after the lift (default true).
+    pub kinetic_scroll: Option<bool>,
+    /// `scroll_friction`: coast decay, 1/s (default 6).
+    pub scroll_friction: Option<f64>,
     pub mouse: Option<MouseConfig>,
     pub touchpad: Option<TouchpadConfig>,
     pub trackpoint: Option<TrackpointConfig>,
@@ -1780,6 +1790,9 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let accel_speed = get_child_arg_f64_opt(node, "accel_speed");
         let accel_profile = get_child_arg_string_opt(node, "accel_profile");
         let scroll_factor = get_child_arg_f64_opt(node, "scroll_factor");
+        let scroll_ease = get_child_arg_f64_opt(node, "scroll_ease");
+        let kinetic_scroll = get_child_arg_bool_opt(node, "kinetic_scroll");
+        let scroll_friction = get_child_arg_f64_opt(node, "scroll_friction");
 
         let mut touchpad = None;
         if let Some(children) = node.children() {
@@ -1844,6 +1857,9 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             accel_speed,
             accel_profile,
             scroll_factor,
+            scroll_ease,
+            kinetic_scroll,
+            scroll_friction,
             mouse,
             touchpad,
             trackpoint,
@@ -2857,6 +2873,9 @@ style {
                 accel_profile "flat"
                 accel_speed (f64)1.0
                 scroll_factor (f64)1.0
+                scroll_ease (f64)9.5
+                kinetic_scroll (bool)false
+                scroll_friction (f64)4.0
                 mouse {
                     accel_speed (f64)0.5
                     scroll_factor (f64)2.0
@@ -2879,6 +2898,9 @@ style {
         assert_eq!(input.accel_profile, Some("flat".to_string()));
         assert_eq!(input.accel_speed, Some(1.0));
         assert_eq!(input.scroll_factor, Some(1.0));
+        assert_eq!(input.scroll_ease, Some(9.5));
+        assert_eq!(input.kinetic_scroll, Some(false));
+        assert_eq!(input.scroll_friction, Some(4.0));
         let mouse = input.mouse.unwrap();
         assert_eq!(mouse.accel_speed, Some(0.5));
         assert_eq!(mouse.scroll_factor, Some(2.0));
