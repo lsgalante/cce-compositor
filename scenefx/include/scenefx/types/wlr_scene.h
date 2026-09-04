@@ -118,12 +118,15 @@ struct wlr_scene {
 	bool restack_xwayland_surfaces;
 
 	/**
-	 * While set, a node moving underneath an optimized-blur node does NOT
-	 * mark that blur dirty. The compositor sets it for the duration of a
-	 * camera pan (every frame moves the screen-sized backdrop under every
-	 * blurred window, which otherwise re-bakes every blur every frame) and
-	 * clears it — marking all blurs dirty once — when the camera settles.
-	 * Explicit wlr_scene_optimized_blur_mark_dirty() calls still apply.
+	 * While set, a node MOVING underneath an optimized-blur node does NOT
+	 * mark that blur dirty (its content changing still does). The
+	 * compositor sets it for the duration of a camera pan — every frame
+	 * moves the screen-sized backdrop under every blurred window, which
+	 * would otherwise re-bake every blur every frame — and clears it when
+	 * the camera settles. Blurs keep sampling their existing bakes at the
+	 * node's travel since the bake (see wlr_scene_optimized_blur), so a
+	 * pure pan needs no re-bake at all; the thaw re-bakes only bakes that
+	 * cannot be trusted (partial, overwritten, or never made).
 	 */
 	bool blur_frozen;
 
@@ -277,16 +280,23 @@ struct wlr_scene_optimized_blur {
 	bool dirty;
 
 	/**
-	 * Layout coordinates the node had when it last baked into the shared
-	 * cache — where its bake lives. While the scene's blur is frozen (see
-	 * wlr_scene.blur_frozen) the sibling wlr_scene_blur samples the cache
-	 * at (baked - current), so a node that moved keeps reading exactly its
-	 * own bake, per node, honoring its own pixel rounding; and a bake that
-	 * does re-run mid-freeze (an explicit mark_dirty) simply re-anchors
-	 * itself. Unset until the first bake.
+	 * Where the node's bake lives in the shared per-output cache: the
+	 * layout coordinates it had, and the output it rendered to, when it
+	 * last baked. The sibling wlr_scene_blur samples the cache shifted by
+	 * the node's travel since then, so a node that moved with its backdrop
+	 * (a desktop pan) keeps reading exactly its own bake — per node, so
+	 * each window's own pixel rounding is honored — and a bake that re-runs
+	 * simply re-anchors. `baked_full` records that the whole box lay inside
+	 * the output, i.e. the bake covers the node wherever it travels; a
+	 * partial bake is re-baked once the scene thaws. `overwritten` is set
+	 * when a later bake landed on this bake's cache region (overlapping
+	 * windows), which also earns a re-bake at thaw.
 	 */
 	bool baked;
 	int baked_x, baked_y;
+	bool baked_full;
+	bool overwritten;
+	struct wlr_scene_output *baked_output;
 };
 
 struct wlr_scene_outputs_update_event {

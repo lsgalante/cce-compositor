@@ -439,6 +439,7 @@ struct scene_update_data {
 	struct wlr_xwayland_surface *restack_above;
 #endif
 	bool blur_frozen;
+	bool content_update;
 };
 
 static uint32_t region_area(const pixman_region32_t *region) {
@@ -718,6 +719,15 @@ static void restack_xwayland_surface(struct wlr_scene_node *node,
 }
 #endif
 
+static bool cce_scene_blur_debug(void) {
+	static int enabled = -1;
+	if (enabled < 0) {
+		const char *v = getenv("CCE_BLUR_DEBUG");
+		enabled = v && *v && strcmp(v, "0") != 0;
+	}
+	return enabled;
+}
+
 static bool scene_node_is_below(struct wlr_scene_node *a, struct wlr_scene_node *b) {
 	if (a == b) {
 		return false;
@@ -779,8 +789,15 @@ static bool scene_node_update_iterator(struct wlr_scene_node *node,
 
 	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
 		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
-		if (data->updated_node && !data->blur_frozen &&
+		// A frozen scene ignores nodes MOVING below (the backdrop travelling
+		// with a pan); content changing below still re-bakes.
+		if (data->updated_node && (!data->blur_frozen || data->content_update) &&
 				scene_node_is_below(data->updated_node, node)) {
+			if (data->blur_frozen && cce_scene_blur_debug()) {
+				wlr_log(WLR_INFO, "[scenefx] frozen: content dirty from node type %d (%dx%d) below opt %dx%d",
+					data->updated_node->type, data->update_box.width, data->update_box.height,
+					scene_blur->width, scene_blur->height);
+			}
 			scene_blur->dirty = true;
 		}
 		if (scene_blur->dirty) {
@@ -858,7 +875,7 @@ static void scene_node_bounds(struct wlr_scene_node *node,
 
 static void scene_update_region(struct wlr_scene *scene,
 		struct wlr_scene_node *updated_node,
-		const pixman_region32_t *update_region) {
+		const pixman_region32_t *update_region, bool content_update) {
 	pixman_region32_t visible;
 	pixman_region32_init(&visible);
 	pixman_region32_copy(&visible, update_region);
@@ -878,6 +895,7 @@ static void scene_update_region(struct wlr_scene *scene,
 		.calculate_visibility = scene->calculate_visibility,
 		.restack_xwayland_surfaces = scene->restack_xwayland_surfaces,
 		.blur_frozen = scene->blur_frozen,
+		.content_update = content_update,
 	};
 
 	// update node visibility and output enter/leave events
@@ -934,6 +952,9 @@ static void scene_node_cleanup_when_disabled(struct wlr_scene_node *node,
 static void scene_node_update(struct wlr_scene_node *node,
 		pixman_region32_t *damage) {
 	struct wlr_scene *scene = scene_node_get_root(node);
+	// Explicit damage means the node's CONTENT changed (a buffer commit, a
+	// disable); NULL means a property or position change.
+	bool content_update = damage != NULL;
 
 	int x, y;
 	if (!wlr_scene_node_coords(node, &x, &y)) {
@@ -942,7 +963,7 @@ static void scene_node_update(struct wlr_scene_node *node,
 		if (damage) {
 			scene_node_cleanup_when_disabled(node, scene->restack_xwayland_surfaces, &scene->outputs);
 
-			scene_update_region(scene, node, damage);
+			scene_update_region(scene, node, damage, content_update);
 			scene_damage_outputs(scene, damage);
 			pixman_region32_fini(damage);
 		}
@@ -962,7 +983,7 @@ static void scene_node_update(struct wlr_scene_node *node,
 	pixman_region32_copy(&update_region, damage);
 	scene_node_bounds(node, x, y, &update_region);
 
-	scene_update_region(scene, node, &update_region);
+	scene_update_region(scene, node, &update_region, content_update);
 	pixman_region32_fini(&update_region);
 
 	scene_node_visibility(node, damage);
@@ -1893,7 +1914,7 @@ void wlr_scene_buffer_set_opaque_region(struct wlr_scene_buffer *scene_buffer,
 	pixman_region32_t update_region;
 	pixman_region32_init(&update_region);
 	scene_node_bounds(&scene_buffer->node, x, y, &update_region);
-	scene_update_region(scene_node_get_root(&scene_buffer->node), &scene_buffer->node, &update_region);
+	scene_update_region(scene_node_get_root(&scene_buffer->node), &scene_buffer->node, &update_region, true);
 	pixman_region32_fini(&update_region);
 }
 
@@ -2424,6 +2445,36 @@ static float get_luminance_multiplier(const struct wlr_color_luminances *src_lum
 	return (dst_lum->reference / src_lum->reference) * (src_lum->max / dst_lum->max);
 }
 
+static void optimized_blur_flag_overwritten_rec(struct wlr_scene_node *node,
+		struct wlr_scene_optimized_blur *self, const struct wlr_box *box) {
+	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
+		struct wlr_scene_optimized_blur *other = wlr_scene_optimized_blur_from_node(node);
+		if (other != self && other->baked && other->baked_output == self->baked_output) {
+			struct wlr_box theirs = {
+				.x = other->baked_x, .y = other->baked_y,
+				.width = other->width, .height = other->height,
+			};
+			struct wlr_box overlap;
+			if (wlr_box_intersection(&overlap, &theirs, box)) {
+				other->overwritten = true;
+			}
+		}
+		return;
+	}
+	if (node->type == WLR_SCENE_NODE_TREE) {
+		struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
+		struct wlr_scene_node *child;
+		wl_list_for_each(child, &tree->children, link) {
+			optimized_blur_flag_overwritten_rec(child, self, box);
+		}
+	}
+}
+
+static void optimized_blur_flag_overwritten(struct wlr_scene *scene,
+		struct wlr_scene_optimized_blur *self, const struct wlr_box *box) {
+	optimized_blur_flag_overwritten_rec(&scene->tree.node, self, box);
+}
+
 static void scene_entry_render(struct render_list_entry *entry, const struct render_data *data) {
 	struct wlr_scene_node *node = entry->node;
 	struct fx_gles_render_pass *fx_pass = fx_get_render_pass(data->render_pass);
@@ -2774,9 +2825,19 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 				scene_blur->dirty = false;
 				int bx, by;
 				if (wlr_scene_node_coords(node, &bx, &by)) {
+					struct wlr_box box = {
+						.x = bx, .y = by,
+						.width = scene_blur->width, .height = scene_blur->height,
+					};
 					scene_blur->baked = true;
 					scene_blur->baked_x = bx;
 					scene_blur->baked_y = by;
+					scene_blur->baked_output = data->output;
+					scene_blur->baked_full = wlr_box_contains_box(&data->logical, &box);
+					scene_blur->overwritten = false;
+					// Any other bake this one landed on top of in the cache
+					// now reads wrong under its owner: flag it for the thaw.
+					optimized_blur_flag_overwritten(scene, scene_blur, &box);
 				}
 			}
 		}
@@ -2840,11 +2901,15 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		struct fx_corner_radii blur_corners = blur->corners;
 		fx_corner_radii_transform(node_transform, &blur_corners);
 
-		// Frozen scene: sample the shared cache where this node's own bake
-		// lives — the sibling optimized node's coordinates at its last bake
-		// — rather than at the node's current position.
+		// Sample the shared cache where this node's own bake lives — the
+		// sibling optimized node's coordinates at its last bake — rather
+		// than at the node's current position: the cache is drawn shifted
+		// by the node's travel since the bake, so screen pixel s shows
+		// cache pixel s - travel, the bake's own pixel for that spot. Only
+		// a bake made on THIS output and covering the whole node is usable
+		// that way; any other (while the scene is not frozen) is re-baked.
 		int freeze_dx = 0, freeze_dy = 0;
-		if (scene->blur_frozen && blur->should_only_blur_bottom_layer &&
+		if (blur->should_only_blur_bottom_layer &&
 				data->transform == WL_OUTPUT_TRANSFORM_NORMAL && node->parent) {
 			struct wlr_scene_node *sib;
 			wl_list_for_each(sib, &node->parent->children, link) {
@@ -2853,12 +2918,21 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 				}
 				struct wlr_scene_optimized_blur *opt = wlr_scene_optimized_blur_from_node(sib);
 				int cur_x, cur_y;
-				if (opt->baked && wlr_scene_node_coords(sib, &cur_x, &cur_y)) {
-					// The cache is drawn shifted by the node's travel since
-					// the bake: screen pixel s then shows cache pixel
-					// s - travel, i.e. the bake's own pixel for that spot.
+				if (!wlr_scene_node_coords(sib, &cur_x, &cur_y)) {
+					break;
+				}
+				bool moved = opt->baked && (cur_x != opt->baked_x || cur_y != opt->baked_y);
+				if (opt->baked && opt->baked_output == data->output &&
+						(opt->baked_full || scene->blur_frozen)) {
+					// Anchored: a full bake wherever it went; a partial one
+					// only while frozen (its covered part stays right, and
+					// the thaw re-bakes it).
 					freeze_dx = cur_x - opt->baked_x;
 					freeze_dy = cur_y - opt->baked_y;
+				} else if (!scene->blur_frozen && moved && !opt->dirty) {
+					// Unfrozen, moved since a bake that cannot follow it
+					// (partial, or from another output): bake once here.
+					wlr_scene_optimized_blur_mark_dirty(opt);
 				}
 				break;
 			}

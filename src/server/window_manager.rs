@@ -2888,13 +2888,14 @@ impl WindowManager {
         // with real cells for the frame or two the client needs to render
         // the flight's replacement patch (backdrop-only exposure was the
         // "cells at the bottom appear late" gap).
-        // A pure pan counts too: a fast trackpad flick or wheel run can
-        // outrun the client's patch, and without the fallback the leading
-        // edge showed bare backdrop until the next patch latched.
+        // NOT a pure pan: enabling the cell pool is a three-frame rect
+        // enable/redraw below every window, which reads to the scene as
+        // content changing and re-bakes every blur at the start and end of
+        // every pan. A pan that outruns its (prefetched, fixed-size) patch
+        // briefly shows bare backdrop at the leading edge instead.
         let cells_wanted = plan.grid_cells_enabled
             || self.camera_ramp_anim.is_some()
-            || self.target_desk_zoom.is_some()
-            || self.viewport_is_active;
+            || self.target_desk_zoom.is_some();
         if self.grid_cells_enabled != cells_wanted {
             self.grid_cells_enabled = cells_wanted;
             // The cell pools redraw only on structure changes; force one so
