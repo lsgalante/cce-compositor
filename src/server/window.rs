@@ -398,6 +398,13 @@ pub struct Window {
     /// The border zone the pointer is over (set by cursor.rs); that segment
     /// draws in `hover_color` while set.
     pub hovered_border_element: Option<BorderElement>,
+    /// The zone the ring was last DRAWN with, so `step_border_fade` can tell
+    /// a hover change from a settled ring. In overview every zone already
+    /// sits at full reveal, so a hover swap moves no reveal value at all —
+    /// and a step keyed on reveal alone never repainted, leaving the shader
+    /// on whatever zone the last unrelated commit happened to push. The
+    /// highlight lagged one hover behind: "the wrong handle lights up".
+    pub border_hover_drawn: Option<BorderElement>,
     /// Per-zone reveal factor, 0.0 (fully hidden) to 1.0 (fully drawn),
     /// indexed by `BorderElement::index`. Borders rest invisible and only the
     /// zone under the pointer fades in. Deliberately NOT part of
@@ -706,6 +713,7 @@ impl Window {
                 tree: border_tree,
             },
             hovered_border_element: None,
+            border_hover_drawn: None,
             border_reveal: [0.0; 8],
             decorations_above: std::mem::zeroed(),
             decorations_above_tree,
@@ -3458,6 +3466,11 @@ impl Window {
             moving = true;
             changed = true;
         }
+        // A hover swap on a fully revealed ring moves nothing above, but the
+        // shader still has to be told which zone to paint.
+        if self.hovered_border_element != self.border_hover_drawn {
+            changed = true;
+        }
         if changed {
             self.draw_borders();
         }
@@ -3806,6 +3819,9 @@ impl Window {
                 && (cw as f64 * sc) >= 12.0
                 && (ch as f64 * sc) >= 12.0;
             if !handles_on {
+                // Nothing is drawn, so nothing is stale: without this the
+                // fade step would see a mismatch and repaint every tick.
+                self.border_hover_drawn = self.hovered_border_element;
                 for r in [self.border.left, self.border.right, self.border.top, self.border.bottom] {
                     ffi::wlr_scene_node_set_enabled(r as *mut ffi::wlr_scene_node, false);
                 }
@@ -3904,6 +3920,7 @@ impl Window {
                 .hovered_border_element
                 .map(|e| e.index() as f32)
                 .unwrap_or(-1.0);
+            self.border_hover_drawn = self.hovered_border_element;
             ffi::wlr_scene_frame_set_hover(
                 self.border.frame,
                 hovered,

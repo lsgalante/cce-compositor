@@ -359,7 +359,15 @@ where the old band sat outside them.
   Each gap therefore separates two thin tips: the frame pinches at every
   join and thickens toward every piece's middle.
   The gap notches sever only the band; a groove across a pad would read as
-  damage. Both `get_border_zone` and the drawing treat a pad as its corner's
+  damage. The shader's zone logic works in TOP-DOWN box-local coordinates
+  (`gl_FragCoord` minus the box position, unflipped): the `corner_dist` SDF
+  flips its own copy, and mirroring the zone coordinate the same way once
+  swapped every zone label vertically — the top edge lit the bottom. And a
+  hover swap must repaint even when no reveal value moves: in overview the
+  ring is already fully revealed, so `step_border_fade` compares the hovered
+  zone against the one last drawn (`border_hover_drawn`), or the shader
+  keeps showing the previous zone until an unrelated commit repaints.
+  Both `get_border_zone` and the drawing treat a pad as its corner's
   zone — its tip reaches past the band, so the hit test carries a matching
   corner-disc check. The corner run (`corner_length`) clamps PER SIDE at 0.45
   of that side's length, in the shader and the hit test alike: two corner

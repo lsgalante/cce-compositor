@@ -82,23 +82,24 @@ void main() {
     }
     float depth = -dist; // 0 at the silhouette, growing inward
 
-    // Rect-local position, in the SAME y-flipped space corner_dist works in
-    // (see corner_alpha.frag: it flips y after subtracting `position`).
-    // Without the flip the zone logic is upside down relative to the SDF.
+    // Rect-local position, TOP-DOWN: gl_FragCoord minus the box position is
+    // already y-down box-local here (the pass renders under a FLIPPED_180
+    // projection, so fragment row 0 is the top of the buffer — see the same
+    // note in droplet.frag). Everything below that names a side — dt/db,
+    // the corner pads, the zones — reads y as "distance from the top", so
+    // this must NOT be flipped the way corner_dist flips its own copy: the
+    // SDF is symmetric under that flip (one radius for all four corners),
+    // but the zone labels are not, and flipping here mirrored them
+    // vertically — hovering the top edge lit the bottom one, and each top
+    // corner lit the corner below it.
     vec2 p = gl_FragCoord.xy - position;
-    p.y = size.y - p.y;
 
-    // A client popover owns this rect; the ring yields to it wholesale.
-    // The rect arrives top-left-origin (y down); p here is y-UP — the flip
-    // above mirrors gl_FragCoord's orientation rather than cancelling it —
-    // so the rect's y converts. (Found empirically: an un-flipped compare
-    // cut the bottom-left when the menu was top-left, with x exact.)
+    // A client popover owns this rect; the ring yields to it wholesale. The
+    // rect arrives top-left-origin (y down), the same space as p.
     if (exclusion.z > 0.0 && exclusion.w > 0.0
-            && p.x >= exclusion.x && p.x < exclusion.x + exclusion.z) {
-        float ey = size.y - exclusion.y - exclusion.w;
-        if (p.y >= ey && p.y < ey + exclusion.w) {
-            discard;
-        }
+            && p.x >= exclusion.x && p.x < exclusion.x + exclusion.z
+            && p.y >= exclusion.y && p.y < exclusion.y + exclusion.w) {
+        discard;
     }
 
     // Which side owns this fragment: whichever edge it sits nearer. The
