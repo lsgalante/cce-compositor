@@ -591,8 +591,11 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
                 curr_out = (*curr_out).next;
             }
             if patch.scale > 0.0 {
-                let sx = ox + ((patch.x - wm.desk_pan_x) * zoom) as i32;
-                let sy = oy + ((patch.y - wm.desk_pan_y) * zoom) as i32;
+                // Rounded like every other virtual->screen placement (the
+                // arrange pass and the fallback lattice); truncation here put
+                // the latched patch a pixel off the lattice it replaces.
+                let sx = ox + ((patch.x - wm.desk_pan_x) * zoom).round() as i32;
+                let sy = oy + ((patch.y - wm.desk_pan_y) * zoom).round() as i32;
                 (*window).rendering_requested.x = sx;
                 (*window).rendering_requested.y = sy;
                 (*window).scale = zoom / patch.scale;

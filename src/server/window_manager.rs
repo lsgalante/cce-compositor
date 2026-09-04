@@ -686,8 +686,8 @@ impl WindowManager {
         let zoom = self.desk_zoom;
         let radius = (self.layout.backplate_corner_radius as f64 * zoom) as i32;
         for p in &self.restore_placeholders {
-            let x = out_x + ((p.vx - self.desk_pan_x) * zoom) as i32;
-            let y = out_y + ((p.vy - self.desk_pan_y) * zoom) as i32;
+            let x = out_x + ((p.vx - self.desk_pan_x) * zoom).round() as i32;
+            let y = out_y + ((p.vy - self.desk_pan_y) * zoom).round() as i32;
             ffi::river_scene_node_set_position_if_changed(p.rect as *mut ffi::wlr_scene_node, x, y);
             ffi::river_scene_rect_set_size_if_changed(
                 p.rect,
