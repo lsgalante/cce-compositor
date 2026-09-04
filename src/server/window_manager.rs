@@ -3627,6 +3627,17 @@ impl WindowManager {
         self.keep_status_bar_on_top();
     }
 
+    /// The overview action a socket command stands for: the keyed
+    /// (focused-window) exit when in overview, else the enter. See the
+    /// "overview" arm of the control handler for why not the toggle.
+    fn overview_action_for_socket(&self) -> crate::config::Action {
+        if self.mode == WindowManagerMode::Overview {
+            crate::config::Action::OverviewExit
+        } else {
+            crate::config::Action::OverviewEnter
+        }
+    }
+
     pub unsafe fn execute_action(&mut self, action: &crate::config::Action, command: Option<&str>) {
         use crate::config::Action;
         self.stop_panning_animation();
@@ -4097,9 +4108,19 @@ impl WindowManager {
                 self.execute_action(&crate::config::Action::Close, None);
                 "ok\n".to_string()
             }
-            // "expose" is the retired name for the overview toggle.
+            // "expose" is the retired name for the overview toggle. The
+            // halves rather than `Action::Overview`: the toggle's exit is
+            // cursor-driven (it lands on the hovered window, else on the
+            // virtual point under the pointer), which suits a gesture but
+            // not a socket command, whose pointer is wherever it was left —
+            // a scripted exit in a headless shadow, pointer idle at its
+            // startup position on the background, came back panned a
+            // screen away from every window. The keyed exit lands on the
+            // focused window and falls back to the cursor only when
+            // nothing is focused; the enter half is identical to the
+            // toggle's.
             "overview" | "expose" => {
-                self.execute_action(&crate::config::Action::Overview, None);
+                self.execute_action(&self.overview_action_for_socket(), None);
                 "ok\n".to_string()
             }
             "wm-mode" => {
@@ -4107,14 +4128,15 @@ impl WindowManager {
                     return format!("{:?}\n", self.mode).to_lowercase();
                 }
                 let target = parts[1].to_lowercase();
+                // Same pointer-less halves as the "overview" command above.
                 if target == "normal" {
                     if self.mode == WindowManagerMode::Overview {
-                        self.execute_action(&crate::config::Action::Overview, None);
+                        self.execute_action(&crate::config::Action::OverviewExit, None);
                     }
                     return "ok\n".to_string();
                 } else if target == "overview" {
                     if self.mode == WindowManagerMode::Normal {
-                        self.execute_action(&crate::config::Action::Overview, None);
+                        self.execute_action(&crate::config::Action::OverviewEnter, None);
                     }
                     return "ok\n".to_string();
                 }

@@ -60,7 +60,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  place-next <app_id> <x> <y> # one-shot: next map of app_id lands near this layout pos");
     print("  place-next-cell <app_id> <x> <y> # one-shot: next map covers the grid square at this pos,");
     print("                              # keeping its size and growing away from its neighbours");
-    print("  overview");
+    print("  overview                   # toggle; the exit lands on the focused window, not the pointer");
     print("  windows [--json]           # list windows; --json emits one JSON object per line");
     print("  status-hide-mode [true|false]");
     print("  adjust-position-mode [true|false|query]");
