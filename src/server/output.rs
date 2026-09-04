@@ -1594,6 +1594,9 @@ pub(crate) fn frame_debug() -> bool {
 
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let output = &mut *crate::container_of!(listener, Output, frame);
+    // The camera steps here, on the vblank, so what this frame renders is
+    // the position computed for it (see WindowManager::step_camera_frame).
+    (*output.server).wm.step_camera_frame();
     let render_start = if frame_debug() {
         Some(std::time::Instant::now())
     } else {

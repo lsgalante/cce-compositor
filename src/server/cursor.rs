@@ -2056,9 +2056,9 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
                 // velocity estimate is kept for the coast on the lift.
                 wm.stop_panning_animation();
                 if vertical {
-                    wm.desk_pan_y += step;
+                    wm.queue_pan(0.0, step);
                 } else {
-                    wm.desk_pan_x += step;
+                    wm.queue_pan(step, 0.0);
                 }
                 let dt_ms = now_ms.wrapping_sub(cursor.pan_last_msec[axis]).clamp(4, 100) as f64;
                 let sample = step / (dt_ms / 1000.0);
@@ -2069,11 +2069,6 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
                 };
                 cursor.pan_last_msec[axis] = now_ms;
                 wm.pan_finger_v[axis] = cursor.pan_vel[axis];
-                if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
-                    wm.update_viewport_local();
-                } else {
-                    wm.dirty_windowing();
-                }
             } else if was_panning {
                 // The lift (libinput's zero-delta finger event): fling on the
                 // estimated velocity unless the finger had come to rest first

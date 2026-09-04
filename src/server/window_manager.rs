@@ -177,6 +177,16 @@ pub struct WindowManager {
     /// gesture is panning the desktop; zero otherwise. Grid patches use it
     /// to prefetch toward where the gesture is heading.
     pub pan_finger_v: [f64; 2],
+    /// A camera animation (wheel glide, coast, zoom target, overview ramp) is
+    /// live: `step_camera_frame` advances it once per output frame, and the
+    /// watchdog timer keeps frames coming while it is set.
+    pub camera_anim_active: bool,
+    /// Finger-pan motion (virtual units, `[x, y]`) queued since the last
+    /// frame. Trackpad axis events used to relayout the desktop per event
+    /// (twice per sample for a diagonal); they now accumulate here and are
+    /// applied once, at the output frame, so the on-screen step lands on
+    /// the vblank instead of whenever the last event happened to arrive.
+    pub pan_pending: [f64; 2],
     pub animation_timer: *mut ffi::wl_event_source,
     /// Edge auto-pan velocity during an interactive move/resize, in SCREEN
     /// px/s (the tick divides by zoom). Written by `Seat::update_edge_pan`
@@ -364,6 +374,8 @@ impl WindowManager {
         self.pan_coast_vy = 0.0;
         self.zoom_anchor = None;
         self.pan_finger_v = [0.0, 0.0];
+        self.camera_anim_active = false;
+        self.pan_pending = [0.0, 0.0];
         self.animation_timer = std::ptr::null_mut();
         self.edge_pan_vx = 0.0;
         self.edge_pan_vy = 0.0;
@@ -1259,6 +1271,8 @@ impl WindowManager {
         self.pan_coast_vx = 0.0;
         self.pan_coast_vy = 0.0;
         self.zoom_anchor = None;
+        self.camera_anim_active = false;
+        self.anim_last_tick = None;
     }
 
     /// Wheel-glide rate for the desktop camera, 1/s (`input { scroll_ease }`).
@@ -1455,11 +1469,16 @@ impl WindowManager {
         }
     }
 
-    /// Arm the camera animation timer (creating it on first use): every 16ms
-    /// `handle_panning_animation_tick` eases `desk_pan_x/y` toward
-    /// `target_desk_pan_x/y` and `desk_zoom` toward `target_desk_zoom` (the
-    /// overview enter/exit transition). Callers set the targets first.
+    /// Start (or continue) the camera animation: the step itself runs in
+    /// `step_camera_frame` on every output frame, so this schedules a frame
+    /// and arms the watchdog timer that keeps frames flowing while the
+    /// animation is live. Callers set the targets first.
     pub unsafe fn start_panning_animation(&mut self) {
+        self.camera_anim_active = true;
+        if self.anim_last_tick.is_none() {
+            self.anim_last_tick = Some(std::time::Instant::now());
+        }
+        self.schedule_frame_all_outputs();
         if self.animation_timer.is_null() {
             let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
             self.animation_timer = ffi::wl_event_loop_add_timer(
@@ -1469,11 +1488,169 @@ impl WindowManager {
             );
         }
         if !self.animation_timer.is_null() {
-            if self.anim_last_tick.is_none() {
-                self.anim_last_tick = Some(std::time::Instant::now());
-            }
-            ffi::wl_event_source_timer_update(self.animation_timer, 16);
+            ffi::wl_event_source_timer_update(self.animation_timer, CAMERA_WATCHDOG_MS);
         }
+    }
+
+    /// Ask every enabled output for a frame (the camera step runs in the
+    /// frame handler). A no-op for an output that already has one pending.
+    pub unsafe fn schedule_frame_all_outputs(&mut self) {
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*outputs_list).next;
+        while curr != outputs_list {
+            let next = (*curr).next;
+            let output = crate::container_of!(curr, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                ffi::wlr_output_schedule_frame((*output).wlr_output);
+            }
+            curr = next;
+        }
+    }
+
+    /// Queue finger-pan motion for the next output frame (see `pan_pending`).
+    pub unsafe fn queue_pan(&mut self, dx: f64, dy: f64) {
+        self.pan_pending[0] += dx;
+        self.pan_pending[1] += dy;
+        self.schedule_frame_all_outputs();
+    }
+
+    /// The camera step for the frame about to render: apply queued finger
+    /// motion, advance any live animation by the real elapsed time, and
+    /// relayout if the camera moved. Called from the output frame handler
+    /// before `render_and_commit`, so the position on screen is the one
+    /// computed for this vblank.
+    pub unsafe fn step_camera_frame(&mut self) {
+        let has_pending = self.pan_pending != [0.0, 0.0];
+        if !self.camera_anim_active && !has_pending {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let dt = self.anim_last_tick.map_or(0.0, |t| now.duration_since(t).as_secs_f64());
+        // A second output's frame in the same vblank takes no extra step.
+        if self.camera_anim_active && !has_pending && dt < 0.002 {
+            return;
+        }
+        if has_pending {
+            self.desk_pan_x += self.pan_pending[0];
+            self.desk_pan_y += self.pan_pending[1];
+            self.pan_pending = [0.0, 0.0];
+        }
+        if self.camera_anim_active {
+            self.anim_last_tick = Some(now);
+            if self.advance_camera_animation(dt.clamp(0.0, 0.1)) {
+                self.camera_anim_active = false;
+                self.anim_last_tick = None;
+            }
+        }
+        if matches!(self.state, WindowManagerState::Idle) {
+            self.update_viewport_local();
+        } else {
+            self.dirty_windowing();
+        }
+    }
+
+    /// Advance the camera animation by `dt` seconds. Returns true when
+    /// nothing is left to animate.
+    unsafe fn advance_camera_animation(&mut self, dt: f64) -> bool {
+        let mut done = true;
+        // Frame-rate independent exponential approach: the same fraction of
+        // the remaining distance per unit time whatever the frame pacing.
+        let factor = 1.0 - (-self.scroll_ease_rate() * dt).exp();
+
+        // Ramp-driven transition: position is a pure function of elapsed
+        // time, so a stalled frame never changes where the camera lands.
+        let ramp = self.camera_ramp_anim.as_ref().map(|a| {
+            (a.start, a.target, a.started.elapsed().as_secs_f64() * 1000.0 / a.duration_ms)
+        });
+        if let Some((start, target, t)) = ramp {
+            if t >= 1.0 {
+                self.desk_pan_x = target.pan_x;
+                self.desk_pan_y = target.pan_y;
+                self.desk_zoom = target.zoom;
+                self.camera_ramp_anim = None;
+            } else if let Some((ramp, _)) = &self.layout.overview_anim {
+                let p = ramp.progress(t);
+                let cam = crate::policy::camera::anchored_interp(start, target, p);
+                self.desk_pan_x = cam.pan_x;
+                self.desk_pan_y = cam.pan_y;
+                self.desk_zoom = cam.zoom;
+                done = false;
+            } else {
+                // Ramp was unconfigured mid-flight (reload): land instantly.
+                self.desk_pan_x = target.pan_x;
+                self.desk_pan_y = target.pan_y;
+                self.desk_zoom = target.zoom;
+                self.camera_ramp_anim = None;
+            }
+        }
+
+        if let Some(target_x) = self.target_desk_pan_x {
+            let dx = target_x - self.desk_pan_x;
+            if dx.abs() > 0.5 {
+                self.desk_pan_x += dx * factor;
+                done = false;
+            } else {
+                self.desk_pan_x = target_x;
+                self.target_desk_pan_x = None;
+            }
+        }
+        if let Some(target_y) = self.target_desk_pan_y {
+            let dy = target_y - self.desk_pan_y;
+            if dy.abs() > 0.5 {
+                self.desk_pan_y += dy * factor;
+                done = false;
+            } else {
+                self.desk_pan_y = target_y;
+                self.target_desk_pan_y = None;
+            }
+        }
+
+        // Zoom eases geometrically (exponential approach in log space): a
+        // linear step would leap multiple-x per frame at the small end of an
+        // overview exit, while a constant per-frame RATIO reads as uniform
+        // motion.
+        if let Some(target_zoom) = self.target_desk_zoom {
+            let cur = self.desk_zoom.max(1e-6);
+            let log_delta = (target_zoom / cur).ln();
+            let new_zoom = if log_delta.abs() > 0.001 {
+                done = false;
+                cur * (log_delta * factor).exp()
+            } else {
+                self.target_desk_zoom = None;
+                target_zoom
+            };
+            // An anchored zoom (wheel zoom about the cursor) re-derives the
+            // pan from the anchor every step, so the pivot never wanders.
+            if let Some((ax, ay)) = self.zoom_anchor {
+                let cam = crate::policy::camera::zoom_about_anchor(self.camera(), ax, ay, new_zoom);
+                self.desk_pan_x = cam.pan_x;
+                self.desk_pan_y = cam.pan_y;
+                self.desk_zoom = cam.zoom;
+                if self.target_desk_zoom.is_none() {
+                    self.zoom_anchor = None;
+                }
+            } else {
+                self.desk_zoom = new_zoom;
+            }
+        }
+
+        // Kinetic pan: a trackpad flick's velocity carries the desktop on,
+        // decaying under friction; it stalls below one screen pixel per frame.
+        if self.pan_coast_vx != 0.0 || self.pan_coast_vy != 0.0 {
+            self.desk_pan_x += self.pan_coast_vx * dt;
+            self.desk_pan_y += self.pan_coast_vy * dt;
+            let decay = (-self.scroll_friction() * dt).exp();
+            self.pan_coast_vx *= decay;
+            self.pan_coast_vy *= decay;
+            let screen_speed = self.pan_coast_vx.hypot(self.pan_coast_vy) * self.desk_zoom;
+            if screen_speed < 5.0 {
+                self.pan_coast_vx = 0.0;
+                self.pan_coast_vy = 0.0;
+            } else {
+                done = false;
+            }
+        }
+        done
     }
 
     pub unsafe fn ensure_windowing(&self) -> bool {
@@ -2860,7 +3037,15 @@ impl WindowManager {
         self.last_viewport_pan_x = self.desk_pan_x;
         self.last_viewport_pan_y = self.desk_pan_y;
 
+        let arrange_t0 = crate::output::frame_debug().then(std::time::Instant::now);
         self.arrange_views();
+        if let Some(t0) = arrange_t0 {
+            log::info!(
+                "[cce-frame] viewport relayout {}us ({} windows, moved={moved})",
+                t0.elapsed().as_micros(),
+                self.windows.count()
+            );
+        }
         // Clear rendering dirty flag so we don't trigger the idle callback's IPC handshake
         self.rendering_scheduled.dirty = false;
         self.remove_dirty_idle();
@@ -5680,129 +5865,22 @@ pub struct CameraRampAnim {
     pub duration_ms: f64,
 }
 
+/// Interval of the camera-animation watchdog. The camera steps in the
+/// output frame handler; this timer only re-requests a frame while an
+/// animation is live, so a frame pipeline that goes quiet (nothing else
+/// damaged, an output that stopped delivering frames) cannot strand it.
+const CAMERA_WATCHDOG_MS: i32 = 50;
+
 pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let wm = data as *mut WindowManager;
     if wm.is_null() {
         return 0;
     }
-
-    let mut done = true;
-    // Frame-rate independent exponential approach: the same fraction of the
-    // remaining distance per unit time whatever the timer's actual cadence
-    // (a 16ms timer under load fires late; the old fixed 0.15/tick then
-    // stuttered). dt is clamped so a stalled loop cannot leap.
-    let now = std::time::Instant::now();
-    let dt = (*wm)
-        .anim_last_tick
-        .map_or(0.016, |t| now.duration_since(t).as_secs_f64())
-        .clamp(0.0, 0.1);
-    (*wm).anim_last_tick = Some(now);
-    let factor = 1.0 - (-(*wm).scroll_ease_rate() * dt).exp();
-
-    // Ramp-driven transition: position is a pure function of elapsed time,
-    // so a stalled tick (busy frame) never changes where the camera lands.
-    if let Some(anim) = &(*wm).camera_ramp_anim {
-        let t = anim.started.elapsed().as_secs_f64() * 1000.0 / anim.duration_ms;
-        if t >= 1.0 {
-            (*wm).desk_pan_x = anim.target.pan_x;
-            (*wm).desk_pan_y = anim.target.pan_y;
-            (*wm).desk_zoom = anim.target.zoom;
-            (*wm).camera_ramp_anim = None;
-        } else if let Some((ramp, _)) = &(*wm).layout.overview_anim {
-            let p = ramp.progress(t);
-            let cam = crate::policy::camera::anchored_interp(anim.start, anim.target, p);
-            (*wm).desk_pan_x = cam.pan_x;
-            (*wm).desk_pan_y = cam.pan_y;
-            (*wm).desk_zoom = cam.zoom;
-            done = false;
-        } else {
-            // Ramp was unconfigured mid-flight (reload): land instantly.
-            (*wm).desk_pan_x = anim.target.pan_x;
-            (*wm).desk_pan_y = anim.target.pan_y;
-            (*wm).desk_zoom = anim.target.zoom;
-            (*wm).camera_ramp_anim = None;
-        }
-    }
-
-    if let Some(target_x) = (*wm).target_desk_pan_x {
-        let dx = target_x - (*wm).desk_pan_x;
-        if dx.abs() > 0.5 {
-            (*wm).desk_pan_x += dx * factor;
-            done = false;
-        } else {
-            (*wm).desk_pan_x = target_x;
-            (*wm).target_desk_pan_x = None;
-        }
-    }
-    
-    if let Some(target_y) = (*wm).target_desk_pan_y {
-        let dy = target_y - (*wm).desk_pan_y;
-        if dy.abs() > 0.5 {
-            (*wm).desk_pan_y += dy * factor;
-            done = false;
-        } else {
-            (*wm).desk_pan_y = target_y;
-            (*wm).target_desk_pan_y = None;
-        }
-    }
-
-    // Zoom eases geometrically (exponential approach in log space): a linear
-    // step would leap multiple-x per frame at the small end of an overview
-    // exit, while a constant per-frame RATIO reads as uniform motion.
-    if let Some(target_zoom) = (*wm).target_desk_zoom {
-        let cur = (*wm).desk_zoom.max(1e-6);
-        let log_delta = (target_zoom / cur).ln();
-        let new_zoom = if log_delta.abs() > 0.001 {
-            done = false;
-            cur * (log_delta * factor).exp()
-        } else {
-            (*wm).target_desk_zoom = None;
-            target_zoom
-        };
-        // An anchored zoom (wheel zoom about the cursor) re-derives the pan
-        // from the anchor every step, so the pivot never wanders mid-glide.
-        if let Some((ax, ay)) = (*wm).zoom_anchor {
-            let cam = crate::policy::camera::zoom_about_anchor((*wm).camera(), ax, ay, new_zoom);
-            (*wm).desk_pan_x = cam.pan_x;
-            (*wm).desk_pan_y = cam.pan_y;
-            (*wm).desk_zoom = cam.zoom;
-            if (*wm).target_desk_zoom.is_none() {
-                (*wm).zoom_anchor = None;
-            }
-        } else {
-            (*wm).desk_zoom = new_zoom;
-        }
-    }
-
-    // Kinetic pan: a trackpad flick's velocity carries the desktop on,
-    // decaying under friction; it stalls below one screen pixel per frame.
-    if (*wm).pan_coast_vx != 0.0 || (*wm).pan_coast_vy != 0.0 {
-        (*wm).desk_pan_x += (*wm).pan_coast_vx * dt;
-        (*wm).desk_pan_y += (*wm).pan_coast_vy * dt;
-        let decay = (-(*wm).scroll_friction() * dt).exp();
-        (*wm).pan_coast_vx *= decay;
-        (*wm).pan_coast_vy *= decay;
-        let screen_speed = ((*wm).pan_coast_vx.hypot((*wm).pan_coast_vy)) * (*wm).desk_zoom;
-        if screen_speed < 5.0 {
-            (*wm).pan_coast_vx = 0.0;
-            (*wm).pan_coast_vy = 0.0;
-        } else {
-            done = false;
-        }
-    }
-
-    if matches!((*wm).state, WindowManagerState::Idle) {
-        (*wm).update_viewport_local();
-    } else {
-        (*wm).dirty_windowing();
-    }
-    
-    if !done {
+    if (*wm).camera_anim_active {
+        (*wm).schedule_frame_all_outputs();
         if !(*wm).animation_timer.is_null() {
-            ffi::wl_event_source_timer_update((*wm).animation_timer, 16);
+            ffi::wl_event_source_timer_update((*wm).animation_timer, CAMERA_WATCHDOG_MS);
         }
-    } else {
-        (*wm).anim_last_tick = None;
     }
     0
 }
