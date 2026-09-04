@@ -536,10 +536,18 @@ impl Output {
         self.draw_grid();
         self.draw_adjust_overlay();
         // Right after draw_grid, whose geometry this reuses, and BEFORE the
-        // needs-frame early-out: a camera pan slides the lattice under a
+        // needs-frame early-out: a camera move slides the lattice under a
         // segment that has no damage of its own, and the bar still has to
-        // hear about it.
-        self.measure_status_backdrops();
+        // hear about it — once the camera has SETTLED. During the motion
+        // itself the measurement is skipped: the sliding lattice changed the
+        // quantized reading on most frames (a push and a bar repaint each),
+        // and a window under a segment moved its sampled region every frame,
+        // defeating the per-(window, region) readback cache — a GPU texture
+        // readback inside the render path, per pan frame. The settle's full
+        // repaint frame runs the measurement with the final camera.
+        if !(*self.server).wm.viewport_is_active {
+            self.measure_status_backdrops();
+        }
 
         // A parked `ccectl screenshot` targeting this output forces a render
         // even without damage so there is a fresh buffer to read back.
