@@ -465,6 +465,11 @@ pub struct Window {
     /// The patch the CURRENT buffer covers — what arrange anchors to.
     pub grid_patch_current: Option<crate::policy::api::GridPatch>,
     pub grid_patch_serial: u32,
+    /// The current patch was rendered under a style config that has since
+    /// changed (reload, or a `layout` change to the desktop keys): re-issue
+    /// it on the next arrange even though its coverage is still fine. See
+    /// `WindowManager::invalidate_grid_patches`.
+    pub grid_patch_stale: bool,
     pub saved_floating_width: i32,
     pub saved_floating_height: i32,
     pub saved_floating_virtual_x: f64,
@@ -723,6 +728,7 @@ impl Window {
             grid_patch_acked: None,
             grid_patch_current: None,
             grid_patch_serial: 0,
+            grid_patch_stale: false,
             saved_floating_width: 0,
             saved_floating_height: 0,
             saved_floating_virtual_x: 0.0,

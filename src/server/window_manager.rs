@@ -2343,11 +2343,16 @@ impl WindowManager {
             if !matches!((*w).state, crate::window::WindowState::Mapped) {
                 continue;
             }
-            if (*w).grid_patch_current.as_ref().map_or(false, &covers) {
+            // A stale patch (style changed since it was rendered) is
+            // re-issued regardless of coverage; a covering patch already in
+            // flight is left to latch first, and the flag then re-sends
+            // once it has become current.
+            let stale = (*w).grid_patch_stale;
+            if !stale && (*w).grid_patch_current.as_ref().map_or(false, &covers) {
                 continue;
             }
             if let Some(cur) = &(*w).grid_patch_current {
-                explain("current", cur);
+                explain(if stale { "stale" } else { "current" }, cur);
             }
             if let Some((_, pending)) = &(*w).grid_patch_pending {
                 if covers(pending) {
@@ -2410,11 +2415,28 @@ impl WindowManager {
                 .cce_window_management
                 .send_grid_patch((*w).ref_key, serial, patch)
             {
-                log::info!("[Grid] sent patch #{serial}: {:.0},{:.0} {:.0}x{:.0} @{:.3}",
-                    patch.x, patch.y, patch.w, patch.h, patch.scale);
+                log::info!("[Grid] sent patch #{serial}: {:.0},{:.0} {:.0}x{:.0} @{:.3}{}",
+                    patch.x, patch.y, patch.w, patch.h, patch.scale,
+                    if stale { " (style reload)" } else { "" });
                 (*w).grid_patch_pending = Some((serial, patch));
+                (*w).grid_patch_stale = false;
             } else {
                 log::info!("[Grid] patch #{serial} not sent (no toplevel resource yet)");
+            }
+        }
+    }
+
+    /// Mark every grid client's rendered patch stale so `update_grid_patches`
+    /// re-issues it on the next arrange even though its coverage is still
+    /// fine. The grid client is a pure function of (patch, style config) and
+    /// repaints only when handed a patch, so after a config reload — or a
+    /// `layout` change to a desktop key — an unmoved viewport kept showing
+    /// the OLD cell size and colors until the camera happened to travel far
+    /// enough to need a fresh patch.
+    pub unsafe fn invalidate_grid_patches(&mut self) {
+        for &w in self.windows.iter() {
+            if !w.is_null() && !(*w).closed && (*w).is_grid() {
+                (*w).grid_patch_stale = true;
             }
         }
     }
@@ -4371,6 +4393,9 @@ impl WindowManager {
                 }
                 self.retile_for_grid_change(old_sp);
                 self.remap_saved_entries(&old_sp);
+                if key.starts_with("desktop_") || key.starts_with("grid_cell") {
+                    self.invalidate_grid_patches();
+                }
                 self.dirty_windowing();
                 "ok\n".to_string()
             }
@@ -4827,6 +4852,9 @@ impl WindowManager {
                     // reload too — closed windows must reopen on their
                     // squares, not their stale pixels.
                     self.remap_saved_entries(&old_sp);
+                    // The grid client reads the same desktop keys and only
+                    // repaints when handed a patch: hand it one.
+                    self.invalidate_grid_patches();
                     self.dirty_windowing();
 
                     // Process old PIDs
