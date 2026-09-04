@@ -37,6 +37,10 @@ static bool cce_blur_debug(void) {
 	return enabled;
 }
 
+static void read_to_buffer_offset(struct fx_gles_render_pass *pass,
+		pixman_region32_t *_region, struct fx_framebuffer *dst_buffer,
+		struct fx_framebuffer *src_buffer, int ox, int oy);
+
 struct fx_render_texture_options fx_render_texture_options_default(
 		const struct wlr_render_texture_options *base) {
 	struct fx_render_texture_options options = {
@@ -92,10 +96,15 @@ bool fx_render_pass_init_offscreen_buffers(struct wlr_render_pass *render_pass,
 			&pass->fx_offscreen_buffers->effects_buffer, &failed);
 	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
 			&pass->fx_offscreen_buffers->effects_buffer_swapped, &failed);
-	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
+	// The optimized-blur cache carries a quarter-output margin on every
+	// side (see fx_offscreen_buffers.cache_margin_*).
+	const int margin_x = width / 4;
+	const int margin_y = height / 4;
+	pass->fx_offscreen_buffers->cache_margin_x = margin_x;
+	pass->fx_offscreen_buffers->cache_margin_y = margin_y;
+	fx_framebuffer_get_or_create_custom(renderer, output->allocator,
+			width + 2 * margin_x, height + 2 * margin_y, false,
 			&pass->fx_offscreen_buffers->optimized_blur_buffer, &failed);
-	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
-			&pass->fx_offscreen_buffers->optimized_no_blur_buffer, &failed);
 
 	// Bind back to the default buffer
 	fx_framebuffer_bind(pass->buffer);
@@ -1340,15 +1349,11 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 	TRACY_ZONE_TEXT_f("Optimized Blur Successfully Used: %d",
 			buffer && fx_options->use_optimized_blur);
 	if (!fx_options->use_optimized_blur || has_strength) {
-		// Render the blur into its own buffer
+		// Render the blur into its own buffer (a reduced-strength blur of
+		// an optimized node too: the cache holds only the full-strength
+		// bake, at its node's anchor).
 		struct fx_render_blur_pass_options blur_options = *fx_options;
-		if (fx_options->use_optimized_blur && has_strength) {
-			// Re-blur the saved non-blurred version of the optimized blur.
-			// Isn't as efficient as just using the optimized blur buffer
-			blur_options.current_buffer = pass->fx_offscreen_buffers->optimized_no_blur_buffer;
-		} else {
-			blur_options.current_buffer = pass->buffer;
-		}
+		blur_options.current_buffer = pass->buffer;
 		buffer = get_main_buffer_blur(pass, &blur_options);
 	}
 	if (!buffer) {
@@ -1370,13 +1375,14 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 		stencil_mask_close(true);
 	}
 
-	// Draw the blurred texture. Sampled straight from the shared cache
-	// (optimized, full strength) it may be shifted by the scene's freeze
-	// offset; a freshly blurred buffer is always in place.
+	// Draw the blurred texture. The shared cache (optimized, full strength)
+	// is drawn so that screen pixel s reads cache pixel s + shift — the
+	// node's bake at its anchor, inside the margin; a freshly blurred
+	// buffer is output-sized and in place.
 	const bool direct_cache = fx_options->use_optimized_blur && !has_strength;
 	tex_options->base.dst_box = (struct wlr_box) {
-		.x = direct_cache ? fx_options->sample_offset_x : 0,
-		.y = direct_cache ? fx_options->sample_offset_y : 0,
+		.x = direct_cache ? -fx_options->cache_shift_x : 0,
+		.y = direct_cache ? -fx_options->cache_shift_y : 0,
 		.width = buffer->buffer->width,
 		.height = buffer->buffer->height,
 	};
@@ -1441,10 +1447,11 @@ bool fx_render_pass_add_optimized_blur(struct fx_gles_render_pass *pass,
 	TRACY_ZONE_TEXT_f("\tSaturation: %f", fx_options->blur_data->saturation);
 	push_fx_debug(renderer);
 
-	// The actual cache re-bake (rare: a healthy session bakes only at startup).
+	// The actual cache bake (a whole node, or a strip it newly exposes).
 	if (cce_blur_debug()) {
-		wlr_log(WLR_INFO, "[scenefx] add_optimized_blur dst_box: %dx%d at (%d, %d)",
-				dst_box.width, dst_box.height, dst_box.x, dst_box.y);
+		wlr_log(WLR_INFO, "[scenefx] add_optimized_blur dst_box: %dx%d at (%d, %d) shift (%d, %d)",
+				dst_box.width, dst_box.height, dst_box.x, dst_box.y,
+				fx_options->cache_shift_x, fx_options->cache_shift_y);
 	}
 
 	pixman_region32_t clip;
@@ -1457,13 +1464,10 @@ bool fx_render_pass_add_optimized_blur(struct fx_gles_render_pass *pass,
 	blur_options.tex_options.base.clip = &clip;
 	struct fx_framebuffer *fx_buffer = get_main_buffer_blur(pass, &blur_options);
 	if (fx_buffer != NULL) {
-		// Render the newly blurred content into the blur_buffer
-		fx_render_pass_read_to_buffer(pass, &clip,
-				pass->fx_offscreen_buffers->optimized_blur_buffer, fx_buffer);
-
-		// Save the current scene pass state
-		fx_render_pass_read_to_buffer(pass, &clip,
-				pass->fx_offscreen_buffers->optimized_no_blur_buffer, pass->buffer);
+		// Land the newly blurred content in the cache at the node's anchor.
+		read_to_buffer_offset(pass, &clip,
+				pass->fx_offscreen_buffers->optimized_blur_buffer, fx_buffer,
+				fx_options->cache_shift_x, fx_options->cache_shift_y);
 	}
 
 	pixman_region32_fini(&clip);
@@ -1473,9 +1477,10 @@ bool fx_render_pass_add_optimized_blur(struct fx_gles_render_pass *pass,
 	return fx_buffer != NULL;
 }
 
-void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
+/* Copy `_region` of src_buffer into dst_buffer, landing at (+ox, +oy). */
+static void read_to_buffer_offset(struct fx_gles_render_pass *pass,
 		pixman_region32_t *_region, struct fx_framebuffer *dst_buffer,
-		struct fx_framebuffer *src_buffer) {
+		struct fx_framebuffer *src_buffer, int ox, int oy) {
 	if (!_region || !pixman_region32_not_empty(_region)) {
 		return;
 	}
@@ -1484,6 +1489,7 @@ void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
 	pixman_region32_t region;
 	pixman_region32_init(&region);
 	pixman_region32_copy(&region, _region);
+	pixman_region32_translate(&region, ox, oy);
 
 	struct wlr_texture *src_tex =
 		fx_texture_from_buffer(&pass->buffer->renderer->wlr_renderer, src_buffer->buffer);
@@ -1491,18 +1497,34 @@ void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
 		goto done;
 	}
 
-	// Draw onto the dst_buffer
+	// Draw onto the dst_buffer. The pass's projection and viewport are the
+	// output's; a larger destination (the margin cache) needs its own for
+	// the duration of the copy, or everything past the output's extent is
+	// clipped away.
+	const int dst_w = dst_buffer->buffer->width;
+	const int dst_h = dst_buffer->buffer->height;
+	const int pass_w = pass->buffer->buffer->width;
+	const int pass_h = pass->buffer->buffer->height;
+	const bool resize = dst_w != pass_w || dst_h != pass_h;
+	float saved_proj[9];
+	if (resize) {
+		memcpy(saved_proj, pass->projection_matrix, sizeof(saved_proj));
+		matrix_projection(pass->projection_matrix, dst_w, dst_h, WL_OUTPUT_TRANSFORM_FLIPPED_180);
+	}
 	fx_framebuffer_bind(dst_buffer);
+	if (resize) {
+		glViewport(0, 0, dst_w, dst_h);
+	}
 	wlr_render_pass_add_texture(&pass->base, &(struct wlr_render_texture_options) {
 		.texture = src_tex,
 		.clip = &region,
 		.transform = WL_OUTPUT_TRANSFORM_NORMAL,
 		.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
 		.dst_box = (struct wlr_box){
-			.x = 0,
-			.y = 0,
-			.width = dst_buffer->buffer->width,
-			.height = dst_buffer->buffer->height,
+			.x = ox,
+			.y = oy,
+			.width = src_buffer->buffer->width,
+			.height = src_buffer->buffer->height,
 		},
 		.src_box = (struct wlr_fbox){
 			.x = 0,
@@ -1515,11 +1537,21 @@ void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
 
 	// Bind back to the main WLR buffer
 	fx_framebuffer_bind(pass->buffer);
+	if (resize) {
+		memcpy(pass->projection_matrix, saved_proj, sizeof(saved_proj));
+		glViewport(0, 0, pass_w, pass_h);
+	}
 
 done:
 	TRACY_BOTH_ZONES_END;
 
 	pixman_region32_fini(&region);
+}
+
+void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
+		pixman_region32_t *_region, struct fx_framebuffer *dst_buffer,
+		struct fx_framebuffer *src_buffer) {
+	read_to_buffer_offset(pass, _region, dst_buffer, src_buffer, 0, 0);
 }
 
 static const char *reset_status_str(GLenum status) {

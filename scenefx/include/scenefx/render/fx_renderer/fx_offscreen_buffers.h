@@ -12,8 +12,15 @@ struct fx_offscreen_buffers {
 	struct wl_list link; // fx_renderer.offscreen_buffers
 	struct wlr_addon addon;
 
-	// Contains the blurred background for tiled windows
+	// Contains the blurred background for tiled windows. Larger than the
+	// output by cache_margin_* on every side: a bake is stored at its
+	// node's ANCHOR (where the node was when it baked, plus the margin), and
+	// sampled shifted by the node's travel since, so a node that moves with
+	// its backdrop keeps reading its own bake; the margin gives room to bake
+	// the strips a window hanging off the output exposes as it travels,
+	// without re-anchoring the whole bake.
 	struct fx_framebuffer *optimized_blur_buffer;
+	int cache_margin_x, cache_margin_y;
 	// Contains the non-blurred background for tiled windows. Used for blurring
 	// optimized surfaces with an alpha. Just as inefficient as the regular blur.
 	struct fx_framebuffer *optimized_no_blur_buffer;

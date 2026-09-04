@@ -1086,37 +1086,10 @@ void river_scene_mark_optimized_blur_dirty(struct wlr_scene *scene) {
  * invalidation for the duration of a camera pan. Thawing marks every
  * optimized blur dirty once so the settled frame re-bakes against the
  * final backdrop. */
-/* Thaw: re-bake only what a pan could have left untrustworthy — a bake
- * that never happened, one that did not cover the whole node (it lay
- * partly off the output), or one another bake landed on top of. Everything
- * else keeps sampling its own bake at its travel, exactly as it did
- * mid-pan. */
-static void thaw_optimized_blur_rec(struct wlr_scene_node *node) {
-	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
-		struct wlr_scene_optimized_blur *opt = wlr_scene_optimized_blur_from_node(node);
-		if (!opt->baked || !opt->baked_full || opt->overwritten) {
-			wlr_scene_optimized_blur_mark_dirty(opt);
-		}
-		return;
-	}
-	if (node->type == WLR_SCENE_NODE_TREE) {
-		struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
-		struct wlr_scene_node *child;
-		wl_list_for_each(child, &tree->children, link) {
-			thaw_optimized_blur_rec(child);
-		}
-	}
-}
-
 /* See wlr_scene.blur_frozen. Blurs sample the shared cache where their own
- * bake lives, frozen or not, so a pure pan needs no re-bake at either end;
- * the thaw only re-bakes what cannot be trusted. */
+ * bake lives, frozen or not, and bake the strips they newly expose as they
+ * travel, so a pan needs no re-bake at either end: the thaw is just the
+ * flag. */
 void river_scene_set_blur_frozen(struct wlr_scene *scene, bool frozen) {
-	if (scene->blur_frozen == frozen) {
-		return;
-	}
 	scene->blur_frozen = frozen;
-	if (!frozen) {
-		thaw_optimized_blur_rec(&scene->tree.node);
-	}
 }

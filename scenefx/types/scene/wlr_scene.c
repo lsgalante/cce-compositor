@@ -191,6 +191,8 @@ void wlr_scene_node_destroy(struct wlr_scene_node *node) {
 		assert(wl_list_empty(&scene_buffer->events.outputs_update.listener_list));
 		assert(wl_list_empty(&scene_buffer->events.output_sample.listener_list));
 		assert(wl_list_empty(&scene_buffer->events.frame_done.listener_list));
+	} else if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
+		pixman_region32_fini(&wlr_scene_optimized_blur_from_node(node)->baked_region);
 	} else if (node->type == WLR_SCENE_NODE_TREE) {
 		struct wlr_scene_tree *scene_tree = wlr_scene_tree_from_node(node);
 
@@ -1668,6 +1670,7 @@ struct wlr_scene_optimized_blur *wlr_scene_optimized_blur_create(
 
 	scene_blur->width = width;
 	scene_blur->height = height;
+	pixman_region32_init(&scene_blur->baked_region);
 	// Start dirty so the first render pass bakes the cache; scene_entry_render
 	// only re-bakes when dirty (re-baking on undamaged frames samples stale
 	// pass->buffer content, ghosting whatever was composited above the node).
@@ -2445,34 +2448,145 @@ static float get_luminance_multiplier(const struct wlr_color_luminances *src_lum
 	return (dst_lum->reference / src_lum->reference) * (src_lum->max / dst_lum->max);
 }
 
-static void optimized_blur_flag_overwritten_rec(struct wlr_scene_node *node,
-		struct wlr_scene_optimized_blur *self, const struct wlr_box *box) {
-	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
-		struct wlr_scene_optimized_blur *other = wlr_scene_optimized_blur_from_node(node);
-		if (other != self && other->baked && other->baked_output == self->baked_output) {
-			struct wlr_box theirs = {
-				.x = other->baked_x, .y = other->baked_y,
-				.width = other->width, .height = other->height,
-			};
-			struct wlr_box overlap;
-			if (wlr_box_intersection(&overlap, &theirs, box)) {
-				other->overwritten = true;
-			}
-		}
-		return;
+/* Bake the content below the node within one screen-space layout rect into
+ * the cache, landing at `shift` (buffer px added to the screen buffer
+ * coordinates: the node's anchor plus the cache margin). */
+static bool optimized_blur_bake_rect(struct fx_gles_render_pass *fx_pass,
+		struct wlr_scene *scene, const struct render_data *data,
+		const struct wlr_box *layout_rect, int shift_x, int shift_y) {
+	struct wlr_box buf = {
+		.x = (int)round((layout_rect->x - data->logical.x) * data->scale),
+		.y = (int)round((layout_rect->y - data->logical.y) * data->scale),
+		.width = (int)round(layout_rect->width * data->scale),
+		.height = (int)round(layout_rect->height * data->scale),
+	};
+	if (buf.width <= 0 || buf.height <= 0) {
+		return true;
 	}
-	if (node->type == WLR_SCENE_NODE_TREE) {
-		struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
-		struct wlr_scene_node *child;
-		wl_list_for_each(child, &tree->children, link) {
-			optimized_blur_flag_overwritten_rec(child, self, box);
-		}
-	}
+	const float opacity = 1.0f;
+	struct fx_render_blur_pass_options blur_options = {
+		.tex_options = {
+			.base = {
+				.transform = WL_OUTPUT_TRANSFORM_NORMAL,
+				.alpha = &opacity,
+				.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+				.dst_box = buf,
+			},
+			.clip_box = &buf,
+			.discard_transparent = false,
+			.clipped_region = {0}
+		},
+		.blur_data = &scene->blur_data,
+		.blur_strength = 1.0f,
+		.cache_shift_x = shift_x,
+		.cache_shift_y = shift_y,
+	};
+	return fx_render_pass_add_optimized_blur(fx_pass, &blur_options);
 }
 
-static void optimized_blur_flag_overwritten(struct wlr_scene *scene,
-		struct wlr_scene_optimized_blur *self, const struct wlr_box *box) {
-	optimized_blur_flag_overwritten_rec(&scene->tree.node, self, box);
+/* The optimized node's per-frame work: a full bake (anchored where the node
+ * is now) when dirty, never baked, baked elsewhere, or travelled past the
+ * cache margin; otherwise only the strips the node now shows that its bake
+ * does not cover, landed at its existing anchor. */
+static void optimized_blur_render(struct wlr_scene *scene,
+		struct wlr_scene_optimized_blur *ob, struct wlr_scene_node *node,
+		struct fx_gles_render_pass *fx_pass, const struct render_data *data,
+		struct wlr_box dst_box) {
+	struct fx_offscreen_buffers *fbos = fx_pass->fx_offscreen_buffers;
+	if (fbos == NULL) {
+		return;
+	}
+	const int mx = fbos->cache_margin_x, my = fbos->cache_margin_y;
+	const bool normal = data->transform == WL_OUTPUT_TRANSFORM_NORMAL;
+	int cx, cy;
+	if (!wlr_scene_node_coords(node, &cx, &cy)) {
+		return;
+	}
+	struct wlr_box cur = { .x = cx, .y = cy, .width = ob->width, .height = ob->height };
+	struct wlr_box vis;
+	if (!wlr_box_intersection(&vis, &cur, &data->logical)) {
+		return;
+	}
+
+	bool full = ob->dirty || !ob->baked || ob->baked_output != data->output || !normal;
+	int dx = 0, dy = 0; // anchor-space shift, layout px: anchor - current
+	if (!full) {
+		dx = ob->baked_x - cx;
+		dy = ob->baked_y - cy;
+		double mlx = mx / data->scale, mly = my / data->scale;
+		if (vis.x + dx < data->logical.x - mlx || vis.y + dy < data->logical.y - mly ||
+				vis.x + dx + vis.width > data->logical.x + data->logical.width + mlx ||
+				vis.y + dy + vis.height > data->logical.y + data->logical.height + mly) {
+			full = true;
+		}
+	}
+
+	if (full) {
+		bool ok;
+		if (normal) {
+			ok = optimized_blur_bake_rect(fx_pass, scene, data, &vis, mx, my);
+		} else {
+			// Transformed output: the whole node in its buffer-space box,
+			// in place (no anchoring on rotated outputs).
+			const float opacity = 1.0f;
+			enum wl_output_transform transform = wlr_output_transform_invert(data->transform);
+			transform = wlr_output_transform_compose(transform, data->transform);
+			struct fx_render_blur_pass_options blur_options = {
+				.tex_options = {
+					.base = {
+						.transform = transform,
+						.alpha = &opacity,
+						.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+						.dst_box = dst_box,
+					},
+					.clip_box = &dst_box,
+					.discard_transparent = false,
+					.clipped_region = {0}
+				},
+				.blur_data = &scene->blur_data,
+				.blur_strength = 1.0f,
+				.cache_shift_x = mx,
+				.cache_shift_y = my,
+			};
+			ok = fx_render_pass_add_optimized_blur(fx_pass, &blur_options);
+		}
+		if (!ok) {
+			return;
+		}
+		ob->dirty = false;
+		ob->baked = true;
+		ob->baked_x = cx;
+		ob->baked_y = cy;
+		ob->baked_output = data->output;
+		pixman_region32_fini(&ob->baked_region);
+		pixman_region32_init_rect(&ob->baked_region, vis.x, vis.y, vis.width, vis.height);
+		return;
+	}
+
+	// Anchored: what the node shows now, in anchor space, minus what the
+	// cache already holds for it.
+	pixman_region32_t need, uncovered;
+	pixman_region32_init_rect(&need, vis.x + dx, vis.y + dy, vis.width, vis.height);
+	pixman_region32_init(&uncovered);
+	pixman_region32_subtract(&uncovered, &need, &ob->baked_region);
+	int n = 0;
+	const pixman_box32_t *rects = pixman_region32_rectangles(&uncovered, &n);
+	const int shift_x = (int)round(dx * data->scale) + mx;
+	const int shift_y = (int)round(dy * data->scale) + my;
+	for (int i = 0; i < n; i++) {
+		// The strip in screen space (where its content is being composited
+		// this frame); it lands in the cache at the node's anchor.
+		struct wlr_box r = {
+			.x = rects[i].x1 - dx, .y = rects[i].y1 - dy,
+			.width = rects[i].x2 - rects[i].x1, .height = rects[i].y2 - rects[i].y1,
+		};
+		if (optimized_blur_bake_rect(fx_pass, scene, data, &r, shift_x, shift_y)) {
+			pixman_region32_union_rect(&ob->baked_region, &ob->baked_region,
+				rects[i].x1, rects[i].y1, r.width, r.height);
+		}
+	}
+	pixman_region32_fini(&need);
+	pixman_region32_fini(&uncovered);
 }
 
 static void scene_entry_render(struct render_list_entry *entry, const struct render_data *data) {
@@ -2792,54 +2906,13 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		break;
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:;
 		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
-		// Re-render the optimized blur buffer when needed. Retry rendering
-		// until there's a visible blur_node. The dirty gate is load-bearing:
-		// mark_dirty damages the node's whole box, so pass->buffer holds fresh
-		// below-node content when the re-bake samples it. Without the gate the
-		// re-bake fires on frames whose damage only grazes the box and blurs
-		// stale pass->buffer pixels — including this very surface composited
-		// above — baking ghosts into the shared cache.
-		if (fx_pass->has_blur && is_scene_blur_enabled(&scene->blur_data)
-				&& scene_blur->dirty) {
-			const float opacity = 1.0f;
-			enum wl_output_transform transform =
-				wlr_output_transform_invert(data->transform);
-			transform = wlr_output_transform_compose(transform, data->transform);
-			struct fx_render_blur_pass_options blur_options = {
-				.tex_options = {
-					.base = {
-						.transform = transform,
-						.alpha = &opacity,
-						.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
-						.dst_box = dst_box,
-					},
-					.clip_box = &dst_box,
-					.discard_transparent = false,
-					.clipped_region = {0}
-				},
-				.blur_data = &scene->blur_data,
-				.blur_strength = 1.0f,
-			};
-			bool result = fx_render_pass_add_optimized_blur(fx_pass, &blur_options);
-			if (result) {
-				scene_blur->dirty = false;
-				int bx, by;
-				if (wlr_scene_node_coords(node, &bx, &by)) {
-					struct wlr_box box = {
-						.x = bx, .y = by,
-						.width = scene_blur->width, .height = scene_blur->height,
-					};
-					scene_blur->baked = true;
-					scene_blur->baked_x = bx;
-					scene_blur->baked_y = by;
-					scene_blur->baked_output = data->output;
-					scene_blur->baked_full = wlr_box_contains_box(&data->logical, &box);
-					scene_blur->overwritten = false;
-					// Any other bake this one landed on top of in the cache
-					// now reads wrong under its owner: flag it for the thaw.
-					optimized_blur_flag_overwritten(scene, scene_blur, &box);
-				}
-			}
+		// Bake (or top up) this node's cache entry. The dirty gate on a full
+		// bake is load-bearing: mark_dirty damages the node's whole box, so
+		// pass->buffer holds fresh below-node content when the bake samples
+		// it; strips are baked only where the node newly shows content, in
+		// the frame that composites it.
+		if (fx_pass->has_blur && is_scene_blur_enabled(&scene->blur_data)) {
+			optimized_blur_render(scene, scene_blur, node, fx_pass, data, dst_box);
 		}
 		break;
 	case WLR_SCENE_NODE_BLUR:;
@@ -2901,14 +2974,16 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		struct fx_corner_radii blur_corners = blur->corners;
 		fx_corner_radii_transform(node_transform, &blur_corners);
 
-		// Sample the shared cache where this node's own bake lives — the
-		// sibling optimized node's coordinates at its last bake — rather
-		// than at the node's current position: the cache is drawn shifted
-		// by the node's travel since the bake, so screen pixel s shows
-		// cache pixel s - travel, the bake's own pixel for that spot. Only
-		// a bake made on THIS output and covering the whole node is usable
-		// that way; any other (while the scene is not frozen) is re-baked.
-		int freeze_dx = 0, freeze_dy = 0;
+		// Sample the shared cache at this node's own bake: the sibling
+		// optimized node's anchor (its coordinates at its last full bake)
+		// plus the cache margin. The optimized node, rendered just before
+		// this one, has already baked whatever the node newly shows.
+		int cache_mx = 0, cache_my = 0;
+		if (fx_pass->fx_offscreen_buffers) {
+			cache_mx = fx_pass->fx_offscreen_buffers->cache_margin_x;
+			cache_my = fx_pass->fx_offscreen_buffers->cache_margin_y;
+		}
+		int shift_x = cache_mx, shift_y = cache_my;
 		if (blur->should_only_blur_bottom_layer &&
 				data->transform == WL_OUTPUT_TRANSFORM_NORMAL && node->parent) {
 			struct wlr_scene_node *sib;
@@ -2918,21 +2993,10 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 				}
 				struct wlr_scene_optimized_blur *opt = wlr_scene_optimized_blur_from_node(sib);
 				int cur_x, cur_y;
-				if (!wlr_scene_node_coords(sib, &cur_x, &cur_y)) {
-					break;
-				}
-				bool moved = opt->baked && (cur_x != opt->baked_x || cur_y != opt->baked_y);
 				if (opt->baked && opt->baked_output == data->output &&
-						(opt->baked_full || scene->blur_frozen)) {
-					// Anchored: a full bake wherever it went; a partial one
-					// only while frozen (its covered part stays right, and
-					// the thaw re-bakes it).
-					freeze_dx = cur_x - opt->baked_x;
-					freeze_dy = cur_y - opt->baked_y;
-				} else if (!scene->blur_frozen && moved && !opt->dirty) {
-					// Unfrozen, moved since a bake that cannot follow it
-					// (partial, or from another output): bake once here.
-					wlr_scene_optimized_blur_mark_dirty(opt);
+						wlr_scene_node_coords(sib, &cur_x, &cur_y)) {
+					shift_x += (int)round((opt->baked_x - cur_x) * data->scale);
+					shift_y += (int)round((opt->baked_y - cur_y) * data->scale);
 				}
 				break;
 			}
@@ -2962,8 +3026,8 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			// (layout px -> buffer px), so it reads its own bake. Only
 			// meaningful for an untransformed output; a rotated one gets
 			// the unshifted cache.
-			.sample_offset_x = (int)round(freeze_dx * data->scale),
-			.sample_offset_y = (int)round(freeze_dy * data->scale),
+			.cache_shift_x = shift_x,
+			.cache_shift_y = shift_y,
 		};
 		fx_render_pass_add_blur(fx_pass, &blur_options);
 		break;

@@ -281,21 +281,23 @@ struct wlr_scene_optimized_blur {
 
 	/**
 	 * Where the node's bake lives in the shared per-output cache: the
-	 * layout coordinates it had, and the output it rendered to, when it
-	 * last baked. The sibling wlr_scene_blur samples the cache shifted by
-	 * the node's travel since then, so a node that moved with its backdrop
-	 * (a desktop pan) keeps reading exactly its own bake — per node, so
-	 * each window's own pixel rounding is honored — and a bake that re-runs
-	 * simply re-anchors. `baked_full` records that the whole box lay inside
-	 * the output, i.e. the bake covers the node wherever it travels; a
-	 * partial bake is re-baked once the scene thaws. `overwritten` is set
-	 * when a later bake landed on this bake's cache region (overlapping
-	 * windows), which also earns a re-bake at thaw.
+	 * layout coordinates it had (its ANCHOR) and the output it rendered to
+	 * when it last fully baked, plus `baked_region` — the layout-space
+	 * region, in anchor space, the cache actually holds for it. The sibling
+	 * wlr_scene_blur samples the cache shifted by the node's travel since
+	 * the anchor, so a node that moved with its backdrop (a desktop pan)
+	 * keeps reading exactly its own bake, per node. As the node travels,
+	 * any part it shows that the region does not cover (a window hanging
+	 * off the output, entering) is baked as a strip into the cache margin
+	 * and added to the region; only travel past the margin re-anchors.
+	 * Overlapping blurred windows share cache space and the later bake
+	 * wins there, exactly as with in-place bakes: the lower window's
+	 * overlap region reads the upper window's bake until something below
+	 * it changes.
 	 */
 	bool baked;
 	int baked_x, baked_y;
-	bool baked_full;
-	bool overwritten;
+	pixman_region32_t baked_region;
 	struct wlr_scene_output *baked_output;
 };
 
