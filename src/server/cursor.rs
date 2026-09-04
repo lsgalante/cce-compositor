@@ -821,7 +821,22 @@ impl Cursor {
             }
             self.set_border_hover(std::ptr::null_mut(), None);
 
-            if is_window && (*server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
+            // Chrome — a Popup (the cce-cloud launcher) or an Overlay dock —
+            // is live UI during overview, not a spatial thumbnail: the button
+            // path already lets its presses through to the app, and hover has
+            // to reach it the same way or its rows never highlight and a
+            // press lands on a surface that never saw an enter. So it skips
+            // the overview branch below and takes normal delivery.
+            let hovered_chrome = !hovered_toplevel.is_null()
+                && matches!(
+                    (*hovered_toplevel).tiling_mode,
+                    crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
+                );
+
+            if is_window
+                && !hovered_chrome
+                && (*server).wm.mode == crate::window_manager::WindowManagerMode::Overview
+            {
                 // Focus follows the pointer in overview: the ring is drawn on
                 // the focused window only, so hovering is how it moves between
                 // windows without a click. Guarded on an actual change —
@@ -2019,21 +2034,41 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
         return;
     }
 
-    let is_on_background = {
+    let (is_on_background, over_chrome) = {
         let lx = cursor.x();
         let ly = cursor.y();
         let server = seat.server;
         let mut over_interactive = false;
+        // Chrome under the pointer — a Popup (the cce-cloud launcher) or an
+        // Overlay dock, or a cce-cloud layer surface (context menu). Live UI
+        // during overview, same as in the button and motion paths: a wheel
+        // over the launcher's list scrolls the list, not the desktop.
+        let mut over_chrome = false;
         if let Some(result) = (*server).scene.at(lx, ly) {
             match result.data {
-                SceneNodeDataVal::Window(_) | SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                SceneNodeDataVal::Window(window) => {
+                    over_interactive = true;
+                    over_chrome = !window.is_null()
+                        && matches!(
+                            (*window).tiling_mode,
+                            crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
+                        );
+                }
+                SceneNodeDataVal::LayerSurface(layer_surface) => {
+                    over_interactive = true;
+                    over_chrome = is_cloud_layer(layer_surface);
+                }
+                SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                     over_interactive = true;
                 }
             }
         }
-        !over_interactive
+        (!over_interactive, over_chrome)
     };
-    let is_overview = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview;
+    // Overview pans on any scroll — except over chrome, which takes the
+    // event itself.
+    let is_overview = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview
+        && !over_chrome;
 
     let is_finger = (*event).source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_FINGER
         || (*event).source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_CONTINUOUS;
