@@ -267,7 +267,12 @@ Config is **KDL** (`kdl` crate), loaded from `~/.config/cce/` (honoring
   per-device-class sub-blocks (`mouse` / `trackpad` / `trackpoint`: accel,
   scroll_factor…), consumed by the compositor; an `input { }` child inside an
   app domain holds that app's scroll overrides, applied client-side by cce-ui
-  (pixel deltas scale as trackpad, discrete wheel clicks as mouse). Keybinding
+  (pixel deltas scale as trackpad, discrete wheel clicks as mouse). Smooth
+  scrolling is tuned by the same keys on both sides — `smooth_scroll`,
+  `scroll_ease`, `kinetic_scroll`, `scroll_friction` — read by cce-ui from
+  the app/`cce-ui` domain (`cce-ui/src/widget/scroll_motion.rs`, the one
+  wheel→offset model every scrolling widget and app-owned list drives) and
+  by the compositor from the global block for its own desktop pans. Keybinding
   and input edits are made directly on the file (e.g. via cce-data-editor) —
   there is deliberately no dedicated settings UI.
 - Config edits are backed up under `~/.config/cce/backups/config.kdl.<n>.bak`.
