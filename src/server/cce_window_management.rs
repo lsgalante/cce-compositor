@@ -255,6 +255,7 @@ unsafe extern "C" fn toplevel_set_fullscreen(
     if let Some(window) = resolve_window(server, window_key) {
         (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());
         (*server).wm.dirty_windowing();
+        (*server).wm.apply_client_fullscreen(window, true);
     }
 }
 
@@ -271,6 +272,7 @@ unsafe extern "C" fn toplevel_unset_fullscreen(
     if let Some(window) = resolve_window(server, window_key) {
         (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Exit;
         (*server).wm.dirty_windowing();
+        (*server).wm.apply_client_fullscreen(window, false);
     }
 }
 

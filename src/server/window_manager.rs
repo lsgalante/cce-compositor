@@ -3662,6 +3662,31 @@ impl WindowManager {
         }
     }
 
+    /// A client asked for fullscreen, or to leave it, on one of its own windows:
+    /// xdg_toplevel.set_fullscreen, the cce protocol's set_fullscreen, Xwayland's
+    /// _NET_WM_STATE, or a state a toplevel set before its first commit (read at
+    /// map, since wlroots stores that one instead of signalling it). Applied here,
+    /// in-process, through the policy's fullscreen toggle, so the mode, the lock
+    /// and the exit's restore are exactly the keyed action's. The scheduled
+    /// zcce_window_v1 event still goes out to a window-manager client as before;
+    /// until this, that event was the request's only consumer, and nothing in the
+    /// session listens for it, so client fullscreen was silently dropped.
+    pub unsafe fn apply_client_fullscreen(&mut self, win: *mut Window, enter: bool) {
+        if win.is_null() || (*win).closed || (*win).state != crate::window::WindowState::Mapped {
+            return;
+        }
+        let is_fullscreen = (*win).tiling_mode == crate::tiling::TilingMode::Fullscreen;
+        if enter == is_fullscreen {
+            return;
+        }
+        use crate::policy::api::{Compositor, Policy, WindowId};
+        let mut ctx = self.build_action_ctx();
+        ctx.focused = Some(WindowId((*win).ref_key));
+        for cmd in crate::policy::actions::DefaultPolicy.action(&ctx, crate::config::Action::Fullscreen, None) {
+            self.apply(&cmd);
+        }
+    }
+
     pub unsafe fn execute_action(&mut self, action: &crate::config::Action, command: Option<&str>) {
         use crate::config::Action;
         self.stop_panning_animation();

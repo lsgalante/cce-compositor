@@ -459,6 +459,22 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
     let mut new_geometry = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
     (*toplevel).geometry = new_geometry;
+
+    // A fullscreen state the client set before its first commit never raises
+    // request_fullscreen (wlroots only records it); honour it now that the
+    // window is mapped. A fresh floating spawn has no box yet — the arrange
+    // pass leaves it 0x0 so the acked-commit path adopts the natural size —
+    // but that next commit will be the fullscreen one, so seed the box with
+    // the size the window mapped at, or leaving fullscreen restores an
+    // output-sized window.
+    if ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel) {
+        let window = (*toplevel).window;
+        if (*window).box_geom.width <= 0 && (*window).box_geom.height <= 0 && new_geometry.width > 0 && new_geometry.height > 0 {
+            (*window).box_geom.width = new_geometry.width;
+            (*window).box_geom.height = new_geometry.height;
+        }
+        (*(*window).server).wm.apply_client_fullscreen(window, true);
+    }
     // Status segments and Utility windows are SELF-sizing: their bounds
     // track their own box, so the committed geometry is adopted as the box.
     let is_self_sized = matches!(
@@ -942,6 +958,8 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
         (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Exit;
     }
     (*(*window).server).wm.dirty_windowing();
+    let enter = ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel);
+    (*(*window).server).wm.apply_client_fullscreen(window, enter);
 }
 
 unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

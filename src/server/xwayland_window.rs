@@ -571,6 +571,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
         crate::window::FullscreenRequest::Exit
     };
     (*(*(*xwindow).window).server).wm.dirty_windowing();
+    (*(*(*xwindow).window).server).wm.apply_client_fullscreen((*xwindow).window, fullscreen);
 }
 
 unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
