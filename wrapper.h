@@ -274,6 +274,7 @@ void river_scene_buffer_set_dest_size_if_changed(struct wlr_scene_buffer *scene_
 int river_scene_buffer_get_width(struct wlr_scene_buffer *scene_buffer);
 int river_scene_buffer_get_height(struct wlr_scene_buffer *scene_buffer);
 void river_scene_buffer_set_scaled_opaque_region(struct wlr_scene_buffer *scene_buffer, struct wlr_surface *surface, double scale);
+bool river_scene_buffer_get_surface_clip(struct wlr_scene_buffer *scene_buffer, struct wlr_box *out);
 int river_scene_buffer_get_dest_width(struct wlr_scene_buffer *scene_buffer);
 int river_scene_buffer_get_dest_height(struct wlr_scene_buffer *scene_buffer);
 bool river_scene_node_get_enabled(struct wlr_scene_node *node);

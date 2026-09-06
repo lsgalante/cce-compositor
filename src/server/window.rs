@@ -448,6 +448,10 @@ pub struct Window {
     /// border-fade tick. `render_finish` draws at this rect (position, buffer
     /// stretch, backdrop, clip) instead of the settled geometry.
     pub fs_anim: Option<FsAnim>,
+    /// Mode and lock this window had when a `SetWindowMode` made it
+    /// Fullscreen; the policy's fullscreen toggle restores both on exit.
+    /// Cleared by any `SetWindowMode` to another mode.
+    pub pre_fullscreen: Option<(crate::tiling::TilingMode, bool)>,
     pub circular: bool,
     pub blur: bool,
     pub scale: f64,
@@ -733,6 +737,7 @@ impl Window {
             has_parent: false,
             minimized: false,
             fs_anim: None,
+            pre_fullscreen: None,
             circular: false,
             blur: false,
             scale: 1.0,
@@ -2824,19 +2829,20 @@ impl Window {
 
                 let surface = ffi::river_scene_node_get_surface(node);
                 if !surface.is_null() {
-                    let w = ffi::river_wlr_surface_get_width(surface);
-                    let h = ffi::river_wlr_surface_get_height(surface);
+                    let (w, h, ox, oy) = surface_buffer_extent(buffer, surface);
                     if data.scale_x == 1.0 && data.scale_y == 1.0 {
                         ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
-                        ffi::river_scene_node_set_position_if_changed(node, 0, 0);
+                        ffi::river_scene_node_set_position_if_changed(node, ox, oy);
                     } else {
                         let dest_w = (w as f64 * data.scale_x) as i32;
                         let dest_h = (h as f64 * data.scale_y) as i32;
                         ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
 
+                        // The parent offset scales like the content; the
+                        // clip origin rides on top of it, scaled the same.
                         let (px, py) = get_parent_position_relative_to(node, data.ancestor);
-                        let dest_x = (px as f64 * (data.scale_x - 1.0)) as i32;
-                        let dest_y = (py as f64 * (data.scale_y - 1.0)) as i32;
+                        let dest_x = (px as f64 * (data.scale_x - 1.0) + ox as f64 * data.scale_x) as i32;
+                        let dest_y = (py as f64 * (data.scale_y - 1.0) + oy as f64 * data.scale_y) as i32;
                         ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
                     }
                     // Keep the opaque region in step with the dest scale —
@@ -3076,19 +3082,18 @@ impl Window {
 
             let surface = ffi::river_scene_node_get_surface(node);
             if !surface.is_null() {
-                let w = ffi::river_wlr_surface_get_width(surface);
-                let h = ffi::river_wlr_surface_get_height(surface);
+                let (w, h, ox, oy) = surface_buffer_extent(buffer, surface);
                 if data.scale == 1.0 {
                     ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
-                    ffi::river_scene_node_set_position_if_changed(node, 0, 0);
+                    ffi::river_scene_node_set_position_if_changed(node, ox, oy);
                 } else {
                     let dest_w = (w as f64 * data.scale) as i32;
                     let dest_h = (h as f64 * data.scale) as i32;
                     ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
 
                     let (px, py) = get_parent_position_relative_to(node, data.ancestor);
-                    let dest_x = (px as f64 * (data.scale - 1.0)) as i32;
-                    let dest_y = (py as f64 * (data.scale - 1.0)) as i32;
+                    let dest_x = (px as f64 * (data.scale - 1.0) + ox as f64 * data.scale) as i32;
+                    let dest_y = (py as f64 * (data.scale - 1.0) + oy as f64 * data.scale) as i32;
                     ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
                 }
                 // Keep the opaque region in step with the dest scale —
@@ -4078,9 +4083,37 @@ impl Window {
             _ => {}
         }
 
+        // Crop a CSD toplevel to its xdg geometry. Chromium-family clients
+        // paint a translucent shadow band outside the geometry whenever they
+        // are not maximized; the compositor draws its own shadow, and it
+        // rounds corners per buffer at the buffer's edge, so uncropped the
+        // rounding fell in that band and the visible window read
+        // square-cornered (an Electron window un-tiled by a fullscreen round
+        // trip). A geometry clip was set once and nulled in 34b3ae64: the
+        // scaling passes rewrote every buffer's dest size from the full
+        // surface each commit and stretched the crop back out — they go
+        // through surface_buffer_extent now. Skipped while a cce-ui client
+        // has a popover overhanging its geometry (set_popover_region): that
+        // rim is live menu content, not a shadow. And skipped mid
+        // fullscreen-toggle, where the animation owns the buffers' stretch.
+        let mut crop = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+        if let WindowImpl::Toplevel(toplevel) = self.impl_type {
+            if !toplevel.is_null()
+                && !self.wm_requested.ssd
+                && self.popover_region.is_none()
+                && self.fs_anim.is_none()
+            {
+                crop = (*toplevel).geometry;
+            }
+        }
+        let clip: *const ffi::wlr_box = if crop.width > 0 && crop.height > 0 {
+            &crop
+        } else {
+            std::ptr::null()
+        };
         let children_head = ffi::river_scene_tree_get_children(self.surfaces.tree) as *mut WlList;
         if (*children_head).next != children_head {
-            ffi::wlr_scene_subsurface_tree_set_clip(self.surfaces.tree as *mut ffi::wlr_scene_node, std::ptr::null());
+            ffi::wlr_scene_subsurface_tree_set_clip(self.surfaces.tree as *mut ffi::wlr_scene_node, clip);
         }
     }
 }
@@ -5107,6 +5140,29 @@ pub static mut DECORATION_ROLE: ffi::wlr_surface_role = ffi::wlr_surface_role {
     unmap: None,
     destroy: Some(dec_role_destroy),
 };
+
+/// A surface buffer's visible extent for the scaling passes: `(width,
+/// height, x, y)` — the subsurface clip when one is set (the xdg geometry,
+/// see `apply_surface_clip`), placed where wlroots puts the cropped content
+/// in its parent, else the whole surface at the origin. wlroots re-derives
+/// dest size and position from the clip on every commit; a pass that
+/// overrides them from the full surface size stretches the crop back out.
+unsafe fn surface_buffer_extent(
+    buffer: *mut ffi::wlr_scene_buffer,
+    surface: *mut ffi::wlr_surface,
+) -> (i32, i32, i32, i32) {
+    let mut clip = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+    if ffi::river_scene_buffer_get_surface_clip(buffer, &mut clip) {
+        (clip.width, clip.height, clip.x, clip.y)
+    } else {
+        (
+            ffi::river_wlr_surface_get_width(surface),
+            ffi::river_wlr_surface_get_height(surface),
+            0,
+            0,
+        )
+    }
+}
 
 unsafe fn get_parent_position_relative_to(
     node: *mut ffi::wlr_scene_node,

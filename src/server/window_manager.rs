@@ -1420,6 +1420,7 @@ impl WindowManager {
                 scale: (*w).scale,
                 mode: (*w).tiling_mode,
                 resolved_mode,
+                pre_fullscreen: (*w).pre_fullscreen,
                 visible,
                 focus_cyclable,
                 overview_eligible,
@@ -5800,6 +5801,33 @@ impl crate::policy::api::Compositor for WindowManager {
                 Command::SetWindowMode { id, mode, locked } => {
                     if let Some(&win) = self.windows.get(id.0) {
                         if !win.is_null() && !(*win).closed {
+                            // Remember what Fullscreen replaced, so the
+                            // toggle's exit can put it back (policy
+                            // `actions::fullscreen`). A re-lock while
+                            // already Fullscreen keeps the first record.
+                            if mode == crate::tiling::TilingMode::Fullscreen {
+                                if (*win).tiling_mode != crate::tiling::TilingMode::Fullscreen {
+                                    (*win).pre_fullscreen = Some(((*win).tiling_mode, (*win).mode_locked));
+                                }
+                            } else {
+                                // Coming back Tiled from Fullscreen is a
+                                // RETURN, not a fresh entry: the arrange
+                                // pass's Enter transition would snapshot
+                                // the current box — still the output-sized
+                                // fullscreen box at this point — as the
+                                // window's floating geometry, and a later
+                                // un-tile would pop it to screen size.
+                                // Restoring `was_tiled` with the mode keeps
+                                // the floating geometry saved before the
+                                // window was tiled in the first place.
+                                if (*win).tiling_mode == crate::tiling::TilingMode::Fullscreen
+                                    && mode == crate::tiling::TilingMode::Tiled
+                                    && matches!((*win).pre_fullscreen, Some((crate::tiling::TilingMode::Tiled, _)))
+                                {
+                                    (*win).was_tiled = true;
+                                }
+                                (*win).pre_fullscreen = None;
+                            }
                             (*win).tiling_mode = mode;
                             (*win).mode_locked = locked;
                         }

@@ -918,11 +918,39 @@ int river_scene_buffer_get_height(struct wlr_scene_buffer *scene_buffer) {
  * margins. Culling then skipped repainting behind the shadow ring: stale
  * pixels showed through the translucent shadow around focused windows when
  * zoomed (worst at the bottom, where Chromium's ring is tallest). */
+/* The subsurface clip on a surface buffer (wlr_scene_subsurface_tree_set_clip,
+ * applied by the window's apply_surface_clip as the xdg geometry): the part of
+ * the surface this buffer shows, in surface coordinates. wlroots crops the
+ * buffer's source box to it and sizes/positions the node from it on every
+ * commit, so every pass that rewrites a buffer's dest size or position must
+ * work from this extent rather than the surface's full size — or it stretches
+ * the cropped source back out to the whole surface. False (and an empty box)
+ * when the buffer is not a surface's or nothing is clipped. */
+bool river_scene_buffer_get_surface_clip(struct wlr_scene_buffer *scene_buffer,
+		struct wlr_box *out) {
+	*out = (struct wlr_box){0};
+	struct wlr_scene_surface *scene_surface = wlr_scene_surface_try_from_buffer(scene_buffer);
+	if (!scene_surface) {
+		return false;
+	}
+	*out = scene_surface->WLR_PRIVATE.clip;
+	return !wlr_box_empty(out);
+}
+
 void river_scene_buffer_set_scaled_opaque_region(struct wlr_scene_buffer *scene_buffer,
 		struct wlr_surface *surface, double scale) {
 	pixman_region32_t scaled;
 	pixman_region32_init(&scaled);
 	pixman_region32_copy(&scaled, &surface->opaque_region);
+	/* A clipped buffer shows only `clip` of the surface, at its own origin:
+	 * bring the region into buffer space before scaling, or the part of it
+	 * that lies in the cropped-away margin claims pixels the node never
+	 * paints. */
+	struct wlr_box clip;
+	if (river_scene_buffer_get_surface_clip(scene_buffer, &clip)) {
+		pixman_region32_translate(&scaled, -clip.x, -clip.y);
+		pixman_region32_intersect_rect(&scaled, &scaled, 0, 0, clip.width, clip.height);
+	}
 	wlr_region_scale(&scaled, &scaled, (float)scale);
 	wlr_scene_buffer_set_opaque_region(scene_buffer, &scaled);
 	pixman_region32_fini(&scaled);
