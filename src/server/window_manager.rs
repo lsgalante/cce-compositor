@@ -187,6 +187,14 @@ pub struct WindowManager {
     /// applied once, at the output frame, so the on-screen step lands on
     /// the vblank instead of whenever the last event happened to arrive.
     pub pan_pending: [f64; 2],
+    /// An interactive move/resize has pointer motion the client has not
+    /// been configured for yet. The seat op recomputes the dragged window's
+    /// geometry on every pointer event (cheap, and the arrange pass reads
+    /// the op state), but it used to also send the client a configure and
+    /// run a manage pass per event — a fast mouse handed the client several
+    /// sizes per frame, most rendered and never shown. Now it queues one
+    /// frame and `step_op_frame` does both once, on the vblank.
+    pub op_frame_pending: bool,
     pub animation_timer: *mut ffi::wl_event_source,
     /// Edge auto-pan velocity during an interactive move/resize, in SCREEN
     /// px/s (the tick divides by zoom). Written by `Seat::update_edge_pan`
@@ -376,6 +384,7 @@ impl WindowManager {
         self.pan_finger_v = [0.0, 0.0];
         self.camera_anim_active = false;
         self.pan_pending = [0.0, 0.0];
+        self.op_frame_pending = false;
         self.animation_timer = std::ptr::null_mut();
         self.edge_pan_vx = 0.0;
         self.edge_pan_vy = 0.0;
@@ -1513,6 +1522,47 @@ impl WindowManager {
         self.pan_pending[0] += dx;
         self.pan_pending[1] += dy;
         self.schedule_frame_all_outputs();
+    }
+
+    /// Queue the interactive move/resize's configure and relayout for the
+    /// next output frame (see `op_frame_pending`).
+    pub unsafe fn queue_op_frame(&mut self) {
+        if !self.op_frame_pending {
+            self.op_frame_pending = true;
+            self.schedule_frame_all_outputs();
+        }
+    }
+
+    /// The seat-op step for the frame about to render: configure the
+    /// dragged window for the LATEST pointer position and run the manage
+    /// pass, once per vblank — what `Seat::op_update` did per event. The
+    /// pass runs synchronously, as the dirty-idle callback would run it, so
+    /// this frame draws the result; with a pass already in flight the dirty
+    /// flag queues it, as before.
+    pub unsafe fn step_op_frame(&mut self) {
+        if !self.op_frame_pending {
+            return;
+        }
+        self.op_frame_pending = false;
+        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*seats_list).next;
+        while curr != seats_list {
+            let seat = crate::container_of!(curr, crate::seat::Seat, link);
+            if let Some(ref op) = (*seat).op {
+                let win = op.window_ptr;
+                if !win.is_null() && !(*win).closed {
+                    (*win).manage_finish();
+                }
+            }
+            curr = (*curr).next;
+        }
+        if matches!(self.state, WindowManagerState::Idle) {
+            self.scheduled.dirty = true;
+            self.scheduled.dirty_lazy = false;
+            self.manage_start();
+        } else {
+            self.dirty_windowing();
+        }
     }
 
     /// The camera step for the frame about to render: apply queued finger

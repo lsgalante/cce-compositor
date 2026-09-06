@@ -1449,9 +1449,11 @@ impl Seat {
                         (*win).set_dimensions(new_w, new_h);
                     }
                 }
-                (*win).manage_finish();
             }
-            (*self.server).wm.dirty_windowing();
+            // The configure and the relayout go out once per output frame,
+            // for wherever the pointer is by then (WindowManager::
+            // step_op_frame), not once per motion event.
+            (*self.server).wm.queue_op_frame();
         }
         self.update_edge_pan(x as f64, y as f64);
     }

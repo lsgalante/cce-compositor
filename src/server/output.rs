@@ -1665,6 +1665,9 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
     // The camera steps here, on the vblank, so what this frame renders is
     // the position computed for it (see WindowManager::step_camera_frame).
     (*output.server).wm.step_camera_frame();
+    // Likewise the interactive move/resize: one configure + relayout per
+    // vblank, for the pointer's latest position.
+    (*output.server).wm.step_op_frame();
     let render_start = if frame_debug() {
         Some(std::time::Instant::now())
     } else {
