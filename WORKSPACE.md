@@ -26,7 +26,7 @@ desktop environment written in Rust, split into two halves:
   `cce-designer`, `cce-files`, `cce-color-editor`, `cce-mail`, `cce-graph`, `cce-notifier`,
   `cce-authenticator`, `cce-display-manager`, `cce-text-editor`,
   `cce-data-editor`, `cce-fonts`, `cce-cloud`, `cce-layout-interface`,
-  `cce-screenaver`, `cce-test-interface`, `cce-terminal`, …) — Wayland client GUIs that connect to the
+  `cce-screenaver`, `cce-gallery`, `cce-terminal`, …) — Wayland client GUIs that connect to the
   compositor and to each other over Unix sockets. (The desktop background is drawn
   natively by the compositor — the former `cce-wallpaper` client was retired.)
 
