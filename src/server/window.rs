@@ -1164,6 +1164,23 @@ impl Window {
         (0.0, 0.0, 1920.0, 1080.0)
     }
 
+    /// Virtual position to layout (screen) position, ROUNDED — the same
+    /// conversion the arrange pass makes (`PlacementCtx::virtual_to_screen`).
+    /// Every writer of a window's screen origin has to agree on the
+    /// rounding: the seat op and the resize-commit anchoring truncated while
+    /// the arrange pass rounds, so whenever the fractional part was .5 or
+    /// more the window stepped a pixel back and forth between a commit and
+    /// the next arrange — a twitch on every resize step at overview zoom,
+    /// and a one-pixel hop on grab and release.
+    pub unsafe fn virtual_to_screen(&self, vx: f64, vy: f64) -> (i32, i32) {
+        let wm = &(*self.server).wm;
+        let (out_x, out_y, _, _) = self.first_enabled_output_box();
+        (
+            out_x as i32 + ((vx - wm.desk_pan_x) * wm.desk_zoom).round() as i32,
+            out_y as i32 + ((vy - wm.desk_pan_y) * wm.desk_zoom).round() as i32,
+        )
+    }
+
     /// Best-known window size in VIRTUAL units at map time. `box_geom` is the
     /// render pass's size and is only filled in once a frame has been drawn
     /// (or by `try_restore` from the saved geometry), so a first-ever launch
@@ -1966,12 +1983,7 @@ impl Window {
             self.virtual_y = self.resize_start_vy + (self.resize_start_h as f64 - committed_h as f64);
         }
 
-        let zoom = (*self.server).wm.desk_zoom;
-        let pan_x = (*self.server).wm.desk_pan_x;
-        let pan_y = (*self.server).wm.desk_pan_y;
-        let (out_x, out_y, _, _) = self.first_enabled_output_box();
-        let final_x = out_x as i32 + ((self.virtual_x - pan_x) * zoom) as i32;
-        let final_y = out_y as i32 + ((self.virtual_y - pan_y) * zoom) as i32;
+        let (final_x, final_y) = self.virtual_to_screen(self.virtual_x, self.virtual_y);
         self.rendering_requested.x = final_x;
         self.rendering_requested.y = final_y;
         self.box_geom.x = final_x;
