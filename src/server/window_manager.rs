@@ -684,7 +684,7 @@ impl WindowManager {
             curr_out = (*curr_out).next;
         }
         let zoom = self.desk_zoom;
-        let radius = (self.layout.backplate_corner_radius as f64 * zoom) as i32;
+        let radius = (self.layout.root_plate_corner_radius as f64 * zoom) as i32;
         for p in &self.restore_placeholders {
             let x = out_x + ((p.vx - self.desk_pan_x) * zoom).round() as i32;
             let y = out_y + ((p.vy - self.desk_pan_y) * zoom).round() as i32;

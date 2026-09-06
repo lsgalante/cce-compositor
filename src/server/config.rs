@@ -58,7 +58,7 @@ pub struct Layout {
     pub grid_gap: i32,
     pub border_blur: bool,
     pub window_blur: bool,
-    pub backplate_corner_radius: i32,
+    pub root_plate_corner_radius: i32,
     pub overlay_behavior: String,
     pub overlay_width: i32,
     pub overlay_position: String,
@@ -163,10 +163,10 @@ impl Layout {
             cell_w: self.desktop_cell_width,
             cell_h: self.desktop_cell_height,
             gap_width: self.desktop_gap_width as f64,
-            // Cells inherit the window backplate radius: a tiled window's
+            // Cells inherit the window root plate radius: a tiled window's
             // content covers exactly the visible cell box, so its arc sits
             // precisely on the cell's arc underneath.
-            cell_corner_radius: self.backplate_corner_radius,
+            cell_corner_radius: self.root_plate_corner_radius,
             cell_fade_inset: self.desktop_cell_fade_inset as i32,
             fade_mode: GridFadeMode::from_name(&self.desktop_grid_fade_mode),
         })
@@ -219,7 +219,7 @@ impl Default for Layout {
             grid_gap: 18,
             border_blur: false,
             window_blur: false,
-            backplate_corner_radius: 12,
+            root_plate_corner_radius: 12,
             overlay_behavior: "inline".to_string(),
             overlay_width: 360,
             overlay_position: "left".to_string(),
@@ -493,12 +493,12 @@ pub struct SurfaceConfig {
     pub desktop_edge_pan_band: i64,
     #[serde(default = "default_desktop_edge_pan_speed")]
     pub desktop_edge_pan_speed: i64,
-    #[serde(default = "default_backplate_color")]
-    pub backplate_color: String,
-    #[serde(default = "default_backplate_blur")]
-    pub backplate_blur: f64,
-    #[serde(default = "default_backplate_corner_radius")]
-    pub backplate_corner_radius: i64,
+    #[serde(default = "default_root_plate_color")]
+    pub root_plate_color: String,
+    #[serde(default = "default_root_plate_blur")]
+    pub root_plate_blur: f64,
+    #[serde(default = "default_root_plate_corner_radius")]
+    pub root_plate_corner_radius: i64,
     #[serde(default = "default_border_width")]
     pub border_width: i64,
     #[serde(default = "default_border_color")]
@@ -610,9 +610,9 @@ impl Default for SurfaceConfig {
             desktop_edge_pan: default_desktop_edge_pan(),
             desktop_edge_pan_band: default_desktop_edge_pan_band(),
             desktop_edge_pan_speed: default_desktop_edge_pan_speed(),
-            backplate_color: default_backplate_color(),
-            backplate_blur: default_backplate_blur(),
-            backplate_corner_radius: default_backplate_corner_radius(),
+            root_plate_color: default_root_plate_color(),
+            root_plate_blur: default_root_plate_blur(),
+            root_plate_corner_radius: default_root_plate_corner_radius(),
             border_width: default_border_width(),
             border_color: default_border_color(),
             border_color_focused: None,
@@ -701,15 +701,15 @@ fn default_desktop_edge_pan_speed() -> i64 {
     1000
 }
 
-fn default_backplate_color() -> String {
+fn default_root_plate_color() -> String {
     "#151520e6".to_string()
 }
 
-fn default_backplate_blur() -> f64 {
+fn default_root_plate_blur() -> f64 {
     0.8
 }
 
-fn default_backplate_corner_radius() -> i64 {
+fn default_root_plate_corner_radius() -> i64 {
     12
 }
 
@@ -1982,7 +1982,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                     // RFC Phase 7a (cce-ui): `plate { root ... }` is the one
                     // spelling of the root-plate style; the compositor reads
                     // the silhouette values from this block. The legacy
-                    // `backplate` read-alias was removed 2026-09-06 after
+                    // `root plate` read-alias was removed 2026-09-06 after
                     // every live config had migrated.
                     let root_plate_node = surface_children
                         .nodes()
@@ -1990,14 +1990,14 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                         .find(|n| n.name().value() == "plate")
                         .and_then(|n| n.children())
                         .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "root"));
-                    if let Some(backplate_node) = root_plate_node {
+                    if let Some(root_node) = root_plate_node {
                         found_nested = true;
-                        for entry in backplate_node.entries() {
+                        for entry in root_node.entries() {
                             if let Some(id) = entry.name() {
                                 match id.value() {
                                     "color" => {
                                         if let Some(val) = entry.value().as_string() {
-                                            surface.backplate_color = val.to_string();
+                                            surface.root_plate_color = val.to_string();
                                         }
                                     }
                                     "blur" => {
@@ -2015,12 +2015,12 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                                     }
                                                 }
                                             }
-                                            surface.backplate_blur = val;
+                                            surface.root_plate_blur = val;
                                         }
                                     }
                                     "corner_radius" => {
                                         if let Some(val) = entry.value().as_i64() {
-                                            surface.backplate_corner_radius = val;
+                                            surface.root_plate_corner_radius = val;
                                         }
                                     }
                                     _ => {}
@@ -2170,7 +2170,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.shadow_enabled = val;
                                         }
                                     }
-                                    // Named `blur` to match the status/backplate blur keys.
+                                    // Named `blur` to match the status/root plate blur keys.
                                     "blur" => {
                                         if let Some(val) = entry.value().as_f64() {
                                             surface.shadow_sigma = val;
@@ -2236,9 +2236,9 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.desktop_edge_pan = get_child_arg_bool(node, "desktop_edge_pan", default_desktop_edge_pan());
             surface.desktop_edge_pan_band = get_child_arg_i64(node, "desktop_edge_pan_band", default_desktop_edge_pan_band());
             surface.desktop_edge_pan_speed = get_child_arg_i64(node, "desktop_edge_pan_speed", default_desktop_edge_pan_speed());
-            surface.backplate_color = get_child_arg_string(node, "backplate_color", &default_backplate_color());
-            surface.backplate_blur = get_child_arg_f64(node, "backplate_blur", default_backplate_blur());
-            surface.backplate_corner_radius = get_child_arg_i64(node, "backplate_corner_radius", default_backplate_corner_radius());
+            surface.root_plate_color = get_child_arg_string(node, "root_plate_color", &default_root_plate_color());
+            surface.root_plate_blur = get_child_arg_f64(node, "root_plate_blur", default_root_plate_blur());
+            surface.root_plate_corner_radius = get_child_arg_i64(node, "root_plate_corner_radius", default_root_plate_corner_radius());
             surface.border_width = get_child_arg_i64(node, "border_width", default_border_width());
             surface.border_color = get_child_arg_string(node, "border_color", &default_border_color());
             surface.border_color_focused = get_child_arg_string_opt(node, "border_color_focused");
@@ -2441,8 +2441,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.transition_duration = config.layout.transition_duration as i32;
     state.layout.grid_gap = config.layout.grid_gap as i32;
     state.layout.border_blur = false;
-    state.layout.window_blur = config.surface.backplate_blur > 0.001;
-    state.layout.backplate_corner_radius = config.surface.backplate_corner_radius as i32;
+    state.layout.window_blur = config.surface.root_plate_blur > 0.001;
+    state.layout.root_plate_corner_radius = config.surface.root_plate_corner_radius as i32;
     state.layout.overlay_behavior = config.layout.overlay_behavior;
     state.layout.overlay_width = config.layout.overlay_width as i32;
     state.layout.overlay_position = config.layout.overlay_position;
@@ -2450,8 +2450,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.status_normal_color = config.layout.status_normal_color.clone();
     state.layout.status_background_blur = config.layout.status_background_blur as f32;
     state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
-    let backplate_rgba = parse_hex_color_rgba(&config.surface.backplate_color);
-    state.layout.window_opacity = backplate_rgba[3] < 0.999;
+    let root_plate_rgba = parse_hex_color_rgba(&config.surface.root_plate_color);
+    state.layout.window_opacity = root_plate_rgba[3] < 0.999;
     state.layout.scenefx_optimized_blur = config.output.as_ref().map(|o| o.scenefx_optimized_blur).unwrap_or(true);
     state.layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
     state.layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
@@ -2701,14 +2701,14 @@ mod tests {
             parse_config(&path, &mut server.wm).unwrap();
             assert!(!server.wm.layout.desktop_gap_color.is_empty());
             assert!(server.wm.layout.desktop_gap_width >= 0);
-            assert!(server.wm.layout.backplate_corner_radius >= 0);
+            assert!(server.wm.layout.root_plate_corner_radius >= 0);
             println!("TEST_WM_STARTUP: {:?}", server.wm.startup);
             println!("TEST_WM_PATH: {:?}", std::env::var("PATH"));
         }
     }
 
     /// RFC Phase 7a: `plate { root ... }` is the one root-plate spelling; a
-    /// legacy `backplate` node is ignored (its read-alias was removed
+    /// legacy `root plate` node is ignored (its read-alias was removed
     /// 2026-09-06), so the defaults stand when only it is present.
     #[test]
     fn test_plate_root_canonical_spelling() {
@@ -2723,8 +2723,8 @@ style {
 }
 "##;
         let config = parse_kdl_config(canonical).unwrap();
-        assert_eq!(config.surface.backplate_corner_radius, 21, "canonical read; legacy ignored");
-        assert_eq!(config.surface.backplate_color, "#11223344");
+        assert_eq!(config.surface.root_plate_corner_radius, 21, "canonical read; legacy ignored");
+        assert_eq!(config.surface.root_plate_color, "#11223344");
 
         // The legacy spelling alone is not read: the defaults stand.
         let legacy = r##"
@@ -2735,8 +2735,8 @@ style {
 }
 "##;
         let config = parse_kdl_config(legacy).unwrap();
-        assert_eq!(config.surface.backplate_corner_radius, default_backplate_corner_radius(), "legacy spelling is not read");
-        assert_eq!(config.surface.backplate_color, default_backplate_color());
+        assert_eq!(config.surface.root_plate_corner_radius, default_root_plate_corner_radius(), "legacy spelling is not read");
+        assert_eq!(config.surface.root_plate_color, default_root_plate_color());
     }
 
     #[test]

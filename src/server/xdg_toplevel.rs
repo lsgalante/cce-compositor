@@ -700,7 +700,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         // mirror): status segments draw their own module-box corners.
         0
     } else if (*window).wm_requested.ssd || is_decorated {
-        (*(*window).server).wm.layout.backplate_corner_radius
+        (*(*window).server).wm.layout.root_plate_corner_radius
     } else {
         0
     };

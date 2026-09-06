@@ -1340,7 +1340,7 @@ impl Output {
                         let cell_radius = crate::window::widen_corner_radius(
                             cells.corner_radius_px, cells.cell_w_px, cells.cell_h_px,
                         );
-                        // The backplate-edge roll (mirroring cce-grid): the
+                        // The root plate-edge roll (mirroring cce-grid): the
                         // bevel-width knob clamped to a fraction of the
                         // rail, pre-scaled by zoom like every cell metric,
                         // so the rail reads as a flat face with a narrow

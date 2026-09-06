@@ -2711,13 +2711,13 @@ impl Window {
                 w.min(h) / 2
             } else if is_status {
                 // Status segments draw their own module-box corners. The
-                // backplate clip is invisible on a bar-thin segment (the
+                // root plate clip is invisible on a bar-thin segment (the
                 // half-extent cap keeps it inside the transparent band) but
                 // carves visible sweeps into an EXPANDED segment's in-surface
                 // menu box once the cap stops binding.
                 0
             } else if self.wm_requested.ssd || is_decorated {
-                (*self.server).wm.layout.backplate_corner_radius
+                (*self.server).wm.layout.root_plate_corner_radius
             } else {
                 0
             };
@@ -3200,7 +3200,7 @@ impl Window {
                     // paths drive the same nodes and must agree.
                     0
                 } else if self.wm_requested.ssd || is_decorated {
-                    (*self.server).wm.layout.backplate_corner_radius
+                    (*self.server).wm.layout.root_plate_corner_radius
                 } else {
                     0
                 };
@@ -3279,14 +3279,14 @@ impl Window {
         }
     }
 
-    /// The backplate / content-clip corner radius in logical px, before span
+    /// The root plate / content-clip corner radius in logical px, before span
     /// widening. Single source for every writer of that radius: the two render
-    /// paths clip the surface with it, and `draw_borders` shapes the backplate
+    /// paths clip the surface with it, and `draw_borders` shapes the root plate
     /// rect with it. Those disagreed — draw_borders applied the BORDER ring's
-    /// radius to the backplate node and, running last, silently overrode the
+    /// radius to the root plate node and, running last, silently overrode the
     /// value set_rendering_state had just written, making
-    /// `backplate_corner_radius` dead config.
-    pub unsafe fn backplate_radius_base(&self) -> i32 {
+    /// `root_plate_corner_radius` dead config.
+    pub unsafe fn root_plate_radius_base(&self) -> i32 {
         if self.is_fullscreen() {
             return 0;
         }
@@ -3303,7 +3303,7 @@ impl Window {
         }
         let is_decorated = (*self.server).wm.is_decorated_app(&app_id);
         if self.wm_requested.ssd || is_decorated {
-            (*self.server).wm.layout.backplate_corner_radius
+            (*self.server).wm.layout.root_plate_corner_radius
         } else {
             0
         }
@@ -3764,11 +3764,11 @@ impl Window {
         ffi::river_scene_rect_set_size_if_changed(self.window_background, bg_width, bg_height);
         ffi::wlr_scene_rect_set_color(self.window_background, border_color.as_ptr());
         // The background plate sits directly under the client's plate, so it
-        // takes the BACKPLATE radius and the same span widening as the
+        // takes the ROOT_PLATE radius and the same span widening as the
         // blur/clip radius — not the border ring's radius, which is a
         // separate key describing a different edge.
         let bg_radius = widen_corner_radius(
-            self.backplate_radius_base(),
+            self.root_plate_radius_base(),
             self.box_geom.width,
             self.box_geom.height,
         );
@@ -3936,7 +3936,7 @@ impl Window {
 
             let layout = &(*self.server).wm.layout;
             // The ring hugs the window's own silhouette, so its outer arc IS
-            // the window's content radius (the widened backplate radius the
+            // the window's content radius (the widened root plate radius the
             // corner clip uses) rather than that plus a band.
             let r_in = bg_radius;
             // corner_len and gap are retired by the wave profile (the
