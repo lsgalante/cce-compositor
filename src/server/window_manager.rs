@@ -2114,7 +2114,9 @@ impl WindowManager {
                             // the next unrelated transaction reparented it (the
                             // off-screen reveal delay in overview/zoom).
                             let layer = if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
-                                (*self.server).scene.layers.background
+                                // Between the native backdrop and the fallback
+                                // cells, like a layer-shell Background surface.
+                                (*self.server).scene.layers.background_clients
                             } else if (*window).is_grid() {
                                 // The grid client is a desktop fixture: above
                                 // the native backdrop and fallback cells

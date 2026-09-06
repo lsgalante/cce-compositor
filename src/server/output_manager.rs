@@ -235,6 +235,13 @@ impl OutputManager {
                                 output.sent.y,
                             );
                         }
+                        if !output.grid_backdrop_tree.is_null() {
+                            ffi::wlr_scene_node_set_position(
+                                output.grid_backdrop_tree as *mut ffi::wlr_scene_node,
+                                output.sent.x,
+                                output.sent.y,
+                            );
+                        }
 
                         if output.adjust_tree.is_null() {
                             output.adjust_tree = ffi::wlr_scene_tree_create((*server).scene.layers.top);
@@ -257,6 +264,11 @@ impl OutputManager {
                             ffi::wlr_scene_node_destroy(output.grid_tree as *mut ffi::wlr_scene_node);
                             output.grid_tree = std::ptr::null_mut();
                             output.grid_rect_pool.clear();
+                        }
+                        if !output.grid_backdrop_tree.is_null() {
+                            ffi::wlr_scene_node_destroy(output.grid_backdrop_tree as *mut ffi::wlr_scene_node);
+                            output.grid_backdrop_tree = std::ptr::null_mut();
+                            output.grid_backdrop_rect = std::ptr::null_mut();
                         }
                         if !output.adjust_tree.is_null() {
                             ffi::wlr_scene_node_destroy(output.adjust_tree as *mut ffi::wlr_scene_node);

@@ -6,6 +6,14 @@ use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
 
 pub struct SceneLayers {
     pub background: *mut ffi::wlr_scene_tree,
+    /// Client-provided backgrounds — wlr-layer-shell Background surfaces and
+    /// the `cce-wallpaper` window — inside `background`, ABOVE each output's
+    /// base rect and grid backdrop and BELOW its grid cells (`Output::draw_grid`
+    /// keeps the backdrop under this tree and the cell tree above it). A client
+    /// wallpaper therefore replaces the flat backdrop colour and keeps the cell
+    /// lattice; before this tree the grid tree, re-raised on every redraw, buried
+    /// every client background under its opaque backdrop.
+    pub background_clients: *mut ffi::wlr_scene_tree,
     pub bottom: *mut ffi::wlr_scene_tree,
     pub wm: *mut ffi::wlr_scene_tree,
     pub top: *mut ffi::wlr_scene_tree,
@@ -42,6 +50,7 @@ impl Scene {
             locked_tree: std::ptr::null_mut(),
             layers: SceneLayers {
                 background: std::ptr::null_mut(),
+                background_clients: std::ptr::null_mut(),
                 bottom: std::ptr::null_mut(),
                 wm: std::ptr::null_mut(),
                 top: std::ptr::null_mut(),
@@ -98,6 +107,7 @@ impl Scene {
         ffi::wlr_scene_node_set_enabled(locked_tree as *mut ffi::wlr_scene_node, false);
 
         self.layers.background = ffi::wlr_scene_tree_create(normal_tree);
+        self.layers.background_clients = ffi::wlr_scene_tree_create(self.layers.background);
         self.layers.bottom = ffi::wlr_scene_tree_create(normal_tree);
         self.layers.wm = ffi::wlr_scene_tree_create(normal_tree);
         self.layers.top = ffi::wlr_scene_tree_create(normal_tree);
@@ -113,6 +123,7 @@ impl Scene {
 
         if self.layers.border_overlay.is_null()
             || self.layers.background.is_null()
+            || self.layers.background_clients.is_null()
             || self.layers.bottom.is_null()
             || self.layers.wm.is_null()
             || self.layers.top.is_null()
@@ -212,7 +223,7 @@ impl Scene {
     pub unsafe fn layer_surface_tree(&self, layer: u32) -> *mut ffi::wlr_scene_tree {
         // layer is zwlr_layer_shell_v1_layer enum values
         match layer {
-            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND => self.layers.background,
+            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND => self.layers.background_clients,
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM => self.layers.bottom,
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_TOP => self.layers.top,
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY => self.layers.overlay,

@@ -159,6 +159,12 @@ pub struct Output {
     pub scene_output: *mut ffi::wlr_scene_output,
     pub background_rect: *mut ffi::wlr_scene_rect,
     pub grid_tree: *mut ffi::wlr_scene_tree,
+    /// The grid's backdrop (gap colour, or the Solid spec's colour), kept in
+    /// its own tree under `scene.layers.background_clients` so a client
+    /// background surface paints over it while the cells in `grid_tree` stay
+    /// on top. Positioned in lockstep with `grid_tree`.
+    pub grid_backdrop_tree: *mut ffi::wlr_scene_tree,
+    pub grid_backdrop_rect: *mut ffi::wlr_scene_rect,
     pub adjust_tree: *mut ffi::wlr_scene_tree,
     pub adjust_rects: Vec<*mut ffi::wlr_scene_rect>,
     pub last_adjust_mode: bool,
@@ -381,6 +387,11 @@ impl Output {
                         ffi::wlr_scene_node_destroy(self.grid_tree as *mut ffi::wlr_scene_node);
                         self.grid_tree = std::ptr::null_mut();
                     }
+                    if !self.grid_backdrop_tree.is_null() {
+                        ffi::wlr_scene_node_destroy(self.grid_backdrop_tree as *mut ffi::wlr_scene_node);
+                        self.grid_backdrop_tree = std::ptr::null_mut();
+                        self.grid_backdrop_rect = std::ptr::null_mut();
+                    }
                     self.grid_rect_pool.clear();
                     // The bevel subtree died with grid_tree above.
                     self.grid_bevel_pool.clear();
@@ -457,6 +468,8 @@ impl Output {
             scene_output,
             background_rect: std::ptr::null_mut(),
             grid_tree: std::ptr::null_mut(),
+            grid_backdrop_tree: std::ptr::null_mut(),
+            grid_backdrop_rect: std::ptr::null_mut(),
             adjust_tree: std::ptr::null_mut(),
             adjust_rects: Vec::new(),
             last_adjust_mode: false,
@@ -1164,8 +1177,40 @@ impl Output {
         // Enable the grid tree.
         ffi::wlr_scene_node_set_enabled(self.grid_tree as *mut ffi::wlr_scene_node, true);
 
-        // Keep the grid tree at the top of the background layer to prevent wallpaper windows from overlapping it
+        // Keep the grid tree (cells + rims) at the top of the background layer,
+        // above the client backgrounds in layers.background_clients.
         ffi::wlr_scene_node_raise_to_top(self.grid_tree as *mut ffi::wlr_scene_node);
+
+        // The backdrop goes BELOW the client backgrounds: its own tree, placed
+        // just above this output's base rect (or at the very bottom), so a
+        // layer-shell Background surface or a wallpaper window replaces the flat
+        // colour and keeps the cell lattice.
+        if self.grid_backdrop_tree.is_null() {
+            self.grid_backdrop_tree = ffi::wlr_scene_tree_create((*self.server).scene.layers.background);
+            if self.grid_backdrop_tree.is_null() {
+                return;
+            }
+            if !self.background_rect.is_null() {
+                ffi::wlr_scene_node_lower_to_bottom(self.background_rect as *mut ffi::wlr_scene_node);
+                ffi::wlr_scene_node_place_above(
+                    self.grid_backdrop_tree as *mut ffi::wlr_scene_node,
+                    self.background_rect as *mut ffi::wlr_scene_node,
+                );
+            } else {
+                ffi::wlr_scene_node_lower_to_bottom(self.grid_backdrop_tree as *mut ffi::wlr_scene_node);
+            }
+        }
+        ffi::wlr_scene_node_set_enabled(self.grid_backdrop_tree as *mut ffi::wlr_scene_node, true);
+        let backdrop_tree = self.grid_backdrop_tree;
+        let backdrop_rect = &mut self.grid_backdrop_rect;
+        let mut set_backdrop = |w: i32, h: i32, color_ptr: *const f32| {
+            if backdrop_rect.is_null() {
+                *backdrop_rect = ffi::wlr_scene_rect_create(backdrop_tree, w, h, color_ptr);
+            } else {
+                ffi::wlr_scene_rect_set_size(*backdrop_rect, w, h);
+                ffi::wlr_scene_rect_set_color(*backdrop_rect, color_ptr);
+            }
+        };
 
         let (viewport_w, viewport_h) = self.current.dimensions();
         let spec = wm.layout.background_spec();
@@ -1307,6 +1352,11 @@ impl Output {
                         x,
                         y,
                     );
+                    ffi::river_scene_node_set_position_if_changed(
+                        backdrop_tree as *mut ffi::wlr_scene_node,
+                        x,
+                        y,
+                    );
                 }
 
                 if force {
@@ -1314,7 +1364,7 @@ impl Output {
                     // backdrop always draws — while a grid client is live it
                     // is the safety net beyond the patch edges during fast
                     // pans; the CELLS yield to the client's rendering.
-                    get_rect(frame.backdrop_w, frame.backdrop_h, grid.gap_color.0.as_ptr(), 0, 0, 0, 0);
+                    set_backdrop(frame.backdrop_w, frame.backdrop_h, grid.gap_color.0.as_ptr());
 
                     if let Some(cells) = frame.cells.as_ref().filter(|_| wm.grid_cells_enabled) {
                         // scenefx fade-inset wire encoding: inset px * 1000
@@ -1385,8 +1435,13 @@ impl Output {
                     self.sent.x,
                     self.sent.y,
                 );
+                ffi::river_scene_node_set_position_if_changed(
+                    backdrop_tree as *mut ffi::wlr_scene_node,
+                    self.sent.x,
+                    self.sent.y,
+                );
                 if force {
-                    get_rect(viewport_w, viewport_h, color.0.as_ptr(), 0, 0, 0, 0);
+                    set_backdrop(viewport_w, viewport_h, color.0.as_ptr());
                 }
             }
         }
@@ -1549,6 +1604,11 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     if !(*output).grid_tree.is_null() {
         ffi::wlr_scene_node_destroy((*output).grid_tree as *mut ffi::wlr_scene_node);
         (*output).grid_tree = std::ptr::null_mut();
+    }
+    if !(*output).grid_backdrop_tree.is_null() {
+        ffi::wlr_scene_node_destroy((*output).grid_backdrop_tree as *mut ffi::wlr_scene_node);
+        (*output).grid_backdrop_tree = std::ptr::null_mut();
+        (*output).grid_backdrop_rect = std::ptr::null_mut();
     }
 
     if !(*output).adjust_tree.is_null() {
