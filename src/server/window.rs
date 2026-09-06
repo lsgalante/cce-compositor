@@ -1916,6 +1916,68 @@ impl Window {
         }
     }
 
+    /// Is a pointer resize op on this window still in progress on any seat?
+    pub unsafe fn resize_op_active(&self) -> bool {
+        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+        let mut curr_seat = (*seats_list).next;
+        while curr_seat != seats_list {
+            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+            if let Some(ref op) = (*seat).op {
+                if op.window_ptr == self as *const Window as *mut Window {
+                    if let crate::seat::PointerOpType::Resize { .. } = op.op_type {
+                        return true;
+                    }
+                }
+            }
+            curr_seat = (*curr_seat).next;
+        }
+        false
+    }
+
+    /// Interactive-resize anchoring for the commit path, shared by every
+    /// surface kind. While a LEFT/TOP edge is being dragged, the client's
+    /// committed size decides where the window's origin goes: the opposite
+    /// edge stays where the drag found it, so the dragged edge is the one
+    /// that appears to move. Without this the origin holds still and the
+    /// window grows away from the grabbed edge — which is what Xwayland
+    /// windows did until they were routed through here: only the
+    /// xdg-toplevel commit handler had the math.
+    ///
+    /// `committed_w`/`committed_h` are the size the client just committed,
+    /// in `box_geom` units (content size; for wine X11 windows the caller has
+    /// already taken the 32px frame off, as the render pass does). Updates
+    /// the virtual position and the requested/box screen origin and returns
+    /// that origin, or `None` when no resize is armed. The anchoring outlives
+    /// the seat op by one commit — the last configure is usually still in
+    /// flight at release — so the first commit after the op disarms it.
+    pub unsafe fn anchor_resize_commit(&mut self, committed_w: i32, committed_h: i32) -> Option<(i32, i32)> {
+        let edges = self.resize_edges?;
+        let resize_active = self.resize_op_active();
+
+        if edges.left {
+            self.virtual_x = self.resize_start_vx + (self.resize_start_w as f64 - committed_w as f64);
+        }
+        if edges.top {
+            self.virtual_y = self.resize_start_vy + (self.resize_start_h as f64 - committed_h as f64);
+        }
+
+        let zoom = (*self.server).wm.desk_zoom;
+        let pan_x = (*self.server).wm.desk_pan_x;
+        let pan_y = (*self.server).wm.desk_pan_y;
+        let (out_x, out_y, _, _) = self.first_enabled_output_box();
+        let final_x = out_x as i32 + ((self.virtual_x - pan_x) * zoom) as i32;
+        let final_y = out_y as i32 + ((self.virtual_y - pan_y) * zoom) as i32;
+        self.rendering_requested.x = final_x;
+        self.rendering_requested.y = final_y;
+        self.box_geom.x = final_x;
+        self.box_geom.y = final_y;
+
+        if !resize_active {
+            self.resize_edges = None;
+        }
+        Some((final_x, final_y))
+    }
+
     pub unsafe fn set_decoration_hint(&mut self, hint: ffi::zcce_window_v1_decoration_hint) {
         self.wm_scheduled.decoration_hint = hint;
         if hint != self.wm_sent.decoration_hint {
@@ -5077,6 +5139,25 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
     let window = crate::container_of!(listener, Window, commit);
     (*window).stream_dirty = true;
     let was_status = (*window).is_status_bar();
+    // An X11 client committing under a left/top-edge drag: anchor on the
+    // size it just committed, ahead of the render_finish below that places
+    // the tree at `rendering_requested`. (xdg toplevels do the same in their
+    // own commit handler, where the toplevel geometry is the authority.)
+    if let WindowImpl::Xwayland(xwindow) = (*window).impl_type {
+        if !xwindow.is_null() && !(*xwindow).xsurface.is_null() && (*window).resize_edges.is_some() {
+            let surface = (*(*xwindow).xsurface).surface;
+            if !surface.is_null() {
+                let mut w = ffi::river_wlr_surface_get_width(surface);
+                let mut h = ffi::river_wlr_surface_get_height(surface);
+                let has_parent = !(*(*xwindow).xsurface).parent.is_null();
+                if (*window).is_wine() && !has_parent && !(*window).is_fullscreen() {
+                    w = (w - 32).max(0);
+                    h = (h - 32).max(0);
+                }
+                (*window).anchor_resize_commit(w, h);
+            }
+        }
+    }
     (*window).render_finish();
     if was_status {
         (*(*window).server).wm.dirty_windowing();
