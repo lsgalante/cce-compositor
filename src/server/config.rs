@@ -1979,21 +1979,17 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                             }
                         }
                     }
-                    // RFC Phase 7a (cce-ui): `plate { root ... }` is the
-                    // CANONICAL spelling of the root-plate style; `backplate`
-                    // is its legacy read-alias. The compositor reads the
-                    // silhouette values from this block, so it must accept
-                    // both spellings or a canonically-migrated config.kdl
-                    // silently breaks window clipping. Canonical wins.
+                    // RFC Phase 7a (cce-ui): `plate { root ... }` is the one
+                    // spelling of the root-plate style; the compositor reads
+                    // the silhouette values from this block. The legacy
+                    // `backplate` read-alias was removed 2026-09-06 after
+                    // every live config had migrated.
                     let root_plate_node = surface_children
                         .nodes()
                         .iter()
                         .find(|n| n.name().value() == "plate")
                         .and_then(|n| n.children())
-                        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "root"))
-                        .or_else(|| {
-                            surface_children.nodes().iter().find(|n| n.name().value() == "backplate")
-                        });
+                        .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "root"));
                     if let Some(backplate_node) = root_plate_node {
                         found_nested = true;
                         for entry in backplate_node.entries() {
@@ -2711,9 +2707,9 @@ mod tests {
         }
     }
 
-    /// RFC Phase 7a: the canonical `plate { root ... }` spelling feeds the
-    /// same silhouette values as the legacy `backplate` node, and wins when
-    /// both are present.
+    /// RFC Phase 7a: `plate { root ... }` is the one root-plate spelling; a
+    /// legacy `backplate` node is ignored (its read-alias was removed
+    /// 2026-09-06), so the defaults stand when only it is present.
     #[test]
     fn test_plate_root_canonical_spelling() {
         let canonical = r##"
@@ -2727,9 +2723,10 @@ style {
 }
 "##;
         let config = parse_kdl_config(canonical).unwrap();
-        assert_eq!(config.surface.backplate_corner_radius, 21, "canonical wins");
+        assert_eq!(config.surface.backplate_corner_radius, 21, "canonical read; legacy ignored");
         assert_eq!(config.surface.backplate_color, "#11223344");
 
+        // The legacy spelling alone is not read: the defaults stand.
         let legacy = r##"
 style {
     surface {
@@ -2738,8 +2735,8 @@ style {
 }
 "##;
         let config = parse_kdl_config(legacy).unwrap();
-        assert_eq!(config.surface.backplate_corner_radius, 9, "legacy still reads");
-        assert_eq!(config.surface.backplate_color, "#55667788");
+        assert_eq!(config.surface.backplate_corner_radius, default_backplate_corner_radius(), "legacy spelling is not read");
+        assert_eq!(config.surface.backplate_color, default_backplate_color());
     }
 
     #[test]
