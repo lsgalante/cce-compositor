@@ -766,6 +766,13 @@ impl WindowManager {
             if (*w).tiling_mode == crate::tiling::TilingMode::Utility {
                 continue;
             }
+            // A transient (dialog) belongs to its parent's process: saved, it
+            // would carry that process's cmdline and a session restore would
+            // spawn the whole app a second time just to place a dialog that
+            // no longer exists. `try_restore` skips transients to match.
+            if !(*w).get_parent().is_null() {
+                continue;
+            }
 
             let app_id = (*w).get_app_id_string().unwrap_or_default();
             if app_id.is_empty() {

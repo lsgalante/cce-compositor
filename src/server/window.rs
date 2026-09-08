@@ -1035,6 +1035,19 @@ impl Window {
         if self.tiling_mode == crate::tiling::TilingMode::Utility {
             return;
         }
+        // A transient — an xdg toplevel with a parent, or an X11 window with
+        // WM_TRANSIENT_FOR — is a dialog of the window it hangs off, and is
+        // never what a saved entry describes. It shares its app_id with the
+        // main window, so the app_id-only third pass of the state matchers
+        // (kept for a relaunched main window whose title has changed) would
+        // hand it the MAIN window's geometry: Houdini's Preferences opened at
+        // the full 1856x1141 of the session it belongs to, and hkey's
+        // "Redeem Result" at the administrator's size. The save pass skips
+        // transients for the same reason, so there is nothing of their own to
+        // restore either; they size themselves.
+        if !self.get_parent().is_null() {
+            return;
+        }
         let app_id_str = self.get_app_id_string().unwrap_or_default();
         if app_id_str.is_empty()
             || app_id_str.starts_with("cce-status")
