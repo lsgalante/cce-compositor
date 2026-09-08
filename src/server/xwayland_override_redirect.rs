@@ -21,6 +21,10 @@ pub struct XwaylandOverrideRedirect {
     pub unmap: ffi::wl_listener,
 
     pub set_geometry: ffi::wl_listener,
+    /// Re-applies the 1/scale dest size after every commit (the scene's
+    /// commit handler resets it) — see `Window`'s commit handler for why a
+    /// per-frame pass alone leaves a hit-testing gap.
+    pub commit: ffi::wl_listener,
 }
 
 unsafe fn connect_listener(
@@ -68,6 +72,7 @@ impl XwaylandOverrideRedirect {
             map: std::mem::zeroed(),
             unmap: std::mem::zeroed(),
             set_geometry: std::mem::zeroed(),
+            commit: std::mem::zeroed(),
         });
 
         let raw = Box::into_raw(override_redirect);
@@ -246,6 +251,8 @@ unsafe fn handle_map_impl(or: *mut XwaylandOverrideRedirect) {
     (*or).apply_x11_scale();
 
     connect_listener(&mut (*(*or).xsurface).events.set_geometry, &mut (*or).set_geometry, handle_set_geometry);
+    // After the scene's subsurface tree, so this runs after its reset.
+    connect_listener(ffi::river_wlr_surface_get_commit_signal(surface), &mut (*or).commit, handle_commit);
 
     (*or).focus_if_desired();
 }
@@ -254,6 +261,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, unmap);
 
     wl_listener_remove_safe(&mut (*or).set_geometry);
+    wl_listener_remove_safe(&mut (*or).commit);
 
     let surface = (*(*or).xsurface).surface;
     if !surface.is_null() {
@@ -285,6 +293,11 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
     (*(*or).server).wm.dirty_windowing();
 }
 
+unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    let or = crate::container_of!(listener, XwaylandOverrideRedirect, commit);
+    (*or).apply_x11_scale();
+}
+
 unsafe extern "C" fn handle_set_geometry(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, set_geometry);
     (*or).place();
@@ -301,6 +314,7 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
         if ffi::river_wlr_surface_is_mapped(surface) {
             // handle unmap inline
             wl_listener_remove_safe(&mut (*or).set_geometry);
+    wl_listener_remove_safe(&mut (*or).commit);
             ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
             if !(*or).surface_tree.is_null() {
                 ffi::wlr_scene_node_destroy((*or).surface_tree as *mut ffi::wlr_scene_node);

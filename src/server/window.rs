@@ -5270,6 +5270,17 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
         }
     }
     (*window).render_finish();
+    // The scene's own commit handler (registered before this one, so it has
+    // already run) resets the committed buffer's dest size to natural. For
+    // an X11 surface under xwayland_hidpi that is the physical size — twice
+    // the logical box — and until the per-frame pass restores it every
+    // pointer event hit-tests through the unscaled buffer and reaches the
+    // client at HALF its coordinates. Houdini repaints on every hover
+    // change, so hover flickered: each repaint opened the gap, the next
+    // motion event landed elsewhere, the widget un-hovered, repeat.
+    if (*window).x11_buffer_scale() != 1.0 {
+        (*window).scale_only_render_finish();
+    }
     if was_status {
         (*(*window).server).wm.dirty_windowing();
     }

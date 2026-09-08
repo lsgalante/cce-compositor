@@ -51,6 +51,12 @@ pub struct Cursor {
     /// implicit grab's frame of reference, so held-button motion stays
     /// surface-relative wherever the pointer goes (passthrough's grab branch).
     pub grab_origin: (f64, f64),
+    /// Surface units per layout pixel for the grabbed surface, frozen at
+    /// press: 1 for a buffer shown at its natural size, the output scale
+    /// for an X11 surface under xwayland_hidpi (physical-pixel buffer drawn
+    /// at 1/scale), 1/zoom in the overview. Without it a held-button drag
+    /// reached an X11 client at half speed.
+    pub grab_scale: f64,
 
     pub touch_down_listener: ffi::wl_listener,
     pub touch_motion_listener: ffi::wl_listener,
@@ -132,6 +138,7 @@ impl Default for Cursor {
             pressed: HashMap::new(),
             notified_pressed: HashSet::new(),
             grab_origin: (0.0, 0.0),
+            grab_scale: 1.0,
 
             touch_down_listener: unsafe { std::mem::zeroed() },
             touch_motion_listener: unsafe { std::mem::zeroed() },
@@ -747,8 +754,8 @@ impl Cursor {
                 ffi::wlr_seat_pointer_notify_motion(
                     (*self.seat).wlr_seat,
                     time_msec,
-                    lx - self.grab_origin.0,
-                    ly - self.grab_origin.1,
+                    (lx - self.grab_origin.0) * self.grab_scale,
+                    (ly - self.grab_origin.1) * self.grab_scale,
                 );
                 return;
             }
@@ -1653,7 +1660,17 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 let glx = cursor.x();
                 let gly = cursor.y();
                 if let Some(result) = (*seat.server).scene.at(glx, gly) {
-                    cursor.grab_origin = (glx - result.sx, gly - result.sy);
+                    // A surface node's scene buffer begins with its node.
+                    let mut ratio = 1.0;
+                    if !result.surface.is_null() && !result.node.is_null() {
+                        let dest_w = ffi::river_scene_buffer_get_dest_width(result.node as *mut ffi::wlr_scene_buffer);
+                        let surf_w = ffi::river_wlr_surface_get_width(result.surface);
+                        if dest_w > 0 && surf_w > 0 {
+                            ratio = surf_w as f64 / dest_w as f64;
+                        }
+                    }
+                    cursor.grab_scale = ratio;
+                    cursor.grab_origin = (glx - result.sx / ratio, gly - result.sy / ratio);
                 }
                 // A grab that starts on the grid freezes its node mapping
                 // here instead of using grab_origin: passthrough maps motion
