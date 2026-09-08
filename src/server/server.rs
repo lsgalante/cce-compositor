@@ -502,6 +502,40 @@ unsafe extern "C" fn handle_new_xwayland_surface(listener: *mut ffi::wl_listener
     }
 }
 
+/// The first field of `struct wl_interface`; bindgen leaves the type opaque.
+#[repr(C)]
+struct WlInterfaceHead {
+    name: *const std::os::raw::c_char,
+}
+
+/// Hide the xdg-output global from the Xwayland client while
+/// `xwayland_hidpi` is on. Xwayland sizes its root window from xdg-output's
+/// LOGICAL size when it can see one (1920x1200 on the scale-2 panel), and
+/// then every X11 app draws at logical resolution and is upscaled — blurry.
+/// Without xdg-output it falls back to the wl_output mode, the physical
+/// pixel grid, and a DPI-aware X11 app renders sharp; the compositor draws
+/// X11 surfaces at 1/scale and converts X11 geometry to match
+/// (`xwayland_window.rs`). Every other client keeps seeing xdg-output.
+unsafe extern "C" fn xwayland_global_filter(
+    client: *const ffi::wl_client,
+    global: *const ffi::wl_global,
+    data: *mut std::ffi::c_void,
+) -> bool {
+    let server = data as *mut Server;
+    if server.is_null() || (*server).xwayland.is_null() || !(*server).wm.xwayland_hidpi {
+        return true;
+    }
+    let xserver = (*((*server).xwayland as *mut WlrXwayland)).server as *mut ffi::wlr_xwayland_server;
+    if xserver.is_null() || (*xserver).client.is_null() || (*xserver).client as *const ffi::wl_client != client {
+        return true;
+    }
+    let iface = ffi::wl_global_get_interface(global) as *const WlInterfaceHead;
+    if iface.is_null() || (*iface).name.is_null() {
+        return true;
+    }
+    std::ffi::CStr::from_ptr((*iface).name).to_bytes() != b"zxdg_output_manager_v1"
+}
+
 unsafe extern "C" fn handle_xwayland_ready(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let server = container_of!(listener, Server, xwayland_ready);
     let xwayland_cast = (*server).xwayland as *mut WlrXwayland;
@@ -511,6 +545,35 @@ unsafe extern "C" fn handle_xwayland_ready(listener: *mut ffi::wl_listener, _dat
             .into_owned();
         log::info!("Xwayland is ready on display {}", display_name);
         std::env::set_var("DISPLAY", &display_name);
+
+        // Under `xwayland_hidpi` X11 is a physical-pixel world (see
+        // `xwayland_window::x11_scale`), so tell X11 clients the DPI that goes
+        // with it: Qt 6 (Houdini) and Xft-based toolkits read Xft.dpi and scale
+        // themselves to match. GTK on X11 wants GDK_SCALE in its own environment
+        // on top of this; that is the app launcher's to provide.
+        let s = crate::xwayland_window::x11_scale(server);
+        if s != 1.0 {
+            let dpi = (96.0 * s).round() as i32;
+            let cursor = (24.0 * s).round() as i32;
+            match std::process::Command::new("xrdb")
+                .args(["-merge", "-"])
+                .env("DISPLAY", &display_name)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(mut child) => {
+                    use std::io::Write;
+                    if let Some(mut stdin) = child.stdin.take() {
+                        let _ = write!(stdin, "Xft.dpi: {}\nXcursor.size: {}\n", dpi, cursor);
+                    }
+                    std::thread::spawn(move || { let _ = child.wait(); });
+                    log::info!("Xwayland HiDPI: X11 scale {} — set Xft.dpi {} via xrdb", s, dpi);
+                }
+                Err(e) => log::warn!("Xwayland HiDPI: could not run xrdb to set Xft.dpi: {}", e),
+            }
+        }
     }
 }
 
@@ -727,6 +790,12 @@ impl Server {
                     return Err("Failed to create xwayland server");
                 }
                 self.xwayland = xwayland;
+                // See `xwayland_global_filter`.
+                ffi::wl_display_set_global_filter(
+                    wl_server,
+                    Some(xwayland_global_filter),
+                    self as *mut Server as *mut std::ffi::c_void,
+                );
             }
 
             // Setup linux dmabuf if supported

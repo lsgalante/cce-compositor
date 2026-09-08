@@ -71,6 +71,7 @@ impl XwaylandOverrideRedirect {
         });
 
         let raw = Box::into_raw(override_redirect);
+        (*server).wm.override_redirects.push(raw);
 
         connect_listener(&mut (*xsurface).events.request_configure, &mut (*raw).request_configure, handle_request_configure);
         connect_listener(&mut (*xsurface).events.destroy, &mut (*raw).destroy, handle_destroy);
@@ -86,6 +87,60 @@ impl XwaylandOverrideRedirect {
         }
 
         Ok(())
+    }
+
+    /// Put the surface tree where X11 says the window is, in logical
+    /// pixels (`xwayland_window::x11_scale`).
+    pub unsafe fn place(&mut self) {
+        if self.surface_tree.is_null() {
+            return;
+        }
+        let s = crate::xwayland_window::x11_scale(self.server);
+        ffi::wlr_scene_node_set_position(
+            self.surface_tree as *mut ffi::wlr_scene_node,
+            crate::xwayland_window::from_x11((*self.xsurface).x as i32, s),
+            crate::xwayland_window::from_x11((*self.xsurface).y as i32, s),
+        );
+    }
+
+    /// Draw the physical-pixel X11 buffer at 1/scale. Runs from the
+    /// per-frame pass (output.rs) because the scene's commit listener
+    /// resets a committed buffer's dest size; every setter is change-checked.
+    pub unsafe fn apply_x11_scale(&mut self) {
+        if self.surface_tree.is_null() {
+            return;
+        }
+        let s = crate::xwayland_window::x11_scale(self.server) as f64;
+        if s == 1.0 {
+            return;
+        }
+        unsafe extern "C" fn iter(
+            buffer: *mut ffi::wlr_scene_buffer,
+            _sx: i32,
+            _sy: i32,
+            user_data: *mut std::ffi::c_void,
+        ) {
+            let inv = *(user_data as *const f64);
+            let node = buffer as *mut ffi::wlr_scene_node;
+            let surface = ffi::river_scene_node_get_surface(node);
+            if surface.is_null() {
+                return;
+            }
+            let w = ffi::river_wlr_surface_get_width(surface);
+            let h = ffi::river_wlr_surface_get_height(surface);
+            ffi::river_scene_buffer_set_dest_size_if_changed(
+                buffer,
+                (w as f64 * inv).round() as i32,
+                (h as f64 * inv).round() as i32,
+            );
+            ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, inv);
+        }
+        let inv = 1.0 / s;
+        ffi::wlr_scene_node_for_each_buffer(
+            self.surface_tree as *mut ffi::wlr_scene_node,
+            Some(iter),
+            &inv as *const f64 as *mut std::ffi::c_void,
+        );
     }
 
     pub unsafe fn focus_if_desired(&self) {
@@ -123,6 +178,7 @@ unsafe extern "C" fn handle_request_configure(_listener: *mut ffi::wl_listener, 
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, destroy);
+    (*(*or).server).wm.override_redirects.retain(|&p| p != or);
 
     wl_listener_remove_safe(&mut (*or).request_configure);
     wl_listener_remove_safe(&mut (*or).destroy);
@@ -186,11 +242,8 @@ unsafe fn handle_map_impl(or: *mut XwaylandOverrideRedirect) {
 
     ffi::river_wlr_surface_set_data(surface, surface_tree as *mut ffi::wlr_scene_node as *mut _);
 
-    ffi::wlr_scene_node_set_position(
-        surface_tree as *mut ffi::wlr_scene_node,
-        (*(*or).xsurface).x as i32,
-        (*(*or).xsurface).y as i32,
-    );
+    (*or).place();
+    (*or).apply_x11_scale();
 
     connect_listener(&mut (*(*or).xsurface).events.set_geometry, &mut (*or).set_geometry, handle_set_geometry);
 
@@ -234,13 +287,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
 
 unsafe extern "C" fn handle_set_geometry(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, set_geometry);
-    if !(*or).surface_tree.is_null() {
-        ffi::wlr_scene_node_set_position(
-            (*or).surface_tree as *mut ffi::wlr_scene_node,
-            (*(*or).xsurface).x as i32,
-            (*(*or).xsurface).y as i32,
-        );
-    }
+    (*or).place();
 }
 
 unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

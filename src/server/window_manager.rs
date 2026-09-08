@@ -114,6 +114,13 @@ pub struct WindowManager {
     pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
     pub status_sender: Option<crate::status_server::StatusSender>,
     pub output_scale: f32,
+    /// Xwayland sees a physical-pixel screen and X11 surfaces draw at
+    /// 1/scale (see `WindowManagerConfig::xwayland_hidpi`).
+    pub xwayland_hidpi: bool,
+    /// Live override-redirect X11 surfaces (menus, tooltips, combo lists),
+    /// so the per-frame pass can re-apply their 1/scale dest size — the
+    /// scene's own commit listener resets it on every commit.
+    pub override_redirects: Vec<*mut XwaylandOverrideRedirect>,
     pub display: std::collections::HashMap<String, f64>,
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
     pub input_config: crate::config::InputConfig,
@@ -345,6 +352,7 @@ impl WindowManager {
         self.scheduled.output_config = std::ptr::null_mut();
         self.sent.output_config = std::ptr::null_mut();
         self.output_scale = 1.0;
+        self.xwayland_hidpi = true;
         self.display = std::collections::HashMap::new();
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
@@ -408,12 +416,14 @@ impl WindowManager {
         self.last_window_states = Vec::new();
         self.exit_orphans = Vec::new();
         self.last_saved_windows = Vec::new();
+        self.override_redirects = Vec::new();
         self.pending_placements = Vec::new();
         self.rounded_apps = Vec::new();
         self.bevel_apps = Vec::new();
         self.shutting_down = false;
         self.layout = crate::config::Layout::default();
         self.output_scale = 1.0;
+        self.xwayland_hidpi = true;
         self.display = std::collections::HashMap::new();
         self.has_restored_focused_window = false;
         self.restored_focused_window_mapped = false;

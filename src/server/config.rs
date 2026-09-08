@@ -393,6 +393,12 @@ pub struct WindowManagerConfig {
     /// KDL: `bevel_apps "*claude*"`. Globbed like `rounded_apps`; reported by
     /// `ccectl windows` as `beveled=`.
     pub bevel_apps: Option<Vec<String>>,
+    /// Present Xwayland with a PHYSICAL-pixel screen (the xdg-output global is
+    /// hidden from it, so it sizes its root from the wl_output mode) and draw
+    /// X11 surfaces at 1/scale, so HiDPI-aware X11 apps render sharp instead
+    /// of being upscaled from logical size. Default on. KDL:
+    /// `xwayland_hidpi (bool)false` to get the old blurry-but-1:1 behaviour.
+    pub xwayland_hidpi: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
@@ -2263,7 +2269,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let corner_shape = get_child_arg_f64_opt(node, "corner_shape");
         let rounded_apps = get_child_args_string_vec_opt(node, "rounded_apps");
         let bevel_apps = get_child_args_string_vec_opt(node, "bevel_apps");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, on_app_exit, corner_shape, rounded_apps, bevel_apps });
+        let xwayland_hidpi = get_child_arg_bool_opt(node, "xwayland_hidpi");
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, on_app_exit, corner_shape, rounded_apps, bevel_apps, xwayland_hidpi });
     }
 
     Ok(Config {
@@ -2319,6 +2326,11 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     }
 
     state.output_scale = 1.0f32;
+    state.xwayland_hidpi = config
+        .window_manager
+        .as_ref()
+        .and_then(|wm| wm.xwayland_hidpi)
+        .unwrap_or(true);
     state.display = config.display.clone();
     state.on_app_exit = config
         .window_manager

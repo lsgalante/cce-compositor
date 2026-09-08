@@ -50,6 +50,47 @@ unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
     }
 }
 
+/// Wine draws its own frame in a margin around the window; the compositor
+/// hides it by oversizing and offsetting the X window. Logical pixels.
+pub const WINE_MARGIN: i32 = 16;
+
+/// The factor between X11 root coordinates and the logical layout.
+///
+/// With `xwayland_hidpi` on (the default) the xdg-output global is hidden
+/// from Xwayland (`server.rs`), so it sizes its screen from the wl_output
+/// MODE — the physical pixel grid — and X11 is a physical-pixel world: a
+/// HiDPI-aware X11 app (Houdini, any Qt 6 app reading Xft.dpi) renders at
+/// full resolution and its surfaces are drawn at 1/scale
+/// (`Window::x11_buffer_scale`), sharp instead of upscaled from logical size.
+/// Every position and size crossing into or out of X11 converts through
+/// `to_x11` / `from_x11`; the window's own geometry stays logical.
+///
+/// Off, X11 is the logical layout (Xwayland reads xdg-output) and the
+/// factor is 1. Multi-output with differing scales is not a case X11 can
+/// express — the first output's scale stands for the screen.
+pub unsafe fn x11_scale(server: *mut crate::server::Server) -> f32 {
+    if server.is_null() || !(*server).wm.xwayland_hidpi {
+        return 1.0;
+    }
+    let link = (*server).om.outputs.next;
+    if link != &mut (*server).om.outputs as *mut ffi::wl_list {
+        let output = crate::container_of!(link, crate::output::Output, link);
+        let scale = (*output).current.scale;
+        if scale > 0.0 {
+            return scale;
+        }
+    }
+    1.0
+}
+
+pub fn to_x11(logical: i32, scale: f32) -> i32 {
+    (logical as f32 * scale).round() as i32
+}
+
+pub fn from_x11(x11: i32, scale: f32) -> i32 {
+    (x11 as f32 / scale).round() as i32
+}
+
 impl XwaylandWindow {
     pub unsafe fn create(
         xsurface: *mut ffi::wlr_xwayland_surface,
@@ -119,49 +160,44 @@ impl XwaylandWindow {
         let window = self.window;
         let scheduled = &mut (*window).configure_scheduled;
         let sent = &mut (*window).configure_sent;
+        let s = x11_scale((*window).server);
 
         if scheduled.width == Some(0) {
-            scheduled.width = Some((*self.xsurface).width as u32);
+            scheduled.width = Some(from_x11((*self.xsurface).width as i32, s) as u32);
         }
         if scheduled.height == Some(0) {
-            scheduled.height = Some((*self.xsurface).height as u32);
+            scheduled.height = Some(from_x11((*self.xsurface).height as i32, s) as u32);
         }
 
         let mut phys_width = if let Some(w) = scheduled.width {
-            w as u16
+            to_x11(w as i32, s) as u16
         } else {
             (*self.xsurface).width
         };
 
         let mut phys_height = if let Some(h) = scheduled.height {
-            h as u16
+            to_x11(h as i32, s) as u16
         } else {
             (*self.xsurface).height
         };
 
-        // X11 root coordinates are the LOGICAL layout: Xwayland sizes its
-        // screen from the wl_output's logical size (1920x1200 on the scale-2
-        // panel), and a window's X size already goes over 1:1. Positions used
-        // to be multiplied by the output scale here, which told X a window at
-        // logical (120, 30) sat at (240, 60) — and every override-redirect
-        // popup the client placed relative to that origin (Houdini's menus,
-        // Qt combo lists) landed displaced by the window's own on-screen
-        // position, down and to the right, since the override-redirect layer
-        // draws them at their raw X coordinates.
-        let mut phys_x = (*window).box_geom.x as i16;
-        let mut phys_y = (*window).box_geom.y as i16;
+        // X11 root coordinates: see `x11_scale`. Everything sent to X goes
+        // through `to_x11`, everything read back through `from_x11`; the
+        // window's own geometry stays logical.
+        let mut phys_x = to_x11((*window).box_geom.x, s) as i16;
+        let mut phys_y = to_x11((*window).box_geom.y, s) as i16;
 
         let has_parent = !(*self.xsurface).parent.is_null();
 
         if (*window).is_wine() && !has_parent && !(*window).is_fullscreen() {
             if scheduled.width.is_some() {
-                phys_width += 32;
+                phys_width += to_x11(WINE_MARGIN * 2, s) as u16;
             }
             if scheduled.height.is_some() {
-                phys_height += 32;
+                phys_height += to_x11(WINE_MARGIN * 2, s) as u16;
             }
-            phys_x -= 16;
-            phys_y -= 16;
+            phys_x -= to_x11(WINE_MARGIN, s) as i16;
+            phys_y -= to_x11(WINE_MARGIN, s) as i16;
         }
 
         if phys_x != (*self.xsurface).x
@@ -188,15 +224,15 @@ impl XwaylandWindow {
             ffi::wlr_xwayland_surface_set_fullscreen(self.xsurface, scheduled.inform_fullscreen);
         }
 
-        let mut width = scheduled.width.unwrap_or((*self.xsurface).width as u32);
-        let mut height = scheduled.height.unwrap_or((*self.xsurface).height as u32);
+        let mut width = scheduled.width.unwrap_or(from_x11((*self.xsurface).width as i32, s) as u32);
+        let mut height = scheduled.height.unwrap_or(from_x11((*self.xsurface).height as i32, s) as u32);
 
         if (*window).is_wine() && !has_parent && !(*window).is_fullscreen() {
             if scheduled.width.is_none() {
-                width = width.saturating_sub(32);
+                width = width.saturating_sub((WINE_MARGIN * 2) as u32);
             }
             if scheduled.height.is_none() {
-                height = height.saturating_sub(32);
+                height = height.saturating_sub((WINE_MARGIN * 2) as u32);
             }
         }
 
@@ -297,7 +333,7 @@ unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
 
     if (*(*xwindow).window).is_wine() && !has_parent && !(*(*xwindow).window).is_fullscreen() {
-        ffi::wlr_scene_node_set_position(surface_tree as *mut ffi::wlr_scene_node, -16, -16);
+        ffi::wlr_scene_node_set_position(surface_tree as *mut ffi::wlr_scene_node, -WINE_MARGIN, -WINE_MARGIN);
     }
 
     ffi::river_wlr_surface_set_data(surface, &mut (*(*xwindow).window).node as *mut crate::wm_node::WmNode as *mut _);
@@ -361,6 +397,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     let is_wine = (*window).is_wine();
 
     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
+    let s = x11_scale((*window).server);
     log::info!(
         "XWayland configure request: title='{}' class='{}' has_parent={} is_wine={} event=({}, {}, {}, {}) xsurface=({}, {}, {}, {})",
         title,
@@ -379,11 +416,10 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
             (*event).width,
             (*event).height,
         );
-        // Logical already — see `configure`.
-        let log_x = (*event).x as i32;
-        let log_y = (*event).y as i32;
-        let log_width = (*event).width as u32;
-        let log_height = (*event).height as u32;
+        let log_x = from_x11((*event).x as i32, s);
+        let log_y = from_x11((*event).y as i32, s);
+        let log_width = from_x11((*event).width as i32, s) as u32;
+        let log_height = from_x11((*event).height as i32, s) as u32;
         
         (*window).box_geom.x = log_x;
         (*window).box_geom.y = log_y;
@@ -410,10 +446,10 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
             let mut w = log_w;
             let mut h = log_h;
             if is_wine && !has_parent && !is_fullscreen {
-                w += 32;
-                h += 32;
+                w += (WINE_MARGIN * 2) as u32;
+                h += (WINE_MARGIN * 2) as u32;
             }
-            (w as u16, h as u16)
+            (to_x11(w as i32, s) as u16, to_x11(h as i32, s) as u16)
         } else {
             ((*event).width, (*event).height)
         }
@@ -421,12 +457,12 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         ((*event).width, (*event).height)
     };
 
-    let mut phys_x = (*window).box_geom.x as i16;
-    let mut phys_y = (*window).box_geom.y as i16;
+    let mut phys_x = to_x11((*window).box_geom.x, s) as i16;
+    let mut phys_y = to_x11((*window).box_geom.y, s) as i16;
 
     if is_wine && !has_parent && !is_fullscreen {
-        phys_x -= 16;
-        phys_y -= 16;
+        phys_x -= to_x11(WINE_MARGIN, s) as i16;
+        phys_y -= to_x11(WINE_MARGIN, s) as i16;
     }
 
     ffi::wlr_xwayland_surface_configure(
@@ -436,11 +472,11 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         phys_width,
         phys_height,
     );
-    let mut log_width = phys_width as u32;
-    let mut log_height = phys_height as u32;
+    let mut log_width = from_x11(phys_width as i32, s) as u32;
+    let mut log_height = from_x11(phys_height as i32, s) as u32;
     if is_wine && !has_parent && !is_fullscreen {
-        log_width = log_width.saturating_sub(32);
-        log_height = log_height.saturating_sub(32);
+        log_width = log_width.saturating_sub((WINE_MARGIN * 2) as u32);
+        log_height = log_height.saturating_sub((WINE_MARGIN * 2) as u32);
     }
     (*window).set_dimensions(log_width, log_height);
 }

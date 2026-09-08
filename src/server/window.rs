@@ -931,6 +931,18 @@ impl Window {
         }
     }
 
+    /// Dest-size factor for this window's surface buffers on top of the
+    /// overview zoom: 1/output-scale for an X11 window under
+    /// `xwayland_hidpi`, whose buffer is physical pixels (see
+    /// `xwayland_window::x11_scale`); 1 for everything else.
+    pub unsafe fn x11_buffer_scale(&self) -> f64 {
+        if matches!(self.impl_type, WindowImpl::Xwayland(_)) {
+            1.0 / crate::xwayland_window::x11_scale(self.server) as f64
+        } else {
+            1.0
+        }
+    }
+
     pub unsafe fn get_parent(&self) -> *mut Window {
         match self.impl_type {
             WindowImpl::Toplevel(toplevel) => {
@@ -1108,8 +1120,9 @@ impl Window {
                 }
                 WindowImpl::Xwayland(xwindow) => {
                     if !xwindow.is_null() && !(*xwindow).xsurface.is_null() {
-                        (*(*xwindow).xsurface).width = saved.width as u16;
-                        (*(*xwindow).xsurface).height = saved.height as u16;
+                        let s = crate::xwayland_window::x11_scale(self.server);
+                        (*(*xwindow).xsurface).width = crate::xwayland_window::to_x11(saved.width as i32, s) as u16;
+                        (*(*xwindow).xsurface).height = crate::xwayland_window::to_x11(saved.height as i32, s) as u16;
                     }
                 }
                 _ => {}
@@ -2600,12 +2613,13 @@ impl Window {
             }
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
-                    let mut w = (*(*xwindow).xsurface).width as u32;
-                    let mut h = (*(*xwindow).xsurface).height as u32;
+                    let s = crate::xwayland_window::x11_scale(self.server);
+                    let mut w = crate::xwayland_window::from_x11((*(*xwindow).xsurface).width as i32, s) as u32;
+                    let mut h = crate::xwayland_window::from_x11((*(*xwindow).xsurface).height as i32, s) as u32;
                     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
                     if self.is_wine() && !has_parent && !self.is_fullscreen() {
-                        w = w.saturating_sub(32);
-                        h = h.saturating_sub(32);
+                        w = w.saturating_sub((crate::xwayland_window::WINE_MARGIN * 2) as u32);
+                        h = h.saturating_sub((crate::xwayland_window::WINE_MARGIN * 2) as u32);
                     }
                     self.rendering_scheduled.width = w;
                     self.rendering_scheduled.height = h;
@@ -3089,7 +3103,10 @@ impl Window {
         if self.fs_anim.is_some() {
             return;
         }
-        if self.scale == 1.0 {
+        // The zoom the overview asks for, times 1/output-scale for an X11
+        // surface whose buffer is physical pixels (`x11_buffer_scale`).
+        let eff_scale = self.scale * self.x11_buffer_scale();
+        if eff_scale == 1.0 {
             self.last_applied_scale = 1.0;
             return;
         }
@@ -3150,7 +3167,7 @@ impl Window {
             // leaves it briefly at the old zoom, which restore corrects.
         }
 
-        let scale_data_surfaces = ScaleData { scale: self.scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
+        let scale_data_surfaces = ScaleData { scale: eff_scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
         ffi::wlr_scene_node_for_each_buffer(
             self.surfaces.tree as *mut ffi::wlr_scene_node,
             Some(set_overview_scale_iterator),
@@ -3158,7 +3175,7 @@ impl Window {
         );
 
         if self.surfaces.saved {
-            let scale_data_saved = ScaleData { scale: self.scale, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
+            let scale_data_saved = ScaleData { scale: eff_scale, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
                 Some(set_overview_scale_iterator),
@@ -3166,7 +3183,7 @@ impl Window {
             );
         }
 
-        let scale_data_popup = ScaleData { scale: self.scale, ancestor: self.popup_tree as *mut ffi::wlr_scene_node };
+        let scale_data_popup = ScaleData { scale: eff_scale, ancestor: self.popup_tree as *mut ffi::wlr_scene_node };
         ffi::wlr_scene_node_for_each_buffer(
             self.popup_tree as *mut ffi::wlr_scene_node,
             Some(set_overview_scale_iterator),
@@ -4954,7 +4971,7 @@ impl Decoration {
             // leaves it briefly at the old zoom, which restore corrects.
         }
 
-        let scale_data = ScaleData { scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
+        let scale_data = ScaleData { scale: scale * (*self.window).x11_buffer_scale(), ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
         ffi::wlr_scene_node_for_each_buffer(
             self.surfaces.tree as *mut ffi::wlr_scene_node,
             Some(set_overview_scale_iterator),
@@ -4962,7 +4979,7 @@ impl Decoration {
         );
 
         if self.surfaces.saved {
-            let scale_data_saved = ScaleData { scale, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
+            let scale_data_saved = ScaleData { scale: scale * (*self.window).x11_buffer_scale(), ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
                 Some(set_overview_scale_iterator),
@@ -4978,7 +4995,7 @@ impl Decoration {
 
     pub unsafe fn scale_only_render_finish(&mut self) {
         let scale = (*self.window).scale;
-        if scale == 1.0 {
+        if scale * (*self.window).x11_buffer_scale() == 1.0 {
             return;
         }
 
@@ -5029,7 +5046,7 @@ impl Decoration {
             // leaves it briefly at the old zoom, which restore corrects.
         }
 
-        let scale_data = ScaleData { scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
+        let scale_data = ScaleData { scale: scale * (*self.window).x11_buffer_scale(), ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
         ffi::wlr_scene_node_for_each_buffer(
             self.surfaces.tree as *mut ffi::wlr_scene_node,
             Some(set_overview_scale_iterator),
@@ -5037,7 +5054,7 @@ impl Decoration {
         );
 
         if self.surfaces.saved {
-            let scale_data_saved = ScaleData { scale, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
+            let scale_data_saved = ScaleData { scale: scale * (*self.window).x11_buffer_scale(), ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
                 Some(set_overview_scale_iterator),
