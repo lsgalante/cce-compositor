@@ -1589,6 +1589,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     let output = crate::container_of!(listener, Output, destroy);
 
     log::debug!("Output destroyed");
+    crate::xwayland_window::note_output_change();
 
     // Remove listeners
     wl_listener_remove(&mut (*output).destroy);

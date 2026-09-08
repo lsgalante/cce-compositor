@@ -611,6 +611,7 @@ unsafe extern "C" fn handle_new_output(listener: *mut ffi::wl_listener, data: *m
     let server = crate::container_of!(om as *mut OutputManager, Server, om);
     let wlr_output = data as *mut ffi::wlr_output;
     log::debug!("new output {:?}", std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name(wlr_output)));
+    crate::xwayland_window::note_output_change();
     if let Err(e) = Output::create(server, wlr_output) {
         log::error!("failed to create output: {}", e);
         ffi::wlr_output_destroy(wlr_output);

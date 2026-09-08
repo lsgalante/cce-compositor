@@ -68,19 +68,79 @@ pub const WINE_MARGIN: i32 = 16;
 /// Off, X11 is the logical layout (Xwayland reads xdg-output) and the
 /// factor is 1. Multi-output with differing scales is not a case X11 can
 /// express — the first output's scale stands for the screen.
+///
+/// The factor must survive the output going away. A lid-close suspend
+/// destroys the DRM output and re-creates it on resume, and X11 windows
+/// live on through it: any geometry read back from X while no output
+/// exists (`Window::render_finish`, `XwaylandWindow::configure`) is still
+/// in physical pixels, and dividing it by 1 instead of the panel's scale
+/// records a window twice its logical size — which the first configure
+/// after resume then multiplies by the real scale again, handing X a
+/// window four times too big. So the last scale an output reported is
+/// remembered and stands in while there is none.
 pub unsafe fn x11_scale(server: *mut crate::server::Server) -> f32 {
     if server.is_null() || !(*server).wm.xwayland_hidpi {
         return 1.0;
     }
+    let mut current = None;
     let link = (*server).om.outputs.next;
     if link != &mut (*server).om.outputs as *mut ffi::wl_list {
         let output = crate::container_of!(link, crate::output::Output, link);
         let scale = (*output).current.scale;
         if scale > 0.0 {
-            return scale;
+            current = Some(scale);
         }
     }
-    1.0
+    resolve_x11_scale(current, &LAST_X11_SCALE)
+}
+
+/// The scale of the last output `x11_scale` saw, as `f32` bits; 0 until an
+/// output has reported one.
+static LAST_X11_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// `x11_scale` without the FFI: the live output's scale when there is one
+/// (remembering it in `last`), else the remembered one, else 1.
+pub fn resolve_x11_scale(current: Option<f32>, last: &std::sync::atomic::AtomicU32) -> f32 {
+    use std::sync::atomic::Ordering;
+    if let Some(scale) = current {
+        last.store(scale.to_bits(), Ordering::Relaxed);
+        return scale;
+    }
+    let remembered = f32::from_bits(last.load(Ordering::Relaxed));
+    if remembered > 0.0 { remembered } else { 1.0 }
+}
+
+/// X11 clients answer an output coming or going — Xwayland re-creates its
+/// screen and RandR tells them — by re-asserting a geometry of their own:
+/// Houdini (Qt) asks for the whole panel after a resume from suspend, and a
+/// floating window's unsolicited size request is otherwise honoured
+/// verbatim (`handle_request_configure`). For a moment after any output
+/// change those requests are answered with the window's own geometry
+/// instead, the way a tiled window's always are, so the size the user set
+/// survives the screen change.
+static OUTPUT_CHANGE_GRACE_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// How long after an output is created or destroyed to hold floating X11
+/// windows at their own size. Xwayland's RandR update and the client's
+/// reaction land within the same second in practice; this leaves room for
+/// a slow client.
+const OUTPUT_CHANGE_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Called when an output is created or destroyed: (re)starts the grace
+/// window during which floating X11 windows keep their size.
+pub fn note_output_change() {
+    if let Ok(mut deadline) = OUTPUT_CHANGE_GRACE_UNTIL.lock() {
+        *deadline = Some(std::time::Instant::now() + OUTPUT_CHANGE_GRACE);
+    }
+}
+
+/// True while inside the grace window begun by `note_output_change`.
+pub fn in_output_change_grace() -> bool {
+    OUTPUT_CHANGE_GRACE_UNTIL
+        .lock()
+        .ok()
+        .and_then(|deadline| *deadline)
+        .is_some_and(|deadline| std::time::Instant::now() < deadline)
 }
 
 pub fn to_x11(logical: i32, scale: f32) -> i32 {
@@ -439,7 +499,17 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
 
     let is_fullscreen = unsafe { (*window).is_fullscreen() };
 
-    let (phys_width, phys_height) = if is_tiled {
+    // A floating window normally gets the size it asks for; not while an
+    // output is coming or going (see `note_output_change`).
+    let hold_size = is_tiled || in_output_change_grace();
+    if hold_size && !is_tiled {
+        log::info!(
+            "XWayland configure request: holding floating '{}' at its own size during output-change grace",
+            title,
+        );
+    }
+
+    let (phys_width, phys_height) = if hold_size {
         let log_w = (*window).configure_sent.width.unwrap_or((*window).box_geom.width as u32);
         let log_h = (*window).configure_sent.height.unwrap_or((*window).box_geom.height as u32);
         if log_w > 0 && log_h > 0 {
@@ -596,4 +666,51 @@ unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, da
     ffi::wlr_xwayland_surface_set_minimized((*xwindow).xsurface, (*event).minimize);
     (*(*xwindow).window).wm_scheduled.minimize_requested = true;
     (*(*(*xwindow).window).server).wm.dirty_windowing();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicU32;
+
+    #[test]
+    fn scale_from_live_output_is_remembered() {
+        let last = AtomicU32::new(0);
+        assert_eq!(resolve_x11_scale(Some(2.0), &last), 2.0);
+        // Output gone (suspend): the remembered scale stands in, not 1.
+        assert_eq!(resolve_x11_scale(None, &last), 2.0);
+        // A new output with another scale takes over and is remembered.
+        assert_eq!(resolve_x11_scale(Some(1.5), &last), 1.5);
+        assert_eq!(resolve_x11_scale(None, &last), 1.5);
+    }
+
+    #[test]
+    fn scale_before_any_output_is_one() {
+        let last = AtomicU32::new(0);
+        assert_eq!(resolve_x11_scale(None, &last), 1.0);
+    }
+
+    #[test]
+    fn x11_round_trip_holds_at_remembered_scale() {
+        // The suspend case: physical 3712 read back while no output exists
+        // must come back as logical 1856, and go out again as 3712.
+        let last = AtomicU32::new(0);
+        let _ = resolve_x11_scale(Some(2.0), &last);
+        let s = resolve_x11_scale(None, &last);
+        let logical = from_x11(3712, s);
+        assert_eq!(logical, 1856);
+        assert_eq!(to_x11(logical, resolve_x11_scale(Some(2.0), &last)), 3712);
+    }
+
+    #[test]
+    fn output_change_grace_begins_and_is_re_armed() {
+        note_output_change();
+        assert!(in_output_change_grace());
+        // Expire it by hand, then a second change re-arms it.
+        *OUTPUT_CHANGE_GRACE_UNTIL.lock().unwrap() =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        assert!(!in_output_change_grace());
+        note_output_change();
+        assert!(in_output_change_grace());
+    }
 }
