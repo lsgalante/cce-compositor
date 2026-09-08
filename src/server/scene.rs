@@ -199,6 +199,43 @@ impl Scene {
                 }
 
                 let surface = ffi::river_scene_node_get_surface(node);
+                // An X11 surface under xwayland_hidpi is a physical-pixel
+                // buffer drawn at 1/scale, and wlr_scene_node_at maps the
+                // point through the buffer's CURRENT dest size. That size
+                // is reset to natural on every commit and restored by the
+                // commit hook — but any other writer of dest sizes (a
+                // transaction's frozen copy, a fullscreen tick) opens the
+                // same gap, in which a pointer event reaches the client at
+                // half its coordinates: Houdini's hover jumping up-left for
+                // a frame. Derive the surface point from what is INVARIANT
+                // instead — the node's layout origin and the scale the
+                // buffer is meant to be shown at — so input never depends
+                // on the dest state.
+                let (mut sx, mut sy) = (sx, sy);
+                if !surface.is_null() {
+                    let ratio: Option<f64> = match scene_node_data.data {
+                        SceneNodeDataVal::Window(window)
+                            if !window.is_null()
+                                && matches!((*window).impl_type, crate::window::WindowImpl::Xwayland(_)) =>
+                        {
+                            let s = crate::xwayland_window::x11_scale((*window).server) as f64;
+                            let zoom = if (*window).scale > 0.0 { (*window).scale } else { 1.0 };
+                            (s != 1.0).then_some(s / zoom)
+                        }
+                        SceneNodeDataVal::OverrideRedirect(or) if !or.is_null() => {
+                            let s = crate::xwayland_window::x11_scale((*or).server) as f64;
+                            (s != 1.0).then_some(s)
+                        }
+                        _ => None,
+                    };
+                    if let Some(ratio) = ratio {
+                        let (mut nx, mut ny) = (0, 0);
+                        if ffi::wlr_scene_node_coords(node, &mut nx, &mut ny) {
+                            sx = (lx - nx as f64) * ratio;
+                            sy = (ly - ny as f64) * ratio;
+                        }
+                    }
+                }
                 result = Some(AtResult {
                     node,
                     surface,
