@@ -1048,6 +1048,19 @@ impl Window {
         if !self.get_parent().is_null() {
             return;
         }
+        // For an X11 window that check is only meaningful once its properties
+        // are all in: they arrive one PropertyNotify at a time, and WM_CLASS
+        // (the app_id) lands before WM_TRANSIENT_FOR, so on the app_id notify
+        // a dialog still looks parentless and the app_id-only match below
+        // restored it anyway — first match wins, and the restore overwrites
+        // the client's own requested size, so it cannot be undone when the
+        // parent turns up. (Waiting for the wl_surface was not enough: GTK's
+        // dialog was still title-less and parentless at association.) Wait
+        // for `map`, which calls back in here; by then every property the
+        // client set before mapping has been read.
+        if matches!(self.impl_type, WindowImpl::Xwayland(_)) && self.state != WindowState::Mapped {
+            return;
+        }
         let app_id_str = self.get_app_id_string().unwrap_or_default();
         if app_id_str.is_empty()
             || app_id_str.starts_with("cce-status")
