@@ -11,6 +11,14 @@ pub struct Cursor {
     pub xcursor_manager: *mut ffi::wlr_xcursor_manager,
     pub constraint: *mut crate::pointer_constraint::PointerConstraint,
 
+    /// Trackpad-to-view-drag emulation for the apps `touchpad_view_apps`
+    /// names (see `ViewDrag`); `None` while no emulated drag is in progress.
+    pub view_drag: Option<ViewDrag>,
+    /// Ends an emulated drag that has seen no finger event for a while: a
+    /// two-finger scroll normally ends with a zero-delta axis event, but
+    /// not every path delivers one.
+    pub view_drag_timer: *mut ffi::wl_event_source,
+
     /// Animated-XCursor playback. An XCursor theme may ship several images per
     /// cursor with a per-frame `delay`; wlroots parses them but never advances
     /// them — `wlr_xcursor_frame` has no callers inside wlroots, so driving the
@@ -166,6 +174,8 @@ impl Default for Cursor {
             pan_last_msec: [0, 0],
             pinch_zoom_active: false,
             pinch_start_zoom: 1.0,
+            view_drag: None,
+            view_drag_timer: std::ptr::null_mut(),
             last_click_time: 0,
             last_click_window: std::ptr::null_mut(),
             hovered_border_window: std::ptr::null_mut(),
@@ -216,6 +226,11 @@ impl Cursor {
             return Err("Failed to create xcursor animation timer");
         }
         self.anim_timer = anim_timer;
+        self.view_drag_timer = ffi::wl_event_loop_add_timer(
+            event_loop,
+            Some(handle_view_drag_timeout),
+            self as *mut Cursor as *mut _,
+        );
 
         // Load default cursor theme
         ffi::wlr_xcursor_manager_load(xcursor_manager, 1.0);
@@ -1047,6 +1062,27 @@ impl Cursor {
     /// scale from 1 to `scale` (and the rotation to `rotation` degrees),
     /// end. Exercises the compositor's pinch policy and the
     /// pointer-gestures forward to clients headlessly.
+    /// One stage of a pinch, for a test that paces the updates itself:
+    /// `stage` is "begin", "update" (with `scale`/`rotation`) or "end".
+    pub unsafe fn inject_pinch_stage(&mut self, stage: &str, scale: f64, rotation: f64) {
+        let time = crate::util::msec_timestamp();
+        match stage {
+            "begin" => {
+                let mut ev = ffi::wlr_pointer_pinch_begin_event { pointer: std::ptr::null_mut(), time_msec: time, fingers: 2 };
+                handle_pinch_begin(&mut self.pinch_begin_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+            }
+            "update" => {
+                let mut ev = ffi::wlr_pointer_pinch_update_event { pointer: std::ptr::null_mut(), time_msec: time, fingers: 2, dx: 0.0, dy: 0.0, scale, rotation };
+                handle_pinch_update(&mut self.pinch_update_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+            }
+            _ => {
+                let mut ev = ffi::wlr_pointer_pinch_end_event { pointer: std::ptr::null_mut(), time_msec: time, cancelled: false };
+                handle_pinch_end(&mut self.pinch_end_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+            }
+        }
+        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+    }
+
     pub unsafe fn inject_pinch(&mut self, scale: f64, rotation: f64, steps: u32) {
         let time = crate::util::msec_timestamp();
         let mut begin = ffi::wlr_pointer_pinch_begin_event {
@@ -1093,6 +1129,11 @@ impl Cursor {
 unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, motion_listener);
     let event = data as *mut ffi::wlr_pointer_motion_event;
+    // Real pointer motion ends an emulated view drag: the client must not
+    // see the synthetic drag position and the true one interleaved.
+    if cursor.view_drag.is_some() {
+        cursor.end_view_drag();
+    }
     
     let mut dx = (*event).delta_x;
     let mut dy = (*event).delta_y;
@@ -1187,6 +1228,9 @@ unsafe fn is_cloud_layer(layer_surface: *mut crate::layer_shell::LayerSurface) -
 unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, button_listener);
     let event = data as *mut ffi::wlr_pointer_button_event;
+    if cursor.view_drag.is_some() {
+        cursor.end_view_drag();
+    }
     
     let seat = &mut *cursor.seat;
     let lx = cursor.x();
@@ -2100,11 +2144,13 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
     }
 
     let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+    // Modifiers held through `ccectl key-down` count too, so a headless
+    // session can exercise the modifier branches below.
     let modifiers = if !wlr_keyboard.is_null() {
         ffi::wlr_keyboard_get_modifiers(wlr_keyboard)
     } else {
         0
-    };
+    } | (*seat.server).wm.injected_key_mods;
 
     if (modifiers & 0x44) == 0x44 {
         if (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL {
@@ -2257,6 +2303,12 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
         return;
     }
 
+    // A two-finger scroll over an app in `touchpad_view_apps` becomes a
+    // view drag instead of a scroll (see `ViewDrag`).
+    if is_finger && cursor.view_drag_axis(event, delta, modifiers) {
+        return;
+    }
+
     ffi::wlr_seat_pointer_notify_axis(
         seat.wlr_seat,
         (*event).time_msec,
@@ -2266,6 +2318,243 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
         (*event).source,
         (*event).relative_direction,
     );
+}
+
+/// An emulated view drag: trackpad input over a window turned into what
+/// a 3D app's view tool understands, a held key plus a button drag.
+///
+/// Why this exists: Houdini's own trackpad gestures cannot work under X11.
+/// Xwayland attributes every scroll to a device Qt classifies as a
+/// TouchPad, Houdini's touchpad "slide" then moves the view by the wheel
+/// event's pixel deltas, and Qt's X11 backend never fills those in (it
+/// does so only for a scroll increment above 15; Xwayland's is 1, the
+/// libinput X driver's 15). Verified against Houdini 22 headless: the slide
+/// is a no-op and the mouse wheel is swallowed with it, while Space + a
+/// button drag tumbles, pans and dollies. So for apps listed in
+/// `window_manager.touchpad_view_apps` the compositor synthesises exactly
+/// that: Space down, button down, the finger deltas as pointer motion on
+/// the surface (the on-screen cursor never moves), button and Space up
+/// when the fingers lift. Two-finger swipe pans (middle button) or tumbles
+/// (left) per `touchpad_view_swipe`, Shift picks the other, a pinch
+/// dollies (right button, distance from the log of the scale), and Ctrl
+/// + swipe passes through as a plain scroll — the same modifier Houdini
+/// itself assigns to "simulate the mouse wheel" in gesture mode.
+pub struct ViewDrag {
+    pub button: u32,
+    pub surface: *mut ffi::wlr_surface,
+    pub window: *mut crate::window::Window,
+    /// Synthetic pointer position, surface-local.
+    pub sx: f64,
+    pub sy: f64,
+    pub origin_sx: f64,
+    pub origin_sy: f64,
+    /// Surface units per layout pixel (X11 HiDPI buffers, overview zoom).
+    pub ratio: f64,
+    pub from_pinch: bool,
+    /// The button goes down on the first motion, one event after Space:
+    /// Houdini feeds Qt input to its UI thread through a generator thread,
+    /// and a button that arrives in the same instant as Space can be
+    /// interpreted before the key — a right button then reads as a pan,
+    /// not a dolly.
+    pub button_down: bool,
+    /// The keyboard's repeat settings before the drag, restored at its end.
+    /// While Space is held synthetically the seat's repeat is switched off:
+    /// Xwayland autorepeats a held key as release/press pairs, and Houdini
+    /// left view mode on the first release, mid-drag.
+    pub repeat: Option<(i32, i32)>,
+}
+
+const KEY_SPACE: u32 = 57;
+const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
+const BTN_MIDDLE: u32 = 0x112;
+/// Finger silence that ends a swipe drag when no zero-delta event came.
+const VIEW_DRAG_IDLE_MS: i32 = 180;
+/// Drag distance (layout px) per e-fold of pinch scale. Measured against
+/// Houdini 22 (depth of the world origin in view space, which is what a
+/// dolly changes — Houdini dollies toward the point under the pointer, so
+/// distances to a fixed pivot mislead): Space+RMB dollies on the VERTICAL
+/// drag, up is in, and 45 px up shortened the depth by a factor of 1.34,
+/// about 150 px per e-fold. So a pinch of scale s becomes an upward drag
+/// of ln(s) e-folds and the depth ends near 1/s.
+const VIEW_DRAG_PINCH_PX: f64 = 150.0;
+
+impl Cursor {
+    /// The window under the pointer, if `touchpad_view_apps` names its app.
+    unsafe fn view_drag_target(&mut self) -> Option<(*mut crate::window::Window, *mut ffi::wlr_surface, f64, f64, f64)> {
+        let server = (*self.seat).server;
+        let wm = &(*server).wm;
+        if wm.touchpad_view_apps.is_empty() {
+            return None;
+        }
+        let result = (*server).scene.at(self.x(), self.y())?;
+        let SceneNodeDataVal::Window(window) = result.data else { return None };
+        if window.is_null() || result.surface.is_null() || result.node.is_null() {
+            return None;
+        }
+        let app_id = (*window).get_app_id_string().unwrap_or_default();
+        if !wm.touchpad_view_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
+            return None;
+        }
+        let mut ratio = 1.0;
+        let dest_w = ffi::river_scene_buffer_get_dest_width(result.node as *mut ffi::wlr_scene_buffer);
+        let surf_w = ffi::river_wlr_surface_get_width(result.surface);
+        if dest_w > 0 && surf_w > 0 {
+            ratio = surf_w as f64 / dest_w as f64;
+        }
+        Some((window, result.surface, result.sx, result.sy, ratio))
+    }
+
+    unsafe fn begin_view_drag(&mut self, button: u32, from_pinch: bool) -> bool {
+        let Some((window, surface, sx, sy, ratio)) = self.view_drag_target() else { return false };
+        let seat = &mut *self.seat;
+        // Space must reach the window: give it keyboard focus as a click would.
+        if seat.focused != crate::seat::Focus::Window(window) {
+            seat.focus(crate::seat::Focus::Window(window));
+        }
+        seat.ensure_synthetic_keyboard();
+        let time = crate::util::msec_timestamp();
+        let mut repeat = None;
+        let kbd = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+        if !kbd.is_null() {
+            repeat = Some(((*kbd).repeat_info.rate, (*kbd).repeat_info.delay));
+            ffi::wlr_keyboard_set_repeat_info(kbd, 0, 0);
+        }
+        ffi::wlr_seat_pointer_notify_enter(seat.wlr_seat, surface, sx, sy);
+        ffi::wlr_seat_keyboard_notify_key(seat.wlr_seat, time, KEY_SPACE, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
+        ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+        log::info!("[ViewDrag] begin button={:#x} from_pinch={} at surface ({:.0}, {:.0}) ratio={}", button, from_pinch, sx, sy, ratio);
+        self.view_drag = Some(ViewDrag { button, surface, window, sx, sy, origin_sx: sx, origin_sy: sy, ratio, from_pinch, button_down: false, repeat });
+        self.arm_view_drag_timer();
+        true
+    }
+
+    unsafe fn arm_view_drag_timer(&mut self) {
+        if !self.view_drag_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.view_drag_timer, VIEW_DRAG_IDLE_MS);
+        }
+    }
+
+    /// Move the synthetic pointer by layout pixels.
+    unsafe fn move_view_drag(&mut self, dx: f64, dy: f64) {
+        let Some(d) = self.view_drag.as_mut() else { return };
+        let seat = &mut *self.seat;
+        let time = crate::util::msec_timestamp();
+        if !d.button_down {
+            ffi::wlr_seat_pointer_notify_button(seat.wlr_seat, time, d.button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED);
+            ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+            d.button_down = true;
+        }
+        d.sx += dx * d.ratio;
+        d.sy += dy * d.ratio;
+        let (sx, sy) = (d.sx, d.sy);
+        ffi::wlr_seat_pointer_notify_motion(seat.wlr_seat, time, sx, sy);
+        ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+        self.arm_view_drag_timer();
+    }
+
+    pub unsafe fn end_view_drag(&mut self) {
+        let Some(d) = self.view_drag.take() else { return };
+        log::info!("[ViewDrag] end button={:#x} from_pinch={} at surface ({:.0}, {:.0})", d.button, d.from_pinch, d.sx, d.sy);
+        if !self.view_drag_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.view_drag_timer, 0);
+        }
+        let seat = &mut *self.seat;
+        let time = crate::util::msec_timestamp();
+        if d.button_down {
+            ffi::wlr_seat_pointer_notify_button(seat.wlr_seat, time, d.button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED);
+            ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+        }
+        ffi::wlr_seat_keyboard_notify_key(seat.wlr_seat, time, KEY_SPACE, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);
+        if let Some((rate, delay)) = d.repeat {
+            let kbd = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+            if !kbd.is_null() {
+                ffi::wlr_keyboard_set_repeat_info(kbd, rate, delay);
+            }
+        }
+        // Put the client's idea of the pointer back where the cursor is.
+        self.passthrough(time);
+        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+    }
+
+    /// A finger-source axis event over a `touchpad_view_apps` window.
+    /// Returns true when it was consumed by the emulation.
+    pub unsafe fn view_drag_axis(&mut self, event: *const ffi::wlr_pointer_axis_event, delta: f64, modifiers: u32) -> bool {
+        const SHIFT: u32 = 0x1;
+        const CTRL: u32 = 0x4;
+        if matches!(&self.view_drag, Some(d) if d.from_pinch) {
+            return false;
+        }
+        if delta == 0.0 {
+            // The fingers lifted.
+            if self.view_drag.is_some() {
+                self.end_view_drag();
+                return true;
+            }
+            return false;
+        }
+        if modifiers & CTRL != 0 {
+            // Houdini's own wheel modifier: a plain scroll.
+            if self.view_drag.is_some() {
+                self.end_view_drag();
+            }
+            return false;
+        }
+        if self.view_drag.is_none() {
+            let wm = &(*(*self.seat).server).wm;
+            let tumble = wm.touchpad_view_swipe_tumble != (modifiers & SHIFT != 0);
+            let button = if tumble { BTN_LEFT } else { BTN_MIDDLE };
+            if !self.begin_view_drag(button, false) {
+                return false;
+            }
+        }
+        let wm = &(*(*self.seat).server).wm;
+        let mut step = delta * wm.touchpad_view_sensitivity;
+        if wm.touchpad_view_invert {
+            step = -step;
+        }
+        if (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL {
+            self.move_view_drag(0.0, step);
+        } else {
+            self.move_view_drag(step, 0.0);
+        }
+        true
+    }
+
+    pub unsafe fn view_drag_pinch_begin(&mut self) -> bool {
+        if self.view_drag.is_some() {
+            self.end_view_drag();
+        }
+        self.begin_view_drag(BTN_RIGHT, true)
+    }
+
+    pub unsafe fn view_drag_pinch_update(&mut self, scale: f64) -> bool {
+        let Some(d) = self.view_drag.as_ref() else { return false };
+        if !d.from_pinch {
+            return false;
+        }
+        let wm = &(*(*self.seat).server).wm;
+        // Pinch out (scale > 1) dollies in: an upward drag.
+        let px = -scale.max(0.05).ln() * VIEW_DRAG_PINCH_PX * wm.touchpad_view_sensitivity;
+        let target_sy = d.origin_sy + px * d.ratio;
+        let dy_layout = (target_sy - d.sy) / d.ratio;
+        self.move_view_drag(0.0, dy_layout);
+        true
+    }
+
+    pub unsafe fn view_drag_pinch_end(&mut self) -> bool {
+        if matches!(&self.view_drag, Some(d) if d.from_pinch) {
+            self.end_view_drag();
+            return true;
+        }
+        false
+    }
+}
+
+unsafe extern "C" fn handle_view_drag_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let cursor = &mut *(data as *mut Cursor);
+    cursor.end_view_drag();
+    0
 }
 
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -2805,6 +3094,11 @@ unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listener, data: *
         return;
     }
 
+    // A pinch over an app in `touchpad_view_apps` becomes a dolly drag.
+    if cursor.view_drag_pinch_begin() {
+        return;
+    }
+
     let pointer_gestures = (*server).input_manager.pointer_gestures;
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_pinch_begin(
@@ -2827,6 +3121,10 @@ unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: 
         return;
     }
     seat.handle_activity();
+
+    if cursor.view_drag_pinch_update((*event).scale) {
+        return;
+    }
 
     if cursor.pinch_zoom_active {
         let wm = &mut (*seat.server).wm;
@@ -2944,6 +3242,10 @@ unsafe extern "C" fn handle_pinch_end(listener: *mut ffi::wl_listener, data: *mu
         return;
     }
     seat.handle_activity();
+
+    if cursor.view_drag_pinch_end() {
+        return;
+    }
 
     if cursor.pinch_zoom_active {
         // Camera zoom consumed the whole gesture; clients got no begin, so

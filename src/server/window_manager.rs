@@ -117,6 +117,11 @@ pub struct WindowManager {
     /// Xwayland sees a physical-pixel screen and X11 surfaces draw at
     /// 1/scale (see `WindowManagerConfig::xwayland_hidpi`).
     pub xwayland_hidpi: bool,
+    /// Trackpad-to-view-drag emulation (see `cursor::ViewDrag`).
+    pub touchpad_view_apps: Vec<String>,
+    pub touchpad_view_swipe_tumble: bool,
+    pub touchpad_view_sensitivity: f64,
+    pub touchpad_view_invert: bool,
     /// Live override-redirect X11 surfaces (menus, tooltips, combo lists),
     /// so the per-frame pass can re-apply their 1/scale dest size — the
     /// scene's own commit listener resets it on every commit.
@@ -353,6 +358,10 @@ impl WindowManager {
         self.sent.output_config = std::ptr::null_mut();
         self.output_scale = 1.0;
         self.xwayland_hidpi = true;
+        self.touchpad_view_apps = Vec::new();
+        self.touchpad_view_swipe_tumble = false;
+        self.touchpad_view_sensitivity = 1.0;
+        self.touchpad_view_invert = false;
         self.display = std::collections::HashMap::new();
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
@@ -424,6 +433,10 @@ impl WindowManager {
         self.layout = crate::config::Layout::default();
         self.output_scale = 1.0;
         self.xwayland_hidpi = true;
+        self.touchpad_view_apps = Vec::new();
+        self.touchpad_view_swipe_tumble = false;
+        self.touchpad_view_sensitivity = 1.0;
+        self.touchpad_view_invert = false;
         self.display = std::collections::HashMap::new();
         self.has_restored_focused_window = false;
         self.restored_focused_window_mapped = false;
@@ -5046,7 +5059,15 @@ impl WindowManager {
             }
             "pointer-pinch" => {
                 // pointer-pinch <scale> [rotation-degrees] [steps]
-                if parts.len() < 2 { return "error: usage: pointer-pinch <scale> [rotation] [steps]\n".to_string(); }
+                // pointer-pinch begin | update <scale> [rotation] | end   (paced by the caller)
+                if parts.len() < 2 { return "error: usage: pointer-pinch <scale> [rotation] [steps] | begin | update <scale> [rotation] | end\n".to_string(); }
+                if matches!(parts[1], "begin" | "update" | "end") {
+                    let scale = parts.get(2).and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
+                    let rotation = parts.get(3).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                    let stage = parts[1].to_string();
+                    self.for_each_cursor(|cursor| cursor.inject_pinch_stage(&stage, scale, rotation));
+                    return "ok\n".to_string();
+                }
                 let scale = parts[1].parse::<f64>();
                 let rotation = parts.get(2).map(|v| v.parse::<f64>()).unwrap_or(Ok(0.0));
                 let steps = parts.get(3).map(|v| v.parse::<u32>()).unwrap_or(Ok(10));
