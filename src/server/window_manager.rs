@@ -228,6 +228,13 @@ pub struct WindowManager {
     pub viewport_settle_timer: *mut ffi::wl_event_source,
     pub clean_exit_in_progress: bool,
     pub clean_exit_timer: *mut ffi::wl_event_source,
+    /// Entries of the last written state snapshot whose windows a since-
+    /// cancelled clean exit had already closed (see `cancel_clean_exit`).
+    /// Merged into every later snapshot until the app is relaunched, so the
+    /// apps a cancelled logout took down still come back next login.
+    pub exit_orphans: Vec<SavedWindowState>,
+    /// The `windows` list of the last state snapshot actually written.
+    pub last_saved_windows: Vec<SavedWindowState>,
     /// Drives the hover fade on window borders (see `Window::border_reveal`).
     pub border_fade_timer: *mut ffi::wl_event_source,
     /// Whether the fade timer is currently armed, so re-arming while a fade is
@@ -399,6 +406,8 @@ impl WindowManager {
         self.grid_cells_enabled = true;
         self.restore_queue = Vec::new();
         self.last_window_states = Vec::new();
+        self.exit_orphans = Vec::new();
+        self.last_saved_windows = Vec::new();
         self.pending_placements = Vec::new();
         self.rounded_apps = Vec::new();
         self.bevel_apps = Vec::new();
@@ -875,6 +884,15 @@ impl WindowManager {
         last_states.retain(|s| s.app_id != "cce-cloud");
         self.last_window_states = last_states;
 
+        // A cancelled logout already closed some windows; keep their entries
+        // until an exit succeeds so they are restored next login. An orphan
+        // is dropped once a live window is the same app — relaunched. The
+        // identity is app_id AND cmdline: an X11 class is as coarse as
+        // "python3", and two unrelated apps must not stand in for each other.
+        self.exit_orphans.retain(|o| !saved_wins.iter().any(|s| same_app(s, o)));
+        saved_wins.extend(self.exit_orphans.iter().cloned());
+        self.last_saved_windows = saved_wins.clone();
+
         let state = SavedState {
             desk_pan_x: self.desk_pan_x,
             desk_pan_y: self.desk_pan_y,
@@ -942,8 +960,85 @@ impl WindowManager {
             (*w).close();
         }
 
-        // Set a clean exit timer fallback to 2.0 seconds (2000 ms)
-        ffi::wl_event_source_timer_update(self.clean_exit_timer, 2000);
+        // Windows that are still here when this fires are being held by
+        // something — nearly always an app asking whether to save — and the
+        // timeout CANCELS the logout rather than forcing the display down
+        // over the prompt. Long enough for the user to answer the prompt in
+        // place; a quick answer completes the logout with no cancel at all.
+        ffi::wl_event_source_timer_update(self.clean_exit_timer, 10_000);
+    }
+
+    /// Abandon a clean exit whose windows did not all close in time.
+    ///
+    /// What stalls a logout is nearly always an app refusing its close
+    /// request to ask about unsaved work — Houdini with a dirty scene. Until
+    /// 2026-09-08 the timeout forced the display down at that point, which
+    /// is exactly the loss the prompt exists to prevent. So the logout is
+    /// cancelled instead, the user is told what held it up, and they log
+    /// out again once the prompt is answered; `ccectl exit force` skips the
+    /// wait for a client that is hung rather than asking.
+    ///
+    /// The windows the exit already closed would otherwise vanish from the
+    /// next state snapshot (`save_state` runs every transaction), and with
+    /// them from the next login: they are remembered as `exit_orphans`.
+    pub unsafe fn cancel_clean_exit(&mut self) {
+        if !self.clean_exit_in_progress {
+            return;
+        }
+        self.clean_exit_in_progress = false;
+        self.shutting_down = false;
+        if !self.clean_exit_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.clean_exit_timer, 0);
+        }
+
+        let mut remaining: Vec<String> = Vec::new();
+        for &w in self.windows.iter() {
+            if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
+                continue;
+            }
+            if (*w).is_status_bar() || (*w).is_wallpaper() {
+                continue;
+            }
+            // A later self-initiated close must not read as a crash.
+            (*w).close_requested = false;
+            let app_id = (*w).get_app_id_string().unwrap_or_default();
+            if (*w).get_parent().is_null() && !app_id.is_empty() {
+                let title = (*w).get_title_string().unwrap_or_default();
+                remaining.push(if title.is_empty() { app_id.clone() } else { title });
+            }
+        }
+        // The snapshot written as the exit began lists every window it went
+        // on to close; a fresh one lists what survived. The difference is
+        // what must be remembered.
+        let before = std::mem::take(&mut self.last_saved_windows);
+        self.exit_orphans.clear();
+        self.save_state();
+        let survivors = std::mem::take(&mut self.last_saved_windows);
+        self.exit_orphans = before
+            .into_iter()
+            .filter(|b| !survivors.iter().any(|l| same_app(l, b)))
+            .collect();
+        // Write the merged snapshot now rather than on the next transaction.
+        self.save_state();
+
+        // A restart-compositor that stalled must not leave its flag behind
+        // for the next plain logout to act on.
+        let user = std::env::var("USER").unwrap_or_else(|_| format!("uid{}", libc::getuid()));
+        let _ = std::fs::remove_file(format!("/tmp/cce-restart-requested-{}", user));
+
+        let held_by = remaining.join(", ");
+        log::info!(
+            "Clean exit cancelled: {} window(s) still open ({}); {} closed window(s) remembered for the next login",
+            remaining.len(), held_by, self.exit_orphans.len()
+        );
+        let _ = std::process::Command::new("notify-send")
+            .arg("cce")
+            .arg(format!(
+                "Logout cancelled — still open: {}\nAnswer any save prompt, then log out again.",
+                held_by
+            ))
+            .spawn();
+        self.dirty_windowing();
     }
 
     pub unsafe fn check_clean_exit_progress(&mut self) {
@@ -4621,6 +4716,15 @@ impl WindowManager {
                 }
             }
             "exit" => {
+                if matches!(parts.get(1), Some(&"force") | Some(&"--force")) {
+                    // No waiting on close requests: whatever has not closed
+                    // by now is hung rather than asking. Save and go.
+                    log::info!("Forced exit requested; terminating without waiting for windows to close.");
+                    self.save_state();
+                    self.shutting_down = true;
+                    ffi::wl_display_terminate((*self.server).wl_server);
+                    return "ok\n".to_string();
+                }
                 self.execute_action(&crate::config::Action::Exit, None);
                 "ok\n".to_string()
             }
@@ -5530,13 +5634,19 @@ unsafe extern "C" fn dirty_idle_callback(data: *mut std::ffi::c_void) {
     }
 }
 
+/// Two saved entries describe the same app: same app_id and the same
+/// command line (an X11 class alone is as coarse as "python3").
+fn same_app(a: &SavedWindowState, b: &SavedWindowState) -> bool {
+    a.app_id == b.app_id && a.cmdline == b.cmdline
+}
+
 unsafe extern "C" fn handle_clean_exit_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let wm = data as *mut WindowManager;
     if wm.is_null() {
         return 0;
     }
-    log::info!("Clean exit timeout reached. Forcing display termination.");
-    ffi::wl_display_terminate((*(*wm).server).wl_server);
+    log::info!("Clean exit timeout reached with windows still open; cancelling the logout.");
+    (*wm).cancel_clean_exit();
     0
 }
 
