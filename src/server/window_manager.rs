@@ -5029,14 +5029,32 @@ impl WindowManager {
                 "ok\n".to_string()
             }
             "pointer-scroll" => {
-                if parts.len() < 2 { return "error: usage: pointer-scroll <dy> [dx]\n".to_string(); }
+                if parts.len() < 2 { return "error: usage: pointer-scroll <dy> [dx] [finger|finger-stop]\n".to_string(); }
+                if parts[1] == "finger-stop" {
+                    self.for_each_cursor(|cursor| cursor.inject_finger_stop());
+                    return "ok\n".to_string();
+                }
+                let finger = parts.last().map_or(false, |p| *p == "finger");
                 let dy = parts[1].parse::<f64>();
-                let dx = parts.get(2).map(|v| v.parse::<f64>()).unwrap_or(Ok(0.0));
+                let dx = parts.get(2).filter(|p| **p != "finger").map(|v| v.parse::<f64>()).unwrap_or(Ok(0.0));
                 if let (Ok(dy), Ok(dx)) = (dy, dx) {
-                    self.for_each_cursor(|cursor| cursor.inject_scroll(dy, dx));
+                    self.for_each_cursor(|cursor| cursor.inject_scroll(dy, dx, finger));
                     "ok\n".to_string()
                 } else {
                     "error: invalid dy or dx\n".to_string()
+                }
+            }
+            "pointer-pinch" => {
+                // pointer-pinch <scale> [rotation-degrees] [steps]
+                if parts.len() < 2 { return "error: usage: pointer-pinch <scale> [rotation] [steps]\n".to_string(); }
+                let scale = parts[1].parse::<f64>();
+                let rotation = parts.get(2).map(|v| v.parse::<f64>()).unwrap_or(Ok(0.0));
+                let steps = parts.get(3).map(|v| v.parse::<u32>()).unwrap_or(Ok(10));
+                if let (Ok(scale), Ok(rotation), Ok(steps)) = (scale, rotation, steps) {
+                    self.for_each_cursor(|cursor| cursor.inject_pinch(scale, rotation, steps));
+                    "ok\n".to_string()
+                } else {
+                    "error: invalid pinch arguments\n".to_string()
                 }
             }
             "place-next" => {

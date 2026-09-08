@@ -976,7 +976,12 @@ impl Cursor {
 
     /// Wheel scroll; positive `dy` scrolls down (content up), matching a real wheel.
     /// One notch is 15 delta units / 120 `value120` steps (the libinput convention).
-    pub unsafe fn inject_scroll(&mut self, dy: f64, dx: f64) {
+    /// `finger` injects a touchpad two-finger scroll (axis source FINGER, no
+    /// discrete steps) instead of a wheel click, so a headless session can
+    /// exercise the trackpad paths — the compositor's own desk pan and what
+    /// X11/Wayland clients receive. A finger scroll ends with a zero-delta
+    /// event, which `finger_stop` sends.
+    pub unsafe fn inject_scroll(&mut self, dy: f64, dx: f64, finger: bool) {
         let time = crate::util::msec_timestamp();
         for (delta, orientation) in [
             (dy, ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL),
@@ -988,11 +993,15 @@ impl Cursor {
             let mut ev = ffi::wlr_pointer_axis_event {
                 pointer: std::ptr::null_mut(),
                 time_msec: time,
-                source: ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_WHEEL,
+                source: if finger {
+                    ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_FINGER
+                } else {
+                    ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_WHEEL
+                },
                 orientation,
                 relative_direction: ffi::wl_pointer_axis_relative_direction_WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL,
                 delta,
-                delta_discrete: ((delta / 15.0) * 120.0) as i32,
+                delta_discrete: if finger { 0 } else { ((delta / 15.0) * 120.0) as i32 },
             };
             handle_axis(
                 &mut self.axis_listener as *mut ffi::wl_listener,
@@ -1000,6 +1009,84 @@ impl Cursor {
             );
         }
         handle_frame(&mut self.frame_listener as *mut ffi::wl_listener, std::ptr::null_mut());
+        // Every libinput axis event is followed by a frame; clients
+        // (Xwayland among them) deliver only on the frame, and wlroots
+        // asserts if a later axis event changes source within one.
+        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+    }
+
+    /// The zero-delta event that ends a finger scroll (libinput sends one
+    /// when the fingers lift); see `inject_scroll`.
+    pub unsafe fn inject_finger_stop(&mut self) {
+        let time = crate::util::msec_timestamp();
+        for orientation in [
+            ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL,
+            ffi::wl_pointer_axis_WL_POINTER_AXIS_HORIZONTAL_SCROLL,
+        ] {
+            let mut ev = ffi::wlr_pointer_axis_event {
+                pointer: std::ptr::null_mut(),
+                time_msec: time,
+                source: ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_FINGER,
+                orientation,
+                relative_direction: ffi::wl_pointer_axis_relative_direction_WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL,
+                delta: 0.0,
+                delta_discrete: 0,
+            };
+            handle_axis(
+                &mut self.axis_listener as *mut ffi::wl_listener,
+                &mut ev as *mut ffi::wlr_pointer_axis_event as *mut std::ffi::c_void,
+            );
+        }
+        // Every libinput axis event is followed by a frame; clients
+        // (Xwayland among them) deliver only on the frame, and wlroots
+        // asserts if a later axis event changes source within one.
+        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+    }
+
+    /// Inject a whole two-finger pinch: begin, `steps` updates easing the
+    /// scale from 1 to `scale` (and the rotation to `rotation` degrees),
+    /// end. Exercises the compositor's pinch policy and the
+    /// pointer-gestures forward to clients headlessly.
+    pub unsafe fn inject_pinch(&mut self, scale: f64, rotation: f64, steps: u32) {
+        let time = crate::util::msec_timestamp();
+        let mut begin = ffi::wlr_pointer_pinch_begin_event {
+            pointer: std::ptr::null_mut(),
+            time_msec: time,
+            fingers: 2,
+        };
+        handle_pinch_begin(
+            &mut self.pinch_begin_listener as *mut ffi::wl_listener,
+            &mut begin as *mut ffi::wlr_pointer_pinch_begin_event as *mut std::ffi::c_void,
+        );
+        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        let steps = steps.max(1);
+        for i in 1..=steps {
+            let t = i as f64 / steps as f64;
+            let mut update = ffi::wlr_pointer_pinch_update_event {
+                pointer: std::ptr::null_mut(),
+                time_msec: time + i,
+                fingers: 2,
+                dx: 0.0,
+                dy: 0.0,
+                scale: 1.0 + (scale - 1.0) * t,
+                rotation: rotation * t,
+            };
+            handle_pinch_update(
+                &mut self.pinch_update_listener as *mut ffi::wl_listener,
+                &mut update as *mut ffi::wlr_pointer_pinch_update_event as *mut std::ffi::c_void,
+            );
+            ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        }
+        let mut end = ffi::wlr_pointer_pinch_end_event {
+            pointer: std::ptr::null_mut(),
+            time_msec: time + steps + 1,
+            cancelled: false,
+        };
+        handle_pinch_end(
+            &mut self.pinch_end_listener as *mut ffi::wl_listener,
+            &mut end as *mut ffi::wlr_pointer_pinch_end_event as *mut std::ffi::c_void,
+        );
+        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
     }
 }
 
