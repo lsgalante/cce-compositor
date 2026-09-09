@@ -1179,6 +1179,40 @@ impl Window {
                 }
             }
 
+            // A remembered FLOATING position is only worth keeping if it is
+            // where the user can see it. The camera at restore is wherever
+            // the session left it (or wherever the user has panned since a
+            // relaunch), and a floating window a screen away from that is
+            // lost, not remembered: Inkscape's start screen came back a full
+            // viewport above the desk every login, at the cell its previous
+            // incarnation had been saved in, with nothing on screen to say
+            // it existed. Tiled windows are the grid's and stay put.
+            if self.tiling_mode == crate::tiling::TilingMode::Floating && !self.minimized {
+                let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
+                let wm = &(*self.server).wm;
+                let cam = crate::policy::camera::Camera {
+                    pan_x: wm.desk_pan_x,
+                    pan_y: wm.desk_pan_y,
+                    zoom: wm.desk_zoom,
+                };
+                if let Some((nx, ny)) = crate::policy::camera::recalled_origin(
+                    self.virtual_x,
+                    self.virtual_y,
+                    saved.width as f64,
+                    saved.height as f64,
+                    cam,
+                    vp_w,
+                    vp_h,
+                ) {
+                    log::info!(
+                        "Recalling off-view floating window into view: app_id={} remembered=({:.0},{:.0}) -> ({:.0},{:.0})",
+                        app_id_str, self.virtual_x, self.virtual_y, nx, ny
+                    );
+                    self.virtual_x = nx;
+                    self.virtual_y = ny;
+                }
+            }
+
             self.restored = true;
             self.session_restored = from_session;
             // The saved `focused` flag only means something for the startup

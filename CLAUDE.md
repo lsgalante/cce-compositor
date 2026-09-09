@@ -468,6 +468,12 @@ the **bare name** whenever the name's first `PATH` hit is a different file
 from the one running (`path_shadowed_name`), and the restore's `sh -c`
 resolves it the way the launcher did. The absolute path is kept when PATH
 agrees with it.
+A restored **floating** window is recalled into the current view
+(`policy::camera::recalled_origin`, applied at the end of `try_restore`)
+when its remembered position would show less than a quarter of it: the
+camera at restore is wherever the session left it, and a floating window a
+screen away from that is lost, not remembered. Tiled windows stay where the
+grid has them.
 
 ### IPC & status sockets
 
