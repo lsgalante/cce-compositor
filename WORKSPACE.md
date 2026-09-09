@@ -238,7 +238,8 @@ framework. Understanding it is the prerequisite for touching any client.
 - **Modules**: `widget/` (containers, inputs, editor, `json_layout`), `layout.rs`
   (fonts + sizing, lots of `*_font_parsed()` getters), `color.rs`, `config.rs`,
   `protocol.rs` (talking to the compositor), `context.rs`, `process.rs`,
-  `file_dialog.rs`, `scale.rs` (HiDPI), `mcp.rs` (tools-only MCP server over
+  `file_dialog.rs`, `scale.rs` (HiDPI), `units.rs` (lengths with units — `(mm)` config
+  values — and the display metric from EDID), `mcp.rs` (tools-only MCP server over
   Streamable HTTP so apps can expose their state/actions to AI agents —
   `cce-designer` is the reference consumer, see its CLAUDE.md).
 

@@ -457,6 +457,19 @@ border/blur/desktop styling, keybindings → `Action`s, startup programs, output
 settings). Live reconfiguration comes in over IPC (`ccectl reload`, `bind`, `layout …`,
 `config-done`, etc.).
 
+Per-output settings live under `output { <name> … }` as properties or child nodes:
+`scale`, `brightness_interval` / `brightness_up` / `brightness_down`, and
+**`size_mm="344x215"`** — the panel's real size, written into the `wlr_output`'s
+physical size (via the `river_wlr_output_set_phys_size` shim) *before* its
+`wl_output` global exists, so every client's geometry event carries it in place of
+the EDID figure. That is the number cce-ui's `units::Metric` divides the logical
+size by to resolve a `(mm)` config length (see `../cce-ui/CLAUDE.md`, Units). Set it
+when EDID lies (TVs, projectors) or is absent (headless, the shadow: `HEADLESS-1`
+reports 0×0 and clients fall back to an assumed 96 ppi). `ccectl outputs [--json]`
+prints, per output, mode / scale / logical size / mm / logical px per mm and where
+the mm came from (`configured`, `measured`, `none`); the creation log line says the
+same.
+
 Persistent window state is saved to **`~/.local/state/cce/state.json`**
 (`XDG_STATE_HOME/cce/state.json`) on shutdown and restored on start
 (`save_state` / `load_state` / `spawn_restored_windows`). A window's

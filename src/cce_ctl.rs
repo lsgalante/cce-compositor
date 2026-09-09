@@ -63,6 +63,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("                              # keeping its size and growing away from its neighbours");
     print("  overview                   # toggle; the exit lands on the focused window, not the pointer");
     print("  windows [--json]           # list windows; --json emits one JSON object per line");
+    print("  outputs [--json]           # list outputs: mode, scale, logical size, physical mm, px/mm, and where the mm came from");
     print("  status-hide-mode [true|false]");
     print("  adjust-position-mode [true|false|query]");
     print("  exit [force]               # log out; waits for windows to close, cancels if one stays (a save prompt); force skips the wait");

@@ -177,6 +177,16 @@ struct wlr_output_mode *river_wlr_output_get_current_mode(struct wlr_output *out
 	return output->current_mode;
 }
 
+void river_wlr_output_get_phys_size(struct wlr_output *output, int32_t *width_mm, int32_t *height_mm) {
+	*width_mm = output->phys_width;
+	*height_mm = output->phys_height;
+}
+
+void river_wlr_output_set_phys_size(struct wlr_output *output, int32_t width_mm, int32_t height_mm) {
+	output->phys_width = width_mm;
+	output->phys_height = height_mm;
+}
+
 int32_t river_wlr_output_get_width(struct wlr_output *output) {
 	return output->width;
 }

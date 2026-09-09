@@ -1503,6 +1503,14 @@ fn get_nested_prop_f64(node: &kdl::KdlNode, child_name: &str, prop_name: &str, d
     default
 }
 
+/// `"344x215"` (also `344,215` / `344 215`) → (w, h) in mm, both positive.
+fn parse_size_mm(s: &str) -> Option<(f64, f64)> {
+    let mut it = s.split(|c: char| c == 'x' || c == 'X' || c == ',' || c.is_whitespace()).filter(|p| !p.is_empty());
+    let w = it.next()?.trim().parse::<f64>().ok()?;
+    let h = it.next()?.trim().parse::<f64>().ok()?;
+    (w > 0.0 && h > 0.0 && it.next().is_none()).then_some((w, h))
+}
+
 fn parse_kdl_config(content: &str) -> Result<Config, String> {
     let doc: kdl::KdlDocument = content.parse().map_err(|e| format!("KDL parse error: {}", e))?;
     
@@ -1724,6 +1732,15 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                         parsed_scale = Some(num);
                     }
                 }
+                // `size_mm="344x215"`: the panel's real size, overriding
+                // the EDID figure the backend read (TVs and projectors
+                // lie; some panels report nothing). Forwarded into the
+                // wl_output geometry every client sees, so cce-ui's metric
+                // measures against it.
+                let mut parsed_size_mm = None;
+                if let Some(entry) = child.entries().iter().find(|e| e.name().map(|n| n.value()) == Some("size_mm")) {
+                    parsed_size_mm = entry.value().as_string().and_then(parse_size_mm);
+                }
                 let mut parsed_interval = None;
                 if let Some(entry) = child.entries().iter().find(|e| e.name().map(|n| n.value()) == Some("brightness_interval")) {
                     if let Some(num) = entry.value().as_i64() {
@@ -1750,6 +1767,13 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                 if let Some(num) = entry.value().as_f64() {
                                     parsed_scale = Some(num);
                                 }
+                            }
+                        }
+                    }
+                    if parsed_size_mm.is_none() {
+                        if let Some(size_node) = display_children.nodes().iter().find(|n| n.name().value() == "size_mm") {
+                            if let Some(entry) = size_node.entries().first() {
+                                parsed_size_mm = entry.value().as_string().and_then(parse_size_mm);
                             }
                         }
                     }
@@ -1784,6 +1808,10 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
 
                 if let Some(num) = parsed_scale {
                     display.insert(format!("scale_{}", name), num);
+                }
+                if let Some((w, h)) = parsed_size_mm {
+                    display.insert(format!("mm_w_{}", name), w);
+                    display.insert(format!("mm_h_{}", name), h);
                 }
                 let interval = parsed_interval.unwrap_or(10);
                 if parsed_interval.is_some() {
@@ -2813,6 +2841,7 @@ style {
         let config = parse_kdl_config(content).unwrap();
         assert_eq!(config.display.get("scale_eDP-1"), Some(&2.0));
         assert_eq!(config.display.get("scale_DP-1"), Some(&1.5));
+        assert_eq!(config.display.get("mm_w_eDP-1"), None);
         assert_eq!(config.display.get("brightness_interval_eDP-1"), Some(&10.0));
 
         let up_bind = config.key_bindings.iter().find(|kb| kb.key == "XF86MonBrightnessUp").unwrap();
@@ -2822,6 +2851,29 @@ style {
         let down_bind = config.key_bindings.iter().find(|kb| kb.key == "XF86MonBrightnessDown").unwrap();
         assert_eq!(down_bind.action, "spawn");
         assert_eq!(down_bind.command, Some("brightnessctl set 10%-".to_string()));
+    }
+
+    #[test]
+    fn test_kdl_display_size_mm_parsing() {
+        let content = r#"
+            output {
+                eDP-1 scale=(f64)2.0 size_mm="344x215"
+                DP-1 {
+                    scale (f64)1.5
+                    size_mm "597 336"
+                }
+                HDMI-A-1 size_mm="bogus"
+            }
+        "#;
+        let config = parse_kdl_config(content).unwrap();
+        assert_eq!(config.display.get("mm_w_eDP-1"), Some(&344.0));
+        assert_eq!(config.display.get("mm_h_eDP-1"), Some(&215.0));
+        assert_eq!(config.display.get("mm_w_DP-1"), Some(&597.0));
+        assert_eq!(config.display.get("mm_h_DP-1"), Some(&336.0));
+        assert_eq!(config.display.get("mm_w_HDMI-A-1"), None);
+        assert_eq!(parse_size_mm("344,215"), Some((344.0, 215.0)));
+        assert_eq!(parse_size_mm("344x0"), None);
+        assert_eq!(parse_size_mm("1x2x3"), None);
     }
 
     #[test]

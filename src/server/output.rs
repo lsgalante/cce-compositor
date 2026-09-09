@@ -451,6 +451,30 @@ impl Output {
             .map(|&s| s as f32)
             .unwrap_or((*server).wm.output_scale);
 
+        // The physical size every client's wl_output geometry will carry,
+        // which cce-ui's `units::Metric` measures logical px per mm against.
+        // A configured `size_mm` replaces the EDID figure before the global
+        // exists (wlr_output_layout_add creates it), so no client ever sees
+        // the lie. Logged either way: an output with no size at all leaves
+        // clients on the assumed 96 ppi, and that is worth knowing.
+        let (mut edid_w, mut edid_h) = (0i32, 0i32);
+        ffi::river_wlr_output_get_phys_size(wlr_output, &mut edid_w, &mut edid_h);
+        let configured = (*server).wm.display.get(&format!("mm_w_{}", name))
+            .zip((*server).wm.display.get(&format!("mm_h_{}", name)))
+            .map(|(&w, &h)| (w.round() as i32, h.round() as i32));
+        match configured {
+            Some((w, h)) => {
+                ffi::river_wlr_output_set_phys_size(wlr_output, w, h);
+                log::info!("output {}: physical size {}x{} mm (configured size_mm; EDID said {}x{})", name, w, h, edid_w, edid_h);
+            }
+            None if edid_w > 0 && edid_h > 0 => {
+                log::info!("output {}: physical size {}x{} mm (EDID)", name, edid_w, edid_h);
+            }
+            None => {
+                log::info!("output {}: no physical size — clients assume 96 ppi; set `output {{ {} size_mm=\"WxH\" }}` to measure", name, name);
+            }
+        }
+
         let initial = OutputState {
             state: OutputStateValue::DisabledHard,
             x: 0,

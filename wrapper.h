@@ -128,6 +128,11 @@ struct wlr_output_mode *river_wlr_output_get_current_mode(struct wlr_output *out
 int32_t river_wlr_output_get_width(struct wlr_output *output);
 int32_t river_wlr_output_get_height(struct wlr_output *output);
 int32_t river_wlr_output_get_refresh(struct wlr_output *output);
+// Physical size in mm as the backend read it from EDID (0 when unknown),
+// and a setter so a configured `size_mm` override reaches every client's
+// wl_output geometry in place of a lying EDID.
+void river_wlr_output_get_phys_size(struct wlr_output *output, int32_t *width_mm, int32_t *height_mm);
+void river_wlr_output_set_phys_size(struct wlr_output *output, int32_t width_mm, int32_t height_mm);
 struct wl_global *river_wlr_output_get_global(struct wlr_output *output);
 
 void *river_wlr_surface_get_data(struct wlr_surface *surface);

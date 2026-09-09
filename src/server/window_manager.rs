@@ -4830,6 +4830,71 @@ impl WindowManager {
                 self.dirty_windowing();
                 "ok\n".to_string()
             }
+            "outputs" => {
+                // One line per output: the figures a client's `units::Metric`
+                // is built from (mode, scale, logical size, physical mm) and
+                // where the mm came from — `configured` (a `size_mm`
+                // override), `measured` (EDID), or `none` (clients fall back
+                // to the assumed 96 ppi). `px_per_mm` is LOGICAL px, the
+                // number cce-ui resolves a `(mm)` length with.
+                let as_json = parts.get(1).copied() == Some("--json");
+                let mut out = String::new();
+                let om = &(*self.server).om;
+                let head = &om.outputs as *const ffi::wl_list as *mut ffi::wl_list;
+                let mut link = om.outputs.next;
+                while link != head {
+                    let output = &*crate::container_of!(link, crate::output::Output, link);
+                    link = (*link).next;
+                    let wlr_output = output.wlr_output;
+                    if wlr_output.is_null() {
+                        continue;
+                    }
+                    let name = std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name(wlr_output)).to_string_lossy().to_string();
+                    let (mut mm_w, mut mm_h) = (0i32, 0i32);
+                    ffi::river_wlr_output_get_phys_size(wlr_output, &mut mm_w, &mut mm_h);
+                    let source = if self.display.contains_key(&format!("mm_w_{}", name)) {
+                        "configured"
+                    } else if mm_w > 0 && mm_h > 0 {
+                        "measured"
+                    } else {
+                        "none"
+                    };
+                    let st = output.sent;
+                    let enabled = matches!(st.state, crate::output::OutputStateValue::Enabled);
+                    let (pw, ph, refresh) = match st.mode {
+                        crate::output::OutputMode::Standard(m) if !m.is_null() => ((*m).width, (*m).height, (*m).refresh),
+                        crate::output::OutputMode::Custom { width, height, refresh } => (width, height, refresh),
+                        _ => (0, 0, 0),
+                    };
+                    let (lw, lh) = st.dimensions();
+                    let px_per_mm = if mm_w > 0 && mm_h > 0 && lw > 0 && lh > 0 {
+                        0.5 * (lw as f64 / mm_w as f64 + lh as f64 / mm_h as f64)
+                    } else {
+                        0.0
+                    };
+                    if as_json {
+                        out.push_str(&serde_json::json!({
+                            "name": name,
+                            "enabled": enabled,
+                            "x": st.x, "y": st.y,
+                            "mode_w": pw, "mode_h": ph, "refresh_mhz": refresh,
+                            "scale": st.scale,
+                            "logical_w": lw, "logical_h": lh,
+                            "mm_w": mm_w, "mm_h": mm_h,
+                            "px_per_mm": px_per_mm,
+                            "ppi": px_per_mm * 25.4,
+                            "source": source,
+                        }).to_string());
+                        out.push('\n');
+                    } else {
+                        out.push_str(&format!(
+                            "output name={} enabled={} x={} y={} mode={}x{}@{:.3} scale={} logical={}x{} mm={}x{} px_per_mm={:.3} ppi={:.1} source={}\n",
+                            name, enabled, st.x, st.y, pw, ph, refresh as f64 / 1000.0, st.scale, lw, lh, mm_w, mm_h, px_per_mm, px_per_mm * 25.4, source
+                        ));
+                    }
+                }
+                if out.is_empty() { "no outputs\n".to_string() } else { out }
+            }
             "windows" => {
                 // `windows --json` emits one JSON object per line; titles and
                 // app_ids are then properly escaped, unlike the text format.
