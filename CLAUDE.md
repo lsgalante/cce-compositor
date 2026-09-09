@@ -459,7 +459,15 @@ settings). Live reconfiguration comes in over IPC (`ccectl reload`, `bind`, `lay
 
 Persistent window state is saved to **`~/.local/state/cce/state.json`**
 (`XDG_STATE_HOME/cce/state.json`) on shutdown and restored on start
-(`save_state` / `load_state` / `spawn_restored_windows`).
+(`save_state` / `load_state` / `spawn_restored_windows`). A window's
+`cmdline` comes from `/proc/<pid>/cmdline`, which is what the process
+*exec'd into*, not what launched it: an `exec` wrapper in `~/.local/bin`
+(Inkscape's `GDK_SCALE=1` wrapper) reads as `/usr/bin/inkscape`, and a
+restore that replays that path skips the wrapper. So `save_state` records
+the **bare name** whenever the name's first `PATH` hit is a different file
+from the one running (`path_shadowed_name`), and the restore's `sh -c`
+resolves it the way the launcher did. The absolute path is kept when PATH
+agrees with it.
 
 ### IPC & status sockets
 

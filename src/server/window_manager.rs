@@ -25,6 +25,41 @@ fn foot_shell_cwd(foot_pid: i32) -> Option<String> {
     Some(cwd.to_string_lossy().into_owned())
 }
 
+/// The bare program name a window should be restored by, when the binary it
+/// is running is NOT what its name resolves to on `PATH`.
+///
+/// An `exec` wrapper leaves no trace in `/proc`: `~/.local/bin/inkscape`
+/// (`exec /usr/bin/inkscape "$@"`, the GDK_SCALE fix) shows up in the
+/// window's cmdline as `/usr/bin/inkscape`, and a restore that replays that
+/// path starts the program without its wrapper. Desktop entries and the
+/// launcher run bare names, so the first `PATH` hit for the name IS how the
+/// user's environment launches the program. When that hit is a different
+/// file from the one running, record the name and let the restore's
+/// `sh -c` resolve it the same way. Returns `None` for a relative argv[0],
+/// a binary no longer on disk, or a name whose first `PATH` hit is the very
+/// same file (through any symlink) — there the absolute path is already the
+/// truth, and keeping it means a later `PATH` change cannot redirect it.
+fn path_shadowed_name(argv0: &str, path_var: &str) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    if !argv0.starts_with('/') {
+        return None;
+    }
+    let exe = std::path::Path::new(argv0);
+    let name = exe.file_name()?.to_str()?;
+    let real = std::fs::canonicalize(exe).ok()?;
+    for dir in path_var.split(':').filter(|d| !d.is_empty()) {
+        let candidate = std::path::Path::new(dir).join(name);
+        let Ok(meta) = std::fs::metadata(&candidate) else { continue };
+        if !meta.is_file() || meta.permissions().mode() & 0o111 == 0 {
+            continue;
+        }
+        // First executable hit decides, as `sh` would decide it.
+        let candidate_real = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+        return if candidate_real == real { None } else { Some(name.to_string()) };
+    }
+    None
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowManagerState {
     Idle,
@@ -846,6 +881,17 @@ impl WindowManager {
                             if let Some(appimage_path) = appimage_opt {
                                 args[0] = appimage_path;
                             }
+                        }
+                    }
+                    // A wrapper that exec'd the real binary is invisible here;
+                    // restore by the bare name when PATH says the name is a
+                    // different file (see path_shadowed_name).
+                    if !args.is_empty() {
+                        if let Some(name) = path_shadowed_name(
+                            &args[0],
+                            &std::env::var("PATH").unwrap_or_default(),
+                        ) {
+                            args[0] = name;
                         }
                     }
                     // foot only tracks its launch dir, not the shell's current
@@ -6352,6 +6398,81 @@ mod tests {
         }
 
         std::mem::forget(wm);
+    }
+
+    /// A scratch dir holding one executable (or not) file per name.
+    struct BinDir(std::path::PathBuf);
+    impl BinDir {
+        fn new(tag: &str) -> Self {
+            let d = std::env::temp_dir().join(format!(
+                "cce-fx-shadowed-{}-{}-{}",
+                std::process::id(),
+                tag,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&d).unwrap();
+            BinDir(d)
+        }
+        fn file(&self, name: &str, executable: bool) -> String {
+            use std::os::unix::fs::PermissionsExt;
+            let p = self.0.join(name);
+            std::fs::write(&p, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(if executable { 0o755 } else { 0o644 })).unwrap();
+            p.to_string_lossy().into_owned()
+        }
+        fn path(&self) -> String {
+            self.0.to_string_lossy().into_owned()
+        }
+    }
+    impl Drop for BinDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_wrapper_first_on_path_restores_by_name() {
+        let wrappers = BinDir::new("wrap");
+        let system = BinDir::new("sys");
+        wrappers.file("inkscape", true);
+        let real = system.file("inkscape", true);
+        let path = format!("{}:{}", wrappers.path(), system.path());
+        assert_eq!(path_shadowed_name(&real, &path), Some("inkscape".to_string()));
+    }
+
+    #[test]
+    fn the_same_binary_first_on_path_keeps_the_absolute_path() {
+        let system = BinDir::new("sys");
+        let real = system.file("inkscape", true);
+        // Directly...
+        assert_eq!(path_shadowed_name(&real, &system.path()), None);
+        // ...and through a symlink farm ahead of it on PATH.
+        let links = BinDir::new("links");
+        std::os::unix::fs::symlink(&real, links.0.join("inkscape")).unwrap();
+        let path = format!("{}:{}", links.path(), system.path());
+        assert_eq!(path_shadowed_name(&real, &path), None);
+    }
+
+    #[test]
+    fn a_non_executable_namesake_does_not_count() {
+        let junk = BinDir::new("junk");
+        let system = BinDir::new("sys");
+        junk.file("inkscape", false);
+        let real = system.file("inkscape", true);
+        let path = format!("{}:{}", junk.path(), system.path());
+        assert_eq!(path_shadowed_name(&real, &path), None);
+    }
+
+    #[test]
+    fn only_absolute_argv0_of_an_existing_binary_is_considered() {
+        let wrappers = BinDir::new("wrap");
+        wrappers.file("inkscape", true);
+        assert_eq!(path_shadowed_name("inkscape", &wrappers.path()), None);
+        let gone = wrappers.0.join("nope/inkscape").to_string_lossy().into_owned();
+        assert_eq!(path_shadowed_name(&gone, &wrappers.path()), None);
     }
 
     #[test]
