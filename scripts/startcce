@@ -20,12 +20,21 @@ export XCURSOR_SIZE=24
 export XCURSOR_PATH="${XDG_DATA_HOME:-$HOME/.local/share}/icons:$HOME/.icons:/usr/share/icons"
 export WLR_NO_HARDWARE_CURSORS=1
 export WLR_DRM_DEVICES=/dev/dri/card1
+# The session renders on the Intel GPU, so Vulkan is pinned to the Intel ICD.
+# This is not only a compositor concern: an app that also loads the NVIDIA
+# Vulkan ICD (libGLX_nvidia.so.0) and then asks NVIDIA OpenCL about its
+# Mesa GL context segfaults inside the NVIDIA driver — Houdini did, six
+# seconds after launch, every time it came from the launcher. It is
+# imported into the systemd user manager below for that reason: apps spawned
+# by cce-cloud (a user service) inherit the manager's environment, not this
+# script's, and without the import they ran under a different GPU setup than
+# anything the compositor spawned directly.
 export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.json
 # Mesa's rusticl exposes NO OpenCL devices unless enabled per driver — without
-# this the session has zero OpenCL platforms (the other vendor ICD is a stale
-# opencl-nvidia with no NVIDIA hardware behind it), and every OpenCL consumer
-# fails quietly: the designer's kernel-generated geometry (the default
-# project's sphere) simply never appears.
+# this the session has zero OpenCL platforms from Mesa, and every OpenCL
+# consumer that wants the Intel GPU fails quietly: the designer's
+# kernel-generated geometry (the default project's sphere) simply never
+# appears. (The NVIDIA ICD is live too and serves the discrete GPU.)
 export RUSTICL_ENABLE=iris
 
 # The compositor binary this session runs, resolved once so the server launch
@@ -91,7 +100,7 @@ fi
 # literal '$CCE_BIN' and the client would never start.
 cat > "$CCE_LAUNCH" << LAUNCH_EOF
 #!/bin/sh
-systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_ID XDG_RUNTIME_DIR GNOME_KEYRING_CONTROL SSH_AUTH_SOCK RUSTICL_ENABLE${TERMINAL:+ TERMINAL}
+systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_ID XDG_RUNTIME_DIR GNOME_KEYRING_CONTROL SSH_AUTH_SOCK RUSTICL_ENABLE VK_DRIVER_FILES${TERMINAL:+ TERMINAL}
 systemctl --user start cce-session.target
 ${DEBUG_FLAG}exec "$CCE_BIN" client 2>"$CCE_CLIENT_LOG"
 LAUNCH_EOF
