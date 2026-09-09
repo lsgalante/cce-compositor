@@ -4385,9 +4385,10 @@ impl WindowManager {
                 self.execute_action(&crate::config::Action::FocusPrev, None);
                 "ok\n".to_string()
             }
-            // Relative grid steps for the focused TILED window, swapping with
-            // whatever tiled window holds the destination. Absolute placement
-            // is "move-window <square>", above.
+            // Relative grid steps for the focused window: a tiled one swaps
+            // with whatever tiled window holds the destination, a floating one
+            // just moves by the period. Absolute placement is
+            // "move-window <square>", above.
             "move-window-left" | "move-window-right" | "move-window-up" | "move-window-down" => {
                 let a = match action {
                     "move-window-left" => crate::config::Action::MoveWindowLeft,
