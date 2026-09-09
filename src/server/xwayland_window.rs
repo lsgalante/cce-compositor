@@ -28,6 +28,40 @@ pub struct XwaylandWindow {
 
     pub map: ffi::wl_listener,
     pub unmap: ffi::wl_listener,
+
+    /// The last geometry this compositor handed to X through
+    /// `send_configure`, physical pixels; `None` until the first one. See
+    /// `needs_configure` for why this is kept apart from the wlroots mirror.
+    pub sent_geom: Option<X11Geom>,
+}
+
+/// A window geometry in X11 root coordinates — physical pixels under
+/// `xwayland_hidpi` (see `x11_scale`), the same units as the
+/// `wlr_xwayland_surface` fields it is compared against.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct X11Geom {
+    pub x: i16,
+    pub y: i16,
+    pub width: u16,
+    pub height: u16,
+}
+
+/// Whether `wanted` has to be sent to X, given what wlroots reports the
+/// window's geometry to be (`reported`) and the last geometry this
+/// compositor sent (`sent`).
+///
+/// Comparing against the wlroots mirror alone was the bug: the saved-state
+/// restore (`Window::try_restore`) pre-writes the mirror's width/height to
+/// the saved size so the first frame renders at it, which makes the mirror
+/// a statement of what the compositor wants X to have, not what X has. A
+/// window saved fullscreen restored at exactly the fullscreen size then
+/// looked already-configured, the configure was skipped, and the real X
+/// window stayed at its natural size. So a geometry is also considered
+/// unsent until this compositor has actually sent it once; after that the
+/// mirror is what catches X changing the geometry on its own (a
+/// ConfigureNotify updates it), which the sent record cannot see.
+pub fn needs_configure(wanted: X11Geom, reported: X11Geom, sent: Option<X11Geom>) -> bool {
+    wanted != reported || sent != Some(wanted)
 }
 
 unsafe fn connect_listener(
@@ -234,6 +268,7 @@ impl XwaylandWindow {
             request_minimize: std::mem::zeroed(),
             map: std::mem::zeroed(),
             unmap: std::mem::zeroed(),
+            sent_geom: None,
         });
 
         let raw = Box::into_raw(xwindow);
@@ -309,18 +344,9 @@ impl XwaylandWindow {
             phys_y -= to_x11(WINE_MARGIN, s) as i16;
         }
 
-        if phys_x != (*self.xsurface).x
-            || phys_y != (*self.xsurface).y
-            || phys_width != (*self.xsurface).width
-            || phys_height != (*self.xsurface).height
-        {
-            ffi::wlr_xwayland_surface_configure(
-                self.xsurface,
-                phys_x,
-                phys_y,
-                phys_width,
-                phys_height,
-            );
+        let wanted = X11Geom { x: phys_x, y: phys_y, width: phys_width, height: phys_height };
+        if needs_configure(wanted, self.reported_geom(), self.sent_geom) {
+            self.send_configure(wanted);
         }
 
         if scheduled.activated != sent.activated {
@@ -352,6 +378,24 @@ impl XwaylandWindow {
         (*window).configure_scheduled.height = None;
 
         false
+    }
+
+    /// The geometry wlroots currently reports for the X window.
+    pub unsafe fn reported_geom(&self) -> X11Geom {
+        X11Geom {
+            x: (*self.xsurface).x,
+            y: (*self.xsurface).y,
+            width: (*self.xsurface).width,
+            height: (*self.xsurface).height,
+        }
+    }
+
+    /// The one path to `wlr_xwayland_surface_configure`: every geometry
+    /// handed to X is recorded in `sent_geom` so `needs_configure` can tell
+    /// a geometry X has from one the compositor merely mirrored.
+    pub unsafe fn send_configure(&mut self, g: X11Geom) {
+        ffi::wlr_xwayland_surface_configure(self.xsurface, g.x, g.y, g.width, g.height);
+        self.sent_geom = Some(g);
     }
 
     pub unsafe fn set_activated(&self, activated: bool) {
@@ -494,7 +538,12 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
 
     let surface = (*(*xwindow).xsurface).surface;
     if surface.is_null() || !ffi::river_wlr_surface_is_mapped(surface) {
-        ffi::wlr_xwayland_surface_configure((*xwindow).xsurface, (*event).x, (*event).y, (*event).width, (*event).height);
+        (*xwindow).send_configure(X11Geom {
+            x: (*event).x,
+            y: (*event).y,
+            width: (*event).width,
+            height: (*event).height,
+        });
         return;
     }
 
@@ -518,13 +567,12 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     );
 
     if has_parent {
-        ffi::wlr_xwayland_surface_configure(
-            (*xwindow).xsurface,
-            (*event).x,
-            (*event).y,
-            (*event).width,
-            (*event).height,
-        );
+        (*xwindow).send_configure(X11Geom {
+            x: (*event).x,
+            y: (*event).y,
+            width: (*event).width,
+            height: (*event).height,
+        });
         let log_x = from_x11((*event).x as i32, s);
         let log_y = from_x11((*event).y as i32, s);
         let log_width = from_x11((*event).width as i32, s) as u32;
@@ -584,13 +632,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         phys_y -= to_x11(WINE_MARGIN, s) as i16;
     }
 
-    ffi::wlr_xwayland_surface_configure(
-        (*xwindow).xsurface,
-        phys_x,
-        phys_y,
-        phys_width,
-        phys_height,
-    );
+    (*xwindow).send_configure(X11Geom { x: phys_x, y: phys_y, width: phys_width, height: phys_height });
     let mut log_width = from_x11(phys_width as i32, s) as u32;
     let mut log_height = from_x11(phys_height as i32, s) as u32;
     if is_wine && !has_parent && !is_fullscreen {
@@ -776,6 +818,24 @@ mod tests {
         let logical = from_x11(3712, s);
         assert_eq!(logical, 1856);
         assert_eq!(to_x11(logical, resolve_x11_scale(Some(2.0), &last)), 3712);
+    }
+
+    #[test]
+    fn configure_is_sent_until_it_has_actually_been_sent_once() {
+        let g = |x, y, w, h| X11Geom { x, y, width: w, height: h };
+        let fullscreen = g(0, 0, 1280, 720);
+        // The restore case: the mirror already says 1280x720 (pre-written by
+        // try_restore) but nothing was ever sent — X is at its natural size.
+        assert!(needs_configure(fullscreen, fullscreen, None));
+        // Something else was sent (the client's own pre-map request).
+        assert!(needs_configure(fullscreen, fullscreen, Some(g(0, 0, 103, 36))));
+        // Sent once and X reports it: nothing to do.
+        assert!(!needs_configure(fullscreen, fullscreen, Some(fullscreen)));
+        // X moved or resized itself since: the mirror disagrees, resend.
+        assert!(needs_configure(fullscreen, g(10, 10, 1280, 720), Some(fullscreen)));
+        assert!(needs_configure(fullscreen, g(0, 0, 640, 360), Some(fullscreen)));
+        // A different wanted geometry always goes out.
+        assert!(needs_configure(g(0, 0, 640, 360), fullscreen, Some(fullscreen)));
     }
 
     #[test]

@@ -1121,6 +1121,13 @@ impl Window {
                     }
                 }
                 WindowImpl::Xwayland(xwindow) => {
+                    // This pre-writes the wlroots mirror so `render_finish`
+                    // reports the saved size from the first frame; X itself
+                    // is still at the window's natural size until the
+                    // arrange pass configures it. That configure must not
+                    // be deduplicated against this mirror — see
+                    // `xwayland_window::needs_configure`, which also checks
+                    // the geometry the compositor has actually sent.
                     if !xwindow.is_null() && !(*xwindow).xsurface.is_null() {
                         let s = crate::xwayland_window::x11_scale_for(self.server, (*xwindow).xsurface);
                         (*(*xwindow).xsurface).width = crate::xwayland_window::to_x11(saved.width as i32, s) as u16;
