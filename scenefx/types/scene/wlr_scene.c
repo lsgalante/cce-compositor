@@ -2367,12 +2367,40 @@ static bool scene_node_at_iterator(struct wlr_scene_node *node,
 		// deltas hard enough to fling the item across the canvas.
 		// Buffers displayed at their natural size (every window at rest)
 		// scale by exactly 1 here and are untouched.
+		//
+		// The ratio is between dst and the DISPLAYED region of the
+		// surface, which is the whole surface only while no clip is set.
+		// A clipped surface (wlr_scene_subsurface_tree_set_clip — how a
+		// CSD toplevel is cropped to its xdg geometry, shedding the
+		// client-side shadow margins) shows just the clip, at dst ==
+		// clip size, so it is a crop at ratio 1, not a scale — yet its
+		// surface size still differs from dst by the margins. Measuring
+		// against the whole surface inflated every pointer coordinate on
+		// such a window by (surface / geometry): a GTK3 dialog 718px
+		// tall cropped to 666 received clicks 8% below the cursor, more
+		// the further down, and the bottom band was dead because the
+		// inflated point fell outside the surface. The clip's origin is
+		// added by the surface callback below; only the extent matters
+		// here, clamped to the surface as the commit path clamps it.
 		if (scene_buffer->dst_width > 0 && scene_buffer->dst_height > 0) {
 			struct wlr_scene_surface *scene_surface =
 				wlr_scene_surface_try_from_buffer(scene_buffer);
 			if (scene_surface != NULL && scene_surface->surface != NULL) {
 				int sw = scene_surface->surface->current.width;
 				int sh = scene_surface->surface->current.height;
+				const struct wlr_box *clip = &scene_surface->clip;
+				if (!wlr_box_empty(clip)) {
+					if (clip->width < sw - clip->x) {
+						sw = clip->width;
+					} else {
+						sw -= clip->x;
+					}
+					if (clip->height < sh - clip->y) {
+						sh = clip->height;
+					} else {
+						sh -= clip->y;
+					}
+				}
 				if (sw > 0 && sh > 0 && (sw != scene_buffer->dst_width ||
 						sh != scene_buffer->dst_height)) {
 					rx = rx * sw / scene_buffer->dst_width;
