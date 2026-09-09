@@ -117,6 +117,9 @@ pub struct WindowManager {
     /// Xwayland sees a physical-pixel screen and X11 surfaces draw at
     /// 1/scale (see `WindowManagerConfig::xwayland_hidpi`).
     pub xwayland_hidpi: bool,
+    /// X11 windows kept in the logical world while `xwayland_hidpi` is on
+    /// (see `xwayland_window::x11_scale_for`).
+    pub xwayland_hidpi_except: Vec<String>,
     /// Trackpad-to-view-drag emulation (see `cursor::ViewDrag`).
     pub touchpad_view_apps: Vec<String>,
     pub touchpad_view_swipe_tumble: bool,
@@ -358,6 +361,7 @@ impl WindowManager {
         self.sent.output_config = std::ptr::null_mut();
         self.output_scale = 1.0;
         self.xwayland_hidpi = true;
+        self.xwayland_hidpi_except = Vec::new();
         self.touchpad_view_apps = Vec::new();
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;
@@ -433,6 +437,7 @@ impl WindowManager {
         self.layout = crate::config::Layout::default();
         self.output_scale = 1.0;
         self.xwayland_hidpi = true;
+        self.xwayland_hidpi_except = Vec::new();
         self.touchpad_view_apps = Vec::new();
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;

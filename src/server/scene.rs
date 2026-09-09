@@ -218,12 +218,16 @@ impl Scene {
                             if !window.is_null()
                                 && matches!((*window).impl_type, crate::window::WindowImpl::Xwayland(_)) =>
                         {
-                            let s = crate::xwayland_window::x11_scale((*window).server) as f64;
+                            let xsurface = match (*window).impl_type {
+                                crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*xw).xsurface as *const _,
+                                _ => std::ptr::null(),
+                            };
+                            let s = crate::xwayland_window::x11_scale_for((*window).server, xsurface) as f64;
                             let zoom = if (*window).scale > 0.0 { (*window).scale } else { 1.0 };
                             (s != 1.0).then_some(s / zoom)
                         }
                         SceneNodeDataVal::OverrideRedirect(or) if !or.is_null() => {
-                            let s = crate::xwayland_window::x11_scale((*or).server) as f64;
+                            let s = crate::xwayland_window::x11_scale_for((*or).server, (*or).xsurface) as f64;
                             (s != 1.0).then_some(s)
                         }
                         _ => None,

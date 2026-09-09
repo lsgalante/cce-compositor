@@ -934,10 +934,12 @@ impl Window {
     /// Dest-size factor for this window's surface buffers on top of the
     /// overview zoom: 1/output-scale for an X11 window under
     /// `xwayland_hidpi`, whose buffer is physical pixels (see
-    /// `xwayland_window::x11_scale`); 1 for everything else.
+    /// `xwayland_window::x11_scale_for`); 1 for everything else, including
+    /// an X11 window named in `xwayland_hidpi_except`.
     pub unsafe fn x11_buffer_scale(&self) -> f64 {
-        if matches!(self.impl_type, WindowImpl::Xwayland(_)) {
-            1.0 / crate::xwayland_window::x11_scale(self.server) as f64
+        if let WindowImpl::Xwayland(xwindow) = self.impl_type {
+            let xsurface = if xwindow.is_null() { std::ptr::null() } else { (*xwindow).xsurface as *const _ };
+            1.0 / crate::xwayland_window::x11_scale_for(self.server, xsurface) as f64
         } else {
             1.0
         }
@@ -1120,7 +1122,7 @@ impl Window {
                 }
                 WindowImpl::Xwayland(xwindow) => {
                     if !xwindow.is_null() && !(*xwindow).xsurface.is_null() {
-                        let s = crate::xwayland_window::x11_scale(self.server);
+                        let s = crate::xwayland_window::x11_scale_for(self.server, (*xwindow).xsurface);
                         (*(*xwindow).xsurface).width = crate::xwayland_window::to_x11(saved.width as i32, s) as u16;
                         (*(*xwindow).xsurface).height = crate::xwayland_window::to_x11(saved.height as i32, s) as u16;
                     }
@@ -2613,7 +2615,7 @@ impl Window {
             }
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
-                    let s = crate::xwayland_window::x11_scale(self.server);
+                    let s = crate::xwayland_window::x11_scale_for(self.server, (*xwindow).xsurface);
                     let mut w = crate::xwayland_window::from_x11((*(*xwindow).xsurface).width as i32, s) as u32;
                     let mut h = crate::xwayland_window::from_x11((*(*xwindow).xsurface).height as i32, s) as u32;
                     let has_parent = !(*(*xwindow).xsurface).parent.is_null();

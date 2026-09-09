@@ -100,7 +100,7 @@ impl XwaylandOverrideRedirect {
         if self.surface_tree.is_null() {
             return;
         }
-        let s = crate::xwayland_window::x11_scale(self.server);
+        let s = crate::xwayland_window::x11_scale_for(self.server, self.xsurface);
         ffi::wlr_scene_node_set_position(
             self.surface_tree as *mut ffi::wlr_scene_node,
             crate::xwayland_window::from_x11((*self.xsurface).x as i32, s),
@@ -115,7 +115,7 @@ impl XwaylandOverrideRedirect {
         if self.surface_tree.is_null() {
             return;
         }
-        let s = crate::xwayland_window::x11_scale(self.server) as f64;
+        let s = crate::xwayland_window::x11_scale_for(self.server, self.xsurface) as f64;
         if s == 1.0 {
             return;
         }

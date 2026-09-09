@@ -67,7 +67,10 @@ pub const WINE_MARGIN: i32 = 16;
 ///
 /// Off, X11 is the logical layout (Xwayland reads xdg-output) and the
 /// factor is 1. Multi-output with differing scales is not a case X11 can
-/// express — the first output's scale stands for the screen.
+/// express — the first output's scale stands for the screen. A single
+/// window can opt out through `xwayland_hidpi_except` — see `x11_scale_for`,
+/// which every per-window caller goes through; this screen-wide value is
+/// only for what has no window, like the Xft.dpi pushed at Xwayland-ready.
 ///
 /// The factor must survive the output going away. A lid-close suspend
 /// destroys the DRM output and re-creates it on resume, and X11 windows
@@ -141,6 +144,52 @@ pub fn in_output_change_grace() -> bool {
         .ok()
         .and_then(|deadline| *deadline)
         .is_some_and(|deadline| std::time::Instant::now() < deadline)
+}
+
+/// `x11_scale` for one X11 surface: 1 when the window is named in
+/// `window_manager { xwayland_hidpi_except }`, else the screen's factor.
+///
+/// The screen Xwayland shows is one thing for every client, so an exempt
+/// window still SEES a physical-pixel root; what changes is what the
+/// compositor does with it. Its configures go out in logical pixels and its
+/// buffer is drawn at 1 (`Window::x11_buffer_scale`), the pre-`xwayland_hidpi`
+/// arrangement — so a borderless-fullscreen game that asks for the whole
+/// root is answered with the logical size and renders that many pixels,
+/// not scale² as many. Matched by WM_CLASS class, WM_CLASS instance or
+/// title (`hidpi_exempt`), re-evaluated on every use so a title that
+/// arrives after the first configure still takes effect.
+pub unsafe fn x11_scale_for(
+    server: *mut crate::server::Server,
+    xsurface: *const ffi::wlr_xwayland_surface,
+) -> f32 {
+    if server.is_null() || !(*server).wm.xwayland_hidpi {
+        return 1.0;
+    }
+    if !xsurface.is_null() && !(*server).wm.xwayland_hidpi_except.is_empty() {
+        let text = |p: *const libc::c_char| -> String {
+            if p.is_null() { String::new() } else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() }
+        };
+        let class = text((*xsurface).class);
+        let instance = text((*xsurface).instance);
+        let title = text((*xsurface).title);
+        if hidpi_exempt(&(*server).wm.xwayland_hidpi_except, &class, &instance, &title) {
+            return 1.0;
+        }
+    }
+    x11_scale(server)
+}
+
+/// Whether any of `patterns` names this window: each is tried against the
+/// WM_CLASS class, the WM_CLASS instance and the title with the
+/// `app_id_matches` rules (case-insensitive, `*` wildcards). Empty fields
+/// never match.
+pub fn hidpi_exempt(patterns: &[String], class: &str, instance: &str, title: &str) -> bool {
+    use crate::window_manager::app_id_matches;
+    patterns.iter().any(|p| {
+        [class, instance, title]
+            .iter()
+            .any(|field| !field.is_empty() && app_id_matches(p, field))
+    })
 }
 
 pub fn to_x11(logical: i32, scale: f32) -> i32 {
@@ -220,7 +269,7 @@ impl XwaylandWindow {
         let window = self.window;
         let scheduled = &mut (*window).configure_scheduled;
         let sent = &mut (*window).configure_sent;
-        let s = x11_scale((*window).server);
+        let s = x11_scale_for((*window).server, self.xsurface);
 
         if scheduled.width == Some(0) {
             scheduled.width = Some(from_x11((*self.xsurface).width as i32, s) as u32);
@@ -457,7 +506,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     let is_wine = (*window).is_wine();
 
     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
-    let s = x11_scale((*window).server);
+    let s = x11_scale_for((*window).server, (*xwindow).xsurface);
     log::info!(
         "XWayland configure request: title='{}' class='{}' has_parent={} is_wine={} event=({}, {}, {}, {}) xsurface=({}, {}, {}, {})",
         title,
@@ -682,6 +731,33 @@ mod tests {
         // A new output with another scale takes over and is remembered.
         assert_eq!(resolve_x11_scale(Some(1.5), &last), 1.5);
         assert_eq!(resolve_x11_scale(None, &last), 1.5);
+    }
+
+    fn pats(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn exempt_matches_class_instance_or_title() {
+        // Proton: every window is class steam_proton, so the game is told
+        // apart by its instance (the exe) or its title.
+        let p = pats(&["Trackmania"]);
+        assert!(hidpi_exempt(&p, "steam_proton", "trackmania.exe", "Trackmania"));
+        assert!(hidpi_exempt(&p, "steam_proton", "", "Trackmania"));
+        assert!(hidpi_exempt(&p, "Trackmania", "", ""));
+        assert!(!hidpi_exempt(&p, "steam_proton", "upc.exe", "Ubisoft Connect"));
+        // Wildcards and case follow app_id_matches.
+        let p = pats(&["trackmania*"]);
+        assert!(hidpi_exempt(&p, "steam_proton", "Trackmania.exe", ""));
+        assert!(!hidpi_exempt(&p, "steam_proton", "", "My Trackmania"));
+    }
+
+    #[test]
+    fn exempt_ignores_empty_fields_and_lists() {
+        assert!(!hidpi_exempt(&[], "steam_proton", "trackmania.exe", "Trackmania"));
+        // An empty field must not match a pattern that is itself empty-ish.
+        assert!(!hidpi_exempt(&pats(&["*"]), "", "", ""));
+        assert!(hidpi_exempt(&pats(&["*"]), "x", "", ""));
     }
 
     #[test]

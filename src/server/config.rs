@@ -399,6 +399,15 @@ pub struct WindowManagerConfig {
     /// of being upscaled from logical size. Default on. KDL:
     /// `xwayland_hidpi (bool)false` to get the old blurry-but-1:1 behaviour.
     pub xwayland_hidpi: Option<bool>,
+    /// Per-app exception to `xwayland_hidpi`: windows matching one of these
+    /// patterns are configured and drawn in the logical world (factor 1)
+    /// while every other X11 window stays physical. Meant for games and other
+    /// X11 clients that size themselves to the whole screen and would render
+    /// scale² times the pixels for nothing. A pattern is tried against the
+    /// window's WM_CLASS class, its WM_CLASS instance and its title, since
+    /// every Proton window shares the class `steam_proton`; `*` wildcards as
+    /// in `rounded_apps`. KDL: `xwayland_hidpi_except "Trackmania"`.
+    pub xwayland_hidpi_except: Option<Vec<String>>,
     /// Apps whose windows turn trackpad input into a view drag (Space +
     /// button) — see `cursor::ViewDrag`. KDL: `touchpad_view_apps "Houdini FX"`.
     pub touchpad_view_apps: Option<Vec<String>>,
@@ -2280,11 +2289,12 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let rounded_apps = get_child_args_string_vec_opt(node, "rounded_apps");
         let bevel_apps = get_child_args_string_vec_opt(node, "bevel_apps");
         let xwayland_hidpi = get_child_arg_bool_opt(node, "xwayland_hidpi");
+        let xwayland_hidpi_except = get_child_args_string_vec_opt(node, "xwayland_hidpi_except");
         let touchpad_view_apps = get_child_args_string_vec_opt(node, "touchpad_view_apps");
         let touchpad_view_swipe = get_child_arg_string_opt(node, "touchpad_view_swipe");
         let touchpad_view_sensitivity = get_child_arg_f64_opt(node, "touchpad_view_sensitivity");
         let touchpad_view_invert = get_child_arg_bool_opt(node, "touchpad_view_invert");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, on_app_exit, corner_shape, rounded_apps, bevel_apps, xwayland_hidpi, touchpad_view_apps, touchpad_view_swipe, touchpad_view_sensitivity, touchpad_view_invert });
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, on_app_exit, corner_shape, rounded_apps, bevel_apps, xwayland_hidpi, xwayland_hidpi_except, touchpad_view_apps, touchpad_view_swipe, touchpad_view_sensitivity, touchpad_view_invert });
     }
 
     Ok(Config {
@@ -2345,6 +2355,11 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         .as_ref()
         .and_then(|wm| wm.xwayland_hidpi)
         .unwrap_or(true);
+    state.xwayland_hidpi_except = config
+        .window_manager
+        .as_ref()
+        .and_then(|wm| wm.xwayland_hidpi_except.clone())
+        .unwrap_or_default();
     {
         let tv = config.window_manager.as_ref();
         state.touchpad_view_apps = tv.and_then(|w| w.touchpad_view_apps.clone()).unwrap_or_default();
