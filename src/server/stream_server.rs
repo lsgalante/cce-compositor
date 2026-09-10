@@ -49,6 +49,9 @@ pub struct Sub {
 #[derive(Clone)]
 pub struct StreamHub {
     pub subs: Arc<Mutex<Vec<Sub>>>,
+    /// Bumped by the accept thread after pushing a subscriber; the window
+    /// manager has it as an event source and arms its frame tick from it.
+    pub wake: Arc<std::os::fd::OwnedFd>,
 }
 
 pub fn get_stream_socket_path(display_socket: Option<&str>) -> String {
@@ -60,7 +63,10 @@ pub fn get_stream_socket_path(display_socket: Option<&str>) -> String {
 
 /// Spawn the accept thread; returns the hub for the main loop's timer.
 pub fn spawn_stream_server(display_socket: Option<String>) -> StreamHub {
-    let hub = StreamHub { subs: Arc::new(Mutex::new(Vec::new())) };
+    let hub = StreamHub {
+        subs: Arc::new(Mutex::new(Vec::new())),
+        wake: crate::ipc_server::new_wake_fd().expect("failed to create stream wake eventfd"),
+    };
     let accept_hub = hub.clone();
     std::thread::Builder::new()
         .name("cce-stream-server".into())
@@ -112,6 +118,7 @@ fn accept_loop(hub: StreamHub, display_socket: Option<String>) {
         if let Ok(mut subs) = hub.subs.lock() {
             subs.push(Sub { query, tx, needs_frame: true, last_sent: Instant::now() });
         }
+        crate::ipc_server::wake_fd(&hub.wake);
     }
 }
 

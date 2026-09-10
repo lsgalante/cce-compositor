@@ -558,7 +558,13 @@ impl Window {
         if self.grid_declared {
             return crate::policy::api::WindowRole::Grid;
         }
-        crate::policy::api::WindowRole::from_app_id(self.get_app_id_string().as_deref())
+        // Borrowed, not `get_app_id_string()`: this runs several times per
+        // pointer-motion event (`is_status_bar`/`is_grid`/`is_wallpaper` in
+        // the cursor passthrough) and per window per transaction, and each
+        // call used to heap-allocate a String just to prefix-match it.
+        let ptr = self.get_app_id();
+        let app_id = if ptr.is_null() { None } else { std::ffi::CStr::from_ptr(ptr).to_str().ok() };
+        crate::policy::api::WindowRole::from_app_id(app_id)
     }
 
     pub unsafe fn is_grid(&self) -> bool {

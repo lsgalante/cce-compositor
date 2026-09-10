@@ -236,6 +236,10 @@ fn rasterize(text: &str, px: f32) -> Option<Label> {
 #[derive(Default)]
 pub struct LabelCache {
     entries: HashMap<(String, u32), Option<Label>>,
+    /// Grid square labels keyed by (col, row, px) so the per-frame overview
+    /// walk over every visible cell is a hash of three integers, with no
+    /// label String built or copied per cell per frame.
+    squares: HashMap<(i32, i32, u32), Option<Label>>,
 }
 
 impl LabelCache {
@@ -250,17 +254,26 @@ impl LabelCache {
             .as_ref()
     }
 
+    /// The grid square at (col, row) — `policy::cells::square_label` — at
+    /// `px`; the name is only formatted on a miss.
+    pub fn get_square(&mut self, col: i32, row: i32, px: f32) -> Option<&Label> {
+        self.squares
+            .entry((col, row, px.round() as u32))
+            .or_insert_with(|| rasterize(&crate::policy::cells::square_label(col, row), px))
+            .as_ref()
+    }
+
     /// Drop everything (font size changed, or the cache grew unreasonably).
     pub fn clear(&mut self) {
-        for (_, label) in self.entries.drain() {
-            if let Some(label) = label {
-                unsafe { ffi::wlr_buffer_drop(label.buffer) };
-            }
+        let named = self.entries.drain().map(|(_, l)| l);
+        let squares = self.squares.drain().map(|(_, l)| l);
+        for label in named.chain(squares).flatten() {
+            unsafe { ffi::wlr_buffer_drop(label.buffer) };
         }
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.len() + self.squares.len()
     }
 }
 

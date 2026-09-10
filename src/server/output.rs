@@ -186,6 +186,17 @@ pub struct Output {
     pub last_rendered_pan_x: f64,
     pub last_rendered_pan_y: f64,
     pub last_rendered_zoom: f64,
+    /// What the status-backdrop measurement last ran against: the window
+    /// manager's layout epoch, the camera, and when. It re-runs only when one
+    /// of those moved or `BACKDROP_REFRESH` has passed (for window content
+    /// under a segment), not on every vblank.
+    pub backdrop_epoch: u64,
+    pub backdrop_cam: (f64, f64, f64),
+    pub backdrop_measured_at: Option<std::time::Instant>,
+    /// A tearing page-flip test failed for the current tearing episode; do
+    /// not repeat the atomic TEST_ONLY commit every frame. Cleared when the
+    /// fullscreen client's tearing request goes away.
+    pub tearing_test_failed: bool,
     pub last_grid_viewport_w: i32,
     pub last_grid_viewport_h: i32,
     pub last_grid_zoom: f64,
@@ -511,6 +522,10 @@ impl Output {
             last_rendered_pan_x: f64::NAN,
             last_rendered_pan_y: f64::NAN,
             last_rendered_zoom: f64::NAN,
+            backdrop_epoch: u64::MAX,
+            backdrop_cam: (f64::NAN, f64::NAN, f64::NAN),
+            backdrop_measured_at: None,
+            tearing_test_failed: false,
             last_grid_viewport_w: 0,
             last_grid_viewport_h: 0,
             last_grid_zoom: 0.0,
@@ -582,8 +597,29 @@ impl Output {
         // defeating the per-(window, region) readback cache — a GPU texture
         // readback inside the render path, per pan frame. The settle's full
         // repaint frame runs the measurement with the final camera.
-        if !(*self.server).wm.viewport_is_active {
-            self.measure_status_backdrops();
+        //
+        // And not on every frame either: the desktop half of the reading is
+        // pure geometry, which only moves with a transaction (`layout_epoch`)
+        // or the camera; the window-content half is throttled inside
+        // `window_backdrop_sample` at `BACKDROP_REFRESH` anyway. Running the
+        // walk — Vecs, a String per segment, the O(segments × windows) scan,
+        // then `update_status` rebuilding and comparing the whole status
+        // snapshot — every vblank was the largest steady CPU cost of an idle
+        // desktop with anything animating on it.
+        {
+            let wm = &(*self.server).wm;
+            if !wm.viewport_is_active {
+                let cam = (wm.desk_pan_x, wm.desk_pan_y, wm.desk_zoom);
+                let due = self.backdrop_epoch != wm.layout_epoch
+                    || self.backdrop_cam != cam
+                    || self.backdrop_measured_at.map_or(true, |t| t.elapsed() >= BACKDROP_REFRESH);
+                if due {
+                    self.backdrop_epoch = wm.layout_epoch;
+                    self.backdrop_cam = cam;
+                    self.backdrop_measured_at = Some(std::time::Instant::now());
+                    self.measure_status_backdrops();
+                }
+            }
         }
 
         // A parked `ccectl screenshot` targeting this output forces a render
@@ -641,10 +677,14 @@ impl Output {
             }
         }
 
-        // Overview-delay debugging: while /tmp/cce-ovdbg exists (contents =
-        // comma-separated app_id substrings), dump the scene-side truth for
-        // matching windows every rendered frame. Toggle live with
-        // `echo firefox,cce-calendar > /tmp/cce-ovdbg`; `rm` to stop.
+        // Overview-delay debugging: with `CCE_OVDBG=1` in the compositor's
+        // environment, while /tmp/cce-ovdbg exists (contents = comma-separated
+        // app_id substrings), dump the scene-side truth for matching windows
+        // every rendered frame. Toggle live with
+        // `echo firefox,cce-calendar > /tmp/cce-ovdbg`; `rm` to stop. The env
+        // gate is what keeps a release build from doing an open()+read() of
+        // that path on every frame it ever renders.
+        if ovdbg_enabled() {
         if let Ok(filter) = std::fs::read_to_string("/tmp/cce-ovdbg") {
             let pats: Vec<&str> = filter.trim().split(',').filter(|p| !p.is_empty()).collect();
             for &window in wm.windows.iter() {
@@ -682,6 +722,7 @@ impl Output {
                 }
             }
         }
+        }
 
         let mut state = std::mem::zeroed();
         ffi::wlr_output_state_init(&mut state);
@@ -694,10 +735,17 @@ impl Output {
         }
 
         if self.rendering_current.tearing {
-            state.tearing_page_flip = true;
-            if !ffi::wlr_output_test_state(self.wlr_output, &state) {
-                state.tearing_page_flip = false;
+            // The test is an atomic TEST_ONLY commit; once it has said no for
+            // this episode, asking again every frame just taxes the game.
+            if !self.tearing_test_failed {
+                state.tearing_page_flip = true;
+                if !ffi::wlr_output_test_state(self.wlr_output, &state) {
+                    state.tearing_page_flip = false;
+                    self.tearing_test_failed = true;
+                }
             }
+        } else {
+            self.tearing_test_failed = false;
         }
 
         if !ffi::wlr_output_commit_state(self.wlr_output, &state) {
@@ -1557,11 +1605,7 @@ impl Output {
             let rel_x = (col as f64 * frame.period_px_exact_x).round() as i32;
             for row in 0..=cells.rows {
                 let rel_y = (row as f64 * frame.period_px_exact_y).round() as i32;
-                let text = crate::policy::cells::square_label(
-                    frame.first_col + col,
-                    frame.first_row + row,
-                );
-                let Some(label) = self.cell_labels.get(&text, px) else {
+                let Some(label) = self.cell_labels.get_square(frame.first_col + col, frame.first_row + row, px) else {
                     continue;
                 };
                 let (buf, lw, lh) = (label.buffer, label.width, label.height);
@@ -1689,6 +1733,19 @@ pub(crate) fn frame_debug() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FLAG.get_or_init(|| std::env::var_os("CCE_FRAME_DEBUG").is_some())
 }
+
+/// `CCE_OVDBG=1` arms the `/tmp/cce-ovdbg` per-frame scene dump (see
+/// `render_and_commit`); without it the file is never even looked for.
+fn ovdbg_enabled() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("CCE_OVDBG").is_some())
+}
+
+/// Ceiling on how long a status segment's backdrop reading may go unmeasured
+/// while frames are being rendered; matches the readback throttle in
+/// `window_backdrop_sample`. A still desktop renders no frames and measures
+/// nothing at all.
+const BACKDROP_REFRESH: std::time::Duration = std::time::Duration::from_millis(250);
 
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let output = &mut *crate::container_of!(listener, Output, frame);

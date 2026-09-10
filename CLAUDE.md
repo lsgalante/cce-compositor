@@ -520,6 +520,17 @@ grid has them.
   on every transaction: `save_state` reads `/proc` for every window, and a
   drag is one transaction per pointer event.
 
+  **Per-frame work is gated too.** `Output::render_and_commit` measures the
+  status backdrops only when the window manager's `layout_epoch` (bumped per
+  transaction) or the camera moved, or 250 ms passed — not every vblank.
+  The `/tmp/cce-ovdbg` scene dump needs `CCE_OVDBG=1` in the environment
+  before the file is even looked for. The window-stream tick runs only while
+  the stream hub has subscribers (the accept thread's eventfd arms it), and a
+  failed tearing test is not repeated every frame of the same fullscreen
+  episode. `Window::role()` and its `is_status_bar`/`is_grid`/`is_wallpaper`
+  wrappers borrow the app id rather than allocating; keep it that way, they
+  run several times per pointer-motion event.
+
   **`backdrop` is the one per-subscriber topic** — it names the asking segment,
   because the whole point is that the two ends of a bar sit over different things.
   Lines are `<luma> <spread>` (0-100 each) or `unknown`. It answers a question a

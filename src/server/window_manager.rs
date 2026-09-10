@@ -137,6 +137,13 @@ pub struct WindowManager {
     /// at most once per `SAVE_STATE_DELAY_MS`, not once per transaction.
     pub save_state_timer: *mut ffi::wl_event_source,
     pub save_state_pending: bool,
+    /// Bumped at the end of every transaction; outputs compare it to know
+    /// whether window geometry can have moved since they last measured the
+    /// status backdrops.
+    pub layout_epoch: u64,
+    /// The stream hub's wake eventfd as an event source: a new subscriber
+    /// arms `stream_timer`, which otherwise does not tick at all.
+    pub stream_source: *mut ffi::wl_event_source,
     /// Minute tick for the traveling light_source segment: re-arranges so
     /// its perimeter position follows the time of day.
     pub sun_timer: *mut ffi::wl_event_source,
@@ -516,6 +523,8 @@ impl WindowManager {
         self.ipc_wake = None;
         self.save_state_timer = std::ptr::null_mut();
         self.save_state_pending = false;
+        self.layout_epoch = 0;
+        self.stream_source = std::ptr::null_mut();
         self.sun_timer = std::ptr::null_mut();
         self.stream_hub = None;
         self.stream_timer = std::ptr::null_mut();
@@ -573,7 +582,8 @@ impl WindowManager {
             ffi::wl_event_source_remove(self.border_fade_timer);
             return Err("Failed to create stream timer event source");
         }
-        ffi::wl_event_source_timer_update(self.stream_timer, 200);
+        // Not armed here: `start_stream` arms it when a subscriber appears,
+        // and `handle_stream_timer` lets it lapse when the last one leaves.
 
         // Default until the config is parsed (which happens after this init).
         self.center_on_spawn = true;
@@ -1443,6 +1453,22 @@ impl WindowManager {
         }
     }
 
+    /// Own the window-stream hub and wake on its subscriber eventfd.
+    pub unsafe fn start_stream(&mut self, hub: crate::stream_server::StreamHub) {
+        let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+        self.stream_source = ffi::wl_event_loop_add_fd(
+            event_loop,
+            std::os::fd::AsRawFd::as_raw_fd(&*hub.wake),
+            ffi::WL_EVENT_READABLE as u32,
+            Some(handle_stream_wake),
+            self as *mut WindowManager as *mut _,
+        );
+        if self.stream_source.is_null() {
+            log::error!("failed to add the stream wake fd to the event loop; window streams will not run");
+        }
+        self.stream_hub = Some(hub);
+    }
+
     pub unsafe fn deinit(&mut self) {
         if !self.global.is_null() {
             ffi::wl_global_destroy(self.global);
@@ -1453,6 +1479,14 @@ impl WindowManager {
             self.ipc_source = std::ptr::null_mut();
         }
         self.ipc_wake = None;
+        if !self.stream_source.is_null() {
+            ffi::wl_event_source_remove(self.stream_source);
+            self.stream_source = std::ptr::null_mut();
+        }
+        if !self.stream_timer.is_null() {
+            ffi::wl_event_source_remove(self.stream_timer);
+            self.stream_timer = std::ptr::null_mut();
+        }
         if !self.save_state_timer.is_null() {
             ffi::wl_event_source_remove(self.save_state_timer);
             self.save_state_timer = std::ptr::null_mut();
@@ -2506,6 +2540,7 @@ impl WindowManager {
         if self.scheduled.dirty || self.scheduled.dirty_lazy || self.rendering_scheduled.dirty {
             self.add_dirty_idle();
         }
+        self.layout_epoch = self.layout_epoch.wrapping_add(1);
         self.schedule_save_state();
         if let Some(r) = rf0 {
             log::info!("[manage] render_finish total={}us", r.elapsed().as_micros());
@@ -3869,12 +3904,8 @@ impl WindowManager {
             if win_ptr.is_null() || (*win_ptr).closed {
                 continue;
             }
-            if let Some(app_id) = (*win_ptr).get_app_id_string() {
-                if app_id.starts_with("cce-status") {
-                    if matches!((*win_ptr).state, crate::window::WindowState::Mapped) {
-                        status_bar_windows.push(win_ptr);
-                    }
-                }
+            if (*win_ptr).is_status_bar() && matches!((*win_ptr).state, crate::window::WindowState::Mapped) {
+                status_bar_windows.push(win_ptr);
             }
         }
         for win_ptr in status_bar_windows {
@@ -5730,6 +5761,24 @@ unsafe extern "C" fn handle_ipc_event(fd: std::os::raw::c_int, _mask: u32, data:
 /// the writer threads — never blocking the compositor (a full channel means
 /// the client is slow and simply skips the frame). Fast cadence only while
 /// subscribers exist.
+/// A subscriber joined the stream hub: start (or keep) the frame tick.
+unsafe extern "C" fn handle_stream_wake(fd: std::os::raw::c_int, _mask: u32, data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = data as *mut WindowManager;
+    if wm.is_null() {
+        return 0;
+    }
+    crate::ipc_server::drain_wake_fd(fd);
+    if !(*wm).stream_timer.is_null() {
+        ffi::wl_event_source_timer_update((*wm).stream_timer, 1);
+    }
+    0
+}
+
+/// Runs at ~30 Hz while there are subscribers and not at all otherwise:
+/// the tick simply does not re-arm once the subscriber list is empty, and
+/// `handle_stream_wake` restarts it when the accept thread adds one. (It
+/// used to re-arm at 200-500 ms forever, a 2-5 Hz idle wakeup for a feature
+/// that is rarely in use.)
 unsafe extern "C" fn handle_stream_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let wm = &mut *(data as *mut WindowManager);
     let idle_rearm = |wm: &WindowManager, ms: i32| {
@@ -5738,15 +5787,15 @@ unsafe extern "C" fn handle_stream_timer(data: *mut std::ffi::c_void) -> std::os
         }
     };
     let Some(hub) = wm.stream_hub.clone() else {
-        idle_rearm(wm, 500);
         return 0;
     };
     let Ok(mut subs) = hub.subs.lock() else {
+        // A poisoned lock never heals; a retry is still cheaper than a
+        // permanently dead stream, and bounded to twice a second.
         idle_rearm(wm, 500);
         return 0;
     };
     if subs.is_empty() {
-        idle_rearm(wm, 200);
         return 0;
     }
 
