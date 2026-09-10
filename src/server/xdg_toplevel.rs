@@ -863,9 +863,16 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status || is_overlay || is_utility {
                 (*window).set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
                 if is_status {
-                    (*window).box_geom.width = new_geometry.width;
-                    (*window).box_geom.height = new_geometry.height;
-                    (*(*window).server).wm.dirty_windowing();
+                    // Only a size that actually moved re-arranges. A status
+                    // segment acks a configure and commits at its old size
+                    // for every content refresh; each of those used to run
+                    // a full manage/arrange/render transaction.
+                    let (w, h) = (new_geometry.width, new_geometry.height);
+                    if w != (*window).box_geom.width || h != (*window).box_geom.height {
+                        (*window).box_geom.width = w;
+                        (*window).box_geom.height = h;
+                        (*(*window).server).wm.dirty_windowing();
+                    }
                 }
             }
 

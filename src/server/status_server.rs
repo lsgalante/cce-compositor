@@ -8,8 +8,12 @@
 // owns the socket and handles all I/O independently of the Wayland event loop.
 
 use std::io::{BufRead, Write};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
+use std::sync::Arc;
+
+use crate::ipc_server::{drain_wake_fd, new_wake_fd, wake_fd};
 
 /// A status update sent from the main loop to the server thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,21 +94,39 @@ struct Client {
 }
 
 /// Handle to the status server for sending updates from the main loop.
+///
+/// Every send bumps `wake`, the eventfd the server thread `poll()`s on
+/// alongside its sockets. The thread used to spin on `try_recv` with a 20 ms
+/// sleep — 50 wakeups/s forever, subscribers or not; now it blocks until a
+/// socket or the main loop has something for it.
 #[derive(Debug, Clone)]
 pub struct StatusSender {
     tx: mpsc::Sender<StatusMsg>,
+    wake: Arc<OwnedFd>,
 }
 
 impl StatusSender {
     pub fn send(&self, update: StatusUpdate) {
         // If the channel is full or the receiver is gone, just drop it.
-        let _ = self.tx.send(StatusMsg::State(update));
+        if self.tx.send(StatusMsg::State(update)).is_ok() {
+            wake_fd(&self.wake);
+        }
     }
 
     /// Fire a one-shot menu-dismiss at every `dismiss` subscriber except the
     /// segment with this app_id (pass "-" to exempt nobody).
     pub fn send_menu_dismiss(&self, except_app_id: &str) {
-        let _ = self.tx.send(StatusMsg::MenuDismiss { except_app_id: except_app_id.to_string() });
+        if self.tx.send(StatusMsg::MenuDismiss { except_app_id: except_app_id.to_string() }).is_ok() {
+            wake_fd(&self.wake);
+        }
+    }
+}
+
+impl Drop for StatusSender {
+    /// Dropping the last handle disconnects the channel; the thread only
+    /// notices when it next wakes, so give it one.
+    fn drop(&mut self) {
+        wake_fd(&self.wake);
     }
 }
 
@@ -119,18 +141,45 @@ pub fn get_status_socket_path(display_socket: Option<&str>) -> String {
 /// Spawn the status server thread. Returns a StatusSender for the main loop.
 pub fn spawn_status_server(display_socket: Option<String>) -> StatusSender {
     let (tx, rx) = mpsc::channel::<StatusMsg>();
+    let wake = new_wake_fd().expect("failed to create status wake eventfd");
+    let thread_wake = wake.clone();
 
     std::thread::Builder::new()
         .name("cce-status-server".into())
         .spawn(move || {
-            status_server_main(rx, display_socket);
+            status_server_main(rx, thread_wake, display_socket);
         })
         .expect("failed to spawn status server thread");
 
-    StatusSender { tx }
+    StatusSender { tx, wake }
 }
 
-fn status_server_main(rx: mpsc::Receiver<StatusMsg>, display_socket: Option<String>) {
+/// Block until the wake eventfd, the listener, or any subscriber socket is
+/// readable. Returns `(wake, accept, per-client readiness)`; a client is
+/// "ready" on data, hangup or error alike, since all three are handled by
+/// reading it.
+fn wait_for_activity(wake: &OwnedFd, listener: &UnixListener, clients: &[Client]) -> Option<(bool, bool, Vec<bool>)> {
+    let mut fds: Vec<libc::pollfd> = Vec::with_capacity(2 + clients.len());
+    for fd in [wake.as_raw_fd(), listener.as_raw_fd()] {
+        fds.push(libc::pollfd { fd, events: libc::POLLIN, revents: 0 });
+    }
+    for client in clients {
+        fds.push(libc::pollfd { fd: client.stream.as_raw_fd(), events: libc::POLLIN, revents: 0 });
+    }
+    let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+    if n < 0 {
+        let err = std::io::Error::last_os_error();
+        if err.kind() == std::io::ErrorKind::Interrupted {
+            return Some((false, false, vec![false; clients.len()]));
+        }
+        log::error!("[status] poll failed: {}", err);
+        return None;
+    }
+    let ready = |f: &libc::pollfd| f.revents != 0;
+    Some((ready(&fds[0]), ready(&fds[1]), fds[2..].iter().map(ready).collect()))
+}
+
+fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display_socket: Option<String>) {
     let socket_path = get_status_socket_path(display_socket.as_deref());
     // Remove stale socket
     let _ = std::fs::remove_file(&socket_path);
@@ -155,19 +204,34 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, display_socket: Option<Stri
     let mut latest: Option<StatusUpdate> = None;
 
     loop {
-        let mut activity = false;
+        let Some((wake_ready, accept_ready, client_ready)) = wait_for_activity(&wake, &listener, &clients) else {
+            // poll() itself failing is not something a retry fixes fast;
+            // back off so the error line cannot flood the log.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            continue;
+        };
+        if wake_ready {
+            drain_wake_fd(wake.as_raw_fd());
+        }
+
         let mut has_new_update = false;
 
-        // Accept new connections (non-blocking)
+        // Accept new connections (the listener is non-blocking)
         for _ in 0..5 {
+            if !accept_ready {
+                break;
+            }
             match listener.accept() {
                 Ok((stream, _addr)) => {
+                    // Read the subscription line while the socket is still
+                    // blocking (bounded by a read timeout): poll() hands us
+                    // the connection the instant it lands, which can be
+                    // before the client's first line is in the buffer.
+                    let sub = read_subscription(&stream);
                     if let Err(e) = stream.set_nonblocking(true) {
                         log::error!("[status] failed to set non-blocking on client: {}", e);
                         continue;
                     }
-                    // Read the subscription line
-                    let sub = read_subscription(&stream);
                     if sub != Subscription::Unknown {
                         log::info!("[status] new subscriber for {:?}", sub);
                         let client = Client {
@@ -176,7 +240,6 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, display_socket: Option<Stri
                             last_line: None,
                         };
                         clients.push(client);
-                        activity = true;
                         has_new_update = true; // push the latest status to the new client
                     }
                 }
@@ -205,6 +268,10 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, display_socket: Option<Stri
             let mut buf = [0u8; 64];
             let mut dead_clients = Vec::new();
             for (i, client) in clients.iter_mut().enumerate() {
+                // Only sockets poll() flagged; the rest are quiet, not dead.
+                if !client_ready.get(i).copied().unwrap_or(false) {
+                    continue;
+                }
                 loop {
                     use std::io::Read;
                     match client.stream.read(&mut buf) {
@@ -237,12 +304,10 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, display_socket: Option<Stri
             match rx.try_recv() {
                 Ok(StatusMsg::State(update)) => {
                     latest = Some(update);
-                    activity = true;
                     has_new_update = true;
                 }
                 Ok(StatusMsg::MenuDismiss { except_app_id }) => {
                     dismiss_events.push(except_app_id);
-                    activity = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -333,20 +398,17 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, display_socket: Option<Stri
                 }
             }
         }
-
-        if !activity {
-            // Small sleep to avoid busy-looping when nothing is happening
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
     }
 }
 
 fn read_subscription(stream: &UnixStream) -> Subscription {
     let mut reader = std::io::BufReader::new(stream);
     let mut line = String::new();
-    // Try to read with a small timeout
+    // Bounded blocking read: a subscriber writes its one line right after
+    // connecting, so this returns at once in practice; the timeout is for a
+    // client that connects and says nothing.
     stream
-        .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+        .set_read_timeout(Some(std::time::Duration::from_millis(200)))
         .ok();
     match reader.read_line(&mut line) {
         Ok(_) => Subscription::from_str(&line),

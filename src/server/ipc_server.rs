@@ -1,12 +1,63 @@
 // Monolithic IPC Server socket listener for CCE
 use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 
 pub struct IpcRequest {
     pub command: String,
     pub reply_tx: mpsc::Sender<String>,
+}
+
+/// The server-thread end of the request channel. Every `send` is followed by
+/// a write to the wake eventfd, which the compositor has registered with its
+/// wl_event_loop — that is what gets a request dispatched. The drain used to
+/// be a 10 ms timer polling `try_recv` forever, ~100 wakeups/s on an idle
+/// desktop; now the main thread sleeps until a command actually arrives.
+#[derive(Clone)]
+struct IpcSender {
+    tx: mpsc::Sender<IpcRequest>,
+    wake: Arc<OwnedFd>,
+}
+
+impl IpcSender {
+    fn send(&self, req: IpcRequest) -> bool {
+        if self.tx.send(req).is_err() {
+            return false;
+        }
+        wake_fd(&self.wake);
+        true
+    }
+}
+
+/// Bump an eventfd. Errors are ignored on purpose: EAGAIN means the counter
+/// is already saturated (the reader is about to run anyway), and EBADF only
+/// happens at shutdown.
+pub fn wake_fd(fd: &OwnedFd) {
+    let one: u64 = 1;
+    unsafe {
+        libc::write(fd.as_raw_fd(), &one as *const u64 as *const libc::c_void, 8);
+    }
+}
+
+/// Clear an eventfd after its readable event fired.
+pub fn drain_wake_fd(fd: std::os::raw::c_int) {
+    let mut v: u64 = 0;
+    unsafe {
+        libc::read(fd, &mut v as *mut u64 as *mut libc::c_void, 8);
+    }
+}
+
+/// A non-blocking, close-on-exec eventfd for cross-thread wakeups into the
+/// wl_event_loop.
+pub fn new_wake_fd() -> std::io::Result<Arc<OwnedFd>> {
+    let raw = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+    if raw < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(Arc::new(unsafe { OwnedFd::from_raw_fd(raw) }))
 }
 
 fn get_ipc_socket_path(display_socket: Option<&str>) -> String {
@@ -17,20 +68,25 @@ fn get_ipc_socket_path(display_socket: Option<&str>) -> String {
     }
 }
 
-pub fn spawn_ipc_server(display_socket: Option<String>) -> mpsc::Receiver<IpcRequest> {
+/// Spawn the IPC listener thread. Returns the request receiver and the
+/// eventfd that is bumped after every request is queued; the caller adds the
+/// fd to its event loop and drains the receiver when it fires.
+pub fn spawn_ipc_server(display_socket: Option<String>) -> (mpsc::Receiver<IpcRequest>, Arc<OwnedFd>) {
     let (tx, rx) = mpsc::channel::<IpcRequest>();
-    
+    let wake = new_wake_fd().expect("Failed to create IPC wake eventfd");
+    let sender = IpcSender { tx, wake: wake.clone() };
+
     thread::Builder::new()
         .name("cce-ipc-server".to_string())
         .spawn(move || {
-            ipc_server_main(tx, display_socket);
+            ipc_server_main(sender, display_socket);
         })
         .expect("Failed to spawn CCE IPC server thread");
 
-    rx
+    (rx, wake)
 }
 
-fn ipc_server_main(tx: mpsc::Sender<IpcRequest>, display_socket: Option<String>) {
+fn ipc_server_main(tx: IpcSender, display_socket: Option<String>) {
     let socket_path = get_ipc_socket_path(display_socket.as_deref());
     let _ = std::fs::remove_file(&socket_path);
 
@@ -64,7 +120,7 @@ fn ipc_server_main(tx: mpsc::Sender<IpcRequest>, display_socket: Option<String>)
     }
 }
 
-fn handle_client(mut stream: UnixStream, tx: mpsc::Sender<IpcRequest>) {
+fn handle_client(mut stream: UnixStream, tx: IpcSender) {
     let mut buf = [0u8; 4096];
     match stream.read(&mut buf) {
         Ok(0) => {}
@@ -86,7 +142,7 @@ fn handle_client(mut stream: UnixStream, tx: mpsc::Sender<IpcRequest>) {
                     std::time::Duration::from_millis(1000)
                 };
                 let (reply_tx, reply_rx) = mpsc::channel();
-                if tx.send(IpcRequest { command: cmd, reply_tx }).is_ok() {
+                if tx.send(IpcRequest { command: cmd, reply_tx }) {
                     if let Ok(reply) = reply_rx.recv_timeout(timeout) {
                         let _ = stream.write_all(reply.as_bytes());
                     } else {

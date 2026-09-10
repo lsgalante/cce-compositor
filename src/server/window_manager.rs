@@ -128,7 +128,15 @@ pub struct WindowManager {
     pub pointer_binds: Vec<crate::config::PointerBind>,
     pub gesture_binds: Vec<crate::config::GestureBind>,
     pub ipc_rx: Option<std::sync::mpsc::Receiver<crate::ipc_server::IpcRequest>>,
-    pub ipc_timer: *mut ffi::wl_event_source,
+    /// The IPC thread's wake eventfd as a wl_event_loop fd source: fires once
+    /// per queued request, so the drain runs only when there is something to
+    /// drain (it was a 10 ms polling timer before).
+    pub ipc_source: *mut ffi::wl_event_source,
+    pub ipc_wake: Option<std::sync::Arc<std::os::fd::OwnedFd>>,
+    /// One-shot timer behind `schedule_save_state`: the state file is written
+    /// at most once per `SAVE_STATE_DELAY_MS`, not once per transaction.
+    pub save_state_timer: *mut ffi::wl_event_source,
+    pub save_state_pending: bool,
     /// Minute tick for the traveling light_source segment: re-arranges so
     /// its perimeter position follows the time of day.
     pub sun_timer: *mut ffi::wl_event_source,
@@ -141,9 +149,9 @@ pub struct WindowManager {
     pub pending_screenshot: Option<crate::screenshot::PendingScreenshot>,
     /// The reply channel of the IPC command currently being dispatched, so a
     /// command that cannot answer yet can carry it away and answer later
-    /// (only `screenshot` does). Set by `handle_ipc_timer` around the
+    /// (only `screenshot` does). Set by `handle_ipc_event` around the
     /// dispatch; if it is still here afterwards, the command answered
-    /// synchronously and the timer sends its return value.
+    /// synchronously and the drain sends its return value.
     pub pending_ipc_reply: Option<std::sync::mpsc::Sender<String>>,
     pub startup: Vec<crate::config::StartupConfig>,
     pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
@@ -307,6 +315,21 @@ fn dirty_backtrace_debug() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FLAG.get_or_init(|| std::env::var_os("CCE_DIRTY_BACKTRACE").is_some())
 }
+
+/// `CCE_DIRTY_TRACE=1` — one debug line per `dirty_windowing` /
+/// `dirty_rendering` call naming the call site (`#[track_caller]`, so it
+/// costs nothing when off). The cheap way to answer "what keeps the window
+/// manager running transactions on an idle desktop".
+fn dirty_trace() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("CCE_DIRTY_TRACE").is_some())
+}
+
+/// How long after a transaction the state file is written. One write per
+/// second is plenty for a file whose job is surviving a crash, and the
+/// per-window `/proc` reads in `save_state` are far too heavy to run on
+/// every transaction (a drag is one transaction per pointer event).
+const SAVE_STATE_DELAY_MS: i32 = 1000;
 
 /// `CCE_ARRANGE_DEBUG=1` — the arrange pass and its per-window dump. A status
 /// bar commit runs a full arrange every second, so at debug level this alone
@@ -489,7 +512,10 @@ impl WindowManager {
         self.pointer_binds = Vec::new();
         self.gesture_binds = Vec::new();
         self.ipc_rx = None;
-        self.ipc_timer = std::ptr::null_mut();
+        self.ipc_source = std::ptr::null_mut();
+        self.ipc_wake = None;
+        self.save_state_timer = std::ptr::null_mut();
+        self.save_state_pending = false;
         self.sun_timer = std::ptr::null_mut();
         self.stream_hub = None;
         self.stream_timer = std::ptr::null_mut();
@@ -516,17 +542,10 @@ impl WindowManager {
         }
 
         self.ipc_rx = None;
-        self.ipc_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_ipc_timer), self as *mut WindowManager as *mut _);
-        if self.ipc_timer.is_null() {
-            ffi::wl_event_source_remove(self.timeout);
-            return Err("Failed to create IPC timer event source");
-        }
-        ffi::wl_event_source_timer_update(self.ipc_timer, 10);
 
         self.sun_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_sun_timer), self as *mut WindowManager as *mut _);
         if self.sun_timer.is_null() {
             ffi::wl_event_source_remove(self.timeout);
-            ffi::wl_event_source_remove(self.ipc_timer);
             return Err("Failed to create sun timer event source");
         }
         ffi::wl_event_source_timer_update(self.sun_timer, 60_000);
@@ -534,7 +553,6 @@ impl WindowManager {
         self.clean_exit_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_clean_exit_timeout), self as *mut WindowManager as *mut _);
         if self.clean_exit_timer.is_null() {
             ffi::wl_event_source_remove(self.timeout);
-            ffi::wl_event_source_remove(self.ipc_timer);
             return Err("Failed to create clean exit timer event source");
         }
         self.clean_exit_in_progress = false;
@@ -543,7 +561,6 @@ impl WindowManager {
             ffi::wl_event_loop_add_timer(event_loop, Some(handle_border_fade_tick), self as *mut WindowManager as *mut _);
         if self.border_fade_timer.is_null() {
             ffi::wl_event_source_remove(self.timeout);
-            ffi::wl_event_source_remove(self.ipc_timer);
             ffi::wl_event_source_remove(self.clean_exit_timer);
             return Err("Failed to create border fade timer event source");
         }
@@ -552,7 +569,6 @@ impl WindowManager {
         self.stream_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_stream_timer), self as *mut WindowManager as *mut _);
         if self.stream_timer.is_null() {
             ffi::wl_event_source_remove(self.timeout);
-            ffi::wl_event_source_remove(self.ipc_timer);
             ffi::wl_event_source_remove(self.clean_exit_timer);
             ffi::wl_event_source_remove(self.border_fade_timer);
             return Err("Failed to create stream timer event source");
@@ -812,6 +828,11 @@ impl WindowManager {
     pub unsafe fn save_state(&mut self) {
         if self.shutting_down {
             return;
+        }
+        // A direct save supersedes a scheduled one.
+        self.save_state_pending = false;
+        if !self.save_state_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.save_state_timer, 0);
         }
         let Some(path_str) = crate::config::default_state_path() else {
             log::error!("Could not resolve state file path");
@@ -1403,10 +1424,22 @@ impl WindowManager {
         }
     }
 
-    pub fn start_ipc(&mut self, display_socket: Option<String>) {
+    pub unsafe fn start_ipc(&mut self, display_socket: Option<String>) {
         if self.ipc_rx.is_none() {
-            let rx = crate::ipc_server::spawn_ipc_server(display_socket);
+            let (rx, wake) = crate::ipc_server::spawn_ipc_server(display_socket);
+            let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+            self.ipc_source = ffi::wl_event_loop_add_fd(
+                event_loop,
+                std::os::fd::AsRawFd::as_raw_fd(&*wake),
+                ffi::WL_EVENT_READABLE as u32,
+                Some(handle_ipc_event),
+                self as *mut WindowManager as *mut _,
+            );
+            if self.ipc_source.is_null() {
+                log::error!("failed to add the IPC wake fd to the event loop; ccectl will not work");
+            }
             self.ipc_rx = Some(rx);
+            self.ipc_wake = Some(wake);
         }
     }
 
@@ -1414,6 +1447,15 @@ impl WindowManager {
         if !self.global.is_null() {
             ffi::wl_global_destroy(self.global);
             self.global = std::ptr::null_mut();
+        }
+        if !self.ipc_source.is_null() {
+            ffi::wl_event_source_remove(self.ipc_source);
+            self.ipc_source = std::ptr::null_mut();
+        }
+        self.ipc_wake = None;
+        if !self.save_state_timer.is_null() {
+            ffi::wl_event_source_remove(self.save_state_timer);
+            self.save_state_timer = std::ptr::null_mut();
         }
         if !self.timeout.is_null() {
             ffi::wl_event_source_remove(self.timeout);
@@ -1937,6 +1979,7 @@ impl WindowManager {
         ffi::wl_event_source_timer_update(self.border_fade_timer, 16);
     }
 
+    #[track_caller]
     pub unsafe fn dirty_windowing(&mut self) {
         // Capturing and symbolizing a backtrace costs far more than the event it
         // annotates, and this fires on routine commits — the session runs at
@@ -1945,6 +1988,9 @@ impl WindowManager {
         if dirty_backtrace_debug() {
             let bt = std::backtrace::Backtrace::force_capture();
             log::debug!("dirty_windowing called from backtrace:\n{}", bt);
+        }
+        if dirty_trace() {
+            log::debug!("dirty_windowing from {}", std::panic::Location::caller());
         }
         self.scheduled.dirty = true;
         self.add_dirty_idle();
@@ -1961,7 +2007,11 @@ impl WindowManager {
         self.remove_dirty_idle();
     }
  
+    #[track_caller]
     pub unsafe fn dirty_rendering(&mut self) {
+        if dirty_trace() {
+            log::debug!("dirty_rendering from {}", std::panic::Location::caller());
+        }
         self.rendering_scheduled.dirty = true;
         self.add_dirty_idle();
     }
@@ -2456,15 +2506,35 @@ impl WindowManager {
         if self.scheduled.dirty || self.scheduled.dirty_lazy || self.rendering_scheduled.dirty {
             self.add_dirty_idle();
         }
-        let sv0 = if manage_debug() { Some(std::time::Instant::now()) } else { None };
-        self.save_state();
-        if let (Some(r), Some(s)) = (rf0, sv0) {
-            log::info!(
-                "[manage] render_finish total={}us save_state={}us",
-                r.elapsed().as_micros(),
-                s.elapsed().as_micros()
-            );
+        self.schedule_save_state();
+        if let Some(r) = rf0 {
+            log::info!("[manage] render_finish total={}us", r.elapsed().as_micros());
         }
+    }
+
+    /// Write the state file soon, once, no matter how many transactions land
+    /// in the meantime. The first call after a save arms the timer; later
+    /// calls before it fires are absorbed, so a burst of transactions costs
+    /// one save at most `SAVE_STATE_DELAY_MS` behind the last change.
+    pub unsafe fn schedule_save_state(&mut self) {
+        if self.shutting_down || self.save_state_pending {
+            return;
+        }
+        if self.save_state_timer.is_null() {
+            let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+            self.save_state_timer = ffi::wl_event_loop_add_timer(
+                event_loop,
+                Some(handle_save_state_timer),
+                self as *mut WindowManager as *mut _,
+            );
+            if self.save_state_timer.is_null() {
+                log::error!("failed to create the save-state timer; saving synchronously");
+                self.save_state();
+                return;
+            }
+        }
+        self.save_state_pending = true;
+        ffi::wl_event_source_timer_update(self.save_state_timer, SAVE_STATE_DELAY_MS);
     }
 }
 
@@ -4776,7 +4846,7 @@ impl WindowManager {
                         // claimed success for captures that then failed (an
                         // unsupported readback format, a failed commit) and
                         // named a file that never appeared. Taking the
-                        // channel is what tells `handle_ipc_timer` not to
+                        // channel is what tells `handle_ipc_event` not to
                         // answer, so the returned string goes nowhere.
                         self.pending_screenshot = Some(crate::screenshot::PendingScreenshot::new(
                             target_out,
@@ -5618,12 +5688,24 @@ unsafe extern "C" fn handle_sun_timer(data: *mut std::ffi::c_void) -> std::os::r
     0
 }
 
-unsafe extern "C" fn handle_ipc_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+unsafe extern "C" fn handle_save_state_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let wm = data as *mut WindowManager;
     if wm.is_null() {
         return 0;
     }
-    
+    (*wm).save_state_pending = false;
+    (*wm).save_state();
+    0
+}
+
+/// The IPC wake fd fired: clear it and dispatch every queued request.
+unsafe extern "C" fn handle_ipc_event(fd: std::os::raw::c_int, _mask: u32, data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = data as *mut WindowManager;
+    if wm.is_null() {
+        return 0;
+    }
+    crate::ipc_server::drain_wake_fd(fd);
+
     if let Some(ref rx) = (*wm).ipc_rx {
         while let Ok(req) = rx.try_recv() {
             // Lend the reply channel to the dispatch: a command whose real
@@ -5637,10 +5719,6 @@ unsafe extern "C" fn handle_ipc_timer(data: *mut std::ffi::c_void) -> std::os::r
                 let _ = tx.send(reply);
             }
         }
-    }
-    
-    if !(*wm).ipc_timer.is_null() {
-        ffi::wl_event_source_timer_update((*wm).ipc_timer, 10);
     }
 
     0

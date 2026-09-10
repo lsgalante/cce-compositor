@@ -310,8 +310,13 @@ treats them as opaque.
   WM state, the camera fields, window lists, the IPC command dispatcher
   `process_ipc_command()`, the `Policy::action` snapshot builder
   (`build_action_ctx`) and the `Compositor` command applier. IPC requests arrive on
-  an mpsc channel drained by a wlroots event-loop timer (`handle_ipc_timer`) so all
-  mutation happens on the main thread. Decision logic (camera math, action
+  an mpsc channel; the IPC thread bumps an eventfd after each send, and that fd is a
+  `wl_event_loop_add_fd` source (`handle_ipc_event`) which drains the channel, so all
+  mutation happens on the main thread and the loop sleeps until a command exists.
+  (It was a 10 ms polling timer until 2026-09-10 — 100 wakeups/s at total idle. The
+  status server thread had the same shape, a `try_recv` loop with a 20 ms sleep; it
+  now `poll()`s its sockets plus a wake eventfd. Nothing in the compositor should
+  tick while idle: a timer that re-arms itself unconditionally is a bug.) Decision logic (camera math, action
   dispatch, snapping, refocus, grid geometry) lives in `cce-window-manager`.
 - **`window.rs`** (~4.9k lines) — per-window model and rendering (borders, blur,
   viewport transforms).
@@ -497,6 +502,23 @@ grid has them.
   `modifiers`, `dismiss`, or `backdrop <app_id>`) and receives text lines on every
   change. This feeds the status bar (`cce-status-interface`). The main loop pushes
   updates through a `StatusSender` mpsc handle.
+
+  **What may start a transaction.** `dirty_windowing()` schedules a full
+  manage/arrange/render pass, and on an idle desktop the answer to "why is the
+  window manager busy" is always some call site that dirties on a routine
+  commit. Two were found on 2026-09-10 and gated: a status segment's *every*
+  commit (`handle_window_commit`, now only when the surface size changed — the
+  clock ticking once a second used to cost an arrange each time) and a title
+  change (`notify_title`, now only when a mode rule matches on `title=`; the
+  built-in policy is the only manager, `wm.object` is never bound, so nothing
+  else in the manage sequence reads a title — the status bar's `title` topic
+  and the state file are fed directly instead). `CCE_DIRTY_TRACE=1` logs one
+  debug line per dirty call with its `#[track_caller]` site; it is the tool
+  for this question, and costs nothing when unset. `CCE_DIRTY_BACKTRACE=1`
+  adds a full backtrace per call (expensive). The state file is written by a
+  one-shot timer (`schedule_save_state`, at most once a second) rather than
+  on every transaction: `save_state` reads `/proc` for every window, and a
+  drag is one transaction per pointer event.
 
   **`backdrop` is the one per-subscriber topic** — it names the asking segment,
   because the whole point is that the two ends of a bar sit over different things.

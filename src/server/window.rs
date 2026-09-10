@@ -482,6 +482,10 @@ pub struct Window {
     /// timer after a capture: the damage gate for `stream_server` frames.
     /// Starts true so a fresh subscriber gets an immediate first frame.
     pub stream_dirty: bool,
+    /// Surface size at the last commit of a status segment, so
+    /// `handle_window_commit` re-arranges only when the segment actually
+    /// changed size rather than on every content refresh.
+    pub status_commit_size: (i32, i32),
     pub commit: ffi::wl_listener,
     pub was_fullscreen: bool,
     pub saved_width: i32,
@@ -753,6 +757,7 @@ impl Window {
             self_resized: false,
             status_collapsed_len: 0,
             stream_dirty: true,
+            status_commit_size: (0, 0),
             commit: std::mem::zeroed(),
             was_fullscreen: false,
             saved_width: 0,
@@ -2714,7 +2719,21 @@ impl Window {
     pub unsafe fn notify_title(&mut self) {
         self.wm_scheduled.dirty_title = true;
         self.try_restore();
-        (*self.server).wm.dirty_windowing();
+        // A title is arrangement input only through a mode rule that matches
+        // on it (`title=` in a rule); the built-in policy is what runs — no
+        // external manager is ever bound to `wm.object` (see the bind
+        // handler) — so nothing else in the manage sequence reads it. A
+        // terminal running a busy program retitles several times a second,
+        // and each retitle used to cost a full manage/arrange/render pass.
+        // Without a title rule the title's other consumers are the status
+        // bar's `title` topic and the saved-state file, so feed those directly.
+        let wm = &mut (*self.server).wm;
+        if wm.mode_rules.iter().any(|r| r.title_pattern.is_some()) {
+            wm.dirty_windowing();
+        } else {
+            wm.update_status();
+            wm.schedule_save_state();
+        }
 
         if !self.foreign_toplevel_handle.is_null() {
             let title = self.get_title();
@@ -5324,7 +5343,25 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
     if (*window).x11_buffer_scale() != 1.0 {
         (*window).scale_only_render_finish();
     }
+    // A status segment that changed size needs the bar re-arranged around
+    // it. One that merely repainted (the clock, once a second; the cpu
+    // meter) does not — and this used to dirty on every commit, which made
+    // the status bar alone run a full manage/arrange/render transaction for
+    // each of its ticks, all day. Compare the committed surface size against
+    // the last commit's; the xdg commit handler tracks box_geom the same way.
     if was_status {
-        (*(*window).server).wm.dirty_windowing();
+        let surface = (*window).root_surface();
+        if !surface.is_null() {
+            let size = (
+                ffi::river_wlr_surface_get_width(surface),
+                ffi::river_wlr_surface_get_height(surface),
+            );
+            if size != (*window).status_commit_size {
+                (*window).status_commit_size = size;
+                (*(*window).server).wm.dirty_windowing();
+            }
+        } else {
+            (*(*window).server).wm.dirty_windowing();
+        }
     }
 }
