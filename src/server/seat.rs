@@ -698,13 +698,21 @@ impl Seat {
         if !kbd.is_null() {
             let group_ptr = ffi::river_wlr_keyboard_get_data(kbd) as *mut crate::keyboard_group::KeyboardGroup;
             if !group_ptr.is_null() {
+                // Raw evdev keycodes, NOT xkb ones: `wl_keyboard.enter`'s key
+                // array is the same space as `wl_keyboard.key`, and the client
+                // is the one that adds 8 to reach an xkb keycode. Adding it
+                // here shifted every held key up by 8 on the way out — and an
+                // X11 popup that opens under a held key is exactly when this
+                // array is sent, so opening Houdini's TAB menu (evdev 15)
+                // handed Xwayland keycode 31 and typed an `i` into it, with no
+                // release to follow, so X autorepeated it.
                 let mut buffer = [0u32; 32];
                 let mut count = 0;
                 for &keycode in (*group_ptr).pressed.keys() {
                     if count >= 32 {
                         break;
                     }
-                    buffer[count] = keycode + 8;
+                    buffer[count] = keycode;
                     count += 1;
                 }
                 let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
