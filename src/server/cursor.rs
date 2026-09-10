@@ -1132,7 +1132,7 @@ unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut s
     // Real pointer motion ends an emulated view drag: the client must not
     // see the synthetic drag position and the true one interleaved.
     if cursor.view_drag.is_some() {
-        cursor.end_view_drag();
+        cursor.end_view_drag("motion");
     }
     
     let mut dx = (*event).delta_x;
@@ -1229,7 +1229,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
     let cursor = &mut *crate::container_of!(listener, Cursor, button_listener);
     let event = data as *mut ffi::wlr_pointer_button_event;
     if cursor.view_drag.is_some() {
-        cursor.end_view_drag();
+        cursor.end_view_drag("button");
     }
     
     let seat = &mut *cursor.seat;
@@ -2368,8 +2368,16 @@ const KEY_SPACE: u32 = 57;
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 const BTN_MIDDLE: u32 = 0x112;
-/// Finger silence that ends a swipe drag when no zero-delta event came.
-const VIEW_DRAG_IDLE_MS: i32 = 180;
+/// Safety net that ends a swipe drag when the lift event never came.
+/// Only that: libinput posts nothing at all while the fingers rest on the
+/// pad mid-gesture — a captured Houdini swipe paused 3.3 s between two
+/// halves of one scroll, the zero-delta lift arriving only at the true end
+/// — so a short timeout tears the drag down inside the gesture, and the
+/// Space release/re-press a resume then costs can drop Houdini out of view
+/// mode for the rest of the swipe (the ordering hazard `button_down`
+/// documents, now mid-swipe). The lift ends a drag; so, at once, do real
+/// pointer motion, a button and a key press.
+const VIEW_DRAG_IDLE_MS: i32 = 5000;
 /// Drag distance (layout px) per e-fold of pinch scale. Measured against
 /// Houdini 22 (depth of the world origin in view space, which is what a
 /// dolly changes — Houdini dollies toward the point under the pointer, so
@@ -2453,9 +2461,12 @@ impl Cursor {
         self.arm_view_drag_timer();
     }
 
-    pub unsafe fn end_view_drag(&mut self) {
+    /// `reason` names what ended it — "lift", "idle", "motion", "button",
+    /// "key", "ctrl" or "pinch" — so a stall reported later is diagnosable
+    /// from the session log alone.
+    pub unsafe fn end_view_drag(&mut self, reason: &str) {
         let Some(d) = self.view_drag.take() else { return };
-        log::info!("[ViewDrag] end button={:#x} from_pinch={} at surface ({:.0}, {:.0})", d.button, d.from_pinch, d.sx, d.sy);
+        log::info!("[ViewDrag] end reason={} button={:#x} from_pinch={} at surface ({:.0}, {:.0})", reason, d.button, d.from_pinch, d.sx, d.sy);
         if !self.view_drag_timer.is_null() {
             ffi::wl_event_source_timer_update(self.view_drag_timer, 0);
         }
@@ -2488,7 +2499,7 @@ impl Cursor {
         if delta == 0.0 {
             // The fingers lifted.
             if self.view_drag.is_some() {
-                self.end_view_drag();
+                self.end_view_drag("lift");
                 return true;
             }
             return false;
@@ -2496,7 +2507,7 @@ impl Cursor {
         if modifiers & CTRL != 0 {
             // Houdini's own wheel modifier: a plain scroll.
             if self.view_drag.is_some() {
-                self.end_view_drag();
+                self.end_view_drag("ctrl");
             }
             return false;
         }
@@ -2523,7 +2534,7 @@ impl Cursor {
 
     pub unsafe fn view_drag_pinch_begin(&mut self) -> bool {
         if self.view_drag.is_some() {
-            self.end_view_drag();
+            self.end_view_drag("pinch");
         }
         self.begin_view_drag(BTN_RIGHT, true)
     }
@@ -2544,7 +2555,7 @@ impl Cursor {
 
     pub unsafe fn view_drag_pinch_end(&mut self) -> bool {
         if matches!(&self.view_drag, Some(d) if d.from_pinch) {
-            self.end_view_drag();
+            self.end_view_drag("lift");
             return true;
         }
         false
@@ -2553,7 +2564,7 @@ impl Cursor {
 
 unsafe extern "C" fn handle_view_drag_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let cursor = &mut *(data as *mut Cursor);
-    cursor.end_view_drag();
+    cursor.end_view_drag("idle");
     0
 }
 

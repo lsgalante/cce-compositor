@@ -337,6 +337,18 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         return;
     }
 
+    // A real key press ends an emulated view drag (see `cursor::ViewDrag`):
+    // the drag holds Space and a pointer button down on the client's behalf,
+    // and a key pressed on top of that reaches the app as a chord nobody
+    // asked for. The drag's own synthetic Space goes straight to the seat and
+    // never passes through here.
+    if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
+        && !group.seat.is_null()
+        && (*group.seat).cursor.view_drag.is_some()
+    {
+        (*group.seat).cursor.end_view_drag("key");
+    }
+
     // Cancel active binding repeats
     let seat_groups_head = &mut (*group.seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
     let mut curr_g = (*seat_groups_head).next;
