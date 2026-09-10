@@ -16,7 +16,13 @@ export XDG_CURRENT_DESKTOP=cce
 export XDG_SESSION_TYPE=wayland
 export PATH="$HOME/.local/bin:$PATH"
 export XCURSOR_THEME="cce"
-export XCURSOR_SIZE=24
+# No XCURSOR_SIZE. Wayland toolkits already default to 24 logical pixels (sctk,
+# GTK and Chromium all do), and the two worlds want DIFFERENT numbers: under
+# `xwayland_hidpi` X11 is a physical-pixel world, so an X11 cursor has to be
+# 24*scale, which the compositor publishes as the `Xcursor.size` X resource
+# when Xwayland comes up (server.rs). XCURSOR_SIZE beats that resource in both
+# libXcursor and libxcb-cursor, so exporting it here made every X11 app ask for
+# a 24-pixel cursor and get one drawn at half size.
 export XCURSOR_PATH="${XDG_DATA_HOME:-$HOME/.local/share}/icons:$HOME/.icons:/usr/share/icons"
 export WLR_NO_HARDWARE_CURSORS=1
 export WLR_DRM_DEVICES=/dev/dri/card1

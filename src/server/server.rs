@@ -551,28 +551,40 @@ unsafe extern "C" fn handle_xwayland_ready(listener: *mut ffi::wl_listener, _dat
         // with it: Qt 6 (Houdini) and Xft-based toolkits read Xft.dpi and scale
         // themselves to match. GTK on X11 wants GDK_SCALE in its own environment
         // on top of this; that is the app launcher's to provide.
+        //
+        // `Xcursor.size` goes with them, and is where X11 clients get their
+        // cursor size from — the session deliberately exports no XCURSOR_SIZE,
+        // which would beat this resource (see `scripts/startcce`). It is the
+        // physical size for the same reason: an X11 cursor bitmap is drawn at
+        // 1/scale like the rest of the client's drawing (`seat.rs`,
+        // `handle_request_set_cursor`), so 24 logical pixels is 24*scale of
+        // them. Sent even at scale 1, because otherwise libXcursor guesses
+        // from the screen height and lands somewhere else entirely.
         let s = crate::xwayland_window::x11_scale(server);
+        let dpi = (96.0 * s).round() as i32;
+        let cursor = (24.0 * s).round() as i32;
+        let mut resources = format!("Xcursor.size: {}\n", cursor);
         if s != 1.0 {
-            let dpi = (96.0 * s).round() as i32;
-            let cursor = (24.0 * s).round() as i32;
-            match std::process::Command::new("xrdb")
-                .args(["-merge", "-"])
-                .env("DISPLAY", &display_name)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                Ok(mut child) => {
-                    use std::io::Write;
-                    if let Some(mut stdin) = child.stdin.take() {
-                        let _ = write!(stdin, "Xft.dpi: {}\nXcursor.size: {}\n", dpi, cursor);
-                    }
-                    std::thread::spawn(move || { let _ = child.wait(); });
-                    log::info!("Xwayland HiDPI: X11 scale {} — set Xft.dpi {} via xrdb", s, dpi);
+            resources.push_str(&format!("Xft.dpi: {}\n", dpi));
+        }
+        match std::process::Command::new("xrdb")
+            .args(["-merge", "-"])
+            .env("DISPLAY", &display_name)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                use std::io::Write;
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = write!(stdin, "{}", resources);
                 }
-                Err(e) => log::warn!("Xwayland HiDPI: could not run xrdb to set Xft.dpi: {}", e),
+                std::thread::spawn(move || { let _ = child.wait(); });
+                log::info!("Xwayland: X11 scale {} — set Xcursor.size {}{} via xrdb", s, cursor,
+                    if s != 1.0 { format!(", Xft.dpi {}", dpi) } else { String::new() });
             }
+            Err(e) => log::warn!("Xwayland: could not run xrdb to set X resources: {}", e),
         }
     }
 }

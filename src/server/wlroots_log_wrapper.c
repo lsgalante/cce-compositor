@@ -3,6 +3,7 @@
 
 #define _POSIX_C_SOURCE 199309L
 #include <assert.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -213,6 +214,29 @@ void river_wlr_surface_set_data(struct wlr_surface *surface, void *data) {
 
 struct wl_signal *river_wlr_surface_get_commit_signal(struct wlr_surface *surface) {
 	return &surface->events.commit;
+}
+
+struct wl_signal *river_wlr_surface_get_destroy_signal(struct wlr_surface *surface) {
+	return &surface->events.destroy;
+}
+
+// Show a surface at 1/scale of the size it committed itself at.
+//
+// For the cursor surface of an X11 client. Xwayland always commits its cursor
+// at buffer scale 1, and wlr_cursor sizes the pointer from `current.width` --
+// the surface's LOGICAL size -- so an N-pixel X cursor comes out N logical
+// pixels, twice as big as everything else on a scale-2 panel. Under
+// `xwayland_hidpi` X11 is a physical-pixel world and an X11 window's own
+// buffer is already drawn at 1/scale (Window::x11_buffer_scale); this puts its
+// cursor in the same world. Derived from the buffer, so applying it twice to
+// one committed state is a no-op.
+void river_wlr_surface_scale_logical_size(struct wlr_surface *surface, float scale) {
+	if (surface == NULL || scale <= 0.0f || scale == 1.0f) {
+		return;
+	}
+	float total = (float)surface->current.scale * scale;
+	surface->current.width = (int)roundf((float)surface->current.buffer_width / total);
+	surface->current.height = (int)roundf((float)surface->current.buffer_height / total);
 }
 
 enum wlr_input_device_type river_wlr_input_device_get_type(struct wlr_input_device *dev) {

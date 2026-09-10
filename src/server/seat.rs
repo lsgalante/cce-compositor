@@ -114,6 +114,13 @@ pub struct Seat {
     pub wm_sent_y: i32,
 
     pub request_set_cursor: ffi::wl_listener,
+    /// The Xwayland cursor surface currently being shown at 1/`x11_cursor_scale`,
+    /// null when the pointer image is anyone else's. See
+    /// `handle_x11_cursor_commit` for why an X11 cursor needs shrinking at all.
+    pub x11_cursor_surface: *mut ffi::wlr_surface,
+    pub x11_cursor_scale: f32,
+    pub x11_cursor_commit: ffi::wl_listener,
+    pub x11_cursor_destroy: ffi::wl_listener,
     pub request_set_selection: ffi::wl_listener,
     pub request_start_drag: ffi::wl_listener,
     pub start_drag: ffi::wl_listener,
@@ -157,6 +164,10 @@ impl Seat {
             wm_sent_x: 0,
             wm_sent_y: 0,
             request_set_cursor: std::mem::zeroed(),
+            x11_cursor_surface: std::ptr::null_mut(),
+            x11_cursor_scale: 1.0,
+            x11_cursor_commit: std::mem::zeroed(),
+            x11_cursor_destroy: std::mem::zeroed(),
             request_set_selection: std::mem::zeroed(),
             request_start_drag: std::mem::zeroed(),
             start_drag: std::mem::zeroed(),
@@ -268,6 +279,7 @@ impl Seat {
         crate::server::wl_list_remove(&mut (*seat).link as *mut ffi::wl_list as *mut crate::server::WlList);
         crate::server::wl_list_remove(&mut (*seat).link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
 
+        (*seat).unwatch_x11_cursor();
         wl_listener_remove(&mut (*seat).request_set_cursor);
         wl_listener_remove(&mut (*seat).request_set_selection);
         wl_listener_remove(&mut (*seat).request_start_drag);
@@ -280,6 +292,56 @@ impl Seat {
 
         ffi::wlr_seat_destroy((*seat).wlr_seat);
         let _boxed = Box::from_raw(seat);
+    }
+
+    /// Start (or stop) shrinking an X11 client's cursor surface to 1/`scale`.
+    ///
+    /// `scale` of 1 — a Wayland client's cursor, or an X11 window exempted
+    /// from `xwayland_hidpi` — just drops any surface being watched. The
+    /// commit listener is added BEFORE the caller hands the surface to
+    /// `wlr_cursor_set_surface`, so it sits ahead of wlroots' own commit
+    /// listener in the signal and the size is already right when wlroots
+    /// reads it.
+    unsafe fn watch_x11_cursor(&mut self, surface: *mut ffi::wlr_surface, scale: f32) {
+        if scale == 1.0 || surface.is_null() {
+            self.unwatch_x11_cursor();
+            return;
+        }
+        if self.x11_cursor_surface == surface {
+            self.x11_cursor_scale = scale;
+            return;
+        }
+        self.unwatch_x11_cursor();
+        self.x11_cursor_surface = surface;
+        self.x11_cursor_scale = scale;
+
+        let commit = &mut self.x11_cursor_commit as *mut ffi::wl_listener as *mut WlListener;
+        (*commit).notify = Some(handle_x11_cursor_commit);
+        wl_signal_add(
+            ffi::river_wlr_surface_get_commit_signal(surface),
+            &mut self.x11_cursor_commit,
+        );
+
+        let destroy = &mut self.x11_cursor_destroy as *mut ffi::wl_listener as *mut WlListener;
+        (*destroy).notify = Some(handle_x11_cursor_destroy);
+        wl_signal_add(
+            ffi::river_wlr_surface_get_destroy_signal(surface),
+            &mut self.x11_cursor_destroy,
+        );
+
+        // Whatever is already committed on the surface is what wlroots reads
+        // first; the fresh buffer only arrives on the commit that follows.
+        ffi::river_wlr_surface_scale_logical_size(surface, scale);
+    }
+
+    unsafe fn unwatch_x11_cursor(&mut self) {
+        if self.x11_cursor_surface.is_null() {
+            return;
+        }
+        self.x11_cursor_surface = std::ptr::null_mut();
+        self.x11_cursor_scale = 1.0;
+        wl_listener_remove(&mut self.x11_cursor_commit);
+        wl_listener_remove(&mut self.x11_cursor_destroy);
     }
 
     pub unsafe fn attach_device(&mut self, device: *mut crate::input_device::InputDevice) {
@@ -1708,13 +1770,73 @@ unsafe extern "C" fn handle_request_set_cursor(
         // The client owns the cursor image from here; a compositor-driven
         // xcursor animation would paint over it on its next tick.
         seat.cursor.stop_xcursor_animation();
+        // An X11 client's cursor is a physical-pixel bitmap like the rest of
+        // its drawing, but Xwayland commits it at buffer scale 1, so wlroots
+        // would show it at that many LOGICAL pixels — Houdini's 48px
+        // crosshair came out 96 physical px against the desktop's 48. Show it
+        // at 1/scale, the way the window's own buffer already is
+        // (`Window::x11_buffer_scale`), and put the hotspot in the same units.
+        let scale = if is_xwayland_client(seat.server, event_client) {
+            crate::xwayland_window::x11_scale_for_surface(
+                seat.server,
+                ffi::river_wlr_seat_get_pointer_focused_surface(seat.wlr_seat),
+            )
+        } else {
+            1.0
+        };
+        seat.watch_x11_cursor((*event).surface, scale);
+        let (hotspot_x, hotspot_y) = if scale != 1.0 {
+            (
+                ((*event).hotspot_x as f32 / scale).round() as i32,
+                ((*event).hotspot_y as f32 / scale).round() as i32,
+            )
+        } else {
+            ((*event).hotspot_x, (*event).hotspot_y)
+        };
         ffi::wlr_cursor_set_surface(
             seat.cursor.wlr_cursor,
             (*event).surface,
-            (*event).hotspot_x,
-            (*event).hotspot_y,
+            hotspot_x,
+            hotspot_y,
         );
     }
+}
+
+/// Is this the Xwayland client itself? Every X11 window's requests arrive as
+/// that one client, which is what separates an X11 cursor from a Wayland one.
+unsafe fn is_xwayland_client(
+    server: *mut crate::server::Server,
+    client: *mut ffi::wl_client,
+) -> bool {
+    if server.is_null() || (*server).xwayland.is_null() || client.is_null() {
+        return false;
+    }
+    let xwayland = (*server).xwayland as *mut crate::server::WlrXwayland;
+    let xserver = (*xwayland).server as *mut ffi::wlr_xwayland_server;
+    if xserver.is_null() {
+        return false;
+    }
+    !(*xserver).client.is_null() && (*xserver).client == client
+}
+
+/// Keep an X11 cursor surface shown at 1/scale for as long as it is the
+/// pointer image: `wlr_cursor` re-reads the surface's logical size on every
+/// commit, so the shrink has to be re-applied there — before wlroots reads it,
+/// which is why this listener is added ahead of `wlr_cursor_set_surface`.
+unsafe extern "C" fn handle_x11_cursor_commit(
+    listener: *mut ffi::wl_listener,
+    _data: *mut std::ffi::c_void,
+) {
+    let seat = &mut *crate::container_of!(listener, Seat, x11_cursor_commit);
+    ffi::river_wlr_surface_scale_logical_size(seat.x11_cursor_surface, seat.x11_cursor_scale);
+}
+
+unsafe extern "C" fn handle_x11_cursor_destroy(
+    listener: *mut ffi::wl_listener,
+    _data: *mut std::ffi::c_void,
+) {
+    let seat = &mut *crate::container_of!(listener, Seat, x11_cursor_destroy);
+    seat.unwatch_x11_cursor();
 }
 
 unsafe extern "C" fn handle_request_set_selection(

@@ -213,6 +213,31 @@ pub unsafe fn x11_scale_for(
     x11_scale(server)
 }
 
+/// `x11_scale_for` for a surface instead of an xsurface: the factor of the X11
+/// window that surface belongs to, and 1 for anything that is not X11.
+///
+/// What a cursor request needs. The scale has to come from the window under
+/// the pointer rather than the screen, because a window named in
+/// `xwayland_hidpi_except` is drawn in the logical world and its cursor
+/// belongs there with it.
+pub unsafe fn x11_scale_for_surface(
+    server: *mut crate::server::Server,
+    surface: *mut ffi::wlr_surface,
+) -> f32 {
+    if surface.is_null() {
+        return 1.0;
+    }
+    let root = ffi::wlr_surface_get_root_surface(surface);
+    if root.is_null() {
+        return 1.0;
+    }
+    let xsurface = ffi::wlr_xwayland_surface_try_from_wlr_surface(root);
+    if xsurface.is_null() {
+        return 1.0;
+    }
+    x11_scale_for(server, xsurface as *const _)
+}
+
 /// Whether any of `patterns` names this window: each is tried against the
 /// WM_CLASS class, the WM_CLASS instance and the title with the
 /// `app_id_matches` rules (case-insensitive, `*` wildcards). Empty fields

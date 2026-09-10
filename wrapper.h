@@ -138,6 +138,8 @@ struct wl_global *river_wlr_output_get_global(struct wlr_output *output);
 void *river_wlr_surface_get_data(struct wlr_surface *surface);
 void river_wlr_surface_set_data(struct wlr_surface *surface, void *data);
 struct wl_signal *river_wlr_surface_get_commit_signal(struct wlr_surface *surface);
+struct wl_signal *river_wlr_surface_get_destroy_signal(struct wlr_surface *surface);
+void river_wlr_surface_scale_logical_size(struct wlr_surface *surface, float scale);
 struct wl_signal *river_wlr_surface_get_map_signal(struct wlr_surface *surface);
 struct wl_signal *river_wlr_surface_get_unmap_signal(struct wlr_surface *surface);
 struct wl_resource *river_wlr_surface_get_resource(struct wlr_surface *surface);
