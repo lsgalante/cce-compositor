@@ -1440,6 +1440,7 @@ impl Seat {
                                 displace_covered(
                                     self.server,
                                     win,
+                                    op.start_was_tiled,
                                     (virtual_dx, virtual_dy),
                                     &sp,
                                     &mut self.overview_displaced,
@@ -1665,9 +1666,15 @@ impl Seat {
 /// re-evaluates the window AT THAT SPOT — a drag that stops covering it
 /// releases it back home. The ledger drops with the op on release, which
 /// finalizes wherever everything currently sits.
+///
+/// `moved_tiled` is what the dragged window was when it was GRABBED (the op's
+/// `start_was_tiled`), for the reason the snap call above gives: the drag
+/// un-tiles it on the first motion event, so its live mode reads Floating
+/// however it started. The policy skips candidates of the other kind.
 unsafe fn displace_covered(
     server: *mut Server,
     win: *mut crate::window::Window,
+    moved_tiled: bool,
     drag_delta: (f64, f64),
     sp: &crate::policy::snap::SnapParams,
     ledger: &mut Vec<(*mut crate::window::Window, f64, f64)>,
@@ -1715,8 +1722,9 @@ unsafe fn displace_covered(
             tiled: mode == crate::tiling::TilingMode::Tiled,
         });
     }
-    let moves =
-        crate::policy::overview::displace(moved, drag_delta, &cands, sp, sp.gap_width);
+    let moves = crate::policy::overview::displace(
+        moved, moved_tiled, drag_delta, &cands, sp, sp.gap_width,
+    );
 
     let mut changed = false;
     let mut displaced_now: Vec<*mut crate::window::Window> = Vec::new();

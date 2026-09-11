@@ -2503,6 +2503,52 @@ impl WindowManager {
             curr = next;
         }
 
+        // Floating windows are a plane IN FRONT of the tiled ones: a tiled
+        // window never covers a floating one, however recently it was raised.
+        // The loop above stacks layers.wm in render-list order alone, so
+        // clicking a tiled window buried every floating window it overlaps —
+        // and the two modes are meant to be independent, not interleaved.
+        //
+        // Re-applied on every reorder pass, walking the render list again so
+        // each plane keeps its OWN relative stacking: the floating windows
+        // come out in the order they were raised, above the tiled ones in the
+        // order they were raised. A rule in the stacking authority, like the
+        // light_source raise below — `raise_window` cannot own it, because
+        // every other path that reorders the list would then have to know it.
+        //
+        // Only the windows the loop actually parked in layers.wm take part,
+        // tested through the parent it just set: a fullscreen, popup, status
+        // or circular window lives in a layer of its own, where raising it
+        // would reshuffle that layer's members for no reason. `Utility` is
+        // floating furniture too (a client-declared tool window — it floats
+        // and moves like any other), so it rides in the same plane; `Overlay`
+        // keeps its own `overlay_behavior` rule and stays out of this.
+        if reorder {
+            let wm_layer = (*self.server).scene.layers.wm;
+            curr = (*render_list).next;
+            while curr != render_list {
+                let next = (*curr).next;
+                let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
+                if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
+                    let floats = matches!(
+                        (*window).tiling_mode,
+                        crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Utility
+                    );
+                    let in_wm_layer = !(*window).tree.is_null()
+                        && !wm_layer.is_null()
+                        && ffi::river_scene_node_get_parent((*window).tree as *mut _) == wm_layer;
+                    if floats && in_wm_layer {
+                        ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                        ffi::wlr_scene_node_place_above(
+                            (*window).popup_tree as *mut _,
+                            (*window).tree as *mut _,
+                        );
+                    }
+                }
+                curr = next;
+            }
+        }
+
         // The traveling light_source segment crosses over its sibling
         // segments; raise it after the loop so it stacks in front of them
         // within its layer regardless of render-list order. Re-applied on
