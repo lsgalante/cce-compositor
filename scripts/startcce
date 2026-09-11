@@ -38,13 +38,14 @@ export XCURSOR_THEME="cce"
 # libXcursor and libxcb-cursor, so exporting it here made every X11 app ask for
 # a 24-pixel cursor and get one drawn at half size.
 export XCURSOR_PATH="${XDG_DATA_HOME:-$HOME/.local/share}/icons:$HOME/.icons:/usr/share/icons"
-# No WLR_NO_HARDWARE_CURSORS. It was exported from the first day this script
-# existed with no recorded reason (likely the NVIDIA era), and with the
-# session pinned to the Intel card below the cursor plane works. A software
-# cursor is a scene node: every pointer motion damaged the scene and ran a
-# full scenefx composite. wlroots still falls back to a software cursor by
-# itself if the plane refuses an image, so restoring the export is only for
-# a cursor that visibly misbehaves (lag, wrong scale, corruption).
+# KEEP THIS. Removed on 2026-09-11 (cce-compositor@43a9108) on the theory
+# that the Intel cursor plane would work now that the session is pinned to
+# card1 and wlroots falls back to software on failure; the very next login
+# had NO visible cursor at all — the plane accepted the image and showed
+# nothing, so there was no failure to fall back from. A software cursor
+# costs a scene composite per pointer motion; an invisible one costs the
+# session. Do not remove again without verifying on the real display.
+export WLR_NO_HARDWARE_CURSORS=1
 export WLR_DRM_DEVICES=/dev/dri/card1
 # The session renders on the Intel GPU, so Vulkan is pinned to the Intel ICD.
 # This is not only a compositor concern: an app that also loads the NVIDIA
