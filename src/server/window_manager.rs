@@ -2525,6 +2525,7 @@ impl WindowManager {
         // keeps its own `overlay_behavior` rule and stays out of this.
         if reorder {
             let wm_layer = (*self.server).scene.layers.wm;
+            let mut focused_popups: *mut Window = std::ptr::null_mut();
             curr = (*render_list).next;
             while curr != render_list {
                 let next = (*curr).next;
@@ -2544,8 +2545,14 @@ impl WindowManager {
                             (*window).tree as *mut _,
                         );
                     }
+                    // Last, so an open menu clears the plane it was just
+                    // stacked behind (`raise_focused_popups`).
+                    focused_popups = if (*window).is_seat_focused() { window } else { focused_popups };
                 }
                 curr = next;
+            }
+            if !focused_popups.is_null() {
+                self.raise_focused_popups(focused_popups);
             }
         }
 
@@ -3979,6 +3986,43 @@ impl WindowManager {
                 crate::server::wl_list_insert(after, node_link);
             }
         }
+    }
+
+    /// Keep a window's open menus clear of the floating plane.
+    ///
+    /// Floating windows stack in front of tiled ones (the reorder pass), and
+    /// a window's xdg popups ride in its own `popup_tree` just above it — so
+    /// a menu opened in a TILED app was covered by any floating window over
+    /// it. A menu is transient and belongs to whatever the user is working
+    /// in, which is the focused window by definition, so that one window's
+    /// popup tree rides above every window in layers.wm, either plane.
+    ///
+    /// Only the focused window, and only while it is in layers.wm: a
+    /// fullscreen/popup/status window is in a layer of its own, where the
+    /// raise would reorder that layer's members instead. An empty or
+    /// disabled popup tree raises harmlessly (nothing to draw), so this does
+    /// not need to know whether a menu is actually open —
+    /// `wlr_scene_node_raise_to_top` returns early when the node is already
+    /// on top, so a repeat costs nothing and damages nothing.
+    ///
+    /// Called from two places, because neither alone is enough: the reorder
+    /// pass (a restack would otherwise drop the popup back to its window),
+    /// and popup creation (opening a menu changes nothing the order hash can
+    /// see, so it schedules no transaction at all).
+    pub unsafe fn raise_focused_popups(&mut self, window: *mut Window) {
+        if window.is_null() || (*window).popup_tree.is_null() {
+            return;
+        }
+        if !(*window).is_seat_focused() {
+            return;
+        }
+        let wm_layer = (*self.server).scene.layers.wm;
+        if wm_layer.is_null()
+            || ffi::river_scene_node_get_parent((*window).popup_tree as *mut _) != wm_layer
+        {
+            return;
+        }
+        ffi::wlr_scene_node_raise_to_top((*window).popup_tree as *mut _);
     }
 
     pub unsafe fn raise_window(&mut self, window: *mut Window) {

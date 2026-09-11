@@ -515,7 +515,13 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
     ) {
         log::error!("Failed to create popup: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_xdg_popup).resource);
+        return;
     }
+    // Opening a menu changes nothing the reorder pass's order hash can see,
+    // so it schedules no transaction: without this raise a tiled window's
+    // menu would stay under the floating plane until some unrelated restack
+    // came along. The pass re-applies it from then on.
+    (*(*window).server).wm.raise_focused_popups(window);
 }
 
 unsafe extern "C" fn handle_ack_configure(
