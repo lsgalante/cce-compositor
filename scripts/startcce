@@ -1,12 +1,26 @@
 #!/bin/sh
 # Launch cce-server with cce-client
-# Usage: startcce [--logging] [--debug]
+# Usage: startcce [--logging] [--verbose] [--debug]
+#
+#   --logging  announce the log paths. The compositor's stderr goes to
+#              $CCE_RUN/cce.log regardless; this flag no longer raises the
+#              log level. The session entry in /usr/share/wayland-sessions
+#              passes it, and it used to mean `--log-level debug`: every
+#              transaction, key press and xwm property became a formatted
+#              line on the compositor's main thread, tens of MB per session,
+#              for a log that is only read when something goes wrong. Start
+#              with --verbose when it is.
+#   --verbose  compositor at `--log-level debug` (what --logging did before
+#              2026-09-11).
+#   --debug    --verbose plus WAYLAND_DEBUG=1 on the client.
 
 LOGGING=false
+VERBOSE=false
 DEBUG=false
 for arg in "$@"; do
     case "$arg" in
         --logging) LOGGING=true ;;
+        --verbose) VERBOSE=true ;;
         --debug) DEBUG=true ;;
     esac
 done
@@ -24,7 +38,13 @@ export XCURSOR_THEME="cce"
 # libXcursor and libxcb-cursor, so exporting it here made every X11 app ask for
 # a 24-pixel cursor and get one drawn at half size.
 export XCURSOR_PATH="${XDG_DATA_HOME:-$HOME/.local/share}/icons:$HOME/.icons:/usr/share/icons"
-export WLR_NO_HARDWARE_CURSORS=1
+# No WLR_NO_HARDWARE_CURSORS. It was exported from the first day this script
+# existed with no recorded reason (likely the NVIDIA era), and with the
+# session pinned to the Intel card below the cursor plane works. A software
+# cursor is a scene node: every pointer motion damaged the scene and ran a
+# full scenefx composite. wlroots still falls back to a software cursor by
+# itself if the plane refuses an image, so restoring the export is only for
+# a cursor that visibly misbehaves (lag, wrong scale, corruption).
 export WLR_DRM_DEVICES=/dev/dri/card1
 # The session renders on the Intel GPU, so Vulkan is pinned to the Intel ICD.
 # This is not only a compositor concern: an app that also loads the NVIDIA
@@ -113,10 +133,12 @@ LAUNCH_EOF
 chmod +x "$CCE_LAUNCH"
 
 LOG_LEVEL_FLAG=""
-if [ "$LOGGING" = true ] || [ "$DEBUG" = true ]; then
+if [ "$VERBOSE" = true ] || [ "$DEBUG" = true ]; then
     LOG_LEVEL_FLAG="--log-level debug"
+fi
+if [ "$LOGGING" = true ] || [ "$VERBOSE" = true ] || [ "$DEBUG" = true ]; then
     echo "Starting cce-server with cce..."
-    echo "  Logs: $CCE_LOG + $CCE_CLIENT_LOG"
+    echo "  Logs: $CCE_LOG + $CCE_CLIENT_LOG (compositor level: ${LOG_LEVEL_FLAG:---log-level info})"
     if [ "$DEBUG" = true ]; then
         echo "  Wayland debug logging enabled (WAYLAND_DEBUG=1)"
     fi
