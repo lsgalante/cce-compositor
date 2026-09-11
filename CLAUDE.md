@@ -531,6 +531,22 @@ grid has them.
   wrappers borrow the app id rather than allocating; keep it that way, they
   run several times per pointer-motion event.
 
+  **Blur re-renders only where damage reaches** (scenefx `apply_blur_region`,
+  fixed 2026-09-11). `pixman_region32_intersect` returns allocation success,
+  not "non-empty"; the vendored code tested that return, so every blur node
+  counted as touched by every frame's damage and re-blurred — nine status
+  segments cost ~1.3 ms of CPU per frame whenever anything on screen moved
+  (measured: 1670 µs → 495 µs per frame with an animating client far from
+  the bar). A node whose box lies within the blur sample size (2^(passes+1) ×
+  radius = 80 px at the default 3/5) of the damage still re-blurs, as it must.
+  `CCE_BLUR_DEBUG=1` logs each blur node render (`blur entry …`) and each
+  compensation decision (`blur_region …`) — the tool for "why is this blur
+  re-rendering". Known, not fixed: the *optimized* (cached) blur behind a
+  translucent window is not re-baked when content beneath it changes, only on
+  explicit camera/grid dirtying, so a video under a blurred window shows a
+  frozen ghost; buffer commits never pass through `scene_node_update` with
+  damage in this scenefx, which is the path the cache's dirtying hangs off.
+
   **`backdrop` is the one per-subscriber topic** — it names the asking segment,
   because the whole point is that the two ends of a bar sit over different things.
   Lines are `<luma> <spread>` (0-100 each) or `unknown`. It answers a question a

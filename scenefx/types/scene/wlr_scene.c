@@ -19,6 +19,8 @@
 #include <wlr/util/region.h>
 #include <wlr/util/transform.h>
 
+static bool cce_scene_blur_debug(void);
+
 #include "render/color.h"
 #include "render/tracy.h"
 #include "scenefx/render/fx_renderer/fx_offscreen_buffers.h"
@@ -2632,6 +2634,17 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		return;
 	}
 
+	// CCE_BLUR_DEBUG: why is this blur node rendering — its box, the slice
+	// inside this frame's damage, and the damage extents.
+	if (node->type == WLR_SCENE_NODE_BLUR && cce_scene_blur_debug()) {
+		const pixman_box32_t *v = pixman_region32_extents(&node->visible);
+		const pixman_box32_t *r = pixman_region32_extents(&render_region);
+		const pixman_box32_t *d = pixman_region32_extents(&data->damage);
+		wlr_log(WLR_INFO, "[scenefx] blur entry visible=(%d,%d)-(%d,%d) render=(%d,%d)-(%d,%d) damage=(%d,%d)-(%d,%d) rects=%d",
+			v->x1, v->y1, v->x2, v->y2, r->x1, r->y1, r->x2, r->y2,
+			d->x1, d->y1, d->x2, d->y2, pixman_region32_n_rects(&data->damage));
+	}
+
 	int x = entry->x - data->logical.x;
 	int y = entry->y - data->logical.y;
 
@@ -3777,8 +3790,23 @@ static bool apply_blur_region(struct wlr_scene_node *node, struct blur_data *blu
 
 	pixman_region32_t intersection;
 	pixman_region32_init(&intersection);
-	if (pixman_region32_intersect(&intersection, &expanded_damage, &node_visible_region)) {
+	pixman_region32_intersect(&intersection, &expanded_damage, &node_visible_region);
+	// pixman_region32_intersect's return value reports allocation success,
+	// not a non-empty result — testing it here made EVERY blur node count as
+	// touched by EVERY frame's damage, so all of them re-blurred (and pulled
+	// their whole box into the damage) whenever anything on screen changed:
+	// one animating window cost a full re-blur of every status segment and
+	// translucent window each frame. Only a node the expanded damage
+	// actually reaches has stale samples to worry about.
+	if (pixman_region32_not_empty(&intersection)) {
 		should_compensate_blur = true;
+		if (cce_scene_blur_debug()) {
+			const pixman_box32_t *nv = pixman_region32_extents(&node_visible_region);
+			const pixman_box32_t *od = pixman_region32_extents(original_damage);
+			wlr_log(WLR_INFO, "[scenefx] blur_region: type=%d sample=%d node=(%d,%d)-(%d,%d) orig=(%d,%d)-(%d,%d)",
+				node->type, sample_size, nv->x1, nv->y1, nv->x2, nv->y2,
+				od->x1, od->y1, od->x2, od->y2);
+		}
 
 		// Re-render the node's entire blur region, not just the damaged
 		// sliver: the blur samples the framebuffer up to sample_size beyond
