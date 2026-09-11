@@ -5322,16 +5322,27 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
     // size it just committed, ahead of the render_finish below that places
     // the tree at `rendering_requested`. (xdg toplevels do the same in their
     // own commit handler, where the toplevel geometry is the authority.)
+    //
+    // The committed surface is PHYSICAL pixels — under `xwayland_hidpi` twice
+    // the logical box, as the scale pass below says — while
+    // `anchor_resize_commit` works in box_geom's logical units. Convert first,
+    // and take the wine frame off after, the way `render_finish` reads the
+    // xsurface size back. Feeding it the raw buffer width put the origin a
+    // whole window-width to the left and made it track the pointer at double
+    // speed, every X11 left/top drag at scale 2.
     if let WindowImpl::Xwayland(xwindow) = (*window).impl_type {
         if !xwindow.is_null() && !(*xwindow).xsurface.is_null() && (*window).resize_edges.is_some() {
             let surface = (*(*xwindow).xsurface).surface;
             if !surface.is_null() {
-                let mut w = ffi::river_wlr_surface_get_width(surface);
-                let mut h = ffi::river_wlr_surface_get_height(surface);
+                let s = crate::xwayland_window::x11_scale_for((*window).server, (*xwindow).xsurface);
+                let mut w = crate::xwayland_window::from_x11(
+                    ffi::river_wlr_surface_get_width(surface), s);
+                let mut h = crate::xwayland_window::from_x11(
+                    ffi::river_wlr_surface_get_height(surface), s);
                 let has_parent = !(*(*xwindow).xsurface).parent.is_null();
                 if (*window).is_wine() && !has_parent && !(*window).is_fullscreen() {
-                    w = (w - 32).max(0);
-                    h = (h - 32).max(0);
+                    w = (w - crate::xwayland_window::WINE_MARGIN * 2).max(0);
+                    h = (h - crate::xwayland_window::WINE_MARGIN * 2).max(0);
                 }
                 (*window).anchor_resize_commit(w, h);
             }
