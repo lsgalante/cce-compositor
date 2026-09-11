@@ -348,6 +348,12 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
     {
         (*group.seat).cursor.end_view_drag("key");
     }
+    if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
+        && !group.seat.is_null()
+        && (*group.seat).cursor.popup_wheel.is_some()
+    {
+        (*group.seat).cursor.end_popup_wheel("key");
+    }
 
     // Cancel active binding repeats
     let seat_groups_head = &mut (*group.seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;

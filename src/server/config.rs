@@ -409,7 +409,9 @@ pub struct WindowManagerConfig {
     /// in `rounded_apps`. KDL: `xwayland_hidpi_except "Trackmania"`.
     pub xwayland_hidpi_except: Option<Vec<String>>,
     /// Apps whose windows turn trackpad input into a view drag (Space +
-    /// button) — see `cursor::ViewDrag`. KDL: `touchpad_view_apps "Houdini FX"`.
+    /// button) — see `cursor::ViewDrag`. A scroll over one of their popups
+    /// becomes a wheel under a held Ctrl instead — see `cursor::PopupWheel`.
+    /// KDL: `touchpad_view_apps "Houdini FX"`.
     pub touchpad_view_apps: Option<Vec<String>>,
     /// What an unmodified two-finger swipe does there: "pan" (default) or
     /// "tumble"; Shift does the other. KDL: `touchpad_view_swipe "tumble"`.

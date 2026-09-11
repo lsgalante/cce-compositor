@@ -14,9 +14,15 @@ pub struct Cursor {
     /// Trackpad-to-view-drag emulation for the apps `touchpad_view_apps`
     /// names (see `ViewDrag`); `None` while no emulated drag is in progress.
     pub view_drag: Option<ViewDrag>,
-    /// Ends an emulated drag that has seen no finger event for a while: a
+    /// Trackpad-to-wheel emulation over those apps' popups (see
+    /// `PopupWheel`); `None` while no such gesture is in progress. The two
+    /// are mutually exclusive — a view drag needs a window under the
+    /// pointer, this one an override-redirect surface.
+    pub popup_wheel: Option<PopupWheel>,
+    /// Ends an emulated gesture — a `ViewDrag` or a `PopupWheel`, which
+    /// never run at once — that has seen no finger event for a while: a
     /// two-finger scroll normally ends with a zero-delta axis event, but
-    /// not every path delivers one.
+    /// not every path delivers one. Each arms it with its own timeout.
     pub view_drag_timer: *mut ffi::wl_event_source,
 
     /// Animated-XCursor playback. An XCursor theme may ship several images per
@@ -175,6 +181,7 @@ impl Default for Cursor {
             pinch_zoom_active: false,
             pinch_start_zoom: 1.0,
             view_drag: None,
+            popup_wheel: None,
             view_drag_timer: std::ptr::null_mut(),
             last_click_time: 0,
             last_click_window: std::ptr::null_mut(),
@@ -1231,6 +1238,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
     if cursor.view_drag.is_some() {
         cursor.end_view_drag("button");
     }
+    // Before the button reaches the client, so a click on the popup is not
+    // a Ctrl-click (see `PopupWheel`).
+    cursor.end_popup_wheel("button");
     
     let seat = &mut *cursor.seat;
     let lx = cursor.x();
@@ -2304,8 +2314,12 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
     }
 
     // A two-finger scroll over an app in `touchpad_view_apps` becomes a
-    // view drag instead of a scroll (see `ViewDrag`).
+    // view drag instead of a scroll (see `ViewDrag`), and one over that
+    // app's own popup becomes a wheel (see `PopupWheel`).
     if is_finger && cursor.view_drag_axis(event, delta, modifiers) {
+        return;
+    }
+    if is_finger && cursor.popup_wheel_axis(event, delta, modifiers) {
         return;
     }
 
@@ -2562,9 +2576,229 @@ impl Cursor {
     }
 }
 
+/// A trackpad scroll over one of those apps' own popups, turned into the
+/// wheel the popup understands.
+///
+/// Why this exists: `ViewDrag` covers the app's window, but a menu is an
+/// X11 override-redirect surface, so a scroll over one falls through as a
+/// plain axis event — and Houdini with "Enable Trackpad Gestures" on routes
+/// every scroll, a mouse wheel included, into its touchpad slide, which
+/// moves the content by `QWheelEvent::pixelDelta`. Under Xwayland that is
+/// always zero, and no event the compositor can shape changes it: Qt's xcb
+/// backend synthesises pixelDelta only above a scroll increment of 15, and
+/// Xwayland hardcodes its XIScrollClass increment at 1 (measured on a
+/// shadow session — `xinput list --long` reports `increment: 1.000000` on
+/// both valuators, and a Qt6 probe logged `pixel=0` for wheel-source and
+/// finger-source scrolls alike, on a QMenu the compositor delivered to
+/// correctly). What does work is the app's own escape hatch: Houdini's
+/// `touchpadwheelmodifier` — "simulate the mouse wheel", Ctrl — makes it
+/// read a scroll as a wheel again. So over such a popup the compositor
+/// holds Ctrl for the gesture and forwards the finger deltas as whole
+/// notches, which is what the user otherwise has to do by hand.
+pub struct PopupWheel {
+    /// The popup the gesture started on. It also ends the gesture: if the
+    /// pointer focus moves off it (the menu closed, or the pointer left),
+    /// the held Ctrl must not ride along onto whatever took its place.
+    pub surface: *mut ffi::wlr_surface,
+    /// Sub-notch remainder per axis (0 horizontal, 1 vertical), layout px.
+    pub accum: [f64; 2],
+    pub ctrl_down: bool,
+    /// The keyboard's repeat settings before the gesture, restored at its
+    /// end. Xwayland autorepeats a held key as release/press pairs, which
+    /// would drop the modifier mid-swipe — `ViewDrag` hit the same thing
+    /// with Space.
+    pub repeat: Option<(i32, i32)>,
+}
+
+const KEY_LEFTCTRL: u32 = 29;
+/// Layout pixels per emitted notch — the unit wl_pointer and `inject_scroll`
+/// already use for one wheel click.
+const POPUP_WHEEL_NOTCH_PX: f64 = 15.0;
+/// Finger silence that ends a popup gesture when the lift never came. Far
+/// shorter than the view drag's net, because the two failure modes are not
+/// alike: a resumed swipe only re-presses Ctrl, with no view mode to fall
+/// out of, while a modifier left held would turn the user's next click into
+/// a Ctrl-click.
+const POPUP_WHEEL_IDLE_MS: i32 = 400;
+
+impl Cursor {
+    /// The popup under the pointer, when it belongs to the same process as
+    /// a window `touchpad_view_apps` names and the keyboard is inside that
+    /// app. Houdini's menus carry no WM_CLASS of their own, so the pid is
+    /// what ties one to its app — the same test
+    /// `XwaylandOverrideRedirect::focus_if_desired` uses. The keyboard
+    /// check is what keeps a synthetic Ctrl from landing in some other
+    /// client: the popup takes focus itself when it wants it, otherwise
+    /// focus stays on the window it belongs to.
+    unsafe fn popup_wheel_target(&mut self) -> Option<*mut ffi::wlr_surface> {
+        let server = (*self.seat).server;
+        let wm = &(*server).wm;
+        if wm.touchpad_view_apps.is_empty() {
+            return None;
+        }
+        let result = (*server).scene.at(self.x(), self.y())?;
+        let SceneNodeDataVal::OverrideRedirect(or) = result.data else { return None };
+        if or.is_null() || result.surface.is_null() || (*or).xsurface.is_null() {
+            return None;
+        }
+        let pid = (*(*or).xsurface).pid;
+        let focused = ffi::river_wlr_seat_get_keyboard_focused_surface((*self.seat).wlr_seat);
+        if focused.is_null() {
+            return None;
+        }
+        for &window in wm.windows.iter() {
+            if window.is_null() {
+                continue;
+            }
+            let crate::window::WindowImpl::Xwayland(xwindow) = (*window).impl_type else { continue };
+            if xwindow.is_null() || (*(*xwindow).xsurface).pid != pid {
+                continue;
+            }
+            let app_id = (*window).get_app_id_string().unwrap_or_default();
+            if !wm.touchpad_view_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
+                continue;
+            }
+            if focused == result.surface || focused == (*window).root_surface() {
+                return Some(result.surface);
+            }
+        }
+        None
+    }
+
+    /// Hold, or drop, the app's "simulate the mouse wheel" modifier on the
+    /// client's behalf. The mask is OR'd over the keyboard's live state and
+    /// never into `injected_key_mods`, so every modifier read the compositor
+    /// makes for itself — the Ctrl branch in `view_drag_axis` among them —
+    /// keeps seeing the user's real keys and not this one.
+    unsafe fn hold_popup_ctrl(&mut self, down: bool) {
+        match self.popup_wheel.as_mut() {
+            Some(p) if p.ctrl_down != down => p.ctrl_down = down,
+            _ => return,
+        }
+        let seat = &mut *self.seat;
+        let time = crate::util::msec_timestamp();
+        let state = if down {
+            ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
+        } else {
+            ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
+        };
+        ffi::wlr_seat_keyboard_notify_key(seat.wlr_seat, time, KEY_LEFTCTRL, state);
+        let kb = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+        if !kb.is_null() && !(*kb).keymap.is_null() {
+            let idx = ffi::xkb_keymap_mod_get_index((*kb).keymap, b"Control\0".as_ptr() as *const _);
+            if idx != ffi::XKB_MOD_INVALID {
+                // Released sends the device's own state back, which is the
+                // user's keys minus this bit.
+                let mut mods = (*kb).modifiers;
+                if down {
+                    mods.depressed |= 1u32 << idx;
+                }
+                ffi::wlr_seat_keyboard_notify_modifiers(seat.wlr_seat, &mut mods);
+            }
+        }
+    }
+
+    unsafe fn arm_popup_wheel_timer(&mut self) {
+        if !self.view_drag_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.view_drag_timer, POPUP_WHEEL_IDLE_MS);
+        }
+    }
+
+    /// `reason` names what ended it, as `end_view_drag`'s does.
+    pub unsafe fn end_popup_wheel(&mut self, reason: &str) {
+        if self.popup_wheel.is_none() {
+            return;
+        }
+        self.hold_popup_ctrl(false);
+        let Some(p) = self.popup_wheel.take() else { return };
+        log::info!("[PopupWheel] end reason={}", reason);
+        if !self.view_drag_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.view_drag_timer, 0);
+        }
+        if let Some((rate, delay)) = p.repeat {
+            let kbd = ffi::river_wlr_seat_get_keyboard((*self.seat).wlr_seat);
+            if !kbd.is_null() {
+                ffi::wlr_keyboard_set_repeat_info(kbd, rate, delay);
+            }
+        }
+    }
+
+    /// A finger-source axis event over such a popup, emitted to it as whole
+    /// wheel notches under a held Ctrl. Returns true when consumed.
+    pub unsafe fn popup_wheel_axis(&mut self, event: *const ffi::wlr_pointer_axis_event, delta: f64, modifiers: u32) -> bool {
+        const CTRL: u32 = 0x4;
+        if delta == 0.0 {
+            // The fingers lifted.
+            if self.popup_wheel.is_some() {
+                self.end_popup_wheel("lift");
+                return true;
+            }
+            return false;
+        }
+        if modifiers & CTRL != 0 {
+            // The user is already holding the app's wheel modifier: the
+            // scroll passes through as it does today.
+            if self.popup_wheel.is_some() {
+                self.end_popup_wheel("ctrl");
+            }
+            return false;
+        }
+        if self.popup_wheel.is_none() {
+            let Some(surface) = self.popup_wheel_target() else { return false };
+            let seat = &mut *self.seat;
+            seat.ensure_synthetic_keyboard();
+            let mut repeat = None;
+            let kbd = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+            if !kbd.is_null() {
+                repeat = Some(((*kbd).repeat_info.rate, (*kbd).repeat_info.delay));
+                ffi::wlr_keyboard_set_repeat_info(kbd, 0, 0);
+            }
+            log::info!("[PopupWheel] begin on popup surface {:p}", surface);
+            self.popup_wheel = Some(PopupWheel { surface, accum: [0.0, 0.0], ctrl_down: false, repeat });
+            self.hold_popup_ctrl(true);
+        }
+        // The gesture belongs to the popup it started on.
+        let focused = ffi::river_wlr_seat_get_pointer_focused_surface((*self.seat).wlr_seat);
+        if matches!(&self.popup_wheel, Some(p) if focused != p.surface) {
+            self.end_popup_wheel("left-popup");
+            return false;
+        }
+        let vertical = (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
+        let axis = if vertical { 1usize } else { 0usize };
+        let notches = {
+            let Some(p) = self.popup_wheel.as_mut() else { return false };
+            p.accum[axis] += delta;
+            let whole = (p.accum[axis] / POPUP_WHEEL_NOTCH_PX).trunc();
+            p.accum[axis] -= whole * POPUP_WHEEL_NOTCH_PX;
+            whole
+        };
+        if notches != 0.0 {
+            let seat = &mut *self.seat;
+            let time = crate::util::msec_timestamp();
+            let step = POPUP_WHEEL_NOTCH_PX * notches.signum();
+            let discrete = 120 * notches.signum() as i32;
+            for _ in 0..notches.abs() as i32 {
+                ffi::wlr_seat_pointer_notify_axis(
+                    seat.wlr_seat,
+                    time,
+                    (*event).orientation,
+                    step,
+                    discrete,
+                    ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_WHEEL,
+                    (*event).relative_direction,
+                );
+                ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+            }
+        }
+        self.arm_popup_wheel_timer();
+        true
+    }
+}
+
 unsafe extern "C" fn handle_view_drag_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let cursor = &mut *(data as *mut Cursor);
     cursor.end_view_drag("idle");
+    cursor.end_popup_wheel("idle");
     0
 }
 
