@@ -735,9 +735,9 @@ impl WindowManager {
         None
     }
 
-    /// Focus-follow camera rules for a bare virtual rect — the same
-    /// center-when-mostly-hidden / nudge-when-clipped behavior windows get,
-    /// for things that are not windows (restore placeholders).
+    /// Focus-follow camera rules for a bare virtual rect — the same minimal
+    /// pan-into-view windows get, for things that are not windows (restore
+    /// placeholders).
     pub unsafe fn pan_to_virtual_rect(&mut self, vx: f64, vy: f64, w: f64, h: f64) {
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr_out = (*outputs_list).next;
@@ -753,19 +753,7 @@ impl WindowManager {
         let Some(viewport) = viewport else { return };
         let (vw, vh) = (viewport.width as f64, viewport.height as f64);
         let cam = self.camera();
-        let visible = crate::policy::camera::visible_fraction(vx, vy, w, h, cam, vw, vh);
-        let target = if visible < crate::policy::camera::FOCUS_VISIBLE_THRESHOLD {
-            Some(crate::policy::camera::center_on(
-                vx + w / 2.0,
-                vy + h / 2.0,
-                vw,
-                vh,
-                cam.zoom,
-            ))
-        } else {
-            crate::policy::camera::nudge_into_view(vx, vy, w, h, cam, vw, vh)
-        };
-        if let Some(target) = target {
+        if let Some(target) = crate::policy::camera::pan_into_view(vx, vy, w, h, cam, vw, vh) {
             self.target_desk_pan_x = Some(target.pan_x);
             self.target_desk_pan_y = Some(target.pan_y);
             self.start_panning_animation();

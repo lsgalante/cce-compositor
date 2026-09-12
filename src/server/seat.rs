@@ -1079,28 +1079,13 @@ impl Seat {
             // whenever zoom != 1 and mistargeted the pan.
             let vw_w = fw;
             let vw_h = fh;
-            let visible = crate::policy::camera::visible_fraction(
-                (*window).virtual_x,
-                (*window).virtual_y,
-                vw_w,
-                vw_h,
-                cam,
-                viewport_w,
-                viewport_h,
-            );
-
-            if visible < crate::policy::camera::FOCUS_VISIBLE_THRESHOLD {
-                let target = crate::policy::camera::center_on(
-                    (*window).virtual_x + vw_w / 2.0,
-                    (*window).virtual_y + vw_h / 2.0,
-                    viewport_w,
-                    viewport_h,
-                    cam.zoom,
-                );
-                wm.target_desk_pan_x = Some(target.pan_x);
-                wm.target_desk_pan_y = Some(target.pan_y);
-                wm.start_panning_animation();
-            } else if let Some(target) = crate::policy::camera::nudge_into_view(
+            // The camera moves as little as the focus demands: enough to
+            // show the whole window with a margin, and no further. A window
+            // half off the edge and one a screen away take the same rule —
+            // `policy::camera::pan_into_view` carries the reasoning, and
+            // `WindowManager::pan_to_virtual_rect` applies it to the
+            // non-window rects (restore placeholders) from the same place.
+            if let Some(target) = crate::policy::camera::pan_into_view(
                 (*window).virtual_x,
                 (*window).virtual_y,
                 vw_w,
@@ -1109,10 +1094,6 @@ impl Seat {
                 viewport_w,
                 viewport_h,
             ) {
-                // Mostly visible but clipped: slide the
-                // clipped edge on-screen instead of
-                // recentering — focusing a window should
-                // never leave part of it hanging off.
                 wm.target_desk_pan_x = Some(target.pan_x);
                 wm.target_desk_pan_y = Some(target.pan_y);
                 wm.start_panning_animation();
