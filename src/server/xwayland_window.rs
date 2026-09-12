@@ -259,6 +259,24 @@ pub fn from_x11(x11: i32, scale: f32) -> i32 {
     (x11 as f32 / scale).round() as i32
 }
 
+/// The nearest X11 value the LOGICAL grid can express — `to_x11` of
+/// `from_x11`.
+///
+/// At scale 2 an odd X11 coordinate has no logical integer: 181 reads back as
+/// 91 and goes out again as 182. The window's geometry is logical, so
+/// granting a client's request verbatim and storing the rounded logical means
+/// the next configure hands X a value a pixel off the one it asked for —
+/// which the client reads as an unrequested move and answers with another
+/// request, a pixel further along each time. Granting the snapped value makes
+/// the geometry sent and the geometry the compositor's own model reproduces
+/// the same number, so the round trip is stable however often it repeats.
+///
+/// At scale 1 this is the identity, so nothing outside `xwayland_hidpi`
+/// changes.
+pub fn snap_x11(x11: i32, scale: f32) -> i32 {
+    to_x11(from_x11(x11, scale), scale)
+}
+
 impl XwaylandWindow {
     pub unsafe fn create(
         xsurface: *mut ffi::wlr_xwayland_surface,
@@ -592,11 +610,15 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     );
 
     if has_parent {
+        // Granted on the logical grid rather than verbatim — see `snap_x11`.
+        // The logical values below are what the window's geometry becomes, so
+        // handing X anything else is handing it a number this compositor
+        // cannot reproduce.
         (*xwindow).send_configure(X11Geom {
-            x: (*event).x,
-            y: (*event).y,
-            width: (*event).width,
-            height: (*event).height,
+            x: snap_x11((*event).x as i32, s) as i16,
+            y: snap_x11((*event).y as i32, s) as i16,
+            width: snap_x11((*event).width as i32, s) as u16,
+            height: snap_x11((*event).height as i32, s) as u16,
         });
         let log_x = from_x11((*event).x as i32, s);
         let log_y = from_x11((*event).y as i32, s);
@@ -654,10 +676,13 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
             }
             (to_x11(w as i32, s) as u16, to_x11(h as i32, s) as u16)
         } else {
-            ((*event).width, (*event).height)
+            (snap_x11((*event).width as i32, s) as u16, snap_x11((*event).height as i32, s) as u16)
         }
     } else {
-        ((*event).width, (*event).height)
+        // Snapped for the same reason as the parented branch above: the size
+        // stored below is `from_x11` of what goes out here, and the next
+        // configure sends `to_x11` of that back.
+        (snap_x11((*event).width as i32, s) as u16, snap_x11((*event).height as i32, s) as u16)
     };
 
     let mut phys_x = to_x11((*window).box_geom.x, s) as i16;
@@ -854,6 +879,33 @@ mod tests {
         let logical = from_x11(3712, s);
         assert_eq!(logical, 1856);
         assert_eq!(to_x11(logical, resolve_x11_scale(Some(2.0), &last)), 3712);
+    }
+
+    #[test]
+    fn snap_x11_is_what_the_logical_grid_can_express() {
+        // An odd X11 coordinate at scale 2 has no logical integer, so it
+        // moves by one; the point is that it then STAYS there. Granting the
+        // raw value instead is what let Houdini's dialog gain a pixel per
+        // request: 181 -> 91 -> 182 -> 91 -> 182 ...
+        assert_eq!(from_x11(181, 2.0), 91);
+        assert_eq!(to_x11(91, 2.0), 182);
+        assert_eq!(snap_x11(181, 2.0), 182);
+
+        // Idempotent: snapping a snapped value is a no-op, which is what
+        // makes repeated configures converge instead of drifting.
+        for x in [-91, -90, -1, 0, 1, 180, 181, 757, 1300, 3712] {
+            let once = snap_x11(x, 2.0);
+            assert_eq!(snap_x11(once, 2.0), once, "not idempotent at x={x}");
+        }
+
+        // Even values — and every value at scale 1 — are untouched, so
+        // nothing outside xwayland_hidpi changes.
+        for x in [-90, 0, 180, 720, 1360, 3712] {
+            assert_eq!(snap_x11(x, 2.0), x, "even value moved at x={x}");
+        }
+        for x in [-91, -1, 0, 1, 181, 757, 1301] {
+            assert_eq!(snap_x11(x, 1.0), x, "scale 1 moved at x={x}");
+        }
     }
 
     #[test]
