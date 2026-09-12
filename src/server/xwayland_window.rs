@@ -611,6 +611,17 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         (*window).rendering_requested.y = log_y;
         (*window).rendering_sent.width = log_width;
         (*window).rendering_sent.height = log_height;
+        // The screen origin above is only half the move: the arrange pass
+        // places a floating window from its VIRTUAL origin, so leaving that
+        // stale meant the very next transaction recomputed the window back
+        // to where it was. An X11 client reads that as its move being
+        // refused and asks again from the position it was pushed to, which
+        // is a runaway: Houdini's Edit Theme dialog walked 270px left across
+        // one tab switch, re-requesting 15 times in a second and never
+        // converging on a size either.
+        let (vx, vy) = (*window).screen_to_virtual(log_x, log_y);
+        (*window).virtual_x = vx;
+        (*window).virtual_y = vy;
         (*window).set_dimensions(log_width, log_height);
         return;
     }

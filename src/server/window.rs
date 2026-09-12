@@ -1274,6 +1274,21 @@ impl Window {
         )
     }
 
+    /// Layout (screen) position back to a virtual position — the inverse of
+    /// `virtual_to_screen`. A client that repositions itself hands us a
+    /// SCREEN origin, but the arrange pass places a floating window from its
+    /// VIRTUAL one, so a screen origin written on its own survives exactly
+    /// until the next transaction and is then recomputed away.
+    pub unsafe fn screen_to_virtual(&self, sx: i32, sy: i32) -> (f64, f64) {
+        let wm = &(*self.server).wm;
+        let zoom = wm.desk_zoom.max(0.01);
+        let (out_x, out_y, _, _) = self.first_enabled_output_box();
+        (
+            wm.desk_pan_x + (sx as f64 - out_x) / zoom,
+            wm.desk_pan_y + (sy as f64 - out_y) / zoom,
+        )
+    }
+
     /// Best-known window size in VIRTUAL units at map time. `box_geom` is the
     /// render pass's size and is only filled in once a frame has been drawn
     /// (or by `try_restore` from the saved geometry), so a first-ever launch
