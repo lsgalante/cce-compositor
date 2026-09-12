@@ -4103,7 +4103,29 @@ impl Window {
                 None => [0.0; 4],
             };
             ffi::wlr_scene_frame_set_exclusion(self.border.frame, ex.as_ptr());
-            ffi::wlr_scene_frame_set_color(self.border.frame, premul(&border_color).as_ptr());
+            // The ring exists only for the SEAT-focused window — `handles_on`
+            // above says so, and so does step_border_fade's reveal — so it
+            // paints in the focused color, taken from the layout rather than
+            // from `requested.border.color`.
+            //
+            // That field is a PLAN value, written by the arrange pass from the
+            // focus it saw when it ran, and a focus change only schedules an
+            // arrange when the newly focused window happens to be Floating
+            // (Seat::focus). Every other focus change armed the border fade
+            // and nothing else, so the ring eased in wearing the UNFOCUSED
+            // color: hovering a tiled window in overview drew its resize ring
+            // in the plain border gray instead of the focus color, and it
+            // stayed gray until some unrelated transaction refreshed the plan.
+            // Whether the ring is drawn and what color it is are the same
+            // fact — focused — so both now read it live, the way update_bevel
+            // already reads focus off the seats for the rim highlight.
+            //
+            // `window_background` above keeps the plan color: that one is the
+            // window's own plate, not this compositor-drawn handle.
+            ffi::wlr_scene_frame_set_color(
+                self.border.frame,
+                premul(&layout.border_color_focused).as_ptr(),
+            );
             let hovered = self
                 .hovered_border_element
                 .map(|e| e.index() as f32)
