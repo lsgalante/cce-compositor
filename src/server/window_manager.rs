@@ -5381,11 +5381,19 @@ impl WindowManager {
                     self.for_each_cursor(|cursor| cursor.inject_finger_stop());
                     return "ok\n".to_string();
                 }
-                let finger = parts.last().map_or(false, |p| *p == "finger");
+                // `natural` marks the swipe as coming from a natural-scrolling
+                // touchpad: the deltas are given as libinput would deliver
+                // them (already sign-flipped), and the view drag undoes that.
+                let finger = parts.iter().any(|p| *p == "finger");
+                let natural = parts.iter().any(|p| *p == "natural");
                 let dy = parts[1].parse::<f64>();
-                let dx = parts.get(2).filter(|p| **p != "finger").map(|v| v.parse::<f64>()).unwrap_or(Ok(0.0));
+                let dx = parts.get(2).filter(|p| **p != "finger" && **p != "natural").map(|v| v.parse::<f64>()).unwrap_or(Ok(0.0));
                 if let (Ok(dy), Ok(dx)) = (dy, dx) {
-                    self.for_each_cursor(|cursor| cursor.inject_scroll(dy, dx, finger));
+                    self.for_each_cursor(|cursor| {
+                        cursor.inject_natural = natural;
+                        cursor.inject_scroll(dy, dx, finger);
+                        cursor.inject_natural = false;
+                    });
                     "ok\n".to_string()
                 } else {
                     "error: invalid dy or dx\n".to_string()

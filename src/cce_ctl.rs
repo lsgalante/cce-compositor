@@ -86,8 +86,11 @@ fn usage(name: &str, to_stderr: bool) {
     print("  pointer-location");
     print("  pointer-move-to <x> <y>            (layout pixels)");
     print("  pointer-move-by <dx> <dy>");
-    print("  pointer-scroll <dy> [dx] [finger]  (positive dy scrolls down; 15 = one notch;");
-    print("  pointer-scroll finger-stop          finger = a two-finger swipe, ended by finger-stop)");
+    print("  pointer-scroll <dy> [dx] [finger] [natural]");
+    print("                                     (positive dy scrolls down; 15 = one notch; finger = a");
+    print("                                      two-finger swipe, ended by finger-stop; natural = from");
+    print("                                      a natural-scrolling touchpad, deltas already flipped)");
+    print("  pointer-scroll finger-stop");
     print("  pointer-pinch <scale> [rotation] [steps] | begin | update <scale> [rotation] | end");
     print("  touchpad-view-regions <x11:ID|id|app_id> clear | <x,y,w,h> ...");
     print("                                     (limit a touchpad_view_apps drag to these window-local");

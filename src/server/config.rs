@@ -418,7 +418,8 @@ pub struct WindowManagerConfig {
     pub touchpad_view_swipe: Option<String>,
     /// Finger-to-pointer distance factor for the emulated drag (default 1).
     pub touchpad_view_sensitivity: Option<f64>,
-    /// Reverse the drag direction. KDL: `touchpad_view_invert (bool)true`.
+    /// Reverse the drag direction, on top of the natural-scroll correction
+    /// the drag already makes. KDL: `touchpad_view_invert (bool)true`.
     pub touchpad_view_invert: Option<bool>,
 }
 

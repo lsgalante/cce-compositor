@@ -94,6 +94,10 @@ pub struct Cursor {
     pub gesture_scale: f64,
     pub gesture_triggered: bool,
     pub panning_gesture_active: bool,
+    /// What `pointer-scroll ... natural` sets: an injected finger scroll
+    /// (no device behind it) reads as coming from a natural-scrolling
+    /// touchpad, so the view drag's un-inversion can be exercised headlessly.
+    pub inject_natural: bool,
     /// Finger-pan velocity estimate per axis (`[x, y]`, virtual units/s) and
     /// the hardware timestamp of each axis's last finger event, for the
     /// kinetic desktop coast on the lift.
@@ -176,6 +180,7 @@ impl Default for Cursor {
             gesture_scale: 1.0,
             gesture_triggered: false,
             panning_gesture_active: false,
+            inject_natural: false,
             pan_vel: [0.0, 0.0],
             pan_last_msec: [0, 0],
             pinch_zoom_active: false,
@@ -2353,6 +2358,13 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
 /// dollies (right button, distance from the log of the scale), and Ctrl
 /// + swipe passes through as a plain scroll — the same modifier Houdini
 /// itself assigns to "simulate the mouse wheel" in gesture mode.
+///
+/// Natural scrolling is undone here. libinput flips the sign of a finger
+/// delta before the compositor sees it, which is right for a scroll (the
+/// content follows the fingers) and wrong for a drag replayed as pointer
+/// motion: the view follows the pointer, so the pointer has to go where
+/// the fingers went. `axis_event_is_natural` asks the source device, and
+/// `touchpad_view_invert` then means "backwards" on top of that either way.
 pub struct ViewDrag {
     pub button: u32,
     pub surface: *mut ffi::wlr_surface,
@@ -2434,6 +2446,24 @@ impl Cursor {
             ratio = surf_w as f64 / dest_w as f64;
         }
         Some((window, result.surface, result.sx, result.sy, ratio))
+    }
+
+    /// Whether the touchpad behind an axis event has natural scrolling on,
+    /// i.e. its deltas arrive sign-flipped. An injected event has no device
+    /// and answers with `inject_natural` (see `pointer-scroll ... natural`).
+    unsafe fn axis_event_is_natural(&self, event: *const ffi::wlr_pointer_axis_event) -> bool {
+        let pointer = (*event).pointer;
+        if pointer.is_null() {
+            return self.inject_natural;
+        }
+        let dev = &mut (*pointer).base as *mut ffi::wlr_input_device;
+        if !ffi::wlr_input_device_is_libinput(dev) {
+            return false;
+        }
+        let handle = ffi::wlr_libinput_get_device_handle(dev);
+        !handle.is_null()
+            && ffi::libinput_device_config_scroll_has_natural_scroll(handle) != 0
+            && ffi::libinput_device_config_scroll_get_natural_scroll_enabled(handle) != 0
     }
 
     unsafe fn begin_view_drag(&mut self, button: u32, from_pinch: bool) -> bool {
@@ -2544,6 +2574,9 @@ impl Cursor {
         }
         let wm = &(*(*self.seat).server).wm;
         let mut step = delta * wm.touchpad_view_sensitivity;
+        if self.axis_event_is_natural(event) {
+            step = -step;
+        }
         if wm.touchpad_view_invert {
             step = -step;
         }
