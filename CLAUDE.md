@@ -491,7 +491,13 @@ A restored **floating** window is recalled into the current view
 when its remembered position would show less than a quarter of it: the
 camera at restore is wherever the session left it, and a floating window a
 screen away from that is lost, not remembered. Tiled windows stay where the
-grid has them.
+grid has them. **Except on the tiled desk**: a floating window within one
+viewport of the tiled windows' bounding box (`tiled_desk_bounds` — the
+session's Tiled entries still queued plus the live Tiled windows) keeps its
+remembered spot however far the camera is, since the columns beside it are
+what the user pans along (cce-data-editor parked left of the first column
+came back mid-view every login before 2026-09-14). The recall is for a
+window with no tiled neighbour within a screen.
 
 ### IPC & status sockets
 

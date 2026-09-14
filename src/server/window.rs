@@ -1207,6 +1207,13 @@ impl Window {
             // viewport above the desk every login, at the cell its previous
             // incarnation had been saved in, with nothing on screen to say
             // it existed. Tiled windows are the grid's and stay put.
+            //
+            // Unless it is on the tiled desk: a window within a viewport of
+            // the tiled windows' bounding box (`tiled_desk_bounds`, the
+            // session's tiled entries still to restore plus the tiled
+            // windows already up) is placed beside content the user pans
+            // along, and stays where it was put — cce-data-editor parked
+            // left of the first column came back mid-view every login.
             if self.tiling_mode == crate::tiling::TilingMode::Floating && !self.minimized {
                 let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
                 let wm = &(*self.server).wm;
@@ -1215,6 +1222,7 @@ impl Window {
                     pan_y: wm.desk_pan_y,
                     zoom: wm.desk_zoom,
                 };
+                let desk = wm.tiled_desk_bounds();
                 if let Some((nx, ny)) = crate::policy::camera::recalled_origin(
                     self.virtual_x,
                     self.virtual_y,
@@ -1223,10 +1231,11 @@ impl Window {
                     cam,
                     vp_w,
                     vp_h,
+                    desk,
                 ) {
                     log::info!(
-                        "Recalling off-view floating window into view: app_id={} remembered=({:.0},{:.0}) -> ({:.0},{:.0})",
-                        app_id_str, self.virtual_x, self.virtual_y, nx, ny
+                        "Recalling off-view floating window into view: app_id={} remembered=({:.0},{:.0}) -> ({:.0},{:.0}) (tiled desk: {:?})",
+                        app_id_str, self.virtual_x, self.virtual_y, nx, ny, desk
                     );
                     self.virtual_x = nx;
                     self.virtual_y = ny;

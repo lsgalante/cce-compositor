@@ -684,6 +684,51 @@ impl WindowManager {
         }
     }
 
+    /// Bounding box of the TILED desk, virtual units: the union of the
+    /// session's Tiled entries still waiting in `restore_queue` and every
+    /// live Tiled window (mapped, or restored and about to map). `None` when
+    /// there is no tiled window at all. Feeds `recalled_origin`'s on-desk
+    /// exemption in `try_restore`, so a floating window remembered beside
+    /// the tiled columns is not recalled into the view like a lost one.
+    /// Minimized entries are skipped — a minimized window is nowhere on the
+    /// desk to be beside.
+    pub unsafe fn tiled_desk_bounds(&self) -> Option<(f64, f64, f64, f64)> {
+        let mut bounds: Option<(f64, f64, f64, f64)> = None;
+        let mut extend = |x: f64, y: f64, w: f64, h: f64| {
+            if w <= 0.0 || h <= 0.0 {
+                return;
+            }
+            let (min_x, min_y, max_x, max_y) =
+                bounds.unwrap_or((f64::MAX, f64::MAX, f64::MIN, f64::MIN));
+            bounds = Some((min_x.min(x), min_y.min(y), max_x.max(x + w), max_y.max(y + h)));
+        };
+        for e in &self.restore_queue {
+            if e.tiling_mode == crate::tiling::TilingMode::Tiled && !e.minimized {
+                extend(e.virtual_x, e.virtual_y, e.width as f64, e.height as f64);
+            }
+        }
+        for &w in self.windows.iter() {
+            if w.is_null()
+                || (*w).closed
+                || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init)
+                || (*w).tiling_mode != crate::tiling::TilingMode::Tiled
+                || (*w).minimized
+                || (*w).is_status_bar()
+                || (*w).is_wallpaper()
+                || (*w).is_grid()
+            {
+                continue;
+            }
+            extend(
+                (*w).virtual_x,
+                (*w).virtual_y,
+                (*w).box_geom.width as f64,
+                (*w).box_geom.height as f64,
+            );
+        }
+        bounds
+    }
+
     /// Dim frames at every restored window's saved geometry, shown from
     /// login until the real window maps (or a timeout sweeps the leftovers):
     /// the desk isn't a void while slow programs load, and the saved camera
