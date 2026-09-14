@@ -382,6 +382,40 @@ const RECONNECT_FOCUS_GRACE: std::time::Duration = std::time::Duration::from_sec
 /// Deliberately NOT a general glob: no `?`, no character classes. An app_id is
 /// a flat identifier and `*` covers the rename cases; the rest is surface for
 /// a pattern to match something nobody intended.
+/// Whether a surface-local point lies in one of an app's view regions
+/// (`Window::view_regions`). An empty list matches nothing: an app that
+/// has told us it currently shows no view pane gets no view drag at all,
+/// which is different from an app that never said anything (`None`).
+pub fn point_in_view_regions(regions: &[[f64; 4]], x: f64, y: f64) -> bool {
+    regions.iter().any(|[rx, ry, rw, rh]| x >= *rx && y >= *ry && x < rx + rw && y < ry + rh)
+}
+
+/// The mapped window an IPC command names: `x11:<id>` is the X11 window
+/// id an Xwayland client knows itself by (what `windows --json` reports as
+/// `x11`), a bare number is the compositor's own id, anything else an
+/// app_id. Only the first form is unambiguous for an app with several
+/// windows, which is why a client that publishes per-window state should
+/// use it.
+pub unsafe fn window_by_query(windows: impl Iterator<Item = *mut Window>, query: &str) -> Option<*mut Window> {
+    let x11 = query.strip_prefix("x11:").and_then(|v| v.parse::<u32>().ok());
+    let id = query.parse::<u32>().ok();
+    windows.into_iter().find(|&w| {
+        if w.is_null() || (*w).closed || !matches!((*w).state, crate::window::WindowState::Mapped) {
+            return false;
+        }
+        if let Some(x11) = x11 {
+            return match (*w).impl_type {
+                crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*(*xw).xsurface).window_id == x11,
+                _ => false,
+            };
+        }
+        if let Some(id) = id {
+            return (*w).ref_key.index == id;
+        }
+        (*w).get_app_id_string().map_or(false, |a| app_id_matches(query, &a))
+    })
+}
+
 pub fn app_id_matches(pattern: &str, app_id: &str) -> bool {
     if !pattern.contains('*') {
         return pattern.eq_ignore_ascii_case(app_id);
@@ -5120,6 +5154,10 @@ impl WindowManager {
                                 "h": (*w).box_geom.height,
                                 "vx": (*w).virtual_x,
                                 "vy": (*w).virtual_y,
+                                "x11": match (*w).impl_type {
+                                    crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => Some((*(*xw).xsurface).window_id),
+                                    _ => None,
+                                },
                                 "cell": cell,
                                 "minimized": (*w).minimized,
                                 "has_parent": (*w).has_parent,
@@ -5373,6 +5411,40 @@ impl WindowManager {
                 } else {
                     "error: invalid pinch arguments\n".to_string()
                 }
+            }
+            "touchpad-view-regions" => {
+                // touchpad-view-regions <x11:ID|id|app_id> clear | <x,y,w,h> ...
+                // An app named in `touchpad_view_apps` narrows the emulated
+                // view drag (see `cursor::ViewDrag`) to rectangles of one of
+                // its windows, in surface-local pixels — for an X11 window
+                // under `xwayland_hidpi`, the physical pixels the client
+                // itself measures in. A two-finger scroll outside them reaches
+                // the client as the plain scroll it was, so Houdini's
+                // parameter editor scrolls while its viewports still tumble;
+                // it publishes its 3D viewports and network editors from
+                // hou-control. `clear` restores the whole-window drag.
+                if parts.len() < 3 {
+                    return "error: usage: touchpad-view-regions <x11:ID|id|app_id> clear|<x,y,w,h> ...\n".to_string();
+                }
+                let Some(w) = window_by_query(self.windows.iter().copied(), parts[1]) else {
+                    return format!("error: no mapped window matches {}\n", parts[1]);
+                };
+                if parts[2] == "clear" {
+                    (*w).view_regions = None;
+                    log::info!("[touchpad-view-regions] {} cleared", parts[1]);
+                    return "ok\n".to_string();
+                }
+                let mut regions = Vec::new();
+                for spec in &parts[2..] {
+                    let v: Vec<f64> = spec.split(',').filter_map(|n| n.parse().ok()).collect();
+                    if v.len() != 4 {
+                        return format!("error: bad rect {} (want x,y,w,h)\n", spec);
+                    }
+                    regions.push([v[0], v[1], v[2], v[3]]);
+                }
+                log::info!("[touchpad-view-regions] {} -> {:?}", parts[1], regions);
+                (*w).view_regions = Some(regions);
+                "ok\n".to_string()
             }
             "place-next" => {
                 // place-next <app_id> <x> <y>: one-shot hint — the next map of
@@ -6572,6 +6644,25 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn point_in_view_regions_is_half_open() {
+        let r = [[10.0, 20.0, 100.0, 50.0], [500.0, 0.0, 10.0, 10.0]];
+        assert!(point_in_view_regions(&r, 10.0, 20.0));
+        assert!(point_in_view_regions(&r, 109.9, 69.9));
+        assert!(!point_in_view_regions(&r, 110.0, 30.0));
+        assert!(!point_in_view_regions(&r, 50.0, 70.0));
+        assert!(point_in_view_regions(&r, 505.0, 5.0));
+        assert!(!point_in_view_regions(&r, 0.0, 0.0));
+    }
+
+    /// An app that reports no view pane at all gets no drag: that is not
+    /// the same as never having reported (`None`), which keeps the whole
+    /// window.
+    #[test]
+    fn point_in_view_regions_empty_matches_nothing() {
+        assert!(!point_in_view_regions(&[], 0.0, 0.0));
+    }
 
     #[test]
     fn app_id_matches_is_exact_without_a_star() {

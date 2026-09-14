@@ -374,6 +374,14 @@ pub struct Window {
     pub node: WmNode,
     pub state: WindowState,
     pub impl_type: WindowImpl,
+    /// Where a two-finger scroll over this window becomes an emulated
+    /// view drag (see `cursor::ViewDrag`), when the app has said so through
+    /// `touchpad-view-regions`: rectangles in surface-local pixels, `[x, y,
+    /// w, h]`. `None` means the whole window, which is what an app that
+    /// never sends any gets. Outside the rectangles the scroll reaches the
+    /// client untouched — Houdini's parameter editor scrolls, its 3D
+    /// viewports tumble.
+    pub view_regions: Option<Vec<[f64; 4]>>,
 
     pub tree: *mut ffi::wlr_scene_tree,
     pub fullscreen_background: *mut ffi::wlr_scene_rect,
@@ -702,6 +710,7 @@ impl Window {
         let decorations_above_tree = ffi::wlr_scene_tree_create(tree);
 
         let mut window = Box::new(Window {
+            view_regions: None,
             ref_key: crate::slotmap::Key { generation: 0, index: 0 },
             server,
             object: std::ptr::null_mut(),

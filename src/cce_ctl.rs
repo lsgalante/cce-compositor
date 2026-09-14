@@ -86,7 +86,12 @@ fn usage(name: &str, to_stderr: bool) {
     print("  pointer-location");
     print("  pointer-move-to <x> <y>            (layout pixels)");
     print("  pointer-move-by <dx> <dy>");
-    print("  pointer-scroll <dy> [dx]           (positive dy scrolls down; 15 = one notch)");
+    print("  pointer-scroll <dy> [dx] [finger]  (positive dy scrolls down; 15 = one notch;");
+    print("  pointer-scroll finger-stop          finger = a two-finger swipe, ended by finger-stop)");
+    print("  pointer-pinch <scale> [rotation] [steps] | begin | update <scale> [rotation] | end");
+    print("  touchpad-view-regions <x11:ID|id|app_id> clear | <x,y,w,h> ...");
+    print("                                     (limit a touchpad_view_apps drag to these window-local");
+    print("                                      rects; a swipe elsewhere scrolls the app normally)");
     print("  pointer-click [button]             (left|right|middle|back|forward or evdev code)");
     print("  pointer-press [button]             (held until pointer-release — drives drags)");
     print("  pointer-release [button]");

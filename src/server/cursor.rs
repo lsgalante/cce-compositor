@@ -2418,6 +2418,15 @@ impl Cursor {
         if !wm.touchpad_view_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
             return None;
         }
+        // The app may have narrowed the drag to its own view panes (see
+        // `touchpad-view-regions`); elsewhere the scroll passes through.
+        // `result.sx`/`sy` are surface-local, the same pixels the client
+        // measures its panes in.
+        if let Some(regions) = &(*window).view_regions {
+            if !crate::window_manager::point_in_view_regions(regions, result.sx, result.sy) {
+                return None;
+            }
+        }
         let mut ratio = 1.0;
         let dest_w = ffi::river_scene_buffer_get_dest_width(result.node as *mut ffi::wlr_scene_buffer);
         let surf_w = ffi::river_wlr_surface_get_width(result.surface);
