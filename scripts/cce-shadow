@@ -243,6 +243,8 @@ default instance is "default"; CCE_SHADOW_INSTANCE sets it for a whole shell.
                         runs do not inherit the previous one's windows)
       --exec <cmd>      run <cmd> inside the session once it is up
       --scale <n>       output scale, e.g. 2 for HiDPI (default 1)
+      --xwayland        start Xwayland too, for X11 clients (off by default:
+                        a shadow rarely needs it and it slows startup)
       --gpu <path>      pin the renderer (default: first non-NVIDIA render
                         node, because window capture fails on NVIDIA);
                         --gpu none leaves the choice to wlroots
@@ -370,14 +372,28 @@ require_running() {
 }
 
 # The environment a client (or ccectl) needs to talk to the shadow.
+# The X display of a shadow started with --xwayland, ":N", or nothing.
+# Only the compositor's log says which one Xwayland took.
+shadow_x_display() {
+    grep -a -m1 -oE 'Starting Xwayland on :[0-9]+' "$LOG" 2>/dev/null | awk '{print $4}' || true
+}
+
+# `-u DISPLAY` comes first: env(1) takes its options before assignments. It
+# is there so an X11 client cannot fall through to the LIVE session's X
+# server — without it a `run` of a GTK program under an Xwayland-less shadow
+# put its windows on the user's screen.
 shadow_env() {
     printf '%s\n' \
+        "-u" "DISPLAY" \
         "HOME=$SHADOW_HOME" \
         "XDG_CONFIG_HOME=$SHADOW_HOME/.config" \
         "XDG_STATE_HOME=$SHADOW_HOME/.local/state" \
         "XDG_CACHE_HOME=$SHADOW_HOME/.cache" \
         "XDG_DATA_HOME=$SHADOW_HOME/.local/share" \
         "WAYLAND_DISPLAY=$(shadow_display)"
+    local x; x=$(shadow_x_display)
+    [ -n "$x" ] && printf 'DISPLAY=%s\n' "$x"
+    return 0
 }
 
 # ── config seeding ───────────────────────────────────────────────────────────
@@ -463,7 +479,7 @@ seed_config() {
 
 # ── commands ─────────────────────────────────────────────────────────────────
 cmd_start() {
-    local fresh=0 restore=0 exec_cmd=':' scale=1 gpu="${CCE_SHADOW_GPU:-}" bin="" new=0
+    local fresh=0 restore=0 exec_cmd=':' scale=1 gpu="${CCE_SHADOW_GPU:-}" bin="" new=0 xwayland=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --new)   new=1; shift ;;
@@ -472,6 +488,7 @@ cmd_start() {
             --restore) restore=1; shift ;;
             --exec)  exec_cmd=${2:?--exec needs a command}; shift 2 ;;
             --scale) scale=${2:?--scale needs a number}; shift 2 ;;
+            --xwayland) xwayland=1; shift ;;
             --gpu)   gpu=${2:?--gpu needs a device path}; shift 2 ;;
             --bin)   bin=${2:?--bin needs a path}; shift 2 ;;
             *) die "unknown option: $1" ;;
@@ -538,9 +555,12 @@ cmd_start() {
     # compositor dies during startup and leaves the tree behind.
     owner_token > "$RUN_DIR/owner"
 
+    local -a xwayland_args=(--no-xwayland)
+    [ "$xwayland" = 1 ] && xwayland_args=()
+
     note "starting $cce_fx (headless)"
     env "${env_args[@]}" setsid nohup \
-        "$cce_fx" --no-xwayland --log-level info -c "$exec_cmd" \
+        "$cce_fx" "${xwayland_args[@]}" --log-level info -c "$exec_cmd" \
         > "$LOG" 2>&1 &
     local started=$!
     printf '%s\n' "$started" > "$PIDFILE"

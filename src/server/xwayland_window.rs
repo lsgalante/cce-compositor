@@ -548,6 +548,8 @@ unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
         (*(*xwindow).window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());
     }
 
+    place_transient_where_it_asked(xwindow);
+
     (*(*xwindow).window).state = WindowState::Initialized;
     if let Err(e) = (*(*xwindow).window).map() {
         log::error!("out of memory mapping window: {}", e);
@@ -556,6 +558,60 @@ unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
         ffi::wl_client_post_no_memory(client);
     }
     (*(*(*xwindow).window).server).wm.dirty_windowing();
+}
+
+/// A transient that asked for a position before mapping maps there.
+///
+/// `handle_request_configure` grants a request that arrives before the
+/// window is mapped verbatim, but records nothing: the window has no
+/// geometry yet and the arrange pass has not placed it. The grant updates
+/// the X surface's x/y, and nothing read them back at map, so a dialog that
+/// positioned itself before showing -- Qt's `move()` before `show()`, which
+/// is how Houdini's HC Panel centres itself on the pane it was opened over
+/// -- mapped at the constructor's default origin instead, a hundred pixels
+/// in from the desk corner. The client never asks again, since X told it
+/// the request was granted, so the dialog sat there for good.
+///
+/// Only a window with a parent, and only when the client says the position
+/// is its own: ICCCM's `USPosition` / `PPosition` flags in WM_NORMAL_HINTS
+/// are what toolkits set for an explicit move before map. A transient
+/// without them is at whatever the X server defaulted to, and stays on the
+/// compositor's placement. Top-level windows keep theirs too: restore and
+/// the placement hints own those, and a transient is the one kind of window
+/// `try_restore` refuses to touch.
+unsafe fn place_transient_where_it_asked(xwindow: *mut XwaylandWindow) {
+    let xsurface = (*xwindow).xsurface;
+    if (*xsurface).parent.is_null() {
+        return;
+    }
+    let Some(asked) = (*xwindow).sent_geom else {
+        return;
+    };
+    let hints = (*xsurface).size_hints;
+    if hints.is_null() {
+        return;
+    }
+    let position_flags = ffi::xcb_icccm_size_hints_flags_t_XCB_ICCCM_SIZE_HINT_US_POSITION
+        | ffi::xcb_icccm_size_hints_flags_t_XCB_ICCCM_SIZE_HINT_P_POSITION;
+    if (*hints).flags & position_flags == 0 {
+        return;
+    }
+
+    let window = (*xwindow).window;
+    let s = x11_scale_for((*window).server, xsurface);
+    let log_x = from_x11(asked.x as i32, s);
+    let log_y = from_x11(asked.y as i32, s);
+    let (vx, vy) = (*window).screen_to_virtual(log_x, log_y);
+    (*window).virtual_x = vx;
+    (*window).virtual_y = vy;
+    // Placed by the client, like a picker placed by its hint: the camera
+    // must not pan to it on spawn or first focus.
+    (*window).hint_placed = true;
+    log::info!(
+        "XWayland transient mapped where it asked: title='{}' x11=({}, {}) logical=({}, {}) virtual=({:.1}, {:.1})",
+        (*window).get_title_string().unwrap_or_default(),
+        asked.x, asked.y, log_x, log_y, vx, vy,
+    );
 }
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
