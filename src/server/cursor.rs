@@ -1396,7 +1396,11 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     }
                 }
             }
-            if !clicked_status.is_null() {
+            // An EXPANDED segment (menu open) is never grabbed: its rows are
+            // clicked, and a grab here would swallow the press the "Done"
+            // row needs to leave adjust mode — the one control that ends the
+            // mode from the bar would be unreachable while it is on.
+            if !clicked_status.is_null() && !(*server).wm.is_expanded_status_segment(clicked_status) {
                 (*server).wm.stop_panning_animation();
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
@@ -1960,9 +1964,37 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 && (*event).button == 0x110
             {
                 let win = op.window_ptr;
+                let app_id = (*win).get_app_id_string().unwrap_or_default();
+
+                // A press that never travelled is a CLICK, not a drag: end
+                // the grab without snapping — snapping classifies the
+                // release point alone, so a still click on a top-edge
+                // segment away from the corners re-homed it to top-center
+                // — and replay press+release to the segment, which never
+                // saw the press. The grab is taken on press so drag
+                // feedback is immediate; this is where the two are told
+                // apart.
+                const STATUS_CLICK_TRAVEL: f64 = 6.0;
+                let travel = (lx - op.start_x as f64).hypot(ly - op.start_y as f64);
+                if travel < STATUS_CLICK_TRAVEL {
+                    log::info!("[StatusRelease] click (travel {:.1}px) on app_id={} — replayed, not snapped", travel, app_id);
+                    seat.op_end();
+                    cursor.pressed.remove(&(*event).button);
+                    let time = (*event).time_msec;
+                    // Re-evaluate pointer focus onto the surface under the
+                    // pointer (nothing was notified during the grab), then
+                    // deliver the click.
+                    cursor.passthrough(time);
+                    ffi::wlr_seat_pointer_notify_button(seat.wlr_seat, time, (*event).button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED);
+                    ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+                    ffi::wlr_seat_pointer_notify_button(seat.wlr_seat, time, (*event).button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED);
+                    ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+                    (*server).wm.dirty_windowing();
+                    return;
+                }
+
                 let mut closest_edge = crate::window::StatusEdge::TopLeft;
                 let mut min_dist = f64::MAX;
-                let app_id = (*win).get_app_id_string().unwrap_or_default();
                 log::info!("[StatusRelease] Released status window: app_id={}, lx={}, ly={}", app_id, lx, ly);
                 
                 let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;

@@ -3794,23 +3794,27 @@ impl WindowManager {
     /// dismiss (cursor.rs) and the Escape dismiss (keyboard_group.rs) so the
     /// two triggers can never disagree about what counts as open.
     pub unsafe fn any_expanded_status_segment(&self, except: *mut crate::window::Window) -> bool {
+        self.windows.iter().any(|&w| w != except && self.is_expanded_status_segment(w))
+    }
+
+    /// A mapped status segment thicker than the bar — one whose in-surface
+    /// menu is open. The thickness IS the signal: the bar grows its own
+    /// surface into the menu and shrinks it back on close.
+    pub unsafe fn is_expanded_status_segment(&self, w: *mut crate::window::Window) -> bool {
         let bar_h = self.layout.bar_height;
-        self.windows.iter().any(|&w| {
-            !w.is_null()
-                && !(*w).closed
-                && w != except
-                && (*w).is_status_bar()
-                && matches!((*w).state, crate::window::WindowState::Mapped)
-                && {
-                    let bg = (*w).box_geom;
-                    let thickness = match (*w).status_edge {
-                        crate::policy::arrange::StatusEdge::Left
-                        | crate::policy::arrange::StatusEdge::Right => bg.width,
-                        _ => bg.height,
-                    };
-                    thickness > bar_h
-                }
-        })
+        !w.is_null()
+            && !(*w).closed
+            && (*w).is_status_bar()
+            && matches!((*w).state, crate::window::WindowState::Mapped)
+            && {
+                let bg = (*w).box_geom;
+                let thickness = match (*w).status_edge {
+                    crate::policy::arrange::StatusEdge::Left
+                    | crate::policy::arrange::StatusEdge::Right => bg.width,
+                    _ => bg.height,
+                };
+                thickness > bar_h
+            }
     }
 
     pub unsafe fn update_status(&self) {
