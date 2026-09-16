@@ -666,8 +666,10 @@ impl Output {
         // a camera change with no other pending damage would otherwise skip
         // the frame entirely.
         {
+            // Quantized to screen pixels: a sub-pixel pan moves no node
+            // (see `update_viewport_local`), so it is not a reason to paint.
             let wm = &(*self.server).wm;
-            let cam = (wm.desk_pan_x, wm.desk_pan_y, wm.desk_zoom);
+            let cam = ((wm.desk_pan_x * wm.desk_zoom).round(), (wm.desk_pan_y * wm.desk_zoom).round(), wm.desk_zoom);
             if cam != (self.last_rendered_pan_x, self.last_rendered_pan_y, self.last_rendered_zoom) {
                 self.last_rendered_pan_x = cam.0;
                 self.last_rendered_pan_y = cam.1;

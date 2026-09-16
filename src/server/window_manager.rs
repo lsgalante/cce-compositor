@@ -255,6 +255,11 @@ pub struct WindowManager {
     /// applied once, at the output frame, so the on-screen step lands on
     /// the vblank instead of whenever the last event happened to arrive.
     pub pan_pending: [f64; 2],
+    /// A pinch zoom waiting for the next output frame: (zoom, anchor x,
+    /// anchor y) in output-local px. libinput delivers pinch updates faster
+    /// than the refresh rate; the last one before a frame wins, so each
+    /// frame samples the gesture once instead of relaying out per event.
+    pub pinch_pending: Option<(f64, f64, f64)>,
     /// An interactive move/resize has pointer motion the client has not
     /// been configured for yet. The seat op recomputes the dragged window's
     /// geometry on every pointer event (cheap, and the arrange pass reads
@@ -514,6 +519,7 @@ impl WindowManager {
         self.pan_finger_v = [0.0, 0.0];
         self.camera_anim_active = false;
         self.pan_pending = [0.0, 0.0];
+        self.pinch_pending = None;
         self.op_frame_pending = false;
         self.animation_timer = std::ptr::null_mut();
         self.edge_pan_vx = 0.0;
@@ -1846,6 +1852,13 @@ impl WindowManager {
         self.schedule_frame_all_outputs();
     }
 
+    /// Queue a pinch zoom about an output-local anchor for the next output
+    /// frame (see `pinch_pending`).
+    pub unsafe fn queue_pinch(&mut self, zoom: f64, ax: f64, ay: f64) {
+        self.pinch_pending = Some((zoom, ax, ay));
+        self.schedule_frame_all_outputs();
+    }
+
     /// Queue the interactive move/resize's configure and relayout for the
     /// next output frame (see `op_frame_pending`).
     pub unsafe fn queue_op_frame(&mut self) {
@@ -1896,7 +1909,7 @@ impl WindowManager {
     /// be presented (`Output::predicted_present_ns`); the animation
     /// advances to that instant.
     pub unsafe fn step_camera_frame(&mut self, frame_target_ns: u64) {
-        let has_pending = self.pan_pending != [0.0, 0.0];
+        let has_pending = self.pan_pending != [0.0, 0.0] || self.pinch_pending.is_some();
         if !self.camera_anim_active && !has_pending {
             return;
         }
@@ -1909,6 +1922,15 @@ impl WindowManager {
             self.desk_pan_x += self.pan_pending[0];
             self.desk_pan_y += self.pan_pending[1];
             self.pan_pending = [0.0, 0.0];
+            if let Some((zoom, ax, ay)) = self.pinch_pending.take() {
+                // Like the wheel, pinch pivots about the cursor: the virtual
+                // point under it stays put on screen.
+                let cam = crate::policy::camera::zoom_about_anchor(self.camera(), ax, ay, zoom);
+                self.desk_pan_x = cam.pan_x;
+                self.desk_pan_y = cam.pan_y;
+                self.desk_zoom = cam.zoom;
+                self.set_mode(if crate::policy::camera::is_overview(cam.zoom) { WindowManagerMode::Overview } else { WindowManagerMode::Normal });
+            }
         }
         if self.camera_anim_active {
             if crate::output::frame_debug() {
@@ -3493,7 +3515,14 @@ impl WindowManager {
 
     pub unsafe fn update_viewport_local(&mut self) {
         let zoom_changed = self.desk_zoom != self.last_viewport_zoom;
-        let pan_changed = self.desk_pan_x != self.last_viewport_pan_x || self.desk_pan_y != self.last_viewport_pan_y;
+        // A pan counts as motion only once it moves a screen pixel: nodes
+        // sit on integer logical px (`virtual_to_screen` rounds), so the
+        // sub-pixel tail of an eased pan changes nothing on screen, and
+        // repainting the whole output for it was pure cost.
+        let zoom = self.desk_zoom;
+        let px = |pan: f64| (pan * zoom).round();
+        let pan_changed = px(self.desk_pan_x) != px(self.last_viewport_pan_x)
+            || px(self.desk_pan_y) != px(self.last_viewport_pan_y);
         let moved = zoom_changed || pan_changed;
 
         self.last_viewport_zoom = self.desk_zoom;

@@ -2922,8 +2922,8 @@ impl Window {
                 }
                 _ => (self.scale, self.scale),
             };
-            let width = (actual_w as f64 * scale_x) as i32;
-            let height = (actual_h as f64 * scale_y) as i32;
+            let width = (actual_w as f64 * scale_x).round() as i32;
+            let height = (actual_h as f64 * scale_y).round() as i32;
             ffi::river_scene_node_enable_blur(
                 self.tree as *mut ffi::wlr_scene_node,
                 blur_enabled,
@@ -2987,15 +2987,15 @@ impl Window {
                         ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
                         ffi::river_scene_node_set_position_if_changed(node, ox, oy);
                     } else {
-                        let dest_w = (w as f64 * data.scale_x) as i32;
-                        let dest_h = (h as f64 * data.scale_y) as i32;
+                        let dest_w = (w as f64 * data.scale_x).round() as i32;
+                        let dest_h = (h as f64 * data.scale_y).round() as i32;
                         ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
 
                         // The parent offset scales like the content; the
                         // clip origin rides on top of it, scaled the same.
                         let (px, py) = get_parent_position_relative_to(node, data.ancestor);
-                        let dest_x = (px as f64 * (data.scale_x - 1.0) + ox as f64 * data.scale_x) as i32;
-                        let dest_y = (py as f64 * (data.scale_y - 1.0) + oy as f64 * data.scale_y) as i32;
+                        let dest_x = (px as f64 * (data.scale_x - 1.0) + ox as f64 * data.scale_x).round() as i32;
+                        let dest_y = (py as f64 * (data.scale_y - 1.0) + oy as f64 * data.scale_y).round() as i32;
                         ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
                     }
                     // Keep the opaque region in step with the dest scale —
@@ -3243,13 +3243,13 @@ impl Window {
                     ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
                     ffi::river_scene_node_set_position_if_changed(node, ox, oy);
                 } else {
-                    let dest_w = (w as f64 * data.scale) as i32;
-                    let dest_h = (h as f64 * data.scale) as i32;
+                    let dest_w = (w as f64 * data.scale).round() as i32;
+                    let dest_h = (h as f64 * data.scale).round() as i32;
                     ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
 
                     let (px, py) = get_parent_position_relative_to(node, data.ancestor);
-                    let dest_x = (px as f64 * (data.scale - 1.0) + ox as f64 * data.scale) as i32;
-                    let dest_y = (py as f64 * (data.scale - 1.0) + oy as f64 * data.scale) as i32;
+                    let dest_x = (px as f64 * (data.scale - 1.0) + ox as f64 * data.scale).round() as i32;
+                    let dest_y = (py as f64 * (data.scale - 1.0) + oy as f64 * data.scale).round() as i32;
                     ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
                 }
                 // Keep the opaque region in step with the dest scale —
@@ -5069,8 +5069,8 @@ impl Decoration {
                     ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
                     ffi::river_scene_node_set_position_if_changed(node, 0, 0);
                 } else {
-                    let dest_w = (w as f64 * data.scale) as i32;
-                    let dest_h = (h as f64 * data.scale) as i32;
+                    let dest_w = (w as f64 * data.scale).round() as i32;
+                    let dest_h = (h as f64 * data.scale).round() as i32;
                     ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
 
                     let (px, py) = get_parent_position_relative_to(node, data.ancestor);
@@ -5144,8 +5144,8 @@ impl Decoration {
                     ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
                     ffi::river_scene_node_set_position_if_changed(node, 0, 0);
                 } else {
-                    let dest_w = (w as f64 * data.scale) as i32;
-                    let dest_h = (h as f64 * data.scale) as i32;
+                    let dest_w = (w as f64 * data.scale).round() as i32;
+                    let dest_h = (h as f64 * data.scale).round() as i32;
                     ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
 
                     let (px, py) = get_parent_position_relative_to(node, data.ancestor);

@@ -3458,37 +3458,22 @@ unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: 
 
     if cursor.pinch_zoom_active {
         let wm = &mut (*seat.server).wm;
-        let old_zoom = wm.desk_zoom;
         let new_zoom = crate::policy::camera::pinch_zoom(cursor.pinch_start_zoom, (*event).scale);
-        if new_zoom != old_zoom {
-            let cx = cursor.x();
-            let cy = cursor.y();
-            let wlr_output = (*(*seat).server).om.output_at(cx, cy);
-            let (phys_x, phys_y) = if !wlr_output.is_null() {
-                let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-                ffi::wlr_output_layout_get_box((*(*seat).server).om.output_layout, wlr_output, &mut output_box);
-                (output_box.x as f64, output_box.y as f64)
-            } else {
-                (0.0, 0.0)
-            };
-            // Like the wheel, pinch pivots about the cursor: the virtual
-            // point under it stays put on screen.
-            let cam = crate::policy::camera::zoom_about_anchor(
-                wm.camera(),
-                cx - phys_x,
-                cy - phys_y,
-                new_zoom,
-            );
-            wm.desk_pan_x = cam.pan_x;
-            wm.desk_pan_y = cam.pan_y;
-            wm.desk_zoom = cam.zoom;
-            wm.set_mode(if crate::policy::camera::is_overview(cam.zoom) { crate::window_manager::WindowManagerMode::Overview } else { crate::window_manager::WindowManagerMode::Normal });
-            if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
-                wm.update_viewport_local();
-            } else {
-                wm.dirty_windowing();
-            }
-        }
+        let cx = cursor.x();
+        let cy = cursor.y();
+        let wlr_output = (*(*seat).server).om.output_at(cx, cy);
+        let (phys_x, phys_y) = if !wlr_output.is_null() {
+            let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+            ffi::wlr_output_layout_get_box((*(*seat).server).om.output_layout, wlr_output, &mut output_box);
+            (output_box.x as f64, output_box.y as f64)
+        } else {
+            (0.0, 0.0)
+        };
+        // Applied on the next output frame, like finger pans: libinput
+        // delivers pinch updates faster than the refresh rate, and stepping
+        // the camera per event relaid out the desktop for frames nobody
+        // saw and zoomed unevenly (two steps in one frame, one in the next).
+        wm.queue_pinch(new_zoom, cx - phys_x, cy - phys_y);
         return;
     }
 
