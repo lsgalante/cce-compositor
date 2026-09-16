@@ -337,6 +337,13 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         return;
     }
 
+    // Keys are activity for the idle timeouts (and the idle-notify clients)
+    // exactly as pointer events are; before 2026-09-16 only tablet, touch
+    // and gestures counted, so idle-notify clients never saw a key.
+    if !group.seat.is_null() {
+        (*group.seat).handle_activity();
+    }
+
     // A real key press ends an emulated view drag (see `cursor::ViewDrag`):
     // the drag holds Space and a pointer button down on the client's behalf,
     // and a key pressed on top of that reaches the app as a chord nobody

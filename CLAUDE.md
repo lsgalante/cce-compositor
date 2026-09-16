@@ -475,6 +475,30 @@ prints, per output, mode / scale / logical size / mm / logical px per mm and whe
 the mm came from (`configured`, `measured`, `none`); the creation log line says the
 same.
 
+**Idle timeouts** — `idle { display_off <s>; sleep <s>; sleep_command "…" }`,
+both 0 (off) by default — are `src/server/idle.rs`, a `Server` subcomponent
+rather than window-manager state: two `wl_event_loop` timers re-armed from
+`Seat::handle_activity`, held disarmed while `IdleInhibitManager::check_active`
+reports an inhibitor. "Display off" reuses the wlr-output-power-management
+path (`OutputStateValue::DisabledSoft` + `dirty_windowing`): the output stays
+in the layout, nothing re-arranges, and no frame events fire while it is dark.
+Only outputs the timeout darkened (`Output::idle_off`) are woken by the next
+input, so one a client turned off with `wlopm` stays as the client left it.
+The sleep command is `sh -c` under a fork, reaped by the server's SIGCHLD
+handler; `systemctl suspend` returns as soon as the job is queued, so resume
+is detected from the wlroots session's `active` signal instead (the
+`river_wlr_session_get_active_signal` shim — `wlr_session` is opaque to
+bindgen), treated as activity so a lid-open lights the screen without a key.
+Note that until 2026-09-16 the hardware pointer handlers (`handle_motion`,
+`handle_motion_absolute`, `handle_button`, `handle_axis`) and `handle_group_key`
+never called `handle_activity` at all — only tablet, touch and gestures did —
+so `ext-idle-notify` clients were never told about mouse or keyboard use;
+injected `ccectl pointer-*`/`keypress` events count as activity too, which is
+what lets a shadow session exercise the timeouts (`ccectl idle timeouts 2 0`,
+then `ccectl outputs` reads `enabled=false`, then any injected input reads
+`true`). `ccectl idle` prints the state; `idle wake|sleep|display on|off` act
+now. Untested in a shadow, which has no session: the resume wake.
+
 Persistent window state is saved to **`~/.local/state/cce/state.json`**
 (`XDG_STATE_HOME/cce/state.json`) on shutdown and restored on start
 (`save_state` / `load_state` / `spawn_restored_windows`). A window's

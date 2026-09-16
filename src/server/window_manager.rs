@@ -5184,6 +5184,7 @@ impl WindowManager {
                 self.dirty_windowing();
                 "ok\n".to_string()
             }
+            "idle" => unsafe { (*self.server).idle.ipc(&parts[1..]) },
             "outputs" => {
                 // One line per output: the figures a client's `units::Metric`
                 // is built from (mode, scale, logical size, physical mm) and
@@ -5688,6 +5689,7 @@ impl WindowManager {
                         let next_seat = (*curr_seat).next;
                         let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
                         (*seat).ensure_synthetic_keyboard();
+                        (*seat).handle_activity();
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, crate::util::msec_timestamp(), keycode, state);
                         if let Some(name) = mod_name {
                             let kb = ffi::river_wlr_seat_get_keyboard((*seat).wlr_seat);
@@ -5727,6 +5729,7 @@ impl WindowManager {
                         // without a keymap, and a keymap-less client drops
                         // every key we notify. Attach one first.
                         (*seat).ensure_synthetic_keyboard();
+                        (*seat).handle_activity();
                         let time = crate::util::msec_timestamp();
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time + 1, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);

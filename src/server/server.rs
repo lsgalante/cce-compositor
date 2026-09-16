@@ -13,6 +13,7 @@ use crate::input_manager::InputManager;
 use crate::libinput_config::LibinputConfig;
 use crate::xkb_config::XkbConfig;
 use crate::idle_inhibit_manager::IdleInhibitManager;
+use crate::idle::IdleManager;
 use crate::lock_manager::LockManager;
 
 // Activation-attention notifications ("<app> needs attention / has requested
@@ -320,6 +321,7 @@ pub struct Server {
     pub libinput_config: LibinputConfig,
     pub xkb_config: XkbConfig,
     pub idle_inhibit_manager: IdleInhibitManager,
+    pub idle: IdleManager,
     pub lock_manager: LockManager,
     pub inspector: crate::inspector::Inspector,
     pub cce_window_management: crate::cce_window_management::CceWindowManagement,
@@ -840,6 +842,7 @@ impl Server {
             self.libinput_config.init(server_ptr).map_err(|_| "Failed to init libinput_config")?;
             self.xkb_config.init(server_ptr).map_err(|_| "Failed to init xkb_config")?;
             self.idle_inhibit_manager.init(server_ptr).map_err(|_| "Failed to init idle_inhibit_manager")?;
+            self.idle.init(server_ptr).map_err(|_| "Failed to init idle")?;
             self.lock_manager.init(server_ptr).map_err(|_| "Failed to init lock_manager")?;
             self.inspector.init(server_ptr).map_err(|_| "Failed to init inspector")?;
             self.cce_window_management.init(server_ptr).map_err(|_| "Failed to init cce_window_management")?;
@@ -911,6 +914,7 @@ impl Server {
             log::info!("[deinit] self.input_manager.deinit finished");
 
             log::info!("[deinit] deinitializing other subcomponents");
+            self.idle.deinit();
             self.idle_inhibit_manager.deinit();
             self.lock_manager.deinit();
             self.layer_shell.deinit();

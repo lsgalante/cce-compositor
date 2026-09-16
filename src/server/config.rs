@@ -826,6 +826,9 @@ pub struct Config {
     pub surface: SurfaceConfig,
     #[serde(default)]
     pub window_manager: Option<WindowManagerConfig>,
+    /// The `idle { }` block: display-off and sleep timeouts (seconds).
+    #[serde(skip)]
+    pub idle: crate::idle::IdleConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1719,6 +1722,14 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         }
     }
 
+    // 3b. idle timeouts
+    let mut idle = crate::idle::IdleConfig::default();
+    if let Some(node) = doc.nodes().iter().find(|n| n.name().value() == "idle") {
+        idle.display_off_s = get_child_arg_i64(node, "display_off", 0);
+        idle.sleep_s = get_child_arg_i64(node, "sleep", 0);
+        idle.sleep_command = get_child_arg_string_opt(node, "sleep_command");
+    }
+
     // 4. output
     let mut output = None;
     let mut display = HashMap::new();
@@ -2344,6 +2355,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         transparency,
         surface,
         window_manager,
+        idle,
     })
 }
 
@@ -2534,6 +2546,11 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     let root_plate_rgba = parse_hex_color_rgba(&config.surface.root_plate_color);
     state.layout.window_opacity = root_plate_rgba[3] < 0.999;
     state.layout.scenefx_optimized_blur = config.output.as_ref().map(|o| o.scenefx_optimized_blur).unwrap_or(true);
+    // Idle timeouts live on the server, not the window manager; a reload
+    // re-arms them from now with the new figures.
+    if !state.server.is_null() {
+        unsafe { (*state.server).idle.configure(&config.idle); }
+    }
     state.layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
     state.layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
     state.layout.status_module_hide_mode_preview = config.layout.status_module_hide_mode_preview;

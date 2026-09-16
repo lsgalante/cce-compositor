@@ -48,6 +48,21 @@ settings. The config format is [KDL](https://kdl.dev). A startup script at
 
 Configuration can also be changed live over the control socket with `ccectl`.
 
+Idle timeouts go in an `idle { }` block: `display_off` and `sleep` are seconds of
+no input (0, the default, disables one), and `sleep_command` overrides the
+default `systemctl suspend`:
+
+```kdl
+idle {
+    display_off 600
+    sleep 1800
+}
+```
+
+Any pointer or key input wakes the darkened outputs and restarts both countdowns; an
+idle-inhibitor held by a mapped surface (a playing video) pauses them. `ccectl idle`
+reports the state, and `ccectl idle timeouts <display_off> <sleep>` sets them live.
+
 ## Development
 
 See [CLAUDE.md](CLAUDE.md) for a detailed tour of the architecture, the FFI

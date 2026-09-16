@@ -210,6 +210,9 @@ pub struct Output {
     /// not repeat the atomic TEST_ONLY commit every frame. Cleared when the
     /// fullscreen client's tearing request goes away.
     pub tearing_test_failed: bool,
+    /// Darkened by the idle timeout (`IdleManager::set_displays`), so the
+    /// next activity wakes this one and leaves a client-darkened output alone.
+    pub idle_off: bool,
     pub last_grid_viewport_w: i32,
     pub last_grid_viewport_h: i32,
     pub last_grid_zoom: f64,
@@ -544,6 +547,7 @@ impl Output {
             backdrop_cam: (f64::NAN, f64::NAN, f64::NAN),
             backdrop_measured_at: None,
             tearing_test_failed: false,
+            idle_off: false,
             last_grid_viewport_w: 0,
             last_grid_viewport_h: 0,
             last_grid_zoom: 0.0,

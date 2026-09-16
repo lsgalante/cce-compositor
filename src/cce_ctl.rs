@@ -64,6 +64,9 @@ fn usage(name: &str, to_stderr: bool) {
     print("  overview                   # toggle; the exit lands on the focused window, not the pointer");
     print("  windows [--json]           # list windows; --json emits one JSON object per line");
     print("  outputs [--json]           # list outputs: mode, scale, logical size, physical mm, px/mm, and where the mm came from");
+    print("  idle [status]              # idle timeouts: configured seconds, idle time, inhibited/displays_off/sleeping");
+    print("  idle wake|sleep|display on|display off   # act now: wake darkened outputs, run the sleep command, darken/wake outputs");
+    print("  idle timeouts <display_off_s> <sleep_s>  # set the timeouts live (0 = off); config.kdl `idle { }` on reload");
     print("  status-hide-mode [true|false]");
     print("  adjust-position-mode [true|false|query]");
     print("  exit [force]               # log out; waits for windows to close, cancels if one stays (a save prompt); force skips the wait");

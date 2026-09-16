@@ -75,6 +75,7 @@ impl IdleInhibitManager {
         if !notifier.is_null() {
             ffi::wlr_idle_notifier_v1_set_inhibited(notifier, inhibited);
         }
+        (*self.server).idle.set_inhibited(inhibited);
     }
 }
 

@@ -395,6 +395,7 @@ impl Seat {
     }
 
     pub unsafe fn handle_activity(&mut self) {
+        (*self.server).idle.on_activity();
         let notifier = (*self.server).input_manager.idle_notifier;
         if !notifier.is_null() {
             ffi::wlr_idle_notifier_v1_notify_activity(notifier, self.wlr_seat);

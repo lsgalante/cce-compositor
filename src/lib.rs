@@ -59,6 +59,8 @@ pub mod xkb_keyboard;
 pub mod xkb_config;
 #[path = "server/idle_inhibit_manager.rs"]
 pub mod idle_inhibit_manager;
+#[path = "server/idle.rs"]
+pub mod idle;
 #[path = "server/lock_manager.rs"]
 pub mod lock_manager;
 #[path = "server/input_device.rs"]

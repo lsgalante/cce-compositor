@@ -950,6 +950,7 @@ impl Cursor {
     /// layout pixels — `wlr_cursor_warp_absolute` is 0..1-normalized, which is the
     /// bug the old `pointer-move-to` had.
     pub unsafe fn inject_motion_to(&mut self, x: f64, y: f64) {
+        (*self.seat).handle_activity();
         ffi::wlr_cursor_warp(self.wlr_cursor, std::ptr::null_mut(), x, y);
         self.update_hovered();
         self.update_drag_icons();
@@ -1184,6 +1185,10 @@ impl Cursor {
 unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, motion_listener);
     let event = data as *mut ffi::wlr_pointer_motion_event;
+    // Pointer input is activity for the idle timeouts and the idle-notify
+    // clients. Injected events (`ccectl pointer-*`) arrive here too, and
+    // count: a script driving the pointer is someone using the desk.
+    (*cursor.seat).handle_activity();
     // Real pointer motion ends an emulated view drag: the client must not
     // see the synthetic drag position and the true one interleaved.
     if cursor.view_drag.is_some() {
@@ -1243,6 +1248,7 @@ unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut s
 unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, motion_absolute_listener);
     let event = data as *mut ffi::wlr_pointer_motion_absolute_event;
+    (*cursor.seat).handle_activity();
     
     let wlr_device = if (*event).pointer.is_null() {
         std::ptr::null_mut()
@@ -1283,6 +1289,7 @@ unsafe fn is_cloud_layer(layer_surface: *mut crate::layer_shell::LayerSurface) -
 unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, button_listener);
     let event = data as *mut ffi::wlr_pointer_button_event;
+    (*cursor.seat).handle_activity();
     if cursor.view_drag.is_some() {
         cursor.end_view_drag("button");
     }
@@ -2185,6 +2192,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
 unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, axis_listener);
     let event = data as *mut ffi::wlr_pointer_axis_event;
+    (*cursor.seat).handle_activity();
     
     let seat = &mut *cursor.seat;
     

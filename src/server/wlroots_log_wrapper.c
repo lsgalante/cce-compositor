@@ -9,6 +9,7 @@
 #include <stdio.h>
 
 #include <wlr/util/log.h>
+#include <wlr/backend/session.h>
 
 #define BUFFER_SIZE 1024
 
@@ -1188,4 +1189,12 @@ void river_scene_tree_set_desk_offset(struct wlr_scene_tree *tree, bool on) {
 void river_scene_set_desk_subpixel(struct wlr_scene *scene, double sub_x, double sub_y) {
 	scene->desk_sub_x = sub_x;
 	scene->desk_sub_y = sub_y;
+}
+
+struct wl_signal *river_wlr_session_get_active_signal(struct wlr_session *session) {
+	return &session->events.active;
+}
+
+bool river_wlr_session_get_active(struct wlr_session *session) {
+	return session->active;
 }
