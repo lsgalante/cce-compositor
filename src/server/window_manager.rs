@@ -5444,6 +5444,20 @@ impl WindowManager {
                     "error: invalid dy or dx\n".to_string()
                 }
             }
+            "pointer-swipe" => {
+                // pointer-swipe <fingers> <dx> <dy> [steps]
+                if parts.len() < 4 { return "error: usage: pointer-swipe <fingers> <dx> <dy> [steps]\n".to_string(); }
+                let fingers = parts[1].parse::<u32>();
+                let dx = parts[2].parse::<f64>();
+                let dy = parts[3].parse::<f64>();
+                let steps = parts.get(4).map(|v| v.parse::<u32>()).unwrap_or(Ok(10));
+                if let (Ok(fingers), Ok(dx), Ok(dy), Ok(steps)) = (fingers, dx, dy, steps) {
+                    self.for_each_cursor(|cursor| cursor.inject_swipe(fingers, dx, dy, steps));
+                    "ok\n".to_string()
+                } else {
+                    "error: invalid swipe arguments\n".to_string()
+                }
+            }
             "pointer-pinch" => {
                 // pointer-pinch <scale> [rotation-degrees] [steps]
                 // pointer-pinch begin | update <scale> [rotation] | end   (paced by the caller)

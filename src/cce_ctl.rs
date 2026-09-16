@@ -91,6 +91,9 @@ fn usage(name: &str, to_stderr: bool) {
     print("                                      two-finger swipe, ended by finger-stop; natural = from");
     print("                                      a natural-scrolling touchpad, deltas already flipped)");
     print("  pointer-scroll finger-stop");
+    print("  pointer-swipe <fingers> <dx> <dy> [steps]");
+    print("                                     (a 3/4-finger touchpad swipe; drives input.kdl gesture");
+    print("                                      chords such as focus_left \"swipe3_left\")");
     print("  pointer-pinch <scale> [rotation] [steps] | begin | update <scale> [rotation] | end");
     print("  touchpad-view-regions <x11:ID|id|app_id> clear | <x,y,w,h> ...");
     print("                                     (limit a touchpad_view_apps drag to these window-local");

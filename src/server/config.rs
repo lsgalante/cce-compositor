@@ -2578,13 +2578,12 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
 
     state.keybinds.clear();
     let mut table = cce_window_manager::bindings::BindingTable::new();
+    // Gesture entries from the same domain (`focus_left "swipe3_left"`);
+    // they go ahead of config.kdl's `gesture_bind` nodes below.
+    let mut input_gesture_binds: Vec<GestureBind> = Vec::new();
 
     // Primary source: the `cce-window-manager` domain of input.kdl.
     for entry in &wm_domain_entries {
-        let Some(chord) = cce_window_manager::bindings::parse_chord(&entry.chord) else {
-            eprintln!("[WARNING] input.kdl: invalid chord {:?} for {}", entry.chord, entry.name);
-            continue;
-        };
         let Some(action) = Action::from_name(&entry.name) else {
             eprintln!("[WARNING] input.kdl: unknown window-manager action {:?}", entry.name);
             continue;
@@ -2602,6 +2601,33 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
                 entry.command.clone()
             }
             _ => None,
+        };
+        // A touchpad gesture rides in the chord slot: `swipe3_left`,
+        // `super+pinch_out`. The fingerless spelling binds three AND four
+        // fingers, as `toggle_overview "swipe_down"` always has.
+        if let Some(g) = cce_window_manager::bindings::parse_gesture(&entry.chord) {
+            let fingers: Vec<u32> = g.fingers.map(|n| vec![n]).unwrap_or_else(|| vec![3, 4]);
+            for fingers in fingers {
+                let dup = input_gesture_binds.iter().any(|b| {
+                    b.mods == g.mods && b.gesture_type == g.kind.as_str() && b.fingers == fingers && b.direction == g.direction
+                });
+                if dup {
+                    eprintln!("[WARNING] input.kdl: {:?} is bound more than once", entry.chord);
+                }
+                input_gesture_binds.push(GestureBind {
+                    mods: g.mods,
+                    gesture_type: g.kind.as_str().to_string(),
+                    fingers,
+                    direction: g.direction.clone(),
+                    action,
+                    command: command.clone(),
+                });
+            }
+            continue;
+        }
+        let Some(chord) = cce_window_manager::bindings::parse_chord(&entry.chord) else {
+            eprintln!("[WARNING] input.kdl: invalid chord {:?} for {}", entry.chord, entry.name);
+            continue;
         };
         let keysym = parse_keysym(&chord.key);
         if keysym == 0 {
@@ -2680,7 +2706,11 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         });
     }
 
+    // Gesture table, first match wins in the cursor's swipe/pinch handlers:
+    // input.kdl entries, then config.kdl `gesture_bind` nodes, then the
+    // legacy `window_manager { toggle_overview "swipe_down" }`.
     state.gesture_binds.clear();
+    state.gesture_binds.extend(input_gesture_binds);
     for gb in &config.gesture_bind {
         let mods = gb.mods.as_ref().map(|m| parse_modifiers(m)).unwrap_or(0);
         let action = parse_action(&gb.action);

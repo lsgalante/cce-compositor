@@ -1095,6 +1095,49 @@ impl Cursor {
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
     }
 
+    /// Inject a whole touchpad swipe: begin with `fingers`, `steps` updates
+    /// that together move the gesture centre by (`dx`, `dy`), end. Drives
+    /// the gesture-bind table (`swipe3_left` in input.kdl) headlessly;
+    /// the pointer-gestures forward to clients runs too.
+    pub unsafe fn inject_swipe(&mut self, fingers: u32, dx: f64, dy: f64, steps: u32) {
+        let time = crate::util::msec_timestamp();
+        let mut begin = ffi::wlr_pointer_swipe_begin_event {
+            pointer: std::ptr::null_mut(),
+            time_msec: time,
+            fingers,
+        };
+        handle_swipe_begin(
+            &mut self.swipe_begin_listener as *mut ffi::wl_listener,
+            &mut begin as *mut ffi::wlr_pointer_swipe_begin_event as *mut std::ffi::c_void,
+        );
+        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        let steps = steps.max(1);
+        for i in 1..=steps {
+            let mut update = ffi::wlr_pointer_swipe_update_event {
+                pointer: std::ptr::null_mut(),
+                time_msec: time + i,
+                fingers,
+                dx: dx / steps as f64,
+                dy: dy / steps as f64,
+            };
+            handle_swipe_update(
+                &mut self.swipe_update_listener as *mut ffi::wl_listener,
+                &mut update as *mut ffi::wlr_pointer_swipe_update_event as *mut std::ffi::c_void,
+            );
+            ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        }
+        let mut end = ffi::wlr_pointer_swipe_end_event {
+            pointer: std::ptr::null_mut(),
+            time_msec: time + steps + 1,
+            cancelled: false,
+        };
+        handle_swipe_end(
+            &mut self.swipe_end_listener as *mut ffi::wl_listener,
+            &mut end as *mut ffi::wlr_pointer_swipe_end_event as *mut std::ffi::c_void,
+        );
+        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+    }
+
     pub unsafe fn inject_pinch(&mut self, scale: f64, rotation: f64, steps: u32) {
         let time = crate::util::msec_timestamp();
         let mut begin = ffi::wlr_pointer_pinch_begin_event {
