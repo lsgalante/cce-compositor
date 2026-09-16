@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <math.h>
 #include <pixman.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -510,6 +511,33 @@ static void transform_output_box(struct wlr_box *box, const struct render_data *
 	wlr_box_transform(box, box, transform, data->trans_width, data->trans_height);
 }
 
+/* Whether a node renders with the scene's desk sub-pixel offset: any
+ * ancestor is one of the scene's desk trees. */
+static bool scene_node_has_desk_offset(struct wlr_scene *scene, struct wlr_scene_node *node) {
+	for (struct wlr_scene_tree *t = node->parent; t != NULL; t = t->node.parent) {
+		for (int i = 0; i < WLR_SCENE_DESK_TREES; i++) {
+			if (scene->desk_trees[i] == t) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+/* The desk offset in an output's device px (each 0 or negative). Only a
+ * NORMAL transform is shifted: on a rotated output the vector would need
+ * rotating too, and no cce output is rotated. */
+static void scene_desk_offset_px(struct wlr_scene *scene, float scale,
+		enum wl_output_transform transform, int *dx, int *dy) {
+	*dx = 0;
+	*dy = 0;
+	if (transform != WL_OUTPUT_TRANSFORM_NORMAL) {
+		return;
+	}
+	*dx = (int)lround(scene->desk_sub_x * scale);
+	*dy = (int)lround(scene->desk_sub_y * scale);
+}
+
 static void scene_output_damage(struct wlr_scene_output *scene_output,
 		const pixman_region32_t *damage) {
 	struct wlr_output *output = scene_output->output;
@@ -517,6 +545,23 @@ static void scene_output_damage(struct wlr_scene_output *scene_output,
 	pixman_region32_t clipped;
 	pixman_region32_init(&clipped);
 	pixman_region32_intersect_rect(&clipped, damage, 0, 0, output->width, output->height);
+
+	// A desk shifted by the sub-pixel offset draws its nodes up to one
+	// device px away from where their layout boxes say; widen the damage
+	// by that shift so the drawn pixels are always inside it.
+	{
+		int dx, dy;
+		scene_desk_offset_px(scene_output->scene, output->scale, output->transform, &dx, &dy);
+		if (dx != 0 || dy != 0) {
+			pixman_region32_t shifted;
+			pixman_region32_init(&shifted);
+			pixman_region32_copy(&shifted, &clipped);
+			pixman_region32_translate(&shifted, dx, dy);
+			pixman_region32_union(&clipped, &clipped, &shifted);
+			pixman_region32_intersect_rect(&clipped, &clipped, 0, 0, output->width, output->height);
+			pixman_region32_fini(&shifted);
+		}
+	}
 
 	if (!pixman_region32_empty(&clipped)) {
 		wlr_output_schedule_frame(scene_output->output);
@@ -2638,11 +2683,21 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 	struct wlr_scene_node *node = entry->node;
 	struct fx_gles_render_pass *fx_pass = fx_get_render_pass(data->render_pass);
 
+	// Desk nodes draw shifted by the sub-pixel offset (device px); every
+	// box and region derived from the node's layout position below gets
+	// the same shift, so the node stays self-consistent and only its
+	// placement against unshifted layers (bars, fullscreen) is off by it.
+	int desk_dx = 0, desk_dy = 0;
+	if (scene_node_has_desk_offset(data->output->scene, node)) {
+		scene_desk_offset_px(data->output->scene, data->scale, data->transform, &desk_dx, &desk_dy);
+	}
+
 	pixman_region32_t render_region;
 	pixman_region32_init(&render_region);
 	pixman_region32_copy(&render_region, &node->visible);
 	pixman_region32_translate(&render_region, -data->logical.x, -data->logical.y);
 	logical_to_buffer_coords(&render_region, data, true);
+	pixman_region32_translate(&render_region, desk_dx, desk_dy);
 	pixman_region32_intersect(&render_region, &render_region, &data->damage);
 	if (pixman_region32_empty(&render_region)) {
 		pixman_region32_fini(&render_region);
@@ -2669,11 +2724,14 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 	};
 	scene_node_get_size(node, &dst_box.width, &dst_box.height);
 	transform_output_box(&dst_box, data);
+	dst_box.x += desk_dx;
+	dst_box.y += desk_dy;
 
 	pixman_region32_t opaque;
 	pixman_region32_init(&opaque);
 	scene_node_opaque_region(node, x, y, &opaque);
 	logical_to_buffer_coords(&opaque, data, false);
+	pixman_region32_translate(&opaque, desk_dx, desk_dy);
 	pixman_region32_subtract(&opaque, &render_region, &opaque);
 
 	enum wl_output_transform node_transform =
@@ -2698,6 +2756,8 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		rect_clipped_region_box.y += y;
 
 		transform_output_box(&rect_clipped_region_box, data);
+		rect_clipped_region_box.x += desk_dx;
+		rect_clipped_region_box.y += desk_dy;
 		fx_corner_radii_transform(node_transform, &rect_clipped_corners);
 
 		struct fx_render_rect_options rect_options = {
@@ -2839,6 +2899,8 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		shadow_clipped_region_box.y += y;
 
 		transform_output_box(&shadow_clipped_region_box, data);
+		shadow_clipped_region_box.x += desk_dx;
+		shadow_clipped_region_box.y += desk_dy;
 		fx_corner_radii_transform(node_transform, &shadow_clipped_corners);
 
 		struct fx_render_box_shadow_options shadow_options = {
@@ -3616,6 +3678,16 @@ static enum scene_direct_scanout_result scene_entry_try_direct_scanout(
 
 	if (node->type != WLR_SCENE_NODE_BUFFER) {
 		return SCANOUT_INELIGIBLE;
+	}
+
+	// A desk node drawn with a sub-pixel shift is not where its buffer
+	// would be scanned out.
+	{
+		int dx, dy;
+		scene_desk_offset_px(scene_output->scene, data->scale, data->transform, &dx, &dy);
+		if ((dx != 0 || dy != 0) && scene_node_has_desk_offset(scene_output->scene, node)) {
+			return SCANOUT_INELIGIBLE;
+		}
 	}
 
 	if (state->committed & (WLR_OUTPUT_STATE_MODE |

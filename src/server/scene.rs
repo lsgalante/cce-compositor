@@ -121,6 +121,16 @@ impl Scene {
         self.layers.popups = ffi::wlr_scene_tree_create(normal_tree);
         self.layers.override_redirect = ffi::wlr_scene_tree_create(normal_tree);
 
+        // Desk content renders with the camera's sub-pixel offset
+        // (`WindowManager::layout_camera`): windows, their borders, their
+        // popups and X11 menus, and the grid (flagged where it is built).
+        // Layer shells, fullscreen and the lock screen stay put.
+        for tree in [self.layers.wm, self.layers.border_overlay, self.layers.popups, self.layers.override_redirect] {
+            if !tree.is_null() {
+                ffi::river_scene_tree_set_desk_offset(tree, true);
+            }
+        }
+
         if self.layers.border_overlay.is_null()
             || self.layers.background.is_null()
             || self.layers.background_clients.is_null()

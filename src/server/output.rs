@@ -669,7 +669,8 @@ impl Output {
             // Quantized to screen pixels: a sub-pixel pan moves no node
             // (see `update_viewport_local`), so it is not a reason to paint.
             let wm = &(*self.server).wm;
-            let cam = ((wm.desk_pan_x * wm.desk_zoom).round(), (wm.desk_pan_y * wm.desk_zoom).round(), wm.desk_zoom);
+            let q = wm.desk_zoom * self.current.scale as f64;
+            let cam = ((wm.desk_pan_x * q).round(), (wm.desk_pan_y * q).round(), wm.desk_zoom);
             if cam != (self.last_rendered_pan_x, self.last_rendered_pan_y, self.last_rendered_zoom) {
                 self.last_rendered_pan_x = cam.0;
                 self.last_rendered_pan_y = cam.1;
@@ -1284,6 +1285,7 @@ impl Output {
         // colour and keeps the cell lattice.
         if self.grid_backdrop_tree.is_null() {
             self.grid_backdrop_tree = ffi::wlr_scene_tree_create((*self.server).scene.layers.background);
+            ffi::river_scene_tree_set_desk_offset(self.grid_backdrop_tree, true);
             if self.grid_backdrop_tree.is_null() {
                 return;
             }
@@ -1358,6 +1360,10 @@ impl Output {
         ffi::wlr_scene_node_raise_to_top(self.grid_bevel_tree as *mut ffi::wlr_scene_node);
 
         let grid_tree = self.grid_tree;
+        if !grid_tree.is_null() {
+            // Desk content: rendered with the camera's sub-pixel offset.
+            ffi::river_scene_tree_set_desk_offset(grid_tree, true);
+        }
         let pool = &mut self.grid_rect_pool;
         let mut pool_idx = 0;
 
@@ -1440,7 +1446,7 @@ impl Output {
             crate::policy::api::BackgroundSpec::Grid(grid) => {
                 let frame = crate::policy::background::grid_frame(
                     grid,
-                    wm.camera(),
+                    wm.layout_camera().0,
                     viewport_w,
                     viewport_h,
                     self.sent.x,

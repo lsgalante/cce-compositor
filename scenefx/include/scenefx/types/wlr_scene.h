@@ -143,6 +143,22 @@ struct wlr_scene {
 
 		struct blur_data blur_data;
 	} WLR_PRIVATE;
+
+	/**
+	 * Desk sub-pixel rendering (appended last: nothing else in this
+	 * struct, nor wlr_scene_tree, moves). desk_trees lists the subtrees
+	 * that render shifted by desk_sub_x/y — the camera pan's remainder
+	 * below one layout pixel, each in (-1, 0] layout px. Node positions
+	 * stay integer layout px; each output rounds the shift to its own
+	 * device pixels at render time (0 or -1 at scale 2), so at output
+	 * scale 2 a desk moves in single device pixels instead of two at a
+	 * time. Hit-testing and damage stay on the unshifted positions;
+	 * damage is widened by the shift so a client repaint under a shifted
+	 * desk still covers what it drew.
+	 */
+#define WLR_SCENE_DESK_TREES 8
+	struct wlr_scene_tree *desk_trees[WLR_SCENE_DESK_TREES];
+	double desk_sub_x, desk_sub_y;
 };
 
 /** A scene-graph node displaying a single surface. */

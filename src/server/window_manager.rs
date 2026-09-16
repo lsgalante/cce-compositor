@@ -1637,6 +1637,44 @@ impl WindowManager {
     }
 
     /// The current camera as the policy crate's plain-data snapshot.
+    /// The camera as the LAYOUT sees it, plus the desk's sub-pixel render
+    /// offset. Scene nodes sit on integer layout px, so the pan handed to
+    /// placement is floored to a layout pixel (at the current zoom) and the
+    /// remainder — each in (-1, 0] layout px — goes to scenefx, which
+    /// shifts the desk trees by it in device px at render time. At output
+    /// scale 2 that is what lets a slow pan move one device pixel per
+    /// frame instead of two, the visible judder of HiDPI panning.
+    pub fn layout_camera(&self) -> (crate::policy::camera::Camera, f64, f64) {
+        let zoom = self.desk_zoom.max(1e-6);
+        let split = |pan: f64| {
+            let s = pan * zoom;
+            let f = s.floor();
+            (f / zoom, -(s - f))
+        };
+        let (pan_x, sub_x) = split(self.desk_pan_x);
+        let (pan_y, sub_y) = split(self.desk_pan_y);
+        (crate::policy::camera::Camera { pan_x, pan_y, zoom: self.desk_zoom }, sub_x, sub_y)
+    }
+
+    /// The largest enabled output scale: the device-pixel resolution a
+    /// camera move is quantized at (see `update_viewport_local`).
+    pub unsafe fn max_output_scale(&self) -> f64 {
+        let mut best = 1.0f64;
+        if self.server.is_null() {
+            return best;
+        }
+        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*outputs_list).next;
+        while curr != outputs_list {
+            let output = crate::container_of!(curr, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                best = best.max((*output).current.scale as f64);
+            }
+            curr = (*curr).next;
+        }
+        best
+    }
+
     pub fn camera(&self) -> crate::policy::camera::Camera {
         crate::policy::camera::Camera {
             pan_x: self.desk_pan_x,
@@ -3325,6 +3363,10 @@ impl WindowManager {
             win_ptrs.push(win_ptr);
         }
 
+        // Placement sees the pan floored to a layout pixel; the remainder
+        // shifts the desk trees at render time (`layout_camera`).
+        let (layout_cam, sub_x, sub_y) = self.layout_camera();
+        ffi::river_scene_set_desk_subpixel((*self.server).scene.wlr_scene, sub_x, sub_y);
         let params = crate::policy::arrange::ArrangeParams {
             bar_height: self.layout.bar_height,
             status_hide_mode: self.status_hide_mode,
@@ -3356,8 +3398,8 @@ impl WindowManager {
                 desktop_gap_width: self.layout.desktop_gap_width as f64,
                 desktop_cell_inset: self.layout.desktop_cell_fade_inset as f64,
             },
-            pan_x: self.desk_pan_x,
-            pan_y: self.desk_pan_y,
+            pan_x: layout_cam.pan_x,
+            pan_y: layout_cam.pan_y,
             zoom: self.desk_zoom,
         };
 
@@ -3518,12 +3560,14 @@ impl WindowManager {
 
     pub unsafe fn update_viewport_local(&mut self) {
         let zoom_changed = self.desk_zoom != self.last_viewport_zoom;
-        // A pan counts as motion only once it moves a screen pixel: nodes
-        // sit on integer logical px (`virtual_to_screen` rounds), so the
-        // sub-pixel tail of an eased pan changes nothing on screen, and
-        // repainting the whole output for it was pure cost.
+        // A pan counts as motion only once it moves a DEVICE pixel: the
+        // desk renders on integer layout px plus a device-px sub-pixel
+        // shift (`layout_camera`), so the tail of an eased pan below that
+        // changes nothing on screen, and repainting the whole output for
+        // it was pure cost.
         let zoom = self.desk_zoom;
-        let px = |pan: f64| (pan * zoom).round();
+        let scale = self.max_output_scale();
+        let px = |pan: f64| (pan * zoom * scale).round();
         let pan_changed = px(self.desk_pan_x) != px(self.last_viewport_pan_x)
             || px(self.desk_pan_y) != px(self.last_viewport_pan_y);
         let moved = zoom_changed || pan_changed;

@@ -1155,3 +1155,37 @@ void river_scene_mark_optimized_blur_dirty(struct wlr_scene *scene) {
 void river_scene_set_blur_frozen(struct wlr_scene *scene, bool frozen) {
 	scene->blur_frozen = frozen;
 }
+
+/* See wlr_scene.desk_trees: this subtree renders with the desk's
+ * sub-pixel offset. Idempotent; silently ignores a ninth tree. */
+struct wlr_scene *scene_node_get_root(struct wlr_scene_node *node);
+
+void river_scene_tree_set_desk_offset(struct wlr_scene_tree *tree, bool on) {
+	struct wlr_scene *scene = scene_node_get_root(&tree->node);
+	if (scene == NULL) {
+		return;
+	}
+	int free_slot = -1;
+	for (int i = 0; i < WLR_SCENE_DESK_TREES; i++) {
+		if (scene->desk_trees[i] == tree) {
+			if (!on) {
+				scene->desk_trees[i] = NULL;
+			}
+			return;
+		}
+		if (scene->desk_trees[i] == NULL && free_slot < 0) {
+			free_slot = i;
+		}
+	}
+	if (on && free_slot >= 0) {
+		scene->desk_trees[free_slot] = tree;
+	}
+}
+
+/* See wlr_scene.desk_sub_x/y: the camera pan's remainder below one
+ * layout pixel, each in (-1, 0]. Changing it moves every desk node on
+ * screen, which the caller damages (it is a camera move). */
+void river_scene_set_desk_subpixel(struct wlr_scene *scene, double sub_x, double sub_y) {
+	scene->desk_sub_x = sub_x;
+	scene->desk_sub_y = sub_y;
+}

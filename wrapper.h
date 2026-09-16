@@ -272,6 +272,8 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, boo
 
 void river_scene_mark_optimized_blur_dirty(struct wlr_scene *scene);
 void river_scene_set_blur_frozen(struct wlr_scene *scene, bool frozen);
+void river_scene_tree_set_desk_offset(struct wlr_scene_tree *tree, bool on);
+void river_scene_set_desk_subpixel(struct wlr_scene *scene, double sub_x, double sub_y);
 
 void river_scene_node_set_opacity(struct wlr_scene_node *node, float opacity);
 

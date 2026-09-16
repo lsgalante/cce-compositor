@@ -1285,10 +1285,11 @@ impl Window {
     /// and a one-pixel hop on grab and release.
     pub unsafe fn virtual_to_screen(&self, vx: f64, vy: f64) -> (i32, i32) {
         let wm = &(*self.server).wm;
+        let (cam, _, _) = wm.layout_camera();
         let (out_x, out_y, _, _) = self.first_enabled_output_box();
         (
-            out_x as i32 + ((vx - wm.desk_pan_x) * wm.desk_zoom).round() as i32,
-            out_y as i32 + ((vy - wm.desk_pan_y) * wm.desk_zoom).round() as i32,
+            out_x as i32 + ((vx - cam.pan_x) * cam.zoom).round() as i32,
+            out_y as i32 + ((vy - cam.pan_y) * cam.zoom).round() as i32,
         )
     }
 
@@ -1299,11 +1300,12 @@ impl Window {
     /// until the next transaction and is then recomputed away.
     pub unsafe fn screen_to_virtual(&self, sx: i32, sy: i32) -> (f64, f64) {
         let wm = &(*self.server).wm;
-        let zoom = wm.desk_zoom.max(0.01);
+        let (cam, _, _) = wm.layout_camera();
+        let zoom = cam.zoom.max(0.01);
         let (out_x, out_y, _, _) = self.first_enabled_output_box();
         (
-            wm.desk_pan_x + (sx as f64 - out_x) / zoom,
-            wm.desk_pan_y + (sy as f64 - out_y) / zoom,
+            cam.pan_x + (sx as f64 - out_x) / zoom,
+            cam.pan_y + (sy as f64 - out_y) / zoom,
         )
     }
 

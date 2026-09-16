@@ -616,8 +616,9 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
                 // Rounded like every other virtual->screen placement (the
                 // arrange pass and the fallback lattice); truncation here put
                 // the latched patch a pixel off the lattice it replaces.
-                let sx = ox + ((patch.x - wm.desk_pan_x) * zoom).round() as i32;
-                let sy = oy + ((patch.y - wm.desk_pan_y) * zoom).round() as i32;
+                let (lcam, _, _) = wm.layout_camera();
+                let sx = ox + ((patch.x - lcam.pan_x) * zoom).round() as i32;
+                let sy = oy + ((patch.y - lcam.pan_y) * zoom).round() as i32;
                 (*window).rendering_requested.x = sx;
                 (*window).rendering_requested.y = sy;
                 (*window).scale = zoom / patch.scale;
