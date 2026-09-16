@@ -229,7 +229,10 @@ pub struct WindowManager {
     /// are frame-rate independent, so a late timer tick takes a
     /// proportionally larger step instead of a stutter. `None` while the
     /// timer is idle, so the first step after arming measures from the arm.
-    pub anim_last_tick: Option<std::time::Instant>,
+    /// The camera's frame clock: the presentation instant the last step
+    /// animated to (CLOCK_MONOTONIC ns), so each step's dt is measured
+    /// vblank to vblank, not callback to callback.
+    pub anim_last_tick: Option<u64>,
     /// Kinetic desktop pan after a trackpad flick: virtual units/s, decayed
     /// by `input.scroll_friction` each tick until it stalls. Zero = no coast.
     pub pan_coast_vx: f64,
@@ -1805,7 +1808,7 @@ impl WindowManager {
     pub unsafe fn start_panning_animation(&mut self) {
         self.camera_anim_active = true;
         if self.anim_last_tick.is_none() {
-            self.anim_last_tick = Some(std::time::Instant::now());
+            self.anim_last_tick = Some(crate::util::timestamp_ns());
         }
         self.schedule_frame_all_outputs();
         if self.animation_timer.is_null() {
@@ -1889,13 +1892,15 @@ impl WindowManager {
     /// relayout if the camera moved. Called from the output frame handler
     /// before `render_and_commit`, so the position on screen is the one
     /// computed for this vblank.
-    pub unsafe fn step_camera_frame(&mut self) {
+    /// `frame_target_ns` is when the frame about to render is predicted to
+    /// be presented (`Output::predicted_present_ns`); the animation
+    /// advances to that instant.
+    pub unsafe fn step_camera_frame(&mut self, frame_target_ns: u64) {
         let has_pending = self.pan_pending != [0.0, 0.0];
         if !self.camera_anim_active && !has_pending {
             return;
         }
-        let now = std::time::Instant::now();
-        let dt = self.anim_last_tick.map_or(0.0, |t| now.duration_since(t).as_secs_f64());
+        let dt = self.anim_last_tick.map_or(0.0, |t| frame_target_ns.saturating_sub(t) as f64 / 1e9);
         // A second output's frame in the same vblank takes no extra step.
         if self.camera_anim_active && !has_pending && dt < 0.002 {
             return;
@@ -1906,8 +1911,11 @@ impl WindowManager {
             self.pan_pending = [0.0, 0.0];
         }
         if self.camera_anim_active {
-            self.anim_last_tick = Some(now);
-            if self.advance_camera_animation(dt.clamp(0.0, 0.1)) {
+            if crate::output::frame_debug() {
+                log::info!("[cce-frame] camera step dt={}us", (dt * 1e6) as u64);
+            }
+            self.anim_last_tick = Some(frame_target_ns);
+            if self.advance_camera_animation(dt.clamp(0.0, 0.1), frame_target_ns) {
                 self.camera_anim_active = false;
                 self.anim_last_tick = None;
             }
@@ -1921,7 +1929,7 @@ impl WindowManager {
 
     /// Advance the camera animation by `dt` seconds. Returns true when
     /// nothing is left to animate.
-    unsafe fn advance_camera_animation(&mut self, dt: f64) -> bool {
+    unsafe fn advance_camera_animation(&mut self, dt: f64, frame_target_ns: u64) -> bool {
         let mut done = true;
         // Frame-rate independent exponential approach: the same fraction of
         // the remaining distance per unit time whatever the frame pacing.
@@ -1930,7 +1938,7 @@ impl WindowManager {
         // Ramp-driven transition: position is a pure function of elapsed
         // time, so a stalled frame never changes where the camera lands.
         let ramp = self.camera_ramp_anim.as_ref().map(|a| {
-            (a.start, a.target, a.started.elapsed().as_secs_f64() * 1000.0 / a.duration_ms)
+            (a.start, a.target, frame_target_ns.saturating_sub(a.started_ns) as f64 / 1e6 / a.duration_ms)
         });
         if let Some((start, target, t)) = ramp {
             if t >= 1.0 {
@@ -6441,7 +6449,7 @@ impl crate::policy::api::Compositor for WindowManager {
                             self.camera_ramp_anim = Some(CameraRampAnim {
                                 start: self.camera(),
                                 target: camera,
-                                started: std::time::Instant::now(),
+                                started_ns: crate::util::timestamp_ns(),
                                 duration_ms,
                             });
                             self.target_desk_pan_x = None;
@@ -6645,7 +6653,9 @@ pub(crate) unsafe extern "C" fn handle_edge_pan_tick(data: *mut std::ffi::c_void
 pub struct CameraRampAnim {
     pub start: crate::policy::camera::Camera,
     pub target: crate::policy::camera::Camera,
-    pub started: std::time::Instant,
+    /// Presentation-clock start (CLOCK_MONOTONIC ns); progress is read
+    /// against each frame's predicted present time, never the wall clock.
+    pub started_ns: u64,
     pub duration_ms: f64,
 }
 

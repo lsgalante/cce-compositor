@@ -186,6 +186,19 @@ pub struct Output {
     pub last_rendered_pan_x: f64,
     pub last_rendered_pan_y: f64,
     pub last_rendered_zoom: f64,
+    /// Presentation clock, from the `present` event: when the last frame
+    /// turned into light (CLOCK_MONOTONIC ns, 0 = never), its vblank
+    /// sequence number (0 = the backend has none), and the refresh period.
+    /// `predicted_present_ns` derives the camera's frame clock from these.
+    pub present_when_ns: u64,
+    pub present_seq: u32,
+    pub present_refresh_ns: u64,
+    /// Running count of vblanks skipped between consecutive presents —
+    /// the dropped-frame counter `CCE_FRAME_DEBUG` reports.
+    pub present_dropped: u64,
+    /// Phase of the frame clock's vblank grid (ns within a refresh period),
+    /// locked to the presentation times; `u64::MAX` until the first frame.
+    pub frame_phase_ns: u64,
     /// What the status-backdrop measurement last ran against: the window
     /// manager's layout epoch, the camera, and when. It re-runs only when one
     /// of those moved or `BACKDROP_REFRESH` has passed (for window content
@@ -522,6 +535,11 @@ impl Output {
             last_rendered_pan_x: f64::NAN,
             last_rendered_pan_y: f64::NAN,
             last_rendered_zoom: f64::NAN,
+            present_when_ns: 0,
+            present_seq: 0,
+            present_refresh_ns: 0,
+            present_dropped: 0,
+            frame_phase_ns: u64::MAX,
             backdrop_epoch: u64::MAX,
             backdrop_cam: (f64::NAN, f64::NAN, f64::NAN),
             backdrop_measured_at: None,
@@ -1747,11 +1765,61 @@ fn ovdbg_enabled() -> bool {
 /// nothing at all.
 const BACKDROP_REFRESH: std::time::Duration = std::time::Duration::from_millis(250);
 
+impl Output {
+    /// The refresh period to plan frames by: what the last `present`
+    /// reported, else the current mode's rate, else 60 Hz.
+    unsafe fn refresh_period_ns(&self) -> u64 {
+        if self.present_refresh_ns > 0 {
+            return self.present_refresh_ns;
+        }
+        let mhz = if self.wlr_output.is_null() { 0 } else { ffi::river_wlr_output_get_refresh(self.wlr_output) };
+        if mhz > 0 {
+            1_000_000_000_000 / mhz as u64
+        } else {
+            16_666_667
+        }
+    }
+
+    /// When the frame rendered now is expected to reach the screen: the
+    /// first point of a vblank grid after now (plus a small render lead).
+    /// The camera animates to this instant, so its step is an exact whole
+    /// number of refresh periods whether the frame callback ran early or
+    /// late, a missed vblank is a double step rather than a stumble, and a
+    /// second frame inside one period gets the same target (a zero step).
+    ///
+    /// The grid's phase locks to the hardware presentation timestamps and
+    /// re-anchors only when they drift by more than a quarter period, so
+    /// the per-present jitter of the timestamps themselves (and the
+    /// headless backend's commit-time stamps) never reaches the camera.
+    pub unsafe fn predicted_present_ns(&mut self) -> u64 {
+        let now = util::timestamp_ns();
+        let period = self.refresh_period_ns().max(1);
+        if self.present_when_ns != 0 {
+            let phase = self.present_when_ns % period;
+            let drift = if self.frame_phase_ns == u64::MAX {
+                u64::MAX
+            } else {
+                let d = phase.abs_diff(self.frame_phase_ns);
+                d.min(period - d)
+            };
+            if drift > period / 4 {
+                self.frame_phase_ns = phase;
+            }
+        } else if self.frame_phase_ns == u64::MAX {
+            self.frame_phase_ns = now % period;
+        }
+        let lead = period / 8;
+        let base = (now + lead).saturating_sub(self.frame_phase_ns);
+        self.frame_phase_ns + (base / period + 1) * period
+    }
+}
+
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let output = &mut *crate::container_of!(listener, Output, frame);
-    // The camera steps here, on the vblank, so what this frame renders is
-    // the position computed for it (see WindowManager::step_camera_frame).
-    (*output.server).wm.step_camera_frame();
+    // The camera steps here, on the vblank, to where it should be at the
+    // instant THIS frame is presented (see WindowManager::step_camera_frame).
+    let frame_target_ns = output.predicted_present_ns();
+    (*output.server).wm.step_camera_frame(frame_target_ns);
     // Likewise the interactive move/resize: one configure + relayout per
     // vblank, for the pointer's latest position.
     (*output.server).wm.step_op_frame();
@@ -1790,6 +1858,41 @@ unsafe extern "C" fn handle_present(listener: *mut ffi::wl_listener, data: *mut 
     let event = data as *mut ffi::wlr_output_event_present;
     if !(*event).presented {
         return;
+    }
+    // Presentation clock bookkeeping, and the dropped-frame count: a vblank
+    // sequence that advanced by more than one since the last present means
+    // frames were skipped. Backends without a counter (headless) report
+    // seq 0; there the gap is inferred from time, but only while the camera
+    // is animating — a still desktop legitimately presents nothing for ages.
+    {
+        let when_ns = (*event).when.tv_sec as u64 * 1_000_000_000 + (*event).when.tv_nsec as u64;
+        if (*event).refresh > 0 {
+            output.present_refresh_ns = (*event).refresh as u64;
+        }
+        let period = output.refresh_period_ns();
+        let seq = (*event).seq as u32;
+        let mut dropped = 0u64;
+        if seq != 0 && output.present_seq != 0 && seq > output.present_seq + 1 {
+            dropped = (seq - output.present_seq - 1) as u64;
+        } else if seq == 0 && output.present_when_ns != 0 && (*output.server).wm.camera_anim_active {
+            let gap = when_ns.saturating_sub(output.present_when_ns);
+            let periods = (gap + period / 2) / period;
+            dropped = periods.saturating_sub(1);
+        }
+        if dropped > 0 {
+            output.present_dropped += dropped;
+            if frame_debug() {
+                log::info!(
+                    "[cce-frame] present seq={} dropped={} (total {}) refresh={}us",
+                    seq,
+                    dropped,
+                    output.present_dropped,
+                    period / 1000
+                );
+            }
+        }
+        output.present_when_ns = when_ns;
+        output.present_seq = seq;
     }
     match output.lock_render_state {
         LockRenderState::PendingUnlock => {
