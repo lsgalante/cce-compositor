@@ -1333,8 +1333,12 @@ impl Output {
             self.grid_force_redraw_frames = 3;
             // Fallback-grid structure (spec/zoom/viewport) is backdrop
             // content in the optimized-blur capture set — same staleness
-            // rule as the client-grid latch.
-            ffi::river_scene_mark_optimized_blur_dirty((*self.server).scene.wlr_scene);
+            // rule as the client-grid latch. Not while a camera gesture
+            // holds the bakes frozen: the zoom restructures the grid every
+            // frame, and the settle re-bakes once at the end.
+            if !wm.viewport_is_active {
+                ffi::river_scene_mark_optimized_blur_dirty((*self.server).scene.wlr_scene);
+            }
         }
         let force = self.grid_force_redraw_frames > 0;
         if force {

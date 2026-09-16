@@ -1693,6 +1693,17 @@ void wlr_scene_optimized_blur_set_size(struct wlr_scene_optimized_blur *blur_nod
 	blur_node->width = width;
 	blur_node->height = height;
 
+	// While the scene is frozen (a camera gesture in flight, see
+	// wlr_scene.blur_frozen) a resize keeps its bake: the anchored render
+	// path bakes only the strips a grown node newly exposes, and a shrunk
+	// one needs nothing. Re-baking here made every frame of a zoom re-bake
+	// every blur, which the freeze exists to avoid; the thaw re-bakes once.
+	struct wlr_scene *scene = scene_node_get_root(&blur_node->node);
+	if (scene != NULL && scene->blur_frozen && blur_node->baked) {
+		scene_node_update(&blur_node->node, NULL);
+		return;
+	}
+
 	wlr_scene_optimized_blur_mark_dirty(blur_node);
 }
 
@@ -2552,6 +2563,10 @@ static void optimized_blur_render(struct wlr_scene *scene,
 	}
 
 	if (full) {
+		if (cce_scene_blur_debug()) {
+			wlr_log(WLR_INFO, "[scenefx] optimized bake full %dx%d dirty=%d baked=%d",
+				vis.width, vis.height, ob->dirty, ob->baked);
+		}
 		bool ok;
 		if (normal) {
 			ok = optimized_blur_bake_rect(fx_pass, scene, data, &vis, mx, my);

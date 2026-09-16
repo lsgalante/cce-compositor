@@ -260,6 +260,9 @@ pub struct WindowManager {
     /// than the refresh rate; the last one before a frame wins, so each
     /// frame samples the gesture once instead of relaying out per event.
     pub pinch_pending: Option<(f64, f64, f64)>,
+    /// The zoom when the current viewport gesture froze the blur bakes;
+    /// settling re-bakes only if the zoom moved away from it.
+    pub viewport_freeze_zoom: f64,
     /// An interactive move/resize has pointer motion the client has not
     /// been configured for yet. The seat op recomputes the dragged window's
     /// geometry on every pointer event (cheap, and the arrange pass reads
@@ -3548,6 +3551,9 @@ impl WindowManager {
         // stays "active" so blur is not re-enabled mid-gesture — that on/off churn
         // was the flicker of the blurred desktop grid behind transparent windows.
         if moved {
+            if !self.viewport_is_active {
+                self.viewport_freeze_zoom = self.last_viewport_zoom;
+            }
             self.viewport_is_active = true;
             // Every motion frame moves the screen-sized backdrop under every
             // blurred window; without this, scenefx re-bakes every optimized
@@ -3556,10 +3562,13 @@ impl WindowManager {
             // lives (the coordinates it last baked at), reading exactly its
             // own bake — correct, not stale, because the backdrop moved with
             // it. A zoom changes the scale under the window, which no shift
-            // can compensate: the caches thaw (re-bake per frame) for its
-            // duration and re-freeze on the next pure-pan frame.
+            // can compensate — but re-baking every blur on every frame of a
+            // zoom was the most expensive thing the desktop did, and the
+            // mismatch is a low-frequency blur under a window in flight for
+            // a few hundred ms. So the bakes stay frozen through zooms too,
+            // and `finish_viewport_settle` re-bakes once if the zoom moved.
             let scene = (*self.server).scene.wlr_scene;
-            ffi::river_scene_set_blur_frozen(scene, !zoom_changed);
+            ffi::river_scene_set_blur_frozen(scene, true);
             for &window in self.windows.iter() {
                 if !window.is_null() {
                     (*window).render_viewport_update();
@@ -3642,9 +3651,15 @@ impl WindowManager {
             return;
         }
         self.viewport_is_active = false;
-        // Thaw the blur caches (marks them all dirty once) so the settled
-        // frame re-bakes against the final backdrop.
-        ffi::river_scene_set_blur_frozen((*self.server).scene.wlr_scene, false);
+        // Thaw the blur caches so the settled frame re-bakes against the
+        // final backdrop — every bake, if the gesture changed the zoom
+        // (they were sampled at the old scale in flight); otherwise only
+        // the ones the thaw itself distrusts.
+        let scene = (*self.server).scene.wlr_scene;
+        ffi::river_scene_set_blur_frozen(scene, false);
+        if self.desk_zoom != self.viewport_freeze_zoom {
+            ffi::river_scene_mark_optimized_blur_dirty(scene);
+        }
         for &window in self.windows.iter() {
             if !window.is_null() {
                 (*window).render_finish();
