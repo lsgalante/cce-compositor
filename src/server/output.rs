@@ -229,6 +229,11 @@ pub struct Output {
     /// later-created cell rect.
     pub grid_bevel_pool: Vec<*mut ffi::wlr_scene_bevel>,
     pub grid_bevel_tree: *mut ffi::wlr_scene_tree,
+    /// The cell labels' own subtree inside `grid_tree`, raised above the
+    /// cell rects and bevels on every draw: label nodes used to be direct
+    /// children of the grid tree, so any cell rect the pool created after
+    /// them stacked on top and hid them.
+    pub cell_label_tree: *mut ffi::wlr_scene_tree,
     /// Bevel params the rims were last drawn with (enabled, thickness,
     /// light x/y/intensity, shade, shoulder as bits) — the spec alone does
     /// not cover them, and a live config reload must redraw the rims too.
@@ -329,6 +334,8 @@ impl Output {
             self.grid_rect_pool.clear();
             self.grid_bevel_pool.clear();
             self.grid_bevel_tree = std::ptr::null_mut();
+            self.cell_label_pool.clear();
+            self.cell_label_tree = std::ptr::null_mut();
         }
     }
 
@@ -420,9 +427,11 @@ impl Output {
                         self.grid_backdrop_rect = std::ptr::null_mut();
                     }
                     self.grid_rect_pool.clear();
-                    // The bevel subtree died with grid_tree above.
+                    // The bevel and label subtrees died with grid_tree above.
                     self.grid_bevel_pool.clear();
                     self.grid_bevel_tree = std::ptr::null_mut();
+                    self.cell_label_pool.clear();
+                    self.cell_label_tree = std::ptr::null_mut();
 
                     if !self.adjust_tree.is_null() {
                         ffi::wlr_scene_node_destroy(self.adjust_tree as *mut ffi::wlr_scene_node);
@@ -555,6 +564,7 @@ impl Output {
             grid_rect_pool: Vec::new(),
             grid_bevel_pool: Vec::new(),
             grid_bevel_tree: std::ptr::null_mut(),
+            cell_label_tree: std::ptr::null_mut(),
             last_grid_bevel: None,
             grid_force_redraw_frames: 0,
             cell_label_pool: Vec::new(),
@@ -1579,7 +1589,8 @@ impl Output {
     /// navigation aid, not desktop furniture.
     unsafe fn draw_cell_labels(&mut self) {
         let wm = &(*self.server).wm;
-        let overview = wm.mode == crate::window_manager::WindowManagerMode::Overview;
+        let overview = wm.mode == crate::window_manager::WindowManagerMode::Overview
+            && wm.layout.desktop_cell_labels;
 
         if !overview {
             if !self.cell_label_pool.is_empty() {
@@ -1592,6 +1603,15 @@ impl Output {
         if self.grid_tree.is_null() {
             return;
         }
+        if self.cell_label_tree.is_null() {
+            self.cell_label_tree = ffi::wlr_scene_tree_create(self.grid_tree);
+            if self.cell_label_tree.is_null() {
+                return;
+            }
+        }
+        // Above the cell rects and the bevel subtree, which draw_grid raised
+        // just before this.
+        ffi::wlr_scene_node_raise_to_top(self.cell_label_tree as *mut ffi::wlr_scene_node);
 
         let (viewport_w, viewport_h) = self.current.dimensions();
         let spec = wm.layout.background_spec();
@@ -1653,7 +1673,7 @@ impl Output {
                     ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, true);
                     node
                 } else {
-                    let node = ffi::wlr_scene_buffer_create(self.grid_tree, buf);
+                    let node = ffi::wlr_scene_buffer_create(self.cell_label_tree, buf);
                     if node.is_null() {
                         continue;
                     }

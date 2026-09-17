@@ -80,6 +80,9 @@ pub struct Layout {
     pub desktop_line_relief: Option<f64>,
     pub desktop_cell_fade_inset: i64,
     pub desktop_grid_fade_mode: String,
+    /// Chess-style coordinates on the desktop squares while overview is
+    /// open. KDL: `surface { desktop cell_labels=(bool)false }`.
+    pub desktop_cell_labels: bool,
     /// Drop shadow under cce/ssd windows (scenefx box-shadow node).
     pub shadow_enabled: bool,
     /// Gaussian spread in logical px.
@@ -236,6 +239,7 @@ impl Default for Layout {
             desktop_line_relief: None,
             desktop_cell_fade_inset: 0,
             desktop_grid_fade_mode: "linear".to_string(),
+            desktop_cell_labels: true,
             bevel_enabled: true,
             bevel_thickness: 10.0,
             bevel_light_x: -0.7071,
@@ -522,6 +526,8 @@ pub struct SurfaceConfig {
     pub desktop_cell_fade_inset: i64,
     #[serde(default = "default_desktop_grid_fade_mode")]
     pub desktop_grid_fade_mode: String,
+    #[serde(default = "default_desktop_cell_labels")]
+    pub desktop_cell_labels: bool,
     #[serde(default = "default_desktop_snap")]
     pub desktop_snap: bool,
     #[serde(default)]
@@ -646,6 +652,7 @@ impl Default for SurfaceConfig {
             desktop_line_relief: default_desktop_line_relief(),
             desktop_cell_fade_inset: default_desktop_cell_fade_inset(),
             desktop_grid_fade_mode: default_desktop_grid_fade_mode(),
+            desktop_cell_labels: default_desktop_cell_labels(),
             desktop_snap: default_desktop_snap(),
             desktop_overview_ramp: String::new(),
             desktop_overview_ms: default_desktop_overview_ms(),
@@ -714,6 +721,10 @@ fn default_desktop_line_relief() -> i64 {
 
 fn default_desktop_cell_fade_inset() -> i64 {
     0
+}
+
+fn default_desktop_cell_labels() -> bool {
+    true
 }
 
 fn default_desktop_grid_fade_mode() -> String {
@@ -2003,6 +2014,11 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.desktop_cell_fade_inset = val;
                                         }
                                     }
+                                    "cell_labels" => {
+                                        if let Some(val) = entry.value().as_bool() {
+                                            surface.desktop_cell_labels = val;
+                                        }
+                                    }
                                     "grid_fade_mode" => {
                                         if let Some(val) = entry.value().as_string() {
                                             surface.desktop_grid_fade_mode = val.to_string();
@@ -2547,6 +2563,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         Some(config.surface.desktop_line_relief as f64)
     };
     state.layout.desktop_cell_fade_inset = config.surface.desktop_cell_fade_inset;
+    state.layout.desktop_cell_labels = config.surface.desktop_cell_labels;
     state.layout.desktop_grid_fade_mode = config.surface.desktop_grid_fade_mode.clone();
 
     state.layout.border_font_size = 11;

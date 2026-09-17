@@ -5459,6 +5459,11 @@ impl WindowManager {
                             self.layout.desktop_cell_fade_inset = v;
                         }
                     }
+                    "desktop_cell_labels" => {
+                        if let Ok(v) = val.parse::<bool>() {
+                            self.layout.desktop_cell_labels = v;
+                        }
+                    }
                     "desktop_grid_fade_mode" => {
                         self.layout.desktop_grid_fade_mode = val.to_string();
                     }
