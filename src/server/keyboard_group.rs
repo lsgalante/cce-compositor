@@ -592,6 +592,11 @@ unsafe extern "C" fn handle_group_modifiers(listener: *mut ffi::wl_listener, _da
         ffi::wlr_seat_set_keyboard((*group.seat).wlr_seat, &mut group.wlr_keyboard);
         ffi::wlr_seat_keyboard_notify_modifiers((*group.seat).wlr_seat, &mut group.wlr_keyboard.modifiers);
     }
+    // Window-adjust mode (Super held) reads the seat keyboard's mask, which
+    // is this group's — the DEVICE keyboard has no keymap on the DRM
+    // backend (see keyboard::should_set_keymap), so its own modifiers
+    // signal never fires there; this one does for every real key.
+    (*(*group.seat).server).wm.refresh_adjust_held();
 
     group.send_state();
 }
