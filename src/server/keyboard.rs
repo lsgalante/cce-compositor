@@ -311,6 +311,7 @@ unsafe extern "C" fn handle_modifiers(listener: *mut ffi::wl_listener, _data: *m
         let seat = (*keyboard.group).seat;
         if !seat.is_null() && !(*seat).server.is_null() {
             (*(*seat).server).wm.update_status();
+            (*(*seat).server).wm.refresh_adjust_held();
         }
     }
 }

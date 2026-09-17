@@ -3673,7 +3673,7 @@ impl Window {
         // window, each swap easing through this same fade. Hover still reads
         // through on the focused ring, as `color_for` paints the hovered
         // zone in hover_color over the full reveal.
-        let all_on = (*self.server).wm.mode == crate::window_manager::WindowManagerMode::Overview
+        let all_on = (*self.server).wm.window_adjust_active()
             && window_takes_handles(self as *mut Window)
             && self.is_seat_focused();
         for elem in BorderElement::ALL {
@@ -4025,8 +4025,8 @@ impl Window {
             // segments are both disabled outright. The window's own border
             // (`window_background`, above) is untouched in either mode: this
             // moved the HANDLES inward, not the border.
-            let in_overview = (*self.server).wm.mode
-                == crate::window_manager::WindowManagerMode::Overview;
+            // Overview, or Super held: the same adjust mode at any zoom.
+            let in_overview = (*self.server).wm.window_adjust_active();
             let bw = band;
             let layout_handle_w = (*self.server).wm.layout.border_handle_width;
             let sc = if self.scale > 0.0 { self.scale } else { 1.0 };

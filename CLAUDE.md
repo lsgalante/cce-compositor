@@ -426,6 +426,16 @@ where the old band sat outside them.
   this arrangement exists to prevent. Note the *grab* zone stays the full
   even band (the four catcher rects) even where the ring is drawn thin: the
   swell is ornament, and a corner you can see but not grab would be worse.
+- **Holding Super is window-adjust mode at zoom 1**: the same handles,
+  hover-to-focus and body-drag as overview, gated by one predicate,
+  `WindowManager::window_adjust_active()` (overview OR `adjust_held`).
+  `adjust_held` is refreshed from the keyboard's modifier mask on every
+  modifiers event (`refresh_adjust_held`), which also re-runs the pointer
+  passthrough so the ring lands under a still pointer on key-down and the
+  app gets its hover back on key-up. `ccectl key-down 125` holds it in a
+  shadow (injection bypasses the device mask, so it keeps its own flag).
+  A background press with Super held is an ordinary desktop press — only
+  overview exits on it.
 - Handles are shown on the **focused window only**, for as long as overview
   is on (`step_border_fade`'s `all_on` branch, gated on
   `Window::is_seat_focused`). **Focus follows the pointer in overview**: the

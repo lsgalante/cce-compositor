@@ -874,11 +874,12 @@ impl Cursor {
 
             if is_window
                 && !hovered_chrome
-                && (*server).wm.mode == crate::window_manager::WindowManagerMode::Overview
+                && (*server).wm.window_adjust_active()
             {
-                // Focus follows the pointer in overview: the ring is drawn on
-                // the focused window only, so hovering is how it moves between
-                // windows without a click. Guarded on an actual change —
+                // Focus follows the pointer in overview — and while Super is
+                // held, which is the same adjust mode at zoom 1: the ring is
+                // drawn on the focused window only, so hovering is how it
+                // moves between windows without a click. Guarded on an actual change —
                 // seat.focus raises a Floating window BEFORE its same-focus
                 // short-circuit, so an unguarded call would raise and relayout
                 // on every motion event. And with the pan suppressed: hovering
@@ -1444,8 +1445,13 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             }
         }
 
-        // --- ZOOMED OUT CLICK HANDLING ---
-        if (*event).button == 0x110 && (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
+        // --- ADJUST-MODE CLICK HANDLING (overview, or Super held) ---
+        // A press on a window's body grabs the whole window to move it; a
+        // press on its ring falls through to the border path. Only in
+        // overview does a background press mean anything (it exits); with
+        // Super held at zoom 1 it falls through to the normal desktop press.
+        let in_overview = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview;
+        if (*event).button == 0x110 && (*(*seat).server).wm.window_adjust_active() {
             let mut clicked_win: *mut crate::window::Window = std::ptr::null_mut();
             let mut clicked_cloud_layer = false;
             if let Some(result) = (*server).scene.at(lx, ly) {
@@ -1520,13 +1526,13 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     start_pan_y: (*server).wm.desk_pan_y,
                     start_tiling_mode: (*clicked_win).tiling_mode,
                     start_mode_locked: (*clicked_win).mode_locked,
-                    started_in_overview: true,
+                    started_in_overview: in_overview,
                 });
                 cursor.op_start_pointer();
                 cursor.pressed.insert((*event).button, None);
                 cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
                 return;
-            } else if !overview_win_valid {
+            } else if !overview_win_valid && in_overview {
                 // Click-away with a cce-cloud popup open (desktop context
                 // menu, launcher): the press dismisses the popup and does
                 // nothing else — overview stays up. Dropping keyboard focus
@@ -3930,7 +3936,8 @@ pub unsafe fn grid_node_info(
 /// `window.rs`'s `draw_borders` draws the handles from the same band width
 /// and corner length, so the zones and the visuals cannot drift.
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
-    if (*(*window).server).wm.mode != crate::window_manager::WindowManagerMode::Overview {
+    // Overview, or Super held (window-adjust mode): the same ring either way.
+    if !(*(*window).server).wm.window_adjust_active() {
         return BorderZone::None;
     }
     if !crate::window::window_takes_handles(window) {

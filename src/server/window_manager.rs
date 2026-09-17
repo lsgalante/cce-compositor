@@ -192,6 +192,14 @@ pub struct WindowManager {
     pub status_backdrops: std::cell::RefCell<Vec<(String, u8, u8)>>,
     pub status_hide_mode: bool,
     pub adjust_position_mode: bool,
+    /// Window-adjust mode: Super is held. The focused window shows its
+    /// frame (handles) and its body drags it, as in overview — the two
+    /// are one predicate, `window_adjust_active`. Set from the keyboard's
+    /// modifier state (`refresh_adjust_held`), never assigned directly.
+    pub adjust_held: bool,
+    /// A Super held through `ccectl key-down 125|126`, which bypasses the
+    /// keyboard device the modifier mask is read from.
+    pub injected_super_held: bool,
     /// xkb modifier mask currently held via injected `key-down` (see the ipc handler):
     /// OR'd over the device state on every synthetic modifiers notify so clients see
     /// ctrl/shift/alt/super combos from injection like they would from hardware.
@@ -587,6 +595,8 @@ impl WindowManager {
         self.status_backdrops = std::cell::RefCell::new(Vec::new());
         self.status_hide_mode = false;
         self.adjust_position_mode = false;
+        self.adjust_held = false;
+        self.injected_super_held = false;
         self.injected_key_mods = 0;
         let _ = std::fs::remove_file("/tmp/cce-status-interface-adjust-mode");
 
@@ -2145,6 +2155,48 @@ impl WindowManager {
         }
         self.mode = mode;
         self.arm_border_fade();
+    }
+
+    /// Overview, or Super held: the focused window shows its frame and
+    /// its body drags it. Every site that gates the handles — the hit
+    /// test, the reveal, the catcher rects, hover-to-focus, the body
+    /// grab — asks this, so the two ways in cannot drift apart.
+    pub fn window_adjust_active(&self) -> bool {
+        self.mode == WindowManagerMode::Overview || self.adjust_held
+    }
+
+    /// Re-read whether Super is held (the seat keyboard's live mask, or an
+    /// injected one) and, on a change, bring the desk into or out of
+    /// adjust mode: fade the frame in/out and re-evaluate the pointer in
+    /// place, so the ring lands on the window under a still pointer the
+    /// moment the key goes down and the app gets its hover back when it
+    /// comes up. A drag in progress is left alone — it ends on release.
+    pub unsafe fn refresh_adjust_held(&mut self) {
+        let mut held = self.injected_super_held;
+        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+        let mut curr_seat = (*seats_list).next;
+        while curr_seat != seats_list {
+            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+            let kb = ffi::river_wlr_seat_get_keyboard((*seat).wlr_seat);
+            if !kb.is_null() && (ffi::wlr_keyboard_get_modifiers(kb) & ffi::wlr_keyboard_modifier_WLR_MODIFIER_LOGO) != 0 {
+                held = true;
+            }
+            curr_seat = (*curr_seat).next;
+        }
+        if held == self.adjust_held {
+            return;
+        }
+        self.adjust_held = held;
+        self.arm_border_fade();
+        let now = crate::util::msec_timestamp();
+        let mut curr_seat = (*seats_list).next;
+        while curr_seat != seats_list {
+            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+            if (*seat).op.is_none() {
+                (*seat).cursor.passthrough(now);
+            }
+            curr_seat = (*curr_seat).next;
+        }
     }
 
     pub unsafe fn arm_border_fade(&mut self) {
@@ -5719,6 +5771,12 @@ impl WindowManager {
                             }
                         }
                         curr_seat = next_seat;
+                    }
+                    // The compositor's own Super state (window-adjust mode)
+                    // reads the keyboard device, which injection bypasses.
+                    if matches!(keycode, 125 | 126) {
+                        self.injected_super_held = pressed;
+                        self.refresh_adjust_held();
                     }
                     "ok\n".to_string()
                 } else {
