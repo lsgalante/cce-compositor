@@ -175,6 +175,8 @@ pub struct WindowManager {
     pub touchpad_view_swipe_tumble: bool,
     pub touchpad_view_sensitivity: f64,
     pub touchpad_view_invert: bool,
+    /// See `WindowManagerConfig::touchpad_hscroll_shift_apps`.
+    pub touchpad_hscroll_shift_apps: Vec<String>,
     /// Live override-redirect X11 surfaces (menus, tooltips, combo lists),
     /// so the per-frame pass can re-apply their 1/scale dest size — the
     /// scene's own commit listener resets it on every commit.
@@ -476,6 +478,7 @@ impl WindowManager {
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;
         self.touchpad_view_invert = false;
+        self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();
         self.input_rules = Vec::new();
         self.input_config = crate::config::InputConfig::default();
@@ -553,6 +556,7 @@ impl WindowManager {
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;
         self.touchpad_view_invert = false;
+        self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();
         self.has_restored_focused_window = false;
         self.restored_focused_window_mapped = false;

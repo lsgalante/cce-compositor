@@ -19,6 +19,10 @@ pub struct Cursor {
     /// are mutually exclusive — a view drag needs a window under the
     /// pointer, this one an override-redirect surface.
     pub popup_wheel: Option<PopupWheel>,
+    /// Horizontal-scroll-as-Shift+vertical emulation over the apps
+    /// `touchpad_hscroll_shift_apps` names (see `HScrollShift`); `None`
+    /// while no such gesture is in progress.
+    pub hscroll_shift: Option<HScrollShift>,
     /// Ends an emulated gesture — a `ViewDrag` or a `PopupWheel`, which
     /// never run at once — that has seen no finger event for a while: a
     /// two-finger scroll normally ends with a zero-delta axis event, but
@@ -187,6 +191,7 @@ impl Default for Cursor {
             pinch_start_zoom: 1.0,
             view_drag: None,
             popup_wheel: None,
+            hscroll_shift: None,
             view_drag_timer: std::ptr::null_mut(),
             last_click_time: 0,
             last_click_window: std::ptr::null_mut(),
@@ -1194,6 +1199,11 @@ unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut s
     if cursor.view_drag.is_some() {
         cursor.end_view_drag("motion");
     }
+    // Likewise the held Shift must not ride along to wherever the pointer
+    // goes next.
+    if cursor.hscroll_shift.is_some() {
+        cursor.end_hscroll_shift("motion");
+    }
     
     let mut dx = (*event).delta_x;
     let mut dy = (*event).delta_y;
@@ -1296,6 +1306,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
     // Before the button reaches the client, so a click on the popup is not
     // a Ctrl-click (see `PopupWheel`).
     cursor.end_popup_wheel("button");
+    cursor.end_hscroll_shift("button");
     
     let seat = &mut *cursor.seat;
     let lx = cursor.x();
@@ -2410,6 +2421,11 @@ unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std
     if is_finger && cursor.popup_wheel_axis(event, delta, modifiers) {
         return;
     }
+    // A horizontal one over an app in `touchpad_hscroll_shift_apps` is
+    // delivered as Shift + vertical (see `HScrollShift`).
+    if is_finger && cursor.hscroll_shift_axis(event, delta, delta_discrete, modifiers) {
+        return;
+    }
 
     ffi::wlr_seat_pointer_notify_axis(
         seat.wlr_seat,
@@ -2800,6 +2816,15 @@ impl Cursor {
             Some(p) if p.ctrl_down != down => p.ctrl_down = down,
             _ => return,
         }
+        self.hold_synthetic_modifier(KEY_LEFTCTRL, b"Control\0", down);
+    }
+
+    /// Press or release `key` on the client's behalf and OR its xkb
+    /// modifier (`xkb_name`, NUL-terminated) over the keyboard's live state.
+    /// Never touches `injected_key_mods`, so the compositor's own modifier
+    /// reads keep seeing the user's real keys. Shared by `PopupWheel`
+    /// (Ctrl) and `HScrollShift` (Shift).
+    unsafe fn hold_synthetic_modifier(&mut self, key: u32, xkb_name: &[u8], down: bool) {
         let seat = &mut *self.seat;
         let time = crate::util::msec_timestamp();
         let state = if down {
@@ -2807,10 +2832,10 @@ impl Cursor {
         } else {
             ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
         };
-        ffi::wlr_seat_keyboard_notify_key(seat.wlr_seat, time, KEY_LEFTCTRL, state);
+        ffi::wlr_seat_keyboard_notify_key(seat.wlr_seat, time, key, state);
         let kb = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
         if !kb.is_null() && !(*kb).keymap.is_null() {
-            let idx = ffi::xkb_keymap_mod_get_index((*kb).keymap, b"Control\0".as_ptr() as *const _);
+            let idx = ffi::xkb_keymap_mod_get_index((*kb).keymap, xkb_name.as_ptr() as *const _);
             if idx != ffi::XKB_MOD_INVALID {
                 // Released sends the device's own state back, which is the
                 // user's keys minus this bit.
@@ -2924,7 +2949,160 @@ unsafe extern "C" fn handle_view_drag_timeout(data: *mut std::ffi::c_void) -> st
     let cursor = &mut *(data as *mut Cursor);
     cursor.end_view_drag("idle");
     cursor.end_popup_wheel("idle");
+    cursor.end_hscroll_shift("idle");
     0
+}
+
+/// A horizontal trackpad scroll over an app whose widgets cannot use one,
+/// turned into the Shift + vertical scroll they can.
+///
+/// Why this exists: Houdini's native panes -- the geometry spreadsheet
+/// first of all -- read a wheel event's magnitude and ignore its axis: a
+/// horizontal wheel scrolls the rows, and the documented way to scroll the
+/// columns is to hold Shift while scrolling. Measured live: a horizontal
+/// two-finger swipe reached Houdini as a proper horizontal QWheelEvent
+/// (angleDelta x only) and moved the rows; the same swipe with Shift held
+/// moved the columns. So over such a window the compositor holds Shift for
+/// the gesture and re-emits each horizontal finger delta as a vertical one,
+/// same sign, same source. A vertical delta arriving mid-gesture (a swipe
+/// drifting off axis) is dropped rather than sent sideways; the gesture
+/// ends on the lift, on real pointer motion, a button, a key, or silence.
+///
+/// The user already holding Shift or Ctrl passes through untouched: Shift
+/// means they are doing it by hand, Ctrl is the app's own wheel modifier.
+pub struct HScrollShift {
+    /// The window's surface the gesture started on; pointer focus moving
+    /// off it ends the gesture, so the held Shift never reaches another.
+    pub surface: *mut ffi::wlr_surface,
+    pub shift_down: bool,
+    /// Keyboard repeat before the gesture, restored at its end (see
+    /// `PopupWheel::repeat`).
+    pub repeat: Option<(i32, i32)>,
+}
+
+const KEY_LEFTSHIFT: u32 = 42;
+/// Finger silence that ends the gesture when the lift never came; a short
+/// one is safe here because nothing is held that a re-press would break
+/// (unlike `ViewDrag`'s Space).
+const HSCROLL_SHIFT_IDLE_MS: i32 = 300;
+
+impl Cursor {
+    /// The surface under the pointer, if it belongs to a window of an app
+    /// in `touchpad_hscroll_shift_apps`.
+    unsafe fn hscroll_shift_target(&mut self) -> Option<*mut ffi::wlr_surface> {
+        let server = (*self.seat).server;
+        let wm = &(*server).wm;
+        if wm.touchpad_hscroll_shift_apps.is_empty() {
+            return None;
+        }
+        let result = (*server).scene.at(self.x(), self.y())?;
+        let SceneNodeDataVal::Window(window) = result.data else { return None };
+        if window.is_null() || result.surface.is_null() {
+            return None;
+        }
+        let app_id = (*window).get_app_id_string().unwrap_or_default();
+        if !wm.touchpad_hscroll_shift_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
+            return None;
+        }
+        Some(result.surface)
+    }
+
+    unsafe fn hold_hscroll_shift(&mut self, down: bool) {
+        match self.hscroll_shift.as_mut() {
+            Some(h) if h.shift_down != down => h.shift_down = down,
+            _ => return,
+        }
+        self.hold_synthetic_modifier(KEY_LEFTSHIFT, b"Shift\0", down);
+    }
+
+    /// `reason` names what ended it, as `end_view_drag`'s does.
+    pub unsafe fn end_hscroll_shift(&mut self, reason: &str) {
+        if self.hscroll_shift.is_none() {
+            return;
+        }
+        self.hold_hscroll_shift(false);
+        let Some(h) = self.hscroll_shift.take() else { return };
+        log::info!("[HScrollShift] end reason={}", reason);
+        if !self.view_drag_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.view_drag_timer, 0);
+        }
+        if let Some((rate, delay)) = h.repeat {
+            let kbd = ffi::river_wlr_seat_get_keyboard((*self.seat).wlr_seat);
+            if !kbd.is_null() {
+                ffi::wlr_keyboard_set_repeat_info(kbd, rate, delay);
+            }
+        }
+    }
+
+    /// A finger-source axis event over such a window. Returns true when
+    /// consumed (re-emitted as Shift + vertical, or dropped).
+    pub unsafe fn hscroll_shift_axis(&mut self, event: *const ffi::wlr_pointer_axis_event, delta: f64, delta_discrete: i32, modifiers: u32) -> bool {
+        const SHIFT: u32 = 0x1;
+        const CTRL: u32 = 0x4;
+        let vertical = (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
+        if delta == 0.0 {
+            // The fingers lifted. Both axes lift; the first one ends it and
+            // the second finds nothing to do -- and neither must reach the
+            // client as a stray horizontal event.
+            if self.hscroll_shift.is_some() {
+                self.end_hscroll_shift("lift");
+                return true;
+            }
+            return false;
+        }
+        if modifiers & (SHIFT | CTRL) != 0 {
+            if self.hscroll_shift.is_some() {
+                self.end_hscroll_shift("modifier");
+            }
+            return false;
+        }
+        if self.hscroll_shift.is_none() {
+            if vertical {
+                return false;
+            }
+            let Some(surface) = self.hscroll_shift_target() else { return false };
+            let seat = &mut *self.seat;
+            seat.ensure_synthetic_keyboard();
+            let mut repeat = None;
+            let kbd = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+            if !kbd.is_null() {
+                repeat = Some(((*kbd).repeat_info.rate, (*kbd).repeat_info.delay));
+                ffi::wlr_keyboard_set_repeat_info(kbd, 0, 0);
+            }
+            log::info!("[HScrollShift] begin on surface {:p}", surface);
+            self.hscroll_shift = Some(HScrollShift { surface, shift_down: false, repeat });
+            self.hold_hscroll_shift(true);
+        }
+        let focused = ffi::river_wlr_seat_get_pointer_focused_surface((*self.seat).wlr_seat);
+        if matches!(&self.hscroll_shift, Some(h) if focused != h.surface) {
+            self.end_hscroll_shift("left-window");
+            return false;
+        }
+        if vertical {
+            // Off-axis drift mid-gesture: under the held Shift it would
+            // scroll sideways too. Swallow it.
+            self.arm_hscroll_shift_timer();
+            return true;
+        }
+        let seat = &mut *self.seat;
+        ffi::wlr_seat_pointer_notify_axis(
+            seat.wlr_seat,
+            (*event).time_msec,
+            ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL,
+            delta,
+            delta_discrete,
+            (*event).source,
+            (*event).relative_direction,
+        );
+        self.arm_hscroll_shift_timer();
+        true
+    }
+
+    unsafe fn arm_hscroll_shift_timer(&mut self) {
+        if !self.view_drag_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.view_drag_timer, HSCROLL_SHIFT_IDLE_MS);
+        }
+    }
 }
 
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
