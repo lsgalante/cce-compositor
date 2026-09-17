@@ -876,10 +876,11 @@ impl Cursor {
                 && !hovered_chrome
                 && (*server).wm.window_adjust_active()
             {
-                // Focus follows the pointer in overview — and while Super is
-                // held, which is the same adjust mode at zoom 1: the ring is
-                // drawn on the focused window only, so hovering is how it
-                // moves between windows without a click. Guarded on an actual change —
+                // Focus follows the pointer in overview: the ring is drawn on
+                // the focused window only, so hovering is how it moves between
+                // windows without a click. (Super-held adjust mode takes this
+                // branch too, for the pointer-focus clear below, but not the
+                // refocus.) Guarded on an actual change —
                 // seat.focus raises a Floating window BEFORE its same-focus
                 // short-circuit, so an unguarded call would raise and relayout
                 // on every motion event. And with the pan suppressed: hovering
@@ -893,7 +894,11 @@ impl Cursor {
                 // launcher's own first configure — so a stationary pointer
                 // resting on a world window was refocusing that window and
                 // dismissing the launcher the instant it mapped.
-                if !hovered_toplevel.is_null()
+                // Overview only: with Super held at zoom 1 the frame stays
+                // on the focused window, so a focus chord pressed next acts
+                // on the window the user had, not the one under the pointer.
+                if (*server).wm.mode == crate::window_manager::WindowManagerMode::Overview
+                    && !hovered_toplevel.is_null()
                     && !(*self.seat).focus_is_chrome()
                     && (*self.seat).focused
                         != crate::seat::Focus::Window(hovered_toplevel)

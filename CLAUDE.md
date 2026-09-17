@@ -426,8 +426,10 @@ where the old band sat outside them.
   this arrangement exists to prevent. Note the *grab* zone stays the full
   even band (the four catcher rects) even where the ring is drawn thin: the
   swell is ornament, and a corner you can see but not grab would be worse.
-- **Holding Super is window-adjust mode at zoom 1**: the same handles,
-  hover-to-focus and body-drag as overview, gated by one predicate,
+- **Holding Super is window-adjust mode at zoom 1**: the same handles and
+  body-drag as overview (but NOT hover-to-focus — the frame stays on the
+  focused window, so a focus chord pressed next acts on the window the
+  user had), gated by one predicate,
   `WindowManager::window_adjust_active()` (overview OR `adjust_held`).
   `adjust_held` is refreshed from the keyboard's modifier mask on every
   modifiers event (`refresh_adjust_held`), which also re-runs the pointer
