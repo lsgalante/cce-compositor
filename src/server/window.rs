@@ -173,7 +173,7 @@ impl BorderElement {
 
 /// Per-frame step of the hover fade, as a fraction of the remaining distance
 /// to the target (the same exponential-approach shape the viewport pan uses).
-pub const BORDER_FADE_STEP: f32 = 0.25;
+pub const BORDER_FADE_STEP: f32 = 0.15;
 /// Below this the fade is treated as finished and snapped to its target.
 pub const BORDER_FADE_EPSILON: f32 = 0.004;
 
@@ -4033,12 +4033,19 @@ impl Window {
             let (cw, ch) = (content.width, content.height);
             // A window thinner than two bands has no interior left for a
             // ring; drawing one would be a solid block over the whole window.
-            let handles_on = in_overview
+            // Live handles: the mode is on and this is the focused window.
+            // Focused-only, like the reveal in step_border_fade: without
+            // this the invisible catcher rects would keep intercepting
+            // scene hits on windows whose ring is not even drawn.
+            let handles_live = in_overview && self.is_seat_focused();
+            // Drawn handles: live, OR still fading out — releasing Super (or
+            // leaving overview, or losing focus) eases the ring away instead
+            // of cutting it, so the ring stays drawn while any reveal is
+            // above zero. The catchers below are gated on `handles_live`
+            // alone: a fading ring is decoration, never a grab.
+            let fading_out = !handles_live && self.border_reveal.iter().any(|&a| a > 0.0);
+            let handles_on = (handles_live || fading_out)
                 && window_takes_handles(self_ptr)
-                // Focused-only, like the reveal in step_border_fade: without
-                // this the invisible catcher rects would keep intercepting
-                // scene hits on windows whose ring is not even drawn.
-                && self.is_seat_focused()
                 && !is_virtual_border
                 && bw > 0
                 && (cw as f64 * sc) >= 12.0
@@ -4084,13 +4091,13 @@ impl Window {
             // to split a gap SHARED with a neighbouring window, and an inside
             // ring shares nothing.
             let b = ffi::wlr_box { x: 0, y: 0, width: bw_u, height: ch };
-            apply(self.border.left, b, &transparent, true);
+            apply(self.border.left, b, &transparent, handles_live);
             let b = ffi::wlr_box { x: cw - bw_u, y: 0, width: bw_u, height: ch };
-            apply(self.border.right, b, &transparent, true);
+            apply(self.border.right, b, &transparent, handles_live);
             let b = ffi::wlr_box { x: bw_u, y: 0, width: cw - 2 * bw_u, height: bw_u };
-            apply(self.border.top, b, &transparent, true);
+            apply(self.border.top, b, &transparent, handles_live);
             let b = ffi::wlr_box { x: bw_u, y: ch - bw_u, width: cw - 2 * bw_u, height: bw_u };
-            apply(self.border.bottom, b, &transparent, true);
+            apply(self.border.bottom, b, &transparent, handles_live);
 
             let layout = &(*self.server).wm.layout;
             // The ring hugs the window's own silhouette, so its outer arc IS
