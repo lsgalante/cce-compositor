@@ -152,6 +152,38 @@ impl LibinputDevice {
                 }
             }
         }
+
+        // Scroll method. Only the trackpoint and mouse classes carry it: a
+        // touchpad's two-finger default is what everyone wants, and a
+        // pointing stick's default -- scroll on middle-button-down -- is
+        // what nobody clicking a middle button wants (see TrackpointConfig).
+        let class_method = if is_trackpoint {
+            config.trackpoint.as_ref().and_then(|t| t.scroll_method.as_ref())
+        } else if is_touchpad {
+            None
+        } else {
+            config.mouse.as_ref().and_then(|m| m.scroll_method.as_ref())
+        };
+        if let Some(m_str) = class_method {
+            let method = match m_str.as_str() {
+                "none" => Some(ffi::libinput_config_scroll_method_LIBINPUT_CONFIG_SCROLL_NO_SCROLL),
+                "button" | "on_button_down" => Some(ffi::libinput_config_scroll_method_LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN),
+                "two_finger" | "2fg" => Some(ffi::libinput_config_scroll_method_LIBINPUT_CONFIG_SCROLL_2FG),
+                "edge" => Some(ffi::libinput_config_scroll_method_LIBINPUT_CONFIG_SCROLL_EDGE),
+                other => {
+                    log::warn!("input: unknown scroll_method {:?} (none, button, two_finger, edge)", other);
+                    None
+                }
+            };
+            if let Some(m) = method {
+                let supported = ffi::libinput_device_config_scroll_get_methods(handle);
+                if m == ffi::libinput_config_scroll_method_LIBINPUT_CONFIG_SCROLL_NO_SCROLL || (supported & m) != 0 {
+                    ffi::libinput_device_config_scroll_set_method(handle, m);
+                } else {
+                    log::warn!("input: {} does not support scroll_method {:?}", name, m_str);
+                }
+            }
+        }
     }
 
     pub unsafe fn deinit(&mut self) {

@@ -446,6 +446,13 @@ pub struct TrackpointConfig {
     pub accel_speed: Option<f64>,
     pub accel_profile: Option<String>,
     pub scroll_factor: Option<f64>,
+    /// libinput scroll method: `"none"`, `"button"` (scroll while the
+    /// middle button is held) or `"two_finger"` / `"edge"` for devices that
+    /// support them. libinput defaults a pointing stick to `"button"`, which
+    /// withholds every middle press until the release to see whether it was
+    /// a scroll: clients then get a press and release in the same instant,
+    /// so a middle *click* never registers and a middle *drag* scrolls.
+    pub scroll_method: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq)]
@@ -453,6 +460,8 @@ pub struct MouseConfig {
     pub accel_speed: Option<f64>,
     pub accel_profile: Option<String>,
     pub scroll_factor: Option<f64>,
+    /// See `TrackpointConfig::scroll_method`.
+    pub scroll_method: Option<String>,
 }
 
 /// Pointer device configuration. Per-class blocks (`mouse` / `touchpad` /
@@ -1905,6 +1914,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                     accel_speed,
                     accel_profile,
                     scroll_factor: get_child_arg_f64_opt(tp_node, "scroll_factor"),
+                    scroll_method: get_child_arg_string_opt(tp_node, "scroll_method"),
                 });
             }
         }
@@ -1916,6 +1926,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                     accel_speed: get_child_arg_f64_opt(m_node, "accel_speed"),
                     accel_profile: get_child_arg_string_opt(m_node, "accel_profile"),
                     scroll_factor: get_child_arg_f64_opt(m_node, "scroll_factor"),
+                    scroll_method: get_child_arg_string_opt(m_node, "scroll_method"),
                 });
             }
         }
@@ -3028,6 +3039,7 @@ style {
                 mouse {
                     accel_speed (f64)0.5
                     scroll_factor (f64)2.0
+                    scroll_method "button"
                 }
                 trackpad {
                     tap_to_click (bool)true
@@ -3039,6 +3051,7 @@ style {
                     accel_speed (f64)0.4
                     accel_profile "adaptive"
                     scroll_factor (f64)3.0
+                    scroll_method ("menu:none,button,two_finger,edge")"none"
                 }
             }
         "#;
@@ -3053,6 +3066,7 @@ style {
         let mouse = input.mouse.unwrap();
         assert_eq!(mouse.accel_speed, Some(0.5));
         assert_eq!(mouse.scroll_factor, Some(2.0));
+        assert_eq!(mouse.scroll_method, Some("button".to_string()));
         // `trackpad` parses into the touchpad block (input.kdl spelling).
         let tp = input.touchpad.unwrap();
         assert_eq!(tp.tap_to_click, Some(true));
@@ -3063,6 +3077,8 @@ style {
         assert_eq!(tpoint.accel_speed, Some(0.4));
         assert_eq!(tpoint.accel_profile, Some("adaptive".to_string()));
         assert_eq!(tpoint.scroll_factor, Some(3.0));
+        // The annotated spelling the settings UI writes parses the same.
+        assert_eq!(tpoint.scroll_method, Some("none".to_string()));
     }
 
     #[test]
