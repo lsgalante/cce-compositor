@@ -1508,6 +1508,12 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             if overview_chrome || clicked_grid {
                 // fall through
             } else if overview_win_valid && matches!(overview_border_zone, BorderZone::None) {
+                // Super-held at zoom 1: the grab focuses the window, as a
+                // normal press would — the frame moves to it for the drag.
+                // In overview hover already focused it.
+                if !in_overview {
+                    seat.focus(Focus::Window(clicked_win));
+                }
                 (*server).wm.stop_panning_animation();
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
