@@ -2926,14 +2926,20 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 
 		struct fx_render_frame_options frame_options = {
 			.box = dst_box,
-			.corner_radius = scene_frame->corner_radius,
-			.band = scene_frame->band,
-			.band_min = scene_frame->band_min,
-			.corner_len = scene_frame->corner_len,
-			.gap = scene_frame->gap,
+			/* Lengths are node-local logical px, like the bevel's
+			 * thickness and the exclusion rect below; the shader works
+			 * in buffer px, so every one takes the output scale. Left
+			 * unscaled, the handles drew at half size on a scale-2
+			 * output — and smaller than the compositor's hit zone,
+			 * which is sized in logical px. */
+			.corner_radius = scene_frame->corner_radius * data->scale,
+			.band = scene_frame->band * data->scale,
+			.band_min = scene_frame->band_min * data->scale,
+			.corner_len = scene_frame->corner_len * data->scale,
+			.gap = scene_frame->gap * data->scale,
 			.hovered = scene_frame->hovered,
 			.swell_curve = scene_frame->swell_curve,
-			.bulge = scene_frame->bulge,
+			.bulge = scene_frame->bulge * data->scale,
 			.exclusion = {
 				scene_frame->exclusion[0] * data->scale,
 				scene_frame->exclusion[1] * data->scale,
