@@ -2,7 +2,7 @@
 //
 // Runs in a dedicated thread. cce-status connects to
 // /tmp/cce-status-{WAYLAND_DISPLAY}.sock, sends a subscription line
-// ("layout", "title", "modifiers", or "dismiss") and receives lines whenever the status changes.
+// ("layout", "title", "modifiers", "adjust", or "dismiss") and receives lines whenever the status changes.
 //
 // The main loop sends updates through an mpsc channel. The server thread
 // owns the socket and handles all I/O independently of the Wayland event loop.
@@ -24,6 +24,12 @@ pub struct StatusUpdate {
     pub title_text: String,
     /// Plain text for modifiers subscriber
     pub modifiers_text: String,
+    /// "on" while window-adjust mode is active (overview, or Super held —
+    /// `WindowManager::window_adjust_active`), else "off". The desktop grid
+    /// subscribes to show its own resize handles on the pinned images in
+    /// step with the windows' handles; it never holds keyboard focus, so
+    /// it cannot read the modifier state for itself.
+    pub adjust_text: String,
     /// What each status segment is composited OVER, by app_id — see
     /// [`crate::backdrop`]. Unlike the other topics this one is
     /// per-subscriber: a segment gets only its own entry, since the whole
@@ -54,6 +60,8 @@ enum Subscription {
     Layout,
     Title,
     Modifiers,
+    /// `adjust` — "on"/"off" as window-adjust mode comes and goes.
+    Adjust,
     /// One-shot menu-dismiss events only — never receives state pushes.
     Dismiss,
     /// `backdrop <app_id>` — what THIS segment is composited over, so it can
@@ -75,6 +83,7 @@ impl Subscription {
             "layout" => Subscription::Layout,
             "title" => Subscription::Title,
             "modifiers" => Subscription::Modifiers,
+            "adjust" => Subscription::Adjust,
             "dismiss" => Subscription::Dismiss,
             _ => Subscription::Unknown,
         }
@@ -424,6 +433,7 @@ fn format_for_subscription(sub: &Subscription, update: &StatusUpdate) -> String 
         Subscription::Layout => update.layout_text.clone(),
         Subscription::Title => update.title_text.clone(),
         Subscription::Modifiers => update.modifiers_text.clone(),
+        Subscription::Adjust => update.adjust_text.clone(),
         Subscription::Backdrop(app_id) => {
             // A segment the compositor has no sample for (not mapped yet, or
             // its app_id does not match a window) is told so explicitly
@@ -512,6 +522,7 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
         layout_text,
         title_text,
         modifiers_text,
+        adjust_text: if wm.window_adjust_active() { "on" } else { "off" }.to_string(),
         // Measured in the render pass (see `Output::measure_status_backdrops`)
         // because that is where the frame's grid geometry already lives;
         // here it is only carried.

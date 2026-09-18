@@ -2155,6 +2155,8 @@ impl WindowManager {
         }
         self.mode = mode;
         self.arm_border_fade();
+        // The `adjust` status topic follows window_adjust_active().
+        self.update_status();
     }
 
     /// Overview, or Super held: the focused window shows its frame and
@@ -2188,6 +2190,9 @@ impl WindowManager {
         }
         self.adjust_held = held;
         self.arm_border_fade();
+        // The `adjust` status topic: the desktop grid shows its image
+        // handles in step with the windows'.
+        self.update_status();
         let now = crate::util::msec_timestamp();
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {

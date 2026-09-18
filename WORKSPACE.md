@@ -80,7 +80,7 @@ ccebuild install cce-mail  # just one package (what each crate's `make install` 
 ccebuild restart            # restart user services left on a replaced binary
 ccebuild status             # built-vs-installed drift, AND running-vs-installed
 ccebuild prune              # target/ artifacts of crates cargo no longer knows
-ccebuild install-system     # the root-owned binaries (needs sudo)
+ccebuild install-system     # the root-owned binaries, units, PAM stacks (one sudo prompt; --dry-run to preview)
 ```
 
 The full deploy loop is `ccebuild install && ccebuild restart`. `ccebuild` derives
@@ -289,7 +289,9 @@ Clients and compositor communicate over Unix sockets keyed by `$WAYLAND_DISPLAY`
   `ccectl` binary (in `cce-compositor/`) is the CLI client; run `ccectl` with no args for the
   command list.
 - **Status**: `/tmp/cce-status-{WAYLAND_DISPLAY}.sock` — subscribe to `layout` /
-  `title` / `modifiers` / `dismiss` / `backdrop <app_id>` and receive push updates.
+  `title` / `modifiers` / `adjust` / `dismiss` / `backdrop <app_id>` and receive push
+  updates. `adjust` is "on"/"off" as window-adjust mode (overview, or Super
+  held) comes and goes — what `cce-grid` keys its image resize handles on.
   This feeds `cce-status-interface` (the status bar). `backdrop` is the odd one
   out: it takes the asking segment's app_id and reports what that segment is
   composited over, which is the one thing a Wayland client can never see for
