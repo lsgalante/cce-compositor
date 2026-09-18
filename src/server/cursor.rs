@@ -123,13 +123,12 @@ pub struct Cursor {
     pub hovered_border_window: *mut crate::window::Window,
     /// Which of that window's 8 border zones is highlighted.
     pub hovered_border_element: Option<crate::window::BorderElement>,
-    /// The toplevel under the pointer while Super-held adjust mode is on:
-    /// the window the ring lands on and whose handles are live, focused or
-    /// not. Set by `passthrough` on every hover evaluation and cleared when
-    /// the pointer rests on nothing adjustable or the mode is off. Overview
-    /// keys the ring on focus instead — see `Window::is_adjust_target`. May
-    /// dangle after a close: compared by address only, and nulled in
-    /// `Window::destroy`.
+    /// The toplevel under the pointer while adjust mode (overview, or Super
+    /// held) is on: the window the ring lands on and whose handles are live,
+    /// focused or not. Set by `passthrough` on every hover evaluation and
+    /// cleared when the pointer rests on nothing adjustable or the mode is
+    /// off — see `Window::is_adjust_target`. May dangle after a close:
+    /// compared by address only, and nulled in `Window::destroy`.
     pub adjust_hover: *mut crate::window::Window,
     pub right_click_on_bg: bool,
     pub right_click_on_border: bool,
@@ -865,11 +864,10 @@ impl Cursor {
                         is_window = true;
                         hovered_toplevel = window;
                     }
-                    // Super held at zoom 1: the ring lands on the window
-                    // under the pointer, focused or not. Set BEFORE the zone
-                    // test below, so the band is live on the first hover.
-                    // (Null for the status bar, wallpaper and grid; overview
-                    // keys the ring on focus and ignores this.)
+                    // Adjust mode: the ring lands on the window under the
+                    // pointer, focused or not. Set BEFORE the zone test
+                    // below, so the band is live on the first hover. (Null
+                    // for the status bar, wallpaper and grid.)
                     self.set_adjust_hover(if (*server).wm.window_adjust_active() {
                         hovered_toplevel
                     } else {
@@ -928,9 +926,9 @@ impl Cursor {
                 && !hovered_chrome
                 && (*server).wm.window_adjust_active()
             {
-                // Focus follows the pointer in overview: there the ring is
-                // drawn on the focused window only, so hovering is how it
-                // moves between windows without a click. (Super-held adjust mode takes this
+                // Focus follows the pointer in overview, so a click-less
+                // hover chooses the window a focus chord or the exit lands
+                // on. (The ring itself keys on `adjust_hover`, not focus.) (Super-held adjust mode takes this
                 // branch too, for the pointer-focus clear below, but not the
                 // refocus.) Guarded on an actual change —
                 // seat.focus raises a Floating window BEFORE its same-focus
@@ -4010,12 +4008,11 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     if !crate::window::window_takes_handles(window) {
         return BorderZone::None;
     }
-    // The adjust target only, matching what draw_borders draws: the focused
-    // window in overview, the hovered one with Super held. A window showing
-    // no ring has no band, and a grab that is not drawn is the failure mode
-    // this file keeps warning about. Either way the pointer reaches a
-    // window's edge through its body — hover-to-focus in overview, the hover
-    // target at zoom 1 — so the band is live by the time it arrives.
+    // The adjust target only — the window under the pointer — matching what
+    // draw_borders draws. A window showing no ring has no band, and a grab
+    // that is not drawn is the failure mode this file keeps warning about.
+    // The pointer reaches a window's edge through its body, so the band is
+    // live by the time it arrives.
     if !(*window).is_adjust_target() {
         return BorderZone::None;
     }

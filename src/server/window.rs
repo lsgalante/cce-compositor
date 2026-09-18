@@ -3570,19 +3570,18 @@ impl Window {
         false
     }
 
-    /// Whether this is the window the adjust-mode ring and handles belong
-    /// to. In overview that is the focused window (hover-to-focus moves it
-    /// from window to window); with Super held at zoom 1 it is the toplevel
-    /// under some seat's pointer (`Cursor::adjust_hover`), focused or not —
-    /// pressing Super arms the window the pointer is already on, and a drag
-    /// on it never changes focus. The reveal (`step_border_fade`), the drawn
-    /// handles and catchers (`draw_borders`) and the hit test
+    /// Whether this is the window the adjust-mode handles belong to: the
+    /// toplevel under some seat's pointer (`Cursor::adjust_hover`), focused
+    /// or not, in overview and with Super held alike — the handles are
+    /// shown on what the pointer is over and on nothing else, so a pointer
+    /// on the background shows none. (Overview's hover-to-focus still moves
+    /// focus with the pointer, but focus is not what the ring keys on: a
+    /// pointer resting on the background would otherwise keep the last
+    /// window's ring up.) The reveal (`step_border_fade`), the drawn handles
+    /// and catchers (`draw_borders`) and the hit test
     /// (`cursor::get_border_zone`) all ask this one predicate, so the ring
     /// cannot be drawn on one window and grabbed on another.
     pub unsafe fn is_adjust_target(&self) -> bool {
-        if (*self.server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
-            return self.is_seat_focused();
-        }
         let me = self as *const Window as *mut Window;
         let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*seats).next;
@@ -3808,11 +3807,10 @@ impl Window {
     pub unsafe fn step_border_fade(&mut self) -> bool {
         let mut moving = false;
         let mut changed = false;
-        // The adjust TARGET shows its whole ring for as long as the mode is
-        // on — the focused window in overview, the hovered one with Super
-        // held; other windows show nothing. Either way the ring follows the
-        // pointer from window to window, each swap easing through this same
-        // fade. Hover still reads through on the revealed ring, as
+        // The adjust TARGET — the window under the pointer — shows its whole
+        // ring for as long as the mode is on; other windows show nothing.
+        // The ring follows the pointer from window to window, each swap
+        // easing through this same fade. Hover still reads through on the revealed ring, as
         // `color_for` paints the hovered zone in hover_color over the full
         // reveal.
         let all_on = (*self.server).wm.window_adjust_active()
@@ -4174,7 +4172,7 @@ impl Window {
             // A window thinner than two bands has no interior left for a
             // ring; drawing one would be a solid block over the whole window.
             // Live handles: the mode is on and this is the adjust target
-            // (focused in overview, hovered with Super held). Target-only,
+            // (the window under the pointer). Target-only,
             // like the reveal in step_border_fade: without this the
             // invisible catcher rects would keep intercepting scene hits on
             // windows whose ring is not even drawn.

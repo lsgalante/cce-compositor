@@ -417,10 +417,10 @@ sat outside the edges and the ring that followed hugged them.
   body-drag as overview, gated by one predicate,
   `WindowManager::window_adjust_active()` (overview OR `adjust_held`).
   But NOT hover-to-focus: the ring lands on the window **under the
-  pointer** (`Cursor::adjust_hover`, set by `passthrough`), focused or not,
-  and focus stays put — so pressing Super arms whatever the pointer is
-  already on, and a focus chord pressed next acts on the window the user
-  had. **A drag never focuses the window it moves or resizes** (the grab
+  pointer** (`Cursor::adjust_hover`, set by `passthrough` — the same
+  target overview uses), focused or not, and focus stays put — so pressing
+  Super arms whatever the pointer is already on, and a focus chord pressed
+  next acts on the window the user had. **A drag never focuses the window it moves or resizes** (the grab
   paths in `handle_button` call no `seat.focus`; `op_start_pointer` raises
   a Floating one instead); a tap on the band or body — press+release
   without motion — is a click and focuses in `op_end`.
@@ -432,10 +432,11 @@ sat outside the edges and the ring that followed hugged them.
   A background press with Super held is an ordinary desktop press — only
   overview exits on it.
 - Handles are shown on the **adjust target only** — `Window::is_adjust_target`:
-  the focused window in overview, the hovered one with Super held — for as
+  the window under the pointer (`Cursor::adjust_hover`), in overview and
+  with Super held alike; a pointer on the background shows none — for as
   long as the mode is on (`step_border_fade`'s `all_on` branch, `draw_borders`'
-  `handles_live`, and `get_border_zone` all ask it). **Focus follows the
-  pointer in overview**: the
+  `handles_live`, and `get_border_zone` all ask it). Separately, **focus
+  follows the pointer in overview** (the ring does not key on it): the
   motion path focuses the hovered toplevel — guarded on an actual change,
   because `seat.focus` raises a Floating window *before* its same-focus
   short-circuit, so an unguarded call would raise and relayout on every
