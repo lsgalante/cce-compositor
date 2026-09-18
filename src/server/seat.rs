@@ -1611,20 +1611,24 @@ impl Seat {
                         (*self.server).wm.dirty_windowing();
                     }
                 }
-                // A border TAP — press+release without meaningful motion —
-                // is a click, not a drag. The press focused the window and
-                // killed any focus-follow pan (drag protection), which left
-                // a mostly-hidden window stranded: aiming at a thin content
+                // A TAP — press+release without meaningful motion — is a
+                // click, not a drag. A drag never focuses the window it
+                // moves or resizes (the press grabs without focusing), but
+                // a click on a window chooses it as any click does, so the
+                // tap focuses here. And it pans: the press killed any
+                // focus-follow pan (drag protection), which left a
+                // mostly-hidden window stranded — aiming at a thin content
                 // sliver at the screen edge, it is easy to land on the
-                // border band instead, focus the window, and see nothing
-                // happen. Restore the pan for taps; real drags (any actual
-                // motion) keep the camera still. An overview tap is
-                // excluded: its release already launched the exit flight
-                // centered on this window, and a second pan computed from
-                // the still-overview camera drags that flight off target.
+                // border band instead and see nothing happen. Real drags
+                // (any actual motion) keep the camera still. An overview
+                // tap is excluded: its release already launched the exit
+                // flight centered on this window, and a second pan computed
+                // from the still-overview camera drags that flight off
+                // target (hover focused it there anyway).
                 let dx = (op.x - op.start_x).abs();
                 let dy = (op.y - op.start_y).abs();
-                if dx < 4 && dy < 4 && !op.started_in_overview {
+                if dx < 4 && dy < 4 && !op.started_in_overview && !(*win).is_status_bar() {
+                    self.focus(Focus::Window(win));
                     self.focus_follow_pan(win);
                 }
             }

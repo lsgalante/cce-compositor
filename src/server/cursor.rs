@@ -123,6 +123,14 @@ pub struct Cursor {
     pub hovered_border_window: *mut crate::window::Window,
     /// Which of that window's 8 border zones is highlighted.
     pub hovered_border_element: Option<crate::window::BorderElement>,
+    /// The toplevel under the pointer while Super-held adjust mode is on:
+    /// the window the ring lands on and whose handles are live, focused or
+    /// not. Set by `passthrough` on every hover evaluation and cleared when
+    /// the pointer rests on nothing adjustable or the mode is off. Overview
+    /// keys the ring on focus instead — see `Window::is_adjust_target`. May
+    /// dangle after a close: compared by address only, and nulled in
+    /// `Window::destroy`.
+    pub adjust_hover: *mut crate::window::Window,
     pub right_click_on_bg: bool,
     pub right_click_on_border: bool,
     pub left_click_on_bg_in_overview: bool,
@@ -197,6 +205,7 @@ impl Default for Cursor {
             last_click_window: std::ptr::null_mut(),
             hovered_border_window: std::ptr::null_mut(),
             hovered_border_element: None,
+            adjust_hover: std::ptr::null_mut(),
             right_click_on_bg: false,
             right_click_on_border: false,
             left_click_on_bg_in_overview: false,
@@ -690,6 +699,23 @@ impl Cursor {
 
         log::debug!("entering cursor mode op");
         ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+
+        // A grab does not focus the window it moves or resizes, and it was
+        // the press's `seat.focus` that used to raise a Floating one — so
+        // the raise happens here for whatever the op grabbed. (A window
+        // un-tiled by the drag is raised in `op_update` instead.)
+        let grabbed = match &(*self.seat).op {
+            Some(op) => op.window_ptr,
+            None => std::ptr::null_mut(),
+        };
+        if !grabbed.is_null()
+            && !(*grabbed).closed
+            && !(*grabbed).is_status_bar()
+            && (*grabbed).tiling_mode == crate::tiling::TilingMode::Floating
+        {
+            (*(*self.seat).server).wm.raise_window(grabbed);
+            (*(*self.seat).server).wm.dirty_windowing();
+        }
     }
 
     pub unsafe fn op_end_pointer(&mut self) {
@@ -729,6 +755,17 @@ impl Cursor {
         // Borders rest invisible and fade in, so the change in hover target is
         // the start of an animation rather than a repaint: the fade timer
         // repaints every affected window as it steps.
+        (*(*self.seat).server).wm.arm_border_fade();
+    }
+
+    /// Move the Super-held adjust target to `target` (null to clear). The
+    /// ring eases off the old window and onto the new one through the same
+    /// border fade a hover swap uses, so a change arms that timer.
+    pub unsafe fn set_adjust_hover(&mut self, target: *mut crate::window::Window) {
+        if self.adjust_hover == target {
+            return;
+        }
+        self.adjust_hover = target;
         (*(*self.seat).server).wm.arm_border_fade();
     }
 
@@ -798,12 +835,14 @@ impl Cursor {
             if lock_state != crate::lock_manager::LockState::Unlocked {
                 if !matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
                     self.set_border_hover(std::ptr::null_mut(), None);
+                    self.set_adjust_hover(std::ptr::null_mut());
                     self.clear_focus();
                     return;
                 }
             } else {
                 if matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
                     self.set_border_hover(std::ptr::null_mut(), None);
+                    self.set_adjust_hover(std::ptr::null_mut());
                     self.clear_focus();
                     return;
                 }
@@ -826,6 +865,16 @@ impl Cursor {
                         is_window = true;
                         hovered_toplevel = window;
                     }
+                    // Super held at zoom 1: the ring lands on the window
+                    // under the pointer, focused or not. Set BEFORE the zone
+                    // test below, so the band is live on the first hover.
+                    // (Null for the status bar, wallpaper and grid; overview
+                    // keys the ring on focus and ignores this.)
+                    self.set_adjust_hover(if (*server).wm.window_adjust_active() {
+                        hovered_toplevel
+                    } else {
+                        std::ptr::null_mut()
+                    });
                     // No mode gate: the band scales with the window
                     // (get_border_zone is zoom-aware), so the resize/move
                     // controls reveal and work at any zoom, not just 1.
@@ -855,8 +904,11 @@ impl Cursor {
                 }
                 SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                     is_window = true;
+                    self.set_adjust_hover(std::ptr::null_mut());
                 }
-                _ => {}
+                _ => {
+                    self.set_adjust_hover(std::ptr::null_mut());
+                }
             }
             self.set_border_hover(std::ptr::null_mut(), None);
 
@@ -876,9 +928,9 @@ impl Cursor {
                 && !hovered_chrome
                 && (*server).wm.window_adjust_active()
             {
-                // Focus follows the pointer in overview: the ring is drawn on
-                // the focused window only, so hovering is how it moves between
-                // windows without a click. (Super-held adjust mode takes this
+                // Focus follows the pointer in overview: there the ring is
+                // drawn on the focused window only, so hovering is how it
+                // moves between windows without a click. (Super-held adjust mode takes this
                 // branch too, for the pointer-focus clear below, but not the
                 // refocus.) Guarded on an actual change —
                 // seat.focus raises a Floating window BEFORE its same-focus
@@ -894,9 +946,10 @@ impl Cursor {
                 // launcher's own first configure — so a stationary pointer
                 // resting on a world window was refocusing that window and
                 // dismissing the launcher the instant it mapped.
-                // Overview only: with Super held at zoom 1 the frame stays
-                // on the focused window, so a focus chord pressed next acts
-                // on the window the user had, not the one under the pointer.
+                // Overview only: with Super held at zoom 1 focus stays put,
+                // so a focus chord pressed next acts on the window the user
+                // had — the ring follows the pointer through `adjust_hover`
+                // instead (`Window::is_adjust_target`).
                 if (*server).wm.mode == crate::window_manager::WindowManagerMode::Overview
                     && !hovered_toplevel.is_null()
                     && !(*self.seat).focus_is_chrome()
@@ -939,6 +992,7 @@ impl Cursor {
         }
 
         self.set_border_hover(std::ptr::null_mut(), None);
+        self.set_adjust_hover(std::ptr::null_mut());
         self.clear_focus();
     }
 
@@ -1508,12 +1562,12 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             if overview_chrome || clicked_grid {
                 // fall through
             } else if overview_win_valid && matches!(overview_border_zone, BorderZone::None) {
-                // Super-held at zoom 1: the grab focuses the window, as a
-                // normal press would — the frame moves to it for the drag.
-                // In overview hover already focused it.
-                if !in_overview {
-                    seat.focus(Focus::Window(clicked_win));
-                }
+                // The grab does NOT focus the window: moving a window is
+                // not choosing it, and the ring already sits on it through
+                // `adjust_hover`. A tap — press and release without motion
+                // — is a click and focuses in `op_end`; a Floating window
+                // is raised for the drag in `op_start_pointer`. (In
+                // overview hover already focused it.)
                 (*server).wm.stop_panning_animation();
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
@@ -1643,8 +1697,9 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     (*target_win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*target_win).mode_locked = true;
                 }
-                seat.focus(Focus::Window(target_win));
-                
+                // No focus on the grab: a bound move/resize drag acts on
+                // the window under the pointer without choosing it (a tap
+                // focuses in `op_end`, the raise is in `op_start_pointer`).
                 let op_type = match pb.action {
                     crate::config::Action::Move => Some(crate::seat::PointerOpType::Move),
                     // The modifier binding is a resize path the border zones
@@ -1751,7 +1806,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                             (*border_target_win).mode_locked = true;
                         }
 
-                        seat.focus(Focus::Window(border_target_win));
+                        // No focus on the grab (see the body grab above).
                         (*server).wm.stop_panning_animation();
                         let cursor_x = (*cursor.wlr_cursor).x;
                         let cursor_y = (*cursor.wlr_cursor).y;
@@ -1827,7 +1882,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                             (*border_target_win).mode_locked = true;
                         }
 
-                        seat.focus(Focus::Window(border_target_win));
+                        // No focus on the grab (see the body grab above).
                         (*server).wm.stop_panning_animation();
                         let cursor_x = (*cursor.wlr_cursor).x;
                         let cursor_y = (*cursor.wlr_cursor).y;
@@ -3954,12 +4009,13 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     if !crate::window::window_takes_handles(window) {
         return BorderZone::None;
     }
-    // Focused window only, matching what draw_borders draws. Unfocused
-    // windows show no ring, and a grab that is not drawn is the failure mode
-    // this file keeps warning about; hover-to-focus (the motion path) means
-    // reaching a window's edge focuses it on the way, so its band is live by
-    // the time the pointer arrives.
-    if !(*window).is_seat_focused() {
+    // The adjust target only, matching what draw_borders draws: the focused
+    // window in overview, the hovered one with Super held. A window showing
+    // no ring has no band, and a grab that is not drawn is the failure mode
+    // this file keeps warning about. Either way the pointer reaches a
+    // window's edge through its body — hover-to-focus in overview, the hover
+    // target at zoom 1 — so the band is live by the time it arrives.
+    if !(*window).is_adjust_target() {
         return BorderZone::None;
     }
 

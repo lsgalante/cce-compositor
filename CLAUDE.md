@@ -427,10 +427,16 @@ where the old band sat outside them.
   even band (the four catcher rects) even where the ring is drawn thin: the
   swell is ornament, and a corner you can see but not grab would be worse.
 - **Holding Super is window-adjust mode at zoom 1**: the same handles and
-  body-drag as overview (but NOT hover-to-focus — the frame stays on the
-  focused window, so a focus chord pressed next acts on the window the
-  user had), gated by one predicate,
+  body-drag as overview, gated by one predicate,
   `WindowManager::window_adjust_active()` (overview OR `adjust_held`).
+  But NOT hover-to-focus: the ring lands on the window **under the
+  pointer** (`Cursor::adjust_hover`, set by `passthrough`), focused or not,
+  and focus stays put — so pressing Super arms whatever the pointer is
+  already on, and a focus chord pressed next acts on the window the user
+  had. **A drag never focuses the window it moves or resizes** (the grab
+  paths in `handle_button` call no `seat.focus`; `op_start_pointer` raises
+  a Floating one instead); a tap on the band or body — press+release
+  without motion — is a click and focuses in `op_end`.
   `adjust_held` is refreshed from the keyboard's modifier mask on every
   modifiers event (`refresh_adjust_held`), which also re-runs the pointer
   passthrough so the ring lands under a still pointer on key-down and the
@@ -438,9 +444,11 @@ where the old band sat outside them.
   shadow (injection bypasses the device mask, so it keeps its own flag).
   A background press with Super held is an ordinary desktop press — only
   overview exits on it.
-- Handles are shown on the **focused window only**, for as long as overview
-  is on (`step_border_fade`'s `all_on` branch, gated on
-  `Window::is_seat_focused`). **Focus follows the pointer in overview**: the
+- Handles are shown on the **adjust target only** — `Window::is_adjust_target`:
+  the focused window in overview, the hovered one with Super held — for as
+  long as the mode is on (`step_border_fade`'s `all_on` branch, `draw_borders`'
+  `handles_live`, and `get_border_zone` all ask it). **Focus follows the
+  pointer in overview**: the
   motion path focuses the hovered toplevel — guarded on an actual change,
   because `seat.focus` raises a Floating window *before* its same-focus
   short-circuit, so an unguarded call would raise and relayout on every
