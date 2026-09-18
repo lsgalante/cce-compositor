@@ -2906,16 +2906,33 @@ impl WindowManager {
                         let virtual_dy = dy as f64 / scale + (self.desk_pan_y - op.start_pan_y);
                         // Same math (and snapping) as the seat op's Resize
                         // arm — this recomputation feeds the arrange
-                        // snapshot and must not diverge from it.
+                        // snapshot and must not diverge from it: hard
+                        // whole-cell snap for a window grabbed Tiled,
+                        // magnetic pull for a Floating one.
                         let sp = self.layout.snap_params().for_zoom(self.desk_zoom);
-                        let new_w = crate::policy::snap::resize_axis(
-                            op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
-                            edges.left, edges.right, 50.0, &sp.x(),
-                        ) as u32;
-                        let new_h = crate::policy::snap::resize_axis(
-                            op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
-                            edges.top, edges.bottom, 50.0, &sp.y(),
-                        ) as u32;
+                        let (new_w, new_h) = if op.start_was_tiled {
+                            (
+                                crate::policy::snap::resize_axis_tiled(
+                                    op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
+                                    edges.left, edges.right, &sp.x(),
+                                ) as u32,
+                                crate::policy::snap::resize_axis_tiled(
+                                    op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
+                                    edges.top, edges.bottom, &sp.y(),
+                                ) as u32,
+                            )
+                        } else {
+                            (
+                                crate::policy::snap::resize_axis(
+                                    op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
+                                    edges.left, edges.right, 50.0, &sp.x(),
+                                ) as u32,
+                                crate::policy::snap::resize_axis(
+                                    op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
+                                    edges.top, edges.bottom, 50.0, &sp.y(),
+                                ) as u32,
+                            )
+                        };
                         // Same clamp as the seat op (see its Resize arm).
                         return Some((*win_ptr).wm_scheduled.dimensions_hint.clamp(new_w, new_h));
                     }

@@ -324,7 +324,13 @@ treats them as opaque.
   `Tiled` (grid-aligned; the window reports xdg maximized), `Fullscreen`,
   `Popup`, `Overlay`, `Status`, `Utility`. Tiled-ness is geometric: the seat
   op's end (`seat.rs::op_end`) promotes/demotes via
-  `policy::snap::is_cell_aligned`. `Utility` is the one mode a client asks for
+  `policy::snap::is_cell_aligned`. **A window grabbed Tiled snaps HARD
+  through the whole drag** — its move lands on cell starts
+  (`snap::snap_move_tiled`) and its resize lands each dragged edge on a cell
+  edge, whole cells only (`snap::resize_axis_tiled`, used by both the seat
+  op and `get_active_resize_dimensions`) — so it comes out of the drag still
+  Tiled; the magnetic pull (`snap_move`, `resize_axis`) is for Floating
+  windows deciding whether to tile. `Utility` is the one mode a client asks for
   outright — `cce_window_management.rs` sets it on `set_utility` — and it is a
   self-sizing float: no resize affordance, no saved geometry (see
   `xdg_toplevel.rs`, which sizes it and `Status` from their own content, and

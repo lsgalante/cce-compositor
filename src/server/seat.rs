@@ -1464,19 +1464,36 @@ impl Seat {
                             (*win).resize_edges = Some(edges);
                         }
 
-                        // Magnetic grid snap pulls the dragged edge onto the
-                        // visible cell edges; the anchored edge is untouched.
-                        // Must match get_active_resize_dimensions, which
-                        // recomputes this for the arrange snapshot — both go
-                        // through snap::resize_axis.
-                        let new_w = crate::policy::snap::resize_axis(
-                            op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
-                            edges.left, edges.right, 50.0, &sp.x(),
-                        ) as u32;
-                        let new_h = crate::policy::snap::resize_axis(
-                            op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
-                            edges.top, edges.bottom, 50.0, &sp.y(),
-                        ) as u32;
+                        // A window grabbed Tiled snaps HARD: the dragged edge
+                        // lands on a cell edge from any distance and the size
+                        // stays whole cells, so it is still Tiled on release.
+                        // A Floating one gets the magnetic pull onto the
+                        // visible cell edges; the anchored edge is untouched
+                        // either way. Must match get_active_resize_dimensions,
+                        // which recomputes this for the arrange snapshot.
+                        let (new_w, new_h) = if op.start_was_tiled {
+                            (
+                                crate::policy::snap::resize_axis_tiled(
+                                    op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
+                                    edges.left, edges.right, &sp.x(),
+                                ) as u32,
+                                crate::policy::snap::resize_axis_tiled(
+                                    op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
+                                    edges.top, edges.bottom, &sp.y(),
+                                ) as u32,
+                            )
+                        } else {
+                            (
+                                crate::policy::snap::resize_axis(
+                                    op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
+                                    edges.left, edges.right, 50.0, &sp.x(),
+                                ) as u32,
+                                crate::policy::snap::resize_axis(
+                                    op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
+                                    edges.top, edges.bottom, 50.0, &sp.y(),
+                                ) as u32,
+                            )
+                        };
                         // The client's xdg min/max size is a contract, not a
                         // suggestion: a configure below it is applied by
                         // cce-ui as-is, and a layout with less room than its
