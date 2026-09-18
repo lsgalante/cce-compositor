@@ -341,9 +341,10 @@ treats them as opaque.
 
 ### Window move/resize handles
 
-Pointer move and resize exist **only in overview mode**, and their band is
-**inside** the content rect — an inset ring hugging the window's own edges,
-where the old band sat outside them.
+Pointer move and resize exist **only in adjust mode** (overview, or Super
+held), and the resize handles are **eight discs inside** the content rect —
+one at the midpoint of each side, one on each corner — where the old band
+sat outside the edges and the ring that followed hugged them.
 
 - `cursor::get_border_zone` is the hit test: it returns `BorderZone::None`
   outright unless `wm.mode == Overview`, so in normal mode a window cannot be
@@ -353,79 +354,48 @@ where the old band sat outside them.
 - Inside the ring, **all four edges resize**, the top included. Dragging the
   window's body is what moves it in overview, so the top edge no longer has
   to be spent on moving the way the outside band's did.
-- The ring is drawn by **one scenefx node**, `wlr_scene_frame`
-  (`scenefx/render/fx_renderer/shaders/frame.frag`), not by rects. Its
-  inner edge is a WAVE of eight hills and eight valleys: a hill in the
-  middle of each side, a hill on each corner, a valley between every two.
-  The valleys sit `R` in from every corner — a quarter of the window's
-  SHORTER side, on screen — and are `band_min` thick. Between a side's two
-  valleys the band swells to `band` at the midpoint along a raised cosine
-  (shaped by `swell_curve`). Between the two valleys flanking a corner the
-  inner edge is a SUPERELLIPSE arc — a squircle corner of radius
-  R − band_min, tangent to both valleys — whose exponent the shader solves
-  so its deepest point, on the corner's 45° diagonal, is exactly `band` in
-  from the silhouette: the corner hill peaks on the diagonal at the same
-  height as the side hills, and meets the valleys with no crease. The
-  earlier profile (edge bars and corner arms pinching to seams at
-  `corner_length`, with gap notches and a round `bulge` pad on each corner)
-  is gone; those three keys still parse and are passed to the node, and
-  the shader ignores them.
+- The handles are drawn by **one scenefx node**, `wlr_scene_frame`
+  (`scenefx/render/fx_renderer/shaders/frame.frag`): eight discs of
+  diameter `band` (= `border.handle_width`, screen px), each its own zone.
+  The side discs are tangent to their side; a corner disc sits on the
+  corner's 45° diagonal, tangent to the rounded corner arc when that arc is
+  wider than the disc and tucked into the two straight edges otherwise.
+  **`window::handle_disc_layout` is the one layout function**: `draw_borders`
+  places the eight invisible square catchers (`border.segments`) from it,
+  `cursor::get_border_zone` hit-tests the discs from it (a pixel of slack
+  for the rim), and the shader repeats the same arithmetic from the same
+  inputs (size, corner radius, band) — keep the three in step. Between two
+  discs the pointer reaches the app; the old four full-band catchers are
+  disabled for exactly that reason. Not eight rounded scene rects: a scene
+  rect takes the renderer's global corner shape, a squircle, so a rect with
+  radius half its size is not a circle.
   The shader's zone logic works in TOP-DOWN box-local coordinates
-  (`gl_FragCoord` minus the box position, unflipped): the `corner_dist` SDF
-  flips its own copy, and mirroring the zone coordinate the same way once
+  (`gl_FragCoord` minus the box position, unflipped): `corner_dist` flips
+  its own copy, and mirroring the zone coordinate the same way once
   swapped every zone label vertically — the top edge lit the bottom. And a
-  hover swap must repaint even when no reveal value moves: in overview the
-  ring is already fully revealed, so `step_border_fade` compares the hovered
-  zone against the one last drawn (`border_hover_drawn`), or the shader
-  keeps showing the previous zone until an unrelated commit repaints.
-  The valleys are the zone seams: in the shader, a fragment belongs to the
-  side it is nearest (so the split runs along the diagonals) and is a
-  corner zone when it lies within R of that side's end; in
-  `get_border_zone` the corner zones are the R×R squares at the content
-  corners. Both derive R the same way and must stay in step. The profile
-  is continuous along a side, which a rect cannot express: its only shaping
-  tool is a clipped region whose corner radius is a single scalar, capped by
-  the thickness change (tens of px) while a side is hundreds long, so it
-  reads as a bump near the centre rather than a swell. `border.segments`'
-  12 rects are what it replaced; they stay allocated but disabled.
-- **The ring's thickness is a SCREEN width, not a world one**, floored at
-  `HOVER_BAND_MIN`. Handles exist only in overview, which is zoomed *out*, so
-  a band that scaled with the window would be at its thinnest exactly where it
-  is the only way to resize: 16px renders as 7 at a typical overview zoom and
-  the thin corners as 2.5, which is neither visible nor clickable. R, the
-  valley position, is a fraction of the on-screen window, so the composition
-  holds at any zoom — only the thickness is pinned. `draw_borders` and
-  `cursor::get_border_zone` each derive it the same way and must stay in step.
-- `swell_curve` shapes the SIDE hills: the raised cosine's height, 0 at the
-  valleys and 1 at the midpoint, is raised to this power. Below 1 broadens
-  the hill (a flatter top, tighter valleys); above 1 sharpens it. The shader
-  floors it at 0.6 — below 0.5 the valleys turn into cusps. The corner
-  hills' shape is the superellipse's own and does not take it.
-- Three knobs shape it, all under `border` in config.kdl. `handle_width` is
-  the hill height — the thickness at the middle of a side and on each
-  corner's diagonal — in screen px, **its own key, not derived from
-  `width`**, because the ring must be thick enough to see and hit while the
-  desktop is zoomed out, while the window's visible border is a much finer
-  line; deriving one from the other meant you could not thicken the grip
-  without thickening every border. `taper` is the valley thickness as a
-  fraction of the hill's — 1.0 is an even ring, clamped to (0, 1] because
-  past 1 the valleys would be thicker than the hills, which is the moulding
-  inside out. `swell_curve` is above. `corner_length`, `segment_gap` and
-  `bulge` belonged to the retired seam-and-pad profile: still parsed, no
-  longer drawn.
-- The thickness is capped at a fifth of the window's shorter on-screen side,
-  so a zoomed-out window is never mostly ring. That cap replaced a hard
-  cutoff which disabled the handles below a size threshold: a window you
-  cannot resize at all is worse than one with a slimmer grip.
+  hover swap must repaint even when no reveal value moves: in adjust mode
+  the discs are already fully revealed, so `step_border_fade` compares the
+  hovered zone against the one last drawn (`border_hover_drawn`), or the
+  shader keeps showing the previous zone until an unrelated commit repaints.
+- **The disc diameter is a SCREEN size, not a world one**, floored at
+  `HOVER_BAND_MIN` and capped at a fifth of the window's shorter on-screen
+  side. Overview is zoomed *out*, so a handle that scaled with the window
+  would be smallest exactly where it is the only way to resize; the cap
+  keeps a zoomed-out window from being mostly handle. `draw_borders` and
+  `cursor::get_border_zone` each derive it the same way and must stay in
+  step.
+- `handle_width` under `border` in config.kdl is the diameter. `taper`,
+  `swell_curve`, `bulge`, `corner_length` and `segment_gap` belonged to the
+  retired ring profiles (an even ring, then a wave of hills and valleys):
+  still parsed and passed to the node, no longer drawn.
 - The shader's zone numbering MUST match `BorderElement::index()`; it is what
   the hovered-zone uniform selects on.
 - `window::window_takes_handles` is the single predicate for which windows get
   handles (excluding Popup, Fullscreen, Status, Utility, circular, hidden),
   used by both the hit test and the drawing. Keep those in step: a handle that
   is drawn but not honoured — or honoured but not drawn — is the failure mode
-  this arrangement exists to prevent. Note the *grab* zone stays the full
-  even band (the four catcher rects) even where the ring is drawn thin: the
-  swell is ornament, and a corner you can see but not grab would be worse.
+  this arrangement exists to prevent. The grab zone IS the disc (plus a pixel
+  of rim), not a band: a press between two discs is a body press and moves.
 - **Holding Super is window-adjust mode at zoom 1**: the same handles and
   body-drag as overview, gated by one predicate,
   `WindowManager::window_adjust_active()` (overview OR `adjust_held`).

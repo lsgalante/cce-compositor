@@ -238,31 +238,46 @@ pub fn border_band_width(configured_width: u32) -> f64 {
     (configured_width as f64 * 2.0).max(HOVER_BAND_MIN)
 }
 
-// Indices into BorderRects.segments: 4 edge bars + 2 L-arm rects per corner.
-const SEG_TOP: usize = 0;
-const SEG_BOTTOM: usize = 1;
-const SEG_LEFT: usize = 2;
-const SEG_RIGHT: usize = 3;
-const SEG_TL_H: usize = 4;
-const SEG_TL_V: usize = 5;
-const SEG_TR_H: usize = 6;
-const SEG_TR_V: usize = 7;
-const SEG_BL_H: usize = 8;
-const SEG_BL_V: usize = 9;
-const SEG_BR_H: usize = 10;
-const SEG_BR_V: usize = 11;
+/// Where the eight resize handles sit — one disc per zone, in
+/// `BorderElement::index()` order — for a window whose content is `w`×`h`
+/// ON SCREEN, with silhouette corner radius `r_in` and handle diameter `d`
+/// (all screen px). Returns the centres and the disc radius. The side discs
+/// are tangent to their side; a corner disc sits on the corner's diagonal,
+/// tangent to the rounded corner arc when that arc is wider than the disc
+/// and tucked into the two straight edges otherwise. The frame shader
+/// (scenefx `frame.frag`) lays out the same discs from the same inputs;
+/// `draw_borders` (the catchers) and `cursor::get_border_zone` (the hit
+/// test) both call this, so what is drawn is what grabs. Keep the shader
+/// and this in step.
+pub fn handle_disc_layout(w: f64, h: f64, r_in: f64, d: f64) -> ([(f64, f64); 8], f64) {
+    let r = 0.5 * d;
+    let t = if r_in > r { r_in - (r_in - r) / std::f64::consts::SQRT_2 } else { r };
+    let centres = [
+        (0.5 * w, r),     // Top
+        (0.5 * w, h - r), // Bottom
+        (r, 0.5 * h),     // Left
+        (w - r, 0.5 * h), // Right
+        (t, t),           // TopLeft
+        (w - t, t),       // TopRight
+        (t, h - t),       // BottomLeft
+        (w - t, h - t),   // BottomRight
+    ];
+    (centres, r)
+}
 
 pub struct BorderRects {
-    /// Invisible full-band rects kept as scene hit-test catchers, so the
-    /// pointer never falls through the visual gaps between segments.
+    /// The old full-band hit catchers. Retired by the disc handles — the
+    /// pointer between two discs must reach the app, not a catcher — and
+    /// kept disabled.
     pub left: *mut ffi::wlr_scene_rect,
     pub right: *mut ffi::wlr_scene_rect,
     pub top: *mut ffi::wlr_scene_rect,
     pub bottom: *mut ffi::wlr_scene_rect,
-    /// The visible zone segments, indexed by the SEG_* constants. Retired by
-    /// the frame node below and kept disabled; see the creation site.
-    pub segments: [*mut ffi::wlr_scene_rect; 12],
-    /// The resize-handle ring: all eight zones in one shader-drawn node.
+    /// Invisible square catchers, one per handle disc, indexed by
+    /// `BorderElement::index()`: they make a scene hit on a disc resolve to
+    /// this window even where the client's input region does not cover it.
+    pub segments: [*mut ffi::wlr_scene_rect; 8],
+    /// The resize handles: all eight discs in one shader-drawn node.
     pub frame: *mut ffi::wlr_scene_frame,
     /// Parent of `segments`, living in the global border overlay layer rather
     /// than in the window tree. Tracks the window tree's position so the
@@ -695,16 +710,15 @@ impl Window {
             ffi::wlr_scene_node_destroy(&mut (*capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
             return Err("Failed to create window border tree");
         }
-        let mut border_segments = [std::ptr::null_mut(); 12];
+        let mut border_segments = [std::ptr::null_mut(); 8];
         for seg in border_segments.iter_mut() {
             *seg = ffi::wlr_scene_rect_create(border_tree, 0, 0, clear_color.as_ptr());
         }
-        // The resize-handle ring. One node draws all eight zones, because the
-        // thickness swells continuously along each side and rects cannot
-        // (see scenefx frame.frag). The 12 segment rects above are what it
-        // replaced; they stay allocated but disabled — the status-bar code
-        // still reaches for the array, and freeing them would be a wider
-        // change than this.
+        // The resize handles: one node draws all eight discs (scenefx
+        // frame.frag). Not eight rounded scene rects, because a scene rect
+        // takes the renderer's global corner shape — a squircle — so a rect
+        // with radius half its size would not be a circle. The eight rects
+        // above are the discs' invisible hit catchers.
         let border_frame = ffi::wlr_scene_frame_create(border_tree, 0, 0, 0, clear_color.as_ptr());
 
         let decorations_above_tree = ffi::wlr_scene_tree_create(tree);
@@ -3974,15 +3988,13 @@ impl Window {
         ffi::river_scene_rect_set_corner_radius(self.window_background, (bg_radius as f64 * self.scale) as i32);
         ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden && self.wm_requested.ssd);
 
-        // The border draws as 8 zone segments (4 edge bars + 4 two-rect L
-        // corners) with BORDER_SEGMENT_GAP between them; the hovered zone
-        // draws in hover_color. Underneath, the 4 full-band rects stay
-        // enabled but transparent as scene hit-test catchers, so the pointer
-        // never falls through the gaps (and width 0 keeps the legacy
+        // The handles draw as eight discs in one frame node; the hovered
+        // disc draws in hover_color. Under each disc a transparent square
+        // rect is a scene hit-test catcher (width 0 keeps the legacy
         // invisible 8px virtual resize zones).
         //
-        // Segments live in `border.tree`, parented to the global border
-        // overlay layer rather than to this window's tree, so it has to be
+        // They live in `border.tree`, parented to the global border overlay
+        // layer rather than to this window's tree, so it has to be
         // positioned and enabled in step with the window by hand.
         let is_virtual_border = border.width == 0;
         // Deliberately NOT gated on `wm_requested.ssd`: that flag defaults to
@@ -4126,26 +4138,39 @@ impl Window {
             let band_screen = (layout_handle_w as f64)
                 .max(crate::window::HOVER_BAND_MIN)
                 .min(short_side * 0.2);
-            let bw_u = (band_screen / sc).round().max(1.0) as i32;
+            let px = |v: i32| (v as f64 * sc) as i32;
 
-            // Hit catchers: the inside ring, sides spanning the full height
-            // so the corners belong to them. No foam clipping — that exists
-            // to split a gap SHARED with a neighbouring window, and an inside
-            // ring shares nothing.
-            let b = ffi::wlr_box { x: 0, y: 0, width: bw_u, height: ch };
-            apply(self.border.left, b, &transparent, handles_live);
-            let b = ffi::wlr_box { x: cw - bw_u, y: 0, width: bw_u, height: ch };
-            apply(self.border.right, b, &transparent, handles_live);
-            let b = ffi::wlr_box { x: bw_u, y: 0, width: cw - 2 * bw_u, height: bw_u };
-            apply(self.border.top, b, &transparent, handles_live);
-            let b = ffi::wlr_box { x: bw_u, y: ch - bw_u, width: cw - 2 * bw_u, height: bw_u };
-            apply(self.border.bottom, b, &transparent, handles_live);
+            // The band catchers are retired: between two discs the pointer
+            // must reach the app, not a catcher.
+            for r in [self.border.left, self.border.right, self.border.top, self.border.bottom] {
+                ffi::wlr_scene_node_set_enabled(r as *mut ffi::wlr_scene_node, false);
+            }
 
             let layout = &(*self.server).wm.layout;
-            // The ring hugs the window's own silhouette, so its outer arc IS
-            // the window's content radius (the widened root plate radius the
-            // corner clip uses) rather than that plus a band.
+            // The discs sit inside the window's own silhouette, so the
+            // corner discs place against the content radius (the widened
+            // root plate radius the corner clip uses).
             let r_in = bg_radius;
+
+            // Hit catchers: one transparent square under each disc, laid out
+            // by the same function the hit test uses. `apply` takes unscaled
+            // boxes, so the screen-px layout is divided back out (a px of
+            // rounding on an invisible catcher is nothing).
+            let (centres, disc_r) = handle_disc_layout(
+                cw as f64 * sc,
+                ch as f64 * sc,
+                px(r_in) as f64,
+                band_screen,
+            );
+            for (i, &(cx, cy)) in centres.iter().enumerate() {
+                let b = ffi::wlr_box {
+                    x: ((cx - disc_r) / sc).floor() as i32,
+                    y: ((cy - disc_r) / sc).floor() as i32,
+                    width: (2.0 * disc_r / sc).ceil() as i32,
+                    height: (2.0 * disc_r / sc).ceil() as i32,
+                };
+                apply(self.border.segments[i], b, &transparent, handles_live);
+            }
             // corner_len and gap are retired by the wave profile (the
             // valleys place the seams now, a quarter along each side) and
             // ignored by the shader; still passed so the node API holds.
@@ -4160,11 +4185,10 @@ impl Window {
             let a = self.border_reveal[BorderElement::Top.index()].clamp(0.0, 1.0);
             let premul = |c: &[f32; 4]| [c[0] * a, c[1] * a, c[2] * a, c[3] * a];
 
-            let px = |v: i32| (v as f64 * sc) as i32;
             ffi::wlr_scene_frame_set_size(self.border.frame, px(cw), px(ch));
             ffi::wlr_scene_frame_set_corner_radius(self.border.frame, px(r_in));
-            // band is the hill height, band_min (taper × band) the valley
-            // floor; bulge is the fillet radius that domes each corner hill.
+            // band is the disc diameter; the rest is retired by the discs and
+            // ignored by the shader, still passed so the node API holds.
             ffi::wlr_scene_frame_set_shape(
                 self.border.frame,
                 band_screen as f32,
@@ -4229,10 +4253,6 @@ impl Window {
                 &mut (*self.border.frame).node as *mut ffi::wlr_scene_node,
                 a > 0.0,
             );
-            // The rects the ring replaced.
-            for &seg in self.border.segments.iter() {
-                ffi::wlr_scene_node_set_enabled(seg as *mut ffi::wlr_scene_node, false);
-            }
         }
     }
 
@@ -5486,5 +5506,36 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
         } else {
             (*(*window).server).wm.dirty_windowing();
         }
+    }
+}
+
+#[cfg(test)]
+mod handle_disc_tests {
+    use super::*;
+
+    #[test]
+    fn discs_follow_border_element_order_and_stay_inside() {
+        let (c, r) = handle_disc_layout(400.0, 300.0, 0.0, 32.0);
+        assert_eq!(r, 16.0);
+        assert_eq!(c[BorderElement::Top.index()], (200.0, 16.0));
+        assert_eq!(c[BorderElement::Bottom.index()], (200.0, 284.0));
+        assert_eq!(c[BorderElement::Left.index()], (16.0, 150.0));
+        assert_eq!(c[BorderElement::Right.index()], (384.0, 150.0));
+        assert_eq!(c[BorderElement::TopLeft.index()], (16.0, 16.0));
+        assert_eq!(c[BorderElement::BottomRight.index()], (384.0, 284.0));
+        for &(x, y) in &c {
+            assert!(x - r >= 0.0 && x + r <= 400.0 && y - r >= 0.0 && y + r <= 300.0);
+        }
+    }
+
+    #[test]
+    fn corner_disc_is_tangent_to_a_wider_corner_arc() {
+        let (c, r) = handle_disc_layout(400.0, 300.0, 40.0, 32.0);
+        let (tx, ty) = c[BorderElement::TopLeft.index()];
+        assert_eq!(tx, ty);
+        // Distance from the arc centre (40, 40) plus the disc radius is the
+        // arc radius: tangent from the inside.
+        let d = ((tx - 40.0).powi(2) + (ty - 40.0).powi(2)).sqrt();
+        assert!((d + r - 40.0).abs() < 1e-9);
     }
 }

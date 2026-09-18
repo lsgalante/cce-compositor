@@ -3984,23 +3984,24 @@ pub unsafe fn grid_node_info(
     None
 }
 
-/// Where a layout point falls on a window's interactive band.
+/// Which resize handle, if any, a layout point falls on.
 ///
-/// The band lives INSIDE the content rect — an inset ring hugging the
-/// window's own edges — and exists only in overview mode. Two consequences
-/// worth stating, because both are deliberate:
+/// The handles are eight discs INSIDE the content rect — one at the
+/// midpoint of each side, one on each corner — and exist only in adjust
+/// mode (overview, or Super held). Two consequences worth stating, because
+/// both are deliberate:
 ///
-///   - In normal mode there is no band at all, so a window cannot be moved
-///     or resized with the pointer. The keyboard and IPC paths
+///   - Outside adjust mode there are no handles at all, so a window cannot
+///     be resized with the pointer. The keyboard and IPC paths
 ///     (`move_window_*`, `ccectl move-window`, a client repositioning
 ///     itself) are untouched; this is only about dragging.
-///   - Inside the ring, all four edges RESIZE, the top included. Moving is
-///     what dragging the window's body already does in overview, so the top
-///     edge does not have to be spent on it the way the old outside band
-///     did.
+///   - Every disc RESIZES, the top one included. Moving is what dragging
+///     the window's body does in adjust mode, so no handle has to be spent
+///     on it; between two discs the pointer belongs to the body.
 ///
-/// `window.rs`'s `draw_borders` draws the handles from the same band width
-/// and corner length, so the zones and the visuals cannot drift.
+/// `window::handle_disc_layout` places the discs for the hit test here,
+/// the catchers in `draw_borders`, and (mirrored in the frame shader) the
+/// drawing, so the zones and the visuals cannot drift.
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
     // Overview, or Super held (window-adjust mode): the same ring either way.
     if !(*(*window).server).wm.window_adjust_active() {
@@ -4026,10 +4027,10 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
 
     // box_geom holds the UNSCALED content size; on screen the window covers
     // `size * scale`, and lx/ly are layout px — so the CONTENT extents scale
-    // but the band does NOT. The grab width is a screen width, matching what
-    // draw_borders draws: overview is zoomed out, and a band that shrank with
-    // the window would be thinnest exactly where it is the only way to
-    // resize. Keep the two in step.
+    // but the discs do NOT. The disc diameter is a screen size, matching
+    // what draw_borders draws: overview is zoomed out, and a handle that
+    // shrank with the window would be smallest exactly where it is the only
+    // way to resize. Keep the two in step.
     let scale = if (*window).scale > 0.0 { (*window).scale } else { 1.0 };
     let geom = (*window).box_geom;
     let rx = lx - geom.x as f64;
@@ -4040,17 +4041,16 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     let bw = ((*(*window).server).wm.layout.border_handle_width as f64)
         .max(crate::window::HOVER_BAND_MIN)
         // The same fifth-of-the-short-side cap draw_borders applies, so the
-        // grab zone never outgrows the ring the user can see.
+        // grab zone never outgrows the disc the user can see.
         .min(content_w.min(content_h).max(1.0) * 0.2);
 
-    // Outside the window entirely, or in the body beyond the ring: not ours.
-    // The body case is what leaves overview's drag-to-move working.
+    // Outside the window entirely: not ours.
     if rx < 0.0 || rx >= content_w || ry < 0.0 || ry >= content_h {
         return BorderZone::None;
     }
     // A client popover (set_popover_region) owns its rect outright: the menu
     // reads as in front of the chrome, so nothing under it may grab. Checked
-    // before the pads and the band — it beats both.
+    // before the discs — it beats them.
     if let Some(r) = (*window).popover_region {
         let (ex, ey) = (r.x as f64 * scale, r.y as f64 * scale);
         let (ew, eh) = (r.width as f64 * scale, r.height as f64 * scale);
@@ -4059,40 +4059,47 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
         }
     }
 
-    let (near_l, near_r) = (rx < bw, rx >= content_w - bw);
-    let (near_t, near_b) = (ry < bw, ry >= content_h - bw);
-    if !(near_l || near_r || near_t || near_b) {
-        return BorderZone::None;
+    // The discs, from the same on-screen size, silhouette radius and
+    // diameter draw_borders hands the frame shader, so what is drawn is
+    // what grabs. A pixel of slack covers the antialiased rim. The corner
+    // discs place against the content radius: the widened root plate
+    // radius the corner clip uses, on screen.
+    let r_in = crate::window::widen_corner_radius(
+        (*window).root_plate_radius_base(),
+        geom.width,
+        geom.height,
+    ) as f64;
+    let r_in = (r_in * scale) as i32 as f64;
+    let (centres, r) = crate::window::handle_disc_layout(content_w, content_h, r_in, bw);
+    let reach = (r + 1.0) * (r + 1.0);
+    for (i, &(cx, cy)) in centres.iter().enumerate() {
+        let (dx, dy) = (rx - cx, ry - cy);
+        if dx * dx + dy * dy <= reach {
+            return BorderZone::Resize(edges_for_border_element(
+                crate::window::BorderElement::ALL[i],
+            ));
+        }
     }
+    // In the body, between the discs: not ours. This is what leaves the
+    // body drag-to-move working.
+    BorderZone::None
+}
 
-    // Corner zones are the squares within R of each content corner, R a
-    // quarter of the SHORTER side: the ring's inner edge is a wave with a
-    // hill on every corner and in the middle of every side, the valleys
-    // between them sit R in from each corner, and the valley is where the
-    // shader cuts one zone from the next. The same rule here, so what
-    // lights up is what grabs.
-    let cl_x = content_w.min(content_h) * 0.25;
-    let cl_y = cl_x;
-    let corner_l = rx < cl_x;
-    let corner_r = rx >= content_w - cl_x;
-    let corner_t = ry < cl_y;
-    let corner_b = ry >= content_h - cl_y;
-
-    if (corner_l || corner_r) && (corner_t || corner_b) {
-        return BorderZone::Resize(crate::window::Edges {
-            top: corner_t,
-            bottom: corner_b && !corner_t,
-            left: corner_l,
-            right: corner_r && !corner_l,
-        });
-    }
-
-    BorderZone::Resize(crate::window::Edges {
-        top: near_t,
-        bottom: near_b && !near_t,
-        left: near_l,
-        right: near_r && !near_l,
-    })
+/// The resize edges a handle disc stands for — the inverse of
+/// `border_element_for_edges`.
+pub fn edges_for_border_element(element: crate::window::BorderElement) -> crate::window::Edges {
+    use crate::window::BorderElement::*;
+    let (top, bottom, left, right) = match element {
+        Top => (true, false, false, false),
+        Bottom => (false, true, false, false),
+        Left => (false, false, true, false),
+        Right => (false, false, false, true),
+        TopLeft => (true, false, true, false),
+        TopRight => (true, false, false, true),
+        BottomLeft => (false, true, true, false),
+        BottomRight => (false, true, false, true),
+    };
+    crate::window::Edges { top, bottom, left, right }
 }
 
 /// Map a resize zone's edges to the border element that should highlight.
