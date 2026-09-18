@@ -38,6 +38,9 @@ pub struct Layout {
     /// ring has to be thick enough to see and hit while the desktop is zoomed
     /// out, and the window's visible border is a much finer line than that.
     pub border_handle_width: f32,
+    /// Opacity a Floating window is dimmed to while it overlaps the window
+    /// whose resize handles are up (adjust mode), 0..1. 1.0 disables.
+    pub border_overlap_opacity: f32,
     /// Shape of the handle ring's swell along a side. Below 1 the ring gains
     /// its thickness early — a corner that visibly swells, then a long slow
     /// approach to the middle. Above 1 stays thin near the corner and gains
@@ -210,6 +213,7 @@ impl Default for Layout {
             border_segment_gap: 4,
             border_taper: 0.35,
             border_handle_width: 32.0,
+            border_overlap_opacity: 0.4,
             border_swell_curve: 0.45,
             border_corner_bulge: 48.0,
             border_corner_length: 0,
@@ -566,6 +570,8 @@ pub struct SurfaceConfig {
     pub border_taper: f64,
     #[serde(default = "default_border_handle_width")]
     pub border_handle_width: f64,
+    #[serde(default = "default_border_overlap_opacity")]
+    pub border_overlap_opacity: f64,
     #[serde(default = "default_border_swell_curve")]
     pub border_swell_curve: f64,
     #[serde(default = "default_border_corner_bulge")]
@@ -671,6 +677,7 @@ impl Default for SurfaceConfig {
             border_segment_gap: default_border_segment_gap(),
             border_taper: default_border_taper(),
             border_handle_width: default_border_handle_width(),
+            border_overlap_opacity: default_border_overlap_opacity(),
             border_swell_curve: default_border_swell_curve(),
             border_corner_bulge: default_border_corner_bulge(),
             border_corner_length: 0,
@@ -781,6 +788,7 @@ fn default_border_corner_radius() -> i64 {
 
 fn default_border_taper() -> f64 { 0.35 }
 fn default_border_handle_width() -> f64 { 32.0 }
+fn default_border_overlap_opacity() -> f64 { 0.4 }
 fn default_border_swell_curve() -> f64 { 0.45 }
 fn default_border_corner_bulge() -> f64 { 48.0 }
 
@@ -2177,6 +2185,13 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.border_handle_width = val as f64;
                                         }
                                     }
+                                    "overlap_opacity" => {
+                                        if let Some(val) = entry.value().as_f64() {
+                                            surface.border_overlap_opacity = val;
+                                        } else if let Some(val) = entry.value().as_i64() {
+                                            surface.border_overlap_opacity = val as f64;
+                                        }
+                                    }
                                     "swell_curve" => {
                                         if let Some(val) = entry.value().as_f64() {
                                             surface.border_swell_curve = val;
@@ -2523,6 +2538,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     // which is the moulding inside out.
     state.layout.border_taper = config.surface.border_taper.clamp(0.05, 1.0) as f32;
     state.layout.border_handle_width = config.surface.border_handle_width.max(4.0) as f32;
+    state.layout.border_overlap_opacity = config.surface.border_overlap_opacity.clamp(0.0, 1.0) as f32;
     state.layout.border_swell_curve = config.surface.border_swell_curve.clamp(0.1, 6.0) as f32;
     state.layout.border_corner_bulge = config.surface.border_corner_bulge.max(0.0) as f32;
     state.layout.border_corner_length = config.surface.border_corner_length.max(0) as i32;

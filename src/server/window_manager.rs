@@ -3612,6 +3612,11 @@ impl WindowManager {
 
         self.update_status();
         self.rendering_scheduled.dirty = true;
+        // A window that just moved, resized or restacked may now cover the
+        // adjust target, or no longer: let the overlap dim re-evaluate.
+        if self.window_adjust_active() {
+            self.arm_border_fade();
+        }
     }
 
     pub unsafe fn update_viewport_local(&mut self) {
@@ -4268,6 +4273,10 @@ impl WindowManager {
             }
         }
         self.keep_status_bar_on_top();
+        // Restacking changes who covers the adjust target.
+        if self.window_adjust_active() {
+            self.arm_border_fade();
+        }
     }
 
     /// The overview action a POINTER-LESS toggle stands for — a key press
@@ -6854,6 +6863,9 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
             continue;
         }
         if (*window).step_border_fade() {
+            moving = true;
+        }
+        if (*window).step_adjust_dim() {
             moving = true;
         }
         if (*window).step_fs_anim() {

@@ -1213,6 +1213,9 @@ impl Seat {
             
             let win = op.window_ptr;
             if !win.is_null() && !(*win).closed {
+                // Every drag step can bring a Floating window over the
+                // adjust target or take it off: re-evaluate the overlap dim.
+                (*self.server).wm.arm_border_fade();
                 if (*win).tiling_mode != crate::tiling::TilingMode::Floating
                     && (*win).tiling_mode != crate::tiling::TilingMode::Overlay
                     // A drag moves a Utility window; it must not re-class it.

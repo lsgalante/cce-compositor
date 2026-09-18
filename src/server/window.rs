@@ -434,6 +434,13 @@ pub struct Window {
     /// `rendering_requested.border`, which the arrange pass rewrites wholesale
     /// every pass and would otherwise clobber.
     pub border_reveal: [f32; 8],
+    /// How far this window is dimmed for lying OVER the adjust target, 0.0
+    /// (full opacity) to 1.0 (`border.overlap_opacity`): a Floating window
+    /// overlapping the window whose handles are up would hide them, so it
+    /// eases down while the mode is on and back up when it ends. Stepped by
+    /// `step_adjust_dim` on the border-fade timer; applied through
+    /// `effective_opacity`.
+    pub adjust_dim: f32,
     pub decorations_above: ffi::wl_list,
     pub decorations_above_tree: *mut ffi::wlr_scene_tree,
     pub popup_tree: *mut ffi::wlr_scene_tree,
@@ -752,6 +759,7 @@ impl Window {
             hovered_border_element: None,
             border_hover_drawn: None,
             border_reveal: [0.0; 8],
+            adjust_dim: 0.0,
             decorations_above: std::mem::zeroed(),
             decorations_above_tree,
             popup_tree,
@@ -2980,7 +2988,7 @@ impl Window {
             self.update_shadow(width, height, radius, want_shadow);
                 self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
-            ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, requested.opacity);
+            ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, self.effective_opacity());
 
             // Device px, like the blur radius above: the surface content is
             // scaled to its dest size, so an unscaled clip radius would keep
@@ -3714,6 +3722,85 @@ impl Window {
     }
 
 
+
+    /// The opacity the scene tree gets: the requested one, scaled down by the
+    /// adjust-mode overlap dim (`adjust_dim`, 0..1) toward
+    /// `border.overlap_opacity`.
+    pub unsafe fn effective_opacity(&self) -> f32 {
+        let floor = (*self.server).wm.layout.border_overlap_opacity;
+        self.rendering_requested.opacity * (1.0 - self.adjust_dim.clamp(0.0, 1.0) * (1.0 - floor))
+    }
+
+    /// Whether this window should be dimmed right now: adjust mode is on,
+    /// this is a Floating window, and it lies ABOVE the adjust target in the
+    /// render stack while overlapping it on screen — where it would cover
+    /// the target's handles. Windows under the target are left alone; they
+    /// hide nothing.
+    pub unsafe fn adjust_dim_wanted(&self) -> bool {
+        let wm = &(*self.server).wm;
+        if !wm.window_adjust_active()
+            || self.closed
+            || self.tiling_mode != crate::tiling::TilingMode::Floating
+            || self.is_status_bar()
+            || self.is_wallpaper()
+            || self.is_grid()
+        {
+            return false;
+        }
+        let me = self as *const Window as *mut Window;
+        let on_screen = |w: *mut Window| -> (f64, f64, f64, f64) {
+            let sc = if (*w).scale > 0.0 { (*w).scale } else { 1.0 };
+            let g = (*w).box_geom;
+            (g.x as f64, g.y as f64, g.width as f64 * sc, g.height as f64 * sc)
+        };
+        let (mx, my, mw, mh) = on_screen(me);
+        // The render list runs bottom to top (raise_window moves to the
+        // tail), so a target met before this window sits beneath it.
+        let list = &wm.rendering_requested.list as *const ffi::wl_list as *mut WlList;
+        let mut curr = (*list).next;
+        let mut covered = false;
+        while curr != list {
+            let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
+            if let crate::wm_node::WmNodeType::Window(w) = (*node).get() {
+                if w == me {
+                    return covered;
+                }
+                if !w.is_null()
+                    && !(*w).closed
+                    && window_takes_handles(w)
+                    && (*w).is_adjust_target()
+                {
+                    let (tx, ty, tw, th) = on_screen(w);
+                    if mx < tx + tw && tx < mx + mw && my < ty + th && ty < my + mh {
+                        covered = true;
+                    }
+                }
+            }
+            curr = (*curr).next;
+        }
+        false
+    }
+
+    /// Advance the overlap dim one tick toward where `adjust_dim_wanted`
+    /// says it should rest, applying the opacity as it goes. Returns true
+    /// while still in motion, like `step_border_fade`.
+    pub unsafe fn step_adjust_dim(&mut self) -> bool {
+        let target = if self.adjust_dim_wanted() { 1.0 } else { 0.0 };
+        let delta = target - self.adjust_dim;
+        let moving;
+        if delta.abs() <= BORDER_FADE_EPSILON {
+            if self.adjust_dim == target {
+                return false;
+            }
+            self.adjust_dim = target;
+            moving = false;
+        } else {
+            self.adjust_dim += delta * BORDER_FADE_STEP;
+            moving = true;
+        }
+        ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, self.effective_opacity());
+        moving
+    }
 
     /// Advance the hover fade one tick. Every zone eases toward 1.0 if it is
     /// the one under the pointer and 0.0 otherwise. Returns true while any

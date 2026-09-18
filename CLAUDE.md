@@ -384,6 +384,17 @@ sat outside the edges and the ring that followed hugged them.
   keeps a zoomed-out window from being mostly handle. `draw_borders` and
   `cursor::get_border_zone` each derive it the same way and must stay in
   step.
+- **A Floating window lying over the adjust target is dimmed** to
+  `border.overlap_opacity` (default 0.4; 1.0 disables) while the mode is
+  on, so it does not hide the handles. `Window::adjust_dim_wanted` walks
+  the render list bottom-up: only windows ABOVE the target that overlap it
+  on screen qualify (one beneath hides nothing). `step_adjust_dim` eases
+  `adjust_dim` on the same border-fade timer as the ring, and
+  `effective_opacity` folds it into the scene-tree opacity `render_finish`
+  sets — set the tree opacity through that, never from
+  `rendering_requested.opacity` directly, or the dim is clobbered on the
+  next commit. Anything that can change who covers whom re-arms the fade:
+  `arrange_views`, `raise_window`, and every `op_update` step.
 - `handle_width` under `border` in config.kdl is the diameter. `taper`,
   `swell_curve`, `bulge`, `corner_length` and `segment_gap` belonged to the
   retired ring profiles (an even ring, then a wave of hills and valleys):
