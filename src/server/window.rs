@@ -1078,6 +1078,33 @@ impl Window {
             || self.get_app_id_string().as_deref() == Some("cce-cloud")
     }
 
+    /// A "shy" X11 window: a top-level that declines input focus
+    /// (WM_HINTS input = False) and asks to be skipped by the taskbar —
+    /// what Wine emits for a WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW window.
+    /// Apps use those as helpers they place themselves: Ubisoft Connect
+    /// keeps an untitled one exactly behind its borderless main window
+    /// (the shadow-window trick), where Windows never shows it. Managed
+    /// like an app window it was restored to a saved spot, pulled on-desk
+    /// and raised — a blank white window with the app icon, over
+    /// everything. So it is left to the client: no saved-state restore, its
+    /// own position honoured at map and on request, never focused, never
+    /// raised, stacked at the bottom.
+    pub unsafe fn is_shy(&self) -> bool {
+        let WindowImpl::Xwayland(xwindow) = self.impl_type else {
+            return false;
+        };
+        if xwindow.is_null() || (*xwindow).xsurface.is_null() {
+            return false;
+        }
+        let xs = (*xwindow).xsurface;
+        if !(*xs).parent.is_null() || !(*xs).skip_taskbar || (*xs).hints.is_null() {
+            return false;
+        }
+        let hints = (*xs).hints;
+        let input_flag = ffi::xcb_icccm_wm_t_XCB_ICCCM_WM_HINT_INPUT as i32;
+        (*hints).flags & input_flag != 0 && (*hints).input == 0
+    }
+
     pub unsafe fn try_restore(&mut self) {
         if self.restored {
             return;
@@ -1126,6 +1153,17 @@ impl Window {
             log::info!(
                 "Not restoring saved state for {:?}: named in xwayland_hidpi_except, it places itself",
                 self.get_title_string().unwrap_or_default()
+            );
+            self.restored = true;
+            return;
+        }
+        // A shy helper window (no-activate, skip-taskbar) is placed by its
+        // app, relative to the app's own windows — see `is_shy`.
+        if self.is_shy() {
+            log::info!(
+                "Not restoring saved state for {:?} ({}): a no-activate helper window, its app places it",
+                self.get_title_string().unwrap_or_default(),
+                self.get_app_id_string().unwrap_or_default()
             );
             self.restored = true;
             return;
@@ -2310,7 +2348,11 @@ impl Window {
                             wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
                         }
                         let rendering_list = &mut (*self.server).wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-                        wl_list_insert((*rendering_list).prev, &mut self.node.link as *mut ffi::wl_list as *mut WlList);
+                        // The tail is the top of the stack. A shy helper
+                        // window (`is_shy`) links at the head instead — beneath
+                        // the app's own windows, where its app keeps it.
+                        let anchor = if self.is_shy() { rendering_list } else { (*rendering_list).prev };
+                        wl_list_insert(anchor, &mut self.node.link as *mut ffi::wl_list as *mut WlList);
 
                         if self.foreign_toplevel_handle.is_null() {
                             let list = (*self.server).foreign_toplevel_list;

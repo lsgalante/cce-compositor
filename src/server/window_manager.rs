@@ -1804,7 +1804,8 @@ impl WindowManager {
                 && !(*w).minimized
                 && !is_status
                 && !(*w).is_grid()
-                && !(*w).is_overlay_ui();
+                && !(*w).is_overlay_ui()
+                && !(*w).is_shy();
             windows.push(ActionWindow {
                 id: WindowId((*w).ref_key),
                 app_id,
@@ -4357,6 +4358,10 @@ impl WindowManager {
 
     pub unsafe fn raise_window(&mut self, window: *mut Window) {
         if window.is_null() {
+            return;
+        }
+        // A shy helper window stays where its app stacked it: beneath.
+        if (*window).is_shy() {
             return;
         }
         let node_link = &mut (*window).node.link as *mut ffi::wl_list as *mut WlList;

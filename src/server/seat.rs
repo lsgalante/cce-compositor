@@ -423,6 +423,12 @@ impl Seat {
                 log::info!("[FocusDebug] Seat::focus blocking focus to status bar/wallpaper/grid window");
                 return;
             }
+            // A shy helper window declines focus by its own hints
+            // (WM_HINTS input = False); honour that — see `Window::is_shy`.
+            if !window.is_null() && (*window).is_shy() {
+                log::info!("[FocusDebug] Seat::focus blocking focus to a no-activate helper window");
+                return;
+            }
         }
 
         if let Focus::Window(window) = new_focus {

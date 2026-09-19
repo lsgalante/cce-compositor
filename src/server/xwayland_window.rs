@@ -589,6 +589,7 @@ unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
     }
 
     place_transient_where_it_asked(xwindow);
+    place_shy_where_it_is(xwindow);
 
     (*(*xwindow).window).state = WindowState::Initialized;
     if let Err(e) = (*(*xwindow).window).map() {
@@ -651,6 +652,37 @@ unsafe fn place_transient_where_it_asked(xwindow: *mut XwaylandWindow) {
         "XWayland transient mapped where it asked: title='{}' x11=({}, {}) logical=({}, {}) virtual=({:.1}, {:.1})",
         (*window).get_title_string().unwrap_or_default(),
         asked.x, asked.y, log_x, log_y, vx, vy,
+    );
+}
+
+/// A shy helper window (`Window::is_shy`) maps where its app put it: the
+/// X window's own geometry, which Wine set from the app's CreateWindow
+/// position — for Ubisoft Connect's shadow window, exactly its main
+/// window's rect. The compositor's spawn placement would put it at the
+/// default origin, in front of everything, as a blank white window.
+unsafe fn place_shy_where_it_is(xwindow: *mut XwaylandWindow) {
+    let window = (*xwindow).window;
+    if !(*window).is_shy() {
+        return;
+    }
+    let xsurface = (*xwindow).xsurface;
+    let s = x11_scale_for((*window).server, xsurface);
+    let log_x = from_x11((*xsurface).x as i32, s);
+    let log_y = from_x11((*xsurface).y as i32, s);
+    let (vx, vy) = (*window).screen_to_virtual(log_x, log_y);
+    (*window).virtual_x = vx;
+    (*window).virtual_y = vy;
+    (*window).box_geom.x = log_x;
+    (*window).box_geom.y = log_y;
+    (*window).rendering_requested.x = log_x;
+    (*window).rendering_requested.y = log_y;
+    // Placed by the client: no spawn pan to it, ever.
+    (*window).hint_placed = true;
+    log::info!(
+        "XWayland no-activate helper window mapped where it is: title='{}' class='{}' x11=({}, {}) logical=({}, {}) virtual=({:.1}, {:.1})",
+        (*window).get_title_string().unwrap_or_default(),
+        (*window).get_app_id_string().unwrap_or_default(),
+        (*xsurface).x, (*xsurface).y, log_x, log_y, vx, vy,
     );
 }
 
@@ -719,8 +751,11 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     // virtual origin moved with it. Not while the compositor has it
     // fullscreen or tiled: then the size is the compositor's (below).
     let exempt_self_placed = !has_parent && !is_fullscreen && !is_tiled && window_is_hidpi_exempt(window);
+    // A shy helper window (`Window::is_shy`) is placed by its app, which
+    // moves it to track its main window: position and size granted.
+    let shy_self_placed = !has_parent && !is_fullscreen && !is_tiled && (*window).is_shy();
 
-    if has_parent || exempt_self_placed {
+    if has_parent || exempt_self_placed || shy_self_placed {
         // Granted on the logical grid rather than verbatim — see `snap_x11`.
         // The logical values below are what the window's geometry becomes, so
         // handing X anything else is handing it a number this compositor
@@ -786,7 +821,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         let (vx, vy) = (*window).screen_to_virtual(log_x, log_y);
         (*window).virtual_x = vx;
         (*window).virtual_y = vy;
-        if exempt_self_placed {
+        if exempt_self_placed || shy_self_placed {
             // Placed by the client: the camera must not pan to it on spawn.
             (*window).hint_placed = true;
         }
