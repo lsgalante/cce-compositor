@@ -206,9 +206,10 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Six modules carry unit tests — `backdrop.rs` (the most of any, covering the
-measurement and the desktop/window blend), `config.rs`, `window_manager.rs`,
-`screenshot.rs`, `migrate_input.rs`, `text.rs`. They cluster where the logic is
+Eight modules carry unit tests — `backdrop.rs` (the most of any, covering the
+measurement and the desktop/window blend), `window_manager.rs`, `config.rs`,
+`xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
+`text.rs`. They cluster where the logic is
 pure and the FFI is not, which is the only kind of thing testable in a crate
 this deep in wlroots. The arrange/slotmap tests live in the sibling
 `cce-window-manager` crate — run them with `cargo test -p cce-window-manager`.
@@ -306,7 +307,7 @@ treats them as opaque.
   server, loads config + persisted state, adds the wayland socket, spawns the init
   program (`~/.config/cce/init` via `sh -c`) and the IPC + status servers, then
   `wl_display_run`.
-- **`window_manager.rs`** (~5.7k lines) — the heart of the mechanism side. Holds the
+- **`window_manager.rs`** (~7.5k lines) — the heart of the mechanism side. Holds the
   WM state, the camera fields, window lists, the IPC command dispatcher
   `process_ipc_command()`, the `Policy::action` snapshot builder
   (`build_action_ctx`) and the `Compositor` command applier. IPC requests arrive on
@@ -318,7 +319,7 @@ treats them as opaque.
   now `poll()`s its sockets plus a wake eventfd. Nothing in the compositor should
   tick while idle: a timer that re-arms itself unconditionally is a bug.) Decision logic (camera math, action
   dispatch, snapping, refocus, grid geometry) lives in `cce-window-manager`.
-- **`window.rs`** (~4.9k lines) — per-window model and rendering (borders, blur,
+- **`window.rs`** (~5.8k lines) — per-window model and rendering (borders, blur,
   viewport transforms).
 - **`crate::tiling`** (from `cce-window-manager`) — `TilingMode` enum: `Floating`,
   `Tiled` (grid-aligned; the window reports xdg maximized), `Fullscreen`,
