@@ -618,29 +618,39 @@ cmd_restart() {
 
 # The root-owned install paths. Separate command because it needs sudo, which is
 # exactly why these drifted three weeks behind everything else.
+#
+# Planned here as the normal user (every target is world-readable, so the
+# compare needs no privilege), then applied by ONE `sudo bash -c` call. One
+# prompt however sudo authenticates: fingerprint sudo never caches a timestamp
+# on this machine, so the former `sudo -n true` guard refused every run and a
+# chain of separate `sudo` calls would prompt once per file. A single script
+# under `set -e` is also all-or-nothing — no half-applied update.
 cmd_install_system() {
+    local dry=0
+    case "${1:-}" in
+        -n|--dry-run) dry=1 ;;
+        "") ;;
+        *) die "install-system takes only --dry-run" ;;
+    esac
     local stamp; stamp=$(date +%F)
-    # Fail early and legibly rather than dying mid-way through a partial update:
-    # under `set -e` a password prompt on a non-interactive run aborts after the
-    # first backup, leaving one binary replaced and the rest stale.
-    if ! sudo -n true 2>/dev/null; then
-        printf 'ccebuild: sudo needs a password — run this from a terminal:\n' >&2
-        printf '  sudo -v && ccebuild install-system\n' >&2
-        exit 1
-    fi
+    local plan="set -e"
+    # Append one root command to the plan, each word shell-quoted.
+    queue() { plan+=$'\n'"$(printf '%q ' "$@")"; }
+
     local pairs=(
         "cce-display-manager:/usr/bin/cce-display-manager"
     )
-    local entry bin dest
+    local entry bin dest src
     for entry in "${pairs[@]}"; do
         bin=${entry%%:*}; dest=${entry#*:}
-        [ -f "$WS/target/release/$bin" ] || die "$bin not built — run: ccebuild build"
+        src="$WS/target/release/$bin"
+        [ -f "$src" ] || die "$bin not built — run: ccebuild build"
         [ -e "$dest" ] || { printf 'ccebuild: %s absent, skipping\n' "$dest"; continue; }
-        if cmp -s "$WS/target/release/$bin" "$dest"; then continue; fi
+        if cmp -s "$src" "$dest"; then continue; fi
         printf '  %s -> %s\n' "$bin" "$dest"
-        sudo cp -a "$dest" "$dest.bak-$stamp"
+        queue cp -a "$dest" "$dest.bak-$stamp"
         # `install` unlinks first: safe even though these are running as root.
-        sudo install -m 755 "$WS/target/release/$bin" "$dest"
+        queue install -m 755 "$src" "$dest"
     done
 
     # System units and PAM stacks ship from the crates too (discovered, not
@@ -651,20 +661,30 @@ cmd_install_system() {
         dest="/etc/systemd/system/$(basename "$file")"
         if [ -e "$dest" ] && cmp -s "$file" "$dest"; then continue; fi
         printf '  %s -> %s\n' "$(basename "$file")" "$dest"
-        [ -e "$dest" ] && sudo cp -a "$dest" "$dest.bak-$stamp"
-        sudo install -m 644 "$file" "$dest"
+        if [ -e "$dest" ]; then queue cp -a "$dest" "$dest.bak-$stamp"; fi
+        queue install -m 644 "$file" "$dest"
         reload=1
     done < <(system_units)
-    if [ "$reload" -eq 1 ]; then sudo systemctl daemon-reload; fi
+    if [ "$reload" -eq 1 ]; then queue systemctl daemon-reload; fi
 
     while read -r file; do
         dest="/etc/pam.d/$(basename "$file")"
         if [ -e "$dest" ] && cmp -s "$file" "$dest"; then continue; fi
         printf '  %s -> %s\n' "$(basename "$file")" "$dest"
-        [ -e "$dest" ] && sudo cp -a "$dest" "$dest.bak-$stamp"
-        sudo install -m 644 "$file" "$dest"
+        if [ -e "$dest" ]; then queue cp -a "$dest" "$dest.bak-$stamp"; fi
+        queue install -m 644 "$file" "$dest"
     done < <(pam_files)
 
+    if [ "$plan" = "set -e" ]; then
+        printf '==> system artifacts already up to date\n'
+        return 0
+    fi
+    if [ "$dry" -eq 1 ]; then
+        printf '==> dry run; would run as root:\n%s\n' "${plan#set -e}"
+        return 0
+    fi
+    printf '==> applying as root (one sudo prompt)\n'
+    sudo bash -c "$plan"
     printf '==> system artifacts updated (binaries take effect at next login; nothing restarted)\n'
 }
 
@@ -684,9 +704,11 @@ usage: ccebuild <command>
                         sessions are working). Never the compositor.
   prune [--apply]       delete target/ artifacts of crates cargo no longer
                         knows about (renamed/retired); dry-run by default
-  install-system        update the root-owned artifacts: binaries, system
-                        units, /etc/pam.d stacks (needs sudo); backs up each
-                        changed file and restarts nothing
+  install-system [--dry-run]
+                        update the root-owned artifacts: binaries, system
+                        units, /etc/pam.d stacks — one sudo prompt for the
+                        whole batch; backs up each changed file and restarts
+                        nothing (--dry-run: print the root commands only)
 
 environment:
   CCE_WORKSPACE  workspace root (default: located from the current directory)
@@ -703,7 +725,7 @@ case "${1:-}" in
     status)         cmd_status ;;
     restart)        shift; cmd_restart "$@" ;;
     prune)          shift; cmd_prune "$@" ;;
-    install-system) cmd_install_system ;;
+    install-system) shift; cmd_install_system "$@" ;;
     -h|--help|help|"") usage ;;
     *) die "unknown command '$1' (try: ccebuild --help)" ;;
 esac
