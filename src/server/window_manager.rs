@@ -122,6 +122,10 @@ pub struct WindowManager {
     /// From the last arrange plan: false while a live grid client covers
     /// the desktop, so `draw_grid` keeps only the backdrop (and labels).
     pub grid_cells_enabled: bool,
+    /// Armed by a camera flight (overview enter/exit, a zoom target): keeps
+    /// the fallback cells on after landing until the grid client's LATCHED
+    /// patch reaches the whole viewport — see the gate in `arrange_views`.
+    pub grid_cells_hold: bool,
     pub layout: crate::config::Layout,
     pub mode_rules: Vec<crate::config::ModeRule>,
     pub keybinds: Vec<crate::config::Keybind>,
@@ -547,6 +551,7 @@ impl WindowManager {
         self.mode = WindowManagerMode::Normal;
         self.on_app_exit = crate::config::OnAppExit::FocusPrevious;
         self.grid_cells_enabled = true;
+        self.grid_cells_hold = false;
         self.restore_queue = Vec::new();
         self.last_window_states = Vec::new();
         self.exit_orphans = Vec::new();
@@ -3296,6 +3301,50 @@ impl WindowManager {
         }
     }
 
+    /// Whether every mapped grid client's LATCHED patch reaches the whole
+    /// current viewport — bare coverage, no comfort margin. False while the
+    /// patch a camera flight needed is still being rendered by the client,
+    /// or wherever the camera has come to rest beyond the latched patch
+    /// (a union that did not fit the buffer cap). True with no grid client
+    /// at all: that case is the arrange plan's `grid_cells_enabled`.
+    pub unsafe fn grid_patch_covers_viewport(&self) -> bool {
+        let mut out_box: Option<ffi::wlr_box> = None;
+        let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
+        let mut curr_out = (*outputs_list).next;
+        while curr_out != outputs_list {
+            let output = crate::container_of!(curr_out, crate::output::Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                out_box = Some((*output).sent.box_layout());
+                break;
+            }
+            curr_out = (*curr_out).next;
+        }
+        let Some(out) = out_box else { return true };
+        let zoom = crate::policy::background::sanitized_zoom(self.desk_zoom);
+        let (vx, vy) = (self.desk_pan_x, self.desk_pan_y);
+        let (vw, vh) = (out.width as f64 / zoom, out.height as f64 / zoom);
+        for &w in self.windows.iter() {
+            if w.is_null() || (*w).closed || !(*w).is_grid() {
+                continue;
+            }
+            if !matches!((*w).state, crate::window::WindowState::Mapped) {
+                continue;
+            }
+            let Some(p) = &(*w).grid_patch_current else { return false };
+            // Half a virtual unit of tolerance: the anchor is rounded to a
+            // screen pixel, and a patch edge exactly on the viewport edge
+            // must not read as a gap.
+            let covered = p.x <= vx + 0.5
+                && p.y <= vy + 0.5
+                && p.x + p.w >= vx + vw - 0.5
+                && p.y + p.h >= vy + vh - 0.5;
+            if !covered {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Mark every grid client's rendered patch stale so `update_grid_patches`
     /// re-issues it on the next arrange even though its coverage is still
     /// fine. The grid client is a pure function of (patch, style config) and
@@ -3500,10 +3549,41 @@ impl WindowManager {
         // content changing and re-bakes every blur at the start and end of
         // every pan. A pan that outruns its (prefetched, fixed-size) patch
         // briefly shows bare backdrop at the leading edge instead.
-        let cells_wanted = plan.grid_cells_enabled
-            || self.camera_ramp_anim.is_some()
-            || self.target_desk_zoom.is_some();
+        // And AFTER the flight, until the client's patch has actually
+        // landed: the ramp's last frame used to switch the cells off
+        // regardless, and a client still rendering the flight's (large)
+        // patch — a 4096²-buffer re-render, sometimes longer than the
+        // 250ms ramp — left bare backdrop at the screen edges until its
+        // commit latched: "the edge cells appear a moment after the
+        // animation ends". So at rest the cells also stay on while the
+        // LATCHED patch does not reach the whole viewport, which the
+        // latch's own arrange then switches off. Not during a pan gesture
+        // (`viewport_is_active`), per the re-bake cost above.
+        // The hold is ARMED by a flight, not by coverage alone, so a pure
+        // pan that outruns its patch never toggles the pool; and it is
+        // keyed on the latched patch rather than on `viewport_is_active`,
+        // because the ramp's last frame arranges while the viewport still
+        // counts as moving, and the settle that clears that flag 120ms
+        // later never arranges — the only arrange after landing is the
+        // latch's own, which is exactly the one that should switch the
+        // cells off.
+        let flight = self.camera_ramp_anim.is_some() || self.target_desk_zoom.is_some();
+        if flight {
+            self.grid_cells_hold = true;
+        }
+        let uncovered = self.grid_cells_hold && !self.grid_patch_covers_viewport();
+        if self.grid_cells_hold && !flight && !uncovered {
+            self.grid_cells_hold = false;
+        }
+        let cells_wanted = plan.grid_cells_enabled || flight || uncovered;
         if self.grid_cells_enabled != cells_wanted {
+            log::info!(
+                "[Grid] fallback cells {} (no_client={} flight={} held_uncovered={})",
+                if cells_wanted { "on" } else { "off" },
+                plan.grid_cells_enabled,
+                flight,
+                uncovered,
+            );
             self.grid_cells_enabled = cells_wanted;
             // The cell pools redraw only on structure changes; force one so
             // the swap (client grid <-> compositor cells) is immediate.
