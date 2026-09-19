@@ -242,6 +242,38 @@ pub unsafe fn x11_scale_for_surface(
 /// WM_CLASS class, the WM_CLASS instance and the title with the
 /// `app_id_matches` rules (case-insensitive, `*` wildcards). Empty fields
 /// never match.
+/// Whether `window` is an X11 window named in `xwayland_hidpi_except` — a
+/// full-screen X11 game, by the key's definition. Such a window sizes and
+/// places itself to the screen, and the compositor stays out of its way:
+/// no saved-state restore (`Window::try_restore`), its position requests
+/// are granted (`handle_request_configure`), and only a compositor
+/// fullscreen overrides its size.
+pub unsafe fn window_is_hidpi_exempt(window: *const crate::window::Window) -> bool {
+    if window.is_null() {
+        return false;
+    }
+    let crate::window::WindowImpl::Xwayland(xwindow) = (*window).impl_type else {
+        return false;
+    };
+    if xwindow.is_null() || (*xwindow).xsurface.is_null() {
+        return false;
+    }
+    let server = (*window).server;
+    if server.is_null() || !(*server).wm.xwayland_hidpi || (*server).wm.xwayland_hidpi_except.is_empty() {
+        return false;
+    }
+    let xsurface = (*xwindow).xsurface;
+    let text = |p: *const libc::c_char| -> String {
+        if p.is_null() { String::new() } else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() }
+    };
+    hidpi_exempt(
+        &(*server).wm.xwayland_hidpi_except,
+        &text((*xsurface).class),
+        &text((*xsurface).instance),
+        &text((*xsurface).title),
+    )
+}
+
 pub fn hidpi_exempt(patterns: &[String], class: &str, instance: &str, title: &str) -> bool {
     use crate::window_manager::app_id_matches;
     patterns.iter().any(|p| {
@@ -665,7 +697,22 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         (*(*xwindow).xsurface).x, (*(*xwindow).xsurface).y, (*(*xwindow).xsurface).width, (*(*xwindow).xsurface).height,
     );
 
-    if has_parent {
+    let is_tiled = unsafe {
+        (*window).wm_requested.tiled != 0 || !matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Utility)
+    };
+    let is_fullscreen = unsafe { (*window).is_fullscreen() };
+
+    // A window named in `xwayland_hidpi_except` is a full-screen X11 game
+    // that sizes AND places itself to the screen (Trackmania's
+    // "windowedfull" asks for (0, 0) at the desktop size). Refusing the
+    // position — answering every request with the compositor's placement —
+    // had Wine re-asking ~170 times a second for as long as the window was
+    // up. It gets the parented treatment: position and size granted, the
+    // virtual origin moved with it. Not while the compositor has it
+    // fullscreen or tiled: then the size is the compositor's (below).
+    let exempt_self_placed = !has_parent && !is_fullscreen && !is_tiled && window_is_hidpi_exempt(window);
+
+    if has_parent || exempt_self_placed {
         // Granted on the logical grid rather than verbatim — see `snap_x11`.
         // The logical values below are what the window's geometry becomes, so
         // handing X anything else is handing it a number this compositor
@@ -700,19 +747,24 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         let (vx, vy) = (*window).screen_to_virtual(log_x, log_y);
         (*window).virtual_x = vx;
         (*window).virtual_y = vy;
+        if exempt_self_placed {
+            // Placed by the client: the camera must not pan to it on spawn.
+            (*window).hint_placed = true;
+        }
         (*window).set_dimensions(log_width, log_height);
         return;
     }
 
-    let is_tiled = unsafe {
-        (*window).wm_requested.tiled != 0 || !matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Utility)
-    };
-
-    let is_fullscreen = unsafe { (*window).is_fullscreen() };
-
     // A floating window normally gets the size it asks for; not while an
-    // output is coming or going (see `note_output_change`).
-    let hold_size = is_tiled || in_output_change_grace();
+    // output is coming or going (see `note_output_change`), and not while
+    // the compositor has it FULLSCREEN: Wine syncs a window's
+    // _NET_WM_STATE from its own idea of the window rect, so a game whose
+    // fixed-size hints were granted here shrank the X window back the
+    // instant the fullscreen configure went out, then withdrew the
+    // fullscreen state Wine no longer saw as true — every Fullscreen press
+    // on Trackmania undid itself within the same frame. Held at the
+    // fullscreen size, Wine sees a screen-sized rect and keeps the state.
+    let hold_size = is_tiled || is_fullscreen || in_output_change_grace();
     if hold_size && !is_tiled {
         log::info!(
             "XWayland configure request: holding floating '{}' at its own size during output-change grace",
@@ -859,6 +911,11 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
 unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, request_fullscreen);
     let fullscreen = (*(*xwindow).xsurface).fullscreen;
+    log::info!(
+        "XWayland fullscreen request: title='{}' fullscreen={}",
+        (*(*xwindow).window).get_title_string().unwrap_or_default(),
+        fullscreen,
+    );
     (*(*xwindow).window).wm_scheduled.fullscreen_requested = if fullscreen {
         crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut())
     } else {

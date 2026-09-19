@@ -1117,6 +1117,19 @@ impl Window {
         if matches!(self.impl_type, WindowImpl::Xwayland(_)) && self.state != WindowState::Mapped {
             return;
         }
+        // A full-screen X11 game (`xwayland_hidpi_except`) sizes itself to
+        // the screen; restoring a saved size onto it is what shrank
+        // Trackmania to the launcher's 1214x689 — the game then pinned that
+        // size in its hints and no fullscreen could take. Mark it restored
+        // so nothing else tries.
+        if crate::xwayland_window::window_is_hidpi_exempt(self as *const Window) {
+            log::info!(
+                "Not restoring saved state for {:?}: named in xwayland_hidpi_except, it places itself",
+                self.get_title_string().unwrap_or_default()
+            );
+            self.restored = true;
+            return;
+        }
         let app_id_str = self.get_app_id_string().unwrap_or_default();
         if app_id_str.is_empty()
             || app_id_str.starts_with("cce-status")

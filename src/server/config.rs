@@ -415,6 +415,15 @@ pub struct WindowManagerConfig {
     /// window's WM_CLASS class, its WM_CLASS instance and its title, since
     /// every Proton window shares the class `steam_proton`; `*` wildcards as
     /// in `rounded_apps`. KDL: `xwayland_hidpi_except "Trackmania"`.
+    ///
+    /// A named window is treated as the full-screen X11 game it is
+    /// (`xwayland_window::window_is_hidpi_exempt`): it is drawn at 1 in the
+    /// logical world, it is NOT restored to a saved size at map (it sizes
+    /// itself to the screen — a restored 1214x689 is what Trackmania then
+    /// pinned in its hints), its own position requests are granted (its
+    /// "windowedfull" asks for the desktop origin, and refusing that was a
+    /// ~170/s configure loop), and only a compositor fullscreen or tiling
+    /// overrides its size.
     pub xwayland_hidpi_except: Option<Vec<String>>,
     /// Apps whose windows turn trackpad input into a view drag (Space +
     /// button) — see `cursor::ViewDrag`. A scroll over one of their popups
