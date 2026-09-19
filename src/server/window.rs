@@ -441,6 +441,21 @@ pub struct Window {
     /// `step_adjust_dim` on the border-fade timer; applied through
     /// `effective_opacity`.
     pub adjust_dim: f32,
+    /// The map/close fade, 0.0 (invisible) to 1.0 (fully drawn). A window
+    /// starts at 0 when it maps and eases to 1; a client that asks to close
+    /// (`fade-out` on the control socket) eases it back to 0 and then exits.
+    /// Applied through `effective_opacity`, so it MULTIPLIES the arrange
+    /// pass's own opacity and the adjust-mode dim rather than fighting them.
+    /// Stepped by `step_map_fade` on the border-fade timer.
+    pub map_fade: f32,
+    /// Where `map_fade` is easing to: 1.0 while the window lives, 0.0 once a
+    /// close fade has been asked for.
+    pub map_fade_target: f32,
+    /// Linear per-tick step for `map_fade`, derived from the configured
+    /// duration at the moment the fade starts. Linear, not the borders'
+    /// exponential approach: an exponential close fade never actually
+    /// reaches zero, and the client is waiting on a deadline to exit.
+    pub map_fade_step: f32,
     pub decorations_above: ffi::wl_list,
     pub decorations_above_tree: *mut ffi::wlr_scene_tree,
     pub popup_tree: *mut ffi::wlr_scene_tree,
@@ -760,6 +775,12 @@ impl Window {
             border_hover_drawn: None,
             border_reveal: [0.0; 8],
             adjust_dim: 0.0,
+            // 1.0, not 0.0: a window only starts its fade in `map()`, and
+            // one that never fades (fading disabled, a status segment) must
+            // render at full strength from its first frame.
+            map_fade: 1.0,
+            map_fade_target: 1.0,
+            map_fade_step: 1.0,
             decorations_above: std::mem::zeroed(),
             decorations_above_tree,
             popup_tree,
@@ -1971,6 +1992,17 @@ impl Window {
                 }
             }
         }
+
+        // The open dissolve. Last in `map`, so the window is fully placed and
+        // its scene tree built before the ramp touches it — and so a window
+        // that failed to map never starts one. `start_map_fade` snaps rather
+        // than ramps when fading is off or this surface opts out (status
+        // segments, wallpaper), so there is no second branch here.
+        let fade_ms = (*self.server).wm.layout.fade_in_ms;
+        if self.wants_map_fade() && fade_ms > 0 {
+            self.map_fade = 0.0;
+        }
+        self.start_map_fade(1.0, fade_ms);
 
         (*self.server).wm.dirty_windowing();
         Ok(())
@@ -3779,10 +3811,67 @@ impl Window {
 
     /// The opacity the scene tree gets: the requested one, scaled down by the
     /// adjust-mode overlap dim (`adjust_dim`, 0..1) toward
-    /// `border.overlap_opacity`.
+    /// `border.overlap_opacity`, and again by the map/close fade
+    /// (`map_fade`), which rests at 1.0 whenever no fade is in flight.
     pub unsafe fn effective_opacity(&self) -> f32 {
         let floor = (*self.server).wm.layout.border_overlap_opacity;
-        self.rendering_requested.opacity * (1.0 - self.adjust_dim.clamp(0.0, 1.0) * (1.0 - floor))
+        self.rendering_requested.opacity
+            * (1.0 - self.adjust_dim.clamp(0.0, 1.0) * (1.0 - floor))
+            * self.map_fade.clamp(0.0, 1.0)
+    }
+
+    /// Whether this window takes the map/close fade at all. Surfaces that are
+    /// part of the desktop itself rather than something the user opened — the
+    /// status segments, the wallpaper, the grid layer — are left alone: they
+    /// map once at login and a dissolve there reads as the desktop failing to
+    /// draw. Same exclusion list `adjust_dim_wanted` uses, for the same
+    /// reason: these are not windows the user thinks of as opening.
+    pub unsafe fn wants_map_fade(&self) -> bool {
+        !self.is_status_bar() && !self.is_wallpaper() && !self.is_grid()
+    }
+
+    /// Begin a fade toward `target` (0.0 out, 1.0 in) over `ms`, and arm the
+    /// timer that steps it. A `ms` of 0 (or fading disabled) snaps instead,
+    /// so every caller can treat this as "put the window at `target`".
+    pub unsafe fn start_map_fade(&mut self, target: f32, ms: u32) {
+        self.map_fade_target = target.clamp(0.0, 1.0);
+        if ms == 0 || !self.wants_map_fade() {
+            self.map_fade = self.map_fade_target;
+            ffi::river_scene_node_set_opacity(
+                self.tree as *mut ffi::wlr_scene_node,
+                self.effective_opacity(),
+            );
+            return;
+        }
+        // Ticks at 16 ms; at least one step, so a sub-frame duration still
+        // lands on the target rather than dividing by zero.
+        let ticks = ((ms as f32) / 16.0).max(1.0);
+        self.map_fade_step = ((self.map_fade_target - self.map_fade).abs() / ticks).max(1.0e-4);
+        ffi::river_scene_node_set_opacity(
+            self.tree as *mut ffi::wlr_scene_node,
+            self.effective_opacity(),
+        );
+        (*self.server).wm.arm_border_fade();
+    }
+
+    /// Advance the map/close fade one tick toward `map_fade_target`, applying
+    /// the opacity as it goes. Returns true while still in motion, like
+    /// `step_adjust_dim`.
+    pub unsafe fn step_map_fade(&mut self) -> bool {
+        let delta = self.map_fade_target - self.map_fade;
+        if delta.abs() <= self.map_fade_step {
+            if self.map_fade == self.map_fade_target {
+                return false;
+            }
+            self.map_fade = self.map_fade_target;
+        } else {
+            self.map_fade += self.map_fade_step * delta.signum();
+        }
+        ffi::river_scene_node_set_opacity(
+            self.tree as *mut ffi::wlr_scene_node,
+            self.effective_opacity(),
+        );
+        true
     }
 
     /// Whether this window should be dimmed right now: adjust mode is on,

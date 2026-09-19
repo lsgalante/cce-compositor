@@ -41,6 +41,14 @@ pub struct Layout {
     /// Opacity a Floating window is dimmed to while it overlaps the window
     /// whose resize handles are up (adjust mode), 0..1. 1.0 disables.
     pub border_overlap_opacity: f32,
+    /// How long a window or overlay dissolves in when it maps, in ms. 0
+    /// disables the open fade and windows appear at full strength.
+    pub fade_in_ms: u32,
+    /// How long a client that asked to close dissolves out over, in ms. This
+    /// is also the deadline the client waits on before it exits, so it is
+    /// answered back over the control socket rather than assumed — see the
+    /// `fade-out` command. 0 disables the close fade.
+    pub fade_out_ms: u32,
     /// Shape of the handle ring's swell along a side. Below 1 the ring gains
     /// its thickness early — a corner that visibly swells, then a long slow
     /// approach to the middle. Above 1 stays thin near the corner and gains
@@ -214,6 +222,8 @@ impl Default for Layout {
             border_taper: 0.35,
             border_handle_width: 32.0,
             border_overlap_opacity: 0.4,
+            fade_in_ms: 140,
+            fade_out_ms: 120,
             border_swell_curve: 0.45,
             border_corner_bulge: 48.0,
             border_corner_length: 0,
@@ -581,6 +591,12 @@ pub struct SurfaceConfig {
     pub border_handle_width: f64,
     #[serde(default = "default_border_overlap_opacity")]
     pub border_overlap_opacity: f64,
+    /// `surface { fade in_ms=.. out_ms=.. }` — the DE-wide open/close
+    /// dissolve. Milliseconds; 0 on either disables that direction.
+    #[serde(default = "default_fade_in_ms")]
+    pub fade_in_ms: i64,
+    #[serde(default = "default_fade_out_ms")]
+    pub fade_out_ms: i64,
     #[serde(default = "default_border_swell_curve")]
     pub border_swell_curve: f64,
     #[serde(default = "default_border_corner_bulge")]
@@ -687,6 +703,8 @@ impl Default for SurfaceConfig {
             border_taper: default_border_taper(),
             border_handle_width: default_border_handle_width(),
             border_overlap_opacity: default_border_overlap_opacity(),
+            fade_in_ms: default_fade_in_ms(),
+            fade_out_ms: default_fade_out_ms(),
             border_swell_curve: default_border_swell_curve(),
             border_corner_bulge: default_border_corner_bulge(),
             border_corner_length: 0,
@@ -798,6 +816,8 @@ fn default_border_corner_radius() -> i64 {
 fn default_border_taper() -> f64 { 0.35 }
 fn default_border_handle_width() -> f64 { 32.0 }
 fn default_border_overlap_opacity() -> f64 { 0.4 }
+fn default_fade_in_ms() -> i64 { 140 }
+fn default_fade_out_ms() -> i64 { 120 }
 fn default_border_swell_curve() -> f64 { 0.45 }
 fn default_border_corner_bulge() -> f64 { 48.0 }
 
@@ -2145,6 +2165,30 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                             }
                         }
                     }
+                    // `surface { fade in_ms=140 out_ms=120 }` — the DE-wide
+                    // open/close dissolve, read here so both halves of it
+                    // (the compositor's scene-node ramp and the deadline a
+                    // closing client waits on) come from one place.
+                    if let Some(fade_node) = surface_children.nodes().iter().find(|n| n.name().value() == "fade") {
+                        found_nested = true;
+                        for entry in fade_node.entries() {
+                            if let Some(id) = entry.name() {
+                                match id.value() {
+                                    "in_ms" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.fade_in_ms = val;
+                                        }
+                                    }
+                                    "out_ms" => {
+                                        if let Some(val) = entry.value().as_i64() {
+                                            surface.fade_out_ms = val;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
                     if let Some(border_node) = surface_children.nodes().iter().find(|n| n.name().value() == "border") {
                         found_nested = true;
                         for entry in border_node.entries() {
@@ -2548,6 +2592,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.border_taper = config.surface.border_taper.clamp(0.05, 1.0) as f32;
     state.layout.border_handle_width = config.surface.border_handle_width.max(4.0) as f32;
     state.layout.border_overlap_opacity = config.surface.border_overlap_opacity.clamp(0.0, 1.0) as f32;
+    // Capped at 2s: the close fade is a deadline a client blocks on before it
+    // exits, so a mistyped 20000 would hang every quit for 20 seconds.
+    state.layout.fade_in_ms = config.surface.fade_in_ms.clamp(0, 2000) as u32;
+    state.layout.fade_out_ms = config.surface.fade_out_ms.clamp(0, 2000) as u32;
     state.layout.border_swell_curve = config.surface.border_swell_curve.clamp(0.1, 6.0) as f32;
     state.layout.border_corner_bulge = config.surface.border_corner_bulge.max(0.0) as f32;
     state.layout.border_corner_length = config.surface.border_corner_length.max(0) as i32;

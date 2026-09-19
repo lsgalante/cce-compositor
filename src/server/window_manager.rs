@@ -164,6 +164,10 @@ pub struct WindowManager {
     /// dispatch; if it is still here afterwards, the command answered
     /// synchronously and the drain sends its return value.
     pub pending_ipc_reply: Option<std::sync::mpsc::Sender<String>>,
+    /// PID of the client that sent the IPC command currently being
+    /// dispatched, alongside `pending_ipc_reply`. `fade-out` resolves "the
+    /// caller's own window" with it. 0 outside a dispatch.
+    pub pending_ipc_peer_pid: i32,
     pub startup: Vec<crate::config::StartupConfig>,
     pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
     pub status_sender: Option<crate::status_server::StatusSender>,
@@ -548,6 +552,7 @@ impl WindowManager {
         self.desk_zoom = 1.0;
         self.pending_screenshot = None;
         self.pending_ipc_reply = None;
+        self.pending_ipc_peer_pid = 0;
         self.mode = WindowManagerMode::Normal;
         self.on_app_exit = crate::config::OnAppExit::FocusPrevious;
         self.grid_cells_enabled = true;
@@ -4573,6 +4578,59 @@ impl WindowManager {
         // instant SetCamera arm, seat op starts).
         let action = parts[0];
         match action {
+            // "I am closing — dissolve me out, and tell me how long that
+            // takes." The client keeps its surface alive for the reply's
+            // worth of milliseconds and then exits; the compositor ramps the
+            // scene node's opacity down in the meantime, which takes the
+            // backdrop blur and the window's shadow and bevel with it. A
+            // client fading its OWN pixels cannot do that — its surface stays
+            // fully present to the compositor, so the blur behind it hangs at
+            // full strength over a dissolving window (what cce-cloud's
+            // hand-rolled close fade looked like).
+            //
+            // The target is the CALLER, resolved through SO_PEERCRED rather
+            // than a name in the command: the kernel vouches for the pid, and
+            // a client always knows its own even when it has no app_id. The
+            // reply is the duration in ms, always — a client that gets "0"
+            // simply exits at once, which is what a disabled fade means.
+            "fade-out" => {
+                let ms = self.layout.fade_out_ms;
+                let pid = self.pending_ipc_peer_pid;
+                if pid <= 0 {
+                    return "0\n".to_string();
+                }
+                let mut faded = false;
+                let windows: Vec<*mut crate::window::Window> =
+                    self.windows.iter().copied().collect();
+                for window in windows {
+                    if window.is_null() || (*window).closed {
+                        continue;
+                    }
+                    if (*window).unreliable_pid() == pid && (*window).wants_map_fade() {
+                        (*window).start_map_fade(0.0, ms);
+                        faded = true;
+                    }
+                }
+                // The same client may own layer surfaces instead of (or as
+                // well as) windows — cce-cloud's launcher is one.
+                let surfaces: Vec<*mut crate::layer_shell::LayerSurface> =
+                    (*self.server).layer_shell.surfaces.iter().copied().collect();
+                for surface in surfaces {
+                    if surface.is_null() {
+                        continue;
+                    }
+                    if (*surface).client_pid() == pid {
+                        (*surface).start_fade(0.0, ms);
+                        faded = true;
+                    }
+                }
+                if !faded {
+                    // Nothing of the caller's is on screen — no reason to
+                    // make it wait.
+                    return "0\n".to_string();
+                }
+                return format!("{}\n", ms);
+            }
             // Scene introspection: dump EVERY buffer in the whole scene —
             // layer, layout position, dest/natural size, owning client pid.
             // Nothing on screen can hide from this.
@@ -6248,7 +6306,9 @@ unsafe extern "C" fn handle_ipc_event(fd: std::os::raw::c_int, _mask: u32, data:
             // command answered synchronously and its return value is the
             // reply.
             (*wm).pending_ipc_reply = Some(req.reply_tx);
+            (*wm).pending_ipc_peer_pid = req.peer_pid;
             let reply = (*wm).process_ipc_command(&req.command);
+            (*wm).pending_ipc_peer_pid = 0;
             if let Some(tx) = (*wm).pending_ipc_reply.take() {
                 let _ = tx.send(reply);
             }
@@ -6957,8 +7017,8 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
     0
 }
 
-/// Steps every window's border hover fade — and any in-flight
-/// fullscreen-toggle animation — until all of them have settled. Windows at
+/// Steps every window's border hover fade, map/close dissolve, and any
+/// in-flight fullscreen-toggle animation — until all of them have settled. Windows at
 /// rest cost one comparison per zone and no repaint, so leaving this running
 /// for the tail of a fade is cheap.
 unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
@@ -6973,6 +7033,9 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
             moving = true;
         }
         if (*window).step_adjust_dim() {
+            moving = true;
+        }
+        if (*window).step_map_fade() {
             moving = true;
         }
         if (*window).step_fs_anim() {

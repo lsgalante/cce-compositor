@@ -401,6 +401,19 @@ sat outside the edges and the ring that followed hugged them.
   `rendering_requested.opacity` directly, or the dim is clobbered on the
   next commit. Anything that can change who covers whom re-arms the fade:
   `arrange_views`, `raise_window`, and every `op_update` step.
+- The **open/close dissolve** is a third multiplier on the same machinery:
+  `Window::map_fade`, stepped by `step_map_fade` on the border-fade timer and
+  folded into `effective_opacity` beside `adjust_dim`. `Window::map` starts the
+  open ramp (`start_map_fade`; `wants_map_fade` excludes status segments, the
+  wallpaper and the grid), and the `fade-out` control-socket command starts the
+  close ramp for whichever windows and Overlay layer surfaces belong to the
+  CALLER — resolved from `IpcRequest::peer_pid` (SO_PEERCRED), never from a
+  name in the command. Layer surfaces run the same ramp on their own timer
+  (`LayerSurface::start_fade`) because they are not in `wm.windows`. The ramp
+  is LINEAR, unlike the borders' exponential approach: an exponential close
+  fade never reaches zero, and the client is holding its surface open against a
+  deadline. Durations are `surface { fade in_ms out_ms }`; see
+  "Window fades" in WORKSPACE.md for the client half of the contract.
 - `handle_width` under `border` in config.kdl is the diameter. `taper`,
   `swell_curve`, `bulge`, `corner_length` and `segment_gap` belonged to the
   retired ring profiles (an even ring, then a wave of hills and valleys):

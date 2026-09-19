@@ -9,6 +9,13 @@ use std::thread;
 pub struct IpcRequest {
     pub command: String,
     pub reply_tx: mpsc::Sender<String>,
+    /// PID of the process on the other end of the socket, from SO_PEERCRED.
+    /// A command that acts on "whoever is asking" (`fade-out`) resolves its
+    /// target with this instead of trusting a name the caller supplies: the
+    /// kernel vouches for it, and a client always knows its own pid even
+    /// when it does not know its app_id. 0 when the credentials were
+    /// unreadable, which every such command treats as no target.
+    pub peer_pid: i32,
 }
 
 /// The server-thread end of the request channel. Every `send` is followed by
@@ -120,7 +127,31 @@ fn ipc_server_main(tx: IpcSender, display_socket: Option<String>) {
     }
 }
 
+/// PID of the process on the other end of a Unix socket, via SO_PEERCRED.
+/// 0 when the credentials cannot be read — the kernel supplies them for every
+/// AF_UNIX peer, so that only happens on a socket already going away.
+/// (`UnixStream::peer_cred` is still nightly-only, hence the raw getsockopt.)
+fn socket_peer_pid(stream: &UnixStream) -> i32 {
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut libc::ucred as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if rc == 0 {
+        cred.pid
+    } else {
+        0
+    }
+}
+
 fn handle_client(mut stream: UnixStream, tx: IpcSender) {
+    let peer_pid = socket_peer_pid(&stream);
     let mut buf = [0u8; 4096];
     match stream.read(&mut buf) {
         Ok(0) => {}
@@ -142,7 +173,7 @@ fn handle_client(mut stream: UnixStream, tx: IpcSender) {
                     std::time::Duration::from_millis(1000)
                 };
                 let (reply_tx, reply_rx) = mpsc::channel();
-                if tx.send(IpcRequest { command: cmd, reply_tx }) {
+                if tx.send(IpcRequest { command: cmd, reply_tx, peer_pid }) {
                     if let Ok(reply) = reply_rx.recv_timeout(timeout) {
                         let _ = stream.write_all(reply.as_bytes());
                     } else {

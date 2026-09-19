@@ -296,7 +296,17 @@ pub struct LayerSurface {
     pub wlr_layer_surface: *mut ffi::wlr_layer_surface_v1,
     pub scene_layer_surface: *mut ffi::wlr_scene_layer_surface_v1,
     pub popup_tree: *mut ffi::wlr_scene_tree,
+    /// Where the open/close dissolve currently stands, 0.0 (invisible) to
+    /// 1.0. Applied to the whole scene subtree, so the scenefx backdrop blur
+    /// behind the surface fades with it (`river_scene_node_set_opacity`) —
+    /// which is the thing a client fading its own pixels can never do.
     pub opacity: f32,
+    /// Where `opacity` is easing to: 1.0 for an open fade, 0.0 for a close.
+    pub opacity_target: f32,
+    /// Linear per-tick step, from the configured duration at the moment the
+    /// fade starts. Linear rather than exponential because a close fade has
+    /// to actually reach zero before the client's exit deadline.
+    pub opacity_step: f32,
     pub animation_timer: *mut ffi::wl_event_source,
 
     pub destroy: ffi::wl_listener,
@@ -331,6 +341,8 @@ impl LayerSurface {
             scene_layer_surface,
             popup_tree,
             opacity: 1.0,
+            opacity_target: 1.0,
+            opacity_step: 1.0,
             animation_timer: std::ptr::null_mut(),
             destroy: std::mem::zeroed(),
             map: std::mem::zeroed(),
@@ -410,18 +422,30 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
     let _ = Box::from_raw(layer_surface);
 }
 
+/// Steps one layer surface's dissolve toward `opacity_target` and re-arms
+/// itself until it lands. Unlike the window fade — which rides the window
+/// manager's shared border-fade timer — each layer surface keeps its own,
+/// because a layer surface is not in `wm.windows` and there is no list to
+/// sweep.
 unsafe extern "C" fn handle_animation_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let layer_surface = data as *mut LayerSurface;
 
-    let new_opacity = ((*layer_surface).opacity + 0.08).min(1.0);
-    (*layer_surface).opacity = new_opacity;
+    let target = (*layer_surface).opacity_target;
+    let delta = target - (*layer_surface).opacity;
+    let settled = if delta.abs() <= (*layer_surface).opacity_step {
+        (*layer_surface).opacity = target;
+        true
+    } else {
+        (*layer_surface).opacity += (*layer_surface).opacity_step * delta.signum();
+        false
+    };
 
     ffi::river_scene_node_set_opacity(
         (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-        new_opacity,
+        (*layer_surface).opacity,
     );
 
-    if new_opacity >= 1.0 {
+    if settled {
         if !(*layer_surface).animation_timer.is_null() {
             ffi::wl_event_source_remove((*layer_surface).animation_timer);
             (*layer_surface).animation_timer = std::ptr::null_mut();
@@ -433,6 +457,75 @@ unsafe extern "C" fn handle_animation_tick(data: *mut std::ffi::c_void) -> std::
     }
 
     0
+}
+
+impl LayerSurface {
+    /// Begin a dissolve toward `target` (0.0 out, 1.0 in) over `ms`. A `ms`
+    /// of 0 snaps, so callers can treat this as "put the surface at
+    /// `target`" whether or not fading is configured on.
+    pub unsafe fn start_fade(&mut self, target: f32, ms: u32) {
+        self.opacity_target = target.clamp(0.0, 1.0);
+        if !self.animation_timer.is_null() {
+            ffi::wl_event_source_remove(self.animation_timer);
+            self.animation_timer = std::ptr::null_mut();
+        }
+        if ms == 0 {
+            self.opacity = self.opacity_target;
+            ffi::river_scene_node_set_opacity(
+                (*self.scene_layer_surface).tree as *mut ffi::wlr_scene_node,
+                self.opacity,
+            );
+            return;
+        }
+        // Ticks at 16 ms; at least one step so a sub-frame duration still
+        // lands rather than dividing by zero.
+        let ticks = ((ms as f32) / 16.0).max(1.0);
+        self.opacity_step = ((self.opacity_target - self.opacity).abs() / ticks).max(1.0e-4);
+        ffi::river_scene_node_set_opacity(
+            (*self.scene_layer_surface).tree as *mut ffi::wlr_scene_node,
+            self.opacity,
+        );
+
+        let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+        let timer = ffi::wl_event_loop_add_timer(
+            event_loop,
+            Some(handle_animation_tick),
+            self as *mut LayerSurface as *mut _,
+        );
+        if timer.is_null() {
+            log::error!("Failed to create layer surface animation timer");
+            // No timer means no ramp; land on the target rather than leave
+            // the surface stranded at whatever it was mid-fade.
+            self.opacity = self.opacity_target;
+            ffi::river_scene_node_set_opacity(
+                (*self.scene_layer_surface).tree as *mut ffi::wlr_scene_node,
+                self.opacity,
+            );
+        } else {
+            self.animation_timer = timer;
+            ffi::wl_event_source_timer_update(timer, 16);
+        }
+    }
+
+    /// PID of the client owning this layer surface, from its wl_resource.
+    /// 0 when it cannot be read. Used to resolve a `fade-out` to the caller.
+    pub unsafe fn client_pid(&self) -> i32 {
+        let surface = (*self.wlr_layer_surface).surface;
+        if surface.is_null() {
+            return 0;
+        }
+        let res = ffi::river_wlr_surface_get_resource(surface);
+        if res.is_null() {
+            return 0;
+        }
+        let client = ffi::wl_resource_get_client(res);
+        if client.is_null() {
+            return 0;
+        }
+        let (mut pid, mut uid, mut gid) = (0, 0, 0);
+        ffi::wl_client_get_credentials(client, &mut pid, &mut uid, &mut gid);
+        pid
+    }
 }
 
 unsafe fn update_scheduled_focus_and_dirty_windowing<F>(server: *mut Server, f: F)
@@ -476,30 +569,17 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
 
     let server = (*layer_surface).server;
 
+    // Overlay layer only: these are the transient surfaces the user opens
+    // (the launcher, the notifier), so a dissolve reads as the thing
+    // arriving. The Background/Bottom/Top layers are the desktop's own
+    // furniture — wallpaper, status bar — and map once at login, where a
+    // fade reads as the desktop failing to draw.
     if (*wlr_layer_surface).current.layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY {
-        (*layer_surface).opacity = 0.0;
-        ffi::river_scene_node_set_opacity(
-            (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
-            0.0,
-        );
-
-        if !(*layer_surface).animation_timer.is_null() {
-            ffi::wl_event_source_remove((*layer_surface).animation_timer);
-            (*layer_surface).animation_timer = std::ptr::null_mut();
+        let ms = (*server).wm.layout.fade_in_ms;
+        if ms > 0 {
+            (*layer_surface).opacity = 0.0;
         }
-
-        let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
-        let timer = ffi::wl_event_loop_add_timer(
-            event_loop,
-            Some(handle_animation_tick),
-            layer_surface as *mut _,
-        );
-        if timer.is_null() {
-            log::error!("Failed to create layer surface animation timer");
-        } else {
-            (*layer_surface).animation_timer = timer;
-            ffi::wl_event_source_timer_update(timer, 16);
-        }
+        (*layer_surface).start_fade(1.0, ms);
     }
 
     update_scheduled_focus_and_dirty_windowing(server, || {

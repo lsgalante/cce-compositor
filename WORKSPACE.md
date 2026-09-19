@@ -309,6 +309,50 @@ Clients and compositor communicate over Unix sockets keyed by `$WAYLAND_DISPLAY`
   composited over, which is the one thing a Wayland client can never see for
   itself. (The `viewport` topic went with the viewport-tag feature.)
 
+## Window fades (DE-wide open/close dissolve)
+
+Every window and overlay the user opens dissolves in when it maps and out when
+it closes. **The fade is the compositor's, in both directions** — it ramps the
+opacity of the client's scene subtree
+(`river_scene_node_set_opacity`, which also carries the scenefx backdrop blur,
+drop shadow and bevel), so a whole window crossfades against the desktop rather
+than each of its elements crossfading against each other.
+
+- **In** is automatic and needs nothing from the client: `Window::map` starts
+  the ramp for toplevels, `handle_layer_surface_map` for Overlay-layer
+  surfaces. Desktop furniture opts out — status segments, the wallpaper, the
+  grid layer (`Window::wants_map_fade`), and the Background/Bottom/Top layers —
+  because those map once at login, where a dissolve reads as the desktop
+  failing to draw.
+- **Out** needs one thing from the client, because a surface that is already
+  destroyed cannot be faded: it sends `fade-out` on the control socket, is
+  answered with a duration in ms, and keeps its surface mapped and its process
+  alive for exactly that long before exiting. `cce_ui::ipc::request_close_fade()`
+  is that call, and `window_runner` already makes it for every `Application`, so
+  an ordinary cce client gets the close fade for free. An app driving its own
+  event loop calls it itself — `cce-cloud` is the worked example.
+- The duration is `surface { fade in_ms=140 out_ms=120 }`, clamped to 2s. It is
+  answered back over the socket rather than duplicated in the client, so the
+  two halves cannot drift when the config changes. `0` disables that direction,
+  and a client that gets `0` exits immediately.
+- The target is resolved from the caller's **pid** (SO_PEERCRED on the control
+  socket), not from a name in the command: the kernel vouches for it, and a
+  client always knows its own pid even when it has no app_id.
+
+**Do not fade a window from inside the client.** It cannot work: the surface
+stays fully present to the compositor however transparent the client draws
+itself, so the blur behind it hangs at full strength over a dissolving window —
+and in cce-ui specifically, shader-lit output (SDF plate rims, specular) is not
+vertex-alpha and does not fade with the geometry at all. `cce-cloud` carried
+exactly that for months; its close fade dropped the plate batches to hide the
+un-fading rims, which deleted the window's whole background on the fade's first
+frame, since a plate batch **is** its cover quad.
+
+Note the usual toolkit-staleness trap (above): the fade-IN is entirely
+compositor-side and appears the moment a new `cce-fx` is running, but the
+fade-OUT rides `cce-ui`, so a client nobody rebuilt fades in and then vanishes.
+That asymmetry is the symptom of a missed sweep, not of a broken fade.
+
 ## Repo hygiene
 
 The repo root and `cce-compositor/scratch/` are littered with **ad-hoc debugging artifacts** — many
