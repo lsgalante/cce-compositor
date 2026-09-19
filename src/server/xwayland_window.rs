@@ -245,9 +245,11 @@ pub unsafe fn x11_scale_for_surface(
 /// Whether `window` is an X11 window named in `xwayland_hidpi_except` — a
 /// full-screen X11 game, by the key's definition. Such a window sizes and
 /// places itself to the screen, and the compositor stays out of its way:
-/// no saved-state restore (`Window::try_restore`), its position requests
-/// are granted (`handle_request_configure`), and only a compositor
-/// fullscreen overrides its size.
+/// no saved-state restore (`Window::try_restore`); its own requests are
+/// granted, clamped to the output's logical box since it sees a
+/// physical-pixel root (`handle_request_configure`); a compositor
+/// fullscreen overrides its size and survives Wine's withdrawal of the
+/// state (`handle_request_fullscreen`).
 pub unsafe fn window_is_hidpi_exempt(window: *const crate::window::Window) -> bool {
     if window.is_null() {
         return false;
@@ -717,16 +719,47 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         // The logical values below are what the window's geometry becomes, so
         // handing X anything else is handing it a number this compositor
         // cannot reproduce.
+        let (mut ex, mut ey, mut ew, mut eh) =
+            ((*event).x as i32, (*event).y as i32, (*event).width as i32, (*event).height as i32);
+        if exempt_self_placed {
+            // The game SEES the physical-pixel root and asks for all of it
+            // (Trackmania's windowedfull: 3840x2160 at (0, 0)), but its
+            // pixels are logical here — granted verbatim that is a window
+            // twice the screen, which the arrange pass then keeps pulling
+            // back on-desk while the game keeps asking, ~60 requests a
+            // second. So the request is answered with at most the output's
+            // logical box, kept on that output: the whole root becomes the
+            // whole screen, which is what the game meant.
+            let out = (*window).fullscreen_output();
+            if !out.is_null() {
+                let ob = (*out).sent.box_layout();
+                let (ox, oy, ow, oh) = (ob.x, ob.y, ob.width, ob.height);
+                ew = from_x11(ew, s).min(ow).max(1);
+                eh = from_x11(eh, s).min(oh).max(1);
+                ex = from_x11(ex, s).clamp(ox, (ox + ow - ew).max(ox));
+                ey = from_x11(ey, s).clamp(oy, (oy + oh - eh).max(oy));
+                ex = to_x11(ex, s);
+                ey = to_x11(ey, s);
+                ew = to_x11(ew, s);
+                eh = to_x11(eh, s);
+                if (ex, ey, ew, eh) != ((*event).x as i32, (*event).y as i32, (*event).width as i32, (*event).height as i32) {
+                    log::info!(
+                        "XWayland configure request: '{}' is hidpi-exempt; ({}, {}, {}x{}) clamped to the output's logical box as ({}, {}, {}x{})",
+                        title, (*event).x, (*event).y, (*event).width, (*event).height, ex, ey, ew, eh,
+                    );
+                }
+            }
+        }
         (*xwindow).send_configure(X11Geom {
-            x: snap_x11((*event).x as i32, s) as i16,
-            y: snap_x11((*event).y as i32, s) as i16,
-            width: snap_x11((*event).width as i32, s) as u16,
-            height: snap_x11((*event).height as i32, s) as u16,
+            x: snap_x11(ex, s) as i16,
+            y: snap_x11(ey, s) as i16,
+            width: snap_x11(ew, s) as u16,
+            height: snap_x11(eh, s) as u16,
         });
-        let log_x = from_x11((*event).x as i32, s);
-        let log_y = from_x11((*event).y as i32, s);
-        let log_width = from_x11((*event).width as i32, s) as u32;
-        let log_height = from_x11((*event).height as i32, s) as u32;
+        let log_x = from_x11(ex, s);
+        let log_y = from_x11(ey, s);
+        let log_width = from_x11(ew, s) as u32;
+        let log_height = from_x11(eh, s) as u32;
         
         (*window).box_geom.x = log_x;
         (*window).box_geom.y = log_y;
@@ -916,6 +949,20 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
         (*(*xwindow).window).get_title_string().unwrap_or_default(),
         fullscreen,
     );
+    // An exempt game's pixels are logical, so the compositor's fullscreen
+    // is a 1920x1200 X window on a 3840x2400 root. Wine syncs
+    // _NET_WM_STATE from its own idea of the screen and withdraws
+    // FULLSCREEN the moment it sees a window that does not cover its
+    // root — every Fullscreen press on Trackmania was undone by this
+    // request within the frame. The user's fullscreen stands; the key that
+    // set it clears it.
+    if !fullscreen
+        && (*(*xwindow).window).is_fullscreen()
+        && window_is_hidpi_exempt((*xwindow).window)
+    {
+        log::info!("XWayland fullscreen request: ignored — the window is hidpi-exempt and fullscreen by the compositor");
+        return;
+    }
     (*(*xwindow).window).wm_scheduled.fullscreen_requested = if fullscreen {
         crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut())
     } else {
