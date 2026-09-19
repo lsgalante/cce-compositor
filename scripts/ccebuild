@@ -35,9 +35,16 @@ DBUSDIR="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services"
 
 die() { printf 'ccebuild: %s\n' "$*" >&2; exit 1; }
 
+# Where the last `install` ran from, so a caller with neither $CCE_WORKSPACE nor
+# a cwd inside the tree can still find it: a GUI (the settings app's System
+# page shells out to install-system) and anything under pkexec, which scrubs
+# the environment. Written on every install, so it tracks a moved tree.
+WS_STAMP="${XDG_STATE_HOME:-$HOME/.local/state}/cce/workspace"
+
 # The workspace root. Never hardcoded: honour $CCE_WORKSPACE, else ask cargo
 # about the current directory (this script lives in ~/.local/bin once installed,
-# so its own path says nothing about where the source tree is).
+# so its own path says nothing about where the source tree is), else the last
+# tree an install ran from.
 resolve_workspace() {
     if [ -n "${CCE_WORKSPACE:-}" ]; then
         [ -f "$CCE_WORKSPACE/Cargo.toml" ] || die "CCE_WORKSPACE=$CCE_WORKSPACE has no Cargo.toml"
@@ -49,7 +56,19 @@ resolve_workspace() {
         dirname "$manifest"
         return
     fi
+    local remembered
+    if [ -r "$WS_STAMP" ] && remembered=$(cat "$WS_STAMP" 2>/dev/null) \
+        && [ -n "$remembered" ] && [ -f "$remembered/Cargo.toml" ]; then
+        printf '%s\n' "$remembered"
+        return
+    fi
     die "not inside the cce workspace — cd into it, or set CCE_WORKSPACE=/path/to/cce"
+}
+
+# Record the tree this run resolved, for the fallback above.
+remember_workspace() {
+    mkdir -p "$(dirname "$WS_STAMP")" 2>/dev/null || return 0
+    printf '%s\n' "$WS" > "$WS_STAMP" 2>/dev/null || true
 }
 
 # Every bin target cargo knows about, minus EXCLUDE. This is the whole point of
@@ -269,6 +288,7 @@ cmd_build() {
 # packages install only their own bins and units, which is what the per-crate
 # Makefile wrappers call.
 cmd_install() {
+    remember_workspace
     local build=1
     [ "${1:-}" = --no-build ] && { build=0; shift; }
     local pkgs=("$@")
@@ -626,12 +646,16 @@ cmd_restart() {
 # chain of separate `sudo` calls would prompt once per file. A single script
 # under `set -e` is also all-or-nothing — no half-applied update.
 cmd_install_system() {
-    local dry=0
-    case "${1:-}" in
-        -n|--dry-run) dry=1 ;;
-        "") ;;
-        *) die "install-system takes only --dry-run" ;;
-    esac
+    local dry=0 how=auto
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -n|--dry-run) dry=1 ;;
+            --pkexec) how=pkexec ;;
+            --sudo) how=sudo ;;
+            *) die "install-system takes only --dry-run, --pkexec or --sudo" ;;
+        esac
+        shift
+    done
     local stamp; stamp=$(date +%F)
     local plan="set -e"
     # Append one root command to the plan, each word shell-quoted.
@@ -683,8 +707,31 @@ cmd_install_system() {
         printf '==> dry run; would run as root:\n%s\n' "${plan#set -e}"
         return 0
     fi
-    printf '==> applying as root (one sudo prompt)\n'
-    sudo bash -c "$plan"
+    # How the one root call authenticates. sudo on a terminal, pkexec
+    # otherwise — a GUI caller (the settings app's System page) and an agent
+    # shell both have no TTY, and sudo there dies on "a terminal is required
+    # to read the password" after the fingerprint prompt it cannot show times
+    # out. pkexec asks the session's polkit agent (cce-authenticator) instead,
+    # which is how every other privileged action in this desktop already
+    # authenticates. The PLAN is still built as the user either way, which is
+    # what makes this safe: pkexec scrubs the environment, so $WS, $HOME and
+    # `cargo locate-project` would all be gone if the resolution happened on
+    # the far side.
+    if [ "$how" = auto ]; then
+        if [ -t 0 ]; then how=sudo; else how=pkexec; fi
+    fi
+    case "$how" in
+        sudo)
+            printf '==> applying as root (one sudo prompt)\n'
+            sudo bash -c "$plan"
+            ;;
+        pkexec)
+            command -v pkexec >/dev/null 2>&1 || die "pkexec not found — run from a terminal for the sudo path"
+            printf '==> applying as root (authenticate in the polkit prompt)\n'
+            # Full path: pkexec refuses a bare program name.
+            pkexec /bin/bash -c "$plan"
+            ;;
+    esac
     printf '==> system artifacts updated (binaries take effect at next login; nothing restarted)\n'
 }
 
@@ -704,11 +751,14 @@ usage: ccebuild <command>
                         sessions are working). Never the compositor.
   prune [--apply]       delete target/ artifacts of crates cargo no longer
                         knows about (renamed/retired); dry-run by default
-  install-system [--dry-run]
+  install-system [--dry-run] [--pkexec|--sudo]
                         update the root-owned artifacts: binaries, system
-                        units, /etc/pam.d stacks — one sudo prompt for the
-                        whole batch; backs up each changed file and restarts
-                        nothing (--dry-run: print the root commands only)
+                        units, /etc/pam.d stacks — one prompt for the whole
+                        batch; backs up each changed file and restarts
+                        nothing (--dry-run: print the root commands only).
+                        Authenticates with sudo on a terminal and pkexec
+                        (the session's polkit agent) without one; --pkexec
+                        and --sudo force the choice.
 
 environment:
   CCE_WORKSPACE  workspace root (default: located from the current directory)
