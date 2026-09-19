@@ -58,14 +58,15 @@ that was never pushed is not on it.
 The old fetch-only `origin = https://git.lucas.co/<crate>.git` survives as the
 `published` remote in crates that had it. It never accepted a push by design (static
 host; no receive-pack, no SSH) — which is the whole reason for the bare layer, since
-"published" used to mean "a timer happened to run", with no signal either way. See
-`~/.local/bin/git-bare-sync.sh`, which creates the bare repos and pushes every listed
-repo into them in bulk. **It currently pushes nothing:** it reads `repos.conf` field 2
-expecting a work tree, and that field now holds the bare path, so every listed repo is
-skipped as "not a git work tree" — leaving 21 crates with unpushed commits as of
-2026-09-18. Until that is fixed, push per crate by hand. New crates get a line in
-`repos.conf`. (The pre-2026-08-11 per-crate codeberg.org remotes are retired; those
-repos still exist server-side for old history.)
+"published" used to mean "a timer happened to run", with no signal either way.
+
+`git-bare-sync.sh` (in the gitsite repo, symlinked into `~/.local/bin`) is the bulk
+version of that push: it creates any missing bare repos and pushes every repo in
+`repos.conf` into its own. `--dry-run` shows what would go. It was itself broken until
+2026-09-18 — it read `repos.conf` field 2 as a work tree when that field holds the bare
+path, and skipped all 34 repos in silence, which is how 21 crates came to hold unpushed
+commits. New crates get a line in `repos.conf`. (The pre-2026-08-11 per-crate
+codeberg.org remotes are retired; those repos still exist server-side for old history.)
 
 Consequences to respect:
 - **Do not `git init` at the root** — it would swallow every crate as an embedded repo.
