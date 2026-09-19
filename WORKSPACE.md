@@ -45,14 +45,25 @@ independent git repository** with its own committed `Cargo.lock`. The crates sit
 side-by-side under this directory to form the build workspace, but are versioned and
 published separately.
 
-**The local repos are the source of truth — there are no push remotes.** Publishing
-goes through **gitsite** (`~/Dropbox/src/gitsite`): repos listed in its `repos.conf`
-are mirrored, rendered, and deployed as a static read-only site at
-**https://git.lucas.co** (browsable, and clonable over dumb HTTP for `clone`-mode
-entries). A systemd user timer (`gitsite.timer`) republishes automatically when any
-listed repo's HEAD changes, so committing locally IS publishing. Crate repos carry a
-fetch-only `origin = https://git.lucas.co/<crate>.git` — `git push` does not work
-against it by design (static host; no receive-pack, no SSH). New crates get a line in
+**Committing is not publishing — pushing is.** Each crate's `origin` is a local
+**bare repo** under `~/git/<crate>.git`: a real, pushable remote, and a second copy on
+disk independent of the work tree. Publishing then goes through **gitsite**
+(`~/Dropbox/src/gitsite`): its `repos.conf` lists those bare repos, which are mirrored,
+rendered, and deployed as a static read-only site at **https://git.lucas.co**
+(browsable, and clonable over dumb HTTP for `clone`-mode entries). A systemd user timer
+(`gitsite.timer`) republishes when a listed **bare** repo's HEAD changes. So the chain
+is `git commit` → `git push origin <branch>` → `gitsite.timer` → the site, and a commit
+that was never pushed is not on it.
+
+The old fetch-only `origin = https://git.lucas.co/<crate>.git` survives as the
+`published` remote in crates that had it. It never accepted a push by design (static
+host; no receive-pack, no SSH) — which is the whole reason for the bare layer, since
+"published" used to mean "a timer happened to run", with no signal either way. See
+`~/.local/bin/git-bare-sync.sh`, which creates the bare repos and pushes every listed
+repo into them in bulk. **It currently pushes nothing:** it reads `repos.conf` field 2
+expecting a work tree, and that field now holds the bare path, so every listed repo is
+skipped as "not a git work tree" — leaving 21 crates with unpushed commits as of
+2026-09-18. Until that is fixed, push per crate by hand. New crates get a line in
 `repos.conf`. (The pre-2026-08-11 per-crate codeberg.org remotes are retired; those
 repos still exist server-side for old history.)
 
