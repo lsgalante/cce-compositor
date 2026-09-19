@@ -6,11 +6,39 @@ use crate::server::{Server, WlListener, wl_signal_add, wl_listener_remove, WlLis
 use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
 use crate::seat::Focus;
 
+/// Delay before each successive attempt to bring the locker back, in ms. The
+/// length of this is also the attempt limit.
+///
+/// It backs off because the bad case is a locker that dies during startup:
+/// respawning that at full speed is a fork bomb against a user who cannot see
+/// the screen. It gives up rather than retrying forever for the same reason,
+/// and giving up is safe — the session simply stays locked, which is where it
+/// already was.
+const RESPAWN_BACKOFF_MS: [i32; 5] = [200, 500, 1000, 2000, 5000];
+
+/// The locker to run. Mirrors `cce_cloud_cmd()`: prefer the installed path,
+/// fall back to the bare name on PATH.
+fn cce_lock_cmd() -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let path = format!("{}/.local/bin/cce-lock", home);
+        if std::path::Path::new(&path).exists() {
+            return path;
+        }
+    }
+    "cce-lock".to_string()
+}
+
 pub struct LockManager {
     pub wlr_manager: *mut ffi::wlr_session_lock_manager_v1,
     pub state: LockState,
     pub lock: *mut ffi::wlr_session_lock_v1,
     pub lock_surfaces_timer: *mut ffi::wl_event_source,
+    /// Fires to bring a locker back after one died mid-lock; see
+    /// [`LockManager::schedule_locker_respawn`].
+    pub respawn_timer: *mut ffi::wl_event_source,
+    /// Respawns since the last locker that got as far as drawing. Indexes
+    /// [`RESPAWN_BACKOFF_MS`]; past its end, we stop trying.
+    pub respawn_attempts: usize,
     pub server: *mut Server,
 
     pub new_lock: ffi::wl_listener,
@@ -55,6 +83,16 @@ impl LockManager {
         }
         self.lock_surfaces_timer = timer;
 
+        let respawn_timer = ffi::wl_event_loop_add_timer(
+            event_loop,
+            Some(handle_respawn_timeout),
+            self as *mut LockManager as *mut _,
+        );
+        if respawn_timer.is_null() {
+            return Err("Failed to create the locker respawn timer");
+        }
+        self.respawn_timer = respawn_timer;
+
         let new_lock_ptr = &mut self.new_lock as *mut ffi::wl_listener as *mut WlListener;
         (*new_lock_ptr).notify = Some(handle_new_lock);
         wl_signal_add(&mut (*self.wlr_manager).events.new_lock, &mut self.new_lock);
@@ -66,6 +104,10 @@ impl LockManager {
         if !self.lock_surfaces_timer.is_null() {
             ffi::wl_event_source_remove(self.lock_surfaces_timer);
             self.lock_surfaces_timer = std::ptr::null_mut();
+        }
+        if !self.respawn_timer.is_null() {
+            ffi::wl_event_source_remove(self.respawn_timer);
+            self.respawn_timer = std::ptr::null_mut();
         }
         wl_listener_remove(&mut self.new_lock);
     }
@@ -145,6 +187,58 @@ impl LockManager {
         }
         self.state = LockState::Locked;
         (*self.server).wm.dirty_windowing();
+    }
+
+    /// Bring a locker back after the one holding the session went away
+    /// without unlocking.
+    ///
+    /// The session stays locked when a locker dies — that is the protocol's
+    /// guarantee and this does not weaken it. What it fixes is that the
+    /// screen was then a dead end: locked, blank, with no process left to
+    /// type a password into, so the only way back into the session was a TTY
+    /// and a kill. `handle_new_lock` already knows how to hand an
+    /// already-locked session to a fresh client ("given control of already
+    /// locked session"); nothing ever started one.
+    ///
+    /// Backed off and capped by [`RESPAWN_BACKOFF_MS`]. Exhausting it leaves
+    /// the session exactly as it is now — locked — which is why giving up is
+    /// an acceptable outcome and looping forever is not.
+    unsafe fn schedule_locker_respawn(&mut self) {
+        if self.respawn_timer.is_null() {
+            return;
+        }
+        let Some(&delay) = RESPAWN_BACKOFF_MS.get(self.respawn_attempts) else {
+            log::error!(
+                "the locker died {} times without drawing; giving up. The session \
+                 STAYS LOCKED and there is no prompt to type into — switch to a TTY \
+                 (ctrl+alt+F2), log in, and run `cce-lock` against this display, or \
+                 kill the session.",
+                self.respawn_attempts
+            );
+            return;
+        };
+        self.respawn_attempts += 1;
+        // Worded for both callers: the one after a locker vanished, and the
+        // one right after a spawn that arms this as a "did it take?" check.
+        // The check is the common case and is cancelled by `handle_new_lock`
+        // without ever firing, so this must not promise a respawn outright.
+        log::warn!(
+            "no lock client for a locked session; starting one in {}ms unless one \
+             binds first (attempt {} of {})",
+            delay,
+            self.respawn_attempts,
+            RESPAWN_BACKOFF_MS.len()
+        );
+        ffi::wl_event_source_timer_update(self.respawn_timer, delay);
+    }
+
+    /// Stop a respawn that is armed but no longer wanted — a locker is here.
+    /// Without this, a timer armed during the gap could fire after the
+    /// session was unlocked and lock it again out of nowhere.
+    unsafe fn cancel_locker_respawn(&mut self) {
+        if !self.respawn_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.respawn_timer, 0);
+        }
     }
 }
 
@@ -278,6 +372,57 @@ unsafe extern "C" fn handle_lock_surfaces_timeout(data: *mut std::ffi::c_void) -
     0
 }
 
+/// Start a locker for a session that is locked and has none.
+///
+/// Forked and detached like every other client the compositor starts (the
+/// server's SIGCHLD source reaps it). The new process calls
+/// `ext_session_lock_manager_v1.lock()` and `handle_new_lock` hands it the
+/// session that is already locked, so the screen never unlocks across the
+/// gap — the user just gets a prompt back.
+unsafe extern "C" fn handle_respawn_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let manager = &mut *(data as *mut LockManager);
+
+    // The world may have moved while the timer was armed: a locker of the
+    // user's own may have attached, or the session may be unlocked. Either
+    // way, spawning now would seize a session nobody asked us to.
+    if manager.state == LockState::Unlocked || !manager.lock.is_null() {
+        return 0;
+    }
+
+    let cmd = cce_lock_cmd();
+    log::warn!("respawning the locker: {}", cmd);
+    match nix::unistd::fork() {
+        Ok(nix::unistd::ForkResult::Child) => {
+            crate::process::cleanup_child();
+            let sh = std::ffi::CString::new("/bin/sh").unwrap();
+            let dash_c = std::ffi::CString::new("-c").unwrap();
+            let cmd_c = std::ffi::CString::new(cmd)
+                .unwrap_or_else(|_| std::ffi::CString::new("true").unwrap());
+            let args = [sh.as_c_str(), dash_c.as_c_str(), cmd_c.as_c_str()];
+            let _ = nix::unistd::execv(&sh, &args);
+            std::process::exit(1);
+        }
+        Ok(nix::unistd::ForkResult::Parent { .. }) => {
+            // Arm the NEXT step as a "did it take?" check, and let
+            // `handle_new_lock` cancel it when the new locker binds. A
+            // forked child proves nothing: the likeliest real failure is a
+            // locker that cannot start at all — no PAM stack, no GPU, binary
+            // missing — and that one dies without ever creating a
+            // `wlr_session_lock_v1`, so no destroy event is coming to
+            // trigger another attempt. Without this, the single attempt
+            // failed silently and the user stayed locked out with nothing in
+            // the log to say why.
+            manager.schedule_locker_respawn();
+        }
+        Err(e) => {
+            log::error!("failed to fork the locker respawn: {}", e);
+            manager.schedule_locker_respawn();
+        }
+    }
+
+    0
+}
+
 unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let manager = &mut *crate::container_of!(listener, LockManager, new_lock);
     let lock = data as *mut ffi::wlr_session_lock_v1;
@@ -291,6 +436,11 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
     }
 
     manager.lock = lock;
+
+    // Someone is holding the session now — whether that is the respawn we
+    // asked for or a locker the user started themselves, we must not spawn
+    // another on top of it.
+    manager.cancel_locker_respawn();
 
     if manager.state == LockState::Unlocked {
         manager.state = LockState::WaitingForLockSurfaces;
@@ -333,6 +483,11 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
     manager.state = LockState::Unlocked;
     log::info!("session unlocked");
 
+    // The session is going away legitimately: no respawn is wanted, and the
+    // next lock starts with a full budget.
+    manager.cancel_locker_respawn();
+    manager.respawn_attempts = 0;
+
     ffi::wlr_scene_node_set_enabled((*manager.server).scene.normal_tree as *mut ffi::wlr_scene_node, true);
     ffi::wlr_scene_node_set_enabled((*manager.server).scene.locked_tree as *mut ffi::wlr_scene_node, false);
 
@@ -364,6 +519,14 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
         manager.state = LockState::WaitingForBlank;
         ffi::wl_event_source_timer_update(manager.lock_surfaces_timer, 0);
     }
+
+    // Reached two ways: from `handle_unlock`, which has already set the state
+    // to Unlocked and is just tearing down; or from wlroots because the lock
+    // client died. Only the second leaves the user facing a locked screen
+    // with nothing to authenticate against.
+    if manager.state != LockState::Unlocked {
+        manager.schedule_locker_respawn();
+    }
 }
 
 unsafe extern "C" fn handle_surface(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -371,6 +534,10 @@ unsafe extern "C" fn handle_surface(listener: *mut ffi::wl_listener, data: *mut 
     let wlr_lock_surface = data as *mut ffi::wlr_session_lock_surface_v1;
 
     log::debug!("new ext_session_lock_surface_v1 created");
+
+    // Far enough to put something on screen, so this is not the startup crash
+    // loop the cap exists for: give the next failure a full budget again.
+    manager.respawn_attempts = 0;
 
     assert!(manager.state != LockState::Unlocked);
     assert!(!manager.lock.is_null());
