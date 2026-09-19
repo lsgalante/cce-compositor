@@ -1887,6 +1887,15 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
         tv_nsec: now.tv_nsec,
     };
     ffi::wlr_scene_output_send_frame_done(output.scene_output, &mut ffi_now);
+    // The scene's frame-done pass is gated on a node being visible, and the
+    // desktop grid spends most of its life behind opaque windows — so the
+    // one client that MUST repaint on demand is the one whose callbacks dry
+    // up. cce-ui's runner waits on a frame callback before it renders, and
+    // only a 250ms starvation fallback unblocks it: every patch took a
+    // quarter second to come back, which is longer than the overview ramp
+    // and is why an exit's replacement patch used to land after the
+    // animation. While a patch is in the air, drive the client directly.
+    (*output.server).wm.send_frame_done_to_grid_clients_awaiting_patch();
 }
 
 unsafe extern "C" fn handle_present(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

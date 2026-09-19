@@ -74,6 +74,33 @@ pub enum WindowManagerMode {
     Overview,
 }
 
+/// Why `update_grid_patches` is issuing a grid patch — the log tag, and
+/// whether an identical patch may be skipped (every reason but a style
+/// reload, which re-renders the same rect on purpose).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PatchReason {
+    /// The displayed patch no longer covers the viewport, or no longer
+    /// suits its resolution.
+    Coverage,
+    /// A camera flight's destination, sized to land before the ramp does.
+    Flight,
+    /// At rest after a flight: the roomy rect a pan wants back.
+    Upgrade,
+    /// The style config changed under the rendered pixels.
+    StyleReload,
+}
+
+impl PatchReason {
+    fn tag(self) -> &'static str {
+        match self {
+            PatchReason::Coverage => "coverage",
+            PatchReason::Flight => "flight",
+            PatchReason::Upgrade => "rest upgrade",
+            PatchReason::StyleReload => "style reload",
+        }
+    }
+}
+
 pub struct WindowManagerScheduled {
     pub dirty: bool,
     pub dirty_lazy: bool,
@@ -3090,6 +3117,29 @@ impl WindowManager {
                 })
             });
         let in_flight = self.viewport_is_active || target_cam.is_some();
+        // A ZOOM flight (an overview ramp, a zoom target) is the one camera
+        // move that holds the compositor's own cell lattice on for its whole
+        // duration (`grid_cells_hold`, in `arrange_views`) — and that
+        // lattice is analytic: crisp at every zoom, and drawn from the same
+        // style keys, so it stands in for this client's rendering without a
+        // visible seam. So a zoom flight's patch is issued for its
+        // DESTINATION alone, and whatever it does not reach while the camera
+        // is still travelling is carried by the fallback.
+        //
+        // That is what lets it go out on the flight's FIRST frame instead of
+        // waiting for the current viewport to shrink inside the buffer cap:
+        // an overview exit's union is the zoomed-out viewport at the
+        // destination's resolution, several times the cap, so the wait ran
+        // most of the ramp and the client then rendered into the landing —
+        // the exit came to rest on a 2x-magnified patch (4x in a deep
+        // overview) and snapped sharp a beat AFTER the animation was over.
+        //
+        // A pan keeps the union: its fallback stays off (enabling the cell
+        // pool re-bakes every blur, which is not worth paying per pan), so
+        // its patch has to cover where the camera is as well as where it is
+        // heading.
+        let zoom_flight = target_cam.is_some()
+            && (self.camera_ramp_anim.is_some() || self.target_desk_zoom.is_some());
 
         // Buffer px per virtual unit: the DESTINATION zoom quantized to a
         // power of two (small zoom wobbles don't re-render the world),
@@ -3178,7 +3228,12 @@ impl WindowManager {
                     && tdisp > 0.15
                     && tdisp < 1.42
             });
-            now_ok && target_ok
+            // A zoom flight is judged by its destination alone — the same
+            // reason it is ISSUED for the destination alone. Demanding the
+            // current viewport here would reject the patch just sent on
+            // every animation frame and re-send it, the storm the comments
+            // above are all about.
+            (zoom_flight || now_ok) && target_ok
         };
         let explain = |tag: &str, p: &crate::policy::api::GridPatch| {
             if std::env::var("CCE_GRID_DEBUG").is_err() {
@@ -3204,12 +3259,23 @@ impl WindowManager {
             if !matches!((*w).state, crate::window::WindowState::Mapped) {
                 continue;
             }
+            // A flight patch is sized for its destination, not for pan
+            // headroom (see the `zoom_flight` arm below). Once the camera is
+            // at rest and the client has actually latched it, re-issue the
+            // roomy cap-filling rect: a pan outruns the small one within a
+            // fraction of a viewport, and a pan has no fallback lattice to
+            // cover what it outruns. Rendered at rest behind a patch that
+            // already displays correctly, so the swap is invisible.
+            let upgrade = (*w).grid_patch_flight
+                && !zoom_flight
+                && (*w).grid_patch_pending.is_none()
+                && (*w).grid_patch_acked.is_none();
             // A stale patch (style changed since it was rendered) is
             // re-issued regardless of coverage; a covering patch already in
             // flight is left to latch first, and the flag then re-sends
             // once it has become current.
             let stale = (*w).grid_patch_stale;
-            if !stale && (*w).grid_patch_current.as_ref().map_or(false, &covers) {
+            if !stale && !upgrade && (*w).grid_patch_current.as_ref().map_or(false, &covers) {
                 continue;
             }
             if let Some(cur) = &(*w).grid_patch_current {
@@ -3226,17 +3292,49 @@ impl WindowManager {
                 let _ = (serial, acked);
                 continue;
             }
-            // Coverage: the current viewport, unioned with the flight's
-            // destination viewport (+0.10 comfort) when one is known. Then
-            // the remaining buffer budget spreads as margin per side and
-            // the rect period-aligns outward so the client draws whole
-            // cells. Margin and cap are a MEMORY knob: the client's
-            // framebuffer is (patch * q)^2 * 4B per swapchain image (q
-            // carries the output scale) — the original 3x3-viewport margin
-            // cost ~340MB per image, for scroll headroom that the 0.15
-            // comfort margin rarely used. The cap is scale-aware (4096 *
+            // The cap is a MEMORY knob, shared by both sizings below: the
+            // client's framebuffer is (patch * q)^2 * 4B per swapchain image
+            // (q carries the output scale), and it is scale-aware (4096 *
             // out_scale keeps the same VIRTUAL coverage at every scale) so
             // margins can never shrink below what covers() demands.
+            let max_buf: f64 = 4096.0 * out_scale;
+            if let Some((tx, ty, tw, th, _)) = target_rect.filter(|_| zoom_flight) {
+                // A zoom flight's patch is sized for its DESTINATION, not
+                // for the cap — it has to be RENDERED before the ramp lands,
+                // and the cap-filling rect is three times the pixels: 250ms
+                // of client render at this output's scale, longer than the
+                // ramp itself, which is how it used to arrive late. 0.25 of
+                // the destination viewport per side keeps the resting
+                // `covers()` margin (0.15) intact so landing does not
+                // immediately re-patch, and `grid_patch_flight` upgrades to
+                // the roomy rect once at rest.
+                let span = |lo: f64, hi: f64, mid: f64, period: f64| -> (f64, f64) {
+                    let cap = ((max_buf / q) / period).floor().max(1.0) * period;
+                    let p0 = (lo / period).floor() * period;
+                    let p1 = (hi / period).ceil() * period;
+                    if p1 - p0 <= cap {
+                        return (p0, p1 - p0);
+                    }
+                    // A destination too wide to cover at this resolution —
+                    // a deep overview ENTER, whose q is raised for the zoom
+                    // the camera is still at. Cap-sized and centered on it;
+                    // the fallback lattice draws the rest until the rest
+                    // band re-patches at the destination's own resolution.
+                    (((mid - cap * 0.5) / period).floor() * period, cap)
+                };
+                let (x0, pw) = span(tx - 0.25 * tw, tx + 1.25 * tw, tx + tw * 0.5, period_x);
+                let (y0, ph) = span(ty - 0.25 * th, ty + 1.25 * th, ty + th * 0.5, period_y);
+                let patch = crate::policy::api::GridPatch { x: x0, y: y0, w: pw, h: ph, scale: q };
+                let reason = if stale { PatchReason::StyleReload } else { PatchReason::Flight };
+                self.send_grid_patch_to(w, patch, reason, true);
+                continue;
+            }
+            // Coverage: the current viewport, unioned with a predicted
+            // destination (+0.10 comfort) when one is known. Then the
+            // remaining buffer budget spreads as margin per side and the
+            // rect period-aligns outward so the client draws whole cells.
+            // The original 3x3-viewport margin cost ~340MB per image, for
+            // scroll headroom that the 0.15 comfort margin rarely used.
             let mut ux0 = vx;
             let mut uy0 = vy;
             let mut ux1 = vx + vw;
@@ -3249,12 +3347,10 @@ impl WindowManager {
             }
             let uw = ux1 - ux0;
             let uh = uy1 - uy0;
-            let max_buf: f64 = 4096.0 * out_scale;
             if uw * q > max_buf || uh * q > max_buf {
-                // The union doesn't fit yet (an overview exit while still
-                // zoomed far out needs a native-res patch bigger than the
-                // cap): keep displaying the old patch and retry as the
-                // viewport shrinks toward the destination.
+                // The union doesn't fit (a pan whose predicted destination
+                // is a viewport away at native resolution): keep displaying
+                // the old patch and retry as the camera approaches it.
                 continue;
             }
             // The patch is a FIXED size for a given resolution: the largest
@@ -3290,21 +3386,91 @@ impl WindowManager {
                 }
             };
             let patch = crate::policy::api::GridPatch { x: x0, y: y0, w: pw, h: ph, scale: q };
-            (*w).grid_patch_serial = (*w).grid_patch_serial.wrapping_add(1);
-            let serial = (*w).grid_patch_serial;
-            if (*self.server)
-                .cce_window_management
-                .send_grid_patch((*w).ref_key, serial, patch)
-            {
-                log::info!("[Grid] sent patch #{serial}: {:.0},{:.0} {:.0}x{:.0} @{:.3}{}",
-                    patch.x, patch.y, patch.w, patch.h, patch.scale,
-                    if stale { " (style reload)" } else { "" });
-                (*w).grid_patch_pending = Some((serial, patch));
-                (*w).grid_patch_stale = false;
+            let reason = if stale {
+                PatchReason::StyleReload
+            } else if upgrade {
+                PatchReason::Upgrade
             } else {
-                log::info!("[Grid] patch #{serial} not sent (no toplevel resource yet)");
+                PatchReason::Coverage
+            };
+            self.send_grid_patch_to(w, patch, reason, false);
+        }
+    }
+
+    /// Issue one patch to one grid client and record it as pending.
+    /// `flight` marks a patch sized for a camera flight's destination, which
+    /// `update_grid_patches` upgrades to the roomy resting rect once the
+    /// camera has landed and the client has latched it.
+    unsafe fn send_grid_patch_to(
+        &self,
+        w: *mut crate::window::Window,
+        patch: crate::policy::api::GridPatch,
+        reason: PatchReason,
+        flight: bool,
+    ) {
+        // Re-sending the patch the client already has renders the same
+        // pixels again and latches to the same anchor — nothing changes, so
+        // the next arrange asks for it again: a silent re-render loop for as
+        // long as the camera sits there. It is reachable wherever the
+        // resolution the caps allow does not satisfy the rest band (deep
+        // overview, where `q` is already at its 0.125 floor and the patch is
+        // necessarily oversampled). A style reload is the one caller that
+        // MEANS the same rect — the pixels are what changed.
+        if reason != PatchReason::StyleReload {
+            let same = |p: &crate::policy::api::GridPatch| *p == patch;
+            if (*w).grid_patch_pending.as_ref().map_or(false, |(_, p)| same(p))
+                || (*w).grid_patch_acked.as_ref().map_or(false, |(_, p)| same(p))
+                || (*w).grid_patch_current.as_ref().map_or(false, same)
+            {
+                // The upgrade would otherwise ask again on every arrange.
+                (*w).grid_patch_flight = flight;
+                return;
             }
         }
+        (*w).grid_patch_serial = (*w).grid_patch_serial.wrapping_add(1);
+        let serial = (*w).grid_patch_serial;
+        if (*self.server)
+            .cce_window_management
+            .send_grid_patch((*w).ref_key, serial, patch)
+        {
+            log::info!("[Grid] sent patch #{serial}: {:.0},{:.0} {:.0}x{:.0} @{:.3} ({})",
+                patch.x, patch.y, patch.w, patch.h, patch.scale, reason.tag());
+            (*w).grid_patch_pending = Some((serial, patch));
+            (*w).grid_patch_stale = false;
+            (*w).grid_patch_flight = flight;
+        } else {
+            log::info!("[Grid] patch #{serial} not sent (no toplevel resource yet)");
+        }
+    }
+
+    /// Hand a frame callback to every grid client with a patch it has not
+    /// rendered yet, whether or not the scene thinks its surface is visible
+    /// — see the call site in the output frame handler.
+    pub unsafe fn send_frame_done_to_grid_clients_awaiting_patch(&self) {
+        for &w in self.windows.iter() {
+            if w.is_null() || (*w).closed || !(*w).is_grid() {
+                continue;
+            }
+            if !matches!((*w).state, crate::window::WindowState::Mapped) {
+                continue;
+            }
+            if (*w).grid_patch_pending.is_some() {
+                (*w).send_frame_done();
+            }
+        }
+    }
+
+    /// Whether any mapped grid client has a patch issued but not yet
+    /// latched — sent and unacked, or acked and awaiting the commit that
+    /// carries its buffer.
+    pub unsafe fn grid_patch_in_air(&self) -> bool {
+        self.windows.iter().any(|&w| {
+            !w.is_null()
+                && !(*w).closed
+                && (*w).is_grid()
+                && matches!((*w).state, crate::window::WindowState::Mapped)
+                && ((*w).grid_patch_pending.is_some() || (*w).grid_patch_acked.is_some())
+        })
     }
 
     /// Whether every mapped grid client's LATCHED patch reaches the whole
@@ -3577,7 +3743,14 @@ impl WindowManager {
         if flight {
             self.grid_cells_hold = true;
         }
-        let uncovered = self.grid_cells_hold && !self.grid_patch_covers_viewport();
+        // Coverage is geometry only, so the patch a flight was issued for
+        // can still be rendering while its PREDECESSOR covers the landed
+        // viewport — the cells would switch off a beat before the client
+        // swaps buffers, and anything the swap costs a frame (a swapchain
+        // rebuilt for the new buffer extent) would show as bare backdrop.
+        // So the hold also spans a patch still in the air.
+        let in_air = self.grid_patch_in_air();
+        let uncovered = self.grid_cells_hold && (in_air || !self.grid_patch_covers_viewport());
         if self.grid_cells_hold && !flight && !uncovered {
             self.grid_cells_hold = false;
         }

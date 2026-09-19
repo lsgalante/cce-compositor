@@ -554,6 +554,12 @@ pub struct Window {
     /// it on the next arrange even though its coverage is still fine. See
     /// `WindowManager::invalidate_grid_patches`.
     pub grid_patch_stale: bool,
+    /// The patch last issued was sized for a camera FLIGHT's destination —
+    /// small enough for the client to render before the ramp lands, not the
+    /// roomy cap-filling rect a resting camera wants for pan headroom. Once
+    /// the camera is at rest with that patch latched, `update_grid_patches`
+    /// re-issues the roomy one and clears this.
+    pub grid_patch_flight: bool,
     pub saved_floating_width: i32,
     pub saved_floating_height: i32,
     pub saved_floating_virtual_x: f64,
@@ -829,6 +835,7 @@ impl Window {
             grid_patch_current: None,
             grid_patch_serial: 0,
             grid_patch_stale: false,
+            grid_patch_flight: false,
             saved_floating_width: 0,
             saved_floating_height: 0,
             saved_floating_virtual_x: 0.0,
