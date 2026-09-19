@@ -213,13 +213,18 @@ pub unsafe fn x11_scale_for(
     x11_scale(server)
 }
 
-/// `x11_scale_for` for a surface instead of an xsurface: the factor of the X11
-/// window that surface belongs to, and 1 for anything that is not X11.
+/// The factor an X11 client's CURSOR is drawn at: the screen's X11 factor
+/// for any X11 surface, 1 for anything that is not X11.
 ///
-/// What a cursor request needs. The scale has to come from the window under
-/// the pointer rather than the screen, because a window named in
-/// `xwayland_hidpi_except` is drawn in the logical world and its cursor
-/// belongs there with it.
+/// What a cursor request needs. Deliberately NOT `x11_scale_for`: the
+/// `xwayland_hidpi_except` exemption is about a game's window pixels — it
+/// sizes itself to the root ignoring DPI, so its buffer is drawn at 1 —
+/// but its cursor comes from the toolkit or Wine underneath, which follow
+/// the DPI this compositor publishes (Xft.dpi / Xcursor.size at 96×scale
+/// and 24×scale). Wine at LogPixels 192 hands Trackmania a 64px arrow;
+/// drawn in the logical world with the window it was twice the desktop's
+/// cursor. Every X11 cursor is a physical-pixel bitmap, exempt window or
+/// not.
 pub unsafe fn x11_scale_for_surface(
     server: *mut crate::server::Server,
     surface: *mut ffi::wlr_surface,
@@ -235,7 +240,7 @@ pub unsafe fn x11_scale_for_surface(
     if xsurface.is_null() {
         return 1.0;
     }
-    x11_scale_for(server, xsurface as *const _)
+    x11_scale(server)
 }
 
 /// Whether any of `patterns` names this window: each is tried against the
@@ -249,7 +254,8 @@ pub unsafe fn x11_scale_for_surface(
 /// granted, clamped to the output's logical box since it sees a
 /// physical-pixel root (`handle_request_configure`); a compositor
 /// fullscreen overrides its size and survives Wine's withdrawal of the
-/// state (`handle_request_fullscreen`).
+/// state (`handle_request_fullscreen`). Its cursor is NOT exempt — see
+/// `x11_scale_for_surface`.
 pub unsafe fn window_is_hidpi_exempt(window: *const crate::window::Window) -> bool {
     if window.is_null() {
         return false;

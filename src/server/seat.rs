@@ -1798,6 +1798,12 @@ unsafe extern "C" fn handle_request_set_cursor(
         } else {
             1.0
         };
+        if scale != 1.0 {
+            log::debug!(
+                "X11 client cursor: drawn at 1/{scale} (hotspot {}, {})",
+                (*event).hotspot_x, (*event).hotspot_y
+            );
+        }
         seat.watch_x11_cursor((*event).surface, scale);
         let (hotspot_x, hotspot_y) = if scale != 1.0 {
             (
