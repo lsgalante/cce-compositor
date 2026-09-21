@@ -214,6 +214,9 @@ pub struct WindowManager {
     /// directional swipe bind at its threshold, screen px (default 60;
     /// 0 disables). See `cursor::swipe_peek_for`.
     pub swipe_peek_px: f64,
+    /// `window_manager { swipe_threshold }`: accumulated swipe travel
+    /// (libinput units) at which a swipe bind fires (default 50).
+    pub swipe_threshold: f64,
     /// See `WindowManagerConfig::touchpad_hscroll_shift_apps`.
     pub touchpad_hscroll_shift_apps: Vec<String>,
     /// Live override-redirect X11 surfaces (menus, tooltips, combo lists),
@@ -525,6 +528,7 @@ impl WindowManager {
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;
         self.swipe_peek_px = 60.0;
+        self.swipe_threshold = 50.0;
         self.touchpad_view_invert = false;
         self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();
@@ -606,6 +610,7 @@ impl WindowManager {
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;
         self.swipe_peek_px = 60.0;
+        self.swipe_threshold = 50.0;
         self.touchpad_view_invert = false;
         self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();

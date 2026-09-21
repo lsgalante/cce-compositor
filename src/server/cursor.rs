@@ -3530,13 +3530,14 @@ unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: 
     ffi::wlr_seat_touch_notify_frame(seat.wlr_seat);
 }
 
-/// Accumulated swipe travel (libinput units) at which a directional swipe
-/// bind fires. Until then the camera *peeks*: it pans toward the swipe
-/// direction in proportion to the travel, up to `window_manager {
-/// swipe_peek }` screen px (`WindowManager::swipe_peek_px`, default 60) at the
-/// threshold, and eases back if the fingers lift short of it — so a
-/// hesitant three-finger swipe shows where it would go without going.
-const SWIPE_TRIGGER_DISTANCE: f64 = 50.0;
+/// A directional swipe bind fires once the accumulated travel (libinput
+/// units) passes `window_manager { swipe_threshold }`
+/// (`WindowManager::swipe_threshold`, default 50). Until then the camera
+/// *peeks*: it pans toward the swipe direction in proportion to the
+/// travel, up to `window_manager { swipe_peek }` screen px
+/// (`WindowManager::swipe_peek_px`, default 60) at the threshold, and
+/// eases back if the fingers lift short of it — so a hesitant
+/// three-finger swipe shows where it would go without going.
 
 /// Does firing `action` carry the view in the swipe's direction? Only
 /// such binds peek the camera beforehand: an overview toggle or a spawn
@@ -3547,13 +3548,13 @@ fn action_navigates(action: crate::config::Action) -> bool {
 }
 
 /// The peek the accumulated travel `d` along one axis calls for, in
-/// virtual units: proportional and clamped at the threshold, `peek_px`
-/// on screen there, and only toward a direction that has a navigating
-/// bind (`neg` / `pos`) — a swipe with nothing bound its way leaves the
+/// virtual units: proportional and clamped at `threshold`, `peek_px` on
+/// screen there, and only toward a direction that has a navigating bind
+/// (`neg` / `pos`) — a swipe with nothing bound its way leaves the
 /// desktop still.
-fn swipe_peek_for(d: f64, neg: bool, pos: bool, peek_px: f64, zoom: f64) -> f64 {
+fn swipe_peek_for(d: f64, neg: bool, pos: bool, threshold: f64, peek_px: f64, zoom: f64) -> f64 {
     if (d < 0.0 && neg) || (d > 0.0 && pos) {
-        (d / SWIPE_TRIGGER_DISTANCE).clamp(-1.0, 1.0) * peek_px / zoom.max(1e-6)
+        (d / threshold).clamp(-1.0, 1.0) * peek_px / zoom.max(1e-6)
     } else {
         0.0
     }
@@ -3627,6 +3628,7 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         0
     };
 
+    let threshold = (*seat.server).wm.swipe_threshold;
     let mut matched_action = crate::config::Action::None;
     let mut matched_command = None;
     // Which directions this finger count + chord could still fire a
@@ -3636,10 +3638,10 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     for gb in &(*seat.server).wm.gesture_binds {
         if gb.gesture_type == "swipe" && gb.fingers == (*event).fingers && gb.mods == modifiers {
             let (matched, slot) = match gb.direction.as_str() {
-                "left" => (cursor.gesture_dx < -SWIPE_TRIGGER_DISTANCE, Some(0)),
-                "right" => (cursor.gesture_dx > SWIPE_TRIGGER_DISTANCE, Some(1)),
-                "up" => (cursor.gesture_dy < -SWIPE_TRIGGER_DISTANCE, Some(2)),
-                "down" => (cursor.gesture_dy > SWIPE_TRIGGER_DISTANCE, Some(3)),
+                "left" => (cursor.gesture_dx < -threshold, Some(0)),
+                "right" => (cursor.gesture_dx > threshold, Some(1)),
+                "up" => (cursor.gesture_dy < -threshold, Some(2)),
+                "down" => (cursor.gesture_dy > threshold, Some(3)),
                 _ => (false, None),
             };
             if matched {
@@ -3744,8 +3746,8 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         let wm = &mut (*seat.server).wm;
         let peek_px = wm.swipe_peek_px;
         let want = [
-            swipe_peek_for(cursor.gesture_dx, navigates[0], navigates[1], peek_px, wm.desk_zoom),
-            swipe_peek_for(cursor.gesture_dy, navigates[2], navigates[3], peek_px, wm.desk_zoom),
+            swipe_peek_for(cursor.gesture_dx, navigates[0], navigates[1], threshold, peek_px, wm.desk_zoom),
+            swipe_peek_for(cursor.gesture_dy, navigates[2], navigates[3], threshold, peek_px, wm.desk_zoom),
         ];
         let delta = [want[0] - cursor.swipe_peek[0], want[1] - cursor.swipe_peek[1]];
         if delta != [0.0, 0.0] {

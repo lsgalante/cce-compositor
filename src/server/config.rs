@@ -451,6 +451,9 @@ pub struct WindowManagerConfig {
     /// under `input`, because input.kdl's `input {}` block replaces
     /// config.kdl's wholesale. See "Swipe binds peek" in CLAUDE.md.
     pub swipe_peek: Option<f64>,
+    /// Accumulated travel (libinput units, roughly mm) at which a swipe
+    /// bind fires (default 50). KDL: `swipe_threshold (f64)50.0`.
+    pub swipe_threshold: Option<f64>,
     /// Reverse the drag direction, on top of the natural-scroll correction
     /// the drag already makes. KDL: `touchpad_view_invert (bool)true`.
     pub touchpad_view_invert: Option<bool>,
@@ -2443,9 +2446,10 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let touchpad_view_swipe = get_child_arg_string_opt(node, "touchpad_view_swipe");
         let touchpad_view_sensitivity = get_child_arg_f64_opt(node, "touchpad_view_sensitivity");
         let swipe_peek = get_child_arg_f64_opt(node, "swipe_peek");
+        let swipe_threshold = get_child_arg_f64_opt(node, "swipe_threshold");
         let touchpad_view_invert = get_child_arg_bool_opt(node, "touchpad_view_invert");
         let touchpad_hscroll_shift_apps = get_child_args_string_vec_opt(node, "touchpad_hscroll_shift_apps");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, on_app_exit, corner_shape, rounded_apps, bevel_apps, xwayland_hidpi, xwayland_hidpi_except, touchpad_view_apps, touchpad_view_swipe, touchpad_view_sensitivity, swipe_peek, touchpad_view_invert, touchpad_hscroll_shift_apps });
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, on_app_exit, corner_shape, rounded_apps, bevel_apps, xwayland_hidpi, xwayland_hidpi_except, touchpad_view_apps, touchpad_view_swipe, touchpad_view_sensitivity, swipe_peek, swipe_threshold, touchpad_view_invert, touchpad_hscroll_shift_apps });
     }
 
     Ok(Config {
@@ -2523,6 +2527,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             .and_then(|w| w.swipe_peek)
             .filter(|v| v.is_finite() && *v >= 0.0)
             .unwrap_or(60.0);
+        state.swipe_threshold = tv
+            .and_then(|w| w.swipe_threshold)
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(50.0);
         state.touchpad_view_invert = tv.and_then(|w| w.touchpad_view_invert).unwrap_or(false);
         state.touchpad_hscroll_shift_apps = tv.and_then(|w| w.touchpad_hscroll_shift_apps.clone()).unwrap_or_default();
     }
@@ -3054,6 +3062,7 @@ style {
                 toggle_fullscreen (keybind)"super+f"
                 toggle_overview ("menu:swipe_up,swipe_down,swipe_left,swipe_right,pinch_in,pinch_out")"swipe_up"
                 swipe_peek (f64)40.0
+                swipe_threshold (f64)80.0
             }
         "#;
         let config = parse_kdl_config(content).unwrap();
@@ -3063,6 +3072,7 @@ style {
         assert_eq!(wm.toggle_fullscreen, Some("super+f".to_string()));
         assert_eq!(wm.toggle_overview, Some("swipe_up".to_string()));
         assert_eq!(wm.swipe_peek, Some(40.0));
+        assert_eq!(wm.swipe_threshold, Some(80.0));
         // Absent means "unset", which the apply step reads as the centring default.
         assert_eq!(wm.center_on_spawn, None);
     }
