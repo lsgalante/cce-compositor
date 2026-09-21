@@ -210,6 +210,10 @@ pub struct WindowManager {
     pub touchpad_view_swipe_tumble: bool,
     pub touchpad_view_sensitivity: f64,
     pub touchpad_view_invert: bool,
+    /// `window_manager { swipe_peek }`: the desktop's lean toward a
+    /// directional swipe bind at its threshold, screen px (default 60;
+    /// 0 disables). See `cursor::swipe_peek_for`.
+    pub swipe_peek_px: f64,
     /// See `WindowManagerConfig::touchpad_hscroll_shift_apps`.
     pub touchpad_hscroll_shift_apps: Vec<String>,
     /// Live override-redirect X11 surfaces (menus, tooltips, combo lists),
@@ -520,6 +524,7 @@ impl WindowManager {
         self.touchpad_view_apps = Vec::new();
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;
+        self.swipe_peek_px = 60.0;
         self.touchpad_view_invert = false;
         self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();
@@ -600,6 +605,7 @@ impl WindowManager {
         self.touchpad_view_apps = Vec::new();
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;
+        self.swipe_peek_px = 60.0;
         self.touchpad_view_invert = false;
         self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();
