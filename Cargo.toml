@@ -7,8 +7,8 @@ edition = "2021"
 doctest = false
 
 [dependencies]
-cce-ui = { git = "https://git.lucas.co/cce-ui.git", rev = "f2fc3c8e03f0f7c0f49fe11e51f416014f28b8b3" }
-cce-window-manager = { git = "https://git.lucas.co/cce-window-manager.git", rev = "416f42c78fb63131121d8f2a86a607c31c829fc5" }
+cce-ui = { git = "https://github.com/lsgalante/cce-ui.git", rev = "f2fc3c8e03f0f7c0f49fe11e51f416014f28b8b3" }
+cce-window-manager = { git = "https://github.com/lsgalante/cce-window-manager.git", rev = "416f42c78fb63131121d8f2a86a607c31c829fc5" }
 xkbcommon = "0.7"
 serde = { version = "1", features = ["derive"] }
 nix = { version = "0.29", features = ["signal", "process", "fs", "poll", "resource"] }

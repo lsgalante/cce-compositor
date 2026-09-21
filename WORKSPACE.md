@@ -45,28 +45,36 @@ independent git repository** with its own committed `Cargo.lock`. The crates sit
 side-by-side under this directory to form the build workspace, but are versioned and
 published separately.
 
-**Committing is not publishing — pushing is.** Each crate's `origin` is a local
-**bare repo** under `~/git/<crate>.git`: a real, pushable remote, and a second copy on
-disk independent of the work tree. Publishing then goes through **gitsite**
-(`~/Dropbox/src/gitsite`): its `repos.conf` lists those bare repos, which are mirrored,
-rendered, and deployed as a static read-only site at **https://git.lucas.co**
-(browsable, and clonable over dumb HTTP for `clone`-mode entries). A systemd user timer
-(`gitsite.timer`) republishes when a listed **bare** repo's HEAD changes. So the chain
-is `git commit` → `git push origin <branch>` → `gitsite.timer` → the site, and a commit
-that was never pushed is not on it.
+**Committing is not publishing — pushing is.** Every crate's `origin` is
+**GitHub** (`https://github.com/lsgalante/<crate>.git`), and it is the only
+remote: the local bare repos under `~/git/` and the `published` remote are gone
+(since 2026-09-20). A `post-commit` hook, symlinked into each repo by gitsite's
+`install-hooks.sh`, pushes the branch just committed, so in the normal case a
+commit is on GitHub seconds later — but a crate without the hook, or a push
+that failed, leaves the commit on no remote at all, and nothing warns.
+`git log origin/<branch>..` is the check.
 
-The old fetch-only `origin = https://git.lucas.co/<crate>.git` survives as the
-`published` remote in crates that had it. It never accepted a push by design (static
-host; no receive-pack, no SSH) — which is the whole reason for the bare layer, since
-"published" used to mean "a timer happened to run", with no signal either way.
+**git.lucas.co is a read-only mirror of GitHub**, not a publishing step.
+gitsite (`~/projects/gitsite`, run hourly by the `gitsite.timer` user unit via
+`autodeploy.sh`) `ls-remote`s every repo in its `repos.conf` — whose path
+field is now the GitHub URL — and when any HEAD moved, re-mirrors, renders and
+deploys the static site (browsable, clonable over dumb HTTP for `clone`-mode
+entries). So the chain is `git commit` → hook → GitHub → `gitsite.timer` →
+the site, with up to an hour of lag at the last step. New crates get a line in
+`repos.conf`. (The pre-2026-08-11 per-crate codeberg.org remotes are retired;
+those repos still exist server-side for old history.)
 
-`git-bare-sync.sh` (in the gitsite repo, symlinked into `~/.local/bin`) is the bulk
-version of that push: it creates any missing bare repos and pushes every repo in
-`repos.conf` into its own. `--dry-run` shows what would go. It was itself broken until
-2026-09-18 — it read `repos.conf` field 2 as a work tree when that field holds the bare
-path, and skipped all 34 repos in silence, which is how 21 crates came to hold unpushed
-commits. New crates get a line in `repos.conf`. (The pre-2026-08-11 per-crate
-codeberg.org remotes are retired; those repos still exist server-side for old history.)
+The **Cargo git pins name GitHub too** (since 2026-09-21): every app declares
+`cce-ui` (and the compositor `cce-window-manager`) as
+`{ git = "https://github.com/lsgalante/<dep>.git", rev = "<sha>" }`, and the
+root `[patch]` block keys on that same URL to redirect it to the local crate.
+They pointed at git.lucas.co before, which meant a rev pinned right after a
+push was unfetchable for up to an hour of mirror lag. Keep the two URLs
+identical: a patch whose key does not match the pin is silently unused, and
+every crate then builds a fetched copy of the toolkit instead of the tree.
+`bump-revs.sh` at the root repins after a shared crate is pushed; it reads the
+rev from GitHub itself, and refuses while the dependency's work tree is dirty
+or ahead of origin.
 
 Consequences to respect:
 - **Do not `git init` at the root** — it would swallow every crate as an embedded repo.
