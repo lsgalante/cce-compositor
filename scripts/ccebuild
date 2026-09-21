@@ -194,6 +194,14 @@ pam_files() {
         -not -path "$WS/target/*" 2>/dev/null
 }
 
+# udev rules a crate ships in its udev/ dir, for /etc/udev/rules.d. Root-owned
+# like the system units, so install-system only; today that is the Power
+# page's plug/unplug trigger (cce-system-interface/udev/).
+udev_rules() {
+    find "$WS" -mindepth 3 -maxdepth 3 -path '*/udev/*.rules' -type f \
+        -not -path "$WS/target/*" 2>/dev/null
+}
+
 # Helper scripts a crate ships in its own scripts/ dir. Not just this crate's:
 # a script belongs in the repo whose code it is about (cce-keyring-selftest
 # reports on the keyring chain, so it lives with it in cce-display-manager), and
@@ -663,16 +671,21 @@ cmd_install_system() {
 
     local pairs=(
         "cce-display-manager:/usr/bin/cce-display-manager"
+        # The Power page's root-side applier: the udev rule and system unit
+        # both name this path.
+        "cce-power-apply:/usr/bin/cce-power-apply"
     )
     local entry bin dest src
     for entry in "${pairs[@]}"; do
         bin=${entry%%:*}; dest=${entry#*:}
         src="$WS/target/release/$bin"
         [ -f "$src" ] || die "$bin not built — run: ccebuild build"
-        [ -e "$dest" ] || { printf 'ccebuild: %s absent, skipping\n' "$dest"; continue; }
-        if cmp -s "$src" "$dest"; then continue; fi
+        if [ -e "$dest" ] && cmp -s "$src" "$dest"; then continue; fi
         printf '  %s -> %s\n' "$bin" "$dest"
-        queue cp -a "$dest" "$dest.bak-$stamp"
+        # A first install has nothing to back up. (This used to skip an
+        # absent destination, which made a NEW root binary — cce-power-apply
+        # — uninstallable by the one command meant to install it.)
+        if [ -e "$dest" ]; then queue cp -a "$dest" "$dest.bak-$stamp"; fi
         # `install` unlinks first: safe even though these are running as root.
         queue install -m 755 "$src" "$dest"
     done
@@ -698,6 +711,24 @@ cmd_install_system() {
         if [ -e "$dest" ]; then queue cp -a "$dest" "$dest.bak-$stamp"; fi
         queue install -m 644 "$file" "$dest"
     done < <(pam_files)
+
+    # udev rules: reload after a change, and re-trigger the power_supply
+    # class so a freshly installed plug/unplug rule applies the plan now
+    # rather than at the next replug. (A trigger is not a restart: it runs
+    # the oneshot the rule names, nothing else.)
+    local rules_changed=0
+    while read -r file; do
+        dest="/etc/udev/rules.d/$(basename "$file")"
+        if [ -e "$dest" ] && cmp -s "$file" "$dest"; then continue; fi
+        printf '  %s -> %s\n' "$(basename "$file")" "$dest"
+        if [ -e "$dest" ]; then queue cp -a "$dest" "$dest.bak-$stamp"; fi
+        queue install -m 644 "$file" "$dest"
+        rules_changed=1
+    done < <(udev_rules)
+    if [ "$rules_changed" -eq 1 ]; then
+        queue udevadm control --reload
+        queue udevadm trigger --subsystem-match=power_supply --action=change
+    fi
 
     if [ "$plan" = "set -e" ]; then
         printf '==> system artifacts already up to date\n'
@@ -753,7 +784,7 @@ usage: ccebuild <command>
                         knows about (renamed/retired); dry-run by default
   install-system [--dry-run] [--pkexec|--sudo]
                         update the root-owned artifacts: binaries, system
-                        units, /etc/pam.d stacks — one prompt for the whole
+                        units, /etc/pam.d stacks, udev rules — one prompt for the whole
                         batch; backs up each changed file and restarts
                         nothing (--dry-run: print the root commands only).
                         Authenticates with sudo on a terminal and pkexec

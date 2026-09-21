@@ -92,7 +92,7 @@ ccebuild install cce-mail  # just one package (what each crate's `make install` 
 ccebuild restart            # restart user services left on a replaced binary
 ccebuild status             # built-vs-installed drift, AND running-vs-installed
 ccebuild prune              # target/ artifacts of crates cargo no longer knows
-ccebuild install-system     # the root-owned binaries, units, PAM stacks (one sudo prompt; --dry-run to preview)
+ccebuild install-system     # the root-owned binaries, units, PAM stacks, udev rules (one sudo prompt; --dry-run to preview)
 ```
 
 The full deploy loop is `ccebuild install && ccebuild restart`. `ccebuild` derives
