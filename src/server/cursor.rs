@@ -97,6 +97,13 @@ pub struct Cursor {
     pub gesture_dy: f64,
     pub gesture_scale: f64,
     pub gesture_triggered: bool,
+    /// Camera offset (virtual units, `[x, y]`) the in-flight swipe has
+    /// peeked the desktop by so far — see `swipe_peek_for`. Zero outside a
+    /// swipe, and once the swipe's bind has fired or the fingers lifted.
+    pub swipe_peek: [f64; 2],
+    /// Finger count of a staged injected swipe (`pointer-swipe begin`),
+    /// carried into its updates the way libinput repeats it per event.
+    pub inject_swipe_fingers: u32,
     pub panning_gesture_active: bool,
     /// What `pointer-scroll ... natural` sets: an injected finger scroll
     /// (no device behind it) reads as coming from a natural-scrolling
@@ -190,6 +197,8 @@ impl Default for Cursor {
             gesture_dy: 0.0,
             gesture_scale: 1.0,
             gesture_triggered: false,
+            swipe_peek: [0.0, 0.0],
+            inject_swipe_fingers: 3,
             panning_gesture_active: false,
             inject_natural: false,
             pan_vel: [0.0, 0.0],
@@ -1154,6 +1163,30 @@ impl Cursor {
             _ => {
                 let mut ev = ffi::wlr_pointer_pinch_end_event { pointer: std::ptr::null_mut(), time_msec: time, cancelled: false };
                 handle_pinch_end(&mut self.pinch_end_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+            }
+        }
+        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+    }
+
+    /// One stage of a touchpad swipe, paced by the caller (`pointer-swipe
+    /// begin <fingers> | update <dx> <dy> | end`): what lets a shadow hold
+    /// a swipe short of its threshold and read the camera's peek back.
+    pub unsafe fn inject_swipe_stage(&mut self, stage: &str, fingers: u32, dx: f64, dy: f64) {
+        let time = crate::util::msec_timestamp();
+        match stage {
+            "begin" => {
+                self.inject_swipe_fingers = fingers;
+                let mut ev = ffi::wlr_pointer_swipe_begin_event { pointer: std::ptr::null_mut(), time_msec: time, fingers };
+                handle_swipe_begin(&mut self.swipe_begin_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+            }
+            "update" => {
+                let fingers = self.inject_swipe_fingers;
+                let mut ev = ffi::wlr_pointer_swipe_update_event { pointer: std::ptr::null_mut(), time_msec: time, fingers, dx, dy };
+                handle_swipe_update(&mut self.swipe_update_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+            }
+            _ => {
+                let mut ev = ffi::wlr_pointer_swipe_end_event { pointer: std::ptr::null_mut(), time_msec: time, cancelled: false };
+                handle_swipe_end(&mut self.swipe_end_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
             }
         }
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -3497,6 +3530,34 @@ unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: 
     ffi::wlr_seat_touch_notify_frame(seat.wlr_seat);
 }
 
+/// Accumulated swipe travel (libinput units) at which a directional swipe
+/// bind fires. Until then the camera *peeks*: it pans toward the swipe
+/// direction in proportion to the travel, up to `SWIPE_PEEK_PX` on screen
+/// at the threshold, and eases back if the fingers lift short of it — so
+/// a hesitant three-finger swipe shows where it would go without going.
+const SWIPE_TRIGGER_DISTANCE: f64 = 50.0;
+const SWIPE_PEEK_PX: f64 = 60.0;
+
+/// Does firing `action` carry the view in the swipe's direction? Only
+/// such binds peek the camera beforehand: an overview toggle or a spawn
+/// on a swipe has no direction the desktop could lean toward.
+fn action_navigates(action: crate::config::Action) -> bool {
+    use crate::config::Action::*;
+    matches!(action, FocusLeft | FocusRight | FocusUp | FocusDown | PanLeft | PanRight | PanUp | PanDown)
+}
+
+/// The peek the accumulated travel `d` along one axis calls for, in
+/// virtual units: proportional and clamped at the threshold, and only
+/// toward a direction that has a navigating bind (`neg` / `pos`) — a
+/// swipe with nothing bound its way leaves the desktop still.
+fn swipe_peek_for(d: f64, neg: bool, pos: bool, zoom: f64) -> f64 {
+    if (d < 0.0 && neg) || (d > 0.0 && pos) {
+        (d / SWIPE_TRIGGER_DISTANCE).clamp(-1.0, 1.0) * SWIPE_PEEK_PX / zoom.max(1e-6)
+    } else {
+        0.0
+    }
+}
+
 unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, swipe_begin_listener);
     let event = data as *mut ffi::wlr_pointer_swipe_begin_event;
@@ -3512,6 +3573,7 @@ unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *
     cursor.gesture_dx = 0.0;
     cursor.gesture_dy = 0.0;
     cursor.gesture_triggered = false;
+    cursor.swipe_peek = [0.0, 0.0];
 
     log::info!("handle_swipe_begin: fingers={}", (*event).fingers);
 
@@ -3566,20 +3628,30 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
 
     let mut matched_action = crate::config::Action::None;
     let mut matched_command = None;
+    // Which directions this finger count + chord could still fire a
+    // navigating bind in — the directions the camera may peek toward.
+    let mut navigates = [false; 4]; // left, right, up, down
 
     for gb in &(*seat.server).wm.gesture_binds {
         if gb.gesture_type == "swipe" && gb.fingers == (*event).fingers && gb.mods == modifiers {
-            let matched = match gb.direction.as_str() {
-                "left" => cursor.gesture_dx < -50.0,
-                "right" => cursor.gesture_dx > 50.0,
-                "up" => cursor.gesture_dy < -50.0,
-                "down" => cursor.gesture_dy > 50.0,
-                _ => false,
+            let (matched, slot) = match gb.direction.as_str() {
+                "left" => (cursor.gesture_dx < -SWIPE_TRIGGER_DISTANCE, Some(0)),
+                "right" => (cursor.gesture_dx > SWIPE_TRIGGER_DISTANCE, Some(1)),
+                "up" => (cursor.gesture_dy < -SWIPE_TRIGGER_DISTANCE, Some(2)),
+                "down" => (cursor.gesture_dy > SWIPE_TRIGGER_DISTANCE, Some(3)),
+                _ => (false, None),
             };
             if matched {
                 matched_action = gb.action;
                 matched_command = gb.command.clone();
                 break;
+            }
+            // First match wins in this table, so only the first bind per
+            // direction decides whether that way peeks.
+            if let Some(i) = slot {
+                if !navigates[i] && action_navigates(gb.action) {
+                    navigates[i] = true;
+                }
             }
         }
     }
@@ -3587,6 +3659,25 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     if matched_action != crate::config::Action::None {
         log::info!("Swipe gesture matched action: {:?}", matched_action);
         cursor.gesture_triggered = true;
+
+        // Hand the action the camera as it stood before the peek, so a
+        // focus lands exactly where a keyed one would; then resume from
+        // the peeked position so the ease runs from where the screen is.
+        // An action that leaves the camera alone still gets a target: the
+        // origin, so the peek eases back instead of sticking.
+        let peek = std::mem::replace(&mut cursor.swipe_peek, [0.0, 0.0]);
+        let peeked = if peek != [0.0, 0.0] {
+            let wm = &mut (*seat.server).wm;
+            wm.desk_pan_x += wm.pan_pending[0];
+            wm.desk_pan_y += wm.pan_pending[1];
+            wm.pan_pending = [0.0, 0.0];
+            let peeked = (wm.desk_pan_x, wm.desk_pan_y);
+            wm.desk_pan_x -= peek[0];
+            wm.desk_pan_y -= peek[1];
+            Some(peeked)
+        } else {
+            None
+        };
 
         if matched_action == crate::config::Action::Overview && (*seat.server).wm.mode == crate::window_manager::WindowManagerMode::Overview {
             let lx = cursor.x();
@@ -3614,6 +3705,24 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         };
         (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref());
 
+        if let Some((px, py)) = peeked {
+            let wm = &mut (*seat.server).wm;
+            let origin = (px - peek[0], py - peek[1]);
+            // An action that set the camera outright (no ease) owns it now.
+            if (wm.desk_pan_x, wm.desk_pan_y) == origin {
+                if let Some(ramp) = wm.camera_ramp_anim.as_mut() {
+                    ramp.start.pan_x = px;
+                    ramp.start.pan_y = py;
+                } else {
+                    wm.target_desk_pan_x.get_or_insert(origin.0);
+                    wm.target_desk_pan_y.get_or_insert(origin.1);
+                }
+                wm.desk_pan_x = px;
+                wm.desk_pan_y = py;
+                wm.start_panning_animation();
+            }
+        }
+
         let pointer_gestures = (*seat.server).input_manager.pointer_gestures;
         if !pointer_gestures.is_null() {
             ffi::wlr_pointer_gestures_v1_send_swipe_end(
@@ -3624,6 +3733,24 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
             );
         }
         return;
+    }
+
+    // Short of the threshold: lean the camera toward the bind the swipe
+    // is heading for, 1:1 with the fingers like a two-finger pan (queued
+    // for the frame, no easing), recomputed from the total travel so a
+    // reversal leans back through zero.
+    {
+        let wm = &mut (*seat.server).wm;
+        let want = [
+            swipe_peek_for(cursor.gesture_dx, navigates[0], navigates[1], wm.desk_zoom),
+            swipe_peek_for(cursor.gesture_dy, navigates[2], navigates[3], wm.desk_zoom),
+        ];
+        let delta = [want[0] - cursor.swipe_peek[0], want[1] - cursor.swipe_peek[1]];
+        if delta != [0.0, 0.0] {
+            wm.stop_panning_animation();
+            wm.queue_pan(delta[0], delta[1]);
+            cursor.swipe_peek = want;
+        }
     }
 
     let server = seat.server;
@@ -3656,6 +3783,19 @@ unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mu
     if cursor.gesture_triggered {
         cursor.gesture_triggered = false;
         return;
+    }
+
+    // Lifted short of the threshold: ease the camera back to where the
+    // swipe found it.
+    let peek = std::mem::replace(&mut cursor.swipe_peek, [0.0, 0.0]);
+    if peek != [0.0, 0.0] {
+        let wm = &mut (*seat.server).wm;
+        wm.desk_pan_x += wm.pan_pending[0];
+        wm.desk_pan_y += wm.pan_pending[1];
+        wm.pan_pending = [0.0, 0.0];
+        wm.target_desk_pan_x = Some(wm.desk_pan_x - peek[0]);
+        wm.target_desk_pan_y = Some(wm.desk_pan_y - peek[1]);
+        wm.start_panning_animation();
     }
 
     let server = seat.server;

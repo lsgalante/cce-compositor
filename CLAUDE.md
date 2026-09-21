@@ -506,6 +506,24 @@ prints, per output, mode / scale / logical size / mm / logical px per mm and whe
 the mm came from (`configured`, `measured`, `none`); the creation log line says the
 same.
 
+**Swipe binds peek before they fire.** A three-finger swipe bound to a
+directional focus or pan (`focus_left (gesture)"swipe3_left"` in input.kdl)
+fires once the accumulated travel passes `cursor::SWIPE_TRIGGER_DISTANCE`
+(50 libinput units). Short of that the camera *leans* toward the bind the
+swipe is heading for, 1:1 with the fingers and proportional to the travel —
+`SWIPE_PEEK_PX` (60 screen px) at the threshold, clamped there — and eases
+back to where it started if the fingers lift first (`handle_swipe_end`), so
+a hesitant swipe shows where it would go without going. Only binds whose
+action `cursor::action_navigates` (focus/pan left/right/up/down) peek, and
+only toward a direction that has one; a four-finger overview toggle leaves
+the desktop still. When the bind fires (`handle_swipe_update`), the action
+runs against the camera as it stood BEFORE the peek, so a focus lands where
+a keyed one would, and the ease then resumes from the peeked position; an
+action that sets no camera target is given the origin as one, or the peek
+would stick. A shadow drives it staged — `ccectl pointer-swipe begin 3`,
+`update <dx> <dy>`, `end` — and reads the lean and its return back with
+`ccectl camera` (pan, zoom, pan target).
+
 **Idle timeouts** — `idle { display_off <s>; sleep <s>; sleep_command "…" }`,
 both 0 (off) by default — are `src/server/idle.rs`, a `Server` subcomponent
 rather than window-manager state: two `wl_event_loop` timers re-armed from

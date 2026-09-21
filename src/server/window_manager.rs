@@ -5010,6 +5010,20 @@ impl WindowManager {
                 self.dirty_windowing();
                 return format!("ok {}\n", enable);
             }
+            // The camera as it stands and where it is easing to — what a
+            // shadow reads back to assert a swipe's peek and its return.
+            "camera" => {
+                let fmt = |v: Option<f64>| v.map_or("-".to_string(), |v| format!("{:.1}", v));
+                format!(
+                    "pan_x={:.1} pan_y={:.1} zoom={:.3} target_x={} target_y={} anim={}\n",
+                    self.desk_pan_x + self.pan_pending[0],
+                    self.desk_pan_y + self.pan_pending[1],
+                    self.desk_zoom,
+                    fmt(self.target_desk_pan_x),
+                    fmt(self.target_desk_pan_y),
+                    self.camera_anim_active
+                )
+            }
             "pan-by" => {
                 if parts.len() < 3 { return "error: missing dx or dy\n".to_string(); }
                 if let (Ok(dx), Ok(dy)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
@@ -5975,7 +5989,24 @@ impl WindowManager {
             }
             "pointer-swipe" => {
                 // pointer-swipe <fingers> <dx> <dy> [steps]
-                if parts.len() < 4 { return "error: usage: pointer-swipe <fingers> <dx> <dy> [steps]\n".to_string(); }
+                // pointer-swipe begin <fingers> | update <dx> <dy> | end   (paced by the caller)
+                let usage = "error: usage: pointer-swipe <fingers> <dx> <dy> [steps] | begin <fingers> | update <dx> <dy> | end\n";
+                if parts.len() >= 2 && matches!(parts[1], "begin" | "update" | "end") {
+                    let stage = parts[1].to_string();
+                    let num = |i: usize| parts.get(i).and_then(|v| v.parse::<f64>().ok());
+                    let (fingers, dx, dy) = match parts[1] {
+                        "begin" => (num(2).map(|f| f as u32).unwrap_or(3), 0.0, 0.0),
+                        "update" => match (num(2), num(3)) {
+                            (Some(dx), Some(dy)) => (3, dx, dy),
+                            _ => return usage.to_string(),
+                        },
+                        _ => (3, 0.0, 0.0),
+                    };
+                    // The begin fixes the finger count; updates reuse it.
+                    self.for_each_cursor(|cursor| cursor.inject_swipe_stage(&stage, fingers, dx, dy));
+                    return "ok\n".to_string();
+                }
+                if parts.len() < 4 { return usage.to_string(); }
                 let fingers = parts[1].parse::<u32>();
                 let dx = parts[2].parse::<f64>();
                 let dy = parts[3].parse::<f64>();

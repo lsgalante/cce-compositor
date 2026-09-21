@@ -87,6 +87,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  retile");
     print("  mode <floating|tiled|fullscreen|popup|overlay> <app_id> [title]");
     print("  pointer-location");
+    print("  camera                             (pan, zoom, and the pan target being eased to)");
     print("  pointer-move-to <x> <y>            (layout pixels)");
     print("  pointer-move-by <dx> <dy>");
     print("  pointer-scroll <dy> [dx] [finger] [natural]");
@@ -94,9 +95,10 @@ fn usage(name: &str, to_stderr: bool) {
     print("                                      two-finger swipe, ended by finger-stop; natural = from");
     print("                                      a natural-scrolling touchpad, deltas already flipped)");
     print("  pointer-scroll finger-stop");
-    print("  pointer-swipe <fingers> <dx> <dy> [steps]");
+    print("  pointer-swipe <fingers> <dx> <dy> [steps] | begin <fingers> | update <dx> <dy> | end");
     print("                                     (a 3/4-finger touchpad swipe; drives input.kdl gesture");
-    print("                                      chords such as focus_left \"swipe3_left\")");
+    print("                                      chords such as focus_left \"swipe3_left\"; the staged");
+    print("                                      form holds a swipe short of its threshold)");
     print("  pointer-pinch <scale> [rotation] [steps] | begin | update <scale> [rotation] | end");
     print("  touchpad-view-regions <x11:ID|id|app_id> clear | <x,y,w,h> ...");
     print("                                     (limit a touchpad_view_apps drag to these window-local");
