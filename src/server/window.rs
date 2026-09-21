@@ -1213,7 +1213,16 @@ impl Window {
         if let Some(saved) = saved_opt {
             log::info!("Restoring saved state for window: app_id={}, title={}. Position: ({}, {}), Size: {}x{}", app_id_str, title_str, saved.virtual_x, saved.virtual_y, saved.width, saved.height);
             self.tiling_mode = saved.tiling_mode;
-            self.minimized = saved.minimized;
+            // `minimized` is session state, not app memory: a window the
+            // user just opened must never be born hidden. On a
+            // `last_window_states` borrow the flag is whatever the sibling
+            // (or the app's last incarnation) happened to be doing — and a
+            // parentless dialog matched by app_id alone inherits it from
+            // the LIVE main window, which the user may well have minimized
+            // to get it out of the way. Focused, listed, and invisible.
+            if from_session {
+                self.minimized = saved.minimized;
+            }
             self.virtual_x = saved.virtual_x;
             self.virtual_y = saved.virtual_y;
             self.scale = saved.scale;
@@ -1343,6 +1352,27 @@ impl Window {
                 }
             }
 
+            // A borrowed origin is a live sibling's origin whenever the
+            // app_id-only pass matched a window of an app that is still
+            // running: a parentless dialog (1Password's CLI "Authorize"
+            // prompt, a second browser window) lands exactly on the main
+            // window's top-left corner, where it reads as part of that
+            // window rather than a new one. Cascade it off any mapped
+            // sibling already sitting there, the way every stacking WM
+            // offsets a new window from the last. Session entries are
+            // exempt: a restored layout is where the user left it.
+            if !from_session && self.tiling_mode == crate::tiling::TilingMode::Floating {
+                let (nx, ny) = self.cascade_off_siblings(&app_id_str, self.virtual_x, self.virtual_y);
+                if (nx, ny) != (self.virtual_x, self.virtual_y) {
+                    log::info!(
+                        "Cascading new {} window off a sibling at ({:.0},{:.0}) -> ({:.0},{:.0})",
+                        app_id_str, self.virtual_x, self.virtual_y, nx, ny
+                    );
+                    self.virtual_x = nx;
+                    self.virtual_y = ny;
+                }
+            }
+
             self.restored = true;
             self.session_restored = from_session;
             // The saved `focused` flag only means something for the startup
@@ -1351,6 +1381,41 @@ impl Window {
             // must not feed the settle-phase focus gates.
             self.restored_focused = from_session && saved.focused;
         }
+    }
+
+    /// Step an origin diagonally until no mapped sibling of `app_id` (any
+    /// window but this one) has its top-left within a few pixels of it.
+    /// Bounded, so a pathological pile of siblings cannot walk a window off
+    /// the desk: after `MAX_STEPS` the last candidate is taken as is.
+    unsafe fn cascade_off_siblings(&self, app_id: &str, x: f64, y: f64) -> (f64, f64) {
+        const STEP: f64 = 40.0;
+        const NEAR: f64 = 4.0;
+        const MAX_STEPS: usize = 8;
+        let me = self as *const Window;
+        let origins: Vec<(f64, f64)> = (*self.server)
+            .wm
+            .windows
+            .iter()
+            .copied()
+            .filter(|&w| !w.is_null() && w as *const Window != me && !(*w).closed)
+            .filter(|&w| matches!((*w).state, WindowState::Mapped))
+            .filter(|&w| (*w).get_app_id_string().as_deref() == Some(app_id))
+            .map(|w| ((*w).virtual_x, (*w).virtual_y))
+            .collect();
+        let taken = |cx: f64, cy: f64| {
+            origins
+                .iter()
+                .any(|&(ox, oy)| (ox - cx).abs() <= NEAR && (oy - cy).abs() <= NEAR)
+        };
+        let (mut cx, mut cy) = (x, y);
+        for _ in 0..MAX_STEPS {
+            if !taken(cx, cy) {
+                break;
+            }
+            cx += STEP;
+            cy += STEP;
+        }
+        (cx, cy)
     }
 
     /// Apply a one-shot `place-next` hint: land the window's top-left just

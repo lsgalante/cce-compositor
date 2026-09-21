@@ -5,6 +5,11 @@
 //   keycode   evdev code, pressed then released (h=35 e=18 l=38 o=24, 1=Escape)
 //   mod:MASK  set held modifiers for the keys that follow (xkb depressed mask
 //             under the us keymap: shift=1 ctrl=4 alt=8 super=64); cleared on exit
+//   hold      after the events, keep the virtual keyboard alive until killed.
+//             A headless shadow seat has no keyboard at all, so a client that
+//             gains focus there gets wl_keyboard.modifiers with no keymap
+//             before it — Chromium/Electron crash in xkb_state_update_mask on
+//             that. Holding one keyboard gives every later client a keymap.
 
 use std::io::Write;
 use std::os::fd::{BorrowedFd, FromRawFd, OwnedFd};
@@ -122,7 +127,8 @@ fn main() {
     queue.roundtrip(&mut state).unwrap();
 
     let mut t = 0u32;
-    for arg in &args {
+    let hold = args.iter().any(|a| a == "hold");
+    for arg in args.iter().filter(|a| *a != "hold") {
         if let Some(mask) = arg.strip_prefix("mod:") {
             let depressed: u32 = mask.parse().expect("mod mask must be a number");
             vk.modifiers(depressed, 0, 0, 0);
@@ -135,6 +141,14 @@ fn main() {
     }
     vk.modifiers(0, 0, 0, 0);
     queue.roundtrip(&mut state).unwrap();
+
+    if hold {
+        println!("holding virtual keyboard");
+        std::io::stdout().flush().ok();
+        loop {
+            queue.blocking_dispatch(&mut state).unwrap();
+        }
+    }
 
     vk.destroy();
     queue.roundtrip(&mut state).unwrap();

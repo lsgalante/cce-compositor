@@ -233,7 +233,16 @@ own `target/`, invisible to ccebuild), built on demand by the drivers:
 - **`vkey`** — injects key events through `zwp_virtual_keyboard_v1`
   (wtype-style; evdev keycodes plus `mod:MASK` args for held modifiers).
   This exercises the same `KeyboardGroup::handle_group_key` path hardware
-  keys take, so keybindings and builtins fire for injected keys.
+  keys take, so keybindings and builtins fire for injected keys. `vkey hold`
+  keeps the virtual keyboard alive until killed: a headless seat has no
+  keyboard otherwise, and a Chromium/Electron client that gains focus there
+  crashes on a modifiers event with no keymap before it.
+- **`float-pair`** — one client, two parentless Floating toplevels with one
+  app_id: a 1024x800 main window, then an "Authorize" dialog that insists on
+  400x370 (min == max, ignores the configure) and is activated with a token
+  BEFORE its first buffer, the way Chromium/Electron open a dialog.
+  `--reactivate SECS` later activates the by-then-unfocused main window — an
+  activation for an already-mapped window. Prints one milestone per line.
 - **`status-stub`** — maps an xdg toplevel with a `cce-status*` app_id 400px
   tall, which `any_expanded_status_segment` reads as an open in-surface menu
   (expanded is geometric: thicker than `layout.bar_height`). It subscribes to
@@ -544,6 +553,36 @@ remembered spot however far the camera is, since the columns beside it are
 what the user pans along (cce-data-editor parked left of the first column
 came back mid-view every login before 2026-09-14). The recall is for a
 window with no tiled neighbour within a screen.
+
+### xdg-activation
+
+`handle_request_activate` (`server.rs`) runs for every activation wlroots
+accepts — the token was checked against a recent input serial or the
+requesting surface's focus. For a MAPPED window it now does what `ccectl
+focus-window` does: un-minimize, `seat.focus`, `raise_window`, dirty. Until
+2026-09-21 it only fired the "needs attention" D-Bus notification, so an
+activation for an already-mapped window changed nothing on screen. A request
+that lands before the map (Chromium/Electron activate a new window between
+its app_id and its first buffer, so the log reads `Restoring saved state` →
+`xdg activation request` → `Seat::focus`) is left to the map path, which
+focuses under its own settle rules. Every `Seat::focus` on a Floating window
+raises it, and `render_finish` keeps the floating plane above the tiled one
+in render-list order, so focus IS visibility for a float — `ccectl windows`
+prints `stack=N` (render-list position, higher is nearer) so that order can
+be asserted from a shadow without a screenshot.
+
+Two hazards in `try_restore` bite a second toplevel of a running app, which
+the app_id-only third pass of `match_last_window_state` hands the main
+window's remembered entry (a transient is excluded, a parentless dialog is
+not): `minimized` is taken from a session entry only, never from a borrowed
+one — a dialog born minimized is focused, listed and invisible — and a
+Floating window whose borrowed origin coincides with a mapped sibling's is
+cascaded off it (`cascade_off_siblings`, 40 px diagonal steps). Reproduce
+either with `verify/clients` `float-pair` (one client, two parentless
+toplevels, the second activated before its first buffer) or a two-window
+Electron app; Chromium in a shadow needs `vkey hold` running first, since a
+headless seat has no keyboard and Chromium crashes in
+`xkb_state_update_mask` on a modifiers event that no keymap preceded.
 
 ### IPC & status sockets
 

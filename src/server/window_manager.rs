@@ -5674,10 +5674,28 @@ impl WindowManager {
                     curr_seat = next_seat;
                 }
 
+                // Render-list position, bottom (0) to top: the stacking
+                // order the reorder pass applies within a layer, which a
+                // window list keyed by slot id cannot show. -1 = not linked.
+                let mut stack_of: std::collections::HashMap<*mut Window, i64> = std::collections::HashMap::new();
+                {
+                    let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
+                    let mut curr = (*render_list).next;
+                    let mut i = 0i64;
+                    while !curr.is_null() && curr != render_list {
+                        let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
+                        if let crate::wm_node::WmNodeType::Window(win) = (*node).get() {
+                            stack_of.insert(win, i);
+                        }
+                        i += 1;
+                        curr = (*curr).next;
+                    }
+                }
                 let mut out = String::new();
                 let sp = self.layout.snap_params();
                 for &w in self.windows.iter() {
                     if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
+                        let stack = stack_of.get(&w).copied().unwrap_or(-1);
                         let app_id = (*w).get_app_id_string().unwrap_or_default();
                         let title = (*w).get_title_string().unwrap_or_default();
                         // Which desktop square(s) the window sits on, chess
@@ -5711,6 +5729,7 @@ impl WindowManager {
                                 "minimized": (*w).minimized,
                                 "has_parent": (*w).has_parent,
                                 "focused": w == focused_window,
+                                "stack": stack,
                                 "ssd": (*w).wm_requested.ssd,
                                 // Why a window has (or lacks) rounded corners,
                                 // blur and shadow. Without it the only way to
@@ -5724,7 +5743,7 @@ impl WindowManager {
                             out.push('\n');
                         } else {
                             out.push_str(&format!(
-                                "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} cell={} minimized={} has_parent={} focused={} ssd={} decorated={} beveled={}\n",
+                                "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} cell={} minimized={} has_parent={} focused={} stack={} ssd={} decorated={} beveled={}\n",
                                 (*w).ref_key.index,
                                 app_id,
                                 title,
@@ -5739,6 +5758,7 @@ impl WindowManager {
                                 (*w).minimized,
                                 (*w).has_parent,
                                 w == focused_window,
+                                stack,
                                 (*w).wm_requested.ssd,
                                 self.is_decorated_app(&app_id),
                                 self.is_beveled_app(&app_id),

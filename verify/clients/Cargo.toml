@@ -12,9 +12,13 @@ path = "src/bin/vkey.rs"
 name = "status-stub"
 path = "src/bin/status_stub.rs"
 
+[[bin]]
+name = "float-pair"
+path = "src/bin/float_pair.rs"
+
 [dependencies]
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 xkbcommon = "0.8"
 libc = "0.2"

@@ -420,6 +420,31 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
                 break;
             }
 
+            // A valid token (wlroots has already checked it against a recent
+            // input serial or the requesting surface's focus) is the user's
+            // intent to see this window, so honour it like `ccectl
+            // focus-window`: un-minimize, focus and raise — `Seat::focus`
+            // raises a Floating window itself, and `raise_window` covers
+            // the rest. Until now this handler only fired the "needs
+            // attention" notification, so an activation for an already-mapped
+            // window changed nothing: the window stayed beneath whatever
+            // covered it. A window that has not mapped yet (the request
+            // often lands between app_id and map) is left to the map path,
+            // which focuses new windows under its own settle rules.
+            if matches!((*win_ptr).state, crate::window::WindowState::Mapped) && !(*win_ptr).is_shy() {
+                if let Some(seat) = (*server).wm.first_seat() {
+                    if (*win_ptr).minimized {
+                        (*win_ptr).minimized = false;
+                    }
+                    (*seat).focus(crate::seat::Focus::Window(win_ptr));
+                    (*server).wm.raise_window(win_ptr);
+                    (*server).wm.dirty_windowing();
+                    log::info!("xdg activation focused and raised '{}' ({})", title, app_id);
+                }
+            } else {
+                log::info!("xdg activation for unmapped window '{}' ({}): left to the map path", title, app_id);
+            }
+
             let uid = unsafe { libc::getuid() };
             let bus_address = format!("unix:path=/run/user/{}/bus", uid);
             
