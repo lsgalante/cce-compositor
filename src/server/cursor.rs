@@ -101,6 +101,13 @@ pub struct Cursor {
     /// peeked the desktop by so far — see `swipe_peek_for`. Zero outside a
     /// swipe, and once the swipe's bind has fired or the fingers lifted.
     pub swipe_peek: [f64; 2],
+    /// Where the in-flight swipe's bind would send the camera, as an offset
+    /// from the camera the swipe found (virtual units), predicted for the
+    /// swipe's dominant direction (`swipe_dest_dir`: 0 left, 1 right, 2 up,
+    /// 3 down) — the vector the lean runs along. `None` when that bind
+    /// moves the camera nowhere, or there is no navigating bind that way.
+    pub swipe_dest: Option<(f64, f64)>,
+    pub swipe_dest_dir: Option<usize>,
     /// Finger count of a staged injected swipe (`pointer-swipe begin`),
     /// carried into its updates the way libinput repeats it per event.
     pub inject_swipe_fingers: u32,
@@ -198,6 +205,8 @@ impl Default for Cursor {
             gesture_scale: 1.0,
             gesture_triggered: false,
             swipe_peek: [0.0, 0.0],
+            swipe_dest: None,
+            swipe_dest_dir: None,
             inject_swipe_fingers: 3,
             panning_gesture_active: false,
             inject_natural: false,
@@ -3576,11 +3585,12 @@ unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: 
 /// A directional swipe bind fires once the accumulated travel (libinput
 /// units) passes `window_manager { swipe_threshold }`
 /// (`WindowManager::swipe_threshold`, default 50). Until then the camera
-/// *peeks*: it pans toward the swipe direction in proportion to the
-/// travel, up to `window_manager { swipe_peek }` screen px
-/// (`WindowManager::swipe_peek_px`, default 60) at the threshold, and
-/// eases back if the fingers lift short of it — so a hesitant
-/// three-finger swipe shows where it would go without going.
+/// *peeks*: it pans toward where the bind would take it
+/// (`WindowManager::predict_action_camera`) in proportion to the travel,
+/// up to `window_manager { swipe_peek }` screen px
+/// (`WindowManager::swipe_peek_px`, default 60) at the threshold and never
+/// past the destination, and eases back if the fingers lift short of it —
+/// so a hesitant three-finger swipe shows where it would go without going.
 
 /// Does firing `action` carry the view in the swipe's direction? Only
 /// such binds peek the camera beforehand: an overview toggle or a spawn
@@ -3590,17 +3600,20 @@ fn action_navigates(action: crate::config::Action) -> bool {
     matches!(action, FocusLeft | FocusRight | FocusUp | FocusDown | PanLeft | PanRight | PanUp | PanDown)
 }
 
-/// The peek the accumulated travel `d` along one axis calls for, in
-/// virtual units: proportional and clamped at `threshold`, `peek_px` on
-/// screen there, and only toward a direction that has a navigating bind
-/// (`neg` / `pos`) — a swipe with nothing bound its way leaves the
-/// desktop still.
-fn swipe_peek_for(d: f64, neg: bool, pos: bool, threshold: f64, peek_px: f64, zoom: f64) -> f64 {
-    if (d < 0.0 && neg) || (d > 0.0 && pos) {
-        (d / threshold).clamp(-1.0, 1.0) * peek_px / zoom.max(1e-6)
-    } else {
-        0.0
+/// The lean the accumulated travel `d` along the dominant axis calls for,
+/// in virtual units: along the predicted destination vector `dest`,
+/// proportional to the travel and clamped at `threshold` (`peek_px` on
+/// screen there), and never past the destination itself — a window a few
+/// pixels off the edge is leaned those few pixels, not the full peek and
+/// back.
+fn swipe_lean_for(d: f64, dest: (f64, f64), threshold: f64, peek_px: f64, zoom: f64) -> [f64; 2] {
+    let dist = dest.0.hypot(dest.1);
+    if dist <= 0.0 {
+        return [0.0, 0.0];
     }
+    let len = (d.abs() / threshold).min(1.0) * peek_px / zoom.max(1e-6);
+    let s = len.min(dist) / dist;
+    [dest.0 * s, dest.1 * s]
 }
 
 unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -3619,6 +3632,8 @@ unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *
     cursor.gesture_dy = 0.0;
     cursor.gesture_triggered = false;
     cursor.swipe_peek = [0.0, 0.0];
+    cursor.swipe_dest = None;
+    cursor.swipe_dest_dir = None;
 
     log::info!("handle_swipe_begin: fingers={}", (*event).fingers);
 
@@ -3674,9 +3689,9 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     let threshold = (*seat.server).wm.swipe_threshold;
     let mut matched_action = crate::config::Action::None;
     let mut matched_command = None;
-    // Which directions this finger count + chord could still fire a
-    // navigating bind in — the directions the camera may peek toward.
-    let mut navigates = [false; 4]; // left, right, up, down
+    // The navigating bind this finger count + chord would fire in each
+    // direction — what the camera may lean toward.
+    let mut nav_action: [Option<crate::config::Action>; 4] = [None; 4]; // left, right, up, down
 
     for gb in &(*seat.server).wm.gesture_binds {
         if gb.gesture_type == "swipe" && gb.fingers == (*event).fingers && gb.mods == modifiers {
@@ -3693,10 +3708,10 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
                 break;
             }
             // First match wins in this table, so only the first bind per
-            // direction decides whether that way peeks.
+            // direction decides whether that way leans.
             if let Some(i) = slot {
-                if !navigates[i] && action_navigates(gb.action) {
-                    navigates[i] = true;
+                if nav_action[i].is_none() && action_navigates(gb.action) {
+                    nav_action[i] = Some(gb.action);
                 }
             }
         }
@@ -3781,22 +3796,41 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         return;
     }
 
-    // Short of the threshold: lean the camera toward the bind the swipe
-    // is heading for, 1:1 with the fingers like a two-finger pan (queued
-    // for the frame, no easing), recomputed from the total travel so a
-    // reversal leans back through zero. Along the DOMINANT axis only: a
-    // hand swiping left drifts a little up or down as well, and with
-    // up/down binds present that drift leaned the camera vertically too,
-    // then eased it back when the bind fired — a wobble on top of the
-    // real move.
+    // Short of the threshold: lean the camera toward where the bind the
+    // swipe is heading for would take it, 1:1 with the fingers like a
+    // two-finger pan (queued for the frame, no easing), recomputed from
+    // the total travel so a reversal leans back through zero. The heading
+    // is the swipe's DOMINANT axis — a hand swiping left drifts a little
+    // up or down as well, and that drift must not lean anything — and the
+    // destination is predicted once per heading, from the camera as the
+    // swipe found it, so the lean runs along the very vector the fire
+    // then eases the rest of. A bind that moves the camera nowhere (both
+    // windows in view) leans nothing: there is nothing to preview, and a
+    // lean would only spring back.
     {
         let wm = &mut (*seat.server).wm;
-        let peek_px = wm.swipe_peek_px;
         let (dx, dy) = (cursor.gesture_dx, cursor.gesture_dy);
-        let want = if dx.abs() >= dy.abs() {
-            [swipe_peek_for(dx, navigates[0], navigates[1], threshold, peek_px, wm.desk_zoom), 0.0]
-        } else {
-            [0.0, swipe_peek_for(dy, navigates[2], navigates[3], threshold, peek_px, wm.desk_zoom)]
+        let dir = if dx.abs() >= dy.abs() { if dx < 0.0 { 0 } else { 1 } } else if dy < 0.0 { 2 } else { 3 };
+        if cursor.swipe_dest_dir != Some(dir) {
+            cursor.swipe_dest_dir = Some(dir);
+            cursor.swipe_dest = nav_action[dir].and_then(|action| {
+                // Predict from the origin: rewind the lean for the call.
+                wm.desk_pan_x += wm.pan_pending[0];
+                wm.desk_pan_y += wm.pan_pending[1];
+                wm.pan_pending = [0.0, 0.0];
+                let peek = cursor.swipe_peek;
+                wm.desk_pan_x -= peek[0];
+                wm.desk_pan_y -= peek[1];
+                let origin = (wm.desk_pan_x, wm.desk_pan_y);
+                let dest = wm.predict_action_camera(action).map(|(x, y)| (x - origin.0, y - origin.1));
+                wm.desk_pan_x += peek[0];
+                wm.desk_pan_y += peek[1];
+                dest
+            });
+        }
+        let want = match cursor.swipe_dest {
+            Some(dest) => swipe_lean_for(if dir < 2 { dx } else { dy }, dest, threshold, wm.swipe_peek_px, wm.desk_zoom),
+            None => [0.0, 0.0],
         };
         let delta = [want[0] - cursor.swipe_peek[0], want[1] - cursor.swipe_peek[1]];
         if delta != [0.0, 0.0] {

@@ -524,22 +524,28 @@ same.
 directional focus or pan (`focus_left (gesture)"swipe3_left"` in input.kdl)
 fires once the accumulated travel passes `window_manager { swipe_threshold }`
 (libinput units, default 50; `WindowManager::swipe_threshold`). Short of
-that the camera *leans* toward the bind the
-swipe is heading for, 1:1 with the fingers along the swipe's dominant axis
-only (a hand's sideways drift must not lean the camera vertically, or the
-fire eases a wobble back) and proportional to the travel —
-`window_manager { swipe_peek }` screen px at the threshold (default 60, 0
-disables; `WindowManager::swipe_peek_px` — not under `input`, whose
-config.kdl block input.kdl's replaces wholesale), clamped there — and eases
-back to where it started if the fingers lift first (`handle_swipe_end`), so
-a hesitant swipe shows where it would go without going. Only binds whose
-action `cursor::action_navigates` (focus/pan left/right/up/down) peek, and
-only toward a direction that has one; a four-finger overview toggle leaves
-the desktop still. When the bind fires (`handle_swipe_update`), the action
-runs against the camera as it stood BEFORE the peek, so a focus lands where
-a keyed one would, and the ease then resumes from the peeked position; an
-action that sets no camera target is given the origin as one, or the peek
-would stick. A shadow drives it staged — `ccectl pointer-swipe begin 3`,
+that the camera *leans* toward where the bind the swipe is heading for
+would take it: `WindowManager::predict_action_camera` runs the policy on
+the origin camera and reads the destination off its commands (a `Focus`
+through `Seat::focus_pan_target` — the pure half of `focus_follow_pan`, so
+the two cannot disagree — a `PanTo`, a `SetCamera`), once per heading
+(the swipe's dominant axis; a hand's sideways drift picks no heading of
+its own). The lean runs along that vector 1:1 with the fingers,
+proportional to the travel — `window_manager { swipe_peek }` screen px at
+the threshold (default 60, 0 disables; `WindowManager::swipe_peek_px` —
+not under `input`, whose config.kdl block input.kdl's replaces wholesale)
+— and never past the destination; a bind that moves the camera nowhere
+(both windows in view) leans nothing, where an unpredicted lean sprang
+out and back on every such switch. It eases back to where it started if
+the fingers lift first (`handle_swipe_end`), so a hesitant swipe shows
+where it would go without going. Only binds whose action
+`cursor::action_navigates` (focus/pan left/right/up/down) lean; a
+four-finger overview toggle leaves the desktop still. When the bind fires
+(`handle_swipe_update`), the action runs against the camera as it stood
+BEFORE the lean, so a focus lands where a keyed one would, and the ease
+then resumes from the leaned position along the same vector; an action
+that sets no camera target is given the origin as one, or a lean would
+stick. A shadow drives it staged — `ccectl pointer-swipe begin 3`,
 `update <dx> <dy>`, `end` — and reads the lean and its return back with
 `ccectl camera` (pan, zoom, pan target).
 
