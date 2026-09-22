@@ -1011,29 +1011,15 @@ impl Seat {
     /// not desk citizens, so other modes no-op, as do cce-cloud and windows
     /// already fully visible.
     pub unsafe fn focus_follow_pan(&mut self, window: *mut crate::window::Window) {
-        if let Some(target) = self.focus_pan_target(window) {
-            let wm = &mut (*self.server).wm;
-            wm.target_desk_pan_x = Some(target.pan_x);
-            wm.target_desk_pan_y = Some(target.pan_y);
-            wm.start_panning_animation();
-        }
-    }
-
-    /// Where `focus_follow_pan` would send the camera for `window`, from
-    /// the camera as it stands — `None` when focusing it moves nothing.
-    /// Split out so a swipe can lean toward the destination BEFORE it
-    /// fires (`WindowManager::predict_action_camera`); every guard the
-    /// pan applies is here, so the two agree.
-    pub unsafe fn focus_pan_target(&self, window: *mut crate::window::Window) -> Option<crate::policy::camera::Camera> {
         if self.suppress_focus_pan {
-            return None;
+            return;
         }
         // While a camera ramp owns the camera (an overview enter/exit
         // flight), the current camera is a mid-flight sample — any pan
         // target computed from it is stale by construction. Never retarget
         // out from under the ramp.
         if (*self.server).wm.camera_ramp_anim.is_some() {
-            return None;
+            return;
         }
         if window.is_null()
             || !matches!(
@@ -1045,11 +1031,11 @@ impl Seat {
                     | crate::tiling::TilingMode::Utility
             )
         {
-            return None;
+            return;
         }
         let app_id = (*window).get_app_id_string();
         if app_id.as_ref().map(|id| id == "cce-cloud").unwrap_or(false) {
-            return None;
+            return;
         }
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr_out = (*outputs_list).next;
@@ -1093,7 +1079,8 @@ impl Seat {
                 600.0
             };
 
-            let cam = (*self.server).wm.camera();
+            let wm = &mut (*self.server).wm;
+            let cam = wm.camera();
             // box_geom is already virtual units (its screen footprint is
             // box_geom * zoom) — dividing by zoom here inflated the window
             // whenever zoom != 1 and mistargeted the pan.
@@ -1105,7 +1092,7 @@ impl Seat {
             // `policy::camera::pan_into_view` carries the reasoning, and
             // `WindowManager::pan_to_virtual_rect` applies it to the
             // non-window rects (restore placeholders) from the same place.
-            return crate::policy::camera::pan_into_view(
+            if let Some(target) = crate::policy::camera::pan_into_view(
                 (*window).virtual_x,
                 (*window).virtual_y,
                 vw_w,
@@ -1113,9 +1100,12 @@ impl Seat {
                 cam,
                 viewport_w,
                 viewport_h,
-            );
+            ) {
+                wm.target_desk_pan_x = Some(target.pan_x);
+                wm.target_desk_pan_y = Some(target.pan_y);
+                wm.start_panning_animation();
+            }
         }
-        None
     }
 
     pub unsafe fn make_inert(&mut self) {

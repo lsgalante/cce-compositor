@@ -4634,43 +4634,6 @@ impl WindowManager {
         }
     }
 
-    /// Where `execute_action(action)` would send the camera, from the
-    /// camera as it stands: the pan the policy's commands imply — a focus
-    /// through `Seat::focus_pan_target`, a `PanTo`, a `SetCamera` — or
-    /// `None` when the action moves the camera nowhere. Pure: nothing is
-    /// applied. A swipe leans toward this before it fires, so a switch
-    /// between two windows both in view leans nothing instead of leaning
-    /// out and springing back.
-    pub unsafe fn predict_action_camera(&mut self, action: crate::config::Action) -> Option<(f64, f64)> {
-        use crate::policy::api::{Command, Policy};
-        let ctx = self.build_action_ctx();
-        let cmds = crate::policy::actions::DefaultPolicy.action(&ctx, action, None);
-        let cam = self.camera();
-        let mut dest: Option<(f64, f64)> = None;
-        for cmd in &cmds {
-            match cmd {
-                Command::Focus(id) => {
-                    if let Some(&win) = self.windows.get(id.0) {
-                        if !win.is_null() && !(*win).closed {
-                            if let Some(seat) = self.first_seat() {
-                                if let Some(t) = (*seat).focus_pan_target(win) {
-                                    dest = Some((t.pan_x, t.pan_y));
-                                }
-                            }
-                        }
-                    }
-                }
-                Command::PanTo { x, y } => {
-                    let base = dest.unwrap_or((cam.pan_x, cam.pan_y));
-                    dest = Some((x.unwrap_or(base.0), y.unwrap_or(base.1)));
-                }
-                Command::SetCamera { camera, .. } => dest = Some((camera.pan_x, camera.pan_y)),
-                _ => {}
-            }
-        }
-        dest.filter(|d| *d != (cam.pan_x, cam.pan_y))
-    }
-
     pub unsafe fn execute_action(&mut self, action: &crate::config::Action, command: Option<&str>) {
         use crate::config::Action;
         self.stop_panning_animation();
