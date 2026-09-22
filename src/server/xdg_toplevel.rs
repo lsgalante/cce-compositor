@@ -24,6 +24,11 @@ pub struct XdgToplevel {
     /// change detector for the deferred pointer refresh (see `handle_commit`).
     pub last_surface_size: (i32, i32),
     pub configure_state: ConfigureState,
+    /// Has the client ever answered a configure? Until it has,
+    /// `geometry` is the size the CLIENT asked for, not a response to one
+    /// — see `Window::render_start`, which refuses to adopt a wish over a
+    /// restored size.
+    pub acked_once: bool,
 
     pub destroy: ffi::wl_listener,
     pub ack_configure: ffi::wl_listener,
@@ -64,6 +69,7 @@ impl XdgToplevel {
             geometry: std::mem::zeroed(),
             last_surface_size: (0, 0),
             configure_state: ConfigureState::Idle,
+            acked_once: false,
 
             destroy: std::mem::zeroed(),
             ack_configure: std::mem::zeroed(),
@@ -531,6 +537,11 @@ unsafe extern "C" fn handle_ack_configure(
     let toplevel = crate::container_of!(listener, XdgToplevel, ack_configure);
     let acked_configure = data as *mut ffi::wlr_xdg_surface_configure;
     let serial = (*acked_configure).serial;
+
+    // Any ack, matching serial or not, proves the client is answering
+    // configures: from here its geometry is a response, and `render_start`
+    // may adopt it again.
+    (*toplevel).acked_once = true;
 
     match (*toplevel).configure_state {
         ConfigureState::Inflight(s) => {

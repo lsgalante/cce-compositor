@@ -2891,8 +2891,28 @@ impl Window {
                         }
                         _ => {}
                     }
-                    self.rendering_scheduled.width = (*toplevel).geometry.width as u32;
-                    self.rendering_scheduled.height = (*toplevel).geometry.height as u32;
+                    // The client's committed geometry is the authority on
+                    // this window's size — but only once the client has
+                    // ANSWERED a configure. Before its first ack, `geometry`
+                    // holds the size the client asked for on its own:
+                    // Chromium restores its remembered bounds with
+                    // `set_window_geometry` before it ever acks, and those
+                    // bounds are its window PLUS its CSD shadow insets, so
+                    // they always overhang the cell block the restore just
+                    // gave it. Adopting that wish made it `box_geom` (see
+                    // `render_finish`), the next Tiled arrange covered every
+                    // cell the overhang touched (`snap::tiled_span` floors the
+                    // low edge and CEILS the high one), the grown size was
+                    // saved, and Chrome came back a whole cell wider and
+                    // taller on every login — a one-way ratchet, since each
+                    // session's insets sit on top of the last session's block.
+                    // A window with no restored size still seeds its block
+                    // from the client's first wish, which is where a freshly
+                    // launched app's size comes from.
+                    if !self.restored || (*toplevel).acked_once {
+                        self.rendering_scheduled.width = (*toplevel).geometry.width as u32;
+                        self.rendering_scheduled.height = (*toplevel).geometry.height as u32;
+                    }
                 }
             }
             WindowImpl::Xwayland(xwindow) => {
