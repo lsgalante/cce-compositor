@@ -5,9 +5,9 @@
 # compositor (cursor.rs, the background right-click) passes the FOCUSED
 # window as `-i <id> -a <app_id>` when there is one whose mode can be set:
 # it drops focus right after the spawn so the popup can take the keyboard,
-# so the script cannot ask for it. With a window named, the menu gains a
-# "Window Mode" page — the same page cce-app-menu shows — whose picks go
-# through `ccectl set-mode <mode> <id>`.
+# so the script cannot ask for it. With a window named, the menu gains the
+# window verbs cce-app-menu has: a "Window Mode" page whose picks go through
+# `ccectl set-mode <mode> <id>`, plus Minimize and Close Window.
 
 CCE_CTL="$HOME/.local/bin/ccectl"
 CLEAR_CLOUD="$HOME/.local/bin/cce-cloud"
@@ -95,7 +95,10 @@ main = [
 ]
 pages = [{"title": "Desktop Context Menu", "justify": "left", "widgets": main}]
 if current:
+    # The focused-window verbs, together, the same three cce-app-menu has.
     main.append({"type": "button", "text": "Window Mode >", "id": "mode_page", "target_page": 1})
+    main.append({"type": "button", "text": "Minimize", "id": "minimize"})
+    main.append({"type": "button", "text": "Close Window", "id": "close"})
     pages.append({"title": app_id, "justify": "left", "widgets": [
         mode("Floating", "floating"),
         mode("Tiled", "tiled"),
@@ -161,6 +164,14 @@ case "$btn" in
         if [[ -n "$window_index" ]]; then
             $CCE_CTL set-mode "$btn" "$window_index"
             $CCE_CTL focus-window "$window_index"
+        fi
+        ;;
+    "minimize"|"close")
+        # Both act on the focused window, and focus was dropped: refocus
+        # the named window first.
+        if [[ -n "$window_index" ]]; then
+            $CCE_CTL focus-window "$window_index"
+            $CCE_CTL "$btn"
         fi
         ;;
     "reload")
