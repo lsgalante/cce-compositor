@@ -3784,14 +3784,20 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     // Short of the threshold: lean the camera toward the bind the swipe
     // is heading for, 1:1 with the fingers like a two-finger pan (queued
     // for the frame, no easing), recomputed from the total travel so a
-    // reversal leans back through zero.
+    // reversal leans back through zero. Along the DOMINANT axis only: a
+    // hand swiping left drifts a little up or down as well, and with
+    // up/down binds present that drift leaned the camera vertically too,
+    // then eased it back when the bind fired — a wobble on top of the
+    // real move.
     {
         let wm = &mut (*seat.server).wm;
         let peek_px = wm.swipe_peek_px;
-        let want = [
-            swipe_peek_for(cursor.gesture_dx, navigates[0], navigates[1], threshold, peek_px, wm.desk_zoom),
-            swipe_peek_for(cursor.gesture_dy, navigates[2], navigates[3], threshold, peek_px, wm.desk_zoom),
-        ];
+        let (dx, dy) = (cursor.gesture_dx, cursor.gesture_dy);
+        let want = if dx.abs() >= dy.abs() {
+            [swipe_peek_for(dx, navigates[0], navigates[1], threshold, peek_px, wm.desk_zoom), 0.0]
+        } else {
+            [0.0, swipe_peek_for(dy, navigates[2], navigates[3], threshold, peek_px, wm.desk_zoom)]
+        };
         let delta = [want[0] - cursor.swipe_peek[0], want[1] - cursor.swipe_peek[1]];
         if delta != [0.0, 0.0] {
             wm.stop_panning_animation();

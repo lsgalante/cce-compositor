@@ -525,7 +525,9 @@ directional focus or pan (`focus_left (gesture)"swipe3_left"` in input.kdl)
 fires once the accumulated travel passes `window_manager { swipe_threshold }`
 (libinput units, default 50; `WindowManager::swipe_threshold`). Short of
 that the camera *leans* toward the bind the
-swipe is heading for, 1:1 with the fingers and proportional to the travel —
+swipe is heading for, 1:1 with the fingers along the swipe's dominant axis
+only (a hand's sideways drift must not lean the camera vertically, or the
+fire eases a wobble back) and proportional to the travel —
 `window_manager { swipe_peek }` screen px at the threshold (default 60, 0
 disables; `WindowManager::swipe_peek_px` — not under `input`, whose
 config.kdl block input.kdl's replaces wholesale), clamped there — and eases
