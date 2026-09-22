@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 # cce-app-menu — Context menu for CCE application windows
+#
+# Opened by the compositor (cursor.rs, the right-click border path): from a
+# right-click on a window's handle disc in adjust mode, and from a right-click
+# anywhere on a window in overview. It is a `cce-cloud --json` popup, the same
+# mechanism as cce-desktop-menu and cce-grid's desktop-item menu, so it looks
+# and dismisses like every other menu in the DE. The first page holds the
+# window verbs; "Window Mode" is a second page (a button with `target_page`
+# switches pages without closing the popup) listing the modes `ccectl
+# set-mode` accepts, the current one marked.
+#
+# The mode is set with `set-mode <mode> <id>` — one window, by id — NOT
+# `mode <mode> <app_id>`, which appends a persistent rule that also
+# re-classes every later window of that app.
 
 CCE_CTL="$HOME/.local/bin/ccectl"
 CLEAR_CLOUD="$HOME/.local/bin/cce-cloud"
@@ -37,23 +50,48 @@ if [[ -z "$window_index" || -z "$app_id" ]]; then
     exit 1
 fi
 
-# Define the JSON layout for the application context menu
-json_layout='{
-  "pages": [
-    {
-      "title": "'"${app_id}"' Window Options",
-      "justify": "left",
-      "widgets": [
-        { "type": "button", "text": "Maximize", "id": "maximize" },
-        { "type": "button", "text": "Tile (Grid)", "id": "tile_grid" },
-        { "type": "button", "text": "Float", "id": "float" },
-        { "type": "button", "text": "Fullscreen", "id": "fullscreen" },
-        { "type": "button", "text": "Minimize", "id": "minimize" },
-        { "type": "button", "text": "Close Window", "id": "close" }
-      ]
-    }
-  ]
-}'
+# The window's current mode, so the submenu can mark it. `windows --json` is
+# one object per line; a window that has gone since the click yields "".
+current_mode=$("$CCE_CTL" windows --json 2>/dev/null | python3 -c '
+import sys, json
+want = sys.argv[1]
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        w = json.loads(line)
+    except ValueError:
+        continue
+    if str(w.get("id")) == want:
+        print(str(w.get("mode", "")).lower())
+        break
+' "$window_index")
+
+# Build the layout in python so the app_id (client-chosen text) is escaped
+# for JSON rather than spliced into it.
+json_layout=$(python3 - "$app_id" "$current_mode" <<'PY'
+import sys, json
+app_id, current = sys.argv[1], sys.argv[2]
+def mode(text, ident):
+    mark = "● " if ident == current else "   "
+    return {"type": "button", "text": mark + text, "id": ident}
+layout = {"pages": [
+    {"title": app_id, "justify": "left", "widgets": [
+        {"type": "button", "text": "Window Mode >", "id": "mode_page", "target_page": 1},
+        {"type": "button", "text": "Minimize", "id": "minimize"},
+        {"type": "button", "text": "Close Window", "id": "close"},
+    ]},
+    {"title": "Window Mode", "justify": "left", "widgets": [
+        mode("Floating", "floating"),
+        mode("Tiled", "tiled"),
+        mode("Fullscreen", "fullscreen"),
+        {"type": "button", "text": "< Back", "id": "back", "target_page": 0},
+    ]},
+]}
+print(json.dumps(layout))
+PY
+)
 
 # Spawn cce-cloud with the json layout and coordinates
 selected=$(echo "$json_layout" | $CLEAR_CLOUD --json $x_arg $y_arg 2>/dev/null)
@@ -65,26 +103,17 @@ btn=$(echo "$selected" | python3 -c "import sys, json; print(json.load(sys.stdin
 
 [[ -z "$btn" ]] && exit 0
 
-# First focus the window so the commands apply to it
-$CCE_CTL focus-window "$window_index"
-
 case "$btn" in
-    "maximize")
-        $CCE_CTL mode maximized "$app_id"
-        ;;
-    "tile_grid")
-        $CCE_CTL mode grid "$app_id"
-        ;;
-    "float")
-        $CCE_CTL mode floating "$app_id"
-        ;;
-    "fullscreen")
-        $CCE_CTL mode fullscreen "$app_id"
+    "floating"|"tiled"|"fullscreen")
+        $CCE_CTL set-mode "$btn" "$window_index"
         ;;
     "minimize")
+        # minimize/close act on the focused window: focus this one first.
+        $CCE_CTL focus-window "$window_index"
         $CCE_CTL minimize
         ;;
     "close")
+        $CCE_CTL focus-window "$window_index"
         $CCE_CTL close
         ;;
 esac

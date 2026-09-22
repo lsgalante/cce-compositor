@@ -1806,12 +1806,32 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         ) {
             let initial_mode = (*border_target_win).tiling_mode;
             let zone = get_border_zone(border_target_win, lx, ly);
-            if (*event).button == 0x111 && modifiers == 0 && !matches!(zone, BorderZone::None) {
+            // The window context menu (`scripts/cce-app-menu`, a cce-cloud
+            // popup like the desktop menu and cce-grid's item menu). A
+            // right-click on a handle disc opens it in either adjust mode;
+            // in OVERVIEW a right-click anywhere on the window does: the
+            // client never sees buttons there (`should_block_button`), so
+            // the press is the compositor's to spend, and the menu is how a
+            // window's mode is set from the overview. Overlay docks are
+            // chrome and keep their clicks (`overview_chrome` above);
+            // Utility windows take no handles and have no mode to set.
+            let menu_on_body = in_overview
+                && !matches!(
+                    initial_mode,
+                    crate::tiling::TilingMode::Overlay | crate::tiling::TilingMode::Utility
+                );
+            if (*event).button == 0x111
+                && modifiers == 0
+                && (!matches!(zone, BorderZone::None) || menu_on_body)
+            {
                 cursor.right_click_on_border = true;
                 let x = cursor.x() as i32;
                 let y = cursor.y() as i32;
                 let index = (*border_target_win).ref_key.index;
                 let app_id = (*border_target_win).get_app_id_string().unwrap_or_else(|| "unknown".to_string());
+                // The command runs under `sh -c`: quote the app_id, which
+                // is client-chosen text.
+                let app_id = format!("'{}'", app_id.replace('\'', "'\\''"));
                 let home = std::env::var("HOME").unwrap_or_default();
                 let cmd = format!("{}/.local/bin/cce-app-menu -x {} -y {} -i {} -a {}", home, x, y, index, app_id);
                 (*server).wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));

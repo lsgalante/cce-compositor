@@ -479,6 +479,16 @@ sat outside the edges and the ring that followed hugged them.
   scanner cannot resolve; never sync the file over it wholesale.
 - The per-side foam clipping the outside band carried is gone: it split a gap
   SHARED with a neighbouring window, and an inside ring shares nothing.
+- **Right-click opens the window context menu** — `scripts/cce-app-menu`, a
+  `cce-cloud --json` popup like `cce-desktop-menu` and cce-grid's item menu.
+  It opens from a right-click on a handle disc in either adjust mode, and in
+  **overview from a right-click anywhere on the window**, since the client
+  never sees buttons there (`should_block_button`) and the press is the
+  compositor's to spend; Overlay (chrome) and Utility (no handles, no mode)
+  bodies are excluded. The menu's "Window Mode" page — a second JSON page
+  reached through a `target_page` button, which switches pages without
+  closing the popup — sets the mode with `ccectl set-mode <mode> <id>`, one
+  window by id. Not `ccectl mode`, which appends a persistent app_id rule.
 
 None of this is policy — `cce-window-manager` was untouched. The mode is
 already in `ActionCtx`, but what a *pointer* may grab is mechanism.

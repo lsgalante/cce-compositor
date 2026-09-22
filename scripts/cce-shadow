@@ -448,6 +448,17 @@ seed_config() {
         cp "$HOME/.config/fontconfig/fonts.conf" "$SHADOW_HOME/.config/fontconfig/fonts.conf"
     fi
 
+    # The compositor spawns the desktop and window context menus by absolute
+    # path, "$HOME/.local/bin/cce-desktop-menu" / "cce-app-menu" (cursor.rs),
+    # and those scripts reach ccectl and cce-cloud the same way. With HOME
+    # isolated the directory is missing and a right-click silently opens
+    # nothing, so point it at the real one. A symlink, not copies: the
+    # binaries stay whatever is installed, and `--fresh`'s rm -rf removes
+    # the link, never what it points to.
+    if [ ! -e "$SHADOW_HOME/.local/bin" ] && [ -d "$HOME/.local/bin" ]; then
+        ln -s "$HOME/.local/bin" "$SHADOW_HOME/.local/bin"
+    fi
+
     # See the header: readable-but-key-absent means notifications default ON.
     if ! grep -q '^notifications' "$cfg/config.kdl" 2>/dev/null; then
         printf '\n// cce-shadow: keep captures off the real screen.\nnotifications {\n    screenshots (bool)false\n}\n' \
