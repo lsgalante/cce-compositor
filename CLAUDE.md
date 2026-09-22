@@ -489,6 +489,10 @@ sat outside the edges and the ring that followed hugged them.
   reached through a `target_page` button, which switches pages without
   closing the popup — sets the mode with `ccectl set-mode <mode> <id>`, one
   window by id. Not `ccectl mode`, which appends a persistent app_id rule.
+  `cce-desktop-menu` carries the same page for the FOCUSED window: the
+  background right-click passes it as `-i <id> -a <app_id>` (settable modes
+  only) because it drops focus right after the spawn, so the script could
+  not ask for it.
 
 None of this is policy — `cce-window-manager` was untouched. The mode is
 already in `ActionCtx`, but what a *pointer* may grab is mechanism.

@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # cce-desktop-menu — Context menu for CCE desktop background
+#
+# A `cce-cloud --json` popup, like cce-app-menu and cce-grid's item menu. The
+# compositor (cursor.rs, the background right-click) passes the FOCUSED
+# window as `-i <id> -a <app_id>` when there is one whose mode can be set:
+# it drops focus right after the spawn so the popup can take the keyboard,
+# so the script cannot ask for it. With a window named, the menu gains a
+# "Window Mode" page — the same page cce-app-menu shows — whose picks go
+# through `ccectl set-mode <mode> <id>`.
 
 CCE_CTL="$HOME/.local/bin/ccectl"
 CLEAR_CLOUD="$HOME/.local/bin/cce-cloud"
@@ -9,6 +17,8 @@ x_arg=""
 y_arg=""
 x_val=""
 y_val=""
+window_index=""
+app_id=""
 
 # Open the app WHERE THE MENU WAS OPENED: the next window matching $1 covers
 # the grid square under the click, keeping the size it had last time and
@@ -31,31 +41,72 @@ while [[ $# -gt 0 ]]; do
         -y|--y-pos)
             if [[ $# -ge 2 ]]; then y_arg="-y $2"; y_val="$2"; shift 2; else shift; fi
             ;;
+        -i|--window-id)
+            if [[ $# -ge 2 ]]; then window_index="$2"; shift 2; else shift; fi
+            ;;
+        -a|--app-id)
+            if [[ $# -ge 2 ]]; then app_id="$2"; shift 2; else shift; fi
+            ;;
         *)
             shift
             ;;
     esac
 done
 
-# Define the JSON layout for the desktop context menu
-json_layout='{
-  "pages": [
-    {
-      "title": "Desktop Context Menu",
-      "justify": "left",
-      "widgets": [
-        { "type": "button", "text": "Terminal", "id": "terminal" },
-        { "type": "button", "text": "Files", "id": "files" },
-        { "type": "button", "text": "Data Editor", "id": "data_editor" },
-        { "type": "button", "text": "Applications", "id": "apps" },
-        { "type": "button", "text": "System Settings", "id": "settings" },
-        { "type": "button", "text": "Overview", "id": "overview" },
-        { "type": "button", "text": "Reload Config", "id": "reload" },
-        { "type": "button", "text": "Logout", "id": "exit" }
-      ]
-    }
-  ]
-}'
+# The named window's current mode, so the submenu can mark it. One JSON
+# object per line; a window gone since the click yields "" and the page is
+# left out.
+current_mode=""
+if [[ -n "$window_index" ]]; then
+    current_mode=$("$CCE_CTL" windows --json 2>/dev/null | python3 -c '
+import sys, json
+want = sys.argv[1]
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        w = json.loads(line)
+    except ValueError:
+        continue
+    if str(w.get("id")) == want:
+        print(str(w.get("mode", "")).lower())
+        break
+' "$window_index")
+fi
+
+# Build the layout in python so the app_id (client-chosen text) is escaped
+# for JSON rather than spliced into it. The "Window Mode" entry sits with
+# Overview, the other window-manager verb; a `target_page` button switches
+# pages without closing the popup.
+json_layout=$(python3 - "$app_id" "$current_mode" <<'PY'
+import sys, json
+app_id, current = sys.argv[1], sys.argv[2]
+def mode(text, ident):
+    mark = "● " if ident == current else "   "
+    return {"type": "button", "text": mark + text, "id": ident}
+main = [
+    {"type": "button", "text": "Terminal", "id": "terminal"},
+    {"type": "button", "text": "Files", "id": "files"},
+    {"type": "button", "text": "Data Editor", "id": "data_editor"},
+    {"type": "button", "text": "Applications", "id": "apps"},
+    {"type": "button", "text": "System Settings", "id": "settings"},
+    {"type": "button", "text": "Overview", "id": "overview"},
+]
+pages = [{"title": "Desktop Context Menu", "justify": "left", "widgets": main}]
+if current:
+    main.append({"type": "button", "text": "Window Mode >", "id": "mode_page", "target_page": 1})
+    pages.append({"title": app_id, "justify": "left", "widgets": [
+        mode("Floating", "floating"),
+        mode("Tiled", "tiled"),
+        mode("Fullscreen", "fullscreen"),
+        {"type": "button", "text": "< Back", "id": "back", "target_page": 0},
+    ]})
+main.append({"type": "button", "text": "Reload Config", "id": "reload"})
+main.append({"type": "button", "text": "Logout", "id": "exit"})
+print(json.dumps({"pages": pages}))
+PY
+)
 
 # Spawn cce-cloud with the json layout and coordinates
 selected=$(echo "$json_layout" | $CLEAR_CLOUD --json $x_arg $y_arg 2>/dev/null)
@@ -103,6 +154,14 @@ case "$btn" in
         ;;
     "overview")
         $CCE_CTL overview
+        ;;
+    "floating"|"tiled"|"fullscreen")
+        # The background right-click dropped focus for the popup's sake;
+        # the window just acted on is the one to hand it back to.
+        if [[ -n "$window_index" ]]; then
+            $CCE_CTL set-mode "$btn" "$window_index"
+            $CCE_CTL focus-window "$window_index"
+        fi
         ;;
     "reload")
         $CCE_CTL reload

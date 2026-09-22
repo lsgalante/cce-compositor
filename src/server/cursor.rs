@@ -1679,7 +1679,30 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 let x = cursor.x() as i32;
                 let y = cursor.y() as i32;
                 let home = std::env::var("HOME").unwrap_or_default();
-                let cmd = format!("{}/.local/bin/cce-desktop-menu -x {} -y {}", home, x, y);
+                let mut cmd = format!("{}/.local/bin/cce-desktop-menu -x {} -y {}", home, x, y);
+                // The menu's "Window Mode" page acts on the FOCUSED window,
+                // and focus is dropped right below (so the popup takes the
+                // keyboard and a click-away dismisses it) — by the time the
+                // script asks `ccectl windows` nothing is focused. Hand it
+                // the window here instead. Only a window whose mode
+                // `set-mode` accepts is worth naming.
+                if let Focus::Window(w) = seat.focused {
+                    if !w.is_null()
+                        && matches!(
+                            (*w).tiling_mode,
+                            crate::tiling::TilingMode::Floating
+                                | crate::tiling::TilingMode::Tiled
+                                | crate::tiling::TilingMode::Fullscreen
+                        )
+                    {
+                        let app_id = (*w).get_app_id_string().unwrap_or_else(|| "unknown".to_string());
+                        cmd.push_str(&format!(
+                            " -i {} -a '{}'",
+                            (*w).ref_key.index,
+                            app_id.replace('\'', "'\\''")
+                        ));
+                    }
+                }
                 (*server).wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
 
                 seat.focus(Focus::None);
