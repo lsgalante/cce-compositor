@@ -13,6 +13,10 @@ pub enum KeyConsumer {
     Builtin,
     Binding(*mut XkbBinding),
     CceBinding(crate::config::Keybind),
+    /// A chord bound through the GlobalShortcuts portal backend (see
+    /// `global_shortcuts`): the press and the release are both reported on
+    /// the status socket's `shortcuts` topic and neither reaches the client.
+    PortalShortcut { session: String, id: String },
     EnsureEaten,
     ImGrab,
     Focus,
@@ -415,6 +419,9 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         } else if let Some(kb) = match_cce_keybind(&(*(*group.seat).server).wm, xkb_keycode, modifiers, xkb_state) {
             log::debug!("matched CCE monolithic keybind: {:?}", kb);
             KeyConsumer::CceBinding(kb)
+        } else if let Some((session, id)) = match_portal_shortcut(&(*(*group.seat).server).wm, xkb_keycode, modifiers, xkb_state) {
+            log::debug!("matched portal shortcut {} {}", session, id);
+            KeyConsumer::PortalShortcut { session, id }
         } else if let Some(binding) = (*group.seat).match_xkb_binding(xkb_keycode, &mut group.wlr_keyboard) {
             log::debug!("matched xkb binding");
             (*group.seat).xkb_bindings_seat.ensure_next_key_eaten = false;
@@ -477,6 +484,21 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
                 wm.execute_action(&action, kb.command.as_deref());
             }
         }
+        KeyConsumer::PortalShortcut { session, id } => {
+            // Both edges go out: the portal has a Deactivated signal, and
+            // the release comes back here through the consumer map with the
+            // same variant the press recorded.
+            let pressed = (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED;
+            if let Some(ref sender) = (*(*group.seat).server).wm.status_sender {
+                sender.send_shortcut_event(&format!(
+                    "{} {} {} {}",
+                    if pressed { "activated" } else { "deactivated" },
+                    session,
+                    id,
+                    (*event).time_msec
+                ));
+            }
+        }
         KeyConsumer::Binding(binding) => {
             if !binding.is_null() {
                 if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED {
@@ -524,6 +546,42 @@ pub unsafe fn match_cce_keybind(
     modifiers: u32,
     xkb_state: *mut ffi::xkb_state,
 ) -> Option<crate::config::Keybind> {
+    match_chord(keycode, modifiers, xkb_state, |mods, sym| {
+        wm.keybinds.iter().find(|kb| kb.mods == mods && kb.keysym == sym).cloned()
+    })
+}
+
+/// The portal-bound chords (`global_shortcuts`), matched exactly like the
+/// config keybinds but consulted after them. Returns `(session, id)`.
+pub unsafe fn match_portal_shortcut(
+    wm: &crate::window_manager::WindowManager,
+    keycode: u32,
+    modifiers: u32,
+    xkb_state: *mut ffi::xkb_state,
+) -> Option<(String, String)> {
+    if wm.portal_shortcuts.is_empty() {
+        return None;
+    }
+    match_chord(keycode, modifiers, xkb_state, |mods, sym| {
+        wm.portal_shortcuts
+            .iter()
+            .find(|s| s.mods == mods && s.keysym == sym)
+            .map(|s| (s.session.clone(), s.id.clone()))
+    })
+}
+
+/// Chord lookup shared by every (mods, keysym) table. `probe` is asked
+/// twice over: first with the keycode's level-0 keysyms against the raw
+/// modifier mask (so `super+shift+h` matches on `h`, not `H`), then with the
+/// keysyms of the level the modifiers actually select against the mask with
+/// the consumed modifiers removed (so a bind on a shifted symbol like
+/// `plus` still fires). The first hit wins.
+unsafe fn match_chord<T>(
+    keycode: u32,
+    modifiers: u32,
+    xkb_state: *mut ffi::xkb_state,
+    probe: impl Fn(u32, u32) -> Option<T>,
+) -> Option<T> {
     if xkb_state.is_null() {
         return None;
     }
@@ -537,13 +595,9 @@ pub unsafe fn match_cce_keybind(
     let num_syms = ffi::xkb_keymap_key_get_syms_by_level(keymap, keycode, layout, 0, &mut syms_ptr);
     if num_syms > 0 && !syms_ptr.is_null() {
         let syms = std::slice::from_raw_parts(syms_ptr, num_syms as usize);
-        for kb in &wm.keybinds {
-            if kb.mods == modifiers {
-                for &sym in syms {
-                    if sym == kb.keysym {
-                        return Some(kb.clone());
-                    }
-                }
+        for &sym in syms {
+            if let Some(hit) = probe(modifiers, sym) {
+                return Some(hit);
             }
         }
     }
@@ -555,13 +609,9 @@ pub unsafe fn match_cce_keybind(
         let syms = std::slice::from_raw_parts(syms_ptr_level, num_syms_level as usize);
         let consumed = ffi::xkb_state_key_get_consumed_mods2(xkb_state, keycode, ffi::xkb_consumed_mode_XKB_CONSUMED_MODE_XKB);
         let modifiers_translated = modifiers & !consumed;
-        for kb in &wm.keybinds {
-            if kb.mods == modifiers_translated {
-                for &sym in syms {
-                    if sym == kb.keysym {
-                        return Some(kb.clone());
-                    }
-                }
+        for &sym in syms {
+            if let Some(hit) = probe(modifiers_translated, sym) {
+                return Some(hit);
             }
         }
     }

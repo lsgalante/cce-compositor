@@ -111,6 +111,8 @@ fn usage(name: &str, to_stderr: bool) {
     print("  key-down <keycode>                 (modifier codes — ctrl 29/97, shift 42/54,");
     print("  key-up <keycode>                    alt 56/100, super 125/126 — update client");
     print("                                      xkb state, so e.g. 29+36 lands as ctrl+j)");
+    print("  shortcut bind <session> <id> <trigger>   (portal GlobalShortcuts backend: CTRL+SHIFT+space)");
+    print("  shortcut unbind <session> [<id>] | clear | list");
 }
  
 pub fn run_cce_ctl(args: Vec<String>) {

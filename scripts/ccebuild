@@ -32,6 +32,7 @@ UNITDIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 DESKTOPDIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICONDIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons"
 DBUSDIR="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services"
+PORTALDIR="${XDG_DATA_HOME:-$HOME/.local/share}/xdg-desktop-portal/portals"
 
 die() { printf 'ccebuild: %s\n' "$*" >&2; exit 1; }
 
@@ -225,6 +226,18 @@ dbus_services() {
         -not -path "$WS/target/*" 2>/dev/null
 }
 
+# xdg-desktop-portal backend declarations a crate ships in its portals/ dir
+# (`<name>.portal`: the backend's bus name and the impl.portal interfaces it
+# serves), installed to $XDG_DATA_HOME/xdg-desktop-portal/portals where the
+# portal frontend reads them beside /usr/share's. The file only announces the
+# backend; the bus name it names must be activatable, which is the crate's
+# dbus/ service file. Which backend a desktop USES for an interface is
+# ~/.config/xdg-desktop-portal/cce-portals.conf, not installed from here.
+portal_files() {
+    find "$WS" -mindepth 3 -maxdepth 3 -path '*/portals/*.portal' -type f \
+        -not -path "$WS/target/*" 2>/dev/null
+}
+
 # XDG .desktop entries shipped by crates, at the crate root next to Cargo.toml.
 #
 # These used to be hand-written straight into ~/.local/share/applications, which
@@ -278,8 +291,12 @@ app_icons() {
 file_crate_dir() {
     local dir
     dir=$(basename "$(dirname "$1")")
+    # The subdirectories a crate ships installable files in; a file one level
+    # down reports the crate above. A new kind of shipped file needs its dir
+    # here, or its crate reads as e.g. "portals" and the package filter drops
+    # it silently (which is how the first portal declaration went uninstalled).
     case "$dir" in
-        scripts|dbus) dir=$(basename "$(dirname "$(dirname "$1")")") ;;
+        scripts|dbus|portals) dir=$(basename "$(dirname "$(dirname "$1")")") ;;
     esac
     printf '%s\n' "$dir"
 }
@@ -373,6 +390,18 @@ cmd_install() {
         install -m 644 "$b" "$DBUSDIR/$(basename "$b")"
         dbus=$((dbus + 1))
     done < <(dbus_services)
+
+    local pf portals=0
+    while read -r pf; do
+        [ -n "$pf" ] || continue
+        # Same filtered install as the units above.
+        if [ ${#pkgs[@]} -gt 0 ]; then
+            crate_selected "$(file_crate_dir "$pf")" "${pkgs[@]}" || continue
+        fi
+        [ "$portals" -eq 0 ] && { printf '==> installing portal declarations -> %s\n' "$PORTALDIR"; mkdir -p "$PORTALDIR"; }
+        install -m 644 "$pf" "$PORTALDIR/$(basename "$pf")"
+        portals=$((portals + 1))
+    done < <(portal_files)
 
     local d desktops=0
     while read -r d; do

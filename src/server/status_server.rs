@@ -2,7 +2,7 @@
 //
 // Runs in a dedicated thread. cce-status connects to
 // /tmp/cce-status-{WAYLAND_DISPLAY}.sock, sends a subscription line
-// ("layout", "title", "modifiers", "adjust", or "dismiss") and receives lines whenever the status changes.
+// ("layout", "title", "modifiers", "adjust", "dismiss", or "shortcuts") and receives lines whenever the status changes.
 //
 // The main loop sends updates through an mpsc channel. The server thread
 // owns the socket and handles all I/O independently of the Wayland event loop.
@@ -49,6 +49,10 @@ pub enum StatusMsg {
     /// subscriber EXCEPT the segment whose app_id is carried here should
     /// close its open menu (the exempt segment saw the press itself).
     MenuDismiss { except_app_id: String },
+    /// A portal-bound chord went down or up (`global_shortcuts`): one line,
+    /// `activated|deactivated <session> <id> <time_msec>`, for every
+    /// `shortcuts` subscriber — in practice the one portal backend.
+    Shortcut(String),
 }
 
 /// Subscription types that the status bar script can request.
@@ -64,6 +68,9 @@ enum Subscription {
     Adjust,
     /// One-shot menu-dismiss events only — never receives state pushes.
     Dismiss,
+    /// `shortcuts` — one-shot portal shortcut press/release lines only
+    /// (see `StatusMsg::Shortcut`); never receives state pushes.
+    Shortcuts,
     /// `backdrop <app_id>` — what THIS segment is composited over, so it can
     /// adapt its own text contrast. Lines are `<luma> <spread>`, both 0-100.
     Backdrop(String),
@@ -85,6 +92,7 @@ impl Subscription {
             "modifiers" => Subscription::Modifiers,
             "adjust" => Subscription::Adjust,
             "dismiss" => Subscription::Dismiss,
+            "shortcuts" => Subscription::Shortcuts,
             _ => Subscription::Unknown,
         }
     }
@@ -126,6 +134,15 @@ impl StatusSender {
     /// segment with this app_id (pass "-" to exempt nobody).
     pub fn send_menu_dismiss(&self, except_app_id: &str) {
         if self.tx.send(StatusMsg::MenuDismiss { except_app_id: except_app_id.to_string() }).is_ok() {
+            wake_fd(&self.wake);
+        }
+    }
+}
+
+impl StatusSender {
+    /// Report a portal shortcut edge to every `shortcuts` subscriber.
+    pub fn send_shortcut_event(&self, line: &str) {
+        if self.tx.send(StatusMsg::Shortcut(line.to_string())).is_ok() {
             wake_fd(&self.wake);
         }
     }
@@ -309,6 +326,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
 
         // Process incoming updates from the main loop
         let mut dismiss_events: Vec<String> = Vec::new();
+        let mut shortcut_events: Vec<String> = Vec::new();
         loop {
             match rx.try_recv() {
                 Ok(StatusMsg::State(update)) => {
@@ -317,6 +335,9 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
                 }
                 Ok(StatusMsg::MenuDismiss { except_app_id }) => {
                     dismiss_events.push(except_app_id);
+                }
+                Ok(StatusMsg::Shortcut(line)) => {
+                    shortcut_events.push(line);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -356,15 +377,43 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
             }
         }
 
+        // Portal shortcut edges go only to `shortcuts` subscribers, in order.
+        if !shortcut_events.is_empty() {
+            let mut dead_clients = Vec::new();
+            for (i, client) in clients.iter_mut().enumerate() {
+                if client.subscription != Subscription::Shortcuts {
+                    continue;
+                }
+                for line in &shortcut_events {
+                    match client
+                        .stream
+                        .write_all(line.as_bytes())
+                        .and_then(|_| client.stream.write_all(b"\n"))
+                    {
+                        Ok(_) => {}
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(_) => {
+                            dead_clients.push(i);
+                            break;
+                        }
+                    }
+                }
+            }
+            dead_clients.dedup();
+            for i in dead_clients.into_iter().rev() {
+                clients.remove(i);
+            }
+        }
+
         // If we got a new update, push it to all clients
         if has_new_update {
             if let Some(ref update) = latest {
                 let mut dead_clients = Vec::new();
 
                 for (i, client) in clients.iter_mut().enumerate() {
-                    // Dismiss subscribers get one-shot events only, never
-                    // state pushes.
-                    if client.subscription == Subscription::Dismiss {
+                    // Dismiss and shortcuts subscribers get one-shot events
+                    // only, never state pushes.
+                    if matches!(client.subscription, Subscription::Dismiss | Subscription::Shortcuts) {
                         continue;
                     }
                     let msg = format_for_subscription(&client.subscription, update);
@@ -444,7 +493,7 @@ fn format_for_subscription(sub: &Subscription, update: &StatusUpdate) -> String 
                 None => "unknown".to_string(),
             }
         }
-        Subscription::Dismiss | Subscription::Unknown => String::new(),
+        Subscription::Dismiss | Subscription::Shortcuts | Subscription::Unknown => String::new(),
     }
 }
 

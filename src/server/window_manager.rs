@@ -158,6 +158,9 @@ pub struct WindowManager {
     pub keybinds: Vec<crate::config::Keybind>,
     pub pointer_binds: Vec<crate::config::PointerBind>,
     pub gesture_binds: Vec<crate::config::GestureBind>,
+    /// Chords bound through the GlobalShortcuts portal backend — see
+    /// `global_shortcuts`. Matched after `keybinds`, never persisted.
+    pub portal_shortcuts: Vec<crate::global_shortcuts::PortalShortcut>,
     pub ipc_rx: Option<std::sync::mpsc::Receiver<crate::ipc_server::IpcRequest>>,
     /// The IPC thread's wake eventfd as a wl_event_loop fd source: fires once
     /// per queued request, so the drain runs only when there is something to
@@ -624,6 +627,7 @@ impl WindowManager {
         self.keybinds = Vec::new();
         self.pointer_binds = Vec::new();
         self.gesture_binds = Vec::new();
+        self.portal_shortcuts = Vec::new();
         self.ipc_rx = None;
         self.ipc_source = std::ptr::null_mut();
         self.ipc_wake = None;
@@ -6220,6 +6224,9 @@ impl WindowManager {
                     "error: invalid keycode\n".to_string()
                 }
             }
+            // Portal global shortcuts (the `cce-shortcuts-portal` backend's
+            // half of the contract lives in `global_shortcuts`).
+            "shortcut" => crate::global_shortcuts::ipc(self, &parts[1..]),
             _ => format!("error: unknown command: {}\n", action),
         }
     }

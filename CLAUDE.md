@@ -71,6 +71,13 @@ It also installs the **`.desktop` entries** crates ship at their own root into
 in `~/.local/share/applications` until 2026-08-16; see `./WORKSPACE.md` for the
 `Exec=`/`MimeType=` rules that go with them.
 
+**Portal declarations** (`<crate>/portals/*.portal`, the file that tells
+xdg-desktop-portal a backend's bus name and interfaces) install to
+`$XDG_DATA_HOME/xdg-desktop-portal/portals/` the same filtered way
+(`portal_files()`); `cce-shortcuts-portal` ships the first. `file_crate_dir()`
+must know every such subdirectory name (`scripts`, `dbus`, `portals`) or the
+package filter reads the subdirectory as the crate and drops the file.
+
 **App icons** install from any crate's `hicolor/` tree (`app_icons()`), mirrored
 verbatim into `$XDG_DATA_HOME/icons/hicolor/` — so an icon's size and context are
 its directory, not a rule in the script, and `48x48/apps` would need no edit here.
@@ -702,6 +709,38 @@ headless seat has no keyboard and Chromium crashes in
   nobody is typing in is read exactly once. Content that still cannot be read —
   no committed buffer, an unsupported read format, an implausibly large strip —
   falls back to `backdrop::UNKNOWN`.
+
+### Portal global shortcuts
+
+A native Wayland app cannot grab a key; it asks xdg-desktop-portal's
+`GlobalShortcuts` interface for one (1Password's Quick Access does), and the
+portal frontend hands that to a backend. `../cce-shortcuts-portal` is that
+backend and **`src/server/global_shortcuts.rs` is this side of it** — a
+table of `(session, id, mods, keysym)` on the window manager
+(`portal_shortcuts`) with a control-socket command to fill it and a status
+topic to report it:
+
+- `shortcut bind <session> <id> <trigger>` parses a shortcuts-spec trigger
+  (`CTRL+SHIFT+space`; modifiers `CTRL`/`ALT`/`SHIFT`/`LOGO`, key an xkb
+  keysym name) and replies `ok <trigger_description>` (`Ctrl+Shift+Space`)
+  or `error: …`. A chord in `keybinds` is refused — the user's config owns
+  it — as is one another session already holds. `unbind <session> [<id>]`,
+  `clear` and `list` are the rest. Nothing is persisted; the backend sends
+  `clear` when it starts.
+- The chord is matched in `handle_group_key` after the builtins and the
+  config keybinds, through the same two-level keysym lookup
+  (`keyboard_group::match_chord`, which `match_cce_keybind` now wraps), as
+  `KeyConsumer::PortalShortcut`. Press AND release are pushed as one-shot
+  lines on the status socket's `shortcuts` topic —
+  `activated|deactivated <session> <id> <time_msec>` — since the portal has
+  a `Deactivated` signal; neither edge reaches the client.
+
+The compositor never learns which app asked: the session object path is
+the only identity it carries, and it is one whitespace-free token, which is
+why ids come percent-encoded (`Quick%20Access`) and stay that way here.
+Drive it in a shadow with `ccectl shortcut bind /s/1 x CTRL+SHIFT+space`
+and `verify/clients`' `vkey mod:5 57` — not `ccectl keypress`, which goes
+straight to the focused client and never meets the chord matcher.
 
 ## Conventions
 
