@@ -3610,6 +3610,42 @@ fn swipe_peek_for(d: f64, neg: bool, pos: bool, threshold: f64, peek_px: f64, zo
     }
 }
 
+/// Slope (minor over major travel) below which a swipe counts as straight:
+/// tan 15°. Within it the lean stays on the dominant axis, since a hand
+/// swiping left drifts a little up or down, and leaning with that drift
+/// is a wobble, not a direction.
+const SWIPE_LEAN_STRAIGHT_SLOPE: f64 = 0.268;
+
+/// The lean `[x, y]` (virtual units) the swipe's travel so far calls for.
+/// Its size is set by the dominant axis (`swipe_peek_for`: proportional,
+/// `peek_px` on screen at `threshold`), and its direction follows the
+/// fingers: the minor axis leans in proportion to the swipe's slope, so a
+/// 45° swipe leans 45°. The slope is measured past the straight band and
+/// rescaled, `SWIPE_LEAN_STRAIGHT_SLOPE` mapping to 0 and a diagonal to 1,
+/// so the lean turns smoothly off the axis rather than jumping at 15°.
+/// Each axis only leans toward a direction with a navigating bind
+/// (`navigates`: left, right, up, down), and nothing leans at all when the
+/// dominant direction has none.
+fn swipe_lean(dx: f64, dy: f64, navigates: [bool; 4], threshold: f64, peek_px: f64, zoom: f64) -> [f64; 2] {
+    let horizontal = dx.abs() >= dy.abs();
+    let (major, minor) = if horizontal { (dx, dy) } else { (dy, dx) };
+    let (major_nav, minor_nav) = if horizontal {
+        ((navigates[0], navigates[1]), (navigates[2], navigates[3]))
+    } else {
+        ((navigates[2], navigates[3]), (navigates[0], navigates[1]))
+    };
+    let lean_major = swipe_peek_for(major, major_nav.0, major_nav.1, threshold, peek_px, zoom);
+    let minor_allowed = (minor < 0.0 && minor_nav.0) || (minor > 0.0 && minor_nav.1);
+    let lean_minor = if lean_major != 0.0 && minor_allowed {
+        let slope = minor.abs() / major.abs();
+        let turn = ((slope - SWIPE_LEAN_STRAIGHT_SLOPE) / (1.0 - SWIPE_LEAN_STRAIGHT_SLOPE)).clamp(0.0, 1.0);
+        lean_major.abs() * turn * minor.signum()
+    } else {
+        0.0
+    };
+    if horizontal { [lean_major, lean_minor] } else { [lean_minor, lean_major] }
+}
+
 unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, swipe_begin_listener);
     let event = data as *mut ffi::wlr_pointer_swipe_begin_event;
@@ -3806,11 +3842,11 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     // Short of the threshold: lean the camera toward the bind the swipe
     // is heading for, 1:1 with the fingers like a two-finger pan (queued
     // for the frame, no easing), recomputed from the total travel so a
-    // reversal leans back through zero. Along the DOMINANT axis only: a
-    // hand swiping left drifts a little up or down as well, and with
-    // up/down binds present that drift leaned the camera vertically too,
-    // then eased it back when the bind fired — a wobble on top of the
-    // real move.
+    // reversal leans back through zero. In the fingers' direction
+    // (`swipe_lean`): a diagonal swipe leans diagonally, while a nearly
+    // straight one stays on its dominant axis, because a hand swiping
+    // left drifts a little up or down and leaning with that drift was a
+    // wobble on top of the real move.
     {
         let wm = &mut (*seat.server).wm;
         // After a step the lean is slower as well as longer to fill: it
@@ -3819,11 +3855,7 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         // not tug the camera toward the next window as eagerly.
         let peek_px = if cursor.gesture_triggered { wm.swipe_repeat_peek_px } else { wm.swipe_peek_px };
         let (dx, dy) = (cursor.gesture_dx, cursor.gesture_dy);
-        let want = if dx.abs() >= dy.abs() {
-            [swipe_peek_for(dx, navigates[0], navigates[1], threshold, peek_px, wm.desk_zoom), 0.0]
-        } else {
-            [0.0, swipe_peek_for(dy, navigates[2], navigates[3], threshold, peek_px, wm.desk_zoom)]
-        };
+        let want = swipe_lean(dx, dy, navigates, threshold, peek_px, wm.desk_zoom);
         let delta = [want[0] - cursor.swipe_peek[0], want[1] - cursor.swipe_peek[1]];
         if delta != [0.0, 0.0] {
             if cursor.gesture_triggered {
@@ -4389,3 +4421,50 @@ pub unsafe fn get_closest_edges(window: *mut crate::window::Window, lx: f64, ly:
     crate::window::Edges { top, bottom, left, right }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ALL: [bool; 4] = [true; 4];
+    const EPS: f64 = 1e-9;
+
+    #[test]
+    fn straight_swipe_leans_on_its_axis() {
+        // Halfway to the threshold: half the peek, and no drift below 15°.
+        assert_eq!(swipe_lean(35.0, 5.0, ALL, 70.0, 120.0, 1.0), [60.0, 0.0]);
+        assert_eq!(swipe_lean(-4.0, -35.0, ALL, 70.0, 120.0, 1.0), [0.0, -60.0]);
+    }
+
+    #[test]
+    fn diagonal_swipe_leans_diagonally() {
+        let [x, y] = swipe_lean(35.0, -35.0, ALL, 70.0, 120.0, 1.0);
+        assert!((x - 60.0).abs() < EPS && (y + 60.0).abs() < EPS, "{x} {y}");
+    }
+
+    #[test]
+    fn lean_turns_smoothly_off_the_axis() {
+        // Just past the straight band a little; halfway through it, half.
+        let slope_mid = (SWIPE_LEAN_STRAIGHT_SLOPE + 1.0) / 2.0;
+        let [x, y] = swipe_lean(70.0, 70.0 * slope_mid, ALL, 70.0, 120.0, 1.0);
+        assert!((x - 120.0).abs() < EPS && (y - 60.0).abs() < 1e-6, "{x} {y}");
+        let [_, y] = swipe_lean(70.0, 70.0 * (SWIPE_LEAN_STRAIGHT_SLOPE + 0.01), ALL, 70.0, 120.0, 1.0);
+        assert!(y > 0.0 && y < 3.0, "{y}");
+    }
+
+    #[test]
+    fn lean_respects_bound_directions() {
+        // No up bind: a right-and-up swipe leans only right.
+        assert_eq!(swipe_lean(35.0, -35.0, [true, true, false, true], 70.0, 120.0, 1.0), [60.0, 0.0]);
+        // Nothing bound right: no lean at all, not even the minor part.
+        assert_eq!(swipe_lean(35.0, -30.0, [true, false, true, true], 70.0, 120.0, 1.0), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn lean_is_clamped_and_zoom_scaled() {
+        // Past the threshold the size stops growing; zoomed out, the same
+        // screen distance is a longer virtual one.
+        let [x, y] = swipe_lean(140.0, 140.0, ALL, 70.0, 120.0, 0.5);
+        assert!((x - 240.0).abs() < EPS && (y - 240.0).abs() < EPS, "{x} {y}");
+    }
+}

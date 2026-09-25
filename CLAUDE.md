@@ -213,10 +213,10 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Eight modules carry unit tests — `backdrop.rs` (the most of any, covering the
+Nine modules carry unit tests — `backdrop.rs` (the most of any, covering the
 measurement and the desktop/window blend), `window_manager.rs`, `config.rs`,
 `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
-`text.rs`. They cluster where the logic is
+`text.rs`, `cursor.rs` (the swipe lean's direction, `swipe_lean`). They cluster where the logic is
 pure and the FFI is not, which is the only kind of thing testable in a crate
 this deep in wlroots. The arrange/slotmap tests live in the sibling
 `cce-window-manager` crate — run them with `cargo test -p cce-window-manager`.
@@ -534,9 +534,14 @@ fires once the accumulated travel passes `window_manager { swipe_threshold }`
 until 2026-09-24, when a replay of logged swipes showed every deliberate
 first step travelling 75 or more, so 70 drops only hesitant ones). Short of
 that the camera *leans* toward the bind the
-swipe is heading for, 1:1 with the fingers along the swipe's dominant axis
-only (a hand's sideways drift must not lean the camera vertically, or the
-fire eases a wobble back) and proportional to the travel —
+swipe is heading for, 1:1 with the fingers and in their direction
+(`cursor::swipe_lean`, since 2026-09-24; before that it leaned along the
+dominant axis only): its size comes from the dominant axis, and the
+minor axis leans in proportion to the swipe's slope, so a diagonal swipe
+leans diagonally. A swipe within 15° of an axis
+(`SWIPE_LEAN_STRAIGHT_SLOPE`) still leans straight, since a hand's
+sideways drift leaning the camera was a wobble, and the turn off the axis
+is smooth past that band. The size is proportional to the travel —
 `window_manager { swipe_peek }` screen px at the threshold (default 60, 0
 disables; `WindowManager::swipe_peek_px` — not under `input`, whose
 config.kdl block input.kdl's replaces wholesale), clamped there — and eases
