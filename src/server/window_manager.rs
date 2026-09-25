@@ -217,6 +217,10 @@ pub struct WindowManager {
     /// directional swipe bind at its threshold, screen px (default 60;
     /// 0 disables). See `cursor::swipe_peek_for`.
     pub swipe_peek_px: f64,
+    /// `window_manager { swipe_repeat_peek }`: the lean toward each further
+    /// step once a swipe has switched focus, screen px at
+    /// `swipe_repeat_threshold` (default half of `swipe_peek_px`).
+    pub swipe_repeat_peek_px: f64,
     /// `window_manager { swipe_threshold }`: accumulated swipe travel
     /// (libinput units) at which a swipe bind fires (default 70).
     pub swipe_threshold: f64,
@@ -536,6 +540,7 @@ impl WindowManager {
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;
         self.swipe_peek_px = 60.0;
+        self.swipe_repeat_peek_px = 30.0;
         self.swipe_threshold = 70.0;
         self.swipe_repeat_threshold = 280.0;
         self.touchpad_view_invert = false;
@@ -619,6 +624,7 @@ impl WindowManager {
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;
         self.swipe_peek_px = 60.0;
+        self.swipe_repeat_peek_px = 30.0;
         self.swipe_threshold = 70.0;
         self.swipe_repeat_threshold = 280.0;
         self.touchpad_view_invert = false;

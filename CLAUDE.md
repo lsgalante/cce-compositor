@@ -548,7 +548,11 @@ swipe_repeat_threshold }` of travel (libinput units, default four times
 `swipe_threshold`; `WindowManager::swipe_repeat_threshold`) without
 lifting fires again — three windows over is one long swipe, with more
 resistance after the first step so it does not run on through the next
-window — and a reversal after a step goes straight back. The factor was
+window — and a reversal after a step goes straight back. The lean
+toward a further step is smaller too: it reaches `window_manager {
+swipe_repeat_peek }` (screen px, default half of `swipe_peek`;
+`WindowManager::swipe_repeat_peek_px`) at the repeat threshold, so it
+moves far more slowly per unit of travel than the first step's lean. The factor was
 two at first and read as too eager: replaying a session's logged swipes
 (every `handle_swipe_update` is logged at info with its delta, in
 `$XDG_RUNTIME_DIR/cce/cce.log`) showed ordinary single swipes travelling

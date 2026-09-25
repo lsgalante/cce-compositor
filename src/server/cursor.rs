@@ -3813,7 +3813,11 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     // real move.
     {
         let wm = &mut (*seat.server).wm;
-        let peek_px = wm.swipe_peek_px;
+        // After a step the lean is slower as well as longer to fill: it
+        // reaches `swipe_repeat_peek` (default half of `swipe_peek`) at the
+        // repeat threshold, so a swipe that has just switched focus does
+        // not tug the camera toward the next window as eagerly.
+        let peek_px = if cursor.gesture_triggered { wm.swipe_repeat_peek_px } else { wm.swipe_peek_px };
         let (dx, dy) = (cursor.gesture_dx, cursor.gesture_dy);
         let want = if dx.abs() >= dy.abs() {
             [swipe_peek_for(dx, navigates[0], navigates[1], threshold, peek_px, wm.desk_zoom), 0.0]
