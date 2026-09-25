@@ -83,6 +83,58 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let base_surface = ffi::river_wlr_xdg_popup_get_base((*popup).wlr_popup);
     if ffi::river_wlr_xdg_surface_get_initial_commit(base_surface) {
         handle_reposition(&mut (*popup).reposition, std::ptr::null_mut());
+        return;
+    }
+    update_blur(popup, base_surface);
+}
+
+/// Blur behind the popup as behind a window: a translucent menu is frosted
+/// glass, and with no blur node it is a clear pane over whatever it opened
+/// above. cce-ui paints its context-menu popup as the surface's ROOT plate
+/// for exactly this — translucent, with the frost left to the compositor,
+/// since the client has no backdrop to frost from inside its own popup.
+///
+/// Masked by the surface's own alpha (`ignore_transparent`), so the menu's
+/// rounded corners and its shadow margin stay clear; never the optimized
+/// (cached) blur, which re-bakes on every change beneath a surface stacked
+/// above windows — see `handle_layer_surface_commit`. Sized from the
+/// surface, so it runs every commit: a popup is resized by its configure.
+unsafe fn update_blur(popup: *mut XdgPopup, base_surface: *mut ffi::wlr_xdg_surface) {
+    let server = popup_server(popup);
+    if server.is_null() {
+        return;
+    }
+    let wlr_surface = ffi::river_wlr_xdg_surface_get_surface(base_surface);
+    if wlr_surface.is_null() {
+        return;
+    }
+    ffi::river_scene_node_enable_blur(
+        (*popup).tree as *mut ffi::wlr_scene_node,
+        (*server).wm.layout.window_blur,
+        false,
+        (*server).wm.layout.window_backdrop_blur_ignore_transparent,
+        0,
+        0,
+        ffi::river_wlr_surface_get_width(wlr_surface),
+        ffi::river_wlr_surface_get_height(wlr_surface),
+        0,
+    );
+}
+
+/// The server a popup belongs to, found through its parent's scene node —
+/// a window or a shell surface. Null when the parent is neither.
+unsafe fn popup_server(popup: *mut XdgPopup) -> *mut crate::server::Server {
+    let parent_tree = ffi::river_wlr_scene_tree_get_parent((*popup).tree);
+    if parent_tree.is_null() {
+        return std::ptr::null_mut();
+    }
+    match crate::scene_node_data::SceneNodeData::from_node(parent_tree as *mut ffi::wlr_scene_node) {
+        Some(node_data) => match node_data.data {
+            crate::scene_node_data::SceneNodeDataVal::Window(w) => (*w).server,
+            crate::scene_node_data::SceneNodeDataVal::ShellSurface(s) => (*s).server,
+            _ => std::ptr::null_mut(),
+        },
+        None => std::ptr::null_mut(),
     }
 }
 
@@ -113,16 +165,7 @@ unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *
     anchor.x += parent_lx;
     anchor.y += parent_ly;
 
-    let server = if let Some(node_data) = crate::scene_node_data::SceneNodeData::from_node(parent_tree as *mut ffi::wlr_scene_node) {
-        match node_data.data {
-            crate::scene_node_data::SceneNodeDataVal::Window(w) => (*w).server,
-            crate::scene_node_data::SceneNodeDataVal::ShellSurface(s) => (*s).server,
-            _ => std::ptr::null_mut(),
-        }
-    } else {
-        std::ptr::null_mut()
-    };
-
+    let server = popup_server(popup);
     if server.is_null() {
         return;
     }
