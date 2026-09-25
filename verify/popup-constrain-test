@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# popup-constrain-test — behavioral test for submenu unconstraining in
+# xdg_popup.rs::handle_reposition. wlroots wants the unconstrain box in the
+# ROOT window's surface coordinates; measuring it from a submenu's parent
+# menu instead shifted the screen by the menu's offset, so Chrome's
+# three-dot submenus were pushed past the top edge or failed to flip.
+#
+# Setup: a private cce-shadow instance and verify/clients' popup-nest — a
+# fixed-size window at a known spot with a menu and a nested submenu, each
+# asking to flip sideways and slide vertically (what Chrome asks for).
+# Two cases, each asserting the submenu lands fully on the 1280x720 output:
+#
+#   1. a tall submenu off a menu low in the window: must slide up to fit
+#   2. a submenu off a menu near the right edge: must flip to the left
+#
+# Extra args pass to `cce-shadow start`, so `--bin ../target/release/cce-fx`
+# pins the tree's own build.
+
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(dirname "$here")
+shadow="$repo/scripts/cce-shadow"
+out=$(mktemp)
+inst=""
+fails=0
+
+cleanup() {
+    [ -n "$inst" ] && "$shadow" --instance "$inst" stop >/dev/null 2>&1 || true
+    rm -f "$out"
+}
+trap cleanup EXIT
+
+echo "==> building test clients"
+cargo build --quiet --manifest-path "$here/clients/Cargo.toml"
+client="$here/clients/target/debug/popup-nest"
+
+run_case() {
+    local label=$1; shift
+    : >"$out"
+    inst=$("$shadow" start --new "${start_args[@]}" 2>&1 | sed -n "s/.*claimed instance '\([^']*\)'.*/\1/p")
+    [ -n "$inst" ] || { echo "FAIL: could not claim a shadow instance"; exit 1; }
+    sc() { "$shadow" --instance "$inst" "$@"; }
+    sc ctl idle timeouts 0 0 >/dev/null
+    sc ctl place-next test.popupnest 100 100 >/dev/null
+    sc run "$client" "$@" >"$out" 2>&1 &
+    for _ in $(seq 1 50); do grep -q '^submenu' "$out" && break; sleep 0.2; done
+    sleep 0.5
+    local wx wy mx my sx sy sw sh _x
+    read -r wx wy < <(sc ctl windows --json | jq -r 'select(.app_id=="test.popupnest") | "\(.x) \(.y)"')
+    read -r _x mx my _ _ < <(grep '^menu' "$out") || true
+    read -r _x sx sy sw sh < <(grep '^submenu' "$out") || true
+    if [ -z "${sx:-}" ]; then
+        echo "FAIL: $label: no submenu configure"; cat "$out"; fails=$((fails + 1))
+    else
+        local lx=$((wx + mx + sx)) ly=$((wy + my + sy))
+        if [ $lx -ge 0 ] && [ $ly -ge 0 ] && [ $((lx + sw)) -le 1280 ] && [ $((ly + sh)) -le 720 ]; then
+            echo "PASS: $label: submenu at x $lx..$((lx + sw)) y $ly..$((ly + sh))"
+        else
+            echo "FAIL: $label: submenu at x $lx..$((lx + sw)) y $ly..$((ly + sh)), off the 1280x720 output"
+            fails=$((fails + 1))
+        fi
+    fi
+    sc stop >/dev/null 2>&1 || true
+    inst=""
+}
+
+start_args=("$@")
+run_case "tall submenu slides up" --menu-at 500,250 --sub 200x600
+run_case "submenu near the right edge flips left" --menu-at 700,100 --sub 200x300
+
+[ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

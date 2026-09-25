@@ -16,6 +16,10 @@ path = "src/bin/status_stub.rs"
 name = "float-pair"
 path = "src/bin/float_pair.rs"
 
+[[bin]]
+name = "popup-nest"
+path = "src/bin/popup_nest.rs"
+
 [dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }

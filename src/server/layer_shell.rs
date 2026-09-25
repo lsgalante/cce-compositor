@@ -854,7 +854,12 @@ unsafe extern "C" fn handle_layer_surface_new_popup(listener: *mut ffi::wl_liste
     let layer_surface = crate::container_of!(listener, LayerSurface, new_popup);
     let wlr_xdg_popup = data as *mut ffi::wlr_xdg_popup;
 
-    if let Err(e) = XdgPopup::create(wlr_xdg_popup, (*layer_surface).popup_tree, std::ptr::null_mut()) {
+    if let Err(e) = XdgPopup::create(
+        wlr_xdg_popup,
+        (*layer_surface).popup_tree,
+        std::ptr::null_mut(),
+        (*layer_surface).popup_tree,
+    ) {
         log::error!("Failed to create layer surface popup: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_xdg_popup).resource);
     }

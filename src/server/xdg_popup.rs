@@ -8,6 +8,12 @@ pub struct XdgPopup {
     pub wlr_popup: *mut ffi::wlr_xdg_popup,
     pub tree: *mut ffi::wlr_scene_tree,
     pub capture_tree: *mut ffi::wlr_scene_tree,
+    /// The scene tree of the popup's ROOT — the window's or layer
+    /// surface's popup tree, which sits at that surface's origin — shared
+    /// by every submenu under it. `handle_reposition` measures the screen
+    /// from here, because wlroots wants the unconstrain box in the root
+    /// toplevel surface's coordinates, not the immediate parent's.
+    pub root_tree: *mut ffi::wlr_scene_tree,
 
     pub destroy: ffi::wl_listener,
     pub commit: ffi::wl_listener,
@@ -16,10 +22,14 @@ pub struct XdgPopup {
 }
 
 impl XdgPopup {
+    /// `root` is the tree the popup's root surface's popups live in: for a
+    /// top-level menu the same tree as `parent`, for a submenu the one its
+    /// parent popup carries.
     pub unsafe fn create(
         wlr_popup: *mut ffi::wlr_xdg_popup,
         parent: *mut ffi::wlr_scene_tree,
         capture_parent: *mut ffi::wlr_scene_tree,
+        root: *mut ffi::wlr_scene_tree,
     ) -> Result<*mut Self, &'static str> {
         let base_surface = ffi::river_wlr_xdg_popup_get_base(wlr_popup);
         let tree = ffi::wlr_scene_xdg_surface_create(parent, base_surface);
@@ -40,6 +50,7 @@ impl XdgPopup {
             wlr_popup,
             tree,
             capture_tree,
+            root_tree: root,
             destroy: std::mem::zeroed(),
             commit: std::mem::zeroed(),
             new_popup: std::mem::zeroed(),
@@ -142,7 +153,7 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
     let popup = crate::container_of!(listener, XdgPopup, new_popup);
     let wlr_xdg_popup = data as *mut ffi::wlr_xdg_popup;
 
-    if let Err(e) = XdgPopup::create(wlr_xdg_popup, (*popup).tree, (*popup).capture_tree) {
+    if let Err(e) = XdgPopup::create(wlr_xdg_popup, (*popup).tree, (*popup).capture_tree, (*popup).root_tree) {
         log::error!("Failed to create nested popup: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_xdg_popup).resource);
     }
@@ -175,10 +186,20 @@ unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *
         return;
     }
 
+    // The box goes to wlroots in the ROOT surface's coordinates. For a
+    // top-level menu the parent is the root; for a submenu it is the
+    // menu, and measuring from the menu's corner (as this did until
+    // 2026-09-25) shifted the screen up and left by the menu's offset in
+    // the window, so a tall submenu slid past the real top edge and the
+    // flip decisions were made against the wrong right edge.
+    let mut root_lx: i32 = 0;
+    let mut root_ly: i32 = 0;
+    ffi::wlr_scene_node_coords((*popup).root_tree as *mut ffi::wlr_scene_node, &mut root_lx, &mut root_ly);
+
     let mut constraint = std::mem::zeroed();
     ffi::wlr_output_layout_get_box((*server).om.output_layout, wlr_output, &mut constraint);
-    constraint.x -= parent_lx;
-    constraint.y -= parent_ly;
+    constraint.x -= root_lx;
+    constraint.y -= root_ly;
 
     ffi::wlr_xdg_popup_unconstrain_from_box((*popup).wlr_popup, &mut constraint);
     ffi::wlr_xdg_surface_schedule_configure(ffi::river_wlr_xdg_popup_get_base((*popup).wlr_popup));

@@ -518,6 +518,7 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
         wlr_xdg_popup,
         (*window).popup_tree,
         capture_node,
+        (*window).popup_tree,
     ) {
         log::error!("Failed to create popup: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_xdg_popup).resource);

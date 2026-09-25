@@ -256,6 +256,21 @@ own `target/`, invisible to ccebuild), built on demand by the drivers:
   the status socket's `dismiss` topic, prints one line per push, and shrinks
   to a bar strip on the first one — reacting the way the real bar does.
 
+- **`popup-nest`** — a fixed-size window with a menu (`xdg_popup`) and a
+  submenu nested on it, both asking to flip sideways and slide vertically
+  the way Chrome's three-dot menu does, printing each popup's configured
+  position relative to its parent. `--menu-at`, `--menu`, `--sub-at` and
+  `--sub` move and size them.
+
+`./verify/popup-constrain-test` drives `popup-nest` to prove submenus are
+fitted to the real screen (`xdg_popup.rs::handle_reposition`): a tall
+submenu low in the window slides up to fit, and one near the right edge
+flips left. wlroots wants the unconstrain box in the ROOT window's surface
+coordinates, which each popup finds through `XdgPopup::root_tree`; until
+2026-09-25 the box was measured from a submenu's parent menu, which pushed
+Chrome's tall submenus past the top of the screen and stopped them flipping
+at the right edge.
+
 `./verify/escape-dismiss-test` composes the two to prove all three gates of
 the Escape-closes-status-menus arm (`handle_builtin_binding`): a chorded
 Escape stays out of the arm, a plain Escape while expanded pushes exactly one
