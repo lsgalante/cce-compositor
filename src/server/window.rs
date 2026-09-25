@@ -177,6 +177,12 @@ pub const BORDER_FADE_STEP: f32 = 0.15;
 /// Below this the fade is treated as finished and snapped to its target.
 pub const BORDER_FADE_EPSILON: f32 = 0.004;
 
+/// The hover/dim step in force: [`BORDER_FADE_STEP`], or the whole distance
+/// when animations are off (`cce_ui::motion`), which lands in one tick.
+fn border_fade_step() -> f32 {
+    if cce_ui::motion::enabled() { BORDER_FADE_STEP } else { 1.0 }
+}
+
 /// Per-tick step of the fullscreen-toggle animation, as a fraction of the
 /// remaining distance to the target rect (the pan/border-fade shape).
 pub const FS_ANIM_STEP: f64 = 0.22;
@@ -2070,7 +2076,9 @@ impl Window {
         // that failed to map never starts one. `start_map_fade` snaps rather
         // than ramps when fading is off or this surface opts out (status
         // segments, wallpaper), so there is no second branch here.
-        let fade_ms = (*self.server).wm.layout.fade_in_ms;
+        // Animations off (`cce_ui::motion`) is a zero-length fade, the
+        // same as `surface { fade in_ms=0 }`.
+        let fade_ms = if cce_ui::motion::enabled() { (*self.server).wm.layout.fade_in_ms } else { 0 };
         if self.wants_map_fade() && fade_ms > 0 {
             self.map_fade = 0.0;
         }
@@ -4030,7 +4038,7 @@ impl Window {
             self.adjust_dim = target;
             moving = false;
         } else {
-            self.adjust_dim += delta * BORDER_FADE_STEP;
+            self.adjust_dim += delta * border_fade_step();
             moving = true;
         }
         ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, self.effective_opacity());
@@ -4063,7 +4071,7 @@ impl Window {
                 }
                 continue;
             }
-            self.border_reveal[i] += delta * BORDER_FADE_STEP;
+            self.border_reveal[i] += delta * border_fade_step();
             moving = true;
             changed = true;
         }
@@ -4104,6 +4112,11 @@ impl Window {
     /// already been rewritten to the destination state's scale by the arrange
     /// pass in this same cycle.
     unsafe fn start_fs_anim(&mut self) {
+        // Animations off: the window is simply drawn at its new rect.
+        if !cce_ui::motion::enabled() {
+            self.fs_anim = None;
+            return;
+        }
         if !matches!(self.impl_type, WindowImpl::Toplevel(_))
             || !matches!(self.state, WindowState::Mapped)
             || self.box_geom.width <= 0
@@ -4136,6 +4149,11 @@ impl Window {
         let Some(mut anim) = self.fs_anim else {
             return false;
         };
+        // Switched off mid-flight: land now, with the settling frame.
+        if !cce_ui::motion::enabled() {
+            self.fs_anim = None;
+            return true;
+        }
 
         let (tx, ty, tw, th) = if self.is_fullscreen() {
             let output = self.fullscreen_output();

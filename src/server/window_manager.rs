@@ -2068,9 +2068,13 @@ impl WindowManager {
     /// nothing is left to animate.
     unsafe fn advance_camera_animation(&mut self, dt: f64, frame_target_ns: u64) -> bool {
         let mut done = true;
+        // Animations off (`cce_ui::motion`): every ease below covers its
+        // whole distance in this step, the ramp lands, and a flick does not
+        // coast — the camera still goes where it was sent, just at once.
+        let animate = cce_ui::motion::enabled();
         // Frame-rate independent exponential approach: the same fraction of
         // the remaining distance per unit time whatever the frame pacing.
-        let factor = 1.0 - (-self.scroll_ease_rate() * dt).exp();
+        let factor = if animate { 1.0 - (-self.scroll_ease_rate() * dt).exp() } else { 1.0 };
 
         // Ramp-driven transition: position is a pure function of elapsed
         // time, so a stalled frame never changes where the camera lands.
@@ -2078,7 +2082,7 @@ impl WindowManager {
             (a.start, a.target, frame_target_ns.saturating_sub(a.started_ns) as f64 / 1e6 / a.duration_ms)
         });
         if let Some((start, target, t)) = ramp {
-            if t >= 1.0 {
+            if t >= 1.0 || !animate {
                 self.desk_pan_x = target.pan_x;
                 self.desk_pan_y = target.pan_y;
                 self.desk_zoom = target.zoom;
@@ -2151,6 +2155,10 @@ impl WindowManager {
 
         // Kinetic pan: a trackpad flick's velocity carries the desktop on,
         // decaying under friction; it stalls below one screen pixel per frame.
+        if !animate {
+            self.pan_coast_vx = 0.0;
+            self.pan_coast_vy = 0.0;
+        }
         if self.pan_coast_vx != 0.0 || self.pan_coast_vy != 0.0 {
             self.desk_pan_x += self.pan_coast_vx * dt;
             self.desk_pan_y += self.pan_coast_vy * dt;
@@ -4789,7 +4797,9 @@ impl WindowManager {
             // reply is the duration in ms, always — a client that gets "0"
             // simply exits at once, which is what a disabled fade means.
             "fade-out" => {
-                let ms = self.layout.fade_out_ms;
+                // Animations off answers 0 like a disabled fade: the client
+                // exits at once and nothing ramps.
+                let ms = if cce_ui::motion::enabled() { self.layout.fade_out_ms } else { 0 };
                 let pid = self.pending_ipc_peer_pid;
                 if pid <= 0 {
                     return "0\n".to_string();

@@ -575,7 +575,7 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
     // furniture — wallpaper, status bar — and map once at login, where a
     // fade reads as the desktop failing to draw.
     if (*wlr_layer_surface).current.layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY {
-        let ms = (*server).wm.layout.fade_in_ms;
+        let ms = if cce_ui::motion::enabled() { (*server).wm.layout.fade_in_ms } else { 0 };
         if ms > 0 {
             (*layer_surface).opacity = 0.0;
         }

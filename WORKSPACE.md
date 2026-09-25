@@ -361,6 +361,29 @@ compositor-side and appears the moment a new `cce-fx` is running, but the
 fade-OUT rides `cce-ui`, so a client nobody rebuilt fades in and then vanishes.
 That asymmetry is the symptom of a missed sweep, not of a broken fade.
 
+## Animations switch (DE-wide, per power mode)
+
+`cce_ui::motion::enabled()` is the one question every easing in the DE asks
+before it steps; when it answers no, the motion lands on its target in the
+same frame. That means snap, not freeze: a dropdown still opens and a scroll
+still moves. Its source is **`/run/cce/animations`** (`on`/`off`, missing
+means on), written as root by `cce-power-apply` when the Power page's
+**Animations** lever is part of the mode that is running. It lives under
+/run, not `~/.config`, because the writer runs from udev with no session and
+no `$HOME`. `enabled()` re-reads it at most every 500 ms, so a plug or unplug
+reaches running clients and the compositor without a reload. Set
+`CCE_ANIMATIONS=0` (or `1`) to force it for one process, for testing.
+
+What follows the switch: in cce-ui, the dropdown open/close, the toggle
+slide, the scrollbar raise/sink fade, the wheel glide and kinetic coast
+(`scroll_settings()` reports both off), slider and ramp wheel inertia, and
+the hover highlight. In the compositor, the open/close fades (window,
+overlay layer, and the `fade-out` reply, which answers 0), the camera eases
+(`advance_camera_animation`: overview ramp, focus pans, kinetic pan), the
+border-reveal/adjust-dim fades, and the fullscreen-toggle resize. **A new
+animation should ask `enabled()` too.** Like the close fade, the cce-ui half
+reaches a client only once that client has been rebuilt against the toolkit.
+
 ## Repo hygiene
 
 The repo root and `cce-compositor/scratch/` are littered with **ad-hoc debugging artifacts** — many
