@@ -3856,27 +3856,16 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
             _ => (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref()),
         }
 
-        // No reversal at the fire. The action set a pan target if the
-        // window it focused needs one (from the leaned camera — so a
-        // window the lean already brought fully into view asks for
-        // nothing, and the camera stops right here); it set none if the
-        // window is already in view, and then the camera stays where the
-        // lean left it rather than springing back. Either way the lean
-        // only ever continues in its own direction: a target on the leaned
-        // axis that lies back toward where the swipe began is dropped.
-        {
-            let wm = &mut (*seat.server).wm;
-            for (axis, target) in [(0usize, &mut wm.target_desk_pan_x), (1usize, &mut wm.target_desk_pan_y)] {
-                let here = if axis == 0 { wm.desk_pan_x } else { wm.desk_pan_y };
-                if lean[axis] != 0.0 {
-                    if let Some(t) = *target {
-                        if (t - here) * lean[axis].signum() < 0.0 {
-                            *target = None;
-                        }
-                    }
-                }
-            }
-        }
+        // The action ran against the leaned camera. It set a pan target
+        // only if the window it focused crosses a screen edge from there,
+        // and only as far as bringing it in needs (`pan_into_view`), so a
+        // window the lean left fully in view asks for nothing and the
+        // camera stops right here rather than springing back. A target
+        // that heads back against the lean is kept: it means the lean
+        // pushed the window's near edge off screen, or leaned away from
+        // the side the window sits on, and dropping it (as this did until
+        // 2026-09-24, to keep the camera from ever reversing) left the
+        // newly focused window clipped.
 
         if first_fire {
             let pointer_gestures = (*seat.server).input_manager.pointer_gestures;

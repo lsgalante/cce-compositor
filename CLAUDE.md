@@ -585,11 +585,15 @@ its entry rule. The keyboard's focus chords stay four-way. Only binds whose
 action `cursor::action_navigates` (focus/pan left/right/up/down) peek, and
 only toward a direction that has one; a four-finger overview toggle leaves
 the desktop still. When the bind fires (`handle_swipe_update`) the action
-runs against the camera where the lean left it, and **the camera never
-reverses at the fire**: a window that needs a pan gets its ease from
-there, a window already in view sets no target and the camera simply stops
-where the lean left it, and a target on the leaned axis that would head
-back toward where the swipe began is dropped. It does not predict the
+runs against the camera where the lean left it: a window that needs a pan
+gets its ease from there, and a window already in view sets no target, so
+the camera simply stops where the lean left it rather than springing back.
+**A pan back against the lean is kept.** It arises only when the lean
+pushed the new window's near edge off screen, or leaned away from the side
+it sits on, and it is only as large as bringing the window in needs. Until
+2026-09-24 such a target was dropped so the camera never reversed, which
+left the newly focused window clipped whenever the lean overshot; the
+diagonal lean and aiming by finger direction made that common. It does not predict the
 destination (tried on 2026-09-22 — a lean along the policy's predicted pan,
 nothing at all when the target was in view — and retired the same day: the
 lean is meant to answer the finger, not the layout), and it does not spring
