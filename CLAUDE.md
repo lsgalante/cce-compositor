@@ -551,7 +551,10 @@ not end the swipe** (since 2026-09-24): the accumulated travel restarts
 from zero at the fire, and a further `window_manager {
 swipe_repeat_threshold }` of travel (libinput units, default four times
 `swipe_threshold`; `WindowManager::swipe_repeat_threshold`) without
-lifting fires again — three windows over is one long swipe, with more
+lifting fires again — for a focus or pan bind (`action_navigates`) only:
+any other swipe bind, the four-finger overview toggle included, fires
+once per gesture and the rest of it is ignored (`Cursor::swipe_spent`).
+Three windows over is one long swipe, with more
 resistance after the first step so it does not run on through the next
 window — and a reversal after a step goes straight back. The lean
 toward a further step is smaller too: it reaches `window_manager {

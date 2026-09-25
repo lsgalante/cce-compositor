@@ -101,6 +101,11 @@ pub struct Cursor {
     /// again — it records that clients were sent a cancelled end and hear
     /// nothing more of it; a pinch fires once.
     pub gesture_triggered: bool,
+    /// The in-flight swipe fired a bind that is not a step (anything
+    /// `action_navigates` rejects: the overview toggle, a spawn): the rest
+    /// of the gesture fires nothing more, so one swipe toggles the
+    /// overview once however far the fingers go. Cleared at swipe begin.
+    pub swipe_spent: bool,
     /// Camera offset (virtual units, `[x, y]`) the in-flight swipe has
     /// peeked the desktop by so far — see `swipe_peek_for`. Zero outside a
     /// swipe, and restarts from zero at each fire, like the travel.
@@ -201,6 +206,7 @@ impl Default for Cursor {
             gesture_dy: 0.0,
             gesture_scale: 1.0,
             gesture_triggered: false,
+            swipe_spent: false,
             swipe_peek: [0.0, 0.0],
             inject_swipe_fingers: 3,
             panning_gesture_active: false,
@@ -3702,6 +3708,7 @@ unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *
     cursor.gesture_dx = 0.0;
     cursor.gesture_dy = 0.0;
     cursor.gesture_triggered = false;
+    cursor.swipe_spent = false;
     cursor.swipe_peek = [0.0, 0.0];
 
     log::info!("handle_swipe_begin: fingers={}", (*event).fingers);
@@ -3730,11 +3737,16 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     }
     seat.handle_activity();
 
-    // A bind that already fired does not end the gesture: the travel
-    // restarts from zero at the fire (below), so the fingers can keep
-    // going and step focus again — or turn round and step back — without
-    // lifting. `gesture_triggered` only records that clients were sent
-    // their (cancelled) end, so they hear nothing more of this swipe.
+    // A step does not end the gesture: the travel restarts from zero at
+    // the fire (below), so the fingers can keep going and step focus
+    // again — or turn round and step back — without lifting.
+    // `gesture_triggered` only records that clients were sent their
+    // (cancelled) end, so they hear nothing more of this swipe. Any other
+    // bind (the overview toggle, a spawn) fires once per gesture: after
+    // it the swipe is spent and the rest of it is ignored.
+    if cursor.swipe_spent {
+        return;
+    }
 
     cursor.gesture_dx += (*event).dx;
     cursor.gesture_dy += (*event).dy;
@@ -3802,6 +3814,9 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         // aims along it (`swipe_focus_vector`).
         let travel = (cursor.gesture_dx, cursor.gesture_dy);
         let first_fire = !cursor.gesture_triggered;
+        if !action_navigates(matched_action) {
+            cursor.swipe_spent = true;
+        }
         cursor.gesture_triggered = true;
         // The next step needs a full threshold of fresh travel from here,
         // on both axes: a long swipe steps once per threshold, and a
