@@ -218,7 +218,7 @@ pub struct WindowManager {
     /// 0 disables). See `cursor::swipe_peek_for`.
     pub swipe_peek_px: f64,
     /// `window_manager { swipe_threshold }`: accumulated swipe travel
-    /// (libinput units) at which a swipe bind fires (default 50).
+    /// (libinput units) at which a swipe bind fires (default 70).
     pub swipe_threshold: f64,
     /// `window_manager { swipe_repeat_threshold }`: the travel each FURTHER
     /// fire of the same swipe needs after its first (default four times
@@ -536,8 +536,8 @@ impl WindowManager {
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;
         self.swipe_peek_px = 60.0;
-        self.swipe_threshold = 50.0;
-        self.swipe_repeat_threshold = 200.0;
+        self.swipe_threshold = 70.0;
+        self.swipe_repeat_threshold = 280.0;
         self.touchpad_view_invert = false;
         self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();
@@ -619,8 +619,8 @@ impl WindowManager {
         self.touchpad_view_swipe_tumble = false;
         self.touchpad_view_sensitivity = 1.0;
         self.swipe_peek_px = 60.0;
-        self.swipe_threshold = 50.0;
-        self.swipe_repeat_threshold = 200.0;
+        self.swipe_threshold = 70.0;
+        self.swipe_repeat_threshold = 280.0;
         self.touchpad_view_invert = false;
         self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();

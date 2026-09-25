@@ -452,12 +452,12 @@ pub struct WindowManagerConfig {
     /// config.kdl's wholesale. See "Swipe binds peek" in CLAUDE.md.
     pub swipe_peek: Option<f64>,
     /// Accumulated travel (libinput units, roughly mm) at which a swipe
-    /// bind fires (default 50). KDL: `swipe_threshold (f64)50.0`.
+    /// bind fires (default 70). KDL: `swipe_threshold (f64)70.0`.
     pub swipe_threshold: Option<f64>,
     /// Travel each further fire of the same swipe needs after its first
     /// (default four times `swipe_threshold`), so a swipe that has just
     /// stepped focus meets more resistance before stepping again. KDL:
-    /// `swipe_repeat_threshold (f64)200.0`.
+    /// `swipe_repeat_threshold (f64)280.0`.
     pub swipe_repeat_threshold: Option<f64>,
     /// Reverse the drag direction, on top of the natural-scroll correction
     /// the drag already makes. KDL: `touchpad_view_invert (bool)true`.
@@ -2536,7 +2536,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         state.swipe_threshold = tv
             .and_then(|w| w.swipe_threshold)
             .filter(|v| v.is_finite() && *v > 0.0)
-            .unwrap_or(50.0);
+            .unwrap_or(70.0);
         state.swipe_repeat_threshold = tv
             .and_then(|w| w.swipe_repeat_threshold)
             .filter(|v| v.is_finite() && *v > 0.0)

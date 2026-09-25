@@ -3579,7 +3579,7 @@ unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: 
 
 /// A directional swipe bind fires once the accumulated travel (libinput
 /// units) passes `window_manager { swipe_threshold }`
-/// (`WindowManager::swipe_threshold`, default 50). Until then the camera
+/// (`WindowManager::swipe_threshold`, default 70). Until then the camera
 /// *peeks*: it pans toward the swipe direction in proportion to the
 /// travel, up to `window_manager { swipe_peek }` screen px
 /// (`WindowManager::swipe_peek_px`, default 60) at the threshold, and
