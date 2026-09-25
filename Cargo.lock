@@ -454,6 +454,7 @@ dependencies = [
 [[package]]
 name = "cce-ui"
 version = "0.1.0"
+source = "git+https://github.com/lsgalante/cce-ui.git?rev=60f62b257c6b1038e5cc30ce877f0f92475ce2c4#60f62b257c6b1038e5cc30ce877f0f92475ce2c4"
 dependencies = [
  "ash",
  "bitflags 2.13.1",
@@ -467,6 +468,7 @@ dependencies = [
  "libc",
  "log",
  "naga",
+ "png",
  "raw-window-handle",
  "resvg",
  "rfd",
@@ -484,6 +486,7 @@ dependencies = [
 [[package]]
 name = "cce-window-manager"
 version = "0.1.0"
+source = "git+https://github.com/lsgalante/cce-window-manager.git?rev=dfde58422441b56e4219147a6deea1ee1b099bea#dfde58422441b56e4219147a6deea1ee1b099bea"
 dependencies = [
  "log",
  "serde",
