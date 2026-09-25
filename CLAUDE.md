@@ -570,7 +570,18 @@ with whichever threshold is in force. The lean after a step rides on the focus e
 the step started (its pan target moves with the fingers) instead of
 freezing it, and a lift short of the next threshold eases only that lean
 back out; the steps stay. Clients are sent one cancelled `swipe_end` at
-the first fire and hear nothing more of the gesture. Only binds whose
+the first fire and hear nothing more of the gesture. **A focus swipe aims
+where the fingers went** (since 2026-09-24): when the bind that fires is
+a `focus_*`, the step's travel becomes a direction
+(`cursor::swipe_focus_vector`, each axis's sense read from the bind table,
+so mirrored binds mirror it and an axis without focus binds does not aim),
+and `WindowManager::focus_toward` hands it to the policy crate's
+`vector_focus`: the nearest window center within `window_manager {
+swipe_focus_cone }` degrees (default 45; `swipe_focus_cone_deg`) of a ray
+from the focused window's center takes focus, and a swipe toward nothing
+in the cone changes nothing (logged `focus_toward …: no window within`).
+With no focused window there is no ray, and the four-way action runs for
+its entry rule. The keyboard's focus chords stay four-way. Only binds whose
 action `cursor::action_navigates` (focus/pan left/right/up/down) peek, and
 only toward a direction that has one; a four-finger overview toggle leaves
 the desktop still. When the bind fires (`handle_swipe_update`) the action

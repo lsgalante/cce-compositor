@@ -8,7 +8,7 @@ doctest = false
 
 [dependencies]
 cce-ui = { git = "https://github.com/lsgalante/cce-ui.git", rev = "a530574f7fa1f0938049db92053a17df27756acb" }
-cce-window-manager = { git = "https://github.com/lsgalante/cce-window-manager.git", rev = "416f42c78fb63131121d8f2a86a607c31c829fc5" }
+cce-window-manager = { git = "https://github.com/lsgalante/cce-window-manager.git", rev = "dfde58422441b56e4219147a6deea1ee1b099bea" }
 xkbcommon = "0.7"
 serde = { version = "1", features = ["derive"] }
 nix = { version = "0.29", features = ["signal", "process", "fs", "poll", "resource"] }

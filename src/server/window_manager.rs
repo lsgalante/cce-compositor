@@ -221,6 +221,10 @@ pub struct WindowManager {
     /// step once a swipe has switched focus, screen px at
     /// `swipe_repeat_threshold` (default half of `swipe_peek_px`).
     pub swipe_repeat_peek_px: f64,
+    /// `window_manager { swipe_focus_cone }`: degrees off a focus swipe's
+    /// direction within which a window center can take focus (default 45).
+    /// See `focus_toward`.
+    pub swipe_focus_cone_deg: f64,
     /// `window_manager { swipe_threshold }`: accumulated swipe travel
     /// (libinput units) at which a swipe bind fires (default 70).
     pub swipe_threshold: f64,
@@ -541,6 +545,7 @@ impl WindowManager {
         self.touchpad_view_sensitivity = 1.0;
         self.swipe_peek_px = 60.0;
         self.swipe_repeat_peek_px = 30.0;
+        self.swipe_focus_cone_deg = 45.0;
         self.swipe_threshold = 70.0;
         self.swipe_repeat_threshold = 280.0;
         self.touchpad_view_invert = false;
@@ -625,6 +630,7 @@ impl WindowManager {
         self.touchpad_view_sensitivity = 1.0;
         self.swipe_peek_px = 60.0;
         self.swipe_repeat_peek_px = 30.0;
+        self.swipe_focus_cone_deg = 45.0;
         self.swipe_threshold = 70.0;
         self.swipe_repeat_threshold = 280.0;
         self.touchpad_view_invert = false;
@@ -4656,6 +4662,32 @@ impl WindowManager {
         ctx.focused = Some(WindowId((*win).ref_key));
         for cmd in crate::policy::actions::DefaultPolicy.action(&ctx, crate::config::Action::Fullscreen, None) {
             self.apply(&cmd);
+        }
+    }
+
+    /// Focus toward a free direction `v` (virtual units, y down): the
+    /// three-finger focus swipe's path, which has a vector where a key has
+    /// one of four directions (`policy::focus::vector_focus`). The nearest
+    /// window center within `swipe_focus_cone_deg` of the ray from the
+    /// focused window's center takes focus; with none, focus stays. With
+    /// no focused window in the focus ring there is no ray, so `fallback`
+    /// (the four-way action the swipe was bound to) runs instead, for its
+    /// entry rule.
+    pub unsafe fn focus_toward(&mut self, v: (f64, f64), fallback: &crate::config::Action) {
+        use crate::policy::api::Compositor;
+        self.stop_panning_animation();
+        let ctx = self.build_action_ctx();
+        let has_ray = ctx.windows.iter().any(|w| w.focus_cyclable && Some(w.id) == ctx.focused);
+        if !has_ray {
+            self.execute_action(fallback, None);
+            return;
+        }
+        let cmds = crate::policy::actions::focus_toward(&ctx, v, self.swipe_focus_cone_deg);
+        if cmds.is_empty() {
+            log::info!("focus_toward {:?}: no window within {}°", v, self.swipe_focus_cone_deg);
+        }
+        for cmd in &cmds {
+            self.apply(cmd);
         }
     }
 

@@ -3610,6 +3610,47 @@ fn swipe_peek_for(d: f64, neg: bool, pos: bool, threshold: f64, peek_px: f64, zo
     }
 }
 
+fn is_directional_focus(action: crate::config::Action) -> bool {
+    use crate::config::Action;
+    matches!(action, Action::FocusLeft | Action::FocusRight | Action::FocusUp | Action::FocusDown)
+}
+
+/// The sense a swipe along `finger_dir` ("left", "right", "up", "down")
+/// gives its axis when aiming focus: +1 when its bind focuses the way the
+/// fingers moved, -1 when it focuses the opposite way, `None` when the
+/// first bind that way is not a focus on that axis (so the axis does not
+/// aim). First match wins, as in the fire itself.
+fn focus_axis_sense(binds: &[crate::config::GestureBind], fingers: u32, mods: u32, finger_dir: &str) -> Option<f64> {
+    use crate::config::Action;
+    let gb = binds
+        .iter()
+        .find(|gb| gb.gesture_type == "swipe" && gb.fingers == fingers && gb.mods == mods && gb.direction == finger_dir)?;
+    let focus_dir = match gb.action {
+        Action::FocusLeft => "left",
+        Action::FocusRight => "right",
+        Action::FocusUp => "up",
+        Action::FocusDown => "down",
+        _ => return None,
+    };
+    let axis = |d: &str| if d == "left" || d == "right" { 0 } else { 1 };
+    if axis(focus_dir) != axis(finger_dir) {
+        return None;
+    }
+    Some(if focus_dir == finger_dir { 1.0 } else { -1.0 })
+}
+
+/// The direction a focus swipe aims in, from this step's `travel`: each
+/// axis's travel times its sense (`focus_axis_sense`), zero on an axis
+/// with no focus bind the way the fingers went. `None` when neither axis
+/// aims.
+fn swipe_focus_vector(binds: &[crate::config::GestureBind], fingers: u32, mods: u32, travel: (f64, f64)) -> Option<(f64, f64)> {
+    let (dx, dy) = travel;
+    let sx = if dx != 0.0 { focus_axis_sense(binds, fingers, mods, if dx < 0.0 { "left" } else { "right" }) } else { None };
+    let sy = if dy != 0.0 { focus_axis_sense(binds, fingers, mods, if dy < 0.0 { "up" } else { "down" }) } else { None };
+    let v = (sx.map_or(0.0, |s| s * dx), sy.map_or(0.0, |s| s * dy));
+    (v != (0.0, 0.0)).then_some(v)
+}
+
 /// Slope (minor over major travel) below which a swipe counts as straight:
 /// tan 15°. Within it the lean stays on the dominant axis, since a hand
 /// swiping left drifts a little up or down, and leaning with that drift
@@ -3757,6 +3798,9 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
 
     if matched_action != crate::config::Action::None {
         log::info!("Swipe gesture matched action: {:?}", matched_action);
+        // This step's travel, before it restarts below: a focus swipe
+        // aims along it (`swipe_focus_vector`).
+        let travel = (cursor.gesture_dx, cursor.gesture_dy);
         let first_fire = !cursor.gesture_triggered;
         cursor.gesture_triggered = true;
         // The next step needs a full threshold of fresh travel from here,
@@ -3801,7 +3845,16 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         } else {
             matched_action
         };
-        (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref());
+        // A focus swipe aims where the fingers went, not at one of four
+        // directions: the bind table gives each axis its sense (a
+        // `focus_left` on `swipe3_left` follows the fingers, one on
+        // `swipe3_right` mirrors them), and the window manager picks the
+        // nearest window center along the result.
+        let focus_vector = swipe_focus_vector(&(*seat.server).wm.gesture_binds, (*event).fingers, modifiers, travel);
+        match focus_vector {
+            Some(v) if is_directional_focus(matched_action) => (*seat.server).wm.focus_toward(v, &matched_action),
+            _ => (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref()),
+        }
 
         // No reversal at the fire. The action set a pan target if the
         // window it focused needs one (from the leaned camera — so a
@@ -4467,4 +4520,41 @@ mod tests {
         let [x, y] = swipe_lean(140.0, 140.0, ALL, 70.0, 120.0, 0.5);
         assert!((x - 240.0).abs() < EPS && (y - 240.0).abs() < EPS, "{x} {y}");
     }
+
+    fn bind(direction: &str, action: crate::config::Action) -> crate::config::GestureBind {
+        crate::config::GestureBind {
+            mods: 0,
+            gesture_type: "swipe".into(),
+            fingers: 3,
+            direction: direction.into(),
+            action,
+            command: None,
+        }
+    }
+
+    #[test]
+    fn focus_vector_follows_natural_binds() {
+        use crate::config::Action::*;
+        let binds = [bind("left", FocusLeft), bind("right", FocusRight), bind("up", FocusUp), bind("down", FocusDown)];
+        assert_eq!(swipe_focus_vector(&binds, 3, 0, (50.0, -30.0)), Some((50.0, -30.0)));
+        // Another finger count or chord has no binds here.
+        assert_eq!(swipe_focus_vector(&binds, 4, 0, (50.0, -30.0)), Option::None);
+    }
+
+    #[test]
+    fn focus_vector_mirrors_mirrored_binds() {
+        use crate::config::Action::*;
+        let binds = [bind("left", FocusRight), bind("right", FocusLeft), bind("up", FocusDown), bind("down", FocusUp)];
+        assert_eq!(swipe_focus_vector(&binds, 3, 0, (50.0, -30.0)), Some((-50.0, 30.0)));
+    }
+
+    #[test]
+    fn focus_vector_ignores_an_axis_without_focus_binds() {
+        use crate::config::Action::*;
+        // Up/down pan rather than focus: a diagonal swipe aims sideways only.
+        let binds = [bind("left", FocusLeft), bind("right", FocusRight), bind("up", PanUp), bind("down", PanDown)];
+        assert_eq!(swipe_focus_vector(&binds, 3, 0, (50.0, -30.0)), Some((50.0, 0.0)));
+        assert_eq!(swipe_focus_vector(&binds, 3, 0, (0.0, -30.0)), Option::None);
+    }
+
 }
