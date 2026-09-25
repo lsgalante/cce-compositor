@@ -539,7 +539,27 @@ fire eases a wobble back) and proportional to the travel —
 disables; `WindowManager::swipe_peek_px` — not under `input`, whose
 config.kdl block input.kdl's replaces wholesale), clamped there — and eases
 back to where it started if the fingers lift first (`handle_swipe_end`), so
-a hesitant swipe shows where it would go without going. Only binds whose
+a hesitant swipe shows where it would go without going. **A fire does
+not end the swipe** (since 2026-09-24): the accumulated travel restarts
+from zero at the fire, and a further `window_manager {
+swipe_repeat_threshold }` of travel (libinput units, default four times
+`swipe_threshold`; `WindowManager::swipe_repeat_threshold`) without
+lifting fires again — three windows over is one long swipe, with more
+resistance after the first step so it does not run on through the next
+window — and a reversal after a step goes straight back. The factor was
+two at first and read as too eager: replaying a session's logged swipes
+(every `handle_swipe_update` is logged at info with its delta, in
+`$XDG_RUNTIME_DIR/cce/cce.log`) showed ordinary single swipes travelling
+150-250 units, so many stepped twice and then reversed to correct
+(left-left-right-right); four times removes nearly all of those while a
+long deliberate swipe still steps again. libinput's swipe deltas are
+accelerated, so a fast flick covers far more travel than a slow push of
+the same length. The lean scales
+with whichever threshold is in force. The lean after a step rides on the focus ease
+the step started (its pan target moves with the fingers) instead of
+freezing it, and a lift short of the next threshold eases only that lean
+back out; the steps stay. Clients are sent one cancelled `swipe_end` at
+the first fire and hear nothing more of the gesture. Only binds whose
 action `cursor::action_navigates` (focus/pan left/right/up/down) peek, and
 only toward a direction that has one; a four-finger overview toggle leaves
 the desktop still. When the bind fires (`handle_swipe_update`) the action

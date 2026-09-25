@@ -96,10 +96,14 @@ pub struct Cursor {
     pub gesture_dx: f64,
     pub gesture_dy: f64,
     pub gesture_scale: f64,
+    /// A bind has fired during the in-flight swipe or pinch. For a swipe
+    /// it does not end the gesture — the travel restarts and can fire
+    /// again — it records that clients were sent a cancelled end and hear
+    /// nothing more of it; a pinch fires once.
     pub gesture_triggered: bool,
     /// Camera offset (virtual units, `[x, y]`) the in-flight swipe has
     /// peeked the desktop by so far — see `swipe_peek_for`. Zero outside a
-    /// swipe, and once the swipe's bind has fired or the fingers lifted.
+    /// swipe, and restarts from zero at each fire, like the travel.
     pub swipe_peek: [f64; 2],
     /// Finger count of a staged injected swipe (`pointer-swipe begin`),
     /// carried into its updates the way libinput repeats it per event.
@@ -3580,7 +3584,10 @@ unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: 
 /// travel, up to `window_manager { swipe_peek }` screen px
 /// (`WindowManager::swipe_peek_px`, default 60) at the threshold, and
 /// eases back if the fingers lift short of it — so a hesitant
-/// three-finger swipe shows where it would go without going.
+/// three-finger swipe shows where it would go without going. Firing does
+/// not end the swipe: the travel restarts from zero, and each further
+/// `swipe_repeat_threshold` of travel (default four times the first) steps
+/// again — or back, on a reversal — until the fingers lift.
 
 /// Does firing `action` carry the view in the swipe's direction? Only
 /// such binds peek the camera beforehand: an overview toggle or a spawn
@@ -3646,11 +3653,11 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     }
     seat.handle_activity();
 
-
-
-    if cursor.gesture_triggered {
-        return;
-    }
+    // A bind that already fired does not end the gesture: the travel
+    // restarts from zero at the fire (below), so the fingers can keep
+    // going and step focus again — or turn round and step back — without
+    // lifting. `gesture_triggered` only records that clients were sent
+    // their (cancelled) end, so they hear nothing more of this swipe.
 
     cursor.gesture_dx += (*event).dx;
     cursor.gesture_dy += (*event).dy;
@@ -3671,7 +3678,17 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         0
     };
 
-    let threshold = (*seat.server).wm.swipe_threshold;
+    // The first step of a swipe comes at `swipe_threshold`; every further
+    // one at `swipe_repeat_threshold` (default four times that), so a swipe
+    // that has just switched focus meets resistance before switching
+    // again rather than running on through the next window. The lean
+    // scales with the threshold in force, so it stays a preview of how
+    // far the fingers are from the next step.
+    let threshold = if cursor.gesture_triggered {
+        (*seat.server).wm.swipe_repeat_threshold
+    } else {
+        (*seat.server).wm.swipe_threshold
+    };
     let mut matched_action = crate::config::Action::None;
     let mut matched_command = None;
     // Which directions this finger count + chord could still fire a
@@ -3704,7 +3721,14 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
 
     if matched_action != crate::config::Action::None {
         log::info!("Swipe gesture matched action: {:?}", matched_action);
+        let first_fire = !cursor.gesture_triggered;
         cursor.gesture_triggered = true;
+        // The next step needs a full threshold of fresh travel from here,
+        // on both axes: a long swipe steps once per threshold, and a
+        // reversal after a step goes back rather than first having to
+        // undo the travel that got here.
+        cursor.gesture_dx = 0.0;
+        cursor.gesture_dy = 0.0;
 
         // The lean is where the camera IS now: the action runs against
         // it, and whatever it asks for is applied from here. The one rule
@@ -3765,14 +3789,16 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
             }
         }
 
-        let pointer_gestures = (*seat.server).input_manager.pointer_gestures;
-        if !pointer_gestures.is_null() {
-            ffi::wlr_pointer_gestures_v1_send_swipe_end(
-                pointer_gestures,
-                seat.wlr_seat,
-                (*event).time_msec,
-                true, // cancelled: true
-            );
+        if first_fire {
+            let pointer_gestures = (*seat.server).input_manager.pointer_gestures;
+            if !pointer_gestures.is_null() {
+                ffi::wlr_pointer_gestures_v1_send_swipe_end(
+                    pointer_gestures,
+                    seat.wlr_seat,
+                    (*event).time_msec,
+                    true, // cancelled: true
+                );
+            }
         }
         return;
     }
@@ -3796,12 +3822,25 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         };
         let delta = [want[0] - cursor.swipe_peek[0], want[1] - cursor.swipe_peek[1]];
         if delta != [0.0, 0.0] {
-            wm.stop_panning_animation();
+            if cursor.gesture_triggered {
+                // After a step the camera may still be easing the window
+                // it focused into view. The lean rides on top of that ease
+                // rather than freezing it short: the ease's target moves
+                // with the fingers, and the lift (`handle_swipe_end`)
+                // moves it back.
+                if let Some(t) = wm.target_desk_pan_x.as_mut() { *t += delta[0]; }
+                if let Some(t) = wm.target_desk_pan_y.as_mut() { *t += delta[1]; }
+            } else {
+                wm.stop_panning_animation();
+            }
             wm.queue_pan(delta[0], delta[1]);
             cursor.swipe_peek = want;
         }
     }
 
+    if cursor.gesture_triggered {
+        return;
+    }
     let server = seat.server;
     let pointer_gestures = (*server).input_manager.pointer_gestures;
     if !pointer_gestures.is_null() {
@@ -3829,22 +3868,28 @@ unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mu
 
     log::info!("handle_swipe_end: cancelled={}", (*event).cancelled);
 
-    if cursor.gesture_triggered {
-        cursor.gesture_triggered = false;
-        return;
-    }
+    let fired = std::mem::replace(&mut cursor.gesture_triggered, false);
 
-    // Lifted short of the threshold: ease the camera back to where the
-    // swipe found it.
+    // Lifted short of a threshold — the first, or the next one after a
+    // step — ease the lean back out: to where the swipe found the camera,
+    // or, after a step, to where the step's own ease was heading before
+    // the lean moved its target along (`handle_swipe_update`). The steps
+    // themselves stay: the camera never returns to where the swipe began.
     let peek = std::mem::replace(&mut cursor.swipe_peek, [0.0, 0.0]);
     if peek != [0.0, 0.0] {
         let wm = &mut (*seat.server).wm;
         wm.desk_pan_x += wm.pan_pending[0];
         wm.desk_pan_y += wm.pan_pending[1];
         wm.pan_pending = [0.0, 0.0];
-        wm.target_desk_pan_x = Some(wm.desk_pan_x - peek[0]);
-        wm.target_desk_pan_y = Some(wm.desk_pan_y - peek[1]);
+        wm.target_desk_pan_x = Some(wm.target_desk_pan_x.unwrap_or(wm.desk_pan_x) - peek[0]);
+        wm.target_desk_pan_y = Some(wm.target_desk_pan_y.unwrap_or(wm.desk_pan_y) - peek[1]);
         wm.start_panning_animation();
+    }
+
+    // Clients heard a cancelled end at the first step; the lift after one
+    // is not theirs.
+    if fired {
+        return;
     }
 
     let server = seat.server;
