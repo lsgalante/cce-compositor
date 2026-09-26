@@ -157,6 +157,19 @@ fn borrowable(saved: &SavedWindowState, program: Option<&str>) -> bool {
     !saved.title.is_empty() && same_program(saved, program)
 }
 
+/// Whether the session restore can relaunch a window from this saved
+/// command. A Wine/Proton window records its WINDOWS-side exe path
+/// (`C:\...` or `C:/...`) — /bin/sh can never run it — and an empty
+/// command has nothing to run. `spawn_restored_one` skips such entries and
+/// `create_restore_placeholders` draws no plate for them: Ubisoft Connect's
+/// stood a minute over the empty desk every login (2026-09-26), waiting for
+/// a window nothing had started.
+fn relaunchable(cmdline: &str) -> bool {
+    let b = cmdline.trim().as_bytes();
+    let windows_path = b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'/' || b[2] == b'\\');
+    !b.is_empty() && !windows_path
+}
+
 /// Whether a window mapping as (`app_id`, `program`) is the reconnect of
 /// one that vanished as (`gone_app_id`, `gone_program`): the same app_id
 /// AND the same program. An app_id alone is too coarse — every Proton
@@ -1000,6 +1013,13 @@ impl WindowManager {
             if entry.width == 0 || entry.height == 0 {
                 continue;
             }
+            // Nothing is launched for this entry, so no window is coming to
+            // replace the plate: it would stand there until the sweep, a
+            // minute of frame over empty desk. The entry stays queued, so
+            // the app still lands on its saved spot if the user starts it.
+            if !relaunchable(&entry.cmdline) {
+                continue;
+            }
             let mut color = if entry.focused {
                 self.layout.border_color_focused
             } else {
@@ -1023,6 +1043,11 @@ impl WindowManager {
                 h: entry.height,
             });
         }
+        log::info!(
+            "[Restore] {} placeholder(s) for {} queued window(s)",
+            self.restore_placeholders.len(),
+            self.restore_queue.len()
+        );
         if self.restore_placeholders.is_empty() {
             return;
         }
@@ -1702,25 +1727,14 @@ impl WindowManager {
     }
 
     fn spawn_restored_one(w: &SavedWindowState, spawned_any: &mut bool) {
-        // A wine/Proton window records its WINDOWS-side exe path
-        // (C:\... or C:/...) as the command — /bin/sh can never run
-        // it, so each one burns a silent no-op fork per login. Skip
-        // them outright.
-        let cmd_trimmed = w.cmdline.trim();
-        let bytes = cmd_trimmed.as_bytes();
-        let is_windows_path = bytes.len() > 2
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && (bytes[2] == b'/' || bytes[2] == b'\\');
-        if is_windows_path {
-            log::info!(
-                "Skipping unrestorable Windows-path command for {:?}: {}",
-                w.app_id,
-                cmd_trimmed
-            );
-            return;
-        }
-        if w.cmdline.is_empty() {
+        if !relaunchable(&w.cmdline) {
+            if !w.cmdline.trim().is_empty() {
+                log::info!(
+                    "Skipping unrestorable Windows-path command for {:?}: {}",
+                    w.app_id,
+                    w.cmdline.trim()
+                );
+            }
             return;
         }
         // Small stagger so N clients don't all hit Vulkan device
@@ -7685,6 +7699,16 @@ mod tests {
         assert!(!saved_by_program(&tray, UPC));
         assert!(!saved_by_program(&tray, ""));
         assert!(!saved_by_program(&proton_entry("", "steam_proton"), EXPLORER));
+    }
+
+    #[test]
+    fn windows_paths_and_empty_commands_are_not_relaunched() {
+        assert!(relaunchable("/usr/bin/cce-files"));
+        assert!(relaunchable("cce-terminal --working-directory='/tmp'"));
+        assert!(!relaunchable(&format!("{UPC} -upc_desktop_mode")));
+        assert!(!relaunchable("D:/Games/thing.exe"));
+        assert!(!relaunchable("   "));
+        assert!(!relaunchable(""));
     }
 
     #[test]

@@ -683,6 +683,12 @@ the **bare name** whenever the name's first `PATH` hit is a different file
 from the one running (`path_shadowed_name`), and the restore's `sh -c`
 resolves it the way the launcher did. The absolute path is kept when PATH
 agrees with it.
+Wine/Proton windows record their Windows-side exe path (`C:\...`) as the
+command, which `/bin/sh` cannot run, so the restore never relaunches them
+(`relaunchable`) — and draws no login placeholder for them either: until
+2026-09-26 Ubisoft Connect's plate stood a minute over the empty desk,
+waiting for a window nothing had started. The entry stays queued, so the app
+still lands on its saved spot when the user launches it.
 A restored **floating** window is recalled into the current view
 (`policy::camera::recalled_origin`, applied at the end of `try_restore`)
 when its remembered position would show less than a quarter of it: the
