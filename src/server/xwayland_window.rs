@@ -303,6 +303,14 @@ pub fn is_wine_exe(exe: &str) -> bool {
     matches!(name, "wine-preloader" | "wine64-preloader" | "wine" | "wine64")
 }
 
+/// The minimum an X11 client revealed along one axis by asking for
+/// `requested` right after being configured to `sent`: larger than it was
+/// given means it would not go that small. `None` when that says nothing
+/// new (not a refusal, or no larger than the minimum already known).
+pub fn learned_min(sent: u32, requested: u32, known_min: u32) -> Option<u32> {
+    (requested > sent && requested > known_min).then_some(requested)
+}
+
 /// Whether `_MOTIF_WM_HINTS` (flags, functions, decorations, …) offer the
 /// maximize function. Without the functions flag nothing is restricted;
 /// with MWM_FUNC_ALL set the listed functions are the ones REMOVED.
@@ -995,6 +1003,32 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     // fullscreen state Wine no longer saw as true — every Fullscreen press
     // on Trackmania undid itself within the same frame. Held at the
     // fullscreen size, Wine sees a screen-sized rect and keeps the state.
+    // An app with a minimum size refuses a smaller configure by asking for
+    // its minimum back, and Wine carries no minimum for a resizable window
+    // into WM_NORMAL_HINTS (only a fixed-size one's min == max). Granted as
+    // a request, every step of a shrinking drag was answered with the old
+    // size — Ubisoft Connect fought the pointer at 1214x804 (2026-09-26).
+    // So a refusal during an interactive resize is learned as the minimum,
+    // and the drag clamps there (`DimensionsHint::clamp` in the seat op).
+    if (*window).wm_requested.resizing {
+        let (req_w, req_h) = (from_x11((*event).width as i32, s) as u32, from_x11((*event).height as i32, s) as u32);
+        let hint = (*window).wm_scheduled.dimensions_hint;
+        let min_w = (*window).configure_sent.width.and_then(|sent| learned_min(sent, req_w, hint.min_width));
+        let min_h = (*window).configure_sent.height.and_then(|sent| learned_min(sent, req_h, hint.min_height));
+        if min_w.is_some() || min_h.is_some() {
+            let learned = crate::window::DimensionsHint {
+                min_width: min_w.unwrap_or(hint.min_width),
+                min_height: min_h.unwrap_or(hint.min_height),
+                ..hint
+            };
+            log::info!(
+                "XWayland configure request: '{}' refused a smaller size; minimum learned as {}x{}",
+                title, learned.min_width, learned.min_height,
+            );
+            (*window).set_dimensions_hint(learned);
+        }
+    }
+
     let hold_size = is_tiled || is_fullscreen || in_output_change_grace();
     if hold_size && !is_tiled {
         log::info!(
@@ -1234,6 +1268,17 @@ unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, da
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicU32;
+
+    #[test]
+    fn a_refused_shrink_is_a_minimum() {
+        // Ubisoft Connect: dragged to 1100 wide, asks for 1214 back.
+        assert_eq!(learned_min(1100, 1214, 0), Some(1214));
+        // Already known: nothing new.
+        assert_eq!(learned_min(1100, 1214, 1214), None);
+        // Taking the size given, or a smaller one, refuses nothing.
+        assert_eq!(learned_min(1214, 1214, 0), None);
+        assert_eq!(learned_min(1300, 1214, 0), None);
+    }
 
     #[test]
     fn motif_maximize_function() {
