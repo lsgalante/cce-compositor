@@ -269,7 +269,11 @@ own `target/`, invisible to ccebuild), built on demand by the drivers:
   advertises, sends SYSTEM_TRAY_REQUEST_DOCK, paints one solid colour and
   prints each milestone (docked, embedded, every button it receives).
   `--recolor SECS COLOR` and `--exit-after SECS` exercise the icon updating
-  and leaving. Needs `cce-shadow start --xwayland`; see
+  and leaving. `--popup WxH` makes a right-click open an override-redirect
+  popup the way a Windows tray app does — bottom-aligned at the click and
+  clamped to the screen top, i.e. over a top bar — which reports every move
+  and closes on a press outside it: the bridge's popup placement and the
+  `clickaway` topic, together. Needs `cce-shadow start --xwayland`; see
   `../cce-status-interface/CLAUDE.md` for the bridge it tests.
 
 - **`or-flip`** — an X11 window that maps override-redirect, then is
@@ -751,6 +755,17 @@ headless seat has no keyboard and Chromium crashes in
   `modifiers`, `dismiss`, or `backdrop <app_id>`) and receives text lines on every
   change. This feeds the status bar (`cce-status-interface`). The main loop pushes
   updates through a `StatusSender` mpsc handle.
+
+  **`clickaway`** is a one-shot topic (like `dismiss` and `shortcuts`): a
+  `press` line for each button press that lands on NO X11 surface while some
+  override-redirect X window is showing (`handle_button`). Xwayland only sees
+  the pointer over its own surfaces, so an X11 popup — a Wine tray app's
+  menu above all — never hears a press on a Wayland window and stays open;
+  until 2026-09-26 only a click on one of the app's own X windows closed it.
+  The tray bridge (`cce-status-interface`'s `cce-xembed-tray`) subscribes and
+  closes the popup its forwarded click opened by addressing it a press just
+  outside itself. The bridge's hidden icon containers have no scene tree, so
+  they never count as showing.
 
   **What may start a transaction.** `dirty_windowing()` schedules a full
   manage/arrange/render pass, and on an idle desktop the answer to "why is the

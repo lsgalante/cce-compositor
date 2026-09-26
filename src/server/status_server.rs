@@ -53,6 +53,13 @@ pub enum StatusMsg {
     /// `activated|deactivated <session> <id> <time_msec>`, for every
     /// `shortcuts` subscriber — in practice the one portal backend.
     Shortcut(String),
+    /// A button press that landed on no X11 surface while an X11
+    /// override-redirect window was showing: one line, `press`, for every
+    /// `clickaway` subscriber. An X11 popup only hears clicks on its own
+    /// client's X windows (Xwayland's pointer never reaches it over a
+    /// Wayland surface), so the tray bridge closes the popup it opened on
+    /// this cue — see `cce-status-interface`'s `cce-xembed-tray`.
+    ClickAway,
 }
 
 /// Subscription types that the status bar script can request.
@@ -71,6 +78,9 @@ enum Subscription {
     /// `shortcuts` — one-shot portal shortcut press/release lines only
     /// (see `StatusMsg::Shortcut`); never receives state pushes.
     Shortcuts,
+    /// `clickaway` — one-shot `press` lines only (see
+    /// `StatusMsg::ClickAway`); never receives state pushes.
+    ClickAway,
     /// `backdrop <app_id>` — what THIS segment is composited over, so it can
     /// adapt its own text contrast. Lines are `<luma> <spread>`, both 0-100.
     Backdrop(String),
@@ -93,6 +103,7 @@ impl Subscription {
             "adjust" => Subscription::Adjust,
             "dismiss" => Subscription::Dismiss,
             "shortcuts" => Subscription::Shortcuts,
+            "clickaway" => Subscription::ClickAway,
             _ => Subscription::Unknown,
         }
     }
@@ -145,6 +156,46 @@ impl StatusSender {
         if self.tx.send(StatusMsg::Shortcut(line.to_string())).is_ok() {
             wake_fd(&self.wake);
         }
+    }
+
+    /// Report a press that missed every X11 surface (`StatusMsg::ClickAway`).
+    pub fn send_click_away(&self) {
+        if self.tx.send(StatusMsg::ClickAway).is_ok() {
+            wake_fd(&self.wake);
+        }
+    }
+}
+
+/// Write each of `lines` to every client subscribed to `topic`, dropping
+/// the clients whose socket has gone away. One-shot topics only: nothing is
+/// remembered for a client that subscribes later.
+fn push_one_shot(clients: &mut Vec<Client>, topic: &Subscription, lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    let mut dead_clients = Vec::new();
+    for (i, client) in clients.iter_mut().enumerate() {
+        if &client.subscription != topic {
+            continue;
+        }
+        for line in lines {
+            match client
+                .stream
+                .write_all(line.as_bytes())
+                .and_then(|_| client.stream.write_all(b"\n"))
+            {
+                Ok(_) => {}
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => {
+                    dead_clients.push(i);
+                    break;
+                }
+            }
+        }
+    }
+    dead_clients.dedup();
+    for i in dead_clients.into_iter().rev() {
+        clients.remove(i);
     }
 }
 
@@ -327,6 +378,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
         // Process incoming updates from the main loop
         let mut dismiss_events: Vec<String> = Vec::new();
         let mut shortcut_events: Vec<String> = Vec::new();
+        let mut clickaway_events: Vec<String> = Vec::new();
         loop {
             match rx.try_recv() {
                 Ok(StatusMsg::State(update)) => {
@@ -338,6 +390,9 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
                 }
                 Ok(StatusMsg::Shortcut(line)) => {
                     shortcut_events.push(line);
+                }
+                Ok(StatusMsg::ClickAway) => {
+                    clickaway_events.push("press".to_string());
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -377,33 +432,10 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
             }
         }
 
-        // Portal shortcut edges go only to `shortcuts` subscribers, in order.
-        if !shortcut_events.is_empty() {
-            let mut dead_clients = Vec::new();
-            for (i, client) in clients.iter_mut().enumerate() {
-                if client.subscription != Subscription::Shortcuts {
-                    continue;
-                }
-                for line in &shortcut_events {
-                    match client
-                        .stream
-                        .write_all(line.as_bytes())
-                        .and_then(|_| client.stream.write_all(b"\n"))
-                    {
-                        Ok(_) => {}
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                        Err(_) => {
-                            dead_clients.push(i);
-                            break;
-                        }
-                    }
-                }
-            }
-            dead_clients.dedup();
-            for i in dead_clients.into_iter().rev() {
-                clients.remove(i);
-            }
-        }
+        // Portal shortcut edges go only to `shortcuts` subscribers, in
+        // order; click-aways only to `clickaway` subscribers.
+        push_one_shot(&mut clients, &Subscription::Shortcuts, &shortcut_events);
+        push_one_shot(&mut clients, &Subscription::ClickAway, &clickaway_events);
 
         // If we got a new update, push it to all clients
         if has_new_update {
@@ -413,7 +445,10 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
                 for (i, client) in clients.iter_mut().enumerate() {
                     // Dismiss and shortcuts subscribers get one-shot events
                     // only, never state pushes.
-                    if matches!(client.subscription, Subscription::Dismiss | Subscription::Shortcuts) {
+                    if matches!(
+                        client.subscription,
+                        Subscription::Dismiss | Subscription::Shortcuts | Subscription::ClickAway
+                    ) {
                         continue;
                     }
                     let msg = format_for_subscription(&client.subscription, update);
@@ -493,7 +528,10 @@ fn format_for_subscription(sub: &Subscription, update: &StatusUpdate) -> String 
                 None => "unknown".to_string(),
             }
         }
-        Subscription::Dismiss | Subscription::Shortcuts | Subscription::Unknown => String::new(),
+        Subscription::Dismiss
+        | Subscription::Shortcuts
+        | Subscription::ClickAway
+        | Subscription::Unknown => String::new(),
     }
 }
 

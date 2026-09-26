@@ -12,11 +12,18 @@
 //   button N press|release x,y root rx,ry
 //   recolored 0xAARRGGBB
 //   undocked                      (reparented back to the root)
+//   popup at X,Y WxH              (--popup: opened, then after any move)
+//   popup dismissed by press at X,Y
 //
 // Args: --color 0xAARRGGBB (premultiplied pixel, default opaque red)
 //       --recolor SECS 0xAARRGGBB   repaint in a second colour later
 //       --exit-after SECS           destroy the window and exit
 //       --size N                    window size, default 32
+//       --popup WxH                 on a right-click, open an override-
+//                                   redirect popup the way a Windows tray
+//                                   app does: bottom-aligned at the click's
+//                                   root point and clamped to the screen
+//                                   top; closed by a press outside it
 
 use std::time::{Duration, Instant};
 
@@ -35,6 +42,7 @@ fn main() {
     let mut recolor: Option<(f64, u32)> = None;
     let mut exit_after: Option<f64> = None;
     let mut size: u16 = 32;
+    let mut popup_size: Option<(u16, u16)> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -45,6 +53,11 @@ fn main() {
             }
             "--exit-after" => exit_after = Some(args.next().unwrap().parse().unwrap()),
             "--size" => size = args.next().unwrap().parse().unwrap(),
+            "--popup" => {
+                let v = args.next().unwrap();
+                let (w, h) = v.split_once('x').expect("WxH");
+                popup_size = Some((w.parse().unwrap(), h.parse().unwrap()));
+            }
             other => panic!("unknown arg {other}"),
         }
     }
@@ -129,6 +142,7 @@ fn main() {
     conn.send_event(false, owner, EventMask::NO_EVENT, dock).unwrap();
     conn.flush().unwrap();
 
+    let mut popup: Option<(Window, u16, u16)> = None;
     let start = Instant::now();
     let paint = |c: u32| {
         conn.change_gc(gc, &ChangeGCAux::new().foreground(c)).unwrap();
@@ -166,8 +180,47 @@ fn main() {
                         println!("embedded");
                     }
                 }
+                Event::ButtonPress(e) if popup.is_some_and(|(p, _, _)| p == e.event) => {
+                    let (p, w, h) = popup.unwrap();
+                    let inside = e.event_x >= 0 && e.event_y >= 0 && e.event_x < w as i16 && e.event_y < h as i16;
+                    if !inside {
+                        conn.destroy_window(p).unwrap();
+                        conn.flush().unwrap();
+                        popup = None;
+                        println!("popup dismissed by press at {},{}", e.event_x, e.event_y);
+                    }
+                }
+                Event::ConfigureNotify(e) if popup.is_some_and(|(p, _, _)| p == e.window) => {
+                    println!("popup at {},{} {}x{}", e.x, e.y, e.width, e.height);
+                }
                 Event::ButtonPress(e) => {
-                    println!("button {} press {},{} root {},{}", e.detail, e.event_x, e.event_y, e.root_x, e.root_y)
+                    println!("button {} press {},{} root {},{}", e.detail, e.event_x, e.event_y, e.root_x, e.root_y);
+                    if let (3, Some((w, h)), None) = (e.detail, popup_size, popup) {
+                        let x = (e.root_x - w as i16 / 2).max(0);
+                        let y = (e.root_y - h as i16).max(0);
+                        let p = conn.generate_id().unwrap();
+                        conn.create_window(
+                            screen.root_depth,
+                            p,
+                            screen.root,
+                            x,
+                            y,
+                            w,
+                            h,
+                            0,
+                            WindowClass::INPUT_OUTPUT,
+                            screen.root_visual,
+                            &CreateWindowAux::new()
+                                .background_pixel(screen.white_pixel)
+                                .override_redirect(1)
+                                .event_mask(EventMask::BUTTON_PRESS | EventMask::STRUCTURE_NOTIFY),
+                        )
+                        .unwrap();
+                        conn.map_window(p).unwrap();
+                        conn.flush().unwrap();
+                        popup = Some((p, w, h));
+                        println!("popup at {x},{y} {w}x{h}");
+                    }
                 }
                 Event::ButtonRelease(e) => {
                     println!("button {} release {},{} root {},{}", e.detail, e.event_x, e.event_y, e.root_x, e.root_y)

@@ -1493,6 +1493,40 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             }
         }
 
+        // Click-away for X11 popups. Xwayland only sees the pointer over
+        // its own surfaces, so a popup menu an X11 app opened (Wine's, most
+        // of all — a tray icon's menu opened through cce-xembed-tray) never
+        // hears a press on a Wayland window and stays open; only a click on
+        // one of the app's own X windows used to close it. So a press that
+        // lands on no X11 surface while some override-redirect window is
+        // showing is reported on the status socket's `clickaway` topic, and
+        // the bridge closes the popup it opened. The tray bridge's own
+        // containers have no scene tree, so they never count as showing.
+        {
+            let or_showing = (*server)
+                .wm
+                .override_redirects
+                .iter()
+                .any(|&or| !or.is_null() && !(*or).surface_tree.is_null());
+            if or_showing {
+                let on_x11 = match (*server).scene.at(lx, ly) {
+                    Some(result) => match result.data {
+                        SceneNodeDataVal::Window(window) => {
+                            matches!((*window).impl_type, crate::window::WindowImpl::Xwayland(_))
+                        }
+                        SceneNodeDataVal::OverrideRedirect(_) => true,
+                        _ => false,
+                    },
+                    None => false,
+                };
+                if !on_x11 {
+                    if let Some(ref sender) = (*server).wm.status_sender {
+                        sender.send_click_away();
+                    }
+                }
+            }
+        }
+
         // Status-bar segments are dragged either in adjust-position mode or
         // directly with super+left-drag (0x40 = WLR_MODIFIER_LOGO).
         let super_held = {
