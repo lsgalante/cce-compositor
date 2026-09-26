@@ -381,6 +381,10 @@ treats them as opaque.
   by maximizing itself, which for a captionless one (Ubisoft Connect) is the
   whole monitor and so a FULLSCREEN request; `XwaylandWindow::absorbs_wine_echo`
   swallows that echo and the tile's held size lets Wine settle on MAXIMIZED.
+  The same FULLSCREEN is what such an app's OWN maximize button sends; a
+  captionless Wine window whose `_MOTIF_WM_HINTS` functions offer maximize
+  (`is_wine_maximize`, read over the XWM's xcb connection) is tiled instead,
+  while a WS_POPUP game — no maximize function — still goes fullscreen.
   Tiled-ness is geometric: the seat
   op's end (`seat.rs::op_end`) promotes/demotes via
   `policy::snap::is_cell_aligned`. **A window grabbed Tiled snaps HARD

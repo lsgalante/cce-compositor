@@ -43,6 +43,9 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=drm");
     println!("cargo:rustc-link-lib=dylib=gbm");
     println!("cargo:rustc-link-lib=dylib=lcms2");
+    // Already loaded through wlroots' XWM; linked for the one property read
+    // wlroots does not parse (`XwaylandWindow::motif_hints`).
+    println!("cargo:rustc-link-lib=dylib=xcb");
 
     let wlroots = pkg_config::Config::new()
         .atleast_version("0.20.0")

@@ -39,8 +39,9 @@ pub struct XwaylandWindow {
     pub wine_process: Option<bool>,
 
     /// A Wine window has been told it is maximized and has not yet echoed
-    /// the state back (`absorbs_wine_echo`). Cleared by the echo — Wine's
-    /// own `_NET_WM_STATE_MAXIMIZED` add — or by un-maximizing it.
+    /// the state back (`absorbs_wine_echo`). Cleared once the echo is over
+    /// — its FULLSCREEN swap absorbed and written back, or Wine's own
+    /// `_NET_WM_STATE_MAXIMIZED` add — or by un-maximizing it.
     pub wine_max_unconfirmed: bool,
     /// When this compositor last configured the X window or its maximized
     /// state: Wine's reaction to either arrives within moments of it.
@@ -302,6 +303,22 @@ pub fn is_wine_exe(exe: &str) -> bool {
     matches!(name, "wine-preloader" | "wine64-preloader" | "wine" | "wine64")
 }
 
+/// Whether `_MOTIF_WM_HINTS` (flags, functions, decorations, …) offer the
+/// maximize function. Without the functions flag nothing is restricted;
+/// with MWM_FUNC_ALL set the listed functions are the ones REMOVED.
+pub fn motif_allows_maximize(hints: &[u32]) -> bool {
+    const MWM_HINTS_FUNCTIONS: u32 = 1;
+    const MWM_FUNC_ALL: u32 = 1;
+    const MWM_FUNC_MAXIMIZE: u32 = 16;
+    let (Some(&flags), Some(&functions)) = (hints.first(), hints.get(1)) else {
+        return false;
+    };
+    if flags & MWM_HINTS_FUNCTIONS == 0 {
+        return true;
+    }
+    (functions & MWM_FUNC_ALL != 0) != (functions & MWM_FUNC_MAXIMIZE != 0)
+}
+
 pub fn hidpi_exempt(patterns: &[String], class: &str, instance: &str, title: &str) -> bool {
     use crate::window_manager::app_id_matches;
     patterns.iter().any(|p| {
@@ -531,6 +548,70 @@ impl XwaylandWindow {
     /// reacts at once, and a Wine window with a caption never echoes at
     /// all, so an open-ended wait would swallow a game's real fullscreen
     /// request much later.
+    /// Whether a FULLSCREEN request from this window is really the app's
+    /// own maximize button. Wine sends no MAXIMIZED for it: a captionless
+    /// window maximizes to the whole monitor (plus its resize frame, off
+    /// screen), which Wine reports as FULLSCREEN alone, and no geometry
+    /// comes with it — a fullscreen window's size is left to the window
+    /// manager. What tells it from a borderless-fullscreen game is the
+    /// maximize box: Wine mirrors WS_MAXIMIZEBOX into _MOTIF_WM_HINTS'
+    /// functions (Ubisoft Connect: 0x3e; a WS_POPUP game: 0x24). The size
+    /// hints looked like a signal too — Wine pins min == max on a window
+    /// without WS_THICKFRAME — but it loosens them for a fullscreen window
+    /// before the request arrives. A window named in
+    /// `xwayland_hidpi_except` is a fullscreen game by definition.
+    pub unsafe fn is_wine_maximize(&mut self) -> bool {
+        let xs = self.xsurface;
+        if !(*xs).parent.is_null() || window_is_hidpi_exempt(self.window) {
+            return false;
+        }
+        let no_title = (*xs).decorations
+            & ffi::wlr_xwayland_surface_decorations_WLR_XWAYLAND_SURFACE_DECORATIONS_NO_TITLE as u32
+            != 0;
+        no_title && self.is_wine_process() && self.motif_hints().map_or(false, |h| motif_allows_maximize(&h))
+    }
+
+    /// The window's `_MOTIF_WM_HINTS`, read over the XWM's own connection.
+    /// wlroots parses only the decorations out of it, and this is asked
+    /// rarely (a Wine window's fullscreen request), so a synchronous
+    /// round-trip here costs nothing that matters.
+    unsafe fn motif_hints(&self) -> Option<Vec<u32>> {
+        let xwayland = (*(*self.window).server).xwayland;
+        if xwayland.is_null() {
+            return None;
+        }
+        let conn = ffi::wlr_xwayland_get_xwm_connection(xwayland);
+        if conn.is_null() {
+            return None;
+        }
+        let name = b"_MOTIF_WM_HINTS";
+        let cookie = ffi::xcb_intern_atom(conn, 1, name.len() as u16, name.as_ptr() as *const libc::c_char);
+        let atom_reply = ffi::xcb_intern_atom_reply(conn, cookie, std::ptr::null_mut());
+        if atom_reply.is_null() {
+            return None;
+        }
+        let atom = (*atom_reply).atom;
+        libc::free(atom_reply as *mut libc::c_void);
+        if atom == 0 {
+            return None;
+        }
+        // AnyPropertyType; the hints are five CARD32s.
+        let cookie = ffi::xcb_get_property(conn, 0, (*self.xsurface).window_id, atom, 0, 0, 5);
+        let reply = ffi::xcb_get_property_reply(conn, cookie, std::ptr::null_mut());
+        if reply.is_null() {
+            return None;
+        }
+        let hints = if (*reply).format == 32 {
+            let len = ffi::xcb_get_property_value_length(reply) as usize / 4;
+            let data = ffi::xcb_get_property_value(reply) as *const u32;
+            Some(std::slice::from_raw_parts(data, len).to_vec())
+        } else {
+            None
+        };
+        libc::free(reply as *mut libc::c_void);
+        hints
+    }
+
     pub unsafe fn absorbs_wine_echo(&self) -> bool {
         const ECHO_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
         self.wine_max_unconfirmed
@@ -1064,6 +1145,10 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
             let xs = (*xwindow).xsurface;
             ffi::wlr_xwayland_surface_set_fullscreen(xs, false);
             ffi::wlr_xwayland_surface_set_maximized(xs, true, true);
+            // Wine maximizes once per report, so the echo is over: its
+            // MAXIMIZED add, when it comes, changes nothing wlroots would
+            // signal, and an unmaximize from here on is the user's.
+            (*xwindow).wine_max_unconfirmed = false;
         }
         return;
     }
@@ -1108,6 +1193,26 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
         log::info!("XWayland fullscreen request: absorbed — Wine's echo of a tiled window's maximized state");
         return;
     }
+    if fullscreen && !(*(*xwindow).window).is_fullscreen() && (*xwindow).is_wine_maximize() {
+        // Its own maximize button, not a request for fullscreen: tiled, the
+        // way a maximize from any other client is (`handle_request_maximize`).
+        // FULLSCREEN is taken back out of _NET_WM_STATE; the MAXIMIZED the
+        // tile reports then sets off Wine's echo, which is absorbed.
+        log::info!("XWayland fullscreen request: a Wine window's own maximize — tiling it instead");
+        let window = (*xwindow).window;
+        ffi::wlr_xwayland_surface_set_fullscreen((*xwindow).xsurface, false);
+        // The Win32 window is maximized already, so there is no echo to
+        // wait for: MAXIMIZED is written here and marked sent, which keeps
+        // `configure` from arming `wine_max_unconfirmed` for it.
+        ffi::wlr_xwayland_surface_set_maximized((*xwindow).xsurface, true, true);
+        (*window).configure_sent.maximized = true;
+        (*xwindow).wine_max_unconfirmed = false;
+        (*window).tiling_mode = crate::tiling::TilingMode::Tiled;
+        (*window).mode_locked = true;
+        (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Maximize;
+        (*(*window).server).wm.dirty_windowing();
+        return;
+    }
     (*(*xwindow).window).wm_scheduled.fullscreen_requested = if fullscreen {
         crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut())
     } else {
@@ -1129,6 +1234,20 @@ unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, da
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicU32;
+
+    #[test]
+    fn motif_maximize_function() {
+        // Ubisoft Connect: resize|move|minimize|maximize|close.
+        assert!(motif_allows_maximize(&[0x3, 0x3e, 0, 0, 0]));
+        // A WS_POPUP game: move|close.
+        assert!(!motif_allows_maximize(&[0x3, 0x24, 0, 0, 0]));
+        // No functions flag: nothing restricted.
+        assert!(motif_allows_maximize(&[0x2, 0, 0, 0, 0]));
+        // MWM_FUNC_ALL inverts the list.
+        assert!(!motif_allows_maximize(&[0x1, 0x11, 0, 0, 0]));
+        assert!(motif_allows_maximize(&[0x1, 0x21, 0, 0, 0]));
+        assert!(!motif_allows_maximize(&[]));
+    }
 
     #[test]
     fn wine_loader_is_recognised() {
