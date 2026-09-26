@@ -143,6 +143,20 @@ fn saved_by_program(saved: &SavedWindowState, program: &str) -> bool {
             .map_or(false, |rest| rest.is_empty() || rest.starts_with(' '))
 }
 
+/// Whether the app_id-only pass may hand `saved` to a window of `program`:
+/// the same program saved it, and it has a title.
+///
+/// An untitled entry is never borrowed. Untitled on both sides no longer
+/// matches in the title passes (`titles_match`), so this pass was the one
+/// way left to reach one — and an untitled window is almost always a
+/// helper: Wine's tray window was saved at the 1214x689 it had wrongly
+/// borrowed, and the same program kept handing it back to itself every
+/// session. The cost is an app whose windows never set a title: its
+/// relaunch, and its session restore, open where the app puts them.
+fn borrowable(saved: &SavedWindowState, program: Option<&str>) -> bool {
+    !saved.title.is_empty() && same_program(saved, program)
+}
+
 /// The state matchers' exact title pass. Two empty titles do not match: an
 /// untitled window has no identity beyond its app_id, so "" == "" was an
 /// app_id-only match that skipped `same_program` — Wine's untitled tray
@@ -177,7 +191,7 @@ fn log_program_veto<'a>(
     program: Option<&str>,
 ) {
     let others: Vec<&str> = entries
-        .filter(|w| w.app_id == app_id)
+        .filter(|w| w.app_id == app_id && !w.title.is_empty())
         .map(|w| w.cmdline.as_str())
         .collect();
     if !others.is_empty() {
@@ -1249,14 +1263,22 @@ impl WindowManager {
 
             saved_wins.push(win_state.clone());
 
+            // `last_window_states` holds one entry per app_id, and an
+            // untitled one can never be borrowed (`borrowable`) — writing
+            // it would only evict the app's titled entry, as Wine's tray
+            // window evicted Ubisoft Connect's.
+            if title.is_empty() {
+                continue;
+            }
             if let Some(pos) = last_states.iter().position(|s| s.app_id == app_id) {
                 last_states[pos] = win_state;
             } else {
                 last_states.push(win_state);
             }
         }
-        // Scrub entries persisted before the cce-cloud exclusion above.
-        last_states.retain(|s| s.app_id != "cce-cloud");
+        // Scrub entries persisted before the cce-cloud exclusion above, and
+        // untitled ones written before the rule above (never borrowable).
+        last_states.retain(|s| s.app_id != "cce-cloud" && !s.title.is_empty());
         let saved_by_shy = |s: &SavedWindowState| {
             shy.iter().any(|(app_id, title, program)| {
                 s.app_id == *app_id && s.title == *title && saved_by_program(s, program)
@@ -1494,7 +1516,7 @@ impl WindowManager {
             return Some(entry);
         }
         // Third pass: app_id only match, from the same program
-        if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id && same_program(w, program)) {
+        if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id && borrowable(w, program)) {
             let entry = self.restore_queue.remove(pos);
             self.remove_placeholder_for(&entry);
             return Some(entry);
@@ -1522,7 +1544,7 @@ impl WindowManager {
             return Some(w.clone());
         }
         // Third pass: app_id only match, from the same program
-        if let Some(w) = self.last_window_states.iter().find(|w| w.app_id == app_id && same_program(w, program)) {
+        if let Some(w) = self.last_window_states.iter().find(|w| w.app_id == app_id && borrowable(w, program)) {
             return Some(w.clone());
         }
         log_program_veto(self.last_window_states.iter(), app_id, title, program);
@@ -7683,7 +7705,9 @@ mod tests {
             // check applies to it too.
             assert!(wm.match_last_window_state("steam_proton", "", Some(UPC)).is_none());
             assert!(wm.match_last_window_state("steam_proton", "Ubisoft Connect", Some(UPC)).is_none());
-            assert!(wm.match_last_window_state("steam_proton", "", Some(EXPLORER)).is_some());
+            // Nor the tray itself: an untitled entry is never borrowed.
+            assert!(wm.match_last_window_state("steam_proton", "", Some(EXPLORER)).is_none());
+            assert!(wm.match_last_window_state("steam_proton", "", None).is_none());
         }
         std::mem::forget(wm);
     }
