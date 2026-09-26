@@ -20,12 +20,17 @@ path = "src/bin/float_pair.rs"
 name = "popup-nest"
 path = "src/bin/popup_nest.rs"
 
+[[bin]]
+name = "xembed-icon"
+path = "src/bin/xembed_icon.rs"
+
 [dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 xkbcommon = "0.8"
 libc = "0.2"
+x11rb = "0.13"
 
 # Deliberately NOT a member of the cce workspace: these are test clients built
 # on demand by verify/ scripts, invisible to ccebuild and `cargo build` at the

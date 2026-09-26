@@ -213,10 +213,12 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Nine modules carry unit tests — `backdrop.rs` (the most of any, covering the
-measurement and the desktop/window blend), `window_manager.rs`, `config.rs`,
+Ten modules carry unit tests — `window_manager.rs` (the most of any, among
+them the saved-state matchers: same-program borrowing, untitled entries),
+`backdrop.rs` (the measurement and the desktop/window blend), `config.rs`,
 `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
-`text.rs`, `cursor.rs` (the swipe lean's direction, `swipe_lean`). They cluster where the logic is
+`text.rs`, `global_shortcuts.rs` (trigger parsing),
+`cursor.rs` (the swipe lean's direction, `swipe_lean`). They cluster where the logic is
 pure and the FFI is not, which is the only kind of thing testable in a crate
 this deep in wlroots. The arrange/slotmap tests live in the sibling
 `cce-window-manager` crate — run them with `cargo test -p cce-window-manager`.
@@ -261,6 +263,14 @@ own `target/`, invisible to ccebuild), built on demand by the drivers:
   the way Chrome's three-dot menu does, printing each popup's configured
   position relative to its parent. `--menu-at`, `--menu`, `--sub-at` and
   `--sub` move and size them.
+
+- **`xembed-icon`** — a legacy X11 tray icon docked the way Wine's systray
+  docks one: waits for a `_NET_SYSTEM_TRAY_S0` owner, draws in the visual it
+  advertises, sends SYSTEM_TRAY_REQUEST_DOCK, paints one solid colour and
+  prints each milestone (docked, embedded, every button it receives).
+  `--recolor SECS COLOR` and `--exit-after SECS` exercise the icon updating
+  and leaving. Needs `cce-shadow start --xwayland`; see
+  `../cce-status-interface/CLAUDE.md` for the bridge it tests.
 
 `./verify/popup-constrain-test` drives `popup-nest` to prove submenus are
 fitted to the real screen (`xdg_popup.rs::handle_reposition`): a tall
@@ -373,7 +383,12 @@ treats them as opaque.
   `input_relay.rs`/`input_popup.rs` (IME).
 - Shell/surface: `xdg_toplevel.rs`, `xdg_popup.rs`, `shell_surface.rs`,
   `layer_shell.rs`, `xwayland_window.rs`, `xwayland_override_redirect.rs`,
-  `drag_icon.rs`, `wm_node.rs`.
+  `drag_icon.rs`, `wm_node.rs`. An override-redirect window whose WM_CLASS
+  class is `cce-xembed-tray` gets no scene node at all
+  (`is_xembed_tray_container`): it is the tray bridge's container for a
+  legacy X11 tray icon, which X must have mapped for the icon to draw but
+  which is shown in the status bar instead (`cce-status-interface`'s
+  `cce-xembed-tray`).
 - Output: `output.rs`, `output_manager.rs`. Session: `lock_manager.rs`,
   `idle_inhibit_manager.rs`. Rendering: `scene.rs`, `scene_node_data.rs`.
 

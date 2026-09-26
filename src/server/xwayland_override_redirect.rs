@@ -226,7 +226,28 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
     handle_map_impl(or);
 }
 
+/// WM_CLASS of the XEmbed tray bridge's container windows
+/// (`cce-status-interface`'s `cce-xembed-tray`).
+const XEMBED_TRAY_CLASS: &str = "cce-xembed-tray";
+
+/// Whether this override-redirect window is one of the tray bridge's
+/// containers. Each holds a legacy X11 tray icon the bridge adopted and
+/// republishes as a StatusNotifierItem; X needs it mapped for the icon to
+/// draw at all, but the icon is shown in the status bar, so the window
+/// itself must never be. The bridge also gives it an empty input region,
+/// so X never routes the pointer into it either.
+unsafe fn is_xembed_tray_container(xsurface: *mut ffi::wlr_xwayland_surface) -> bool {
+    let class = (*xsurface).class;
+    !class.is_null() && std::ffi::CStr::from_ptr(class).to_bytes() == XEMBED_TRAY_CLASS.as_bytes()
+}
+
 unsafe fn handle_map_impl(or: *mut XwaylandOverrideRedirect) {
+    // No scene node at all: nothing to draw, hit-test or focus. Unmap
+    // copes with the missing tree and the unconnected listeners.
+    if is_xembed_tray_container((*or).xsurface) {
+        log::debug!("xembed tray container mapped; not shown");
+        return;
+    }
     let surface = (*(*or).xsurface).surface;
     let override_redirect_tree = (*(*or).server).scene.layers.override_redirect;
 
