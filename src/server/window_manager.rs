@@ -143,6 +143,15 @@ fn saved_by_program(saved: &SavedWindowState, program: &str) -> bool {
             .map_or(false, |rest| rest.is_empty() || rest.starts_with(' '))
 }
 
+/// The state matchers' exact title pass. Two empty titles do not match: an
+/// untitled window has no identity beyond its app_id, so "" == "" was an
+/// app_id-only match that skipped `same_program` — Wine's untitled tray
+/// window and any other untitled helper of a `steam_proton` app all
+/// claimed one another's entries through it.
+fn titles_match(a: &str, b: &str) -> bool {
+    !a.is_empty() && a == b
+}
+
 /// The state matchers' fuzzy title pass: equal once a trailing `*` (an
 /// editor's unsaved marker) is stripped, or one a prefix of the other.
 /// An empty title resembles nothing — as a prefix it would resemble every
@@ -1471,8 +1480,9 @@ impl WindowManager {
         if app_id.is_empty() {
             return None;
         }
-        // First pass: Exact match (app_id AND title)
-        if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id && w.title == title) {
+        // First pass: Exact match (app_id AND title). An empty title is no
+        // identity (`titles_match`); it falls through to the app_id-only pass.
+        if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id && titles_match(title, &w.title)) {
             let entry = self.restore_queue.remove(pos);
             self.remove_placeholder_for(&entry);
             return Some(entry);
@@ -1503,8 +1513,8 @@ impl WindowManager {
         if app_id.is_empty() {
             return None;
         }
-        // First pass: Exact match (app_id AND title)
-        if let Some(w) = self.last_window_states.iter().find(|w| w.app_id == app_id && w.title == title) {
+        // First pass: Exact match (app_id AND title), as above
+        if let Some(w) = self.last_window_states.iter().find(|w| w.app_id == app_id && titles_match(title, &w.title)) {
             return Some(w.clone());
         }
         // Second pass: Fuzzy title match
@@ -7632,6 +7642,13 @@ mod tests {
     }
 
     #[test]
+    fn empty_titles_match_nothing_exactly() {
+        assert!(titles_match("Ubisoft Connect", "Ubisoft Connect"));
+        assert!(!titles_match("", ""));
+        assert!(!titles_match("Ubisoft Connect", "Ubisoft"));
+    }
+
+    #[test]
     fn empty_titles_resemble_nothing() {
         assert!(titles_resemble("Doc.txt*", "Doc.txt"));
         assert!(titles_resemble("Ubisoft Connect", "Ubisoft"));
@@ -7662,6 +7679,9 @@ mod tests {
         }
         wm.last_window_states[0] = proton_entry("", &format!("{EXPLORER} /desktop"));
         unsafe {
+            // Untitled on both sides is not an exact match, so the program
+            // check applies to it too.
+            assert!(wm.match_last_window_state("steam_proton", "", Some(UPC)).is_none());
             assert!(wm.match_last_window_state("steam_proton", "Ubisoft Connect", Some(UPC)).is_none());
             assert!(wm.match_last_window_state("steam_proton", "", Some(EXPLORER)).is_some());
         }
