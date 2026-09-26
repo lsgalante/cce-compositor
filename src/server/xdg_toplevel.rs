@@ -810,10 +810,16 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     // the external window-manager client) leaves the border a size behind.
     // Utility windows self-size the same way (the arrange pass only ever
     // sends them the "you choose" 0x0, so every size change originates in a
-    // client commit like this one).
+    // client commit like this one). So do Popups: cce-cloud's launcher flags
+    // itself one via set_popup and auto-sizes to its filtered list, and the
+    // WM's Popup arm echoes box_geom back as the size — so without this the
+    // border and blur stayed at the size the popup opened at while the list
+    // shrank and grew under them as the user typed.
     if matches!(
         (*window).tiling_mode,
-        crate::tiling::TilingMode::Overlay | crate::tiling::TilingMode::Utility
+        crate::tiling::TilingMode::Overlay
+            | crate::tiling::TilingMode::Utility
+            | crate::tiling::TilingMode::Popup
     ) {
         let mut live = std::mem::zeroed();
         ffi::river_wlr_xdg_surface_get_geometry(base, &mut live);
