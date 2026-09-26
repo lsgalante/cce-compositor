@@ -33,6 +33,10 @@ pub struct XwaylandWindow {
     /// `send_configure`, physical pixels; `None` until the first one. See
     /// `needs_configure` for why this is kept apart from the wlroots mirror.
     pub sent_geom: Option<X11Geom>,
+
+    /// Whether the client is a Wine/Proton process (`is_wine_process`),
+    /// read from /proc once and cached; `None` until first asked.
+    pub wine_process: Option<bool>,
 }
 
 /// A window geometry in X11 root coordinates — physical pixels under
@@ -352,6 +356,7 @@ impl XwaylandWindow {
             map: std::mem::zeroed(),
             unmap: std::mem::zeroed(),
             sent_geom: None,
+            wine_process: None,
         });
 
         let raw = Box::into_raw(xwindow);
@@ -435,6 +440,23 @@ impl XwaylandWindow {
         if scheduled.activated != sent.activated {
             self.set_activated(scheduled.activated);
         }
+        // A Tiled window is told it is maximized, but Wine answers that
+        // state by maximizing the Win32 window itself — on the next
+        // ConfigureNotify, i.e. the first time the tile moves. A window
+        // with no caption maximizes to the WHOLE monitor, Wine reads a
+        // monitor-sized rect as fullscreen and asks for
+        // _NET_WM_STATE_FULLSCREEN: moving a tiled Ubisoft Connect
+        // (2026-09-26) turned it fullscreen. So a Wine window hears
+        // "maximized" from the layout only while it already holds that
+        // state itself — its own maximize button, which wlroots writes into
+        // _NET_WM_STATE on receipt — so dragging such a window out of the
+        // grid still un-maximizes it.
+        if scheduled.maximized
+            && !((*self.xsurface).maximized_vert || (*self.xsurface).maximized_horz)
+            && self.is_wine_process()
+        {
+            scheduled.maximized = false;
+        }
         if scheduled.maximized != sent.maximized {
             ffi::wlr_xwayland_surface_set_maximized(self.xsurface, scheduled.maximized, scheduled.maximized);
         }
@@ -461,6 +483,25 @@ impl XwaylandWindow {
         (*window).configure_scheduled.height = None;
 
         false
+    }
+
+    /// Whether the client is a Wine/Proton process: its argv[0] is a
+    /// Windows path (`window_manager::is_windows_path`). Not cached while
+    /// the pid is still unknown, so a window read before _NET_WM_PID
+    /// arrives is asked again.
+    pub unsafe fn is_wine_process(&mut self) -> bool {
+        if let Some(wine) = self.wine_process {
+            return wine;
+        }
+        let pid = (*self.xsurface).pid;
+        if pid <= 0 {
+            return false;
+        }
+        let wine = crate::window_manager::proc_args(pid)
+            .first()
+            .map_or(false, |argv0| crate::window_manager::is_windows_path(argv0));
+        self.wine_process = Some(wine);
+        wine
     }
 
     /// The geometry wlroots currently reports for the X window.

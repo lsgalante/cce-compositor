@@ -165,9 +165,16 @@ fn borrowable(saved: &SavedWindowState, program: Option<&str>) -> bool {
 /// stood a minute over the empty desk every login (2026-09-26), waiting for
 /// a window nothing had started.
 fn relaunchable(cmdline: &str) -> bool {
-    let b = cmdline.trim().as_bytes();
-    let windows_path = b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'/' || b[2] == b'\\');
-    !b.is_empty() && !windows_path
+    !cmdline.trim().is_empty() && !is_windows_path(cmdline)
+}
+
+/// Whether `s` starts with a Windows drive path (`C:\` or `C:/`) — the
+/// argv[0] every Wine/Proton process rewrites its command line to, which
+/// makes it the one reliable sign that a window belongs to Wine: its
+/// WM_CLASS is `steam_proton`, `steam_app_N` or the exe's own name.
+pub(crate) fn is_windows_path(s: &str) -> bool {
+    let b = s.trim().as_bytes();
+    b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'/' || b[2] == b'\\')
 }
 
 /// Whether a window mapping as (`app_id`, `program`) is the reconnect of
@@ -7709,6 +7716,15 @@ mod tests {
         assert!(!relaunchable("D:/Games/thing.exe"));
         assert!(!relaunchable("   "));
         assert!(!relaunchable(""));
+    }
+
+    #[test]
+    fn wine_argv0_is_a_windows_path() {
+        assert!(is_windows_path(UPC));
+        assert!(is_windows_path("D:/Games/thing.exe"));
+        assert!(!is_windows_path("/usr/bin/wine"));
+        assert!(!is_windows_path("C:"));
+        assert!(!is_windows_path(""));
     }
 
     #[test]
