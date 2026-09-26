@@ -3704,6 +3704,14 @@ unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *
         return;
     }
     seat.handle_activity();
+    // A swipe or pinch is deliberate input, like a click or a key: it ends
+    // the session-restore settling phase (`WindowManager::startup_input_seen`),
+    // so the first focus of a restored window pans to it. Until 2026-09-26
+    // only buttons and keys counted, and after a login navigated purely by
+    // three-finger swipes, each restored window's first focus left it
+    // wherever it sat, often half off screen. Holds do not count: one begins
+    // whenever fingers merely rest on the pad.
+    (*seat.server).wm.startup_input_seen = true;
 
     cursor.gesture_dx = 0.0;
     cursor.gesture_dy = 0.0;
@@ -4008,6 +4016,14 @@ unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listener, data: *
         return;
     }
     seat.handle_activity();
+    // A swipe or pinch is deliberate input, like a click or a key: it ends
+    // the session-restore settling phase (`WindowManager::startup_input_seen`),
+    // so the first focus of a restored window pans to it. Until 2026-09-26
+    // only buttons and keys counted, and after a login navigated purely by
+    // three-finger swipes, each restored window's first focus left it
+    // wherever it sat, often half off screen. Holds do not count: one begins
+    // whenever fingers merely rest on the pad.
+    (*seat.server).wm.startup_input_seen = true;
 
     cursor.gesture_scale = 1.0;
     cursor.gesture_triggered = false;

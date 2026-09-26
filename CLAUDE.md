@@ -668,6 +668,15 @@ what the user pans along (cce-data-editor parked left of the first column
 came back mid-view every login before 2026-09-14). The recall is for a
 window with no tiled neighbour within a screen.
 
+Restored windows map unfocused, and their FIRST focus pans the camera only
+once the session has seen deliberate input (`WindowManager::startup_input_seen`,
+gated in `Seat::focus`), so apps settling in at login do not drag the view
+around. Deliberate means a button press, a key press, or the start of a
+touchpad swipe or pinch (`handle_swipe_begin`/`handle_pinch_begin`); pointer
+motion and a hold do not count. Swipes were added on 2026-09-26: a login
+navigated only by three-finger swipes left each restored window's first
+focus wherever it sat, often half off screen, while a second focus panned.
+
 ### xdg-activation
 
 `handle_request_activate` (`server.rs`) runs for every activation wlroots
