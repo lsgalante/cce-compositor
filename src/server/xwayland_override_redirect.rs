@@ -348,7 +348,13 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
 
     let server = (*or).server;
 
-    // Destroy this OR instance
+    // Destroy this OR instance. Drop it from the list first, as
+    // `handle_destroy` does: the per-frame `apply_x11_scale` pass walks
+    // `override_redirects`, and a freed entry left there crashed the
+    // compositor on its next frame (2026-09-26, a Wine tray icon handed
+    // back by the XEmbed bridge and remapped as a managed window;
+    // `verify/clients` `or-flip` reproduces it).
+    (*server).wm.override_redirects.retain(|&p| p != or);
     wl_listener_remove_safe(&mut (*or).request_configure);
     wl_listener_remove_safe(&mut (*or).destroy);
     wl_listener_remove_safe(&mut (*or).associate);

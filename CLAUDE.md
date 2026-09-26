@@ -272,6 +272,15 @@ own `target/`, invisible to ccebuild), built on demand by the drivers:
   and leaving. Needs `cce-shadow start --xwayland`; see
   `../cce-status-interface/CLAUDE.md` for the bridge it tests.
 
+- **`or-flip`** — an X11 window that maps override-redirect, then is
+  unmapped, has the flag cleared and maps again (`--cycles N`), so wlroots
+  emits `set_override_redirect` and the record changes kind. Until
+  2026-09-26 the override-redirect side freed its record without dropping it
+  from `wm.override_redirects`, and the next frame's `apply_x11_scale`
+  segfaulted the compositor: a Wine tray icon handed back to the root window
+  by the XEmbed bridge did exactly this and took the live session down. The
+  compositor surviving a run is the assertion.
+
 `./verify/popup-constrain-test` drives `popup-nest` to prove submenus are
 fitted to the real screen (`xdg_popup.rs::handle_reposition`): a tall
 submenu low in the window slides up to fit, and one near the right edge

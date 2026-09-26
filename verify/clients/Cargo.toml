@@ -24,6 +24,10 @@ path = "src/bin/popup_nest.rs"
 name = "xembed-icon"
 path = "src/bin/xembed_icon.rs"
 
+[[bin]]
+name = "or-flip"
+path = "src/bin/or_flip.rs"
+
 [dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
