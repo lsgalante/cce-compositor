@@ -377,7 +377,11 @@ treats them as opaque.
   viewport transforms).
 - **`crate::tiling`** (from `cce-window-manager`) — `TilingMode` enum: `Floating`,
   `Tiled` (grid-aligned; the window reports xdg maximized), `Fullscreen`,
-  `Popup`, `Overlay`, `Status`, `Utility`. Tiled-ness is geometric: the seat
+  `Popup`, `Overlay`, `Status`, `Utility`. A Wine window answers "maximized"
+  by maximizing itself, which for a captionless one (Ubisoft Connect) is the
+  whole monitor and so a FULLSCREEN request; `XwaylandWindow::absorbs_wine_echo`
+  swallows that echo and the tile's held size lets Wine settle on MAXIMIZED.
+  Tiled-ness is geometric: the seat
   op's end (`seat.rs::op_end`) promotes/demotes via
   `policy::snap::is_cell_aligned`. **A window grabbed Tiled snaps HARD
   through the whole drag** — its move lands on cell starts

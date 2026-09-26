@@ -37,6 +37,14 @@ pub struct XwaylandWindow {
     /// Whether the client is a Wine/Proton process (`is_wine_process`),
     /// read from /proc once and cached; `None` until first asked.
     pub wine_process: Option<bool>,
+
+    /// A Wine window has been told it is maximized and has not yet echoed
+    /// the state back (`absorbs_wine_echo`). Cleared by the echo — Wine's
+    /// own `_NET_WM_STATE_MAXIMIZED` add — or by un-maximizing it.
+    pub wine_max_unconfirmed: bool,
+    /// When this compositor last configured the X window or its maximized
+    /// state: Wine's reaction to either arrives within moments of it.
+    pub last_configure: Option<std::time::Instant>,
 }
 
 /// A window geometry in X11 root coordinates — physical pixels under
@@ -286,6 +294,14 @@ pub unsafe fn window_is_hidpi_exempt(window: *const crate::window::Window) -> bo
     )
 }
 
+/// Whether `exe` (a `/proc/<pid>/exe` target) is Wine's loader, which every
+/// Wine and Proton program runs as: `wine-preloader`/`wine64-preloader`, or
+/// `wine`/`wine64` itself on a build without a preloader.
+pub fn is_wine_exe(exe: &str) -> bool {
+    let name = exe.trim_end_matches(" (deleted)").rsplit('/').next().unwrap_or("");
+    matches!(name, "wine-preloader" | "wine64-preloader" | "wine" | "wine64")
+}
+
 pub fn hidpi_exempt(patterns: &[String], class: &str, instance: &str, title: &str) -> bool {
     use crate::window_manager::app_id_matches;
     patterns.iter().any(|p| {
@@ -357,6 +373,8 @@ impl XwaylandWindow {
             unmap: std::mem::zeroed(),
             sent_geom: None,
             wine_process: None,
+            wine_max_unconfirmed: false,
+            last_configure: None,
         });
 
         let raw = Box::into_raw(xwindow);
@@ -440,25 +458,12 @@ impl XwaylandWindow {
         if scheduled.activated != sent.activated {
             self.set_activated(scheduled.activated);
         }
-        // A Tiled window is told it is maximized, but Wine answers that
-        // state by maximizing the Win32 window itself — on the next
-        // ConfigureNotify, i.e. the first time the tile moves. A window
-        // with no caption maximizes to the WHOLE monitor, Wine reads a
-        // monitor-sized rect as fullscreen and asks for
-        // _NET_WM_STATE_FULLSCREEN: moving a tiled Ubisoft Connect
-        // (2026-09-26) turned it fullscreen. So a Wine window hears
-        // "maximized" from the layout only while it already holds that
-        // state itself — its own maximize button, which wlroots writes into
-        // _NET_WM_STATE on receipt — so dragging such a window out of the
-        // grid still un-maximizes it.
-        if scheduled.maximized
-            && !((*self.xsurface).maximized_vert || (*self.xsurface).maximized_horz)
-            && self.is_wine_process()
-        {
-            scheduled.maximized = false;
-        }
         if scheduled.maximized != sent.maximized {
             ffi::wlr_xwayland_surface_set_maximized(self.xsurface, scheduled.maximized, scheduled.maximized);
+            self.last_configure = Some(std::time::Instant::now());
+            // Wine answers this by maximizing the Win32 window itself; see
+            // `absorbs_wine_echo` for what that sets off and how it ends.
+            self.wine_max_unconfirmed = scheduled.maximized && self.is_wine_process();
         }
         if scheduled.inform_fullscreen != sent.inform_fullscreen {
             ffi::wlr_xwayland_surface_set_fullscreen(self.xsurface, scheduled.inform_fullscreen);
@@ -485,10 +490,13 @@ impl XwaylandWindow {
         false
     }
 
-    /// Whether the client is a Wine/Proton process: its argv[0] is a
-    /// Windows path (`window_manager::is_windows_path`). Not cached while
-    /// the pid is still unknown, so a window read before _NET_WM_PID
-    /// arrives is asked again.
+    /// Whether the client is a Wine/Proton process: its executable is
+    /// Wine's loader (`is_wine_exe`), or its argv[0] is a Windows path
+    /// (`window_manager::is_windows_path`) — the loader is what both
+    /// system Wine and Proton run as, and argv[0] alone misses a program
+    /// started by a relative name (`wine popup.exe` keeps `popup.exe`).
+    /// Not cached while the pid is still unknown, so a window read before
+    /// _NET_WM_PID arrives is asked again.
     pub unsafe fn is_wine_process(&mut self) -> bool {
         if let Some(wine) = self.wine_process {
             return wine;
@@ -497,11 +505,37 @@ impl XwaylandWindow {
         if pid <= 0 {
             return false;
         }
-        let wine = crate::window_manager::proc_args(pid)
-            .first()
-            .map_or(false, |argv0| crate::window_manager::is_windows_path(argv0));
+        let exe = std::fs::read_link(format!("/proc/{}/exe", pid)).unwrap_or_default();
+        let wine = is_wine_exe(&exe.to_string_lossy())
+            || crate::window_manager::proc_args(pid)
+                .first()
+                .map_or(false, |argv0| crate::window_manager::is_windows_path(argv0));
         self.wine_process = Some(wine);
         wine
+    }
+
+    /// Whether a `_NET_WM_STATE` request from this window is Wine's echo
+    /// of being told it is maximized, to be absorbed rather than acted on.
+    ///
+    /// Wine answers `_NET_WM_STATE_MAXIMIZED` by maximizing the Win32
+    /// window itself, on the next ConfigureNotify. A window with no
+    /// caption (Ubisoft Connect, any CEF/Electron frameless app) maximizes
+    /// to the WHOLE monitor, and Wine reports a monitor-sized maximized
+    /// window as FULLSCREEN in place of MAXIMIZED: moving a tiled Ubisoft
+    /// Connect turned it fullscreen (2026-09-26). Absorbed, the size stays
+    /// the tile's (`handle_request_configure` holds a tiled window's size),
+    /// Wine sees a rect that no longer covers the monitor and settles on
+    /// MAXIMIZED by itself, which ends the echo (`handle_request_maximize`).
+    ///
+    /// Only within a moment of this compositor's own configure: Wine
+    /// reacts at once, and a Wine window with a caption never echoes at
+    /// all, so an open-ended wait would swallow a game's real fullscreen
+    /// request much later.
+    pub unsafe fn absorbs_wine_echo(&self) -> bool {
+        const ECHO_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+        self.wine_max_unconfirmed
+            && (*self.window).tiling_mode == crate::tiling::TilingMode::Tiled
+            && self.last_configure.map_or(false, |t| t.elapsed() < ECHO_WINDOW)
     }
 
     /// The geometry wlroots currently reports for the X window.
@@ -520,6 +554,7 @@ impl XwaylandWindow {
     pub unsafe fn send_configure(&mut self, g: X11Geom) {
         ffi::wlr_xwayland_surface_configure(self.xsurface, g.x, g.y, g.width, g.height);
         self.sent_geom = Some(g);
+        self.last_configure = Some(std::time::Instant::now());
     }
 
     pub unsafe fn set_activated(&self, activated: bool) {
@@ -1008,6 +1043,30 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
     let xwindow = crate::container_of!(listener, XwaylandWindow, request_maximize);
     let maximized = (*(*xwindow).xsurface).maximized_vert || (*(*xwindow).xsurface).maximized_horz;
     let window = (*xwindow).window;
+    // Wine's echo of a tiled window's maximized state (`absorbs_wine_echo`):
+    // the MAXIMIZED it drops while it believes itself fullscreen, and the
+    // MAXIMIZED it adds once it has settled — which ends the echo. Neither
+    // is the user asking for a mode.
+    if (*xwindow).absorbs_wine_echo() || (maximized && (*xwindow).wine_max_unconfirmed) {
+        log::info!(
+            "XWayland maximize request: absorbed maximized={} — Wine's echo of a tiled window's maximized state",
+            maximized,
+        );
+        if maximized {
+            (*xwindow).wine_max_unconfirmed = false;
+        } else if (*(*xwindow).xsurface).fullscreen {
+            // The echo is complete (Wine sends the FULLSCREEN add first)
+            // and wlroots has written it into _NET_WM_STATE: FULLSCREEN in
+            // place of MAXIMIZED. Wine settles its rect on the tile but does
+            // not correct the property until the window next moves, so the
+            // compositor's state is written back here. Safe inside the
+            // signal: wlroots compared the maximized fields before emitting.
+            let xs = (*xwindow).xsurface;
+            ffi::wlr_xwayland_surface_set_fullscreen(xs, false);
+            ffi::wlr_xwayland_surface_set_maximized(xs, true, true);
+        }
+        return;
+    }
     if maximized {
         (*window).tiling_mode = crate::tiling::TilingMode::Tiled;
         (*window).mode_locked = true;
@@ -1045,6 +1104,10 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
         log::info!("XWayland fullscreen request: ignored — the window is hidpi-exempt and fullscreen by the compositor");
         return;
     }
+    if (*xwindow).absorbs_wine_echo() {
+        log::info!("XWayland fullscreen request: absorbed — Wine's echo of a tiled window's maximized state");
+        return;
+    }
     (*(*xwindow).window).wm_scheduled.fullscreen_requested = if fullscreen {
         crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut())
     } else {
@@ -1066,6 +1129,19 @@ unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, da
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicU32;
+
+    #[test]
+    fn wine_loader_is_recognised() {
+        assert!(is_wine_exe("/usr/lib/wine/x86_64-unix/wine-preloader"));
+        assert!(is_wine_exe(
+            "/home/u/.local/share/Steam/steamapps/common/Proton - Experimental/files/lib/wine/i386-unix/wine-preloader"
+        ));
+        assert!(is_wine_exe("/usr/bin/wine64"));
+        assert!(is_wine_exe("/usr/lib/wine/x86_64-unix/wine64-preloader (deleted)"));
+        assert!(!is_wine_exe("/usr/bin/winecfg-helper"));
+        assert!(!is_wine_exe("/usr/bin/zenity"));
+        assert!(!is_wine_exe(""));
+    }
 
     #[test]
     fn scale_from_live_output_is_remembered() {
