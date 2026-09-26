@@ -157,6 +157,23 @@ fn borrowable(saved: &SavedWindowState, program: Option<&str>) -> bool {
     !saved.title.is_empty() && same_program(saved, program)
 }
 
+/// Whether a window mapping as (`app_id`, `program`) is the reconnect of
+/// one that vanished as (`gone_app_id`, `gone_program`): the same app_id
+/// AND the same program. An app_id alone is too coarse — every Proton
+/// program is `steam_proton`, so a game launched from Ubisoft Connect,
+/// mapping a second after one of the launcher's own windows closed, was
+/// held unfocused as the launcher "reconnecting", and the user's
+/// fullscreen key went to whatever still had focus (2026-09-26). A
+/// program unknown on either side (the process already gone) falls back
+/// to the app_id alone, as before.
+fn is_reconnect(gone_app_id: &str, gone_program: Option<&str>, app_id: &str, program: Option<&str>) -> bool {
+    gone_app_id == app_id
+        && match (gone_program, program) {
+            (Some(a), Some(b)) => a == b,
+            _ => true,
+        }
+}
+
 /// The state matchers' exact title pass. Two empty titles do not match: an
 /// untitled window has no identity beyond its app_id, so "" == "" was an
 /// app_id-only match that skipped `same_program` — Wine's untitled tray
@@ -500,10 +517,11 @@ pub struct WindowManager {
     /// focus from the restored session's focused window.
     pub startup_input_seen: bool,
     /// app_ids whose window went away without the compositor ever asking it
-    /// to close, and when. A client that loses its Wayland connection lands
-    /// here and reappears a moment later having rebuilt its surface; see
-    /// `take_recent_vanish`.
-    pub vanished_windows: Vec<(String, std::time::Instant)>,
+    /// to close, with the program that owned it (`proc_args` argv[0], when
+    /// still readable) and when. A client that loses its Wayland connection
+    /// lands here and reappears a moment later having rebuilt its surface;
+    /// see `take_recent_vanish`.
+    pub vanished_windows: Vec<(String, Option<String>, std::time::Instant)>,
     pub last_viewport_zoom: f64,
     pub last_viewport_pan_x: f64,
     pub last_viewport_pan_y: f64,
@@ -4376,22 +4394,28 @@ impl WindowManager {
         self.focus_history.retain(|&w| w != window);
     }
 
-    /// Record that this app_id's window disappeared unbidden.
-    pub fn note_vanished(&mut self, app_id: String) {
+    /// Record that this app_id's window disappeared unbidden, and which
+    /// program owned it (`None` once the process is gone).
+    pub fn note_vanished(&mut self, app_id: String, program: Option<String>) {
         let now = std::time::Instant::now();
         self.vanished_windows
-            .retain(|(_, at)| now.duration_since(*at) < RECONNECT_FOCUS_GRACE);
-        self.vanished_windows.push((app_id, now));
+            .retain(|(_, _, at)| now.duration_since(*at) < RECONNECT_FOCUS_GRACE);
+        self.vanished_windows.push((app_id, program, now));
     }
 
-    /// Whether this app_id vanished unbidden within the grace, consuming the
-    /// record so one disappearance excuses exactly one re-map — a client that
+    /// Whether this window's program recently lost one of its windows
+    /// unbidden within the grace — the reconnect case — consuming the record
+    /// so one disappearance excuses exactly one re-map: a client that
     /// crashes twice does not get a standing exemption.
-    pub fn take_recent_vanish(&mut self, app_id: &str) -> bool {
+    pub fn take_recent_vanish(&mut self, app_id: &str, program: Option<&str>) -> bool {
         let now = std::time::Instant::now();
         self.vanished_windows
-            .retain(|(_, at)| now.duration_since(*at) < RECONNECT_FOCUS_GRACE);
-        match self.vanished_windows.iter().position(|(id, _)| id == app_id) {
+            .retain(|(_, _, at)| now.duration_since(*at) < RECONNECT_FOCUS_GRACE);
+        match self
+            .vanished_windows
+            .iter()
+            .position(|(id, prog, _)| is_reconnect(id, prog.as_deref(), app_id, program))
+        {
             Some(i) => {
                 self.vanished_windows.remove(i);
                 true
@@ -7661,6 +7685,20 @@ mod tests {
         assert!(!saved_by_program(&tray, UPC));
         assert!(!saved_by_program(&tray, ""));
         assert!(!saved_by_program(&proton_entry("", "steam_proton"), EXPLORER));
+    }
+
+    #[test]
+    fn a_reconnect_is_the_same_program_under_the_same_app_id() {
+        let upc = Some(UPC);
+        let game = Some(r"C:\Program Files\Ubisoft\Trackmania\Trackmania.exe");
+        // The launcher's own window coming back is a reconnect...
+        assert!(is_reconnect("steam_proton", upc, "steam_proton", upc));
+        // ...a game it started, sharing only the app_id, is not.
+        assert!(!is_reconnect("steam_proton", upc, "steam_proton", game));
+        // Unknown program on either side: the app_id decides, as before.
+        assert!(is_reconnect("steam_proton", None, "steam_proton", game));
+        assert!(is_reconnect("cce-files", Some("/usr/bin/cce-files"), "cce-files", None));
+        assert!(!is_reconnect("cce-files", None, "cce-mail", None));
     }
 
     #[test]

@@ -2032,7 +2032,8 @@ impl Window {
             // does too and which must still focus and spawn-pan normally.
             if should_focus {
                 if let Some(app_id) = self.get_app_id_string() {
-                    if (*self.server).wm.take_recent_vanish(&app_id) {
+                    let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
+                    if (*self.server).wm.take_recent_vanish(&app_id, program.as_deref()) {
                         log::info!("[FocusRestore] Blocking focus steal by reconnecting client {:?} ({})", self.get_title(), app_id);
                         should_focus = false;
                     }
@@ -2130,7 +2131,8 @@ impl Window {
             )
         {
             if let Some(app_id) = self.get_app_id_string() {
-                (*self.server).wm.note_vanished(app_id);
+                let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
+                (*self.server).wm.note_vanished(app_id, program);
             }
         }
         wl_listener_remove_safe(&mut self.commit);

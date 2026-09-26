@@ -692,6 +692,17 @@ what the user pans along (cce-data-editor parked left of the first column
 came back mid-view every login before 2026-09-14). The recall is for a
 window with no tiled neighbour within a screen.
 
+**A client reconnecting maps unfocused**: a window that vanishes without
+the compositor asking it to close (`Window::unmap` → `note_vanished`) lets
+the next window of the same app_id AND the same program (`proc_args`
+argv[0]) within 5 s map without taking focus (`take_recent_vanish`) — a
+cce-ui client rebuilding its surface on a fresh connection must not steal
+focus back. The program half is from 2026-09-26: keyed on app_id alone,
+every Proton program is `steam_proton`, so a game Ubisoft Connect launched
+a second after closing one of its own windows was held unfocused, and the
+user's fullscreen key went to the window that kept focus. An unreadable
+program (the process already gone) falls back to the app_id.
+
 Restored windows map unfocused, and their FIRST focus pans the camera only
 once the session has seen deliberate input (`WindowManager::startup_input_seen`,
 gated in `Seat::focus`), so apps settling in at login do not drag the view
