@@ -60,6 +60,125 @@ fn path_shadowed_name(argv0: &str, path_var: &str) -> Option<String> {
     None
 }
 
+/// A process's argv the way `save_state` records it: `/proc/<pid>/cmdline`
+/// split on NUL, an AppImage's throwaway `/tmp/.mount_*` path swapped for
+/// the `APPIMAGE` it was launched from, and argv[0] reduced to its bare name
+/// when `PATH` resolves that name to a different file (`path_shadowed_name`).
+/// Empty when the pid is unknown or the process is gone.
+pub(crate) fn proc_args(pid: i32) -> Vec<String> {
+    if pid <= 0 {
+        return Vec::new();
+    }
+    let proc_cmdline = std::fs::read(format!("/proc/{}/cmdline", pid)).unwrap_or_default();
+    if proc_cmdline.is_empty() {
+        return Vec::new();
+    }
+    let mut args: Vec<String> = proc_cmdline
+        .split(|&b| b == 0)
+        .map(|arg| String::from_utf8_lossy(arg).into_owned())
+        .collect();
+    if args.last().map_or(false, |s| s.is_empty()) {
+        args.pop();
+    }
+    if !args.is_empty() && args[0].starts_with("/tmp/.mount_") {
+        if let Ok(environ_bytes) = std::fs::read(format!("/proc/{}/environ", pid)) {
+            let appimage_opt = environ_bytes
+                .split(|&b| b == 0)
+                .find(|env_var| env_var.starts_with(b"APPIMAGE="))
+                .map(|env_var| {
+                    let val_bytes = &env_var[b"APPIMAGE=".len()..];
+                    String::from_utf8_lossy(val_bytes).into_owned()
+                });
+            if let Some(appimage_path) = appimage_opt {
+                args[0] = appimage_path;
+            }
+        }
+    }
+    // A wrapper that exec'd the real binary is invisible here;
+    // restore by the bare name when PATH says the name is a
+    // different file (see path_shadowed_name).
+    if !args.is_empty() {
+        if let Some(name) =
+            path_shadowed_name(&args[0], &std::env::var("PATH").unwrap_or_default())
+        {
+            args[0] = name;
+        }
+    }
+    args
+}
+
+/// Whether `saved` was recorded from a run of `program` — the argv[0]
+/// `proc_args` gives for the window that wants to borrow it.
+///
+/// The app_id-only pass of the state matchers exists for a relaunched main
+/// window whose title changed, and an app_id alone cannot tell that apart
+/// from a different program that happens to share the class. Every Proton
+/// window is `steam_proton`: Wine's fallback system-tray window (owned by
+/// the prefix's `explorer.exe /desktop`, untitled, a few icons wide) took
+/// Ubisoft Connect's 1214x689 and sat on the desk as a big white window, and
+/// Trackmania took the launcher's size the same way. Only a known program
+/// vetoes: an unknown pid, or an entry `save_state` could only label with
+/// its app_id, matches as before.
+fn same_program(saved: &SavedWindowState, program: Option<&str>) -> bool {
+    let Some(program) = program.filter(|p| !p.is_empty()) else {
+        return true;
+    };
+    if saved.cmdline.is_empty() || saved.cmdline == saved.app_id {
+        return true;
+    }
+    saved_by_program(saved, program)
+}
+
+/// Whether `saved`'s recorded cmdline positively names `program` as its
+/// argv[0]. Unlike `same_program`, an entry that recorded no real cmdline
+/// is not a match: this one decides what to delete, not what to refuse.
+fn saved_by_program(saved: &SavedWindowState, program: &str) -> bool {
+    // The saved cmdline is argv joined with spaces, and argv[0] may hold
+    // spaces itself (`C:\Program Files (x86)\...`), so compare by prefix
+    // rather than by splitting.
+    !program.is_empty()
+        && saved
+            .cmdline
+            .strip_prefix(program)
+            .map_or(false, |rest| rest.is_empty() || rest.starts_with(' '))
+}
+
+/// The state matchers' fuzzy title pass: equal once a trailing `*` (an
+/// editor's unsaved marker) is stripped, or one a prefix of the other.
+/// An empty title resembles nothing — as a prefix it would resemble every
+/// title, which made this pass an app_id-only match in disguise and let a
+/// title-less window skip `same_program`.
+fn titles_resemble(a: &str, b: &str) -> bool {
+    let t1 = a.trim_end_matches('*');
+    let t2 = b.trim_end_matches('*');
+    if t1.is_empty() || t2.is_empty() {
+        return false;
+    }
+    t1 == t2 || t1.starts_with(t2) || t2.starts_with(t1)
+}
+
+/// Say so when an app_id had saved entries but `same_program` refused them
+/// all — otherwise a window that restores nothing looks like one that had
+/// nothing saved. Debug, because `try_restore` runs again on every title
+/// change of a window that has not restored.
+fn log_program_veto<'a>(
+    entries: impl Iterator<Item = &'a SavedWindowState>,
+    app_id: &str,
+    title: &str,
+    program: Option<&str>,
+) {
+    let others: Vec<&str> = entries
+        .filter(|w| w.app_id == app_id)
+        .map(|w| w.cmdline.as_str())
+        .collect();
+    if !others.is_empty() {
+        log::debug!(
+            "Not borrowing saved state for app_id={} title={:?}: program {:?} saved none (saved by {:?})",
+            app_id, title, program.unwrap_or(""), others
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowManagerState {
     Idle,
@@ -1015,6 +1134,9 @@ impl WindowManager {
         let focused_win = self.focused_window();
         let mut saved_wins = Vec::new();
         let mut last_states = self.last_window_states.clone();
+        // (app_id, title, program) of each live shy window, whose own
+        // entries are scrubbed after the loop — see the skip below.
+        let mut shy: Vec<(String, String, String)> = Vec::new();
 
         for &w in self.windows.iter() {
             if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
@@ -1054,73 +1176,48 @@ impl WindowManager {
             let title = (*w).get_title_string().unwrap_or_default();
             
             let pid = (*w).unreliable_pid();
-            let mut cmdline = if pid > 0 {
-                let proc_cmdline = std::fs::read(format!("/proc/{}/cmdline", pid)).unwrap_or_default();
-                if !proc_cmdline.is_empty() {
-                    let mut args: Vec<String> = proc_cmdline
-                        .split(|&b| b == 0)
-                        .map(|arg| String::from_utf8_lossy(arg).into_owned())
-                        .collect();
-                    if args.last().map_or(false, |s| s.is_empty()) {
-                        args.pop();
-                    }
-                    if !args.is_empty() && args[0].starts_with("/tmp/.mount_") {
-                        if let Ok(environ_bytes) = std::fs::read(format!("/proc/{}/environ", pid)) {
-                            let appimage_opt = environ_bytes
-                                .split(|&b| b == 0)
-                                .find(|env_var| env_var.starts_with(b"APPIMAGE="))
-                                .map(|env_var| {
-                                    let val_bytes = &env_var[b"APPIMAGE=".len()..];
-                                    String::from_utf8_lossy(val_bytes).into_owned()
-                                });
-                            if let Some(appimage_path) = appimage_opt {
-                                args[0] = appimage_path;
-                            }
-                        }
-                    }
-                    // A wrapper that exec'd the real binary is invisible here;
-                    // restore by the bare name when PATH says the name is a
-                    // different file (see path_shadowed_name).
-                    if !args.is_empty() {
-                        if let Some(name) = path_shadowed_name(
-                            &args[0],
-                            &std::env::var("PATH").unwrap_or_default(),
-                        ) {
-                            args[0] = name;
-                        }
-                    }
-                    // foot only tracks its launch dir, not the shell's current
-                    // dir, so restore the child shell's cwd via
-                    // --working-directory. Strip any pre-existing one first so
-                    // the flag doesn't accumulate across save/restore cycles.
-                    if app_id == "foot" {
-                        if let Some(cwd) = foot_shell_cwd(pid) {
-                            let mut i = 1;
-                            while i < args.len() {
-                                if args[i] == "--working-directory" || args[i] == "-D" {
-                                    args.drain(i..(i + 2).min(args.len()));
-                                } else if args[i].starts_with("--working-directory=")
-                                    || args[i].starts_with("-D")
-                                {
-                                    args.remove(i);
-                                } else {
-                                    i += 1;
-                                }
-                            }
-                            let flag = format!(
-                                "--working-directory='{}'",
-                                cwd.replace('\'', r"'\''")
-                            );
-                            args.insert(1.min(args.len()), flag);
-                        }
-                    }
-                    args.join(" ")
-                } else {
-                    String::new()
+            let mut args = proc_args(pid);
+            // A shy helper (`Window::is_shy`) is never restored — its app
+            // places it — so saving it can only do harm: it takes the app's
+            // one slot in `last_window_states`, holding a geometry nothing
+            // should borrow, and puts a helper process in the session list.
+            // Wine's fallback tray window did both, saved at the 1214x689 it
+            // had wrongly borrowed from Ubisoft Connect, which left it the
+            // only `steam_proton` entry. Skip it, and scrub what it saved
+            // before this rule (or before its no-activate state arrived,
+            // which can be after map) so a poisoned state file heals.
+            if (*w).is_shy() {
+                if let Some(program) = args.first() {
+                    shy.push((app_id.clone(), title.clone(), program.clone()));
                 }
-            } else {
-                String::new()
-            };
+                continue;
+            }
+            // foot only tracks its launch dir, not the shell's current
+            // dir, so restore the child shell's cwd via
+            // --working-directory. Strip any pre-existing one first so
+            // the flag doesn't accumulate across save/restore cycles.
+            if app_id == "foot" && !args.is_empty() {
+                if let Some(cwd) = foot_shell_cwd(pid) {
+                    let mut i = 1;
+                    while i < args.len() {
+                        if args[i] == "--working-directory" || args[i] == "-D" {
+                            args.drain(i..(i + 2).min(args.len()));
+                        } else if args[i].starts_with("--working-directory=")
+                            || args[i].starts_with("-D")
+                        {
+                            args.remove(i);
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    let flag = format!(
+                        "--working-directory='{}'",
+                        cwd.replace('\'', r"'\''")
+                    );
+                    args.insert(1.min(args.len()), flag);
+                }
+            }
+            let mut cmdline = args.join(" ");
             if cmdline.is_empty() {
                 cmdline = app_id.clone();
             }
@@ -1151,6 +1248,13 @@ impl WindowManager {
         }
         // Scrub entries persisted before the cce-cloud exclusion above.
         last_states.retain(|s| s.app_id != "cce-cloud");
+        let saved_by_shy = |s: &SavedWindowState| {
+            shy.iter().any(|(app_id, title, program)| {
+                s.app_id == *app_id && s.title == *title && saved_by_program(s, program)
+            })
+        };
+        last_states.retain(|s| !saved_by_shy(s));
+        self.exit_orphans.retain(|s| !saved_by_shy(s));
         self.last_window_states = last_states;
 
         // A cancelled logout already closed some windows; keep their entries
@@ -1356,7 +1460,14 @@ impl WindowManager {
         self.bevel_apps.iter().any(|a| app_id_matches(a, app_id))
     }
 
-    pub unsafe fn match_and_remove_restore_state(&mut self, app_id: &str, title: &str) -> Option<SavedWindowState> {
+    /// `program` is the asking window's argv[0] (`proc_args`), `None` when
+    /// unknown; it gates only the app_id-only pass (see `same_program`).
+    pub unsafe fn match_and_remove_restore_state(
+        &mut self,
+        app_id: &str,
+        title: &str,
+        program: Option<&str>,
+    ) -> Option<SavedWindowState> {
         if app_id.is_empty() {
             return None;
         }
@@ -1367,28 +1478,28 @@ impl WindowManager {
             return Some(entry);
         }
         // Second pass: Fuzzy title match (e.g. prefix match, asterisk stripping)
-        if let Some(pos) = self.restore_queue.iter().position(|w| {
-            if w.app_id != app_id {
-                return false;
-            }
-            let t1 = title.trim_end_matches('*');
-            let t2 = w.title.trim_end_matches('*');
-            t1 == t2 || t1.starts_with(t2) || t2.starts_with(t1)
-        }) {
+        if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id && titles_resemble(title, &w.title)) {
             let entry = self.restore_queue.remove(pos);
             self.remove_placeholder_for(&entry);
             return Some(entry);
         }
-        // Third pass: app_id only match
-        if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id) {
+        // Third pass: app_id only match, from the same program
+        if let Some(pos) = self.restore_queue.iter().position(|w| w.app_id == app_id && same_program(w, program)) {
             let entry = self.restore_queue.remove(pos);
             self.remove_placeholder_for(&entry);
             return Some(entry);
         }
+        log_program_veto(self.restore_queue.iter(), app_id, title, program);
         None
     }
 
-    pub unsafe fn match_last_window_state(&self, app_id: &str, title: &str) -> Option<SavedWindowState> {
+    /// `program` as for `match_and_remove_restore_state`.
+    pub unsafe fn match_last_window_state(
+        &self,
+        app_id: &str,
+        title: &str,
+        program: Option<&str>,
+    ) -> Option<SavedWindowState> {
         if app_id.is_empty() {
             return None;
         }
@@ -1397,20 +1508,14 @@ impl WindowManager {
             return Some(w.clone());
         }
         // Second pass: Fuzzy title match
-        if let Some(w) = self.last_window_states.iter().find(|w| {
-            if w.app_id != app_id {
-                return false;
-            }
-            let t1 = title.trim_end_matches('*');
-            let t2 = w.title.trim_end_matches('*');
-            t1 == t2 || t1.starts_with(t2) || t2.starts_with(t1)
-        }) {
+        if let Some(w) = self.last_window_states.iter().find(|w| w.app_id == app_id && titles_resemble(title, &w.title)) {
             return Some(w.clone());
         }
-        // Third pass: app_id only match
-        if let Some(w) = self.last_window_states.iter().find(|w| w.app_id == app_id) {
+        // Third pass: app_id only match, from the same program
+        if let Some(w) = self.last_window_states.iter().find(|w| w.app_id == app_id && same_program(w, program)) {
             return Some(w.clone());
         }
+        log_program_veto(self.last_window_states.iter(), app_id, title, program);
         None
     }
 
@@ -7455,7 +7560,7 @@ mod tests {
 
         unsafe {
             // Test exact match
-            let matched = wm.match_last_window_state("test-app", "My App Window");
+            let matched = wm.match_last_window_state("test-app", "My App Window", None);
             assert!(matched.is_some());
             let m = matched.unwrap();
             assert_eq!(m.app_id, "test-app");
@@ -7463,19 +7568,103 @@ mod tests {
             assert_eq!(m.virtual_y, 200.0);
 
             // Test fuzzy title match
-            let matched_fuzzy = wm.match_last_window_state("test-app", "My App Window*");
+            let matched_fuzzy = wm.match_last_window_state("test-app", "My App Window*", None);
             assert!(matched_fuzzy.is_some());
 
             // Test app_id only match
-            let matched_appid = wm.match_last_window_state("test-app", "Different Title");
+            let matched_appid = wm.match_last_window_state("test-app", "Different Title", None);
             assert!(matched_appid.is_some());
             assert_eq!(matched_appid.unwrap().width, 800);
 
             // Test no match
-            let no_match = wm.match_last_window_state("other-app", "My App Window");
+            let no_match = wm.match_last_window_state("other-app", "My App Window", None);
             assert!(no_match.is_none());
         }
 
+        std::mem::forget(wm);
+    }
+
+    fn proton_entry(title: &str, cmdline: &str) -> SavedWindowState {
+        SavedWindowState {
+            app_id: "steam_proton".to_string(),
+            title: title.to_string(),
+            tiling_mode: crate::tiling::TilingMode::Floating,
+            minimized: false,
+            virtual_x: -5002.0,
+            virtual_y: -1517.0,
+            scale: 1.0,
+            width: 1214,
+            height: 689,
+            cmdline: cmdline.to_string(),
+            focused: false,
+        }
+    }
+
+    const UPC: &str = r"C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\upc.exe";
+    const EXPLORER: &str = r"C:\windows\system32\explorer.exe";
+
+    #[test]
+    fn same_program_compares_argv0_by_prefix() {
+        let saved = proton_entry("Ubisoft Connect", &format!("{UPC} -upc_desktop_mode --disable-gpu"));
+        assert!(same_program(&saved, Some(UPC)));
+        assert!(!same_program(&saved, Some(EXPLORER)));
+        // A prefix of argv[0] is not argv[0].
+        assert!(!same_program(&saved, Some(UPC.trim_end_matches(".exe"))));
+        // Unknown on either side never vetoes.
+        assert!(same_program(&saved, None));
+        assert!(same_program(&saved, Some("")));
+        assert!(same_program(&proton_entry("x", "steam_proton"), Some(EXPLORER)));
+        assert!(same_program(&proton_entry("x", ""), Some(EXPLORER)));
+        // A bare argv with no arguments.
+        assert!(same_program(&proton_entry("x", UPC), Some(UPC)));
+    }
+
+    /// The scrub of a shy window's own entries deletes only on positive
+    /// evidence: an entry `save_state` could label with just the app_id
+    /// names no program, so it is kept.
+    #[test]
+    fn saved_by_program_needs_a_recorded_cmdline() {
+        let tray = proton_entry("", &format!("{EXPLORER} /desktop      "));
+        assert!(saved_by_program(&tray, EXPLORER));
+        assert!(!saved_by_program(&tray, UPC));
+        assert!(!saved_by_program(&tray, ""));
+        assert!(!saved_by_program(&proton_entry("", "steam_proton"), EXPLORER));
+    }
+
+    #[test]
+    fn empty_titles_resemble_nothing() {
+        assert!(titles_resemble("Doc.txt*", "Doc.txt"));
+        assert!(titles_resemble("Ubisoft Connect", "Ubisoft"));
+        assert!(!titles_resemble("Ubisoft Connect", ""));
+        assert!(!titles_resemble("", "Ubisoft Connect"));
+        assert!(!titles_resemble("*", ""));
+    }
+
+    /// Wine's fallback tray window is untitled, owned by the prefix's
+    /// explorer.exe, and shares `steam_proton` with every Proton app; it
+    /// must not borrow the launcher's saved geometry. Nor may the launcher
+    /// borrow the tray's, once the tray has been saved.
+    #[test]
+    #[allow(invalid_value)]
+    fn app_id_only_match_requires_same_program() {
+        let mut wm = unsafe { std::mem::MaybeUninit::<WindowManager>::zeroed().assume_init() };
+        unsafe {
+            std::ptr::write(&mut wm.last_window_states, Vec::new());
+        }
+        wm.last_window_states
+            .push(proton_entry("Ubisoft Connect", &format!("{UPC} -upc_desktop_mode")));
+        unsafe {
+            assert!(wm.match_last_window_state("steam_proton", "", Some(EXPLORER)).is_none());
+            // The launcher itself, under a changed title, still borrows.
+            assert!(wm.match_last_window_state("steam_proton", "Library", Some(UPC)).is_some());
+            // And with its pid unknown, as before.
+            assert!(wm.match_last_window_state("steam_proton", "", None).is_some());
+        }
+        wm.last_window_states[0] = proton_entry("", &format!("{EXPLORER} /desktop"));
+        unsafe {
+            assert!(wm.match_last_window_state("steam_proton", "Ubisoft Connect", Some(UPC)).is_none());
+            assert!(wm.match_last_window_state("steam_proton", "", Some(EXPLORER)).is_some());
+        }
         std::mem::forget(wm);
     }
 
