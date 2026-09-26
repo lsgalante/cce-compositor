@@ -46,6 +46,11 @@ pub struct XwaylandWindow {
     /// When this compositor last configured the X window or its maximized
     /// state: Wine's reaction to either arrives within moments of it.
     pub last_configure: Option<std::time::Instant>,
+
+    /// The last refusal of a smaller size seen per axis (width, height),
+    /// as `(sent, requested)` logical — what `learned_min` compares the
+    /// next one against to tell a floor from rounding.
+    pub refusals: [Option<(u32, u32)>; 2],
 }
 
 /// A window geometry in X11 root coordinates — physical pixels under
@@ -304,11 +309,29 @@ pub fn is_wine_exe(exe: &str) -> bool {
 }
 
 /// The minimum an X11 client revealed along one axis by asking for
-/// `requested` right after being configured to `sent`: larger than it was
-/// given means it would not go that small. `None` when that says nothing
-/// new (not a refusal, or no larger than the minimum already known).
-pub fn learned_min(sent: u32, requested: u32, known_min: u32) -> Option<u32> {
-    (requested > sent && requested > known_min).then_some(requested)
+/// `requested` right after being configured to `sent` — larger than it was
+/// given means it would not go that small — and the refusal to remember
+/// for the next call. `prev` is the last refusal seen, `(sent, requested)`.
+///
+/// One refusal is not enough: an app that rounds its size up (to character
+/// cells, to an aspect) answers "bigger" too, and a minimum learned from
+/// that is stored for good (`min_sizes`) and blocks every smaller size.
+/// A true minimum is a FLOOR — two different sent sizes answered with the
+/// same one (Ubisoft Connect asked for 2428 at every step of a drag).
+/// `None` when that says nothing new, including a floor no larger than
+/// the minimum already known.
+pub fn learned_min(prev: Option<(u32, u32)>, sent: u32, requested: u32, known_min: u32) -> (Option<u32>, Option<(u32, u32)>) {
+    if requested <= sent {
+        return (None, prev);
+    }
+    let floor = matches!(prev, Some((prev_sent, prev_req)) if prev_req == requested && prev_sent != sent);
+    ((floor && requested > known_min).then_some(requested), Some((sent, requested)))
+}
+
+/// A stored minimum (0 = none) checked against the size a window actually
+/// has: a smaller real size is the new minimum.
+pub fn lowered_min(stored: u32, actual: u32) -> u32 {
+    if stored > 0 && actual > 0 && actual < stored { actual } else { stored }
 }
 
 /// Whether `_MOTIF_WM_HINTS` (flags, functions, decorations, …) offer the
@@ -400,6 +423,7 @@ impl XwaylandWindow {
             wine_process: None,
             wine_max_unconfirmed: false,
             last_configure: None,
+            refusals: [None, None],
         });
 
         let raw = Box::into_raw(xwindow);
@@ -537,6 +561,49 @@ impl XwaylandWindow {
                 .map_or(false, |argv0| crate::window_manager::is_windows_path(argv0));
         self.wine_process = Some(wine);
         wine
+    }
+
+    /// This window's key in `min_sizes`: app_id, program (argv[0]) and
+    /// title. `None` while any is unknown — a window with no readable
+    /// process cannot be told from another program with its app_id.
+    unsafe fn min_size_key(&self) -> Option<(String, String, String)> {
+        let app_id = (*self.window).get_app_id_string()?;
+        let program = crate::window_manager::proc_args((*self.xsurface).pid).into_iter().next()?;
+        let title = (*self.window).get_title_string().unwrap_or_default();
+        Some((app_id, program, title))
+    }
+
+    /// Persist a learned minimum (logical `width`x`height` at X11 scale `s`).
+    unsafe fn store_min_size(&self, width: u32, height: u32, s: f32) {
+        let Some((app_id, program, title)) = self.min_size_key() else { return };
+        let (w, h) = (to_x11(width as i32, s) as u32, to_x11(height as i32, s) as u32);
+        (*(*self.window).server).wm.min_sizes.set(&app_id, &program, &title, w, h);
+    }
+
+    /// Hand the window the minimum a previous run learned, before its first
+    /// arrange, so the first drag past it already stops there.
+    unsafe fn apply_stored_min_size(&self) {
+        let Some((app_id, program, title)) = self.min_size_key() else { return };
+        let Some((stored_w, stored_h)) = (*(*self.window).server).wm.min_sizes.get(&app_id, &program, &title) else { return };
+        // Mapping at a size below the stored minimum proves the app takes
+        // it: the minimum was learned too high, or the app lowered it. Kept
+        // unchecked, a stale minimum outlives every restart.
+        let (w, h) = (
+            lowered_min(stored_w, (*self.xsurface).width as u32),
+            lowered_min(stored_h, (*self.xsurface).height as u32),
+        );
+        if (w, h) != (stored_w, stored_h) {
+            log::info!("XWayland map: '{}' maps below its stored minimum; lowered to {}x{} (X11 px)", title, w, h);
+            (*(*self.window).server).wm.min_sizes.set(&app_id, &program, &title, w, h);
+        }
+        let s = x11_scale_for((*self.window).server, self.xsurface);
+        let hint = crate::window::DimensionsHint {
+            min_width: if w > 0 { from_x11(w as i32, s) as u32 } else { 0 },
+            min_height: if h > 0 { from_x11(h as i32, s) as u32 } else { 0 },
+            ..(*self.window).wm_scheduled.dimensions_hint
+        };
+        log::info!("XWayland map: '{}' has a stored minimum of {}x{}", title, hint.min_width, hint.min_height);
+        (*self.window).set_dimensions_hint(hint);
     }
 
     /// Whether a `_NET_WM_STATE` request from this window is Wine's echo
@@ -755,6 +822,7 @@ unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
 
     place_transient_where_it_asked(xwindow);
     place_shy_where_it_is(xwindow);
+    (*xwindow).apply_stored_min_size();
 
     (*(*xwindow).window).state = WindowState::Initialized;
     if let Err(e) = (*(*xwindow).window).map() {
@@ -1010,11 +1078,29 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     // size — Ubisoft Connect fought the pointer at 1214x804 (2026-09-26).
     // So a refusal during an interactive resize is learned as the minimum,
     // and the drag clamps there (`DimensionsHint::clamp` in the seat op).
-    if (*window).wm_requested.resizing {
+    // Stored across restarts (`min_sizes`). And a minimum the app later
+    // goes below on its own, outside a drag, was set too high — or the app
+    // lowered it — so it follows the app down.
+    {
         let (req_w, req_h) = (from_x11((*event).width as i32, s) as u32, from_x11((*event).height as i32, s) as u32);
         let hint = (*window).wm_scheduled.dimensions_hint;
-        let min_w = (*window).configure_sent.width.and_then(|sent| learned_min(sent, req_w, hint.min_width));
-        let min_h = (*window).configure_sent.height.and_then(|sent| learned_min(sent, req_h, hint.min_height));
+        let (min_w, min_h) = if (*window).wm_requested.resizing {
+            let axis = |i: usize, sent: Option<u32>, req: u32, known: u32| {
+                let sent = sent?;
+                let (learned, prev) = learned_min((*xwindow).refusals[i], sent, req, known);
+                (*xwindow).refusals[i] = prev;
+                learned
+            };
+            (
+                axis(0, (*window).configure_sent.width, req_w, hint.min_width),
+                axis(1, (*window).configure_sent.height, req_h, hint.min_height),
+            )
+        } else {
+            (
+                (hint.min_width > 0 && req_w < hint.min_width).then_some(req_w),
+                (hint.min_height > 0 && req_h < hint.min_height).then_some(req_h),
+            )
+        };
         if min_w.is_some() || min_h.is_some() {
             let learned = crate::window::DimensionsHint {
                 min_width: min_w.unwrap_or(hint.min_width),
@@ -1022,10 +1108,14 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
                 ..hint
             };
             log::info!(
-                "XWayland configure request: '{}' refused a smaller size; minimum learned as {}x{}",
-                title, learned.min_width, learned.min_height,
+                "XWayland configure request: '{}' {}; minimum now {}x{}",
+                title,
+                if (*window).wm_requested.resizing { "refused a smaller size" } else { "went below its minimum" },
+                learned.min_width,
+                learned.min_height,
             );
             (*window).set_dimensions_hint(learned);
+            (*xwindow).store_min_size(learned.min_width, learned.min_height, s);
         }
     }
 
@@ -1271,13 +1361,31 @@ mod tests {
 
     #[test]
     fn a_refused_shrink_is_a_minimum() {
-        // Ubisoft Connect: dragged to 1100 wide, asks for 1214 back.
-        assert_eq!(learned_min(1100, 1214, 0), Some(1214));
+        // Ubisoft Connect: dragged to 1100, then 1050, asks for 1214 each
+        // time — a floor, learned on the second.
+        let (l, prev) = learned_min(None, 1100, 1214, 0);
+        assert_eq!((l, prev), (None, Some((1100, 1214))));
+        assert_eq!(learned_min(prev, 1050, 1214, 0), (Some(1214), Some((1050, 1214))));
         // Already known: nothing new.
-        assert_eq!(learned_min(1100, 1214, 1214), None);
-        // Taking the size given, or a smaller one, refuses nothing.
-        assert_eq!(learned_min(1214, 1214, 0), None);
-        assert_eq!(learned_min(1300, 1214, 0), None);
+        assert_eq!(learned_min(prev, 1050, 1214, 1214).0, None);
+        // Rounding up to a cell: every answer differs, never a floor.
+        let (l, prev) = learned_min(None, 803, 808, 0);
+        assert_eq!(l, None);
+        assert_eq!(learned_min(prev, 797, 800, 0).0, None);
+        // The same size sent twice is one refusal repeated, not a floor.
+        assert_eq!(learned_min(Some((1100, 1214)), 1100, 1214, 0).0, None);
+        // Taking the size given, or a smaller one, refuses nothing and
+        // keeps the last refusal.
+        assert_eq!(learned_min(Some((1100, 1214)), 1214, 1214, 0), (None, Some((1100, 1214))));
+        assert_eq!(learned_min(None, 1300, 1214, 0), (None, None));
+    }
+
+    #[test]
+    fn a_window_smaller_than_its_stored_minimum_lowers_it() {
+        assert_eq!(lowered_min(1400, 1200), 1200);
+        assert_eq!(lowered_min(1400, 1600), 1400);
+        assert_eq!(lowered_min(0, 1200), 0);
+        assert_eq!(lowered_min(1400, 0), 1400);
     }
 
     #[test]

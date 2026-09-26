@@ -451,6 +451,8 @@ pub struct WindowManager {
     /// before while making an idle session silent on disk. `None` until the
     /// first write, so a fresh start always writes once.
     pub last_saved_state_json: Option<String>,
+    /// X11 apps' learned minimum sizes, persisted in `min-sizes.json`.
+    pub min_sizes: crate::min_sizes::MinSizes,
     /// One-shot placement hints (`place-next <app_id> <x> <y>` over IPC):
     /// the next map of a floating toplevel with this app_id lands near the
     /// given layout position instead of its remembered spot — widget-spawned

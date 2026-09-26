@@ -91,6 +91,8 @@ pub mod shell_surface;
 pub mod wm_node;
 #[path = "server/xwayland_window.rs"]
 pub mod xwayland_window;
+#[path = "server/min_sizes.rs"]
+pub mod min_sizes;
 #[path = "server/xwayland_override_redirect.rs"]
 pub mod xwayland_override_redirect;
 #[path = "server/text_input.rs"]

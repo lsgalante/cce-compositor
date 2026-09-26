@@ -697,6 +697,13 @@ command, which `/bin/sh` cannot run, so the restore never relaunches them
 2026-09-26 Ubisoft Connect's plate stood a minute over the empty desk,
 waiting for a window nothing had started. The entry stays queued, so the app
 still lands on its saved spot when the user launches it.
+Beside it, **`min-sizes.json`** (`min_sizes.rs`) keeps the minimum sizes
+X11 apps revealed by refusing a smaller configure mid-drag — Wine sends no
+minimum for a resizable window, so Ubisoft Connect fought every shrink past
+1214x804. Only a floor counts (two different sizes answered with the same
+one, `xwayland_window::learned_min`), since a stored value is permanent;
+it is keyed by app_id, program and title, kept in X11 pixels, applied at
+map, and lowered when a window maps smaller than it.
 A restored **floating** window is recalled into the current view
 (`policy::camera::recalled_origin`, applied at the end of `try_restore`)
 when its remembered position would show less than a quarter of it: the

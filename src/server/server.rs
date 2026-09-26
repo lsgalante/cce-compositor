@@ -1020,6 +1020,7 @@ impl Default for Server {
             // explicitly rather than left to the zeroed MaybeUninit.
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.status_backdrops, std::cell::RefCell::new(Vec::new()));
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.last_saved_state_json, None);
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.min_sizes, crate::min_sizes::MinSizes::default());
             std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).cce_window_management, crate::cce_window_management::CceWindowManagement::new());
