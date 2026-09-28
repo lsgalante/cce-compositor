@@ -1149,15 +1149,17 @@ impl WindowManager {
             curr_out = (*curr_out).next;
         }
         let zoom = self.desk_zoom;
-        let radius = (self.layout.root_plate_corner_radius as f64 * zoom) as i32;
         for p in &self.restore_placeholders {
             let x = out_x + ((p.vx - self.desk_pan_x) * zoom).round() as i32;
             let y = out_y + ((p.vy - self.desk_pan_y) * zoom).round() as i32;
+            let (w, h) = ((p.w as f64 * zoom) as i32, (p.h as f64 * zoom) as i32);
             ffi::river_scene_node_set_position_if_changed(p.rect as *mut ffi::wlr_scene_node, x, y);
-            ffi::river_scene_rect_set_size_if_changed(
-                p.rect,
-                (p.w as f64 * zoom) as i32,
-                (p.h as f64 * zoom) as i32,
+            ffi::river_scene_rect_set_size_if_changed(p.rect, w, h);
+            // Span-widened like the window the placeholder stands in for
+            // and the grid cell it sits on; the raw radius read visibly
+            // squarer than both at corner_shape > 2.
+            let radius = crate::window::widen_corner_radius(
+                (self.layout.root_plate_corner_radius as f64 * zoom) as i32, w, h,
             );
             ffi::river_scene_rect_set_corner_radius(p.rect, radius);
         }

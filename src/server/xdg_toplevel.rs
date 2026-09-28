@@ -705,24 +705,11 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     };
     let geom_w = (actual_w as f64 * scale) as i32;
     let geom_h = (actual_h as f64 * scale) as i32;
-    // Must mirror Window::set_rendering_state's radius exactly: both paths drive the same
-    // blur node, so if they disagree the corners flip between rounded and square depending
-    // on which one ran last.
-    let radius = if (*window).is_fullscreen() {
-        0
-    } else if (*window).rendering_requested.circular {
-        let w = (*window).rendering_sent.width as i32;
-        let h = (*window).rendering_sent.height as i32;
-        w.min(h) / 2
-    } else if is_status {
-        // Same status exemption as Window::set_rendering_state (part of the
-        // mirror): status segments draw their own module-box corners.
-        0
-    } else if (*window).wm_requested.ssd || is_decorated {
-        (*(*window).server).wm.layout.root_plate_corner_radius
-    } else {
-        0
-    };
+    // The same radius Window::set_rendering_state applies — the one
+    // `root_plate_radius_base`, not a mirrored copy: both paths drive the same
+    // blur node, and when two copies disagreed the corners flipped between
+    // rounded and square depending on which one ran last.
+    let radius = (*window).root_plate_radius_base();
     // Same span widening as Window::set_rendering_state (part of the mirror).
     let radius = if (*window).rendering_requested.circular {
         radius

@@ -1265,6 +1265,33 @@ fn expand_env_vars(s: &str) -> String {
     result
 }
 
+/// A node's keyed values in BOTH KDL spellings, as `(key, entry)`: its
+/// properties (`root color="…" blur=0.5 corner_radius=24`) and its child
+/// nodes' first positional value (`root { color "…"; blur 0.5;
+/// corner_radius 24 }`). The child form is what cce-data-editor writes and
+/// what cce-ui's `kdl_to_json` reads; a block parsed from properties alone
+/// silently keeps its defaults under it, which is how the compositor ran on
+/// a root radius of 12 while every cce-ui app read the config's 24
+/// (2026-09-28). Properties first, then children, so a key given both ways
+/// takes the child's.
+fn node_keyed_values(node: &kdl::KdlNode) -> Vec<(String, kdl::KdlEntry)> {
+    let mut out: Vec<(String, kdl::KdlEntry)> = node
+        .entries()
+        .iter()
+        .filter_map(|e| e.name().map(|n| (n.value().to_string(), e.clone())))
+        .collect();
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if let Some(e) = child.entries().first() {
+                if e.name().is_none() {
+                    out.push((child.name().value().to_string(), e.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
 fn get_child_arg_i64(node: &kdl::KdlNode, child_name: &str, default: i64) -> i64 {
     if let Some(children) = node.children() {
         for child in children.nodes() {
@@ -2154,39 +2181,44 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                         .and_then(|c| c.nodes().iter().find(|n| n.name().value() == "root"));
                     if let Some(root_node) = root_plate_node {
                         found_nested = true;
-                        for entry in root_node.entries() {
-                            if let Some(id) = entry.name() {
-                                match id.value() {
-                                    "color" => {
-                                        if let Some(val) = entry.value().as_string() {
-                                            surface.root_plate_color = val.to_string();
-                                        }
+                        // Both spellings — properties on the `root` line and
+                        // child nodes inside `root { … }` — see
+                        // `node_keyed_values`. This block is the one the
+                        // window silhouette comes from, and cce-ui reads the
+                        // same keys either way; reading one spelling here put
+                        // the compositor's clip and the apps' root plates on
+                        // different radii.
+                        for (key, entry) in node_keyed_values(root_node) {
+                            match key.as_str() {
+                                "color" => {
+                                    if let Some(val) = entry.value().as_string() {
+                                        surface.root_plate_color = val.to_string();
                                     }
-                                    "blur" => {
-                                        if let Some(mut val) = entry.value().as_f64() {
-                                            if let Some(ty) = entry.ty() {
-                                                let ty_str = ty.value();
-                                                if ty_str.starts_with("f64:") {
-                                                    let range_str = ty_str.trim_start_matches("f64:");
-                                                    if let Some(dash_idx) = range_str.find('-') {
-                                                        let min_str = &range_str[..dash_idx].trim();
-                                                        let max_str = &range_str[dash_idx + 1..].trim();
-                                                        if let (Ok(min_f), Ok(max_f)) = (min_str.parse::<f64>(), max_str.parse::<f64>()) {
-                                                            val = val.clamp(min_f, max_f);
-                                                        }
+                                }
+                                "blur" => {
+                                    if let Some(mut val) = entry.value().as_f64() {
+                                        if let Some(ty) = entry.ty() {
+                                            let ty_str = ty.value();
+                                            if ty_str.starts_with("f64:") {
+                                                let range_str = ty_str.trim_start_matches("f64:");
+                                                if let Some(dash_idx) = range_str.find('-') {
+                                                    let min_str = &range_str[..dash_idx].trim();
+                                                    let max_str = &range_str[dash_idx + 1..].trim();
+                                                    if let (Ok(min_f), Ok(max_f)) = (min_str.parse::<f64>(), max_str.parse::<f64>()) {
+                                                        val = val.clamp(min_f, max_f);
                                                     }
                                                 }
                                             }
-                                            surface.root_plate_blur = val;
                                         }
+                                        surface.root_plate_blur = val;
                                     }
-                                    "corner_radius" => {
-                                        if let Some(val) = entry.value().as_i64() {
-                                            surface.root_plate_corner_radius = val;
-                                        }
-                                    }
-                                    _ => {}
                                 }
+                                "corner_radius" => {
+                                    if let Some(val) = entry.value().as_i64() {
+                                        surface.root_plate_corner_radius = val;
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -3012,6 +3044,28 @@ style {
         let config = parse_kdl_config(canonical).unwrap();
         assert_eq!(config.surface.root_plate_corner_radius, 21, "canonical read; legacy ignored");
         assert_eq!(config.surface.root_plate_color, "#11223344");
+
+        // The child-node spelling of the same block — what cce-data-editor
+        // writes and what a hand-kept config tends to grow into — reads the
+        // same. Until 2026-09-28 it did not, and the compositor sat on its
+        // default radius under root plates the apps drew at the config's.
+        let children = r##"
+style {
+    surface {
+        plate {
+            root {
+                blur (f64)0.1
+                color (rgba)"#5e657acf"
+                corner_radius (i64)24
+            }
+        }
+    }
+}
+"##;
+        let config = parse_kdl_config(children).unwrap();
+        assert_eq!(config.surface.root_plate_corner_radius, 24, "child-node spelling");
+        assert_eq!(config.surface.root_plate_color, "#5e657acf");
+        assert!((config.surface.root_plate_blur - 0.1).abs() < 1e-9);
 
         // The legacy spelling alone is not read: the defaults stand.
         let legacy = r##"

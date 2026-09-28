@@ -3086,25 +3086,11 @@ impl Window {
             }
             // Hoisted above the blur setup: the blur node needs this radius, and whether
             // the window wants rounded corners at all decides the optimized-blur question
-            // below.
-            let radius = if self.is_fullscreen() {
-                0
-            } else if requested.circular {
-                let w = self.rendering_sent.width as i32;
-                let h = self.rendering_sent.height as i32;
-                w.min(h) / 2
-            } else if is_status {
-                // Status segments draw their own module-box corners. The
-                // root plate clip is invisible on a bar-thin segment (the
-                // half-extent cap keeps it inside the transparent band) but
-                // carves visible sweeps into an EXPANDED segment's in-surface
-                // menu box once the cap stops binding.
-                0
-            } else if self.wm_requested.ssd || is_decorated {
-                (*self.server).wm.layout.root_plate_corner_radius
-            } else {
-                0
-            };
+            // below. ONE source — `root_plate_radius_base` — for this path,
+            // `render_viewport_update`, the toplevel commit path and
+            // `draw_borders`: until 2026-09-28 each carried its own copy of
+            // the fullscreen / circular / status / decorated decision.
+            let radius = self.root_plate_radius_base();
             // Rounded corners do NOT require live blur: the corner shape is applied by the
             // standard blur node's sampler (wlr_scene_blur_set_corner_radius) in both modes;
             // the optimized node only re-bakes the shared offscreen cache
@@ -3573,24 +3559,12 @@ impl Window {
                 if is_status {
                     ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
                 }
-                // Same radius/optimized reasoning as set_rendering_state. Before, this path
-                // set no radius at all, so a blur node recreated during a pan came back
-                // square and stayed that way.
-                let radius = if self.is_fullscreen() {
-                    0
-                } else if requested.circular {
-                    let w = self.rendering_sent.width as i32;
-                    let h = self.rendering_sent.height as i32;
-                    w.min(h) / 2
-                } else if is_status {
-                    // Same status exemption as set_rendering_state — the two
-                    // paths drive the same nodes and must agree.
-                    0
-                } else if self.wm_requested.ssd || is_decorated {
-                    (*self.server).wm.layout.root_plate_corner_radius
-                } else {
-                    0
-                };
+                // Same radius/optimized reasoning as set_rendering_state — the
+                // one `root_plate_radius_base`, so the two paths, which drive
+                // the same nodes, cannot disagree. Before, this path set no
+                // radius at all, so a blur node recreated during a pan came
+                // back square and stayed that way.
+                let radius = self.root_plate_radius_base();
                 // Rounded corners do NOT require live blur: the corner shape is applied by the
                 // standard blur node's sampler (wlr_scene_blur_set_corner_radius) in both modes;
                 // the optimized node only re-bakes the shared offscreen cache
@@ -3667,12 +3641,14 @@ impl Window {
     }
 
     /// The root plate / content-clip corner radius in logical px, before span
-    /// widening. Single source for every writer of that radius: the two render
-    /// paths clip the surface with it, and `draw_borders` shapes the root plate
-    /// rect with it. Those disagreed — draw_borders applied the BORDER ring's
-    /// radius to the root plate node and, running last, silently overrode the
-    /// value set_rendering_state had just written, making
-    /// `root_plate_corner_radius` dead config.
+    /// widening (`widen_corner_radius`). THE source for every writer of that
+    /// radius — `set_rendering_state`, `render_viewport_update`, the toplevel
+    /// commit path in `xdg_toplevel.rs` and `draw_borders` — where until
+    /// 2026-09-28 the first three each kept an inline copy of this decision
+    /// "mirrored" by comment. They disagreed once before: draw_borders applied
+    /// the BORDER ring's radius to the root plate node and, running last,
+    /// silently overrode the value set_rendering_state had just written,
+    /// making `root_plate_corner_radius` dead config.
     pub unsafe fn root_plate_radius_base(&self) -> i32 {
         if self.is_fullscreen() {
             return 0;
