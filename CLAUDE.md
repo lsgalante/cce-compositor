@@ -410,6 +410,16 @@ treats them as opaque.
   legacy X11 tray icon, which X must have mapped for the icon to draw but
   which is shown in the status bar instead (`cce-status-interface`'s
   `cce-xembed-tray`).
+  An override-redirect window never takes the keyboard from ANOTHER client
+  (`focus_if_desired`): it gets it only when the seat holds nothing or a
+  window/popup of its own process. wlroots' `override_redirect_wants_focus`
+  cannot tell a Wine tooltip from a Wine menu — both are
+  `_NET_WM_WINDOW_TYPE_DIALOG` with `WM_TAKE_FOCUS` and the same Win32
+  styles — so until 2026-09-27 the tooltip Wine's `explorer.exe` shows on
+  every forwarded tray click took focus from whatever the user was typing
+  in, and kept it after closing. The price is keyboard navigation in the
+  menu of an app with no focused window (a tray menu); the pointer still
+  drives it.
 - Output: `output.rs`, `output_manager.rs`. Session: `lock_manager.rs`,
   `idle_inhibit_manager.rs`. Rendering: `scene.rs`, `scene_node_data.rs`.
 

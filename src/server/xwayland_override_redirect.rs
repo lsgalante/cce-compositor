@@ -148,31 +148,55 @@ impl XwaylandOverrideRedirect {
         );
     }
 
+    /// Give the keyboard to this popup when it asks for it, but never take
+    /// it from another client: only when the seat holds nothing, or holds
+    /// a window or popup of the popup's own process.
+    ///
+    /// wlroots' `override_redirect_wants_focus` only rules out the window
+    /// types a popup is expected to declare, and Wine declares none of
+    /// them: its tooltips and menus alike are `_NET_WM_WINDOW_TYPE_DIALOG`
+    /// with `WM_TAKE_FOCUS`, and their Win32 styles (`_WINE_HWND_STYLE`)
+    /// match too. So a tray icon's tooltip — which Wine's `explorer.exe`
+    /// shows on every click the XEmbed bridge forwards — took the keyboard
+    /// from whatever the user was typing in until 2026-09-27. An X server's
+    /// own window manager never focuses an override-redirect window at
+    /// all; the cost of holding back here is keyboard navigation in a menu
+    /// whose app has no focused window, e.g. a tray menu, which the pointer
+    /// still drives.
     pub unsafe fn focus_if_desired(&self) {
         if (*self.server).lock_manager.state != crate::lock_manager::LockState::Unlocked {
             return;
         }
-
-        if ffi::wlr_xwayland_surface_override_redirect_wants_focus(self.xsurface)
-            && ffi::wlr_xwayland_surface_icccm_input_model(self.xsurface)
-                != ffi::wlr_xwayland_icccm_input_model_WLR_ICCCM_INPUT_MODEL_NONE
+        if !ffi::wlr_xwayland_surface_override_redirect_wants_focus(self.xsurface)
+            || ffi::wlr_xwayland_surface_icccm_input_model(self.xsurface)
+                == ffi::wlr_xwayland_icccm_input_model_WLR_ICCCM_INPUT_MODEL_NONE
         {
-            let seat = (*self.server).input_manager.default_seat;
-            if !seat.is_null() {
-                if let crate::seat::Focus::Window(window) = (*seat).focused {
-                    if !window.is_null() && matches!((*window).impl_type, crate::window::WindowImpl::Xwayland(_)) {
-                        let parent_xwindow = (*window).impl_type;
-                        if let crate::window::WindowImpl::Xwayland(xwindow) = parent_xwindow {
-                            if !xwindow.is_null() && (*(*xwindow).xsurface).pid == (*self.xsurface).pid {
-                                (*seat).keyboard_enter_or_leave((*self.xsurface).surface);
-                                return;
-                            }
-                        }
+            return;
+        }
+        let seat = (*self.server).input_manager.default_seat;
+        if seat.is_null() {
+            return;
+        }
+        let pid = (*self.xsurface).pid;
+        match (*seat).focused {
+            crate::seat::Focus::Window(window) if !window.is_null() => {
+                if let crate::window::WindowImpl::Xwayland(xwindow) = (*window).impl_type {
+                    if !xwindow.is_null() && (*(*xwindow).xsurface).pid == pid {
+                        (*seat).keyboard_enter_or_leave((*self.xsurface).surface);
+                        return;
                     }
                 }
-                (*seat).focus(crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
+                log::debug!("override redirect (pid {pid}) mapped unfocused: another client holds the keyboard");
+                return;
+            }
+            crate::seat::Focus::None => {}
+            crate::seat::Focus::OverrideRedirect(or) if !or.is_null() && (*(*or).xsurface).pid == pid => {}
+            _ => {
+                log::debug!("override redirect (pid {pid}) mapped unfocused: another client holds the keyboard");
+                return;
             }
         }
+        (*seat).focus(crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
     }
 }
 
