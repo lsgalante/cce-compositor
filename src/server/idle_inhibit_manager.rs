@@ -46,36 +46,84 @@ impl IdleInhibitManager {
         }
     }
 
+    /// Recount the live inhibitors and hand the idle manager the list of who
+    /// holds one, so `ccectl idle status` can name them. Every inhibitor is
+    /// visited (no early exit): two apps holding one are both reported.
     pub unsafe fn check_active(&self) {
-        let mut inhibited = false;
-        
+        let mut names: Vec<String> = Vec::new();
+
         let inhibitors_head = &self.inhibitors as *const ffi::wl_list as *mut crate::server::WlList;
         let mut curr = (*inhibitors_head).next;
         while curr != inhibitors_head {
             let next = (*curr).next;
             let inhibitor = crate::container_of!(curr, IdleInhibitor, link);
-            
+
             let surface = (*(*inhibitor).wlr_inhibitor).surface;
             if let Some(node_data) = SceneNodeData::from_surface(surface) {
-                match node_data.data {
-                    crate::scene_node_data::SceneNodeDataVal::Window(_) |
-                    crate::scene_node_data::SceneNodeDataVal::ShellSurface(_) |
-                    crate::scene_node_data::SceneNodeDataVal::LockSurface(_) |
-                    crate::scene_node_data::SceneNodeDataVal::LayerSurface(_) |
-                    crate::scene_node_data::SceneNodeDataVal::OverrideRedirect(_) => {
-                        inhibited = true;
-                        break;
+                use crate::scene_node_data::SceneNodeDataVal::*;
+                let name = match node_data.data {
+                    Window(w) => inhibitor_name(
+                        "window",
+                        (*w).get_app_id_string().as_deref(),
+                        (*w).get_title_string().as_deref(),
+                    ),
+                    ShellSurface(_) => inhibitor_name("shell-surface", None, None),
+                    LockSurface(_) => inhibitor_name("lock-surface", None, None),
+                    LayerSurface(l) => {
+                        let ns = (*(*l).wlr_layer_surface).namespace;
+                        let ns = (!ns.is_null())
+                            .then(|| std::ffi::CStr::from_ptr(ns).to_string_lossy().into_owned());
+                        inhibitor_name("layer", ns.as_deref(), None)
                     }
+                    OverrideRedirect(_) => inhibitor_name("xwayland-override-redirect", None, None),
+                };
+                if !names.contains(&name) {
+                    names.push(name);
                 }
             }
             curr = next;
         }
 
+        let inhibited = !names.is_empty();
         let notifier = (*self.server).input_manager.idle_notifier;
         if !notifier.is_null() {
             ffi::wlr_idle_notifier_v1_set_inhibited(notifier, inhibited);
         }
-        (*self.server).idle.set_inhibited(inhibited);
+        (*self.server).idle.set_inhibitors(names);
+    }
+}
+
+/// What the status line calls one inhibitor: a window's app id, its title
+/// when the client never set one, and the bare kind when it set neither; a
+/// layer surface shows as `layer:<namespace>`. Kinds are stable words, so a
+/// script can tell a browser holding the display from the lock screen.
+pub fn inhibitor_name(kind: &str, id: Option<&str>, title: Option<&str>) -> String {
+    let id = id.filter(|s| !s.is_empty());
+    let title = title.filter(|s| !s.is_empty());
+    match (kind, id, title) {
+        ("window", Some(id), _) => id.to_string(),
+        ("window", None, Some(title)) => format!("window:{}", title),
+        (kind, Some(id), _) => format!("{}:{}", kind, id),
+        (kind, None, _) => kind.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inhibitor_name;
+
+    #[test]
+    fn a_window_is_its_app_id_then_its_title_then_the_kind() {
+        assert_eq!(inhibitor_name("window", Some("cce-browser"), Some("Video")), "cce-browser");
+        assert_eq!(inhibitor_name("window", None, Some("Video")), "window:Video");
+        assert_eq!(inhibitor_name("window", Some(""), None), "window");
+    }
+
+    #[test]
+    fn other_surfaces_are_their_kind_with_an_optional_id() {
+        assert_eq!(inhibitor_name("layer", Some("bar"), None), "layer:bar");
+        assert_eq!(inhibitor_name("layer", None, None), "layer");
+        assert_eq!(inhibitor_name("lock-surface", None, None), "lock-surface");
     }
 }
 

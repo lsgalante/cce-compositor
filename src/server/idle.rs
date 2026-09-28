@@ -61,6 +61,10 @@ pub struct IdleManager {
     sleep_command: Option<String>,
     /// An idle-inhibitor is active: timers are held disarmed.
     inhibited: bool,
+    /// Who holds one, by app id (a window) or surface kind, deduplicated,
+    /// in creation order; empty when nobody does. `Option` for the same
+    /// reason as `sleep_command`: null-niche safe under the zeroed init.
+    inhibitors: Option<Vec<String>>,
     /// The display timeout fired and outputs were darkened by us.
     displays_off: bool,
     /// The sleep command was spawned; cleared by the next activity.
@@ -103,6 +107,7 @@ impl IdleManager {
         self.sleep_ms = 0;
         self.sleep_command = None;
         self.inhibited = false;
+        self.inhibitors = None;
         self.displays_off = false;
         self.sleeping = false;
         self.armed_at_ms = 0;
@@ -165,15 +170,33 @@ impl IdleManager {
         self.rearm(changed);
     }
 
-    /// From `IdleInhibitManager::check_active`: an inhibitor appeared or
-    /// the last one went away.
-    pub unsafe fn set_inhibited(&mut self, inhibited: bool) {
-        if self.inhibited == inhibited {
+    /// From `IdleInhibitManager::check_active`: the set of clients holding
+    /// an inhibitor changed. The names are what `ccectl idle status` and the
+    /// log report, so a display that never darkens can be traced to the app
+    /// keeping it on rather than to a bare `inhibited=true`.
+    pub unsafe fn set_inhibitors(&mut self, names: Vec<String>) {
+        if self.inhibitors.as_deref().unwrap_or(&[]) == names.as_slice() {
             return;
         }
+        let inhibited = !names.is_empty();
+        if inhibited {
+            log::info!("idle: inhibited by {}", names.join(", "));
+        } else {
+            log::info!("idle: no inhibitors left");
+        }
+        self.inhibitors = Some(names);
+        let flipped = self.inhibited != inhibited;
         self.inhibited = inhibited;
-        log::debug!("idle: inhibited={}", inhibited);
-        self.rearm(true);
+        // A change of holder while still inhibited leaves the timers as they
+        // are: disarmed. Only the flag flipping rearms.
+        if flipped {
+            self.rearm(true);
+        }
+    }
+
+    /// The inhibitor names as the status line prints them.
+    fn inhibited_by(&self) -> String {
+        self.inhibitors.as_deref().unwrap_or(&[]).join(",")
     }
 
     /// Arm (or disarm, when inhibited or unconfigured) both timers from
@@ -258,12 +281,13 @@ impl IdleManager {
     pub fn status(&self) -> String {
         let idle_s = now_ms().saturating_sub(self.last_activity_ms) / 1000;
         format!(
-            "display_off={}s sleep={}s command={:?} idle={}s inhibited={} displays_off={} sleeping={}\n",
+            "display_off={}s sleep={}s command={:?} idle={}s inhibited={} inhibited_by={:?} displays_off={} sleeping={}\n",
             self.display_off_ms / 1000,
             self.sleep_ms / 1000,
             self.sleep_command(),
             idle_s,
             self.inhibited,
+            self.inhibited_by(),
             self.displays_off,
             self.sleeping
         )
