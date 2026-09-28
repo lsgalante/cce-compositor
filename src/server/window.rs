@@ -104,12 +104,11 @@ pub struct Border {
     pub color: [f32; 4],
     /// Color while the pointer hovers the border (the grab surface).
     pub hover_color: [f32; 4],
-    pub corner_radius: i32,
 }
 
 impl Border {
     pub fn none() -> Self {
-        Self { edges: Edges::new(), width: 0, color: [0.0; 4], hover_color: [0.0; 4], corner_radius: 0 }
+        Self { edges: Edges::new(), width: 0, color: [0.0; 4], hover_color: [0.0; 4] }
     }
 }
 
@@ -4873,7 +4872,6 @@ unsafe extern "C" fn window_set_borders(
         color,
         // Protocol-set borders don't participate in hover highlighting.
         hover_color: color,
-        corner_radius: 0,
     };
 }
 

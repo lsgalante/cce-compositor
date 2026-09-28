@@ -3898,7 +3898,6 @@ impl WindowManager {
             decoration: crate::policy::api::DecorationSpec {
                 border_width: self.layout.border_width,
                 border_color: crate::policy::api::Rgba(self.layout.border_color),
-                corner_radius: self.layout.border_corner_radius,
             },
             border_color_focused: crate::policy::api::Rgba(self.layout.border_color_focused),
             overlay: crate::policy::arrange::OverlayParams {
@@ -4038,7 +4037,6 @@ impl WindowManager {
                     width: dec.border_width.max(0) as u32,
                     color: dec.border_color.0,
                     hover_color: self.layout.border_color_hover,
-                    corner_radius: dec.corner_radius.max(0),
                 };
             }
             if let Some(blur) = wp.blur {

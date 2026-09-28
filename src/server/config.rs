@@ -26,7 +26,6 @@ pub struct Layout {
     /// Border color while the pointer hovers the border (the grab surface);
     /// defaults to a lightened `border_color_focused`.
     pub border_color_hover: [f32; 4],
-    pub border_corner_radius: i32,
     /// Visual gap between the 8 border zone segments.
     pub border_segment_gap: i32,
     /// How thin the resize-handle ring gets at the corners, as a fraction of
@@ -69,6 +68,15 @@ pub struct Layout {
     pub grid_gap: i32,
     pub border_blur: bool,
     pub window_blur: bool,
+    /// THE window corner radius, logical px before span widening —
+    /// `style.surface.plate.root.corner_radius`, the same key cce-ui's
+    /// root plates and `window_corner_radius` read. Every rounded thing a
+    /// window has derives from it (`Window::root_plate_radius_base`): the
+    /// content clip, the root plate, the border ring, frame and corner
+    /// discs, and the desktop grid's cells (`background_spec`), so a tiled
+    /// window's arc sits on its cell's. There is no second radius: the
+    /// border's own `corner_radius` key was dead config and was removed
+    /// on 2026-09-28.
     pub root_plate_corner_radius: i32,
     pub overlay_behavior: String,
     pub overlay_width: i32,
@@ -217,7 +225,6 @@ impl Default for Layout {
             border_color: [62.0 / 255.0, 62.0 / 255.0, 62.0 / 255.0, 1.0],
             border_color_focused: [62.0 / 255.0, 62.0 / 255.0, 62.0 / 255.0, 1.0],
             border_color_hover: lighten_premultiplied([62.0 / 255.0, 62.0 / 255.0, 62.0 / 255.0, 1.0], HOVER_LIGHTEN),
-            border_corner_radius: 0,
             border_segment_gap: 4,
             border_taper: 0.35,
             border_handle_width: 32.0,
@@ -606,8 +613,6 @@ pub struct SurfaceConfig {
     /// `None` falls back to a lightened `border_color_focused`.
     #[serde(default)]
     pub border_color_hover: Option<String>,
-    #[serde(default = "default_border_corner_radius")]
-    pub border_corner_radius: i64,
     #[serde(default = "default_border_segment_gap")]
     pub border_segment_gap: i64,
     #[serde(default = "default_border_taper")]
@@ -723,7 +728,6 @@ impl Default for SurfaceConfig {
             border_color: default_border_color(),
             border_color_focused: None,
             border_color_hover: None,
-            border_corner_radius: default_border_corner_radius(),
             border_segment_gap: default_border_segment_gap(),
             border_taper: default_border_taper(),
             border_handle_width: default_border_handle_width(),
@@ -832,10 +836,6 @@ fn default_border_width() -> i64 {
 
 fn default_border_color() -> String {
     "#3e3e3e".to_string()
-}
-
-fn default_border_corner_radius() -> i64 {
-    0
 }
 
 fn default_border_taper() -> f64 { 0.35 }
@@ -2239,11 +2239,13 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             surface.border_color_hover = Some(val.to_string());
                                         }
                                     }
-                                    "corner_radius" => {
-                                        if let Some(val) = entry.value().as_i64() {
-                                            surface.border_corner_radius = val;
-                                        }
-                                    }
+                                    // No `corner_radius` here: the border
+                                    // ring, its discs and the frame take the
+                                    // ONE window radius, `plate.root.
+                                    // corner_radius` (see `Layout::
+                                    // root_plate_corner_radius`). The key was
+                                    // read into dead config until 2026-09-28
+                                    // and is ignored now, like any unknown one.
                                     "segment_gap" => {
                                         if let Some(val) = entry.value().as_i64() {
                                             surface.border_segment_gap = val;
@@ -2436,7 +2438,6 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             surface.border_color = get_child_arg_string(node, "border_color", &default_border_color());
             surface.border_color_focused = get_child_arg_string_opt(node, "border_color_focused");
             surface.border_color_hover = get_child_arg_string_opt(node, "border_color_hover");
-            surface.border_corner_radius = get_child_arg_i64(node, "border_corner_radius", default_border_corner_radius());
             surface.border_segment_gap = get_child_arg_i64(node, "border_segment_gap", default_border_segment_gap());
             surface.border_corner_length = get_child_arg_i64(node, "border_corner_length", 0);
             surface.cloud_position_default = get_child_arg_vec2i_opt(node, "cloud_position_default");
@@ -2635,7 +2636,6 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         .as_deref()
         .map(parse_hex_color_rgba)
         .unwrap_or_else(|| lighten_premultiplied(state.layout.border_color_focused, HOVER_LIGHTEN));
-    state.layout.border_corner_radius = config.surface.border_corner_radius as i32;
     state.layout.border_segment_gap = config.surface.border_segment_gap.max(0) as i32;
     // Clamped at 1: past that the corners would be THICKER than the middle,
     // which is the moulding inside out.
@@ -3261,7 +3261,7 @@ style {
         let content = r##"
             style {
                 surface {
-                    border width=2 color="#ff8800" color_focused="#00ff88" color_hover="#88ffcc" corner_radius=10 segment_gap=6 corner_length=24
+                    border width=2 color="#ff8800" color_focused="#00ff88" color_hover="#88ffcc" segment_gap=6 corner_length=24
                 }
             }
         "##;
@@ -3270,7 +3270,6 @@ style {
         assert_eq!(config.surface.border_color, "#ff8800");
         assert_eq!(config.surface.border_color_focused, Some("#00ff88".to_string()));
         assert_eq!(config.surface.border_color_hover, Some("#88ffcc".to_string()));
-        assert_eq!(config.surface.border_corner_radius, 10);
         assert_eq!(config.surface.border_segment_gap, 6);
         assert_eq!(config.surface.border_corner_length, 24);
 
@@ -3278,7 +3277,6 @@ style {
         // and the hover color to a lightened focused color.
         let config = parse_kdl_config("").unwrap();
         assert_eq!(config.surface.border_width, 0);
-        assert_eq!(config.surface.border_corner_radius, 0);
         assert_eq!(config.surface.border_color_focused, None);
         assert_eq!(config.surface.border_color_hover, None);
         assert_eq!(config.surface.border_segment_gap, 4);
