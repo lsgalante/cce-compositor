@@ -213,12 +213,12 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Ten modules carry unit tests — `window_manager.rs` (the most of any, among
+Eleven modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
 `backdrop.rs` (the measurement and the desktop/window blend), `config.rs`,
 `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
 `text.rs`, `global_shortcuts.rs` (trigger parsing),
-`cursor.rs` (the swipe lean's direction, `swipe_lean`). They cluster where the logic is
+`cursor.rs` (the swipe lean's direction, `swipe_lean`), `min_sizes.rs`. They cluster where the logic is
 pure and the FFI is not, which is the only kind of thing testable in a crate
 this deep in wlroots. The arrange/slotmap tests live in the sibling
 `cce-window-manager` crate — run them with `cargo test -p cce-window-manager`.
