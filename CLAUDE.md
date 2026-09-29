@@ -424,6 +424,25 @@ treats them as opaque.
 - Output: `output.rs`, `output_manager.rs`. Session: `lock_manager.rs`,
   `idle_inhibit_manager.rs`. Rendering: `scene.rs`, `scene_node_data.rs`.
 
+### A node must draw everything it claims as opaque
+
+`scene_node_opaque_region` (scenefx `wlr_scene.c`) is a promise: whatever a
+node reports there is culled from every node beneath it AND from the black
+background clear, so a pixel inside it that the node's shader draws at less
+than full alpha blends over whatever the buffer last held. An alpha-1
+`wlr_scene_rect` with a corner radius reports its box minus the corner
+squares, and until 2026-09-28 `quad_round.frag` did not honour that: its
+inlined distance was one pixel off vertically (top row alpha 0, the next
+0.5) and its AA ramp left every straight edge pixel at 0.5. On the desktop
+grid — opaque black rounded cells over the gap-coloured backdrop — that was
+a tint of whatever had last covered a cell's top row, constant in the first
+row and halving per repaint in the second, invisible after a full redraw
+only because the clear colour and the cells are both black. The shader now
+takes its distance from `corner_dist`, like the clip and the buffer corner
+cut. To look for this kind of residue, screenshot a shadow before and after
+drawing over the grid and diff; every desktop pixel should be a multiple of
+the gap colour.
+
 ### Window move/resize handles
 
 Pointer move and resize exist **only in adjust mode** (overview, or Super

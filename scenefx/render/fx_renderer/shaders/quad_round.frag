@@ -19,37 +19,30 @@ uniform float clip_radius_top_right;
 uniform float clip_radius_bottom_left;
 uniform float clip_radius_bottom_right;
 
-float get_dist(vec2 q, float radius);
+float corner_dist(vec2 size, vec2 position,
+		float radius_tl, float radius_tr, float radius_bl, float radius_br);
 float corner_alpha(vec2 size, vec2 position, bool is_cutout,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br);
 
 void main() {
-	vec2 relative_pos = (gl_FragCoord.xy - (position + 0.5));
-	relative_pos.y = size.y - relative_pos.y;
+	// The outline's signed distance, from the same function the clip below
+	// and the buffer corner cut use, so an edge pixel sits at dist 0.
+	//
+	// This was inlined here with two differences that made the node draw
+	// less than the scene thinks it covers. The y flip subtracted from
+	// size.y where the rest of the math works in size - 1, so the distance
+	// was one pixel off vertically: the box's top row got alpha 0 and the
+	// row under it 0.5. And the smoothstep ran -0.5..0.5, which left every
+	// straight edge pixel at half alpha. scene_node_opaque_region counts an
+	// alpha-1 rounded rect as opaque outside its corner squares, so what
+	// lay beneath those rows was culled and they blended over whatever the
+	// buffer last held — a tint that halved on every repaint, or never
+	// changed at all in the alpha-0 row.
+	float dist = corner_dist(size - 1.0, position + 0.5,
+		radius_top_left, radius_top_right,
+		radius_bottom_left, radius_bottom_right);
 
-	// Bounding box check
-	/* if (relative_pos.x < -0.5 || relative_pos.y < -0.5
-			|| relative_pos.x > size.x - 0.5 || relative_pos.y > size.y - 0.5) {
-		discard;
-	} */
-
-	float r_tl = radius_top_left;
-	float r_tr = radius_top_right;
-	float r_bl = radius_bottom_left;
-	float r_br = radius_bottom_right;
-
-	// Calculate corner distance
-	vec2 top_left = abs(relative_pos - (size - 1.0)) - (size - 1.0) + r_tl;
-	vec2 top_right = abs(relative_pos - vec2(0.0, size.y - 1.0)) - (size - 1.0) + r_tr;
-	vec2 bottom_left = abs(relative_pos - vec2(size.x - 1.0, 0.0)) - (size - 1.0) + r_bl;
-	vec2 bottom_right = abs(relative_pos) - (size - 1.0) + r_br;
-
-	float dist = max(
-		max(get_dist(top_left, r_tl), get_dist(top_right, r_tr)),
-		max(get_dist(bottom_left, r_bl), get_dist(bottom_right, r_br))
-	);
-
-	float result = smoothstep(-0.5, 0.5, dist);
+	float result = smoothstep(0.0, 1.0, dist);
 	float quad_corner_alpha = 1.0 - result;
 
 	// Clipping
