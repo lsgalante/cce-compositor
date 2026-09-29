@@ -10,6 +10,13 @@
 //! inhibitor on a mapped surface (a video player) pauses both timers, the
 //! same signal `wlr_idle_notifier_v1_set_inhibited` gets.
 //!
+//! The timeouts come from `idle { }` in config.kdl, but the System
+//! Interface's Power plan can override either per power mode: its applier
+//! writes [`PLAN_DISPLAY_OFF_FILE`] / [`PLAN_SLEEP_FILE`] under [`PLAN_DIR`] as root on plug,
+//! unplug and boot (seconds, 0 = never), and this module polls both once a
+//! second, so battery can darken the display sooner than the desk does
+//! without a reload. A missing file means the config's value.
+//!
 //! "Display off" is the soft-disable the wlr-output-power-management
 //! protocol already drives (`OutputStateValue::DisabledSoft` — the output
 //! stays in the layout, nothing is re-arranged, and no frame events fire
@@ -48,13 +55,73 @@ impl Default for IdleConfig {
 /// measured in minutes.
 const REARM_MIN_MS: u64 = 1000;
 
+/// The Power plan's per-mode timeouts, written by `cce-power-apply`
+/// (`cce_settings::power_plan::IDLE_DISPLAY_OFF_PATH` / `IDLE_SLEEP_PATH`;
+/// the paths are repeated here because that crate is an app, not a
+/// dependency). Seconds, 0 = never; absent = use the config.
+pub const PLAN_DIR: &str = "/run/cce";
+pub const PLAN_DISPLAY_OFF_FILE: &str = "idle_display_off";
+pub const PLAN_SLEEP_FILE: &str = "idle_sleep";
+
+/// Where one plan file lives. `CCE_IDLE_PLAN_DIR` moves the directory for
+/// one process, for testing: /run/cce is root's, and a shadow session must
+/// not read the live machine's plan files either.
+fn plan_path(file: &str) -> String {
+    let dir = std::env::var("CCE_IDLE_PLAN_DIR").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| PLAN_DIR.to_string());
+    format!("{}/{}", dir, file)
+}
+
+/// How often the plan files are stat'ed. A mode change is a plug or an
+/// unplug, so a second is instant to a person and two stats a second is
+/// nothing.
+const PLAN_POLL_MS: i32 = 1000;
+
+/// One plan file's contents as a timeout: seconds on a line, nothing else.
+pub fn parse_plan_secs(text: &str) -> Option<i64> {
+    text.trim().parse::<u32>().ok().map(i64::from)
+}
+
+/// The timeout in force: the plan's when it has one, else the config's.
+fn effective_ms(cfg_ms: i64, plan_ms: Option<i64>) -> i64 {
+    plan_ms.unwrap_or(cfg_ms)
+}
+
+/// A change stamp for one plan file: its mtime in ns plus one, or 0 when it
+/// is absent, so appearing, vanishing and rewriting all read as a change.
+fn plan_stamp(path: &str) -> u128 {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() + 1)
+        .unwrap_or(0)
+}
+
+fn read_plan_ms(path: &str) -> Option<i64> {
+    parse_plan_secs(&std::fs::read_to_string(path).ok()?).map(|s| s * 1000)
+}
+
 pub struct IdleManager {
     pub server: *mut Server,
     display_timer: *mut ffi::wl_event_source,
     sleep_timer: *mut ffi::wl_event_source,
-    /// Timeouts in ms; 0 = disabled.
+    /// The timeouts in force, in ms; 0 = disabled. The plan's when it has
+    /// one, else the config's (`effective_ms`).
     display_off_ms: i64,
     sleep_ms: i64,
+    /// The `idle { }` block's own values, kept apart so a plan override can
+    /// be lifted again when its file goes away.
+    cfg_display_off_ms: i64,
+    cfg_sleep_ms: i64,
+    /// The Power plan's per-mode override for each, from the files under
+    /// /run/cce; None while a file is absent or unparsable.
+    plan_display_off_ms: Option<i64>,
+    plan_sleep_ms: Option<i64>,
+    /// Polls the plan files; see `PLAN_POLL_MS`.
+    plan_timer: *mut ffi::wl_event_source,
+    /// `plan_stamp` of each file at the last poll: the files are only
+    /// re-read when one changes.
+    plan_stamps: [u128; 2],
     /// `None` means `DEFAULT_SLEEP_COMMAND`. (An `Option<String>` is
     /// null-niche safe under `Server::new`'s zeroed init; a bare `String`
     /// is not.)
@@ -103,8 +170,26 @@ impl IdleManager {
             self.display_timer = std::ptr::null_mut();
             return Err("Failed to create idle sleep timer");
         }
+        self.plan_timer = ffi::wl_event_loop_add_timer(
+            event_loop,
+            Some(handle_plan_poll),
+            self as *mut IdleManager as *mut _,
+        );
+        if self.plan_timer.is_null() {
+            ffi::wl_event_source_remove(self.display_timer);
+            ffi::wl_event_source_remove(self.sleep_timer);
+            self.display_timer = std::ptr::null_mut();
+            self.sleep_timer = std::ptr::null_mut();
+            return Err("Failed to create idle plan-poll timer");
+        }
         self.display_off_ms = 0;
         self.sleep_ms = 0;
+        self.cfg_display_off_ms = 0;
+        self.cfg_sleep_ms = 0;
+        self.plan_display_off_ms = None;
+        self.plan_sleep_ms = None;
+        self.plan_stamps = [0, 0];
+        ffi::wl_event_source_timer_update(self.plan_timer, PLAN_POLL_MS);
         self.sleep_command = None;
         self.inhibited = false;
         self.inhibitors = None;
@@ -137,18 +222,72 @@ impl IdleManager {
             ffi::wl_event_source_remove(self.sleep_timer);
             self.sleep_timer = std::ptr::null_mut();
         }
+        if !self.plan_timer.is_null() {
+            ffi::wl_event_source_remove(self.plan_timer);
+            self.plan_timer = std::ptr::null_mut();
+        }
     }
 
-    /// Apply an `idle { }` block (config load and `ccectl reload`).
+    /// Apply an `idle { }` block (config load and `ccectl reload`). A plan
+    /// override in force stays in force: the config is the base it lifts to.
     pub unsafe fn configure(&mut self, cfg: &IdleConfig) {
-        self.display_off_ms = cfg.display_off_s.max(0) * 1000;
-        self.sleep_ms = cfg.sleep_s.max(0) * 1000;
+        self.cfg_display_off_ms = cfg.display_off_s.max(0) * 1000;
+        self.cfg_sleep_ms = cfg.sleep_s.max(0) * 1000;
         self.sleep_command = cfg.sleep_command.clone();
+        self.refresh_effective();
         log::info!(
-            "idle timeouts: display_off={}s sleep={}s command={:?}",
-            cfg.display_off_s.max(0),
-            cfg.sleep_s.max(0),
-            self.sleep_command()
+            "idle timeouts: display_off={}s sleep={}s command={:?}{}",
+            self.display_off_ms / 1000,
+            self.sleep_ms / 1000,
+            self.sleep_command(),
+            self.plan_note()
+        );
+        self.rearm(true);
+    }
+
+    /// Recompute the timeouts in force from the config and the plan.
+    fn refresh_effective(&mut self) {
+        self.display_off_ms = effective_ms(self.cfg_display_off_ms, self.plan_display_off_ms);
+        self.sleep_ms = effective_ms(self.cfg_sleep_ms, self.plan_sleep_ms);
+    }
+
+    /// True when the Power plan overrides at least one timeout.
+    fn plan_active(&self) -> bool {
+        self.plan_display_off_ms.is_some() || self.plan_sleep_ms.is_some()
+    }
+
+    /// For log lines: which values the plan is imposing, or nothing.
+    fn plan_note(&self) -> String {
+        if !self.plan_active() {
+            return String::new();
+        }
+        let show = |v: Option<i64>| v.map(|ms| format!("{}s", ms / 1000)).unwrap_or_else(|| "config".to_string());
+        format!(
+            " (power plan: display_off={} sleep={}, config {}s/{}s)",
+            show(self.plan_display_off_ms),
+            show(self.plan_sleep_ms),
+            self.cfg_display_off_ms / 1000,
+            self.cfg_sleep_ms / 1000
+        )
+    }
+
+    /// From `plan_timer`: re-read the plan files when either changed, and
+    /// put the new timeouts in force from now.
+    pub unsafe fn poll_plan(&mut self) {
+        let (off_path, sleep_path) = (plan_path(PLAN_DISPLAY_OFF_FILE), plan_path(PLAN_SLEEP_FILE));
+        let stamps = [plan_stamp(&off_path), plan_stamp(&sleep_path)];
+        if stamps == self.plan_stamps {
+            return;
+        }
+        self.plan_stamps = stamps;
+        self.plan_display_off_ms = read_plan_ms(&off_path);
+        self.plan_sleep_ms = read_plan_ms(&sleep_path);
+        self.refresh_effective();
+        log::info!(
+            "idle timeouts: display_off={}s sleep={}s{}",
+            self.display_off_ms / 1000,
+            self.sleep_ms / 1000,
+            if self.plan_active() { self.plan_note() } else { " (power plan lifted, config values)".to_string() }
         );
         self.rearm(true);
     }
@@ -281,7 +420,7 @@ impl IdleManager {
     pub fn status(&self) -> String {
         let idle_s = now_ms().saturating_sub(self.last_activity_ms) / 1000;
         format!(
-            "display_off={}s sleep={}s command={:?} idle={}s inhibited={} inhibited_by={:?} displays_off={} sleeping={}\n",
+            "display_off={}s sleep={}s command={:?} idle={}s inhibited={} inhibited_by={:?} displays_off={} sleeping={} plan_display_off={} plan_sleep={}\n",
             self.display_off_ms / 1000,
             self.sleep_ms / 1000,
             self.sleep_command(),
@@ -289,7 +428,9 @@ impl IdleManager {
             self.inhibited,
             self.inhibited_by(),
             self.displays_off,
-            self.sleeping
+            self.sleeping,
+            plan_field(self.plan_display_off_ms),
+            plan_field(self.plan_sleep_ms)
         )
     }
 
@@ -318,7 +459,15 @@ impl IdleManager {
                     (Ok(d), Ok(s)) if d >= 0 && s >= 0 => {
                         let cfg = IdleConfig { display_off_s: d, sleep_s: s, sleep_command: self.sleep_command.clone() };
                         self.configure(&cfg);
-                        "ok\n".to_string()
+                        if self.plan_active() {
+                            format!(
+                                "ok, as the config base; the power plan keeps display_off={}s sleep={}s in force until its mode changes\n",
+                                self.display_off_ms / 1000,
+                                self.sleep_ms / 1000
+                            )
+                        } else {
+                            "ok\n".to_string()
+                        }
                     }
                     _ => "error: idle timeouts <display_off_s> <sleep_s> (non-negative seconds, 0 = off)\n".to_string(),
                 }
@@ -326,6 +475,21 @@ impl IdleManager {
             _ => "error: usage: idle [status|wake|display on|display off|sleep|timeouts <display_off_s> <sleep_s>]\n".to_string(),
         }
     }
+}
+
+/// `none`, or the plan's seconds, for the status line.
+fn plan_field(ms: Option<i64>) -> String {
+    ms.map(|v| format!("{}s", v / 1000)).unwrap_or_else(|| "none".to_string())
+}
+
+unsafe extern "C" fn handle_plan_poll(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let idle = &mut *(data as *mut IdleManager);
+    idle.poll_plan();
+    // wl timers fire once; re-arm for the next look.
+    if !idle.plan_timer.is_null() {
+        ffi::wl_event_source_timer_update(idle.plan_timer, PLAN_POLL_MS);
+    }
+    0
 }
 
 unsafe extern "C" fn handle_display_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
@@ -354,4 +518,32 @@ unsafe extern "C" fn handle_session_active(listener: *mut ffi::wl_listener, _dat
     }
     log::info!("idle: session active (resume / VT switch), waking");
     idle.on_activity();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_plan_file_is_seconds_and_nothing_else() {
+        assert_eq!(parse_plan_secs("600\n"), Some(600));
+        assert_eq!(parse_plan_secs(" 0 "), Some(0));
+        assert_eq!(parse_plan_secs("-5"), None);
+        assert_eq!(parse_plan_secs("10m"), None);
+        assert_eq!(parse_plan_secs(""), None);
+    }
+
+    #[test]
+    fn the_plan_wins_while_present_and_the_config_returns_after() {
+        assert_eq!(effective_ms(600_000, Some(120_000)), 120_000);
+        assert_eq!(effective_ms(600_000, Some(0)), 0);
+        assert_eq!(effective_ms(600_000, None), 600_000);
+        assert_eq!(plan_field(Some(120_000)), "120s");
+        assert_eq!(plan_field(None), "none");
+    }
+
+    #[test]
+    fn an_absent_plan_file_stamps_as_zero() {
+        assert_eq!(plan_stamp("/nonexistent/cce/idle_display_off"), 0);
+    }
 }

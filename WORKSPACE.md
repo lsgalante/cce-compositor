@@ -384,6 +384,25 @@ border-reveal/adjust-dim fades, and the fullscreen-toggle resize. **A new
 animation should ask `enabled()` too.** Like the close fade, the cce-ui half
 reaches a client only once that client has been rebuilt against the toolkit.
 
+## Idle timeouts per power mode
+
+The compositor's display-off and sleep countdowns come from `idle { }` in
+config.kdl, and the Power page can override either per power mode with the
+**Display Off After** and **Sleep After** levers (`idle_display_off_secs`,
+`idle_sleep_secs` in `/etc/cce/power.kdl`). Same mechanism as the
+animations switch: `cce-power-apply` writes **`/run/cce/idle_display_off`**
+and **`/run/cce/idle_sleep`** as root (seconds on a line, 0 = never), and the
+idle manager (`idle.rs`, `PLAN_DIR` + `PLAN_DISPLAY_OFF_FILE` /
+`PLAN_SLEEP_FILE`) polls both once a second, so an unplug shortens the
+countdown within a second and nothing reloads. `CCE_IDLE_PLAN_DIR=<dir>`
+moves the directory for one compositor, for testing in a shadow, which must
+not follow the live machine's files. A file that is absent means the config's value, and
+`ccectl idle timeouts` edits that config base, which the plan keeps
+overriding while its mode holds the lever; `ccectl idle status` reports the
+values in force plus `plan_display_off=` / `plan_sleep=` (`none` or seconds).
+The paths are spelled in both crates (the app cannot be a compositor
+dependency), so a rename must land on both sides.
+
 ## Repo hygiene
 
 The repo root and `cce-compositor/scratch/` are littered with **ad-hoc debugging artifacts** — many
