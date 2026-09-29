@@ -311,6 +311,10 @@ pub struct WindowManager {
     pub object: *mut ffi::wl_resource,
     pub state: WindowManagerState,
     pub windows: SlotMap<*mut Window>,
+    /// The overview drag-selection: the selected windows, the rubber band
+    /// while one is being dragged out, and the nodes that draw both. See
+    /// [`crate::selection`].
+    pub selection: crate::selection::Selection,
     pub focus_history: Vec<*mut Window>,
     pub scheduled: WindowManagerScheduled,
     pub sent: WindowManagerSent,
@@ -745,6 +749,7 @@ impl WindowManager {
         self.object = std::ptr::null_mut();
         self.state = WindowManagerState::Idle;
         self.windows = SlotMap::new();
+        std::ptr::write(&mut self.selection, crate::selection::Selection::default());
         self.focus_history = Vec::new();
         self.scheduled = WindowManagerScheduled {
             dirty: false,
@@ -2414,6 +2419,11 @@ impl WindowManager {
             return;
         }
         self.mode = mode;
+        // The selection belongs to overview: it is made there, and the
+        // group move it exists for is an overview drag.
+        if mode != WindowManagerMode::Overview {
+            self.selection_clear();
+        }
         self.arm_border_fade();
         // The `adjust` status topic follows window_adjust_active().
         self.update_status();
@@ -3211,6 +3221,13 @@ impl WindowManager {
             if let Some(ref op) = (*seat).op {
                 if op.window_ptr == win_ptr {
                     if let crate::seat::PointerOpType::Move = op.op_type {
+                        return true;
+                    }
+                }
+                // A window carried along by a group move is being moved as
+                // much as the one under the pointer.
+                if let crate::seat::PointerOpType::Move = op.op_type {
+                    if (*seat).group_move.iter().any(|&(w, _, _)| w == win_ptr) {
                         return true;
                     }
                 }
@@ -5263,6 +5280,29 @@ impl WindowManager {
                 }
                 self.dirty_windowing();
                 return format!("ok {}\n", enable);
+            }
+            // The overview drag-selection: the selected window ids on one
+            // line (`-` for none) and the rubber band's virtual rect while
+            // one is being dragged out.
+            "selection" => {
+                let ids: Vec<String> = self
+                    .selection
+                    .windows
+                    .iter()
+                    .map(|&w| (*w).ref_key.index.to_string())
+                    .collect();
+                let band = match self.selection.marquee {
+                    Some(m) => {
+                        let (x, y, w, h) = m.rect();
+                        format!("{:.0},{:.0},{:.0}x{:.0}", x, y, w, h)
+                    }
+                    None => "-".to_string(),
+                };
+                format!(
+                    "selected={} band={}\n",
+                    if ids.is_empty() { "-".to_string() } else { ids.join(",") },
+                    band
+                )
             }
             // The camera as it stands and where it is easing to — what a
             // shadow reads back to assert a swipe's peek and its return.

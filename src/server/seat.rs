@@ -11,6 +11,10 @@ pub enum SeatOpInput {
 pub enum PointerOpType {
     Move,
     Resize { edges: crate::window::Edges },
+    /// The overview drag-selection: a press on the bare desktop, stretching
+    /// a rubber band. The one op with no window (`window_ptr` is null); its
+    /// state is the window manager's (`crate::selection`).
+    Select,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -110,6 +114,13 @@ pub struct Seat {
     /// home. Cleared (finalizing the positions) in `op_end`. Lives on the
     /// Seat because `SeatOp` is `Copy`.
     pub overview_displaced: Vec<(*mut crate::window::Window, f64, f64)>,
+    /// The other selected windows a move op carries along, with the virtual
+    /// position each had at the grab: a press on the body of a selected
+    /// window moves the whole selection (`crate::selection`). They follow
+    /// the grabbed window's SNAPPED position rigidly, by the same offset.
+    /// Empty for an ordinary move. Filled at the grab, cleared in `op_end`;
+    /// on the Seat for the reason `overview_displaced` is.
+    pub group_move: Vec<(*mut crate::window::Window, f64, f64)>,
     pub wm_sent_x: i32,
     pub wm_sent_y: i32,
 
@@ -161,6 +172,7 @@ impl Seat {
             op_release: false,
             suppress_focus_pan: false,
             overview_displaced: Vec::new(),
+            group_move: Vec::new(),
             wm_sent_x: 0,
             wm_sent_y: 0,
             request_set_cursor: std::mem::zeroed(),
@@ -1216,7 +1228,23 @@ impl Seat {
             op.y = y;
             let dx = op.x - op.start_x;
             let dy = op.y - op.start_y;
-            
+
+            if op.op_type == PointerOpType::Select {
+                // No window to move. The edge pan below still runs, and its
+                // tick comes back through here, which is what stretches the
+                // band while the desk scrolls under a still pointer — and
+                // why the frame is queued as for any other op: the tick
+                // moves the camera and leaves the relayout to this, so
+                // without it the windows stay where they were drawn while
+                // the grid scrolls away beneath them.
+                let travelled = dx.abs() > crate::selection::DRAG_THRESHOLD
+                    || dy.abs() > crate::selection::DRAG_THRESHOLD;
+                (*self.server).wm.selection_motion(x as f64, y as f64, travelled);
+                (*self.server).wm.queue_op_frame();
+                self.update_edge_pan(x as f64, y as f64);
+                return;
+            }
+
             let win = op.window_ptr;
             if !win.is_null() && !(*win).closed {
                 // Every drag step can bring a Floating window over the
@@ -1435,7 +1463,45 @@ impl Seat {
                                     (virtual_dx, virtual_dy),
                                     &sp,
                                     &mut self.overview_displaced,
+                                    &self.group_move,
                                 );
+                            }
+
+                            // A group move: the rest of the selection
+                            // follows by the offset the grabbed window
+                            // actually took, snap included, so the group
+                            // keeps its shape. Untouched until that offset
+                            // is something — the release of a tap runs
+                            // through here too, and must not un-tile them.
+                            let gdx = vx - op.start_win_virtual_x;
+                            let gdy = vy - op.start_win_virtual_y;
+                            for &(w, start_vx, start_vy) in self.group_move.iter() {
+                                if w == win || !(*self.server).wm.selectable_in_drag(w) {
+                                    continue;
+                                }
+                                if gdx == 0.0
+                                    && gdy == 0.0
+                                    && (*w).virtual_x == start_vx
+                                    && (*w).virtual_y == start_vy
+                                {
+                                    continue;
+                                }
+                                if (*w).tiling_mode == crate::tiling::TilingMode::Tiled {
+                                    // As for the grabbed window above:
+                                    // floating for the drag, geometry kept,
+                                    // re-tiled in op_end if it lands aligned.
+                                    (*w).was_tiled = false;
+                                    (*w).tiling_mode = crate::tiling::TilingMode::Floating;
+                                    (*w).mode_locked = true;
+                                    (*self.server).wm.raise_window(w);
+                                }
+                                (*w).virtual_x = start_vx + gdx;
+                                (*w).virtual_y = start_vy + gdy;
+                                let (fx, fy) = (*w).virtual_to_screen((*w).virtual_x, (*w).virtual_y);
+                                (*w).rendering_requested.x = fx;
+                                (*w).rendering_requested.y = fy;
+                                (*w).box_geom.x = fx;
+                                (*w).box_geom.y = fy;
                             }
 
                             let (final_x, final_y) = (*win).virtual_to_screen(vx, vy);
@@ -1527,6 +1593,8 @@ impl Seat {
                         };
                         (*win).set_dimensions(new_w, new_h);
                     }
+                    // Handled above: it has no window to get here with.
+                    PointerOpType::Select => {}
                 }
             }
             // The configure and the relayout go out once per output frame,
@@ -1549,6 +1617,12 @@ impl Seat {
         let mut vy = 0.0;
         let eligible = wm.layout.desktop_edge_pan
             && match self.op {
+                // The drag-selection has no window, and scrolls the desk
+                // only once the band is up — a press held still near the
+                // screen edge is a click.
+                Some(ref op) if op.op_type == PointerOpType::Select => {
+                    wm.selection.marquee.is_some()
+                }
                 Some(ref op) => {
                     !op.window_ptr.is_null()
                         && !(*op.window_ptr).closed
@@ -1574,6 +1648,50 @@ impl Seat {
         wm.set_edge_pan_velocity(vx, vy);
     }
 
+    /// Geometric mode detection: a move/resize that lands every content edge
+    /// on a visible desktop-grid cell edge makes the window Tiled (it then
+    /// reports the maximized state to its client); landing off-grid makes
+    /// it Floating, in place. Only windows resolving Floating/Tiled
+    /// participate — Popup/Overlay/Status/Fullscreen are untouched.
+    unsafe fn settle_tiling(&mut self, win: *mut crate::window::Window) {
+        let resolved = (*self.server).wm.get_mode_for_window(win);
+        if !matches!(
+            resolved,
+            crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Tiled
+        ) {
+            return;
+        }
+        // Unscaled params: alignment classifies the resting geometry, the
+        // zoom-aware grab distance is irrelevant.
+        let sp = (*self.server).wm.layout.snap_params();
+        let (w, h) = match (*win).wm_requested.dimensions {
+            // A just-finished resize may not be acked into box_geom yet;
+            // the requested size is what the window is about to become.
+            Some(d) => (d.width as f64, d.height as f64),
+            None => ((*win).box_geom.width as f64, (*win).box_geom.height as f64),
+        };
+        let aligned = crate::policy::snap::is_cell_aligned(
+            (*win).virtual_x,
+            (*win).virtual_y,
+            w,
+            h,
+            &sp,
+            1.0,
+        );
+        if aligned && resolved != crate::tiling::TilingMode::Tiled {
+            (*win).tiling_mode = crate::tiling::TilingMode::Tiled;
+            (*win).mode_locked = true;
+            (*self.server).wm.dirty_windowing();
+        } else if !aligned && resolved == crate::tiling::TilingMode::Tiled {
+            // Un-tile in place: clearing was_tiled keeps the arrange Exit
+            // transition from restoring the old floating geometry.
+            (*win).was_tiled = false;
+            (*win).tiling_mode = crate::tiling::TilingMode::Floating;
+            (*win).mode_locked = true;
+            (*self.server).wm.dirty_windowing();
+        }
+    }
+
     pub unsafe fn op_end(&mut self) {
         // Wherever everything sits now is final.
         self.overview_displaced.clear();
@@ -1594,48 +1712,19 @@ impl Seat {
                         (*self.server).wm.dirty_windowing();
                     }
                 }
-                // Geometric mode detection: a move/resize that lands every
-                // content edge on a visible desktop-grid cell edge makes the
-                // window Tiled (it then reports the maximized state to its
-                // client); landing off-grid makes it Floating, in place.
-                // Only windows resolving Floating/Tiled participate —
-                // Popup/Overlay/Status/Fullscreen are untouched.
-                let resolved = (*self.server).wm.get_mode_for_window(win);
-                if matches!(
-                    resolved,
-                    crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Tiled
-                ) {
-                    // Unscaled params: alignment classifies the resting
-                    // geometry, the zoom-aware grab distance is irrelevant.
-                    let sp = (*self.server).wm.layout.snap_params();
-                    let (w, h) = match (*win).wm_requested.dimensions {
-                        // A just-finished resize may not be acked into
-                        // box_geom yet; the requested size is what the
-                        // window is about to become.
-                        Some(d) => (d.width as f64, d.height as f64),
-                        None => ((*win).box_geom.width as f64, (*win).box_geom.height as f64),
-                    };
-                    let aligned = crate::policy::snap::is_cell_aligned(
-                        (*win).virtual_x,
-                        (*win).virtual_y,
-                        w,
-                        h,
-                        &sp,
-                        1.0,
-                    );
-                    if aligned && resolved != crate::tiling::TilingMode::Tiled {
-                        (*win).tiling_mode = crate::tiling::TilingMode::Tiled;
-                        (*win).mode_locked = true;
-                        (*self.server).wm.dirty_windowing();
-                    } else if !aligned && resolved == crate::tiling::TilingMode::Tiled {
-                        // Un-tile in place: clearing was_tiled keeps the
-                        // arrange Exit transition from restoring the old
-                        // floating geometry.
-                        (*win).was_tiled = false;
-                        (*win).tiling_mode = crate::tiling::TilingMode::Floating;
-                        (*win).mode_locked = true;
-                        (*self.server).wm.dirty_windowing();
+                self.settle_tiling(win);
+                // The windows a group move carried land by the same rule,
+                // each on its own geometry.
+                let group = std::mem::take(&mut self.group_move);
+                for &(w, start_vx, start_vy) in group.iter() {
+                    if w == win || !(*self.server).wm.selectable_in_drag(w) {
+                        continue;
                     }
+                    if (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
+                        continue;
+                    }
+                    self.settle_tiling(w);
+                    (*self.server).wm.dirty_windowing();
                 }
                 // A TAP — press+release without meaningful motion — is a
                 // click, not a drag. A drag never focuses the window it
@@ -1664,6 +1753,7 @@ impl Seat {
                 }
             }
         }
+        self.group_move.clear();
     }
 }
 
@@ -1690,6 +1780,7 @@ unsafe fn displace_covered(
     drag_delta: (f64, f64),
     sp: &crate::policy::snap::SnapParams,
     ledger: &mut Vec<(*mut crate::window::Window, f64, f64)>,
+    group: &[(*mut crate::window::Window, f64, f64)],
 ) {
     let wm = &mut (*server).wm;
     // A window can close mid-drag; drop its entry before any deref.
@@ -1704,6 +1795,10 @@ unsafe fn displace_covered(
     let mut cands: Vec<crate::policy::overview::DisplaceCandidate> = Vec::new();
     for &w in wm.windows.iter() {
         if w.is_null() || w == win || (*w).closed || (*w).minimized {
+            continue;
+        }
+        // A window moving WITH the drag is not in its way.
+        if group.iter().any(|&(g, _, _)| g == w) {
             continue;
         }
         if !matches!((*w).state, crate::window::WindowState::Mapped) {

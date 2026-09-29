@@ -2227,6 +2227,7 @@ impl Window {
         (*window).node.deinit();
 
         (*(*window).server).wm.remove_from_history(window);
+        (*(*window).server).wm.selection_forget(window);
         // A seat cursor may still name this window as its adjust target.
         // The next hover evaluation would replace it, but a window allocated
         // at the same address in the meantime must not inherit the ring.
@@ -2238,6 +2239,7 @@ impl Window {
                 if (*seat).cursor.adjust_hover == window {
                     (*seat).cursor.adjust_hover = std::ptr::null_mut();
                 }
+                (*seat).group_move.retain(|&(w, _, _)| w != window);
                 curr = (*curr).next;
             }
         }

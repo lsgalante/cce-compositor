@@ -619,6 +619,7 @@ impl Output {
         // Update grid node positions and parameters first, which marks the scene output as damaged if changed
         self.draw_grid();
         self.draw_adjust_overlay();
+        (*self.server).wm.draw_selection();
         // Right after draw_grid, whose geometry this reuses, and BEFORE the
         // needs-frame early-out: a camera move slides the lattice under a
         // segment that has no damage of its own, and the bar still has to

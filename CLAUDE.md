@@ -213,12 +213,13 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Eleven modules carry unit tests — `window_manager.rs` (the most of any, among
+Twelve modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
 `backdrop.rs` (the measurement and the desktop/window blend), `config.rs`,
 `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
 `text.rs`, `global_shortcuts.rs` (trigger parsing),
-`cursor.rs` (the swipe lean's direction, `swipe_lean`), `min_sizes.rs`. They cluster where the logic is
+`cursor.rs` (the swipe lean's direction, `swipe_lean`), `min_sizes.rs`,
+`selection.rs` (the rubber band's rect and its hit rule). They cluster where the logic is
 pure and the FFI is not, which is the only kind of thing testable in a crate
 this deep in wlroots. The arrange/slotmap tests live in the sibling
 `cce-window-manager` crate — run them with `cargo test -p cce-window-manager`.
@@ -564,6 +565,51 @@ sat outside the edges and the ring that followed hugged them.
 
 None of this is policy — `cce-window-manager` was untouched. The mode is
 already in `ActionCtx`, but what a *pointer* may grab is mechanism.
+
+### Overview drag-selection
+
+A left press on the bare desktop in overview, dragged, stretches a rubber
+band from the press point, and every window the band touches is selected,
+live (`src/server/selection.rs`; state on `WindowManager::selection`). It is
+cce-designer's network-cursor region brought to windows: a new drag replaces
+the selection, a press on a window outside it drops it, no modifiers. The
+hit rule differs on purpose — the designer asks whether a node's cell is
+inside the region, but a window spans many cells and the background between
+two of them is a strip, so touching is enough.
+
+- **The background press no longer exits overview on the spot.** It starts a
+  `PointerOpType::Select` seat op — the one op whose `window_ptr` is null —
+  and the RELEASE decides: past `selection::DRAG_THRESHOLD` (5 px) it was a
+  drag; short of it, a click, which drops the selection if there is one and
+  leaves overview if there is none. `Cursor::left_click_on_bg_in_overview`
+  went with the press-time exit.
+- **Pressing the body of a selected window moves the whole selection.** The
+  grab fills `Seat::group_move` with the other selected windows and their
+  virtual positions; `op_update`'s Move arm carries them by the offset the
+  grabbed window actually took, snap included, so a group of Tiled windows
+  steps in whole cells and re-tiles on release (`Seat::settle_tiling`, the
+  geometric detection `op_end` always ran, now per window). Carried windows
+  count as `is_window_being_moved` and are skipped by the overview
+  displacement. A tap moves nothing and un-tiles nothing.
+- **The band is anchored in virtual coordinates**, so the edge auto-pan
+  scrolls the desk under a held drag and the band grows with it. The Select
+  arm queues the op frame like any other op for that reason: the edge-pan
+  tick moves the camera and leaves the relayout to `op_update`.
+- **Drawn outside `interactive_tree`**, in a tree on the scene root placed
+  just above it: `Scene::at` stops at the first node it meets, and a node
+  with no `SceneNodeData` reads as background, so a highlight inside the
+  interactive tree turns a press on a selected window into a press on the
+  desktop. Each box is a fill rect plus a `wlr_scene_bevel` in its
+  glint-only focus branch, in `bevel_focus_color`;
+  `WindowManager::draw_selection` places them per frame from
+  `Output::render_and_commit`.
+- The selection lives only in overview (`set_mode` clears it) and a
+  destroyed window is dropped from it and from `group_move`
+  (`Window::destroy`).
+- `ccectl selection` prints `selected=<ids|-> band=<virtual rect|->`. In a
+  shadow: `pointer-move-to`, `pointer-press left`, `pointer-move-to`,
+  `selection`, `pointer-release left`. Keep the band off the screen edges or
+  the edge pan scrolls the desk mid-assertion.
 
 ### Config
 

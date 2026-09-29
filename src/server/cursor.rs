@@ -148,7 +148,6 @@ pub struct Cursor {
     pub adjust_hover: *mut crate::window::Window,
     pub right_click_on_bg: bool,
     pub right_click_on_border: bool,
-    pub left_click_on_bg_in_overview: bool,
     /// The grid surface's node mapping — (node_x, node_y, scale) — FROZEN at
     /// the start of an implicit grab that landed on the grid, cleared when
     /// the grab's last button releases. Motion during the grab is mapped
@@ -226,7 +225,6 @@ impl Default for Cursor {
             adjust_hover: std::ptr::null_mut(),
             right_click_on_bg: false,
             right_click_on_border: false,
-            left_click_on_bg_in_overview: false,
             grab_grid: None,
         }
     }
@@ -1644,6 +1642,31 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 // is raised for the drag in `op_start_pointer`. (In
                 // overview hover already focused it.)
                 (*server).wm.stop_panning_animation();
+                // A selected window carries the rest of the selection with
+                // it; a press on any other window drops the selection, the
+                // way a press on a node outside the region does in
+                // cce-designer. The carried Floating windows are raised
+                // here, in stacking order, and the grabbed one over them in
+                // `op_start_pointer`.
+                seat.group_move.clear();
+                if (*server).wm.is_selected(clicked_win) {
+                    let carried: Vec<*mut crate::window::Window> = (*server)
+                        .wm
+                        .selection
+                        .windows
+                        .iter()
+                        .copied()
+                        .filter(|&w| w != clicked_win && (*server).wm.selectable(w))
+                        .collect();
+                    for w in carried {
+                        seat.group_move.push((w, (*w).virtual_x, (*w).virtual_y));
+                        if (*w).tiling_mode == crate::tiling::TilingMode::Floating {
+                            (*server).wm.raise_window(w);
+                        }
+                    }
+                } else {
+                    (*server).wm.selection_clear();
+                }
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
                 seat.op = Some(crate::seat::SeatOp {
@@ -1690,9 +1713,40 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         }
                     }
                 }
-                cursor.left_click_on_bg_in_overview = true;
-                (*server).wm.execute_action(&crate::config::Action::Overview, None);
+                // A press on the bare desktop is a click (which leaves
+                // overview) or the start of a drag-selection, and only the
+                // release can say which: it arms the selection, and the
+                // release path answers a press that never travelled.
+                (*server).wm.stop_panning_animation();
+                (*server).wm.selection_press(lx, ly);
+                seat.group_move.clear();
+                let cursor_x = (*cursor.wlr_cursor).x;
+                let cursor_y = (*cursor.wlr_cursor).y;
+                seat.op = Some(crate::seat::SeatOp {
+                    sent_release: false,
+                    input: crate::seat::SeatOpInput::Pointer,
+                    start_x: cursor_x as i32,
+                    start_y: cursor_y as i32,
+                    x: cursor_x as i32,
+                    y: cursor_y as i32,
+                    window_ptr: std::ptr::null_mut(),
+                    op_type: crate::seat::PointerOpType::Select,
+                    start_win_x: 0,
+                    start_win_y: 0,
+                    start_win_w: 0,
+                    start_win_h: 0,
+                    start_win_virtual_x: 0.0,
+                    start_win_virtual_y: 0.0,
+                    start_was_tiled: false,
+                    start_pan_x: (*server).wm.desk_pan_x,
+                    start_pan_y: (*server).wm.desk_pan_y,
+                    start_tiling_mode: crate::tiling::TilingMode::Floating,
+                    start_mode_locked: false,
+                    started_in_overview: true,
+                });
+                cursor.op_start_pointer();
                 cursor.pressed.insert((*event).button, None);
+                cursor.set_xcursor(b"crosshair\0".as_ptr() as *const _);
                 return;
             }
         }
@@ -1851,6 +1905,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         crate::seat::PointerOpType::Move => {
                             cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
                         }
+                        // A pointer bind is a move or a resize.
+                        crate::seat::PointerOpType::Select => {}
                     }
                     return;
                 }
@@ -2158,6 +2214,26 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             
             let op = seat.op.unwrap();
 
+            if op.op_type == crate::seat::PointerOpType::Select {
+                let dragged = (*server).wm.selection_release();
+                // Released before the op ends, so its end re-evaluates the
+                // pointer and the crosshair does not outlast the drag.
+                cursor.pressed.remove(&(*event).button);
+                seat.op_end();
+                // A press that never travelled is a click on the desktop.
+                // With windows selected it drops the selection, as a click
+                // on empty grid does in cce-designer; with none it leaves
+                // overview, as it always has.
+                if !dragged && (*event).button == 0x110 {
+                    if !(*server).wm.selection.windows.is_empty() {
+                        (*server).wm.selection_clear();
+                    } else {
+                        (*server).wm.execute_action(&crate::config::Action::Overview, None);
+                    }
+                }
+                return;
+            }
+
             #[allow(unused_assignments)]
             if !op.window_ptr.is_null()
                 && (*op.window_ptr).is_status_bar()
@@ -2384,15 +2460,6 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
         if let Some(binding_opt) = cursor.pressed.remove(&(*event).button) {
             if let Some(binding) = binding_opt {
                 (*binding).released();
-                if cursor.pressed.is_empty() && seat.op.is_some() {
-                    seat.op_release = true;
-                    (*(*seat).server).wm.dirty_windowing();
-                }
-                return;
-            }
-
-            if (*event).button == 0x110 && cursor.left_click_on_bg_in_overview {
-                cursor.left_click_on_bg_in_overview = false;
                 if cursor.pressed.is_empty() && seat.op.is_some() {
                     seat.op_release = true;
                     (*(*seat).server).wm.dirty_windowing();
