@@ -819,6 +819,31 @@ with `verify/clients` `float-pair --dialog-honours-configure`: tile the
 main window, and the "Authorize" window maps Tiled at 1404x1076 without a
 rule, Floating at its own 400x370 over the main window with one.
 
+**A prompt opens centred on the view** with a `mode_rule` that says
+`center` (since 2026-09-30):
+
+```kdl
+mode_rule mode="tiled" app_id="com.onepassword.OnePassword" title=" — 1Password"
+mode_rule mode="floating" app_id="com.onepassword.OnePassword" title="1Password" center=(bool)true
+```
+
+It puts the window on the same path as the built-in session modals
+(`Window::try_center_on_view`, gated by `wants_view_center`: the hardcoded
+`cce-authenticator`/`cce-filesystem-chooser` list OR a matching rule):
+forced Floating and `mode_locked`, never minimized, centred on the camera
+as it stands at map with the remembered SIZE kept and the position
+discarded, re-centred on the commit that brings a self-sizer's real size,
+and `hint_placed` so no spawn pan follows it. 1Password's authorization
+popup is a parentless Electron toplevel under the vault window's app_id
+with the bare title `1Password`; it saved as Tiled and reopened at that
+one spot on the desk wherever the camera was. Two rules because title
+matching is substring and the first match wins: the vault window's titles
+all end in ` — 1Password`, so the first rule takes them and only the bare
+title reaches the second. Reproduce with `float-pair --app-id X
+--dialog-honours-configure` under `title="Main window"` / `title="Authorize"
+center` rules: pan the camera, respawn, and `ctl windows` shows the
+dialog at the screen's centre while the main window sits where it was.
+
 **A client reconnecting maps unfocused**: a window that vanishes without
 the compositor asking it to close (`Window::unmap` → `note_vanished`) lets
 the next window of the same app_id AND the same program (`proc_args`

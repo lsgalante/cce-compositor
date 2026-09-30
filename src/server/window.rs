@@ -1892,9 +1892,12 @@ impl Window {
     ///
     /// Hardcoded by app_id like the compositor's other DE-internal window
     /// classes (`cce-status*`/`cce-wallpaper`/`cce-grid` in `try_restore`,
-    /// `cce-notifier`/`cce-cloud` in `get_mode_for_window`). The config's
-    /// per-app window rules assign a tiling MODE, not a placement, so there
-    /// is nothing there to hang this off yet.
+    /// `cce-notifier`/`cce-cloud` in `get_mode_for_window`). A third-party
+    /// prompt asks for the same treatment through a `mode_rule` with
+    /// `center` (`wants_view_center`): 1Password's authorization popup is a
+    /// parentless Electron toplevel under the vault window's app_id, told
+    /// apart by its bare title, and it restored Tiled to wherever it was
+    /// last answered.
     fn is_view_centered_modal(app_id: &str) -> bool {
         // The polkit prompt, and the file chooser cce-files runs in --select/
         // --save mode: both are spawned BY an action in the current view and
@@ -1904,9 +1907,17 @@ impl Window {
         app_id == "cce-authenticator" || app_id == "cce-filesystem-chooser"
     }
 
-    unsafe fn try_center_on_view(&mut self) {
+    /// The built-in modal list, or a matching `mode_rule` that says `center`.
+    unsafe fn wants_view_center(&mut self) -> bool {
         let app_id = self.get_app_id_string().unwrap_or_default();
-        if !Self::is_view_centered_modal(&app_id) {
+        if Self::is_view_centered_modal(&app_id) {
+            return true;
+        }
+        (*self.server).wm.get_rule_for_window(self as *mut Window).map_or(false, |r| r.center)
+    }
+
+    unsafe fn try_center_on_view(&mut self) {
+        if !self.wants_view_center() {
             return;
         }
 

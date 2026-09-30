@@ -6195,6 +6195,7 @@ impl WindowManager {
                     circular: false,
                     ssd: None,
                     over_sibling: false,
+                    center: false,
                 });
                 self.dirty_windowing();
                 "ok\n".to_string()

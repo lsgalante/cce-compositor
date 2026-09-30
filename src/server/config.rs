@@ -308,6 +308,12 @@ pub struct ModeRule {
     /// saved state, sizes itself, and maps centred over a mapped sibling of
     /// the same app_id. See `Window::try_center_on_sibling`.
     pub over_sibling: bool,
+    /// The window opens centred on the current view, whatever position is
+    /// remembered for it: a prompt the user has to answer now (1Password's
+    /// authorization popup). Placement only — the remembered size still
+    /// applies, and a self-sizing window is re-centred once its real size
+    /// lands. See `Window::try_center_on_view`.
+    pub center: bool,
 }
 
 pub use cce_window_manager::api::Action;
@@ -1039,6 +1045,7 @@ pub struct ModeRuleConfig {
     pub circular: Option<bool>,
     pub ssd: Option<bool>,
     pub over_sibling: Option<bool>,
+    pub center: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1794,7 +1801,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                 let circular = get_prop_bool_opt(node, "circular");
                 let ssd = get_prop_bool_opt(node, "ssd");
                 let over_sibling = get_prop_bool_opt(node, "over_sibling");
-                mode_rule.push(ModeRuleConfig { mode, app_id, title, single, tag, circular, ssd, over_sibling });
+                let center = get_prop_bool_opt(node, "center");
+                mode_rule.push(ModeRuleConfig { mode, app_id, title, single, tag, circular, ssd, over_sibling, center });
             }
             "tag_layout" => {
                 let tag = get_prop_i64(node, "tag", 0);
@@ -2981,6 +2989,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             circular: rule.circular.unwrap_or(false),
             ssd: rule.ssd,
             over_sibling: rule.over_sibling.unwrap_or(false),
+            center: rule.center.unwrap_or(false),
         });
     }
 
