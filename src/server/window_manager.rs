@@ -3240,8 +3240,12 @@ impl WindowManager {
                     }
                 }
                 // A window carried along by a group move is being moved as
-                // much as the one under the pointer.
-                if let crate::seat::PointerOpType::Move = op.op_type {
+                // much as the one under the pointer — or as the image under
+                // it, when the group was grabbed by one.
+                if matches!(
+                    op.op_type,
+                    crate::seat::PointerOpType::Move | crate::seat::PointerOpType::GroupMove
+                ) {
                     if (*seat).group_move.iter().any(|&(w, _, _)| w == win_ptr) {
                         return true;
                     }
@@ -5296,15 +5300,35 @@ impl WindowManager {
                 self.dirty_windowing();
                 return format!("ok {}\n", enable);
             }
-            // The overview drag-selection: the selected window ids on one
-            // line (`-` for none) and the rubber band's virtual rect while
-            // one is being dragged out.
+            // The desktop grid reporting its images: `grid-items
+            // <id>:<x>:<y>:<w>:<h> ...` in virtual units, the whole list on
+            // every change (none at all clears it). See `crate::selection`.
+            "grid-items" => {
+                let items = crate::selection::parse_desktop_items(&parts[1..]);
+                let n = items.len();
+                self.set_desktop_items(items);
+                return format!("ok {}\n", n);
+            }
+            // The overview drag-selection: the selected window ids and the
+            // selected desktop images' ids, each on one line (`-` for
+            // none), and the rubber band's virtual rect while one is being
+            // dragged out.
             "selection" => {
                 let ids: Vec<String> = self
                     .selection
                     .windows
                     .iter()
                     .map(|&w| (*w).ref_key.index.to_string())
+                    .collect();
+                let items: Vec<String> =
+                    self.selection.items.iter().map(|id| id.to_string()).collect();
+                // Every image the grid has reported, so a shadow can see
+                // the report landed and where a group move left them.
+                let desk: Vec<String> = self
+                    .selection
+                    .desktop_items
+                    .iter()
+                    .map(|i| format!("{}@{:.0},{:.0},{:.0}x{:.0}", i.id, i.x, i.y, i.w, i.h))
                     .collect();
                 let band = match self.selection.marquee {
                     Some(m) => {
@@ -5314,9 +5338,11 @@ impl WindowManager {
                     None => "-".to_string(),
                 };
                 format!(
-                    "selected={} band={}\n",
+                    "selected={} items={} band={} desk={}\n",
                     if ids.is_empty() { "-".to_string() } else { ids.join(",") },
-                    band
+                    if items.is_empty() { "-".to_string() } else { items.join(",") },
+                    band,
+                    if desk.is_empty() { "-".to_string() } else { desk.join(";") },
                 )
             }
             // The camera as it stands and where it is easing to — what a
@@ -5324,13 +5350,14 @@ impl WindowManager {
             "camera" => {
                 let fmt = |v: Option<f64>| v.map_or("-".to_string(), |v| format!("{:.1}", v));
                 format!(
-                    "pan_x={:.1} pan_y={:.1} zoom={:.3} target_x={} target_y={} anim={}\n",
+                    "pan_x={:.1} pan_y={:.1} zoom={:.3} target_x={} target_y={} anim={} mode={:?}\n",
                     self.desk_pan_x + self.pan_pending[0],
                     self.desk_pan_y + self.pan_pending[1],
                     self.desk_zoom,
                     fmt(self.target_desk_pan_x),
                     fmt(self.target_desk_pan_y),
-                    self.camera_anim_active
+                    self.camera_anim_active,
+                    self.mode
                 )
             }
             "pan-by" => {

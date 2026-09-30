@@ -295,6 +295,11 @@ coordinates, which each popup finds through `XdgPopup::root_tree`; until
 Chrome's tall submenus past the top of the screen and stopped them flipping
 at the right edge.
 
+`./verify/image-selection-test` needs no client of its own: cce-grid and
+cce-terminal are the clients, and the desktop images it seeds are what the
+overview band and a group move have to pick up (see "Overview
+drag-selection" below).
+
 `./verify/escape-dismiss-test` composes the two to prove all three gates of
 the Escape-closes-status-menus arm (`handle_builtin_binding`): a chorded
 Escape stays out of the arm, a plain Escape while expanded pushes exactly one
@@ -625,10 +630,38 @@ two of them is a strip, so touching is enough.
 - The selection lives only in overview (`set_mode` clears it) and a
   destroyed window is dropped from it and from `group_move`
   (`Window::destroy`).
-- `ccectl selection` prints `selected=<ids|-> band=<virtual rect|->`. In a
-  shadow: `pointer-move-to`, `pointer-press left`, `pointer-move-to`,
-  `selection`, `pointer-release left`. Keep the band off the screen edges or
-  the edge pan scrolls the desk mid-assertion.
+- **The desktop images select too** (since 2026-09-30). They are
+  `cce-grid`'s pinned items, which the compositor otherwise knows only as
+  the grid surface's input region, so the grid reports them over the
+  control socket — `grid-items <id>:<x>:<y>:<w>:<h> ...`, virtual units,
+  the whole list on every change, ids per grid process — and
+  `Selection::desktop_items` keeps the list (dropped with the grid window,
+  `selection_forget`). The band picks them up by the same touch rule,
+  `draw_selection` washes them like windows (square-cornered: they are
+  quads), and a group move carries them: `Seat::group_items` is filled
+  beside `group_move` at the grab, `carry_group_items` moves the
+  compositor's rects by the group's offset (the grabbed window's, snap
+  included) and pushes `move <id>:<x>:<y> ...` on the status socket's
+  `selection` topic, and `op_end` pushes `drop`, on which the grid saves
+  its sidecar and reports afresh. A press on a SELECTED image is the
+  compositor's, not the grid's: `PointerOpType::GroupMove`, the one op
+  besides Select with no window — the pointer's own travel moves windows
+  and images alike, snapped to whole cells when a carried window was Tiled
+  (measured on that window, kept in `start_win_virtual_*`). A press on an
+  unselected image drops the selection and goes to the grid, which drags
+  it as before. A background click clears images too (`has_selection`), so
+  a click with only images selected drops them rather than leaving
+  overview. See `../cce-grid/CLAUDE.md` for the grid's half.
+- `ccectl selection` prints `selected=<ids|-> items=<ids|->
+  band=<virtual rect|-> desk=<id@x,y,wxh;...|->` — `items` are the selected
+  images, `desk` every image the grid has reported, which is how a shadow
+  sees the report land and where a group move left them; `ccectl camera`
+  prints `mode=` too. In a shadow: `pointer-move-to`, `pointer-press left`,
+  `pointer-move-to`, `selection`, `pointer-release left`. Keep the band off
+  the screen edges or the edge pan scrolls the desk mid-assertion.
+  `./verify/image-selection-test` drives the whole of the above — the
+  report, the band, both grab sides, the click rules, the exit — against a
+  cce-grid it runs itself (`CCE_GRID`, else the workspace's release build).
 
 ### Config
 
@@ -903,6 +936,10 @@ headless seat has no keyboard and Chromium crashes in
   `modifiers`, `dismiss`, or `backdrop <app_id>`) and receives text lines on every
   change. This feeds the status bar (`cce-status-interface`). The main loop pushes
   updates through a `StatusSender` mpsc handle.
+
+  **`selection`** is a one-shot topic too, for the desktop grid alone: the
+  overview drag-selection carrying its images pushes `move <id>:<x>:<y>
+  ...` per step and `drop` at the release (see "Overview drag-selection").
 
   **`clickaway`** is a one-shot topic (like `dismiss` and `shortcuts`): a
   `press` line for each button press that lands on NO X11 surface while some

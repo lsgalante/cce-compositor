@@ -14,6 +14,21 @@
 //! Like the designer, a new drag replaces the selection, a press on a window
 //! outside it drops it, and there are no modifiers.
 //!
+//! The desktop IMAGES select the same way. They are `cce-grid`'s (its
+//! desktop items, pinned to the virtual canvas), and the compositor never
+//! sees them as anything but the grid surface's input region — so the grid
+//! reports them over the control socket (`grid-items <id>:<x>:<y>:<w>:<h>
+//! ...`, virtual units, on every change) and this module keeps the list
+//! (`Selection::desktop_items`). The band picks them up by the same touch
+//! rule, the highlight is drawn here beside the windows', and a group move
+//! carries them: the compositor moves the rects it holds and pushes the new
+//! positions over the status socket's `selection` topic (`move
+//! <id>:<x>:<y> ...`, then `drop` at the release, on which the grid saves
+//! its sidecar and reports the list afresh). A press on a selected image
+//! starts the group move from the image's side (`PointerOpType::GroupMove`
+//! — no grabbed window, the delta is the pointer's); a press on an
+//! unselected one drops the selection and goes to the grid as before.
+//!
 //! The press that starts the drag used to exit overview on the spot. It
 //! still does, on RELEASE, when the pointer never travelled: the press
 //! cannot know which of the two it is.
@@ -44,6 +59,50 @@ const MARQUEE_FILL: f32 = 0.14;
 const SELECTED_FILL: f32 = 0.12;
 /// Corner radius of the rubber band, screen px.
 const MARQUEE_RADIUS: f64 = 6.0;
+
+/// One of the grid's desktop images, as it last reported it: a
+/// per-process id the grid assigns, and its rect in virtual units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DesktopItem {
+    pub id: u64,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl DesktopItem {
+    pub fn rect(&self) -> (f64, f64, f64, f64) {
+        (self.x, self.y, self.w, self.h)
+    }
+}
+
+/// Parse the grid's report: whitespace-separated `id:x:y:w:h` tokens, any
+/// malformed one skipped. An empty report is an empty desk.
+pub fn parse_desktop_items(tokens: &[&str]) -> Vec<DesktopItem> {
+    tokens
+        .iter()
+        .filter_map(|tok| {
+            let mut f = tok.split(':');
+            let id = f.next()?.parse::<u64>().ok()?;
+            let x = f.next()?.parse::<f64>().ok()?;
+            let y = f.next()?.parse::<f64>().ok()?;
+            let w = f.next()?.parse::<f64>().ok()?;
+            let h = f.next()?.parse::<f64>().ok()?;
+            Some(DesktopItem { id, x, y, w, h })
+        })
+        .collect()
+}
+
+/// The topmost item under a virtual point. The grid draws its list in
+/// order, last on top, and reports it in that order.
+pub fn item_at(items: &[DesktopItem], vx: f64, vy: f64) -> Option<u64> {
+    items
+        .iter()
+        .rev()
+        .find(|i| vx >= i.x && vx < i.x + i.w && vy >= i.y && vy < i.y + i.h)
+        .map(|i| i.id)
+}
 
 /// The rubber band: the press point and the pointer, in virtual coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -81,6 +140,12 @@ pub struct Selection {
     /// `Window::destroy`; a window that is merely unmapped or minimized
     /// stays listed and is skipped where it matters.
     pub windows: Vec<*mut Window>,
+    /// The selected desktop images, by the grid's id, in report order.
+    pub items: Vec<u64>,
+    /// Every desktop image the grid has reported, in its draw order. Moved
+    /// here during a group move so the highlight follows; the grid's next
+    /// report replaces the lot.
+    pub desktop_items: Vec<DesktopItem>,
     /// Where the armed background press landed (virtual). Set on press,
     /// cleared on release.
     pub anchor: Option<(f64, f64)>,
@@ -94,6 +159,8 @@ impl Default for Selection {
     fn default() -> Self {
         Self {
             windows: Vec::new(),
+            items: Vec::new(),
+            desktop_items: Vec::new(),
             anchor: None,
             marquee: None,
             tree: std::ptr::null_mut(),
@@ -136,6 +203,39 @@ impl WindowManager {
         self.selection.windows.iter().any(|&w| w == window)
     }
 
+    pub fn is_item_selected(&self, id: u64) -> bool {
+        self.selection.items.iter().any(|&i| i == id)
+    }
+
+    /// Anything selected at all — what a background click drops, and what
+    /// a press on a selected image carries.
+    pub fn has_selection(&self) -> bool {
+        !self.selection.windows.is_empty() || !self.selection.items.is_empty()
+    }
+
+    /// The selected desktop image under a virtual point, if the topmost
+    /// one there is selected.
+    pub fn selected_item_at(&self, vx: f64, vy: f64) -> Option<u64> {
+        item_at(&self.selection.desktop_items, vx, vy).filter(|&id| self.is_item_selected(id))
+    }
+
+    pub fn desktop_item(&self, id: u64) -> Option<&DesktopItem> {
+        self.selection.desktop_items.iter().find(|i| i.id == id)
+    }
+
+    pub fn desktop_item_mut(&mut self, id: u64) -> Option<&mut DesktopItem> {
+        self.selection.desktop_items.iter_mut().find(|i| i.id == id)
+    }
+
+    /// The grid reported its images (`grid-items`). The list is replaced
+    /// wholesale; a selected id that is no longer in it was removed or
+    /// belongs to a restarted grid, and is dropped.
+    pub unsafe fn set_desktop_items(&mut self, items: Vec<DesktopItem>) {
+        self.selection.items.retain(|id| items.iter().any(|i| i.id == *id));
+        self.selection.desktop_items = items;
+        self.schedule_frame_all_outputs();
+    }
+
     /// Arm a drag-selection at a background press. Nothing is selected or
     /// drawn until the pointer travels (`selection_motion`).
     pub unsafe fn selection_press(&mut self, lx: f64, ly: f64) {
@@ -173,6 +273,17 @@ impl WindowManager {
             log::debug!("selection: {} window(s)", picked.len());
             self.selection.windows = picked;
         }
+        let picked_items: Vec<u64> = self
+            .selection
+            .desktop_items
+            .iter()
+            .filter(|i| touches(rect, i.rect()))
+            .map(|i| i.id)
+            .collect();
+        if picked_items != self.selection.items {
+            log::debug!("selection: {} image(s)", picked_items.len());
+            self.selection.items = picked_items;
+        }
         self.schedule_frame_all_outputs();
     }
 
@@ -188,20 +299,28 @@ impl WindowManager {
     }
 
     pub unsafe fn selection_clear(&mut self) {
-        if self.selection.windows.is_empty() && self.selection.marquee.is_none() {
+        if !self.has_selection() && self.selection.marquee.is_none() {
             return;
         }
         self.selection.windows.clear();
+        self.selection.items.clear();
         self.selection.marquee = None;
         self.schedule_frame_all_outputs();
     }
 
     /// `window` is being destroyed: it must not stay listed for a window
-    /// allocated at the same address to inherit.
+    /// allocated at the same address to inherit. The grid going away takes
+    /// its images with it.
     pub unsafe fn selection_forget(&mut self, window: *mut Window) {
         let before = self.selection.windows.len();
         self.selection.windows.retain(|&w| w != window);
-        if self.selection.windows.len() != before {
+        let mut changed = self.selection.windows.len() != before;
+        if (*window).is_grid() && !self.selection.desktop_items.is_empty() {
+            self.selection.desktop_items.clear();
+            self.selection.items.clear();
+            changed = true;
+        }
+        if changed {
             self.schedule_frame_all_outputs();
         }
     }
@@ -240,7 +359,7 @@ impl WindowManager {
     pub unsafe fn draw_selection(&mut self) {
         let showing = self.mode == WindowManagerMode::Overview
             && (*self.server).lock_manager.state == crate::lock_manager::LockState::Unlocked
-            && (self.selection.marquee.is_some() || !self.selection.windows.is_empty());
+            && (self.selection.marquee.is_some() || self.has_selection());
         if !showing {
             if !self.selection.tree.is_null() {
                 ffi::wlr_scene_node_set_enabled(
@@ -270,6 +389,21 @@ impl WindowManager {
                 (g.width as f64 * sc) as i32,
                 (g.height as f64 * sc) as i32,
                 (radius as f64 * sc) as i32,
+                SELECTED_FILL,
+            ));
+        }
+        // The images are square-cornered quads on the grid surface, so
+        // their wash is too.
+        for &id in self.selection.items.iter() {
+            let Some(item) = self.desktop_item(id) else { continue };
+            let (x0, y0) = self.virtual_to_layout(item.x, item.y);
+            let (x1, y1) = self.virtual_to_layout(item.x + item.w, item.y + item.h);
+            wanted.push((
+                x0.round() as i32,
+                y0.round() as i32,
+                (x1 - x0).round() as i32,
+                (y1 - y0).round() as i32,
+                0,
                 SELECTED_FILL,
             ));
         }
@@ -430,5 +564,31 @@ mod tests {
     #[test]
     fn a_window_with_no_area_is_never_touched() {
         assert!(!touches((0.0, 0.0, 1000.0, 1000.0), (100.0, 100.0, 0.0, 300.0)));
+    }
+
+    #[test]
+    fn the_grid_report_parses_and_skips_a_bad_token() {
+        let items = parse_desktop_items(&["3:10.5:20:300:200", "junk", "4:0:0:1:1:extra", "x:1:2:3:4"]);
+        assert_eq!(
+            items,
+            vec![
+                DesktopItem { id: 3, x: 10.5, y: 20.0, w: 300.0, h: 200.0 },
+                DesktopItem { id: 4, x: 0.0, y: 0.0, w: 1.0, h: 1.0 },
+            ]
+        );
+        assert!(parse_desktop_items(&[]).is_empty());
+    }
+
+    #[test]
+    fn the_last_reported_image_is_on_top() {
+        let items = vec![
+            DesktopItem { id: 1, x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+            DesktopItem { id: 2, x: 50.0, y: 50.0, w: 100.0, h: 100.0 },
+        ];
+        assert_eq!(item_at(&items, 75.0, 75.0), Some(2));
+        assert_eq!(item_at(&items, 10.0, 10.0), Some(1));
+        assert_eq!(item_at(&items, 200.0, 200.0), None);
+        // Half-open: the far edge belongs to nothing.
+        assert_eq!(item_at(&items, 150.0, 150.0), None);
     }
 }

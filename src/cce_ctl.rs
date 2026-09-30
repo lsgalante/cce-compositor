@@ -88,6 +88,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  mode <floating|tiled|fullscreen|popup|overlay> <app_id> [title]");
     print("  pointer-location");
     print("  camera                             (pan, zoom, and the pan target being eased to)");
+    print("  selection                          (overview drag-selection: window ids, image ids, band)");
     print("  pointer-move-to <x> <y>            (layout pixels)");
     print("  pointer-move-by <dx> <dy>");
     print("  pointer-scroll <dy> [dx] [finger] [natural]");

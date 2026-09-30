@@ -2,7 +2,8 @@
 //
 // Runs in a dedicated thread. cce-status connects to
 // /tmp/cce-status-{WAYLAND_DISPLAY}.sock, sends a subscription line
-// ("layout", "title", "modifiers", "adjust", "dismiss", or "shortcuts") and receives lines whenever the status changes.
+// ("layout", "title", "modifiers", "adjust", "dismiss", "shortcuts",
+// "clickaway" or "selection") and receives lines whenever the status changes.
 //
 // The main loop sends updates through an mpsc channel. The server thread
 // owns the socket and handles all I/O independently of the Wayland event loop.
@@ -60,6 +61,12 @@ pub enum StatusMsg {
     /// Wayland surface), so the tray bridge closes the popup it opened on
     /// this cue — see `cce-status-interface`'s `cce-xembed-tray`.
     ClickAway,
+    /// The overview drag-selection carrying the grid's desktop images: one
+    /// line for every `selection` subscriber (in practice the grid) —
+    /// `move <id>:<x>:<y> ...` with the images' new virtual positions as a
+    /// group move steps, then `drop` at its release. See
+    /// [`crate::selection`].
+    Selection(String),
 }
 
 /// Subscription types that the status bar script can request.
@@ -81,6 +88,9 @@ enum Subscription {
     /// `clickaway` — one-shot `press` lines only (see
     /// `StatusMsg::ClickAway`); never receives state pushes.
     ClickAway,
+    /// `selection` — one-shot group-move lines for the desktop images
+    /// (see `StatusMsg::Selection`); never receives state pushes.
+    Selection,
     /// `backdrop <app_id>` — what THIS segment is composited over, so it can
     /// adapt its own text contrast. Lines are `<luma> <spread>`, both 0-100.
     Backdrop(String),
@@ -104,6 +114,7 @@ impl Subscription {
             "dismiss" => Subscription::Dismiss,
             "shortcuts" => Subscription::Shortcuts,
             "clickaway" => Subscription::ClickAway,
+            "selection" => Subscription::Selection,
             _ => Subscription::Unknown,
         }
     }
@@ -161,6 +172,14 @@ impl StatusSender {
     /// Report a press that missed every X11 surface (`StatusMsg::ClickAway`).
     pub fn send_click_away(&self) {
         if self.tx.send(StatusMsg::ClickAway).is_ok() {
+            wake_fd(&self.wake);
+        }
+    }
+
+    /// Tell the grid where a group move put its images
+    /// (`StatusMsg::Selection`).
+    pub fn send_selection_line(&self, line: &str) {
+        if self.tx.send(StatusMsg::Selection(line.to_string())).is_ok() {
             wake_fd(&self.wake);
         }
     }
@@ -379,6 +398,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
         let mut dismiss_events: Vec<String> = Vec::new();
         let mut shortcut_events: Vec<String> = Vec::new();
         let mut clickaway_events: Vec<String> = Vec::new();
+        let mut selection_events: Vec<String> = Vec::new();
         loop {
             match rx.try_recv() {
                 Ok(StatusMsg::State(update)) => {
@@ -393,6 +413,9 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
                 }
                 Ok(StatusMsg::ClickAway) => {
                     clickaway_events.push("press".to_string());
+                }
+                Ok(StatusMsg::Selection(line)) => {
+                    selection_events.push(line);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -436,6 +459,7 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
         // order; click-aways only to `clickaway` subscribers.
         push_one_shot(&mut clients, &Subscription::Shortcuts, &shortcut_events);
         push_one_shot(&mut clients, &Subscription::ClickAway, &clickaway_events);
+        push_one_shot(&mut clients, &Subscription::Selection, &selection_events);
 
         // If we got a new update, push it to all clients
         if has_new_update {
@@ -447,7 +471,10 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
                     // only, never state pushes.
                     if matches!(
                         client.subscription,
-                        Subscription::Dismiss | Subscription::Shortcuts | Subscription::ClickAway
+                        Subscription::Dismiss
+                            | Subscription::Shortcuts
+                            | Subscription::ClickAway
+                            | Subscription::Selection
                     ) {
                         continue;
                     }
@@ -531,6 +558,7 @@ fn format_for_subscription(sub: &Subscription, update: &StatusUpdate) -> String 
         Subscription::Dismiss
         | Subscription::Shortcuts
         | Subscription::ClickAway
+        | Subscription::Selection
         | Subscription::Unknown => String::new(),
     }
 }

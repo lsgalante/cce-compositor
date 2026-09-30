@@ -1632,6 +1632,76 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             } else {
                 BorderZone::None
             };
+            // A press on a SELECTED desktop image grabs the whole selection
+            // — windows and images — from the image's side: the grid never
+            // sees the press, the compositor moves everything and tells the
+            // grid where its images went (`crate::selection`). A press on an
+            // unselected image drops the selection, as one on an unselected
+            // window does, and goes to the grid as before.
+            if clicked_grid && in_overview {
+                let (vx, vy) = (*server).wm.layout_to_virtual(lx, ly);
+                if (*server).wm.selected_item_at(vx, vy).is_some() {
+                    (*server).wm.stop_panning_animation();
+                    seat.group_move.clear();
+                    seat.group_items.clear();
+                    // The first Tiled window carried is the snap anchor.
+                    let mut tiled_anchor: Option<(f64, f64)> = None;
+                    let carried: Vec<*mut crate::window::Window> = (*server)
+                        .wm
+                        .selection
+                        .windows
+                        .iter()
+                        .copied()
+                        .filter(|&w| (*server).wm.selectable(w))
+                        .collect();
+                    for w in carried {
+                        seat.group_move.push((w, (*w).virtual_x, (*w).virtual_y));
+                        if (*w).tiling_mode == crate::tiling::TilingMode::Tiled {
+                            if tiled_anchor.is_none() {
+                                tiled_anchor = Some(((*w).virtual_x, (*w).virtual_y));
+                            }
+                        } else if (*w).tiling_mode == crate::tiling::TilingMode::Floating {
+                            (*server).wm.raise_window(w);
+                        }
+                    }
+                    let ids: Vec<u64> = (*server).wm.selection.items.clone();
+                    for id in ids {
+                        if let Some(item) = (*server).wm.desktop_item(id) {
+                            seat.group_items.push((id, item.x, item.y));
+                        }
+                    }
+                    let cursor_x = (*cursor.wlr_cursor).x;
+                    let cursor_y = (*cursor.wlr_cursor).y;
+                    let (anchor_x, anchor_y) = tiled_anchor.unwrap_or((0.0, 0.0));
+                    seat.op = Some(crate::seat::SeatOp {
+                        sent_release: false,
+                        input: crate::seat::SeatOpInput::Pointer,
+                        start_x: cursor_x as i32,
+                        start_y: cursor_y as i32,
+                        x: cursor_x as i32,
+                        y: cursor_y as i32,
+                        window_ptr: std::ptr::null_mut(),
+                        op_type: crate::seat::PointerOpType::GroupMove,
+                        start_win_x: 0,
+                        start_win_y: 0,
+                        start_win_w: 0,
+                        start_win_h: 0,
+                        start_win_virtual_x: anchor_x,
+                        start_win_virtual_y: anchor_y,
+                        start_was_tiled: tiled_anchor.is_some(),
+                        start_pan_x: (*server).wm.desk_pan_x,
+                        start_pan_y: (*server).wm.desk_pan_y,
+                        start_tiling_mode: crate::tiling::TilingMode::Floating,
+                        start_mode_locked: false,
+                        started_in_overview: true,
+                    });
+                    cursor.op_start_pointer();
+                    cursor.pressed.insert((*event).button, None);
+                    cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
+                    return;
+                }
+                (*server).wm.selection_clear();
+            }
             if overview_chrome || clicked_grid {
                 // fall through
             } else if overview_win_valid && matches!(overview_border_zone, BorderZone::None) {
@@ -1649,6 +1719,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 // here, in stacking order, and the grabbed one over them in
                 // `op_start_pointer`.
                 seat.group_move.clear();
+                seat.group_items.clear();
                 if (*server).wm.is_selected(clicked_win) {
                     let carried: Vec<*mut crate::window::Window> = (*server)
                         .wm
@@ -1662,6 +1733,13 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         seat.group_move.push((w, (*w).virtual_x, (*w).virtual_y));
                         if (*w).tiling_mode == crate::tiling::TilingMode::Floating {
                             (*server).wm.raise_window(w);
+                        }
+                    }
+                    // And the selected desktop images, by the same offset.
+                    let ids: Vec<u64> = (*server).wm.selection.items.clone();
+                    for id in ids {
+                        if let Some(item) = (*server).wm.desktop_item(id) {
+                            seat.group_items.push((id, item.x, item.y));
                         }
                     }
                 } else {
@@ -1906,7 +1984,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                             cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
                         }
                         // A pointer bind is a move or a resize.
-                        crate::seat::PointerOpType::Select => {}
+                        crate::seat::PointerOpType::Select
+                        | crate::seat::PointerOpType::GroupMove => {}
                     }
                     return;
                 }
@@ -2225,7 +2304,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                 // on empty grid does in cce-designer; with none it leaves
                 // overview, as it always has.
                 if !dragged && (*event).button == 0x110 {
-                    if !(*server).wm.selection.windows.is_empty() {
+                    if (*server).wm.has_selection() {
                         (*server).wm.selection_clear();
                     } else {
                         (*server).wm.execute_action(&crate::config::Action::Overview, None);

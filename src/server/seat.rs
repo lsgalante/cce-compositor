@@ -15,6 +15,13 @@ pub enum PointerOpType {
     /// a rubber band. The one op with no window (`window_ptr` is null); its
     /// state is the window manager's (`crate::selection`).
     Select,
+    /// A group move grabbed by a selected desktop IMAGE: no window under
+    /// the pointer (`window_ptr` is null), the whole selection — windows
+    /// (`Seat::group_move`) and images (`Seat::group_items`) — follows the
+    /// pointer's own travel. `start_was_tiled` says a carried window was
+    /// Tiled at the grab and `start_win_virtual_*` is where it stood, so
+    /// the travel snaps to whole cells the way a grab on that window would.
+    GroupMove,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -121,6 +128,11 @@ pub struct Seat {
     /// Empty for an ordinary move. Filled at the grab, cleared in `op_end`;
     /// on the Seat for the reason `overview_displaced` is.
     pub group_move: Vec<(*mut crate::window::Window, f64, f64)>,
+    /// The selected desktop images a group move carries: the grid's id and
+    /// the virtual position each had at the grab. Filled beside
+    /// `group_move`; the positions go to the grid over the `selection`
+    /// status topic as the move steps (`carry_group_items`).
+    pub group_items: Vec<(u64, f64, f64)>,
     pub wm_sent_x: i32,
     pub wm_sent_y: i32,
 
@@ -173,6 +185,7 @@ impl Seat {
             suppress_focus_pan: false,
             overview_displaced: Vec::new(),
             group_move: Vec::new(),
+            group_items: Vec::new(),
             wm_sent_x: 0,
             wm_sent_y: 0,
             request_set_cursor: std::mem::zeroed(),
@@ -1245,6 +1258,34 @@ impl Seat {
                 return;
             }
 
+            if op.op_type == PointerOpType::GroupMove {
+                // Grabbed by an image: the pointer's own travel is the
+                // group's, snapped to whole cells when a Tiled window is
+                // along (measured on that window, so it lands on cells).
+                let op = *op;
+                let scale = (*self.server).wm.desk_zoom;
+                let pan_x = (*self.server).wm.desk_pan_x;
+                let pan_y = (*self.server).wm.desk_pan_y;
+                let virtual_dx = dx as f64 / scale + (pan_x - op.start_pan_x);
+                let virtual_dy = dy as f64 / scale + (pan_y - op.start_pan_y);
+                let (gdx, gdy) = if op.start_was_tiled {
+                    let (sx, sy) = crate::policy::snap::snap_move_tiled(
+                        op.start_win_virtual_x + virtual_dx,
+                        op.start_win_virtual_y + virtual_dy,
+                        &sp,
+                    );
+                    (sx - op.start_win_virtual_x, sy - op.start_win_virtual_y)
+                } else {
+                    (virtual_dx, virtual_dy)
+                };
+                (*self.server).wm.arm_border_fade();
+                carry_group_windows(self.server, &self.group_move, std::ptr::null_mut(), gdx, gdy);
+                carry_group_items(self.server, &self.group_items, gdx, gdy);
+                (*self.server).wm.queue_op_frame();
+                self.update_edge_pan(x as f64, y as f64);
+                return;
+            }
+
             let win = op.window_ptr;
             if !win.is_null() && !(*win).closed {
                 // Every drag step can bring a Floating window over the
@@ -1475,34 +1516,8 @@ impl Seat {
                             // through here too, and must not un-tile them.
                             let gdx = vx - op.start_win_virtual_x;
                             let gdy = vy - op.start_win_virtual_y;
-                            for &(w, start_vx, start_vy) in self.group_move.iter() {
-                                if w == win || !(*self.server).wm.selectable_in_drag(w) {
-                                    continue;
-                                }
-                                if gdx == 0.0
-                                    && gdy == 0.0
-                                    && (*w).virtual_x == start_vx
-                                    && (*w).virtual_y == start_vy
-                                {
-                                    continue;
-                                }
-                                if (*w).tiling_mode == crate::tiling::TilingMode::Tiled {
-                                    // As for the grabbed window above:
-                                    // floating for the drag, geometry kept,
-                                    // re-tiled in op_end if it lands aligned.
-                                    (*w).was_tiled = false;
-                                    (*w).tiling_mode = crate::tiling::TilingMode::Floating;
-                                    (*w).mode_locked = true;
-                                    (*self.server).wm.raise_window(w);
-                                }
-                                (*w).virtual_x = start_vx + gdx;
-                                (*w).virtual_y = start_vy + gdy;
-                                let (fx, fy) = (*w).virtual_to_screen((*w).virtual_x, (*w).virtual_y);
-                                (*w).rendering_requested.x = fx;
-                                (*w).rendering_requested.y = fy;
-                                (*w).box_geom.x = fx;
-                                (*w).box_geom.y = fy;
-                            }
+                            carry_group_windows(self.server, &self.group_move, win, gdx, gdy);
+                            carry_group_items(self.server, &self.group_items, gdx, gdy);
 
                             let (final_x, final_y) = (*win).virtual_to_screen(vx, vy);
                             (*win).rendering_requested.x = final_x;
@@ -1593,8 +1608,8 @@ impl Seat {
                         };
                         (*win).set_dimensions(new_w, new_h);
                     }
-                    // Handled above: it has no window to get here with.
-                    PointerOpType::Select => {}
+                    // Handled above: neither has a window to get here with.
+                    PointerOpType::Select | PointerOpType::GroupMove => {}
                 }
             }
             // The configure and the relayout go out once per output frame,
@@ -1623,6 +1638,8 @@ impl Seat {
                 Some(ref op) if op.op_type == PointerOpType::Select => {
                     wm.selection.marquee.is_some()
                 }
+                // Grabbed by an image: no window, always a drag.
+                Some(ref op) if op.op_type == PointerOpType::GroupMove => true,
                 Some(ref op) => {
                     !op.window_ptr.is_null()
                         && !(*op.window_ptr).closed
@@ -1713,19 +1730,6 @@ impl Seat {
                     }
                 }
                 self.settle_tiling(win);
-                // The windows a group move carried land by the same rule,
-                // each on its own geometry.
-                let group = std::mem::take(&mut self.group_move);
-                for &(w, start_vx, start_vy) in group.iter() {
-                    if w == win || !(*self.server).wm.selectable_in_drag(w) {
-                        continue;
-                    }
-                    if (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
-                        continue;
-                    }
-                    self.settle_tiling(w);
-                    (*self.server).wm.dirty_windowing();
-                }
                 // A TAP — press+release without meaningful motion — is a
                 // click, not a drag. A drag never focuses the window it
                 // moves or resizes (the press grabs without focusing), but
@@ -1747,6 +1751,34 @@ impl Seat {
                     self.focus_follow_pan(win);
                 }
             }
+            // The windows a group move carried land by the same rule as
+            // the grabbed one, each on its own geometry — whether the grab
+            // was a window or an image (then `win` is null).
+            let group = std::mem::take(&mut self.group_move);
+            for &(w, start_vx, start_vy) in group.iter() {
+                if w == win || !(*self.server).wm.selectable_in_drag(w) {
+                    continue;
+                }
+                if (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
+                    continue;
+                }
+                self.settle_tiling(w);
+                (*self.server).wm.dirty_windowing();
+            }
+            // The images it carried are the grid's to keep: `drop` is its
+            // cue to save them, if any actually moved.
+            let items = std::mem::take(&mut self.group_items);
+            let moved = items.iter().any(|&(id, sx, sy)| {
+                (*self.server)
+                    .wm
+                    .desktop_item(id)
+                    .map_or(false, |i| i.x != sx || i.y != sy)
+            });
+            if moved {
+                if let Some(ref sender) = (*self.server).wm.status_sender {
+                    sender.send_selection_line("drop");
+                }
+            }
             match op.input {
                 SeatOpInput::Pointer => {
                     self.cursor.op_end_pointer();
@@ -1754,7 +1786,76 @@ impl Seat {
             }
         }
         self.group_move.clear();
+        self.group_items.clear();
     }
+}
+
+/// One step of a group move for the windows it carries: each lands at its
+/// grab position plus `(gdx, gdy)` — the offset the grabbed window actually
+/// took, snap included, so the group keeps its shape; `grabbed` (null for
+/// a grab by an image) is skipped, it is placed by its own arm. Untouched
+/// until that offset is something: the release of a tap runs through here
+/// too, and must not un-tile them.
+unsafe fn carry_group_windows(
+    server: *mut crate::server::Server,
+    group: &[(*mut crate::window::Window, f64, f64)],
+    grabbed: *mut crate::window::Window,
+    gdx: f64,
+    gdy: f64,
+) {
+    for &(w, start_vx, start_vy) in group.iter() {
+        if w == grabbed || !(*server).wm.selectable_in_drag(w) {
+            continue;
+        }
+        if gdx == 0.0 && gdy == 0.0 && (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
+            continue;
+        }
+        if (*w).tiling_mode == crate::tiling::TilingMode::Tiled {
+            // As for a grabbed window: floating for the drag, geometry
+            // kept, re-tiled in op_end if it lands aligned.
+            (*w).was_tiled = false;
+            (*w).tiling_mode = crate::tiling::TilingMode::Floating;
+            (*w).mode_locked = true;
+            (*server).wm.raise_window(w);
+        }
+        (*w).virtual_x = start_vx + gdx;
+        (*w).virtual_y = start_vy + gdy;
+        let (fx, fy) = (*w).virtual_to_screen((*w).virtual_x, (*w).virtual_y);
+        (*w).rendering_requested.x = fx;
+        (*w).rendering_requested.y = fy;
+        (*w).box_geom.x = fx;
+        (*w).box_geom.y = fy;
+    }
+}
+
+/// The same step for the desktop images the move carries: the rects the
+/// compositor holds move (so the highlight follows this frame), and the
+/// grid is told where they are now over the `selection` status topic.
+/// Nothing is sent for a step that moved nothing.
+unsafe fn carry_group_items(server: *mut crate::server::Server, items: &[(u64, f64, f64)], gdx: f64, gdy: f64) {
+    if items.is_empty() {
+        return;
+    }
+    let wm = &mut (*server).wm;
+    let mut line = String::from("move");
+    let mut changed = false;
+    for &(id, start_x, start_y) in items.iter() {
+        let Some(item) = wm.desktop_item_mut(id) else { continue };
+        let (nx, ny) = (start_x + gdx, start_y + gdy);
+        if item.x != nx || item.y != ny {
+            changed = true;
+        }
+        item.x = nx;
+        item.y = ny;
+        line.push_str(&format!(" {}:{:.2}:{:.2}", id, nx, ny));
+    }
+    if !changed {
+        return;
+    }
+    if let Some(ref sender) = wm.status_sender {
+        sender.send_selection_line(&line);
+    }
+    wm.schedule_frame_all_outputs();
 }
 
 /// Live overview displacement for one motion step of a move op: every

@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# image-selection-test — behavioral test for the overview drag-selection
+# picking up the desktop IMAGES (cce-grid's pinned items) beside windows,
+# and a group move carrying them (src/server/selection.rs, since
+# 2026-09-30).
+#
+# Setup: a private cce-shadow instance whose seeded desktop holds two
+# images (a 100x100 red one right of where cce-terminal maps, a 60x100 blue
+# one left of it), cce-grid running against the shadow so it reports them
+# (`grid-items` on the control socket), and one cce-terminal window. The
+# camera stays at zoom 1 in overview with one window, so everything is
+# driven in virtual units and converted through `ccectl camera`. The
+# assertions, in order:
+#
+#   1. the grid's report landed (`ccectl selection` desk=...)
+#   2. a band over the red image picks it, live, and the pick survives the
+#      release
+#   3. a press on the selected image drags it (PointerOpType::GroupMove):
+#      the compositor's rect follows mid-drag, the grid saves the sidecar
+#      on `drop`
+#   4. a band over everything, then a drag of the terminal, moves both
+#      images by exactly the terminal's offset (snap included) and the
+#      sidecar agrees
+#   5. a background click drops the selection and stays in overview — also
+#      with only images selected (has_selection), where it used to exit
+#   6. a press on an UNSELECTED image drops the selection and the grid
+#      drags the image itself, then re-reports
+#   7. leaving overview clears it
+#
+# The compositor binary is whatever cce-shadow resolves (installed first,
+# then the workspace target/release); extra args go to `cce-shadow start`,
+# so `--bin ../target/release/cce-fx` pins the tree's own build. The grid
+# is $CCE_GRID, else the workspace's target/release/cce-grid, else the one
+# on PATH — build it with `cargo build --release -p cce-grid` to test the
+# tree's.
+
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(dirname "$here")
+shadow="$repo/scripts/cce-shadow"
+out=$(mktemp -d)
+inst=""
+
+cleanup() {
+    [ -n "$inst" ] && "$shadow" --instance "$inst" stop >/dev/null 2>&1 || true
+    rm -rf "$out"
+}
+trap cleanup EXIT
+
+fail() {
+    echo "FAIL: $*" >&2
+    echo "--- grid log ---" >&2
+    cat "$out/grid.log" >&2 || true
+    echo "--- compositor log tail ---" >&2
+    [ -n "$inst" ] && "$shadow" --instance "$inst" logs 2>/dev/null | tail -20 >&2 || true
+    exit 1
+}
+
+grid=${CCE_GRID:-}
+if [ -z "$grid" ]; then
+    if [ -x "$repo/../target/release/cce-grid" ]; then
+        grid="$repo/../target/release/cce-grid"
+    else
+        grid=$(command -v cce-grid) || fail "no cce-grid: build it or set CCE_GRID"
+    fi
+fi
+command -v cce-terminal >/dev/null || fail "cce-terminal is not installed"
+
+echo "==> starting shadow instance"
+inst=$("$shadow" start --new "$@" 2>&1 | sed -n "s/.*claimed instance '\([^']*\)'.*/\1/p")
+[ -n "$inst" ] || fail "could not claim a shadow instance"
+sc() { "$shadow" --instance "$inst" "$@"; }
+home=$(sc env | sed -n 's/^export HOME=//p')
+[ -n "$home" ] || fail "could not read the shadow's HOME"
+
+echo "==> seeding two desktop images"
+mkdir -p "$home/Desktop" "$home/.local/share/cce"
+python3 - "$home/Desktop" <<'EOF'
+import struct, sys, zlib
+def png(path, w, h, rgb):
+    raw = b"".join(b"\0" + bytes(rgb) * w for _ in range(h))
+    def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+png(sys.argv[1] + "/red.png", 100, 100, (220, 60, 60))
+png(sys.argv[1] + "/blue.png", 60, 100, (60, 120, 220))
+EOF
+cat > "$home/.local/share/cce/desktop-items.json" <<EOF
+[{"path":"$home/Desktop/red.png","x":960,"y":150,"w":100,"h":100},
+ {"path":"$home/Desktop/blue.png","x":-90,"y":150,"w":60,"h":100}]
+EOF
+
+echo "==> starting the grid ($grid) and a terminal"
+sc run "$grid" >"$out/grid.log" 2>&1 &
+sc ctl spawn cce-terminal >/dev/null
+sleep 4
+
+echo "==> driving"
+python3 - "$shadow" "$inst" "$home" "$out/grid.log" <<'EOF' || fail "assertions failed"
+import json, re, subprocess, sys, time
+S, INST, H, GRIDLOG = sys.argv[1:5]
+fails = 0
+
+def ctl(*a):
+    return subprocess.run([S, "--instance", INST, "ctl", *a], capture_output=True, text=True).stdout.strip()
+
+def cam():
+    c = ctl("camera")
+    g = lambda k: re.search(rf"{k}=([-\w.]+)", c).group(1)
+    return float(g("pan_x")), float(g("pan_y")), float(g("zoom")), g("mode")
+
+def sel():
+    s = ctl("selection")
+    g = lambda k: re.search(rf"{k}=(\S+)", s).group(1)
+    desk = {}
+    if g("desk") != "-":
+        for tok in g("desk").split(";"):
+            i, rest = tok.split("@")
+            x, y, wh = rest.split(",")
+            w, h = wh.split("x")
+            desk[int(i)] = (float(x), float(y), float(w), float(h))
+    windows = [] if g("selected") == "-" else [int(v) for v in g("selected").split(",")]
+    items = [] if g("items") == "-" else [int(v) for v in g("items").split(",")]
+    return dict(raw=s, windows=windows, items=items, desk=desk, band=g("band"))
+
+def term():
+    for line in ctl("windows").splitlines():
+        if "app_id=cce-terminal" in line:
+            g = lambda k: re.search(rf"\b{k}=([-\w.]+)", line).group(1)
+            return float(g("vx")), float(g("vy")), float(g("w")), float(g("h"))
+    return None
+
+def move(vx, vy):
+    px, py, z, _ = cam()
+    ctl("pointer-move-to", str(round((vx - px) * z)), str(round((vy - py) * z)))
+    time.sleep(0.08)
+
+def press(): ctl("pointer-press", "left"); time.sleep(0.1)
+def release(): ctl("pointer-release", "left"); time.sleep(0.5)
+
+def check(name, ok, detail=""):
+    global fails
+    print(("  ok    " if ok else "  FAIL  ") + name + ("" if ok else f"  [{detail}]"))
+    if not ok: fails += 1
+
+def band(x0, y0, x1, y1):
+    move(x0, y0); press()
+    move((x0 + x1) / 2, (y0 + y1) / 2); move(x1, y1); time.sleep(0.2)
+    mid = sel(); release(); return mid, sel()
+
+def sidecar():
+    return {d["path"].rsplit("/", 1)[1]: (d["x"], d["y"]) for d in json.load(open(f"{H}/.local/share/cce/desktop-items.json"))}
+
+def center(r): return (r[0] + r[2] / 2, r[1] + r[3] / 2)
+
+# 1. the report
+for _ in range(25):
+    s0 = sel()
+    if len(s0["desk"]) == 2 and term(): break
+    time.sleep(0.2)
+check("grid reported both images", len(s0["desk"]) == 2, s0["raw"])
+check("terminal mapped", term() is not None)
+red = next(i for i, r in s0["desk"].items() if r[2] == 100)
+blue = next(i for i, r in s0["desk"].items() if r[2] == 60)
+if cam()[3] != "Overview":
+    ctl("overview"); time.sleep(1.5)
+check("in overview", cam()[3] == "Overview", str(cam()))
+
+# 2. band over the red image only (pressed to its right, clear of the terminal)
+r = s0["desk"][red]
+mid, after = band(r[0] + r[2] + 30, r[1] - 30, r[0] - 10, r[1] + r[3] + 10)
+check("band mid-drag picks the red image only", mid["items"] == [red] and mid["windows"] == [] and mid["band"] != "-", mid["raw"])
+check("selection persists after release", after["items"] == [red] and after["band"] == "-", after["raw"])
+
+# 3. press the selected image, drag it down 100
+cx, cy = center(r)
+move(cx, cy); press(); move(cx, cy + 50); move(cx, cy + 100); time.sleep(0.3)
+mid = sel()
+check("image follows the drag mid-move", abs(mid["desk"][red][1] - (r[1] + 100)) < 1 and mid["items"] == [red], mid["raw"])
+release(); time.sleep(0.5)
+after = sel()
+check("image stays where dropped, still selected", abs(after["desk"][red][1] - (r[1] + 100)) < 1 and after["items"] == [red], after["raw"])
+check("grid saved the new position", abs(sidecar()["red.png"][1] - (r[1] + 100)) < 1, str(sidecar()))
+check("grid logged the drop", "group move dropped" in open(GRIDLOG).read())
+
+# 4. band over everything, drag the terminal, images follow by its offset
+t = term(); d = sel()["desk"]
+x0 = min(d[blue][0], t[0]) - 20; y0 = min(d[blue][1], d[red][1], t[1]) - 20
+x1 = max(d[red][0] + d[red][2], t[0] + t[2]) + 20; y1 = max(d[red][1] + d[red][3], t[1] + t[3]) + 20
+mid, after = band(x0, y0, x1, y1)
+check("band over everything picks the window and both images", len(after["windows"]) == 1 and sorted(after["items"]) == sorted([red, blue]), after["raw"])
+t0 = term(); d0 = sel()["desk"]
+tcx, tcy = t0[0] + t0[2] / 2, t0[1] + t0[3] / 2
+move(tcx, tcy); press(); move(tcx, tcy + 100); move(tcx, tcy + 200); time.sleep(0.3)
+release(); time.sleep(0.6)
+t1 = term(); d1 = sel()["desk"]
+dt = (t1[0] - t0[0], t1[1] - t0[1])
+check("terminal moved", dt != (0.0, 0.0), f"dt={dt}")
+for name, i in (("red", red), ("blue", blue)):
+    di = (d1[i][0] - d0[i][0], d1[i][1] - d0[i][1])
+    check(f"{name} image moved by the terminal's offset", abs(di[0] - dt[0]) < 1 and abs(di[1] - dt[1]) < 1, f"image {di} terminal {dt}")
+sc = sidecar()
+check("sidecar matches the compositor's rects", abs(sc["red.png"][1] - d1[red][1]) < 1 and abs(sc["blue.png"][1] - d1[blue][1]) < 1, f"{sc} vs {d1}")
+
+# 5. background clicks
+t = term()
+bx, by = t[0] - 15, t[1] + t[3] / 2
+move(bx, by); press(); release()
+s = sel()
+check("background click drops the selection", s["windows"] == [] and s["items"] == [], s["raw"])
+check("still in overview after dropping", cam()[3] == "Overview", str(cam()))
+b = sel()["desk"][blue]
+mid, after = band(b[0] - 12, b[1] - 12, b[0] + b[2] + 8, b[1] + b[3] + 12)
+check("band picks the blue image only", after["items"] == [blue] and after["windows"] == [], after["raw"])
+move(bx, by + 150); press(); release()
+s = sel()
+check("click drops an image-only selection", s["items"] == [], s["raw"])
+check("and stays in overview", cam()[3] == "Overview", str(cam()))
+
+# 6. a press on an unselected image
+mid, after = band(b[0] - 12, b[1] - 12, b[0] + b[2] + 8, b[1] + b[3] + 12)
+check("blue selected again", after["items"] == [blue], after["raw"])
+rr = sel()["desk"][red]; cx, cy = center(rr)
+move(cx, cy); press(); time.sleep(0.2)
+s = sel()
+check("press on the unselected red image drops the selection", s["items"] == [], s["raw"])
+move(cx, cy - 30); move(cx, cy - 60); time.sleep(0.2); release(); time.sleep(0.8)
+d = sel()["desk"]
+check("grid dragged the red image itself and re-reported", abs(d[red][1] - (rr[1] - 60)) < 2, f"{d[red]} from {rr}")
+check("blue untouched by that drag", abs(d[blue][1] - b[1]) < 1, str(d))
+
+# 7. leaving overview
+band(rr[0] - 10, rr[1] - 70, rr[0] + rr[2] + 10, rr[1] + rr[3])
+check("something selected before exit", sel()["items"] == [red], sel()["raw"])
+ctl("overview"); time.sleep(1.5)
+s = sel()
+check("leaving overview clears the selection", s["items"] == [] and s["windows"] == [] and cam()[3] == "Normal", s["raw"] + " " + str(cam()))
+sys.exit(1 if fails else 0)
+EOF
+
+echo "PASS"
