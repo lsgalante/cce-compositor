@@ -303,6 +303,11 @@ pub struct ModeRule {
     pub tag: i32,
     pub circular: bool,
     pub ssd: Option<bool>,
+    /// The window is a satellite of its app's main window (a settings
+    /// window opened as a parentless toplevel): it is never restored from
+    /// saved state, sizes itself, and maps centred over a mapped sibling of
+    /// the same app_id. See `Window::try_center_on_sibling`.
+    pub over_sibling: bool,
 }
 
 pub use cce_window_manager::api::Action;
@@ -1033,6 +1038,7 @@ pub struct ModeRuleConfig {
     pub tag: Option<i64>,
     pub circular: Option<bool>,
     pub ssd: Option<bool>,
+    pub over_sibling: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1787,7 +1793,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                 let tag = get_prop_i64_opt(node, "tag");
                 let circular = get_prop_bool_opt(node, "circular");
                 let ssd = get_prop_bool_opt(node, "ssd");
-                mode_rule.push(ModeRuleConfig { mode, app_id, title, single, tag, circular, ssd });
+                let over_sibling = get_prop_bool_opt(node, "over_sibling");
+                mode_rule.push(ModeRuleConfig { mode, app_id, title, single, tag, circular, ssd, over_sibling });
             }
             "tag_layout" => {
                 let tag = get_prop_i64(node, "tag", 0);
@@ -2973,6 +2980,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             tag: rule.tag.unwrap_or(-1) as i32,
             circular: rule.circular.unwrap_or(false),
             ssd: rule.ssd,
+            over_sibling: rule.over_sibling.unwrap_or(false),
         });
     }
 

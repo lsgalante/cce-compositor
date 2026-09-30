@@ -1268,7 +1268,12 @@ impl WindowManager {
             // only `steam_proton` entry. Skip it, and scrub what it saved
             // before this rule (or before its no-activate state arrived,
             // which can be after map) so a poisoned state file heals.
-            if (*w).is_shy() {
+            // A satellite (`mode_rule over_sibling`) is skipped and scrubbed
+            // the same way: it is placed over its sibling, never restored,
+            // and saved it would take the app's one `last_window_states`
+            // slot — the main window then reopens at a settings window's
+            // size.
+            if (*w).is_shy() || (*w).satellite {
                 if let Some(program) = args.first() {
                     shy.push((app_id.clone(), title.clone(), program.clone()));
                 }
@@ -1582,6 +1587,16 @@ impl WindowManager {
         }
         log_program_veto(self.restore_queue.iter(), app_id, title, program);
         None
+    }
+
+    /// Whether a saved entry describes THIS window — same app_id and a
+    /// title the first two matcher passes would accept — as opposed to one
+    /// the app_id-only pass would merely lend it.
+    pub fn has_titled_saved_entry(&self, app_id: &str, title: &str) -> bool {
+        self.restore_queue
+            .iter()
+            .chain(self.last_window_states.iter())
+            .any(|w| w.app_id == app_id && (titles_match(title, &w.title) || titles_resemble(title, &w.title)))
     }
 
     /// `program` as for `match_and_remove_restore_state`.
@@ -6179,6 +6194,7 @@ impl WindowManager {
                     tag: -1,
                     circular: false,
                     ssd: None,
+                    over_sibling: false,
                 });
                 self.dirty_windowing();
                 "ok\n".to_string()

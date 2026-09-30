@@ -112,6 +112,28 @@ impl Border {
     }
 }
 
+/// Whether a window a title rule matches skips the saved-state restore: it
+/// does when it opens over a sibling, and when the only entry on offer is
+/// one the app_id-only pass would lend it from another window.
+pub fn rule_skips_restore(has_sibling: bool, own_entry: bool) -> bool {
+    has_sibling || !own_entry
+}
+
+/// Origin that centres a `size` window over `sibling` (x, y, w, h), then
+/// slides it into `view` (x, y, w, h) on each axis it fits on — a sibling
+/// lying half off screen must not take its settings window with it. All in
+/// virtual units.
+pub fn centered_over(sibling: (f64, f64, f64, f64), size: (f64, f64), view: (f64, f64, f64, f64)) -> (f64, f64) {
+    let axis = |s0: f64, s_len: f64, len: f64, v0: f64, v_len: f64| {
+        let c = s0 + (s_len - len) / 2.0;
+        if len <= v_len { c.clamp(v0, v0 + v_len - len) } else { c }
+    };
+    (
+        axis(sibling.0, sibling.2, size.0, view.0, view.2).round(),
+        axis(sibling.1, sibling.3, size.1, view.1, view.3).round(),
+    )
+}
+
 /// A window-scale corner radius as scenefx should consume it: the configured
 /// nominal (circle-equivalent) radius widened by the curvature-match span
 /// factor, capped at half the smaller content extent so opposite corners
@@ -481,6 +503,10 @@ pub struct Window {
     /// map sees `mapped_size_hint`'s fallback and misses by half the
     /// difference between that and the truth.
     pub pending_view_center: bool,
+    /// Matched a `mode_rule` with `over_sibling` while a sibling was up: a
+    /// settings-style window of a running app. Never restored from saved
+    /// state, never saved, and centred over that sibling at map.
+    pub satellite: bool,
     /// True only when the restored geometry came out of the startup restore queue
     /// (`state.json`'s window list). A window reopened later in the session matches
     /// `last_window_states` instead and leaves this false, so it still counts as a
@@ -803,6 +829,7 @@ impl Window {
             restored: false,
             hint_placed: false,
             pending_view_center: false,
+            satellite: false,
             session_restored: false,
             restored_focused: false,
             closed: false,
@@ -1210,6 +1237,49 @@ impl Window {
             return;
         }
         let title_str = self.get_title_string().unwrap_or_default();
+        // A `mode_rule` with `title=` names one window of an app, and it can
+        // only be judged once the title is in. Chromium/Electron set the
+        // app_id first, and restoring on that notify handed Obsidian's
+        // Settings window the MAIN window's entry by app_id alone — Tiled,
+        // latched, at the main window's size — before the rule that floats
+        // it could match. So an untitled window of an app some title rule
+        // names waits for its title; `map` calls back in here regardless.
+        if title_str.is_empty() && self.state != WindowState::Mapped {
+            let wm = &(*self.server).wm;
+            if wm.mode_rules.iter().any(|r| {
+                r.title_pattern.is_some()
+                    && (r.app_id_pattern == "*" || app_id_str.contains(&r.app_id_pattern))
+            }) {
+                return;
+            }
+        }
+        // With the title in, a title rule outranks an entry that is not this
+        // window's own: the rule is about this window, the entry about
+        // another one of the same app. An `over_sibling` rule outranks its
+        // own entry too while a sibling is up — the window goes where the
+        // sibling is, at the size it asks for.
+        {
+            let wm = &(*self.server).wm;
+            let rule = wm
+                .get_rule_for_window(self as *mut Window)
+                .filter(|r| r.title_pattern.is_some())
+                .map(|r| r.over_sibling);
+            if let Some(over_sibling) = rule {
+                let has_sibling = over_sibling && !self.find_sibling(&app_id_str).is_null();
+                let own_entry = wm.has_titled_saved_entry(&app_id_str, &title_str);
+                if rule_skips_restore(has_sibling, own_entry) {
+                    log::info!(
+                        "Not restoring saved state for {:?} ({}): a title rule matches it{}",
+                        title_str,
+                        app_id_str,
+                        if has_sibling { ", and it opens over its sibling" } else { "" }
+                    );
+                    self.satellite = has_sibling;
+                    self.restored = true;
+                    return;
+                }
+            }
+        }
         // Which program this window belongs to, so an entry matched by
         // app_id alone is only borrowed from a run of the same one — see
         // `window_manager::same_program`.
@@ -1391,6 +1461,70 @@ impl Window {
             // must not feed the settle-phase focus gates.
             self.restored_focused = from_session && saved.focused;
         }
+    }
+
+    /// The window a satellite opens over: a mapped, visible window of the
+    /// same app_id that is not itself a satellite — the focused one when it
+    /// qualifies, since that is where the user asked for the settings.
+    unsafe fn find_sibling(&self, app_id: &str) -> *mut Window {
+        let me = self as *const Window;
+        let wm = &(*self.server).wm;
+        let qualifies = |w: *mut Window| {
+            !w.is_null()
+                && w as *const Window != me
+                && !(*w).closed
+                && !(*w).minimized
+                && !(*w).satellite
+                && matches!((*w).state, WindowState::Mapped)
+                && (*w).get_app_id_string().as_deref() == Some(app_id)
+        };
+        let focused = wm.focused_window();
+        if qualifies(focused) {
+            return focused;
+        }
+        wm.windows.iter().copied().find(|&w| qualifies(w)).unwrap_or(std::ptr::null_mut())
+    }
+
+    /// Centre a satellite over its sibling. Like `try_center_on_view` this
+    /// owns the POSITION only, and latches a redo for the commit that
+    /// brings the window's real size (`pending_view_center`).
+    unsafe fn try_center_on_sibling(&mut self) {
+        if !self.satellite {
+            return;
+        }
+        self.minimized = false;
+        self.pending_view_center = self.box_geom.width <= 0 || self.box_geom.height <= 0;
+        self.apply_sibling_centering();
+    }
+
+    unsafe fn apply_sibling_centering(&mut self) {
+        let app_id = self.get_app_id_string().unwrap_or_default();
+        let sibling = self.find_sibling(&app_id);
+        if sibling.is_null() {
+            return;
+        }
+        let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
+        let wm = &(*self.server).wm;
+        let zoom = wm.desk_zoom.max(0.01);
+        let (w, h) = self.mapped_size_hint();
+        let (sw, sh) = (*sibling).mapped_size_hint();
+        let (x, y) = centered_over(
+            ((*sibling).virtual_x, (*sibling).virtual_y, sw, sh),
+            (w, h),
+            (wm.desk_pan_x, wm.desk_pan_y, vp_w / zoom, vp_h / zoom),
+        );
+        self.virtual_x = x;
+        self.virtual_y = y;
+        self.hint_placed = true;
+        log::info!(
+            "satellite centred over sibling: app_id={} size=({:.0}x{:.0}) sibling={:?} virtual=({:.1},{:.1})",
+            app_id,
+            w,
+            h,
+            (*sibling).get_title_string().unwrap_or_default(),
+            x,
+            y
+        );
     }
 
     /// Step an origin diagonally until no mapped sibling of `app_id` (any
@@ -1817,6 +1951,10 @@ impl Window {
     /// The centering itself, split out so the self-sizing commit path can redo
     /// it once the client's real size lands.
     unsafe fn apply_view_centering(&mut self) {
+        if self.satellite {
+            self.apply_sibling_centering();
+            return;
+        }
         let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
         let wm = &(*self.server).wm;
         let zoom = wm.desk_zoom.max(0.01);
@@ -1860,6 +1998,7 @@ impl Window {
         // Last: a session modal's placement is not negotiable, so it wins
         // over both the remembered geometry and any stale place-next hint.
         self.try_center_on_view();
+        self.try_center_on_sibling();
         // After every placement decision, including the invocation-square one:
         // whichever chose this spot, a tiled window must not open stacked on
         // another. The anchor rule already avoids that when any corner is
@@ -5838,5 +5977,38 @@ mod handle_disc_tests {
         // arc radius: tangent from the inside.
         let d = ((tx - 40.0).powi(2) + (ty - 40.0).powi(2)).sqrt();
         assert!((d + r - 40.0).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod satellite_tests {
+    use super::*;
+
+    const VIEW: (f64, f64, f64, f64) = (0.0, 0.0, 1920.0, 1200.0);
+
+    #[test]
+    fn centred_on_a_sibling_in_view() {
+        let at = centered_over((200.0, 100.0, 1400.0, 1000.0), (800.0, 600.0), VIEW);
+        assert_eq!(at, (500.0, 300.0));
+    }
+
+    #[test]
+    fn slides_into_view_when_the_sibling_hangs_off_it() {
+        let at = centered_over((-1000.0, 900.0, 1400.0, 1000.0), (800.0, 600.0), VIEW);
+        assert_eq!(at, (0.0, 600.0));
+    }
+
+    #[test]
+    fn larger_than_the_view_stays_centred_on_the_sibling() {
+        let at = centered_over((0.0, 0.0, 1000.0, 1000.0), (2000.0, 600.0), VIEW);
+        assert_eq!(at, (-500.0, 200.0));
+    }
+
+    #[test]
+    fn a_title_rule_beats_a_borrowed_entry_only() {
+        assert!(rule_skips_restore(false, false));
+        assert!(!rule_skips_restore(false, true));
+        assert!(rule_skips_restore(true, true));
+        assert!(rule_skips_restore(true, false));
     }
 }

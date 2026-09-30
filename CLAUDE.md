@@ -792,6 +792,33 @@ what the user pans along (cce-data-editor parked left of the first column
 came back mid-view every login before 2026-09-14). The recall is for a
 window with no tiled neighbour within a screen.
 
+**A settings window opens over its app** with a `mode_rule` that names it
+by title and says `over_sibling`:
+
+```kdl
+mode_rule mode="floating" app_id="md.obsidian.Obsidian" title="Settings" over_sibling=(bool)true
+```
+
+Obsidian (and Electron apps generally) open Settings as a PARENTLESS
+toplevel, so nothing marks it a dialog; until 2026-09-29 it borrowed the
+main window's saved entry by app_id — Tiled, latched, at the main window's
+size — and the overlap rule pushed it to a free cell. Three things in
+`try_restore` make the rule work. An untitled window of an app some title
+rule names **waits for its title** before restoring at all (Electron sets
+the app_id first, and a rule on the title cannot be judged without one).
+A matching title rule then **outranks a borrowed entry** — never the
+window's own (`rule_skips_restore`), so a plain title rule still honours a
+geometry the user gave that window. And with `over_sibling`, while a mapped
+window of the same app_id is up (`find_sibling`: the focused one when it
+qualifies), the window is a **satellite** (`Window::satellite`): no saved
+state applies, it sizes itself, `try_center_on_sibling` centres it over the
+sibling (`centered_over`, slid into the view on any axis it fits) with the
+same commit-time redo the view-centred modals use, and `save_state` neither
+saves it nor lets it keep the app's `last_window_states` slot. Reproduce
+with `verify/clients` `float-pair --dialog-honours-configure`: tile the
+main window, and the "Authorize" window maps Tiled at 1404x1076 without a
+rule, Floating at its own 400x370 over the main window with one.
+
 **A client reconnecting maps unfocused**: a window that vanishes without
 the compositor asking it to close (`Window::unmap` → `note_vanished`) lets
 the next window of the same app_id AND the same program (`proc_args`
