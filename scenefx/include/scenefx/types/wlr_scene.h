@@ -395,7 +395,37 @@ struct wlr_scene_buffer {
 
 	struct fx_corner_radii corners;
 	struct linked_node blur;
+
+	// The compositor owns this buffer's dest size and opaque region:
+	// wlr_scene_buffer_set_dest_size() and
+	// wlr_scene_buffer_set_opaque_region() leave them alone, and only the
+	// _pinned setters move them. See wlr_scene_buffer_set_geometry_pinned().
+	bool geometry_pinned;
 };
+
+/**
+ * Hand a buffer's dest size and opaque region to the compositor.
+ *
+ * wlroots' scene surface helper rewrites both on EVERY commit, to the
+ * surface's natural size and its unscaled opaque region. A compositor that
+ * draws the surface at another size then has to put its own values back,
+ * and each of the two rewrites damages the whole node: a surface shown
+ * scaled repaints in full on every commit, whatever damage the client sent.
+ * For one that covers the screen, that is the screen.
+ *
+ * While pinned, the plain setters are ignored for this buffer and
+ * wlr_scene_buffer_set_dest_size_pinned() /
+ * wlr_scene_buffer_set_opaque_region_pinned() are the only way to move the
+ * values, so a commit that changes neither damages only what the client
+ * damaged. The compositor must then set both itself whenever the surface's
+ * size or opaque region changes.
+ */
+void wlr_scene_buffer_set_geometry_pinned(struct wlr_scene_buffer *scene_buffer,
+	bool pinned);
+void wlr_scene_buffer_set_dest_size_pinned(struct wlr_scene_buffer *scene_buffer,
+	int width, int height);
+void wlr_scene_buffer_set_opaque_region_pinned(struct wlr_scene_buffer *scene_buffer,
+	const pixman_region32_t *region);
 
 /** A viewport for an output in the scene-graph */
 struct wlr_scene_output {

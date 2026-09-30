@@ -3056,17 +3056,6 @@ impl Window {
         let requested = &self.rendering_requested;
         let enabled = !requested.hidden && (matches!(self.state, WindowState::Mapped) || matches!(self.state, WindowState::Closing));
 
-        let title_ptr = match self.impl_type {
-            WindowImpl::Xwayland(xwindow) => {
-                if xwindow.is_null() { std::ptr::null() } else { (*(*xwindow).xsurface).title }
-            }
-            _ => std::ptr::null(),
-        };
-        let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
-        if title.contains("Ubisoft") {
-            log::info!("render_finish for '{}' (addr={:p}): enabled={} hidden={} state={:?}", title, self as *const Window, enabled, requested.hidden, self.state);
-        }
-
         ffi::wlr_scene_node_set_enabled(self.tree as *mut ffi::wlr_scene_node, enabled);
         ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
         if !enabled {
@@ -3188,6 +3177,13 @@ impl Window {
                 scale_x: f64,
                 scale_y: f64,
                 ancestor: *mut ffi::wlr_scene_node,
+                /// The grid's buffers are pinned (see
+                /// `wlr_scene_buffer_set_geometry_pinned`). Its surface is
+                /// always shown scaled and covers the screen, so the scene
+                /// helper resetting its dest size and opaque region on each
+                /// commit, and this pass putting them back, repainted the
+                /// whole output for every frame of an image being dragged.
+                pin: bool,
             }
 
             unsafe extern "C" fn set_overview_scale_iterator(
@@ -3201,6 +3197,9 @@ impl Window {
 
                 let surface = ffi::river_scene_node_get_surface(node);
                 if !surface.is_null() {
+                    if data.pin {
+                        ffi::river_scene_buffer_set_geometry_pinned(buffer, true);
+                    }
                     let (w, h, ox, oy) = surface_buffer_extent(buffer, surface);
                     if data.scale_x == 1.0 && data.scale_y == 1.0 {
                         ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
@@ -3235,7 +3234,7 @@ impl Window {
                 // leaves it briefly at the old zoom, which restore corrects.
             }
 
-            let scale_data_surfaces = ScaleData { scale_x, scale_y, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
+            let scale_data_surfaces = ScaleData { scale_x, scale_y, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node, pin: self.is_grid() };
             ffi::wlr_scene_node_for_each_buffer(
                 self.surfaces.tree as *mut ffi::wlr_scene_node,
                 Some(set_overview_scale_iterator),
@@ -3243,7 +3242,7 @@ impl Window {
             );
 
             if self.surfaces.saved {
-                let scale_data_saved = ScaleData { scale_x, scale_y, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
+                let scale_data_saved = ScaleData { scale_x, scale_y, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node, pin: self.is_grid() };
                 ffi::wlr_scene_node_for_each_buffer(
                     self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
                     Some(set_overview_scale_iterator),
@@ -3251,7 +3250,7 @@ impl Window {
                 );
             }
             
-            let scale_data_popup = ScaleData { scale_x, scale_y, ancestor: self.popup_tree as *mut ffi::wlr_scene_node };
+            let scale_data_popup = ScaleData { scale_x, scale_y, ancestor: self.popup_tree as *mut ffi::wlr_scene_node, pin: self.is_grid() };
             ffi::wlr_scene_node_for_each_buffer(
                 self.popup_tree as *mut ffi::wlr_scene_node,
                 Some(set_overview_scale_iterator),
@@ -4630,26 +4629,6 @@ impl Window {
                     let y = if self.wm_requested.ssd { 0 } else { (*toplevel).geometry.y };
                     surface_clip.x += x;
                     surface_clip.y += y;
-                }
-            }
-            WindowImpl::Xwayland(xwindow) => {
-                if !xwindow.is_null() {
-                    let title_ptr = (*(*xwindow).xsurface).title;
-                    let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
-                    if title.contains("Ubisoft") {
-                        log::info!(
-                            "XWayland window clip check: title='{}' box_geom=({}, {}, {}, {}) xsurface=({}, {}, {}, {})",
-                            title,
-                            self.box_geom.x,
-                            self.box_geom.y,
-                            self.box_geom.width,
-                            self.box_geom.height,
-                            (*(*xwindow).xsurface).x,
-                            (*(*xwindow).xsurface).y,
-                            (*(*xwindow).xsurface).width,
-                            (*(*xwindow).xsurface).height,
-                        );
-                    }
                 }
             }
             _ => {}

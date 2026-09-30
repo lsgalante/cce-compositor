@@ -909,9 +909,16 @@ void river_scene_node_set_corner_radius(struct wlr_scene_node *node, int radius)
 	}
 }
 
+/* See wlr_scene_buffer_set_geometry_pinned(). The two setters below write
+ * through the pin, so every caller of theirs keeps working on a pinned
+ * buffer. */
+void river_scene_buffer_set_geometry_pinned(struct wlr_scene_buffer *scene_buffer, bool pinned) {
+	wlr_scene_buffer_set_geometry_pinned(scene_buffer, pinned);
+}
+
 void river_scene_buffer_set_dest_size_if_changed(struct wlr_scene_buffer *scene_buffer, int width, int height) {
 	if (scene_buffer->dst_width != width || scene_buffer->dst_height != height) {
-		wlr_scene_buffer_set_dest_size(scene_buffer, width, height);
+		wlr_scene_buffer_set_dest_size_pinned(scene_buffer, width, height);
 	}
 }
 
@@ -987,7 +994,7 @@ void river_scene_buffer_set_scaled_opaque_region(struct wlr_scene_buffer *scene_
 		pixman_region32_intersect_rect(&scaled, &scaled, 0, 0, clip.width, clip.height);
 	}
 	wlr_region_scale(&scaled, &scaled, (float)scale);
-	wlr_scene_buffer_set_opaque_region(scene_buffer, &scaled);
+	wlr_scene_buffer_set_opaque_region_pinned(scene_buffer, &scaled);
 	pixman_region32_fini(&scaled);
 }
 

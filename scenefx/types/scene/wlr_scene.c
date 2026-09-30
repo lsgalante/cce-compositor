@@ -1959,7 +1959,20 @@ void wlr_scene_buffer_set_buffer(struct wlr_scene_buffer *scene_buffer,
 	wlr_scene_buffer_set_buffer_with_options(scene_buffer, buffer, NULL);
 }
 
+void wlr_scene_buffer_set_geometry_pinned(struct wlr_scene_buffer *scene_buffer,
+		bool pinned) {
+	scene_buffer->geometry_pinned = pinned;
+}
+
 void wlr_scene_buffer_set_opaque_region(struct wlr_scene_buffer *scene_buffer,
+		const pixman_region32_t *region) {
+	if (scene_buffer->geometry_pinned) {
+		return;
+	}
+	wlr_scene_buffer_set_opaque_region_pinned(scene_buffer, region);
+}
+
+void wlr_scene_buffer_set_opaque_region_pinned(struct wlr_scene_buffer *scene_buffer,
 		const pixman_region32_t *region) {
 	if (pixman_region32_equal(&scene_buffer->opaque_region, region)) {
 		return;
@@ -1996,6 +2009,14 @@ void wlr_scene_buffer_set_source_box(struct wlr_scene_buffer *scene_buffer,
 }
 
 void wlr_scene_buffer_set_dest_size(struct wlr_scene_buffer *scene_buffer,
+		int width, int height) {
+	if (scene_buffer->geometry_pinned) {
+		return;
+	}
+	wlr_scene_buffer_set_dest_size_pinned(scene_buffer, width, height);
+}
+
+void wlr_scene_buffer_set_dest_size_pinned(struct wlr_scene_buffer *scene_buffer,
 		int width, int height) {
 	if (scene_buffer->dst_width == width && scene_buffer->dst_height == height) {
 		return;
