@@ -636,6 +636,54 @@ impl Window {
             || !self.wm_requested.fullscreen.is_null()
     }
 
+    /// A fullscreen window has stepped aside for another: a window focused
+    /// more recently than it is still up (the switcher, `focus-window`, a
+    /// focus chord). It stays fullscreen — the client keeps its size and
+    /// mode — but the stacking pass drops it out of `layers.fullscreen` to
+    /// behind every window, or the window just focused would be drawn under
+    /// it. Focusing it again brings it back on top.
+    ///
+    /// Read from the focus history, not the seat's live focus: overlay UI
+    /// (a launcher, the switcher itself) never enters the history, so
+    /// opening one over the window you switched to does not pop the
+    /// fullscreen one back over it. Only a desk window displaces it — not
+    /// its own popups or dialogs, a status segment, or a window that has
+    /// since been minimized or unmapped.
+    pub unsafe fn fullscreen_yields(&self) -> bool {
+        let me = self as *const Window as *mut Window;
+        for &w in (*self.server).wm.focus_history.iter() {
+            if w == me {
+                return false;
+            }
+            if w.is_null()
+                || (*w).closed
+                || (*w).minimized
+                || !matches!((*w).state, WindowState::Mapped)
+                || !matches!(
+                    (*w).tiling_mode,
+                    crate::tiling::TilingMode::Floating
+                        | crate::tiling::TilingMode::Tiled
+                        | crate::tiling::TilingMode::Utility
+                        | crate::tiling::TilingMode::Fullscreen
+                )
+            {
+                continue;
+            }
+            // A dialog of this window opens over it, fullscreen or not.
+            let mut p = (*w).get_parent();
+            let mut depth = 0;
+            while !p.is_null() && p != me && depth < 16 {
+                p = (*p).get_parent();
+                depth += 1;
+            }
+            if p == me {
+                continue;
+            }
+            return true;
+        }
+        false
+    }
+
     pub unsafe fn role(&self) -> crate::policy::api::WindowRole {
         if self.grid_declared {
             return crate::policy::api::WindowRole::Grid;

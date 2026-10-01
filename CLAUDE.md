@@ -897,6 +897,22 @@ motion and a hold do not count. Swipes were added on 2026-09-26: a login
 navigated only by three-finger swipes left each restored window's first
 focus wherever it sat, often half off screen, while a second focus panned.
 
+### Fullscreen steps aside for focus
+
+A fullscreen window lives in `layers.fullscreen`, above every desk window, so
+until 2026-10-01 focusing another window (the Super+Tab switcher,
+`focus-window`, a focus chord) moved the keyboard to a window nobody could
+see. Now `Window::fullscreen_yields` drops it to `layers.bottom` — behind
+every window, above the grid — whenever a desk window (Floating, Tiled,
+Utility, another Fullscreen; not its own dialogs, a popup or a status
+segment) is ahead of it in `focus_history`. It stays fullscreen: the client
+is not resized or told anything. Focusing it again puts it back on top. The
+predicate reads the MRU history, not live seat focus, so a launcher or the
+switcher opening (overlay UI never enters the history) does not pop it back
+over the window you switched to. `Seat::focus` dirties windowing whenever a
+fullscreen window exists, because the stacking pass that applies this only
+runs on a transaction.
+
 ### xdg-activation
 
 `handle_request_activate` (`server.rs`) runs for every activation wlroots

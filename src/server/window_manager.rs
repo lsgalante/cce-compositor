@@ -2848,6 +2848,7 @@ impl WindowManager {
                 crate::wm_node::WmNodeType::Window(window) => {
                     (*window).ref_key.hash(&mut hasher);
                     rendered_fullscreen(window).hash(&mut hasher);
+                    fullscreen_on_top(window).hash(&mut hasher);
                     (*window).rendering_requested.circular.hash(&mut hasher);
                     (*window).rendering_requested.hidden.hash(&mut hasher);
                     (*window).tiling_mode.hash(&mut hasher);
@@ -2908,8 +2909,17 @@ impl WindowManager {
                                 // render-list order, burying whichever windows
                                 // happened to map before it.
                                 (*self.server).scene.layers.bottom
-                            } else if rendered_fullscreen(window) {
+                            } else if fullscreen_on_top(window) {
                                 (*self.server).scene.layers.fullscreen
+                            } else if rendered_fullscreen(window) {
+                                // Stepped aside for a focused window (alt-tab
+                                // out): behind every window but above the
+                                // grid, which the pass below re-asserts.
+                                // Not layers.wm, which carries the camera's
+                                // sub-pixel desk offset — the window is
+                                // pinned to its output, like the layer it
+                                // left.
+                                (*self.server).scene.layers.bottom
                             } else if (*window).tiling_mode == crate::tiling::TilingMode::Popup {
                                 (*self.server).scene.layers.popups
                             } else if (*window).tiling_mode == crate::tiling::TilingMode::Status {
@@ -2947,7 +2957,7 @@ impl WindowManager {
                             } else {
                                 ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                             }
-                            if !(*window).rendering_requested.hidden && rendered_fullscreen(window) {
+                            if fullscreen_on_top(window) {
                                 found_fullscreen = true;
                             }
 
@@ -3026,6 +3036,23 @@ impl WindowManager {
             }
             if !focused_popups.is_null() {
                 self.raise_focused_popups(focused_popups);
+            }
+        }
+
+        // A fullscreen window that stepped aside shares layers.bottom with the
+        // grid, which the loop raises in render-list order; keep the window
+        // over it — the grid is the desk, and the window sits on the desk.
+        if reorder {
+            for &w in self.windows.iter() {
+                if !w.is_null()
+                    && !(*w).closed
+                    && matches!((*w).state, crate::window::WindowState::Mapped)
+                    && rendered_fullscreen(w)
+                    && !fullscreen_on_top(w)
+                {
+                    ffi::wlr_scene_node_raise_to_top((*w).tree as *mut ffi::wlr_scene_node);
+                    ffi::wlr_scene_node_place_above((*w).popup_tree as *mut _, (*w).tree as *mut _);
+                }
             }
         }
 
@@ -7009,6 +7036,12 @@ unsafe extern "C" fn handle_stream_timer(data: *mut std::ffi::c_void) -> std::os
 
 unsafe fn rendered_fullscreen(window: *mut Window) -> bool {
     (*window).is_fullscreen() && !(*window).rendering_requested.hidden
+}
+
+/// A fullscreen window that owns the top of the stack: rendered fullscreen
+/// and not stepped aside for another focused window (`fullscreen_yields`).
+unsafe fn fullscreen_on_top(window: *mut Window) -> bool {
+    rendered_fullscreen(window) && !(*window).fullscreen_yields()
 }
 
 /// Prefer the installed `~/.local/bin/cce-cloud`, falling back to PATH lookup.

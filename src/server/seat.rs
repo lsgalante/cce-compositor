@@ -536,6 +536,12 @@ impl Seat {
         if let Focus::Window(window) = new_focus {
             if !window.is_null() {
                 (*self.server).wm.record_focus(window);
+                // Focus decides whether a fullscreen window stays on top
+                // (`Window::fullscreen_yields`); restack whenever one is up,
+                // since not every path to here dirties on its own.
+                if (*self.server).wm.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
+                    (*self.server).wm.dirty_windowing();
+                }
             }
         }
         (*self.server).wm.update_status();
