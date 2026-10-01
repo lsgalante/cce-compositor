@@ -73,7 +73,7 @@ fn usage(name: &str, to_stderr: bool) {
     print("  restart");
     print("  restart-compositor        # exit cleanly; cce-display-manager relaunches the session");
     print("  reload");
-    print("  repeat <rate> <delay>");
+    print("  repeat [<rate> <delay>]    # key repeat for hardware keyboards: repeats/s (0 = off), ms before the first; until the next config load. No args prints it");
     print("  input <device_name|*> scroll-factor <value>");
     print("  config-done");
     print("  spawn <command>");

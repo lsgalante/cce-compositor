@@ -5942,6 +5942,23 @@ impl WindowManager {
                 "ok\n".to_string()
             }
             "idle" => unsafe { (*self.server).idle.ipc(&parts[1..]) },
+            // Live key repeat for every hardware keyboard, like `idle
+            // timeouts`: it lasts until the next config load, which puts
+            // `input { repeat_rate repeat_delay }` back.
+            "repeat" => {
+                if parts.len() == 3 {
+                    let (Ok(rate), Ok(delay)) = (parts[1].parse::<u32>(), parts[2].parse::<u32>()) else {
+                        return "error: rate and delay must be non-negative integers\n".to_string();
+                    };
+                    self.input_config.repeat_rate = Some(rate as i64);
+                    self.input_config.repeat_delay = Some(delay as i64);
+                } else if parts.len() != 1 {
+                    return "error: usage: repeat [<rate> <delay>]\n".to_string();
+                }
+                let keyboards = unsafe { self.apply_key_repeat() };
+                let (rate, delay) = self.input_config.repeat_info();
+                format!("rate={} delay={} keyboards={}\n", rate, delay, keyboards)
+            }
             "outputs" => {
                 // One line per output: the figures a client's `units::Metric`
                 // is built from (mode, scale, logical size, physical mm) and
@@ -6616,14 +6633,31 @@ impl WindowManager {
             if let Some(ref mut libinput) = (*device).libinput {
                 libinput.apply_config(&self.input_config);
             }
-            // Key repeat: a hardware keyboard regroups on a change (groups
-            // are keyed by repeat info), so only touch it when it differs.
+            curr = next;
+        }
+        self.apply_key_repeat();
+    }
+
+    /// Push `input_config`'s repeat rate/delay to every hardware keyboard and
+    /// return how many there are. A keyboard regroups on a change (groups are
+    /// keyed by repeat info), so one already matching is left alone.
+    pub unsafe fn apply_key_repeat(&mut self) -> usize {
+        if self.server.is_null() {
+            return 0;
+        }
+        let (rate, delay) = self.input_config.repeat_info();
+        let mut count = 0;
+        let devices_head = &mut (*self.server).input_manager.devices as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*devices_head).next;
+        while curr != devices_head {
+            let next = (*curr).next;
+            let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
             if !(*device).virtual_device
                 && ffi::river_wlr_input_device_get_type((*device).wlr_device) == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD
             {
                 let keyboard = (*device).destroy_data as *mut crate::keyboard::Keyboard;
                 if !keyboard.is_null() {
-                    let (rate, delay) = self.input_config.repeat_info();
+                    count += 1;
                     if (*keyboard).config.repeat_rate != rate || (*keyboard).config.repeat_delay != delay {
                         (*keyboard).set_repeat_info(rate, delay);
                     }
@@ -6631,6 +6665,7 @@ impl WindowManager {
             }
             curr = next;
         }
+        count
     }
 
     pub unsafe fn spawn_startup_program(&mut self, prog: crate::config::StartupConfig) {
