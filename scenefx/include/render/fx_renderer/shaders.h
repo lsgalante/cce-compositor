@@ -127,6 +127,10 @@ struct tex_shader {
 
 	GLint discard_transparent;
 
+	GLint compress_ceil;
+	GLint compress_knee;
+	GLint compress_invert;
+
 	// Only used for the effects shader
 	struct {
 		GLint size;
@@ -221,6 +225,9 @@ struct droplet_shader {
 	GLint band_px;
 	GLint refr;
 	GLint ghost;
+	GLint compress_ceil;
+	GLint compress_knee;
+	GLint compress_invert;
 };
 
 bool link_droplet_program(struct droplet_shader *shader);

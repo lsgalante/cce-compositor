@@ -741,6 +741,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         // geom_w/h are already scaled to device px; the radius must match.
         (radius as f64 * scale) as i32,
     );
+    (*window).sync_backdrop_compress();
 
     let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;
     let mut geom = std::mem::zeroed();

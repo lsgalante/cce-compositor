@@ -1015,10 +1015,6 @@ impl Default for Server {
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.startup, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.startup_pids, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.status_sender, None);
-            // A zeroed Vec is a null data pointer, which Vec's NonNull
-            // invariant forbids — the same reason `startup` above is written
-            // explicitly rather than left to the zeroed MaybeUninit.
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.status_backdrops, std::cell::RefCell::new(Vec::new()));
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.last_saved_state_json, None);
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.min_sizes, crate::min_sizes::MinSizes::default());
             std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());

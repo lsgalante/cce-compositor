@@ -497,6 +497,9 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 
 	glUniform1i(shader->tex, 0);
 	glUniform1f(shader->alpha, alpha);
+	glUniform1f(shader->compress_ceil, fx_options->compress.ceil);
+	glUniform1f(shader->compress_knee, fx_options->compress.knee);
+	glUniform1i(shader->compress_invert, fx_options->compress.invert);
 
 	glUniform1f(shader->discard_transparent, fx_options->discard_transparent);
 
@@ -1311,6 +1314,9 @@ void fx_render_pass_add_droplet(struct fx_gles_render_pass *pass,
 	glUniform1f(shader->band_px, options->band_px);
 	glUniform1f(shader->refr, options->refr);
 	glUniform1f(shader->ghost, options->ghost);
+	glUniform1f(shader->compress_ceil, options->compress.ceil);
+	glUniform1f(shader->compress_knee, options->compress.knee);
+	glUniform1i(shader->compress_invert, options->compress.invert);
 
 	render(&box, &clip_region, shader->pos_attrib);
 
@@ -1370,6 +1376,8 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 		struct fx_render_texture_options tex_options = fx_options->tex_options;
 		tex_options.discard_transparent = true;
 		tex_options.clipped_region = fx_options->clipped_region;
+		// The mask is the window's own buffer, not the backdrop.
+		tex_options.compress = (struct fx_backdrop_compress){0};
 		fx_render_pass_add_texture(pass, &tex_options);
 
 		stencil_mask_close(true);

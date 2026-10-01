@@ -170,6 +170,12 @@ pub struct Layout {
     /// (backdrop refraction) per status segment from the SAME spec the bar
     /// draws its drops from, so the two silhouettes cannot drift.
     pub status_droplet: Option<String>,
+    /// Backdrop compression for status segments, from the bar's
+    /// `module { backdrop_compress }` (the minimum WCAG contrast ratio the
+    /// module text must hold against any backdrop pixel) and its
+    /// `module { text_color }`: `(ceil, knee, invert)` in linear luminance,
+    /// see `backdrop_compress_params`. `None` = off.
+    pub status_backdrop_compress: Option<(f32, f32, bool)>,
     pub cloud_position_default: Option<[i32; 2]>,
 }
 
@@ -289,6 +295,7 @@ impl Default for Layout {
             status_module_hide_mode_preview: 4,
             status_module_spacing: 12,
             status_droplet: None,
+            status_backdrop_compress: None,
             cloud_position_default: None,
         }
     }
@@ -996,6 +1003,13 @@ pub struct LayoutConfig {
     /// reads the same spec the bar draws from).
     #[serde(default)]
     pub status_droplet: Option<String>,
+    /// Backdrop compression for status segments, from the bar's
+    /// `module { backdrop_compress }` (the minimum WCAG contrast ratio the
+    /// module text must hold against any backdrop pixel) and its
+    /// `module { text_color }`: `(ceil, knee, invert)` in linear luminance,
+    /// see `backdrop_compress_params`. `None` = off.
+    #[serde(default)]
+    pub status_backdrop_compress: Option<(f32, f32, bool)>,
 }
 
 impl Default for LayoutConfig {
@@ -1023,6 +1037,7 @@ impl Default for LayoutConfig {
             status_module_hide_mode_preview: default_status_module_hide_mode_preview(),
             status_module_spacing: default_status_module_spacing(),
             status_droplet: None,
+            status_backdrop_compress: None,
         }
     }
 }
@@ -1082,6 +1097,46 @@ pub fn parse_hex_color(hex_str: &str) -> u32 {
     } else {
         0xFFFFFFFF
     }
+}
+
+/// Backdrop compression parameters for text of color `text_hex` that must
+/// hold a WCAG contrast `ratio` against every backdrop pixel: `(ceil, knee,
+/// invert)` in linear luminance, as scenefx's `wlr_scene_blur_set_compress`
+/// takes them. Light text caps the backdrop at the brightest luminance that
+/// still gives the ratio; dark text (`invert`) floors it at the darkest, and
+/// the ceiling is then measured in the inverted image (1 - floor). The knee,
+/// where compression starts, sits at half the ceiling, so a backdrop already
+/// dark enough for the text is left exactly as it is. `None` for a ratio of
+/// 1 or less, or an unparseable color.
+///
+/// The bubble's own translucent fill and droplet lighting composite on top
+/// of the compressed backdrop and lift it, so the ratio reached is well
+/// under the one asked for (droplet style on pure white: 4.5 asked, 2.7
+/// reached; 10 asked, 4.7 reached).
+pub fn backdrop_compress_params(text_hex: &str, ratio: f64) -> Option<(f32, f32, bool)> {
+    if !(ratio > 1.0) {
+        return None;
+    }
+    let hex = text_hex.trim_matches(|c| c == '"' || c == '\'' || c == ' ').trim_start_matches('#');
+    if hex.len() < 6 {
+        return None;
+    }
+    let lin = |i: usize| -> Option<f64> {
+        let c = u8::from_str_radix(hex.get(i..i + 2)?, 16).ok()? as f64 / 255.0;
+        Some(if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) })
+    };
+    let lt = 0.2126 * lin(0)? + 0.7152 * lin(2)? + 0.0722 * lin(4)?;
+    // Which way the text reads: against black or against white.
+    let light = (lt + 0.05) / 0.05 >= 1.05 / (lt + 0.05);
+    let ceil = if light {
+        (lt + 0.05) / ratio - 0.05
+    } else {
+        1.0 - (ratio * (lt + 0.05) - 0.05)
+    };
+    // A ratio the text color cannot reach at all still compresses as hard
+    // as it sensibly can rather than crushing the backdrop to black.
+    let ceil = ceil.clamp(0.005, 1.0) as f32;
+    Some((ceil, ceil * 0.5, !light))
 }
 
 pub fn parse_hex_color_rgba(hex_str: &str) -> [f32; 4] {
@@ -1758,6 +1813,29 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                             .and_then(|v| v.as_string().map(|s| s.to_string()))
                     };
                     layout.status_droplet = module_str("droplet");
+                    // Backdrop compression: the contrast ratio the text must
+                    // hold, against the text color the bar draws in (its
+                    // own fallback is the shared status normal_color).
+                    let module_f64 = |key: &str| -> Option<f64> {
+                        module
+                            .entries()
+                            .iter()
+                            .find(|e| e.name().map(|id| id.value()) == Some(key))
+                            .map(|e| e.value())
+                            .or_else(|| {
+                                module.children().and_then(|c| {
+                                    c.nodes()
+                                        .iter()
+                                        .find(|n| n.name().value() == key)
+                                        .and_then(|n| n.entries().first().map(|e| e.value()))
+                                })
+                            })
+                            .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)))
+                    };
+                    let text_color = module_str("text_color")
+                        .unwrap_or_else(|| layout.status_normal_color.clone());
+                    layout.status_backdrop_compress = module_f64("backdrop_compress")
+                        .and_then(|ratio| backdrop_compress_params(&text_color, ratio));
                 }
             }
         }
@@ -2796,6 +2874,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     state.layout.status_module_hide_mode_preview = config.layout.status_module_hide_mode_preview;
     state.layout.status_module_spacing = config.layout.status_module_spacing;
     state.layout.status_droplet = config.layout.status_droplet.clone();
+    state.layout.status_backdrop_compress = config.layout.status_backdrop_compress;
     state.layout.cloud_position_default = config.surface.cloud_position_default;
     state.layout.shadow_enabled = config.surface.shadow_enabled;
     state.layout.shadow_sigma = config.surface.shadow_sigma.max(0.0) as f32;
@@ -3408,5 +3487,26 @@ style {
         assert_eq!(config.surface.border_color_hover, None);
         assert_eq!(config.surface.border_segment_gap, 4);
         assert_eq!(config.surface.border_corner_length, 0);
+    }
+
+    #[test]
+    fn backdrop_compress_caps_light_text_and_floors_dark_text() {
+        // White text at 4.5:1 caps the backdrop at (1.05 / 4.5) - 0.05.
+        let (ceil, knee, invert) = backdrop_compress_params("#ffffff", 4.5).unwrap();
+        assert!(!invert);
+        assert!((ceil - 0.1833).abs() < 1e-3, "{ceil}");
+        assert!((knee - ceil * 0.5).abs() < 1e-6);
+        // Black text floors it at 4.5 * 0.05 - 0.05 = 0.175, a ceiling of
+        // 0.825 in the inverted image.
+        let (ceil, _, invert) = backdrop_compress_params("#000000", 4.5).unwrap();
+        assert!(invert);
+        assert!((ceil - 0.825).abs() < 1e-3, "{ceil}");
+        // Off, or nothing to compress for.
+        assert_eq!(backdrop_compress_params("#ffffff", 1.0), None);
+        assert_eq!(backdrop_compress_params("#ffffff", 0.0), None);
+        assert_eq!(backdrop_compress_params("nonsense", 4.5), None);
+        // A ratio the color cannot reach clamps rather than going negative.
+        let (ceil, _, _) = backdrop_compress_params("#808080", 21.0).unwrap();
+        assert!(ceil > 0.0);
     }
 }

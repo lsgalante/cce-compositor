@@ -37,6 +37,30 @@ uniform float curve;     // corner-shape exponent (2 = circular)
 uniform float band_px;   // dome skirt width px (the refraction falloff scale)
 uniform float refr;      // rim refraction strength px (sign flips direction)
 uniform float ghost;     // inverted-lens ghost strength 0-1
+uniform float compress_ceil;  // backdrop compression ceiling, linear luma (0 = off)
+uniform float compress_knee;  // where compression starts, linear luma
+uniform bool compress_invert; // dark text: lift shadows instead
+
+// The same backdrop compression the blurred backdrop gets (tex.frag's
+// compress_backdrop — keep the two in step): the refracted image is the
+// segment's backdrop when this node is live, so it is what the text has to
+// read against.
+vec3 compress_backdrop(vec3 c) {
+	vec3 lin = pow(max(c, vec3(0.0)), vec3(2.2));
+	if (compress_invert) {
+		lin = vec3(1.0) - lin;
+	}
+	float y = dot(lin, vec3(0.2126, 0.7152, 0.0722));
+	if (y > compress_knee) {
+		float span = max(compress_ceil - compress_knee, 1e-4);
+		float y2 = compress_knee + span * (1.0 - exp(-(y - compress_knee) / span));
+		lin *= y2 / y;
+	}
+	if (compress_invert) {
+		lin = vec3(1.0) - lin;
+	}
+	return pow(clamp(lin, 0.0, 1.0), vec3(1.0 / 2.2));
+}
 
 // Signed distance to the drop silhouette at box-local p (y DOWN from the box
 // top). The rounded-box part is the same construction as the client's
@@ -114,6 +138,10 @@ void main() {
 		vec2 ghost_uv = (center_fc + (center_fc - gl_FragCoord.xy) * 0.35) / tex_size;
 		vec4 gcol = texture2D(tex, clamp(ghost_uv, vec2(0.0), vec2(1.0)));
 		col.rgb = mix(col.rgb, gcol.rgb, ghost * t * t);
+	}
+
+	if (compress_ceil > 0.0) {
+		col.rgb = compress_backdrop(col.rgb);
 	}
 
 	gl_FragColor = vec4(col.rgb, 1.0) * aa;

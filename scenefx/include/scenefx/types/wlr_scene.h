@@ -219,6 +219,9 @@ struct wlr_scene_droplet {
 	float band_px;
 	float refr;
 	float ghost;
+	float compress_ceil;
+	float compress_knee;
+	bool compress_invert;
 };
 
 /** A resize-handle frame: a ring inside a rounded rect, cut into four corner
@@ -286,6 +289,11 @@ struct wlr_scene_blur {
 	bool should_only_blur_bottom_layer;
 
 	struct linked_node transparency_mask_source;
+
+	/** Backdrop compression (fx_backdrop_compress); a zero ceil is off. */
+	float compress_ceil;
+	float compress_knee;
+	bool compress_invert;
 };
 
 /** A scene-graph node telling SceneFX to render the optimized blur */
@@ -795,6 +803,9 @@ void wlr_scene_droplet_set_silhouette(struct wlr_scene_droplet *droplet,
 /** Lens: falloff band px, rim refraction px, inverted-ghost strength 0-1. */
 void wlr_scene_droplet_set_lens(struct wlr_scene_droplet *droplet,
 		float band_px, float refr, float ghost);
+/** Backdrop compression of the refracted image (see wlr_scene_blur_set_compress). */
+void wlr_scene_droplet_set_compress(struct wlr_scene_droplet *droplet,
+		float ceil, float knee, bool invert);
 void wlr_scene_bevel_set_color(struct wlr_scene_bevel *bevel, const float color[static 4]);
 void wlr_scene_bevel_set_focus(struct wlr_scene_bevel *bevel, float focus, float sharpness,
 	const float color[static 3]);
@@ -884,6 +895,15 @@ void wlr_scene_blur_set_alpha(struct wlr_scene_blur *blur, float alpha);
  * fade-out effect.
  */
 void wlr_scene_blur_set_strength(struct wlr_scene_blur *blur, float strength);
+
+/**
+ * Compresses the blurred backdrop's luminance under `ceil` (linear), starting
+ * at `knee`, so text drawn over the node keeps its contrast however bright the
+ * backdrop is; `invert` lifts the shadows instead, for dark text. A ceil of 0
+ * turns it off.
+ */
+void wlr_scene_blur_set_compress(struct wlr_scene_blur *blur,
+		float ceil, float knee, bool invert);
 
 /**
  * Sets the region where to clip the blur.

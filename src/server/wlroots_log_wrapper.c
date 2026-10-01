@@ -871,6 +871,20 @@ void river_scene_node_enable_blur(struct wlr_scene_node *node, bool enabled, boo
 	}
 }
 
+// Backdrop compression on the tree's standard blur node (see
+// wlr_scene_blur_set_compress). Separate from river_scene_node_enable_blur so
+// its many callers need not all carry it: call it after enable_blur, which may
+// have just recreated the node with compression off.
+void river_scene_node_set_blur_compress(struct wlr_scene_node *node, float ceil, float knee, bool invert) {
+	if (node->type != WLR_SCENE_NODE_TREE) {
+		return;
+	}
+	struct wlr_scene_node *std_blur_node = find_blur_node(wlr_scene_tree_from_node(node));
+	if (std_blur_node) {
+		wlr_scene_blur_set_compress((struct wlr_scene_blur *)std_blur_node, ceil, knee, invert);
+	}
+}
+
 static void set_opacity_iterator(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
 	(void)sx;
 	(void)sy;

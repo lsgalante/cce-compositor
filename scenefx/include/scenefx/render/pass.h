@@ -41,12 +41,24 @@ struct fx_gradient {
 	float *colors;
 };
 
+/**
+ * Backdrop compression: the drawn luminance is pulled under `ceil` (linear),
+ * starting at `knee`, so text of a known color keeps its contrast over all of
+ * it; `invert` lifts the shadows instead, for dark text. A zero ceil is off.
+ */
+struct fx_backdrop_compress {
+	float ceil;
+	float knee;
+	bool invert;
+};
+
 struct fx_render_texture_options {
 	struct wlr_render_texture_options base;
 	const struct wlr_box *clip_box; // Used to clip csd. Ignored if NULL
 	struct fx_corner_fradii corners;
 	bool discard_transparent;
 	struct clipped_fregion clipped_region;
+	struct fx_backdrop_compress compress;
 };
 
 struct fx_render_rect_options {
@@ -153,6 +165,7 @@ struct fx_render_droplet_options {
 	float band_px;
 	float refr;
 	float ghost;
+	struct fx_backdrop_compress compress;
 };
 
 struct fx_render_blur_pass_options {

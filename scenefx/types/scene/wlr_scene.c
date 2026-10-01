@@ -1425,6 +1425,18 @@ void wlr_scene_droplet_set_lens(struct wlr_scene_droplet *droplet,
 	scene_node_update(&droplet->node, NULL);
 }
 
+void wlr_scene_droplet_set_compress(struct wlr_scene_droplet *droplet,
+		float ceil, float knee, bool invert) {
+	if (droplet->compress_ceil == ceil && droplet->compress_knee == knee
+			&& droplet->compress_invert == invert) {
+		return;
+	}
+	droplet->compress_ceil = ceil;
+	droplet->compress_knee = knee;
+	droplet->compress_invert = invert;
+	scene_node_update(&droplet->node, NULL);
+}
+
 void wlr_scene_bevel_set_color(struct wlr_scene_bevel *bevel, const float color[static 4]) {
 	if (memcmp(bevel->color, color, sizeof(bevel->color)) == 0) {
 		return;
@@ -1609,6 +1621,18 @@ void wlr_scene_blur_set_strength(struct wlr_scene_blur *blur, float strength) {
 	}
 
 	blur->strength = strength;
+	scene_node_update(&blur->node, NULL);
+}
+
+void wlr_scene_blur_set_compress(struct wlr_scene_blur *blur,
+		float ceil, float knee, bool invert) {
+	if (blur->compress_ceil == ceil && blur->compress_knee == knee
+			&& blur->compress_invert == invert) {
+		return;
+	}
+	blur->compress_ceil = ceil;
+	blur->compress_knee = knee;
+	blur->compress_invert = invert;
 	scene_node_update(&blur->node, NULL);
 }
 
@@ -3045,6 +3069,11 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.band_px = scene_droplet->band_px * data->scale,
 			.refr = scene_droplet->refr * data->scale,
 			.ghost = scene_droplet->ghost,
+			.compress = {
+				.ceil = scene_droplet->compress_ceil,
+				.knee = scene_droplet->compress_knee,
+				.invert = scene_droplet->compress_invert,
+			},
 			.clip = &render_region,
 		};
 		fx_render_pass_add_droplet(fx_pass, &droplet_options);
@@ -3162,6 +3191,11 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 				.clip_box = &dst_box,
 				.corners = fx_corner_radii_scale(blur_corners, data->scale),
 				.discard_transparent = false,
+				.compress = {
+					.ceil = blur->compress_ceil,
+					.knee = blur->compress_knee,
+					.invert = blur->compress_invert,
+				},
 			},
 			.use_optimized_blur = blur->should_only_blur_bottom_layer,
 			.blur_data = &scene->blur_data,

@@ -309,17 +309,17 @@ Clients and compositor communicate over Unix sockets keyed by `$WAYLAND_DISPLAY`
   `ccectl` binary (in `cce-compositor/`) is the CLI client; run `ccectl` with no args for the
   command list.
 - **Status**: `/tmp/cce-status-{WAYLAND_DISPLAY}.sock` — subscribe to `layout` /
-  `title` / `modifiers` / `adjust` / `dismiss` / `selection` / `backdrop <app_id>`
+  `title` / `modifiers` / `adjust` / `dismiss` / `selection`
   and receive push updates. `adjust` is "on"/"off" as window-adjust mode
   (overview, or Super held) comes and goes — what `cce-grid` keys its image
   resize handles on. `selection` is the other grid-facing topic: the overview
   drag-selection carrying the grid's images tells it where they went
   (`move <id>:<x>:<y> ...`, then `drop`); the grid reports the images it holds
   the other way, with `grid-items` on the control socket.
-  This feeds `cce-status-interface` (the status bar). `backdrop` is the odd one
-  out: it takes the asking segment's app_id and reports what that segment is
-  composited over, which is the one thing a Wayland client can never see for
-  itself. (The `viewport` topic went with the viewport-tag feature.)
+  This feeds `cce-status-interface` (the status bar). (The `viewport` topic
+  went with the viewport-tag feature; the per-segment `backdrop` topic went
+  2026-10-01, when the bar's text contrast moved to compositor-side backdrop
+  compression.)
 
 ## Window fades (DE-wide open/close dissolve)
 

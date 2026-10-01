@@ -3308,6 +3308,7 @@ impl Window {
             self.update_shadow(width, height, radius, want_shadow);
                 self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
+                self.sync_backdrop_compress();
             ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, self.effective_opacity());
 
             // Device px, like the blur radius above: the surface content is
@@ -3784,6 +3785,7 @@ impl Window {
                 self.update_shadow(width, height, radius, want_shadow);
                 self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
+                self.sync_backdrop_compress();
             }
 
             self.scale_only_render_finish();
@@ -3971,6 +3973,24 @@ impl Window {
             layout.bevel_focus_color.as_ptr(),
         );
         ffi::river_scene_node_set_position_if_changed(node, 0, 0);
+    }
+    /// Push the status bar's backdrop compression (`module {
+    /// backdrop_compress }`) onto this segment's backdrop: the blur node and
+    /// the droplet lens, whichever is live. Off for everything that is not a
+    /// status segment. Call after `river_scene_node_enable_blur`, which can
+    /// recreate the blur node with compression off — from every path that
+    /// calls it for a status segment.
+    pub unsafe fn sync_backdrop_compress(&self) {
+        let is_status = self.tiling_mode == crate::tiling::TilingMode::Status;
+        let (ceil, knee, invert) = if is_status {
+            (*self.server).wm.layout.status_backdrop_compress.unwrap_or((0.0, 0.0, false))
+        } else {
+            (0.0, 0.0, false)
+        };
+        ffi::river_scene_node_set_blur_compress(self.tree as *mut ffi::wlr_scene_node, ceil, knee, invert);
+        if !self.droplet.is_null() {
+            ffi::wlr_scene_droplet_set_compress(self.droplet, ceil, knee, invert);
+        }
     }
     /// Sync the droplet backdrop-refraction node for a droplet-styled status
     /// segment. Called from BOTH render paths, like update_bevel — one-path

@@ -213,10 +213,10 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Twelve modules carry unit tests — `window_manager.rs` (the most of any, among
+Thirteen modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
-`backdrop.rs` (the measurement and the desktop/window blend), `config.rs`,
-`xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
+`config.rs` (among them `backdrop_compress_params`), `idle.rs`,
+`idle_inhibit_manager.rs`, `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
 `text.rs`, `global_shortcuts.rs` (trigger parsing),
 `cursor.rs` (the swipe lean's direction, `swipe_lean`), `min_sizes.rs`,
 `selection.rs` (the rubber band's rect and its hit rule). They cluster where the logic is
@@ -933,7 +933,7 @@ headless seat has no keyboard and Chromium crashes in
   request/reply over a Unix socket. `ccectl` / `cce_ctl.rs` is the client.
 - **Status socket** `/tmp/cce-status-{WAYLAND_DISPLAY}.sock` (`status_server.rs`): runs
   on its own thread; a client sends one subscription line (`layout`, `title`,
-  `modifiers`, `dismiss`, or `backdrop <app_id>`) and receives text lines on every
+  `modifiers`, `dismiss`, …) and receives text lines on every
   change. This feeds the status bar (`cce-status-interface`). The main loop pushes
   updates through a `StatusSender` mpsc handle.
 
@@ -969,10 +969,7 @@ headless seat has no keyboard and Chromium crashes in
   on every transaction: `save_state` reads `/proc` for every window, and a
   drag is one transaction per pointer event.
 
-  **Per-frame work is gated too.** `Output::render_and_commit` measures the
-  status backdrops only when the window manager's `layout_epoch` (bumped per
-  transaction) or the camera moved, or 250 ms passed — not every vblank.
-  The `/tmp/cce-ovdbg` scene dump needs `CCE_OVDBG=1` in the environment
+  **Per-frame work is gated too.** The `/tmp/cce-ovdbg` scene dump needs `CCE_OVDBG=1` in the environment
   before the file is even looked for. The window-stream tick runs only while
   the stream hub has subscribers (the accept thread's eventfd arms it), and a
   failed tearing test is not repeated every frame of the same fullscreen
@@ -996,27 +993,19 @@ headless seat has no keyboard and Chromium crashes in
   frozen ghost; buffer commits never pass through `scene_node_update` with
   damage in this scenefx, which is the path the cache's dirtying hangs off.
 
-  **`backdrop` is the one per-subscriber topic** — it names the asking segment,
-  because the whole point is that the two ends of a bar sit over different things.
-  Lines are `<luma> <spread>` (0-100 each) or `unknown`. It answers a question a
-  Wayland client cannot: what its translucent module boxes are composited *over*,
-  so it can raise its text contrast to match. The measurement is geometry, not a
-  readback where it can be — the desktop background is drawn from a declarative
-  spec, so `backdrop.rs` computes cell-vs-gap coverage under each segment rect
-  on the CPU (`Output::measure_status_backdrops`, per frame, gated by
-  `update_status`'s equality check).
-
-  A window covering part of a segment is the case that has to be *read*:
-  `Output::read_window_region` composites that window's surfaces (subsurfaces
-  included) over just the overlapping strip via
-  `screenshot::read_texture_region`, and `backdrop::blend` folds the result
-  into the desktop measurement for the rest of the segment. Two gates keep that
-  readback off the render thread's back, and the second one matters more than
-  the first: a 250ms throttle, and a check that the window's summed surface
-  commit sequence changed at all (`river_wlr_surface_current_seq`). A window
-  nobody is typing in is read exactly once. Content that still cannot be read —
-  no committed buffer, an unsupported read format, an implausibly large strip —
-  falls back to `backdrop::UNKNOWN`.
+  **Status text contrast is backdrop compression** (`module { backdrop_compress }`
+  in the bar's config, the minimum WCAG ratio its text must hold). A Wayland
+  client cannot see what its translucent module boxes are composited over, so
+  the compositor fixes the backdrop instead: `backdrop_compress_params`
+  (`config.rs`) turns the ratio and the bar's `module { text_color }` into a
+  luminance ceiling, `Window::sync_backdrop_compress` sets it on the segment's
+  blur node and droplet lens (`wlr_scene_blur_set_compress` /
+  `wlr_scene_droplet_set_compress`), and scenefx's `tex.frag` / `droplet.frag`
+  (`compress_backdrop`) pull every backdrop pixel brighter than half the
+  ceiling smoothly under it — or, for dark text, lift the shadows. It replaced
+  (2026-10-01) the per-segment `backdrop` status topic, whose CPU geometry
+  measurement and window-content readbacks ran every frame to feed a bar-side
+  scrim.
 
 ### Portal global shortcuts
 

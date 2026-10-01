@@ -294,6 +294,9 @@ bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source sourc
 	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
 
 	shader->discard_transparent = glGetUniformLocation(prog, "discard_transparent");
+	shader->compress_ceil = glGetUniformLocation(prog, "compress_ceil");
+	shader->compress_knee = glGetUniformLocation(prog, "compress_knee");
+	shader->compress_invert = glGetUniformLocation(prog, "compress_invert");
 
 	if (!effects) {
 		return true;
@@ -428,6 +431,9 @@ bool link_droplet_program(struct droplet_shader *shader) {
 	shader->band_px = glGetUniformLocation(prog, "band_px");
 	shader->refr = glGetUniformLocation(prog, "refr");
 	shader->ghost = glGetUniformLocation(prog, "ghost");
+	shader->compress_ceil = glGetUniformLocation(prog, "compress_ceil");
+	shader->compress_knee = glGetUniformLocation(prog, "compress_knee");
+	shader->compress_invert = glGetUniformLocation(prog, "compress_invert");
 
 	return true;
 }
