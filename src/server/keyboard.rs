@@ -7,6 +7,14 @@ use crate::server::{WlListener, wl_listener_remove, wl_signal_add};
 use crate::keyboard_group::KeyboardGroup;
 use std::collections::HashSet;
 
+/// Key repeat defaults (keys/s, ms before the first repeat). A hardware
+/// keyboard takes `input { repeat_rate repeat_delay }` over these
+/// (`InputConfig::repeat_info`); the synthetic and virtual keyboards keep
+/// them. A client can still change a device's via river's
+/// `input_device.set_repeat_info`, until the next config load.
+pub const DEFAULT_REPEAT_RATE: i32 = 40;
+pub const DEFAULT_REPEAT_DELAY: i32 = 250;
+
 #[derive(Clone, Copy)]
 pub struct KeyboardConfig {
     pub keymap: *mut ffi::xkb_keymap,
@@ -34,6 +42,11 @@ impl Keyboard {
         let wlr_keyboard = ffi::wlr_keyboard_from_input_device((*device).wlr_device);
         
         let virtual_device = (*device).virtual_device;
+        let (repeat_rate, repeat_delay) = if virtual_device {
+            (DEFAULT_REPEAT_RATE, DEFAULT_REPEAT_DELAY)
+        } else {
+            (*(*(*device).seat).server).wm.input_config.repeat_info()
+        };
         let mut keymap = std::ptr::null_mut();
         if virtual_device {
             let kbd_keymap = ffi::river_wlr_keyboard_get_keymap(wlr_keyboard);
@@ -60,8 +73,8 @@ impl Keyboard {
             group_link: std::mem::zeroed(),
             config: KeyboardConfig {
                 keymap,
-                repeat_rate: 40,
-                repeat_delay: 400,
+                repeat_rate,
+                repeat_delay,
             },
         }));
 

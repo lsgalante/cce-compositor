@@ -6616,6 +6616,19 @@ impl WindowManager {
             if let Some(ref mut libinput) = (*device).libinput {
                 libinput.apply_config(&self.input_config);
             }
+            // Key repeat: a hardware keyboard regroups on a change (groups
+            // are keyed by repeat info), so only touch it when it differs.
+            if !(*device).virtual_device
+                && ffi::river_wlr_input_device_get_type((*device).wlr_device) == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD
+            {
+                let keyboard = (*device).destroy_data as *mut crate::keyboard::Keyboard;
+                if !keyboard.is_null() {
+                    let (rate, delay) = self.input_config.repeat_info();
+                    if (*keyboard).config.repeat_rate != rate || (*keyboard).config.repeat_delay != delay {
+                        (*keyboard).set_repeat_info(rate, delay);
+                    }
+                }
+            }
             curr = next;
         }
     }

@@ -559,9 +559,26 @@ pub struct InputConfig {
     pub kinetic_scroll: Option<bool>,
     /// `scroll_friction`: coast decay, 1/s (default 6).
     pub scroll_friction: Option<f64>,
+    /// `repeat_rate`: key repeats per second once repeating starts
+    /// (default `keyboard::DEFAULT_REPEAT_RATE`; 0 disables repeat).
+    pub repeat_rate: Option<i64>,
+    /// `repeat_delay`: ms a key is held before it starts repeating
+    /// (default `keyboard::DEFAULT_REPEAT_DELAY`).
+    pub repeat_delay: Option<i64>,
     pub mouse: Option<MouseConfig>,
     pub touchpad: Option<TouchpadConfig>,
     pub trackpoint: Option<TrackpointConfig>,
+}
+
+impl InputConfig {
+    /// `(rate, delay)` for hardware keyboards, defaults filled in. Negative
+    /// values are clamped to 0, which `wl_keyboard.repeat_info` reads as
+    /// "no repeat" for the rate; the protocol rejects negatives outright.
+    pub fn repeat_info(&self) -> (i32, i32) {
+        let rate = self.repeat_rate.map_or(crate::keyboard::DEFAULT_REPEAT_RATE, |v| v.clamp(0, i32::MAX as i64) as i32);
+        let delay = self.repeat_delay.map_or(crate::keyboard::DEFAULT_REPEAT_DELAY, |v| v.clamp(0, i32::MAX as i64) as i32);
+        (rate, delay)
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -1318,6 +1335,19 @@ fn get_child_arg_i64(node: &kdl::KdlNode, child_name: &str, default: i64) -> i64
     default
 }
 
+fn get_child_arg_i64_opt(node: &kdl::KdlNode, child_name: &str) -> Option<i64> {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            if child.name().value() == child_name {
+                if let Some(entry) = child.entries().first() {
+                    return entry.value().as_i64();
+                }
+            }
+        }
+    }
+    None
+}
+
 fn get_child_arg_f64(node: &kdl::KdlNode, child_name: &str, default: f64) -> f64 {
     if let Some(children) = node.children() {
         for child in children.nodes() {
@@ -1990,6 +2020,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let scroll_ease = get_child_arg_f64_opt(node, "scroll_ease");
         let kinetic_scroll = get_child_arg_bool_opt(node, "kinetic_scroll");
         let scroll_friction = get_child_arg_f64_opt(node, "scroll_friction");
+        let repeat_rate = get_child_arg_i64_opt(node, "repeat_rate");
+        let repeat_delay = get_child_arg_i64_opt(node, "repeat_delay");
 
         let mut touchpad = None;
         if let Some(children) = node.children() {
@@ -2059,6 +2091,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
             scroll_ease,
             kinetic_scroll,
             scroll_friction,
+            repeat_rate,
+            repeat_delay,
             mouse,
             touchpad,
             trackpoint,
@@ -3308,6 +3342,28 @@ style {
         assert_eq!(tpoint.scroll_factor, Some(3.0));
         // The annotated spelling the settings UI writes parses the same.
         assert_eq!(tpoint.scroll_method, Some("none".to_string()));
+    }
+
+    #[test]
+    fn test_kdl_input_key_repeat() {
+        let input = parse_kdl_config("input {\n repeat_rate 30\n repeat_delay 200\n}\n")
+            .unwrap()
+            .input
+            .unwrap();
+        assert_eq!(input.repeat_rate, Some(30));
+        assert_eq!(input.repeat_delay, Some(200));
+        assert_eq!(input.repeat_info(), (30, 200));
+
+        // Unset keys fall back to the defaults; negatives clamp to 0.
+        let input = parse_kdl_config("input {\n repeat_delay -5\n}\n").unwrap().input.unwrap();
+        assert_eq!(
+            input.repeat_info(),
+            (crate::keyboard::DEFAULT_REPEAT_RATE, 0)
+        );
+        assert_eq!(
+            InputConfig::default().repeat_info(),
+            (crate::keyboard::DEFAULT_REPEAT_RATE, crate::keyboard::DEFAULT_REPEAT_DELAY)
+        );
     }
 
     #[test]

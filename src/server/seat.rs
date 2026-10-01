@@ -761,8 +761,8 @@ impl Seat {
         // `keyboard_notify_enter` its pressed-key tracking.
         let config = crate::keyboard::KeyboardConfig {
             keymap,
-            repeat_rate: 40,
-            repeat_delay: 400,
+            repeat_rate: crate::keyboard::DEFAULT_REPEAT_RATE,
+            repeat_delay: crate::keyboard::DEFAULT_REPEAT_DELAY,
         };
         match crate::keyboard_group::KeyboardGroup::create(self, config, true) {
             Ok(group) => {
