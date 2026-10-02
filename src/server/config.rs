@@ -1298,14 +1298,11 @@ pub fn default_config_path() -> Option<String> {
     }
 }
 
+/// `<state_home>/cce/state.json`; `None` when neither `$XDG_STATE_HOME` nor
+/// `$HOME` is set, rather than a path relative to wherever we were started.
 pub fn default_state_path() -> Option<String> {
-    if let Ok(xdg_state_home) = std::env::var("XDG_STATE_HOME") {
-        Some(format!("{}/cce/state.json", xdg_state_home))
-    } else if let Ok(home) = std::env::var("HOME") {
-        Some(format!("{}/.local/state/cce/state.json", home))
-    } else {
-        None
-    }
+    let path = cce_ui::config::cce_state_dir().join("state.json");
+    path.is_absolute().then(|| path.to_string_lossy().into_owned())
 }
 
 fn expand_env_vars(s: &str) -> String {
