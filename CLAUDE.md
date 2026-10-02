@@ -705,7 +705,9 @@ is smooth past that band. The size is proportional to the travel —
 disables; `WindowManager::swipe_peek_px` — not under `input`, whose
 config.kdl block input.kdl's replaces wholesale), clamped there — and eases
 back to where it started if the fingers lift first (`handle_swipe_end`), so
-a hesitant swipe shows where it would go without going. **A fire does
+a hesitant swipe shows where it would go without going. With animations
+off (`cce_ui::motion`) nothing leans: the camera holds still until the
+bind fires and the step's pan lands at once. **A fire does
 not end the swipe** (since 2026-09-24): the accumulated travel restarts
 from zero at the fire, and a further `window_manager {
 swipe_repeat_threshold }` of travel (libinput units, default four times

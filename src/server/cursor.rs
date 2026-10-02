@@ -4097,8 +4097,18 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         // After a step the lean is slower as well as longer to fill: it
         // reaches `swipe_repeat_peek` (default half of `swipe_peek`) at the
         // repeat threshold, so a swipe that has just switched focus does
-        // not tug the camera toward the next window as eagerly.
-        let peek_px = if cursor.gesture_triggered { wm.swipe_repeat_peek_px } else { wm.swipe_peek_px };
+        // not tug the camera toward the next window as eagerly. With
+        // animations off (`cce_ui::motion`) there is no lean at all: the
+        // camera stays put until the bind fires, then jumps (the step's
+        // ease is instant then, `advance_camera_animation`). A lean
+        // already showing when they were turned off goes back the same way.
+        let peek_px = if !cce_ui::motion::enabled() {
+            0.0
+        } else if cursor.gesture_triggered {
+            wm.swipe_repeat_peek_px
+        } else {
+            wm.swipe_peek_px
+        };
         let (dx, dy) = (cursor.gesture_dx, cursor.gesture_dy);
         let want = swipe_lean(dx, dy, navigates, threshold, peek_px, wm.desk_zoom);
         let delta = [want[0] - cursor.swipe_peek[0], want[1] - cursor.swipe_peek[1]];
