@@ -320,6 +320,17 @@ Clients and compositor communicate over Unix sockets keyed by `$WAYLAND_DISPLAY`
   went with the viewport-tag feature; the per-segment `backdrop` topic went
   2026-10-01, when the bar's text contrast moved to compositor-side backdrop
   compression.)
+- **Per-app instance sockets**: `/tmp/<app>-{WAYLAND_DISPLAY}.sock`, the same
+  convention (`cce_ui::ipc::socket_path`). An app that runs once per session
+  uses **`cce_ui::ipc::instance`**: `forward_or_claim(prefix, line)` in
+  `main()` before any Wayland work (true = a running instance took it, exit),
+  `serve(handler)` once the loop's sender exists, `cleanup()` after `run`
+  returns. It owns the connect-before-bind race, stale-socket replacement and
+  bounded reads; the app owns only its line protocol. cce-browser, cce-notes
+  and cce-graph's vault mode use it. A listener of any other shape reads
+  requests with `cce_ui::ipc::read_request_line` (a total deadline and a size
+  cap), never a bare `read_line`: one silent client otherwise wedges the
+  listener for every client after it. Don't copy either into an app again.
 
 ## Window fades (DE-wide open/close dissolve)
 
