@@ -5994,6 +5994,13 @@ impl WindowManager {
                 "ok\n".to_string()
             }
             "restart-compositor" => {
+                // Never from a locked session: the display manager relaunches
+                // the session greeter-free, so a restart sent while locked
+                // (only a process of the user's can send one then) came back
+                // unlocked. The user unlocks first.
+                if unsafe { (*self.server).lock_manager.state } != crate::lock_manager::LockState::Unlocked {
+                    return "error: the session is locked; unlock before restarting the compositor\n".to_string();
+                }
                 // Leave the restart flag for cce-display-manager's daemon (it
                 // checks after the session worker exits, verifies the file is
                 // owned by the session user, and relaunches this same session
