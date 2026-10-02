@@ -196,6 +196,7 @@ void wlr_scene_node_destroy(struct wlr_scene_node *node) {
 		assert(wl_list_empty(&scene_buffer->events.frame_done.listener_list));
 	} else if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
 		pixman_region32_fini(&wlr_scene_optimized_blur_from_node(node)->baked_region);
+		pixman_region32_fini(&wlr_scene_optimized_blur_from_node(node)->edge_region);
 	} else if (node->type == WLR_SCENE_NODE_TREE) {
 		struct wlr_scene_tree *scene_tree = wlr_scene_tree_from_node(node);
 
@@ -1742,6 +1743,7 @@ struct wlr_scene_optimized_blur *wlr_scene_optimized_blur_create(
 	scene_blur->width = width;
 	scene_blur->height = height;
 	pixman_region32_init(&scene_blur->baked_region);
+	pixman_region32_init(&scene_blur->edge_region);
 	// Start dirty so the first render pass bakes the cache; scene_entry_render
 	// only re-bakes when dirty (re-baking on undamaged frames samples stale
 	// pass->buffer content, ghosting whatever was composited above the node).
@@ -2615,6 +2617,29 @@ static bool optimized_blur_bake_rect(struct fx_gles_render_pass *fx_pass,
 	return fx_render_pass_add_optimized_blur(fx_pass, &blur_options);
 }
 
+/* Record a just-baked rect (anchor space) in the node's region. What lay
+ * within the blur's reach of an output edge — anything outside `trusted`,
+ * the output inset by that reach, in the same space — sampled clamped edge
+ * pixels in place of the backdrop beyond, so it also goes into
+ * `edge_region` to be re-baked once it is clear of the edge. */
+static void optimized_blur_note_baked(struct wlr_scene_optimized_blur *ob,
+		const pixman_box32_t *rect, const struct wlr_box *trusted) {
+	pixman_region32_t guessed;
+	pixman_region32_init_rect(&guessed, rect->x1, rect->y1,
+		rect->x2 - rect->x1, rect->y2 - rect->y1);
+	pixman_region32_union(&ob->baked_region, &ob->baked_region, &guessed);
+	pixman_region32_subtract(&ob->edge_region, &ob->edge_region, &guessed);
+	if (trusted->width > 0 && trusted->height > 0) {
+		pixman_region32_t keep;
+		pixman_region32_init_rect(&keep, trusted->x, trusted->y,
+			trusted->width, trusted->height);
+		pixman_region32_subtract(&guessed, &guessed, &keep);
+		pixman_region32_fini(&keep);
+	}
+	pixman_region32_union(&ob->edge_region, &ob->edge_region, &guessed);
+	pixman_region32_fini(&guessed);
+}
+
 /* The optimized node's per-frame work: a full bake (anchored where the node
  * is now) when dirty, never baked, baked elsewhere, or travelled past the
  * cache margin; otherwise only the strips the node now shows that its bake
@@ -2638,6 +2663,16 @@ static void optimized_blur_render(struct wlr_scene *scene,
 	if (!wlr_box_intersection(&vis, &cur, &data->logical)) {
 		return;
 	}
+
+	// The output inset by the blur's sampling reach (layout px): a pixel
+	// baked outside it sampled past the output's edge.
+	const int reach = (int)ceil(blur_data_calc_size(&scene->blur_data) / data->scale);
+	const struct wlr_box trusted = {
+		.x = data->logical.x + reach,
+		.y = data->logical.y + reach,
+		.width = data->logical.width - 2 * reach,
+		.height = data->logical.height - 2 * reach,
+	};
 
 	bool full = ob->dirty || !ob->baked || ob->baked_output != data->output || !normal;
 	int dx = 0, dy = 0; // anchor-space shift, layout px: anchor - current
@@ -2693,17 +2728,39 @@ static void optimized_blur_render(struct wlr_scene *scene,
 		ob->baked_x = cx;
 		ob->baked_y = cy;
 		ob->baked_output = data->output;
-		pixman_region32_fini(&ob->baked_region);
-		pixman_region32_init_rect(&ob->baked_region, vis.x, vis.y, vis.width, vis.height);
+		pixman_region32_clear(&ob->baked_region);
+		pixman_region32_clear(&ob->edge_region);
+		const pixman_box32_t all = { vis.x, vis.y, vis.x + vis.width, vis.y + vis.height };
+		optimized_blur_note_baked(ob, &all, &trusted);
 		return;
 	}
 
 	// Anchored: what the node shows now, in anchor space, minus what the
-	// cache already holds for it.
-	pixman_region32_t need, uncovered;
+	// cache already holds for it — plus what it holds only as an edge guess
+	// that has since moved clear of every edge (a pan carrying a window
+	// that hung off the output inward: without this, the band along the
+	// old edge kept its clamped blur, a seam of smeared backdrop).
+	const struct wlr_box trusted_a = {
+		.x = trusted.x + dx, .y = trusted.y + dy,
+		.width = trusted.width, .height = trusted.height,
+	};
+	pixman_region32_t need, uncovered, stale;
 	pixman_region32_init_rect(&need, vis.x + dx, vis.y + dy, vis.width, vis.height);
 	pixman_region32_init(&uncovered);
 	pixman_region32_subtract(&uncovered, &need, &ob->baked_region);
+	pixman_region32_init(&stale);
+	if (trusted.width > 0 && trusted.height > 0) {
+		pixman_region32_intersect_rect(&stale, &ob->edge_region,
+			trusted_a.x, trusted_a.y, trusted_a.width, trusted_a.height);
+		pixman_region32_intersect(&stale, &stale, &need);
+		if (cce_scene_blur_debug() && pixman_region32_not_empty(&stale)) {
+			const pixman_box32_t *e = pixman_region32_extents(&stale);
+			wlr_log(WLR_INFO, "[scenefx] optimized re-bake edge guess %dx%d at (%d, %d), node travel (%d, %d)",
+				e->x2 - e->x1, e->y2 - e->y1, e->x1, e->y1, -dx, -dy);
+		}
+		pixman_region32_union(&uncovered, &uncovered, &stale);
+	}
+	pixman_region32_fini(&stale);
 	int n = 0;
 	const pixman_box32_t *rects = pixman_region32_rectangles(&uncovered, &n);
 	const int shift_x = (int)round(dx * data->scale) + mx;
@@ -2716,8 +2773,7 @@ static void optimized_blur_render(struct wlr_scene *scene,
 			.width = rects[i].x2 - rects[i].x1, .height = rects[i].y2 - rects[i].y1,
 		};
 		if (optimized_blur_bake_rect(fx_pass, scene, data, &r, shift_x, shift_y)) {
-			pixman_region32_union_rect(&ob->baked_region, &ob->baked_region,
-				rects[i].x1, rects[i].y1, r.width, r.height);
+			optimized_blur_note_baked(ob, &rects[i], &trusted_a);
 		}
 	}
 	pixman_region32_fini(&need);

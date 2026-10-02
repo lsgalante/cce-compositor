@@ -1011,6 +1011,21 @@ headless seat has no keyboard and Chromium crashes in
   frozen ghost; buffer commits never pass through `scene_node_update` with
   damage in this scenefx, which is the path the cache's dirtying hangs off.
 
+  **A bake near the output edge is a guess** (fixed 2026-10-01). Through a
+  frozen pan (a swipe) each optimized node keeps its bake and only bakes the
+  strips it newly shows (`optimized_blur_render`, anchored at
+  `baked_x/baked_y` with `baked_region`). But a pixel baked within the blur's
+  reach (sample size / output scale, ~40 layout px at scale 2) of an output
+  edge sampled that edge's clamped pixels, not the backdrop beyond it — so a
+  window that hung off the screen and was swiped on kept a seam of smeared
+  grid along where the edge had been, up to the reach wide. Such pixels go
+  into `edge_region` as well as `baked_region`, and are re-baked once a pan
+  carries them clear of every edge (`optimized re-bake edge guess` under
+  `CCE_BLUR_DEBUG=1`). A window sitting at the edge re-bakes nothing. To
+  reproduce, the content just past the edge must differ from the content at
+  it: a black cell on both sides blurs the same either way, which is why the
+  first shadow attempts showed nothing. Put a grid gap just off screen.
+
   **Status text contrast is backdrop compression** (`module { backdrop_compress }`
   in the bar's config, the minimum WCAG ratio its text must hold). A Wayland
   client cannot see what its translucent module boxes are composited over, so

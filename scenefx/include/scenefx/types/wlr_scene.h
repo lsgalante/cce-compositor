@@ -323,6 +323,15 @@ struct wlr_scene_optimized_blur {
 	int baked_x, baked_y;
 	pixman_region32_t baked_region;
 	struct wlr_scene_output *baked_output;
+	/**
+	 * The part of `baked_region` (anchor space) that was within the blur's
+	 * reach of an output edge when it was baked. The blur's samples past
+	 * that edge were clamped to the edge's own pixels, so these pixels are
+	 * a guess at the backdrop, not a blur of it: right while they stay at
+	 * the edge, wrong as soon as a pan carries them inward. They are
+	 * re-baked once they are clear of every edge.
+	 */
+	pixman_region32_t edge_region;
 };
 
 struct wlr_scene_outputs_update_event {
