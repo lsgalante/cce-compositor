@@ -901,7 +901,6 @@ impl WindowManager {
         self.adjust_held = false;
         self.injected_super_held = false;
         self.injected_key_mods = 0;
-        let _ = std::fs::remove_file("/tmp/cce-status-interface-adjust-mode");
 
         ffi::wl_list_init(&mut self.sent.outputs);
         ffi::wl_list_init(&mut self.sent.seats);
@@ -5373,12 +5372,10 @@ impl WindowManager {
                 } else {
                     !self.adjust_position_mode
                 };
+                // The state reaches the bar on the status socket's `adjust`
+                // topic. A fixed-name flag file in shared /tmp was also
+                // written here until 2026-10-02; nothing read it.
                 self.adjust_position_mode = enable;
-                if enable {
-                    let _ = std::fs::File::create("/tmp/cce-status-interface-adjust-mode");
-                } else {
-                    let _ = std::fs::remove_file("/tmp/cce-status-interface-adjust-mode");
-                }
                 self.dirty_windowing();
                 return format!("ok {}\n", enable);
             }
