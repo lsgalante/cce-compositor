@@ -168,6 +168,50 @@ fn relaunchable(cmdline: &str) -> bool {
     !cmdline.trim().is_empty() && !is_windows_path(cmdline)
 }
 
+/// One argument, quoted for `sh -c` so the shell hands it back unchanged:
+/// left bare when it is only characters the shell never reinterprets, else
+/// single-quoted (with `'` written `'\''`).
+fn shell_quote(arg: &str) -> String {
+    let plain = !arg.is_empty()
+        && arg.bytes().all(|b| b.is_ascii_alphanumeric() || b"@%+=:,./_-".contains(&b));
+    if plain {
+        arg.to_string()
+    } else {
+        format!("'{}'", arg.replace('\'', r"'\''"))
+    }
+}
+
+/// A legacy `cmdline` (a state file from before `argv`) the shell reads
+/// exactly as written: words of plain characters and spaces, nothing it
+/// expands, substitutes, redirects or chains.
+fn plain_cmdline(cmdline: &str) -> bool {
+    cmdline.bytes().all(|b| b.is_ascii_alphanumeric() || b" @%+=:,./_-".contains(&b))
+}
+
+/// The `sh -c` command that relaunches a saved window, or None when it must
+/// not be relaunched.
+///
+/// Until 2026-10-02 this was `cmdline` itself — argv joined with spaces and
+/// run through `/bin/sh -c` at the next login — so an argument's own shell
+/// characters were executed: a viewer left open on `~/Downloads/x$(cmd).pdf`
+/// ran `cmd`, and a URL with `&` was split into two commands. Now the saved
+/// `argv` is quoted argument by argument. An entry saved before `argv`
+/// existed is relaunched only when its cmdline is plain; one with shell
+/// characters is skipped (its geometry still applies when the app is
+/// started by hand, and the next save records its argv).
+fn restore_command(w: &SavedWindowState) -> Option<String> {
+    if !relaunchable(&w.cmdline) {
+        return None;
+    }
+    match &w.argv {
+        Some(argv) if !argv.is_empty() => {
+            Some(argv.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" "))
+        }
+        _ if plain_cmdline(&w.cmdline) => Some(w.cmdline.clone()),
+        _ => None,
+    }
+}
+
 /// Whether `s` starts with a Windows drive path (`C:\` or `C:/`) — the
 /// argv[0] every Wine/Proton process rewrites its command line to, which
 /// makes it the one reliable sign that a window belongs to Wine: its
@@ -1020,7 +1064,7 @@ impl WindowManager {
             // replace the plate: it would stand there until the sweep, a
             // minute of frame over empty desk. The entry stays queued, so
             // the app still lands on its saved spot if the user starts it.
-            if !relaunchable(&entry.cmdline) {
+            if restore_command(entry).is_none() {
                 continue;
             }
             let mut color = if entry.focused {
@@ -1286,11 +1330,8 @@ impl WindowManager {
                             i += 1;
                         }
                     }
-                    let flag = format!(
-                        "--working-directory='{}'",
-                        cwd.replace('\'', r"'\''")
-                    );
-                    args.insert(1.min(args.len()), flag);
+                    // A plain argv entry: `restore_command` quotes it.
+                    args.insert(1.min(args.len()), format!("--working-directory={}", cwd));
                 }
             }
             let mut cmdline = args.join(" ");
@@ -1312,6 +1353,7 @@ impl WindowManager {
                 height: (*w).box_geom.height as u32,
                 cmdline,
                 focused: is_focused,
+                argv: (!args.is_empty()).then(|| args.clone()),
             };
 
             saved_wins.push(win_state.clone());
@@ -1747,16 +1789,26 @@ impl WindowManager {
     }
 
     fn spawn_restored_one(w: &SavedWindowState, spawned_any: &mut bool) {
-        if !relaunchable(&w.cmdline) {
-            if !w.cmdline.trim().is_empty() {
-                log::info!(
-                    "Skipping unrestorable Windows-path command for {:?}: {}",
+        let Some(cmd) = restore_command(w) else {
+            if !relaunchable(&w.cmdline) {
+                if !w.cmdline.trim().is_empty() {
+                    log::info!(
+                        "Skipping unrestorable Windows-path command for {:?}: {}",
+                        w.app_id,
+                        w.cmdline.trim()
+                    );
+                }
+            } else {
+                log::warn!(
+                    "Not relaunching {:?}: saved without its argv and its command line has \
+                     shell characters, which the shell would run; start it once by hand \
+                     and the next save records it safely: {}",
                     w.app_id,
                     w.cmdline.trim()
                 );
             }
             return;
-        }
+        };
         // Small stagger so N clients don't all hit Vulkan device
         // init at the same instant; restore matching and focus
         // restoration are map-order independent.
@@ -1764,8 +1816,7 @@ impl WindowManager {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         *spawned_any = true;
-        log::info!("Deferred spawning restored window command: {}", w.cmdline);
-        let cmd = w.cmdline.clone();
+        log::info!("Deferred spawning restored window command: {}", cmd);
         match unsafe { nix::unistd::fork() } {
             Ok(nix::unistd::ForkResult::Child) => {
                 crate::process::cleanup_child();
@@ -7807,6 +7858,7 @@ mod tests {
             height: 600,
             cmdline: "test-app".to_string(),
             focused: false,
+            argv: None,
         });
 
         unsafe {
@@ -7848,7 +7900,54 @@ mod tests {
             height: 689,
             cmdline: cmdline.to_string(),
             focused: false,
+            argv: None,
         }
+    }
+
+    fn entry_with(cmdline: &str, argv: Option<&[&str]>) -> SavedWindowState {
+        SavedWindowState {
+            app_id: "viewer".to_string(),
+            cmdline: cmdline.to_string(),
+            argv: argv.map(|a| a.iter().map(|s| s.to_string()).collect()),
+            ..proton_entry("t", "")
+        }
+    }
+
+    /// What `sh -c` makes of a command: the argv it would exec.
+    fn shell_argv(cmd: &str) -> Vec<String> {
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", &format!("printf '%s\\0' {cmd}")])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().split('\0').filter(|s| !s.is_empty()).map(String::from).collect()
+    }
+
+    #[test]
+    fn a_restore_relaunches_the_saved_argv_exactly() {
+        // Every argument comes back from the shell as it went in: the
+        // substitution, the `&`, the quote and the space are text.
+        let argv = ["zathura", "/home/u/Downloads/x$(touch /tmp/pwned).pdf", "a&b", "it's", "two words", "--working-directory=/tmp/a b"];
+        let cmd = restore_command(&entry_with("ignored", Some(&argv))).unwrap();
+        assert_eq!(shell_argv(&cmd), argv);
+        // Plain arguments stay readable in the log.
+        assert_eq!(shell_quote("/usr/bin/foot"), "/usr/bin/foot");
+        assert_eq!(shell_quote("--app-id=cce-terminal"), "--app-id=cce-terminal");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn a_legacy_entry_relaunches_only_when_its_cmdline_is_plain() {
+        // Saved before argv: plain words still relaunch as before...
+        assert_eq!(
+            restore_command(&entry_with("cce-terminal --app-id=cce-terminal", None)).as_deref(),
+            Some("cce-terminal --app-id=cce-terminal")
+        );
+        // ...but anything the shell would act on is not run at all.
+        for bad in ["zathura x$(id).pdf", "chromium https://a/?x=1&y=2", "foot --working-directory='/tmp'", "a;b", "a`id`"] {
+            assert!(restore_command(&entry_with(bad, None)).is_none(), "{bad:?} must not be relaunched");
+        }
+        // Wine's Windows paths never relaunch, argv or not.
+        assert!(restore_command(&entry_with(r"C:\x.exe", Some(&[r"C:\x.exe"]))).is_none());
     }
 
     const UPC: &str = r"C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\upc.exe";

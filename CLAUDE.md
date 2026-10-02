@@ -821,6 +821,15 @@ the **bare name** whenever the name's first `PATH` hit is a different file
 from the one running (`path_shadowed_name`), and the restore's `sh -c`
 resolves it the way the launcher did. The absolute path is kept when PATH
 agrees with it.
+**The restore relaunches the saved `argv`, quoted, never `cmdline`**
+(`restore_command`, since 2026-10-02). `cmdline` is argv joined with spaces
+and stays what the matchers compare (`saved_by_program`, `same_app`), but run
+through `sh -c` it executed an argument's own shell characters: a viewer left
+open on `x$(cmd).pdf` ran `cmd` at the next login, and a URL with `&` split in
+two. Each argument is now `shell_quote`d. An entry saved before `argv` existed
+relaunches only when its cmdline is plain words (`plain_cmdline`), else it is
+skipped with a warning and its geometry still applies when started by hand.
+foot's `--working-directory=` is a plain argv entry for the same reason.
 Wine/Proton windows record their Windows-side exe path (`C:\...`) as the
 command, which `/bin/sh` cannot run, so the restore never relaunches them
 (`relaunchable`) — and draws no login placeholder for them either: until
