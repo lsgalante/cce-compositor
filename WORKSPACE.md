@@ -385,7 +385,10 @@ still moves. Its source is **`/run/cce/animations`** (`on`/`off`, missing
 means on), written as root by `cce-power-apply` when the Power page's
 **Animations** lever is part of the mode that is running. It lives under
 /run, not `~/.config`, because the writer runs from udev with no session and
-no `$HOME`. `enabled()` re-reads it at most every 500 ms, so a plug or unplug
+no `$HOME`. It also runs after every wake (`cce-power-apply-resume.service`,
+which `ccebuild install-system` enables through its `X-CceEnable=yes` key),
+because the kernel's resume event for a charger plugged in during sleep is
+unreliable. `enabled()` re-reads it at most every 500 ms, so a plug or unplug
 reaches running clients and the compositor without a reload. Set
 `CCE_ANIMATIONS=0` (or `1`) to force it for one process, for testing.
 

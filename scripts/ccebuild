@@ -771,6 +771,24 @@ cmd_install_system() {
     done < <(system_units)
     if [ "$reload" -eq 1 ]; then queue systemctl daemon-reload; fi
 
+    # Enabling is opt-in per unit, with `X-CceEnable=yes` in its [Install]
+    # (systemd ignores X- keys). Most units here must not be enabled on
+    # install: cce-display-manager.service stays disabled because the
+    # template is what runs. But a unit wanted by a sleep target, like
+    # cce-power-apply-resume.service, does nothing until it is enabled, and
+    # an install that skipped that step would report success for a hook
+    # that never fires. Checked as the user (is-enabled needs no privilege),
+    # queued after the daemon-reload so a unit that is new in this run is
+    # already known.
+    local unit
+    while read -r file; do
+        grep -qE '^[[:space:]]*X-CceEnable[[:space:]]*=[[:space:]]*yes[[:space:]]*$' "$file" || continue
+        unit=$(basename "$file")
+        if systemctl is-enabled --quiet "$unit" 2>/dev/null; then continue; fi
+        printf '  enable %s\n' "$unit"
+        queue systemctl enable "$unit"
+    done < <(system_units)
+
     while read -r file; do
         dest="/etc/pam.d/$(basename "$file")"
         if [ -e "$dest" ] && cmp -s "$file" "$dest"; then continue; fi
