@@ -20,7 +20,7 @@
 // thread only try_send()s, so a stalled client skips frames (backpressure =
 // frame dropping) and can never block the compositor.
 
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -89,15 +89,11 @@ fn accept_loop(hub: StreamHub, display_socket: Option<String>) {
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        // Subscription line, with a timeout so a silent connect can't park.
-        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
-        let mut line = String::new();
-        {
-            let mut reader = std::io::BufReader::new(&stream);
-            if reader.read_line(&mut line).is_err() {
-                continue;
-            }
-        }
+        // Subscription line: bounded in size and in TOTAL time, since this
+        // accept thread serves every subscriber in turn.
+        let Some(line) = crate::ipc_server::read_line_bounded(&stream, 256, std::time::Duration::from_secs(2)) else {
+            continue;
+        };
         let Some(query) = line.trim().strip_prefix("window ").map(str::trim) else {
             continue;
         };

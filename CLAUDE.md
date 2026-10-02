@@ -978,6 +978,19 @@ headless seat has no keyboard and Chromium crashes in
 
 - **Control socket** `/tmp/cce-{WAYLAND_DISPLAY}.sock` (`ipc_server.rs`): line-oriented
   request/reply over a Unix socket. `ccectl` / `cce_ctl.rs` is the client.
+  `read_command` frames a request (since 2026-10-02): the first line, ended
+  by its newline, the client closing, or a 50 ms pause after some bytes
+  (clients that send neither still work), at most 64 KiB — an overlong one
+  is refused, never cut short and run as the old single 4 KiB `read` did —
+  and a connection silent for 5 s is dropped. A NUL byte is refused (it
+  reached xkbcommon's `CString::new(..).unwrap()` from `shortcut bind`), and
+  `handle_ipc_event` runs each command under `catch_unwind`, since a panic
+  unwinding out of that `extern "C"` callback aborts the whole session.
+  Numbers parse through `parse_finite` (no NaN/inf into pointer or camera
+  math) and injected swipe/pinch steps clamp to `MAX_INJECTED_STEPS`. The
+  status and stream sockets read their subscription line through
+  `read_line_bounded` (total deadline and size cap): a per-read timeout let a
+  byte-a-second client hold the thread that serves every other subscriber.
 - **Status socket** `/tmp/cce-status-{WAYLAND_DISPLAY}.sock` (`status_server.rs`): runs
   on its own thread; a client sends one subscription line (`layout`, `title`,
   `modifiers`, `dismiss`, …) and receives text lines on every

@@ -8,7 +8,7 @@
 // The main loop sends updates through an mpsc channel. The server thread
 // owns the socket and handles all I/O independently of the Wayland event loop.
 
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
@@ -502,18 +502,14 @@ fn status_server_main(rx: mpsc::Receiver<StatusMsg>, wake: Arc<OwnedFd>, display
 }
 
 fn read_subscription(stream: &UnixStream) -> Subscription {
-    let mut reader = std::io::BufReader::new(stream);
-    let mut line = String::new();
-    // Bounded blocking read: a subscriber writes its one line right after
-    // connecting, so this returns at once in practice; the timeout is for a
-    // client that connects and says nothing.
-    stream
-        .set_read_timeout(Some(std::time::Duration::from_millis(200)))
-        .ok();
-    match reader.read_line(&mut line) {
-        Ok(_) => Subscription::from_str(&line),
-        Err(e) => {
-            log::error!("[status] failed to read subscription: {}", e);
+    // A subscriber writes its one line right after connecting, so this
+    // returns at once in practice. The bound is for one that does not: this
+    // thread pushes every status update, so the wait is capped in total time
+    // and size, not per read (`read_line_bounded`).
+    match crate::ipc_server::read_line_bounded(stream, 256, std::time::Duration::from_millis(200)) {
+        Some(line) => Subscription::from_str(&line),
+        None => {
+            log::error!("[status] no subscription line within 200ms / 256 bytes");
             Subscription::Unknown
         }
     }

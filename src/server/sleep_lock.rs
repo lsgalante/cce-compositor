@@ -93,6 +93,7 @@ fn request(socket: &str, command: &str) -> std::io::Result<String> {
     let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.write_all(command.as_bytes())?;
+    stream.write_all(b"\n")?;
     let mut reply = String::new();
     stream.read_to_string(&mut reply)?;
     Ok(reply)

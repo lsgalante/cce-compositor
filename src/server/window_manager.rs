@@ -164,6 +164,18 @@ fn borrowable(saved: &SavedWindowState, program: Option<&str>) -> bool {
 /// `create_restore_placeholders` draws no plate for them: Ubisoft Connect's
 /// stood a minute over the empty desk every login (2026-09-26), waiting for
 /// a window nothing had started.
+/// A control-socket number: `str::parse::<f64>` accepts "NaN", "inf" and
+/// "infinity", which no command means and which would reach pointer and
+/// camera math as positions (cce-remote filters the same for its frames).
+fn parse_finite(s: &str) -> Result<f64, ()> {
+    s.parse::<f64>().ok().filter(|v| v.is_finite()).ok_or(())
+}
+
+/// Most synthetic steps one `pointer-swipe` / `pointer-pinch` may take. The
+/// steps run in one loop on the main thread, so a count like 4000000000 held
+/// the whole session frozen; a real gesture is tens of events.
+const MAX_INJECTED_STEPS: u32 = 1000;
+
 fn relaunchable(cmdline: &str) -> bool {
     !cmdline.trim().is_empty() && !is_windows_path(cmdline)
 }
@@ -5432,7 +5444,7 @@ impl WindowManager {
             }
             "pan-by" => {
                 if parts.len() < 3 { return "error: missing dx or dy\n".to_string(); }
-                if let (Ok(dx), Ok(dy)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                if let (Ok(dx), Ok(dy)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
                     self.desk_pan_x += dx;
                     self.desk_pan_y += dy;
                     if matches!(self.state, WindowManagerState::Idle) {
@@ -5446,7 +5458,7 @@ impl WindowManager {
             }
             "pan-to" => {
                 if parts.len() < 3 { return "error: missing x or y\n".to_string(); }
-                if let (Ok(x), Ok(y)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                if let (Ok(x), Ok(y)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
                     self.desk_pan_x = x;
                     self.desk_pan_y = y;
                     if matches!(self.state, WindowManagerState::Idle) {
@@ -5496,7 +5508,7 @@ impl WindowManager {
             }
             "set-zoom" => {
                 if parts.len() < 2 { return "error: missing zoom factor\n".to_string(); }
-                if let Ok(factor) = parts[1].parse::<f64>() {
+                if let Ok(factor) = parse_finite(parts[1]) {
                     let new_zoom = factor.clamp(0.1, 10.0);
                     let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
                     let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
@@ -5524,7 +5536,7 @@ impl WindowManager {
             }
             "set-coords" => {
                 if parts.len() < 3 { return "error: missing x or y\n".to_string(); }
-                if let (Ok(x), Ok(y)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                if let (Ok(x), Ok(y)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
                     if let Some(seat) = self.first_seat() {
                         if let crate::seat::Focus::Window(fw) = (*seat).focused {
                             (*fw).virtual_x = x;
@@ -5540,7 +5552,7 @@ impl WindowManager {
             "set-coords-of" => {
                 if parts.len() < 4 { return "error: missing app_id, x, or y\n".to_string(); }
                 let app_id_query = parts[1];
-                if let (Ok(x), Ok(y)) = (parts[2].parse::<f64>(), parts[3].parse::<f64>()) {
+                if let (Ok(x), Ok(y)) = (parse_finite(parts[2]), parse_finite(parts[3])) {
                     let mut found = false;
                     for &w in self.windows.iter() {
                         if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
@@ -6253,18 +6265,18 @@ impl WindowManager {
                         self.layout.desktop_cell_color = crate::config::parse_hex_color_rgba(val);
                     }
                     "desktop_grid_scale" | "grid_cell_size" => {
-                        if let Ok(v) = val.parse::<f64>() {
+                        if let Ok(v) = parse_finite(val) {
                             self.layout.desktop_cell_width = v;
                             self.layout.desktop_cell_height = v;
                         }
                     }
                     "grid_cell_width" => {
-                        if let Ok(v) = val.parse::<f64>() {
+                        if let Ok(v) = parse_finite(val) {
                             self.layout.desktop_cell_width = v;
                         }
                     }
                     "grid_cell_height" => {
-                        if let Ok(v) = val.parse::<f64>() {
+                        if let Ok(v) = parse_finite(val) {
                             self.layout.desktop_cell_height = v;
                         }
                     }
@@ -6335,7 +6347,7 @@ impl WindowManager {
                 let key = parts[2];
                 let val = parts[3];
                 if key == "scroll-factor" {
-                    if let Ok(factor) = val.parse::<f64>() {
+                    if let Ok(factor) = parse_finite(val) {
                         if factor < 0.0 {
                             return "error: scroll factor cannot be negative\n".to_string();
                         }
@@ -6372,7 +6384,7 @@ impl WindowManager {
             // (`Cursor::inject_*`), so grabs/ops/focus behave exactly as with hardware.
             "pointer-move-to" => {
                 if parts.len() < 3 { return "error: usage: pointer-move-to <x> <y>\n".to_string(); }
-                if let (Ok(x), Ok(y)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                if let (Ok(x), Ok(y)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
                     self.for_each_cursor(|cursor| cursor.inject_motion_to(x, y));
                     "ok\n".to_string()
                 } else {
@@ -6381,7 +6393,7 @@ impl WindowManager {
             }
             "pointer-move-by" => {
                 if parts.len() < 3 { return "error: usage: pointer-move-by <dx> <dy>\n".to_string(); }
-                if let (Ok(dx), Ok(dy)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                if let (Ok(dx), Ok(dy)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
                     self.for_each_cursor(|cursor| cursor.inject_motion_by(dx, dy));
                     "ok\n".to_string()
                 } else {
@@ -6414,8 +6426,8 @@ impl WindowManager {
                 // them (already sign-flipped), and the view drag undoes that.
                 let finger = parts.iter().any(|p| *p == "finger");
                 let natural = parts.iter().any(|p| *p == "natural");
-                let dy = parts[1].parse::<f64>();
-                let dx = parts.get(2).filter(|p| **p != "finger" && **p != "natural").map(|v| v.parse::<f64>()).unwrap_or(Ok(0.0));
+                let dy = parse_finite(parts[1]);
+                let dx = parts.get(2).filter(|p| **p != "finger" && **p != "natural").map(|v| parse_finite(v)).unwrap_or(Ok(0.0));
                 if let (Ok(dy), Ok(dx)) = (dy, dx) {
                     self.for_each_cursor(|cursor| {
                         cursor.inject_natural = natural;
@@ -6433,7 +6445,7 @@ impl WindowManager {
                 let usage = "error: usage: pointer-swipe <fingers> <dx> <dy> [steps] | begin <fingers> | update <dx> <dy> | end\n";
                 if parts.len() >= 2 && matches!(parts[1], "begin" | "update" | "end") {
                     let stage = parts[1].to_string();
-                    let num = |i: usize| parts.get(i).and_then(|v| v.parse::<f64>().ok());
+                    let num = |i: usize| parts.get(i).and_then(|v| parse_finite(v).ok());
                     let (fingers, dx, dy) = match parts[1] {
                         "begin" => (num(2).map(|f| f as u32).unwrap_or(3), 0.0, 0.0),
                         "update" => match (num(2), num(3)) {
@@ -6448,9 +6460,9 @@ impl WindowManager {
                 }
                 if parts.len() < 4 { return usage.to_string(); }
                 let fingers = parts[1].parse::<u32>();
-                let dx = parts[2].parse::<f64>();
-                let dy = parts[3].parse::<f64>();
-                let steps = parts.get(4).map(|v| v.parse::<u32>()).unwrap_or(Ok(10));
+                let dx = parse_finite(parts[2]);
+                let dy = parse_finite(parts[3]);
+                let steps = parts.get(4).map(|v| v.parse::<u32>()).unwrap_or(Ok(10)).map(|n| n.clamp(1, MAX_INJECTED_STEPS));
                 if let (Ok(fingers), Ok(dx), Ok(dy), Ok(steps)) = (fingers, dx, dy, steps) {
                     self.for_each_cursor(|cursor| cursor.inject_swipe(fingers, dx, dy, steps));
                     "ok\n".to_string()
@@ -6463,15 +6475,15 @@ impl WindowManager {
                 // pointer-pinch begin | update <scale> [rotation] | end   (paced by the caller)
                 if parts.len() < 2 { return "error: usage: pointer-pinch <scale> [rotation] [steps] | begin | update <scale> [rotation] | end\n".to_string(); }
                 if matches!(parts[1], "begin" | "update" | "end") {
-                    let scale = parts.get(2).and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
-                    let rotation = parts.get(3).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                    let scale = parts.get(2).and_then(|v| parse_finite(v).ok()).unwrap_or(1.0);
+                    let rotation = parts.get(3).and_then(|v| parse_finite(v).ok()).unwrap_or(0.0);
                     let stage = parts[1].to_string();
                     self.for_each_cursor(|cursor| cursor.inject_pinch_stage(&stage, scale, rotation));
                     return "ok\n".to_string();
                 }
-                let scale = parts[1].parse::<f64>();
-                let rotation = parts.get(2).map(|v| v.parse::<f64>()).unwrap_or(Ok(0.0));
-                let steps = parts.get(3).map(|v| v.parse::<u32>()).unwrap_or(Ok(10));
+                let scale = parse_finite(parts[1]);
+                let rotation = parts.get(2).map(|v| parse_finite(v)).unwrap_or(Ok(0.0));
+                let steps = parts.get(3).map(|v| v.parse::<u32>()).unwrap_or(Ok(10)).map(|n| n.clamp(1, MAX_INJECTED_STEPS));
                 if let (Ok(scale), Ok(rotation), Ok(steps)) = (scale, rotation, steps) {
                     self.for_each_cursor(|cursor| cursor.inject_pinch(scale, rotation, steps));
                     "ok\n".to_string()
@@ -6522,7 +6534,7 @@ impl WindowManager {
                 if parts.len() < 4 {
                     return "error: usage: place-next <app_id> <x> <y>\n".to_string();
                 }
-                let (x, y) = match (parts[2].parse::<f64>(), parts[3].parse::<f64>()) {
+                let (x, y) = match (parse_finite(parts[2]), parse_finite(parts[3])) {
                     (Ok(x), Ok(y)) => (x, y),
                     _ => return "error: x/y must be numbers\n".to_string(),
                 };
@@ -6542,7 +6554,7 @@ impl WindowManager {
                 if parts.len() < 4 {
                     return "error: usage: place-next-cell <app_id> <x> <y>\n".to_string();
                 }
-                let (x, y) = match (parts[2].parse::<f64>(), parts[3].parse::<f64>()) {
+                let (x, y) = match (parse_finite(parts[2]), parse_finite(parts[3])) {
                     (Ok(x), Ok(y)) => (x, y),
                     _ => return "error: x/y must be numbers\n".to_string(),
                 };
@@ -7005,7 +7017,18 @@ unsafe extern "C" fn handle_ipc_event(fd: std::os::raw::c_int, _mask: u32, data:
             // reply.
             (*wm).pending_ipc_reply = Some(req.reply_tx);
             (*wm).pending_ipc_peer_pid = req.peer_pid;
-            let reply = (*wm).process_ipc_command(&req.command);
+            // A panic here would unwind out of this extern "C" callback,
+            // which aborts the process — the whole desktop — over one bad
+            // command. Contain it to the command: the caller gets an error.
+            let reply = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (*wm).process_ipc_command(&req.command)
+            })) {
+                Ok(reply) => reply,
+                Err(_) => {
+                    log::error!("[ipc] command panicked and was abandoned: {:?}", req.command);
+                    "error: the compositor failed running that command\n".to_string()
+                }
+            };
             (*wm).pending_ipc_peer_pid = 0;
             if let Some(tx) = (*wm).pending_ipc_reply.take() {
                 let _ = tx.send(reply);
@@ -7920,6 +7943,15 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8(out.stdout).unwrap().split('\0').filter(|s| !s.is_empty()).map(String::from).collect()
+    }
+
+    #[test]
+    fn control_socket_numbers_must_be_finite() {
+        assert_eq!(parse_finite("1.5"), Ok(1.5));
+        assert_eq!(parse_finite("-20"), Ok(-20.0));
+        for bad in ["NaN", "nan", "inf", "-inf", "infinity", "1e999", "x", ""] {
+            assert!(parse_finite(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

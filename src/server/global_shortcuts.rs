@@ -93,6 +93,12 @@ pub fn parse_trigger(s: &str) -> Result<Trigger, String> {
         };
         mods |= bit;
     }
+    // xkbcommon builds a CString from the name and unwraps it, so a NUL
+    // panics. The control socket refuses NUL already; this keeps the parser
+    // safe on its own.
+    if key.contains('\0') {
+        return Err(format!("unknown key {key:?}"));
+    }
     let keysym: u32 = xkbcommon::xkb::keysym_from_name(key, xkbcommon::xkb::KEYSYM_CASE_INSENSITIVE).into();
     if keysym == 0 {
         return Err(format!("unknown key {key:?}"));
@@ -198,6 +204,13 @@ pub fn ipc(wm: &mut WindowManager, args: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_nul_in_the_key_name_is_an_error_not_a_panic() {
+        // xkbcommon's keysym_from_name unwraps a CString of the name; this
+        // used to abort the compositor from `shortcut bind`.
+        assert!(parse_trigger("CTRL+a\0b").is_err());
+    }
 
     #[test]
     fn parses_spec_triggers() {
