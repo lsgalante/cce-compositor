@@ -267,8 +267,13 @@ default instance is "default"; CCE_SHADOW_INSTANCE sets it for a whole shell.
   env                 print the environment as shell exports
 
 Do not run inside the shadow: cce-authenticator (claims the PolicyKit D-Bus
-name), cce-secrets (Secret Service), cce-remote (binds 0.0.0.0:17017). Every
-other cce app is safe; cce-cloud's daemon socket is already display-keyed.
+name), cce-remote (binds 0.0.0.0:17017). Every other cce app is safe;
+cce-cloud's daemon socket is already display-keyed.
+
+cce-secrets runs, but browse only: the shadow shares the live session bus and
+XDG_RUNTIME_DIR, so it lists and can EDIT the live keyring. To test one-time
+codes, point CCE_KEYRING_SYNC_SOCK at a stand-in socket (cce-secrets/
+KEYRING-SYNC.md, "One-time codes in cce-secrets").
 EOF
 }
 
