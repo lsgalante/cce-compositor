@@ -211,17 +211,35 @@ fn plain_cmdline(cmdline: &str) -> bool {
 /// existed is relaunched only when its cmdline is plain; one with shell
 /// characters is skipped (its geometry still applies when the app is
 /// started by hand, and the next save records its argv).
+///
+/// Chromium and every Electron app rewrite their own `/proc/<pid>/cmdline`
+/// to one space-joined string, so their argv is saved as a single element
+/// holding the whole command line. Quoted as one word, that names no file:
+/// Claude Desktop and Chrome stopped coming back at login the day argv
+/// quoting landed (2026-10-02, `sh: ... No such file or directory`). A
+/// lone argv[0] with whitespace that is not an existing file is therefore
+/// read as a joined command line, under the same plain-only rule as a
+/// legacy entry.
 fn restore_command(w: &SavedWindowState) -> Option<String> {
     if !relaunchable(&w.cmdline) {
         return None;
     }
-    match &w.argv {
+    match w.argv.as_deref() {
+        Some([joined]) if is_rewritten_cmdline(joined) => {
+            plain_cmdline(joined).then(|| joined.clone())
+        }
         Some(argv) if !argv.is_empty() => {
             Some(argv.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" "))
         }
         _ if plain_cmdline(&w.cmdline) => Some(w.cmdline.clone()),
         _ => None,
     }
+}
+
+/// Whether a one-element argv is a process's rewritten, space-joined
+/// command line rather than a program whose path contains a space.
+fn is_rewritten_cmdline(arg0: &str) -> bool {
+    arg0.contains(char::is_whitespace) && !std::path::Path::new(arg0).exists()
 }
 
 /// Whether `s` starts with a Windows drive path (`C:\` or `C:/`) — the
@@ -7984,6 +8002,30 @@ mod tests {
         }
         // Wine's Windows paths never relaunch, argv or not.
         assert!(restore_command(&entry_with(r"C:\x.exe", Some(&[r"C:\x.exe"]))).is_none());
+    }
+
+    #[test]
+    fn a_rewritten_cmdline_relaunches_as_its_words() {
+        // Chromium/Electron leave one space-joined string in /proc cmdline;
+        // it must come back as three words, not one missing program name.
+        let joined = "/usr/lib/claude-desktop/claude-desktop --ozone-platform=wayland --password-store=gnome-libsecret";
+        let cmd = restore_command(&entry_with(joined, Some(&[joined]))).unwrap();
+        assert_eq!(
+            shell_argv(&cmd),
+            ["/usr/lib/claude-desktop/claude-desktop", "--ozone-platform=wayland", "--password-store=gnome-libsecret"]
+        );
+        // Shell characters in a joined line are still never run.
+        let url = "/opt/google/chrome/chrome https://a/?x=1&y=2";
+        assert!(restore_command(&entry_with(url, Some(&[url]))).is_none());
+        // A real program whose path holds a space stays one quoted word.
+        let dir = std::env::temp_dir().join(format!("cce restore test {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prog = dir.join("my app");
+        std::fs::write(&prog, "").unwrap();
+        let prog = prog.to_str().unwrap();
+        let cmd = restore_command(&entry_with(prog, Some(&[prog]))).unwrap();
+        assert_eq!(shell_argv(&cmd), [prog]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     const UPC: &str = r"C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\upc.exe";
