@@ -203,6 +203,32 @@ udev_rules() {
         -not -path "$WS/target/*" 2>/dev/null
 }
 
+# The root-bound files whose names are not cce's own, one "!! why: path" per
+# line; empty when all are. A PAM stack must be named after the crate that
+# ships it (<crate> or <crate>-<word>), so no crate can replace a system
+# stack or another crate's; a system unit must be cce-*; a udev rule
+# NN-cce-*.rules. Lowercase, digits and dashes only, which also refuses an
+# editor's backup (`cce-lock~`, `.cce-lock.swp`).
+system_artifact_misnamed() {
+    local file name crate
+    while read -r file; do
+        name=$(basename "$file")
+        crate=$(basename "$(dirname "$(dirname "$file")")")
+        [[ "$name" =~ ^${crate}(-[a-z0-9]+)*$ ]] \
+            || printf '!! PAM stack not named after its crate (%s): %s\n' "$crate" "${file#"$WS"/}"
+    done < <(pam_files)
+    while read -r file; do
+        name=$(basename "$file")
+        [[ "$name" =~ ^cce(-[a-z0-9]+)+@?\.(service|timer|path|socket)$ ]] \
+            || printf '!! system unit not named cce-*: %s\n' "${file#"$WS"/}"
+    done < <(system_units)
+    while read -r file; do
+        name=$(basename "$file")
+        [[ "$name" =~ ^[0-9][0-9]-cce(-[a-z0-9]+)+\.rules$ ]] \
+            || printf '!! udev rule not named NN-cce-*.rules: %s\n' "${file#"$WS"/}"
+    done < <(udev_rules)
+}
+
 # Helper scripts a crate ships in its own scripts/ dir. Not just this crate's:
 # a script belongs in the repo whose code it is about (cce-keyring-selftest
 # reports on the keyring chain, so it lives with it in cce-display-manager), and
@@ -693,6 +719,18 @@ cmd_install_system() {
         esac
         shift
     done
+    # Everything below lands in /etc as root, discovered from whatever the
+    # crates' pam/, udev/ and unit files hold. Until 2026-10-02 nothing
+    # checked a name: a pam/system-auth or pam/sudo in any crate, or an
+    # editor's backup of a real stack, would have replaced a system file
+    # with no prompt beyond the one sudo. Names are now held to what cce
+    # ships, and anything else stops the run before a root command is
+    # planned.
+    local bad; bad=$(system_artifact_misnamed)
+    if [ -n "$bad" ]; then
+        printf '%s\n' "$bad" >&2
+        die "install-system refuses files not named as cce's own (see above); rename or remove them"
+    fi
     local stamp; stamp=$(date +%F)
     local plan="set -e"
     # Append one root command to the plan, each word shell-quoted.
