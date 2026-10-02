@@ -486,7 +486,7 @@ dependencies = [
 [[package]]
 name = "cce-window-manager"
 version = "0.1.0"
-source = "git+https://github.com/lsgalante/cce-window-manager.git?rev=1b918a5a52ec5b23b5abdc8162b92038ad7cf0a6#1b918a5a52ec5b23b5abdc8162b92038ad7cf0a6"
+source = "git+https://github.com/lsgalante/cce-window-manager.git?rev=52a2d8e9ac9ceb7b073a560d84332f53d789b6b5#52a2d8e9ac9ceb7b073a560d84332f53d789b6b5"
 dependencies = [
  "log",
  "serde",
