@@ -63,6 +63,8 @@ pub mod idle_inhibit_manager;
 pub mod idle;
 #[path = "server/lock_manager.rs"]
 pub mod lock_manager;
+#[path = "server/sleep_lock.rs"]
+pub mod sleep_lock;
 #[path = "server/input_device.rs"]
 pub mod input_device;
 #[path = "server/pointer_constraint.rs"]

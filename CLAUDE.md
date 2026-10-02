@@ -790,6 +790,26 @@ then `ccectl outputs` reads `enabled=false`, then any injected input reads
 `true`). `ccectl idle` prints the state; `idle wake|sleep|display on|off` act
 now. Untested in a shadow, which has no session: the resume wake.
 
+**Every sleep locks first** (since 2026-10-01; before, nothing ever started
+the lock screen and a laptop woke to its desktop). `LockManager::lock_now` locks
+from the compositor's side with no client yet — the normal tree off, each output
+rendering the blank locked tree — and then starts `cce-lock` through the
+respawn timer, which binds via `handle_new_lock`'s already-locked branch; a
+locker that never comes leaves the session locked, the crash path's guarantee.
+The idle sleep and `ccectl idle sleep` go through `IdleManager::lock_then_sleep`
+(sleep on `on_locked`, or after `LOCK_BEFORE_SLEEP_MS` regardless; activity in
+between calls the sleep off and keeps the lock). logind's own sleeps — lid,
+power key, `systemctl suspend` — are `sleep_lock.rs`: a thread holding a
+`delay` sleep inhibitor that answers `PrepareForSleep(true)` with `ccectl
+lock` (whose reply waits for `send_locked`) and then lets logind go. Real seats
+only; a shadow has no session and starts no thread, so test `ccectl lock` and
+`idle sleep` there (give the shadow a harmless `idle { sleep_command }` first —
+its seeded config's default is `systemctl suspend`, the REAL machine) and the
+logind half with `cargo test --lib sleep_lock -- --ignored`. While locked,
+`handle_group_key` runs no binding but VT switches and config keybinds on
+volume/brightness/media keys (`allowed_while_locked`), and no input-method
+grab; every other key goes to the lock surface.
+
 Persistent window state is saved to **`~/.local/state/cce/state.json`**
 (`XDG_STATE_HOME/cce/state.json`) on shutdown and restored on start
 (`save_state` / `load_state` / `spawn_restored_windows`). A window's

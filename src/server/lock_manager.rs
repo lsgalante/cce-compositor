@@ -39,6 +39,11 @@ pub struct LockManager {
     /// Respawns since the last locker that got as far as drawing. Indexes
     /// [`RESPAWN_BACKOFF_MS`]; past its end, we stop trying.
     pub respawn_attempts: usize,
+    /// Replies owed to `ccectl lock` callers (the lock-before-sleep thread
+    /// among them), sent once the session is `Locked`. `Option` because the
+    /// struct is zero-initialised: `None` is the null niche, an empty `Vec`
+    /// is not.
+    pub lock_waiters: Option<Vec<std::sync::mpsc::Sender<String>>>,
     pub server: *mut Server,
 
     pub new_lock: ffi::wl_listener,
@@ -65,6 +70,7 @@ impl LockManager {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.server = server;
         self.state = LockState::Unlocked;
+        std::ptr::write(&mut self.lock_waiters, None);
 
         let wlr_manager = ffi::wlr_session_lock_manager_v1_create((*server).wl_server);
         if wlr_manager.is_null() {
@@ -186,7 +192,77 @@ impl LockManager {
             ffi::wlr_session_lock_v1_send_locked(self.lock);
         }
         self.state = LockState::Locked;
+        for tx in self.lock_waiters.take().unwrap_or_default() {
+            let _ = tx.send("ok locked\n".to_string());
+        }
+        (*self.server).idle.on_locked();
         (*self.server).wm.dirty_windowing();
+    }
+
+    /// Lock the session from the compositor's side, with no lock client yet.
+    ///
+    /// Until 2026-10-01 only a client could lock — the protocol's `lock()` —
+    /// and nothing ever started one: the idle timeout and a lid close both
+    /// suspended an UNLOCKED session, so whoever opened the lid had the
+    /// desktop. Now the compositor hides the desktop at once (the normal tree
+    /// off, every output rendering the blank locked tree) and then starts
+    /// `cce-lock`, which binds through `handle_new_lock`'s "already locked
+    /// session" branch and puts the prompt up. This is the state a crashed
+    /// locker leaves behind, so the respawn timer is what starts it, with the
+    /// same backoff and the same fail-closed end: a locker that never comes
+    /// leaves the session locked, not open.
+    ///
+    /// No-op when the session is already locked or locking.
+    pub unsafe fn lock_now(&mut self) {
+        if self.state != LockState::Unlocked {
+            return;
+        }
+        log::info!("locking the session (compositor-initiated)");
+        self.state = LockState::WaitingForBlank;
+        let scene = &(*self.server).scene;
+        ffi::wlr_scene_node_set_enabled(scene.locked_tree as *mut ffi::wlr_scene_node, true);
+        ffi::wlr_scene_node_set_enabled(scene.normal_tree as *mut ffi::wlr_scene_node, false);
+
+        let seats_head = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*seats_head).next;
+        while curr != seats_head {
+            let next = (*curr).next;
+            let seat = crate::container_of!(curr, crate::seat::Seat, link);
+            (*seat).focus(Focus::None);
+            curr = next;
+        }
+
+        // Each enabled output reports `Blanked` after its next frame, and the
+        // last of them completes the lock in `maybe_lock`. With none enabled
+        // (the idle timeout darkened them all) there is nothing to wait for,
+        // and this call completes it now.
+        let outputs_head = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let mut curr = (*outputs_head).next;
+        while curr != outputs_head {
+            let next = (*curr).next;
+            let output = crate::container_of!(curr, crate::output::Output, link);
+            if !(*output).wlr_output.is_null() && ffi::river_wlr_output_get_enabled((*output).wlr_output) {
+                ffi::wlr_output_schedule_frame((*output).wlr_output);
+            }
+            curr = next;
+        }
+        (*self.server).wm.dirty_windowing();
+        self.maybe_lock();
+
+        self.respawn_attempts = 0;
+        if !self.respawn_timer.is_null() {
+            ffi::wl_event_source_timer_update(self.respawn_timer, 1);
+        }
+    }
+
+    /// Answer `tx` once the session is locked: now if it is, else from
+    /// `send_locked`.
+    pub fn reply_when_locked(&mut self, tx: std::sync::mpsc::Sender<String>) {
+        if self.state == LockState::Locked {
+            let _ = tx.send("ok locked\n".to_string());
+        } else {
+            self.lock_waiters.get_or_insert_with(Vec::new).push(tx);
+        }
     }
 
     /// Bring a locker back after the one holding the session went away
@@ -390,7 +466,7 @@ unsafe extern "C" fn handle_respawn_timeout(data: *mut std::ffi::c_void) -> std:
     }
 
     let cmd = cce_lock_cmd();
-    log::warn!("respawning the locker: {}", cmd);
+    log::info!("starting the locker: {}", cmd);
     match nix::unistd::fork() {
         Ok(nix::unistd::ForkResult::Child) => {
             crate::process::cleanup_child();
@@ -482,6 +558,8 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
 
     manager.state = LockState::Unlocked;
     log::info!("session unlocked");
+    // Nobody is waiting for a lock that is over.
+    manager.lock_waiters = None;
 
     // The session is going away legitimately: no respawn is wanted, and the
     // next lock starts with a full budget.

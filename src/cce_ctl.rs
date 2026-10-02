@@ -65,8 +65,9 @@ fn usage(name: &str, to_stderr: bool) {
     print("  windows [--json]           # list windows; --json emits one JSON object per line");
     print("  outputs [--json]           # list outputs: mode, scale, logical size, physical mm, px/mm, and where the mm came from");
     print("  idle [status]              # idle timeouts in force, idle time, inhibited and by whom (app ids), displays_off/sleeping, and the power plan's override of each (plan_*)");
-    print("  idle wake|sleep|display on|display off   # act now: wake darkened outputs, run the sleep command, darken/wake outputs");
+    print("  idle wake|sleep|display on|display off   # act now: wake darkened outputs, lock, then run the sleep command; darken/wake outputs");
     print("  idle timeouts <display_off_s> <sleep_s>  # set the config timeouts live (0 = off); config.kdl `idle { }` on reload; a Power-plan file under /run/cce overrides either while it exists");
+    print("  lock                       # lock the session now (cce-lock takes the prompt); replies `ok locked` once every output shows the locked scene");
     print("  status-hide-mode [true|false]");
     print("  adjust-position-mode [true|false|query]");
     print("  exit [force]               # log out; waits for windows to close, cancels if one stays (a save prompt); force skips the wait");

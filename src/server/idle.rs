@@ -36,6 +36,13 @@ use crate::output::{Output, OutputStateValue};
 
 pub const DEFAULT_SLEEP_COMMAND: &str = "systemctl suspend";
 
+/// How long the sleep waits for the session to finish locking before it
+/// goes ahead anyway. The desktop is hidden from the moment the lock starts
+/// (`LockManager::lock_now`), so a lock still settling at that point is a
+/// blank screen, not an open one; staying awake forever on a wedged output
+/// would be the worse failure.
+const LOCK_BEFORE_SLEEP_MS: i32 = 3000;
+
 /// The `idle { }` block, in seconds; 0 disables a timeout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdleConfig {
@@ -136,6 +143,10 @@ pub struct IdleManager {
     displays_off: bool,
     /// The sleep command was spawned; cleared by the next activity.
     sleeping: bool,
+    /// A sleep is waiting for the session lock to complete (`on_locked`),
+    /// or for `lock_fallback_timer`, whichever comes first.
+    sleep_after_lock: bool,
+    lock_fallback_timer: *mut ffi::wl_event_source,
     /// Monotonic ms of the last (re)arm and of the last activity.
     armed_at_ms: u64,
     last_activity_ms: u64,
@@ -170,6 +181,18 @@ impl IdleManager {
             self.display_timer = std::ptr::null_mut();
             return Err("Failed to create idle sleep timer");
         }
+        self.lock_fallback_timer = ffi::wl_event_loop_add_timer(
+            event_loop,
+            Some(handle_lock_fallback),
+            self as *mut IdleManager as *mut _,
+        );
+        if self.lock_fallback_timer.is_null() {
+            ffi::wl_event_source_remove(self.display_timer);
+            ffi::wl_event_source_remove(self.sleep_timer);
+            self.display_timer = std::ptr::null_mut();
+            self.sleep_timer = std::ptr::null_mut();
+            return Err("Failed to create idle lock-fallback timer");
+        }
         self.plan_timer = ffi::wl_event_loop_add_timer(
             event_loop,
             Some(handle_plan_poll),
@@ -195,6 +218,7 @@ impl IdleManager {
         self.inhibitors = None;
         self.displays_off = false;
         self.sleeping = false;
+        self.sleep_after_lock = false;
         self.armed_at_ms = 0;
         self.last_activity_ms = now_ms();
 
@@ -225,6 +249,10 @@ impl IdleManager {
         if !self.plan_timer.is_null() {
             ffi::wl_event_source_remove(self.plan_timer);
             self.plan_timer = std::ptr::null_mut();
+        }
+        if !self.lock_fallback_timer.is_null() {
+            ffi::wl_event_source_remove(self.lock_fallback_timer);
+            self.lock_fallback_timer = std::ptr::null_mut();
         }
     }
 
@@ -306,6 +334,13 @@ impl IdleManager {
             self.set_displays(true);
         }
         self.sleeping = false;
+        // Someone is here: a sleep still waiting for its lock is called off.
+        // The lock itself stands.
+        if self.sleep_after_lock {
+            self.sleep_after_lock = false;
+            ffi::wl_event_source_timer_update(self.lock_fallback_timer, 0);
+            log::info!("idle: activity while locking; the sleep is off, the lock stays");
+        }
         self.rearm(changed);
     }
 
@@ -416,6 +451,36 @@ impl IdleManager {
         }
     }
 
+    /// Lock the session, then sleep once it is locked.
+    ///
+    /// Every compositor-initiated sleep goes through here (the idle timeout,
+    /// `ccectl idle sleep`): a sleep used to run with the session unlocked,
+    /// so the desktop was there for whoever woke the machine. A lid close is
+    /// logind's sleep, not ours, and is covered by `sleep_lock`.
+    pub unsafe fn lock_then_sleep(&mut self) {
+        if self.sleeping || self.sleep_after_lock {
+            return;
+        }
+        let lock = &mut (*self.server).lock_manager;
+        lock.lock_now();
+        if lock.state == crate::lock_manager::LockState::Locked {
+            self.sleep_now();
+            return;
+        }
+        log::info!("idle: locking before sleep");
+        self.sleep_after_lock = true;
+        ffi::wl_event_source_timer_update(self.lock_fallback_timer, LOCK_BEFORE_SLEEP_MS);
+    }
+
+    /// The session finished locking (`LockManager::send_locked`).
+    pub unsafe fn on_locked(&mut self) {
+        if self.sleep_after_lock {
+            self.sleep_after_lock = false;
+            ffi::wl_event_source_timer_update(self.lock_fallback_timer, 0);
+            self.sleep_now();
+        }
+    }
+
     /// `ccectl idle` report.
     pub fn status(&self) -> String {
         let idle_s = now_ms().saturating_sub(self.last_activity_ms) / 1000;
@@ -451,7 +516,7 @@ impl IdleManager {
                 "ok\n".to_string()
             }
             ["sleep"] => {
-                self.sleep_now();
+                self.lock_then_sleep();
                 "ok\n".to_string()
             }
             ["timeouts", display, sleep] => {
@@ -505,6 +570,16 @@ unsafe extern "C" fn handle_sleep_timeout(data: *mut std::ffi::c_void) -> std::o
     let idle = &mut *(data as *mut IdleManager);
     if !idle.inhibited && !idle.sleeping {
         log::info!("idle: sleep timeout reached");
+        idle.lock_then_sleep();
+    }
+    0
+}
+
+unsafe extern "C" fn handle_lock_fallback(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let idle = &mut *(data as *mut IdleManager);
+    if idle.sleep_after_lock {
+        log::warn!("idle: the lock did not complete in {}ms; sleeping anyway (the desktop is already hidden)", LOCK_BEFORE_SLEEP_MS);
+        idle.sleep_after_lock = false;
         idle.sleep_now();
     }
     0

@@ -67,7 +67,7 @@ pub fn new_wake_fd() -> std::io::Result<Arc<OwnedFd>> {
     Ok(Arc::new(unsafe { OwnedFd::from_raw_fd(raw) }))
 }
 
-fn get_ipc_socket_path(display_socket: Option<&str>) -> String {
+pub fn get_ipc_socket_path(display_socket: Option<&str>) -> String {
     if let Some(display) = display_socket {
         format!("/tmp/cce-{}.sock", display)
     } else {
@@ -167,8 +167,13 @@ fn handle_client(mut stream: UnixStream, tx: IpcSender) {
                 // spell — NVIDIA recompiles shaders on the way) has been
                 // measured over a second. Timing that out would report
                 // failure for a capture that lands.
+                // `lock` answers once the session IS locked: a frame on every
+                // output plus a locker starting, and the lock-before-sleep
+                // thread holds logind's sleep (5s at most) on that reply.
                 let timeout = if cmd.starts_with("screenshot") {
                     std::time::Duration::from_secs(5)
+                } else if cmd == "lock" {
+                    std::time::Duration::from_secs(4)
                 } else {
                     std::time::Duration::from_millis(1000)
                 };

@@ -280,6 +280,38 @@ impl KeyboardGroup {
     }
 }
 
+fn is_vt_switch(keysym: u32) -> bool {
+    (ffi::XKB_KEY_XF86Switch_VT_1..=ffi::XKB_KEY_XF86Switch_VT_12).contains(&keysym)
+}
+
+/// The keys that still act while the session is locked. Everything else —
+/// every config keybind (close window, spawn, reload), portal shortcut,
+/// client-registered xkb binding and input-method grab — goes to the lock
+/// screen instead. Until 2026-10-01 nothing here asked about the lock, so at
+/// the lock screen super+q closed the focused window behind it and any
+/// `spawn` bind ran. What stays: switching VTs (a builtin), and a config
+/// keybind on a volume, brightness or media key, the controls a locked
+/// laptop still needs — the same set other compositors bind `--locked`.
+fn allowed_while_locked(keysym: u32) -> bool {
+    is_vt_switch(keysym)
+        || matches!(
+            keysym,
+            ffi::XKB_KEY_XF86AudioRaiseVolume
+                | ffi::XKB_KEY_XF86AudioLowerVolume
+                | ffi::XKB_KEY_XF86AudioMute
+                | ffi::XKB_KEY_XF86AudioMicMute
+                | ffi::XKB_KEY_XF86AudioPlay
+                | ffi::XKB_KEY_XF86AudioPause
+                | ffi::XKB_KEY_XF86AudioStop
+                | ffi::XKB_KEY_XF86AudioNext
+                | ffi::XKB_KEY_XF86AudioPrev
+                | ffi::XKB_KEY_XF86MonBrightnessUp
+                | ffi::XKB_KEY_XF86MonBrightnessDown
+                | ffi::XKB_KEY_XF86KbdBrightnessUp
+                | ffi::XKB_KEY_XF86KbdBrightnessDown
+        )
+}
+
 unsafe fn handle_builtin_binding(seat: *mut Seat, keysym: u32, modifiers: u32) -> bool {
     match keysym {
         ffi::XKB_KEY_XF86Switch_VT_1..=ffi::XKB_KEY_XF86Switch_VT_12 => {
@@ -398,6 +430,9 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
     } else {
         let xkb_keycode = (*event).keycode + 8;
         let modifiers = ffi::wlr_keyboard_get_modifiers(&mut group.wlr_keyboard);
+        // While the session is locked (or locking) a key is the lock
+        // screen's: see `allowed_while_locked` for the few that still act.
+        let locked = (*(*group.seat).server).lock_manager.state != crate::lock_manager::LockState::Unlocked;
         
         let mut matched_builtin = false;
         let mut syms_ptr: *const ffi::xkb_keysym_t = std::ptr::null();
@@ -407,6 +442,9 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             let syms = std::slice::from_raw_parts(syms_ptr, num_syms as usize);
             for &sym in syms {
                 log::debug!("  keysym={:#x}", sym);
+                if locked && !is_vt_switch(sym) {
+                    continue;
+                }
                 if handle_builtin_binding(group.seat, sym, modifiers) {
                     matched_builtin = true;
                     break;
@@ -416,13 +454,21 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
 
         if matched_builtin {
             KeyConsumer::Builtin
-        } else if let Some(kb) = match_cce_keybind(&(*(*group.seat).server).wm, xkb_keycode, modifiers, xkb_state) {
+        } else if let Some(kb) = match_cce_keybind(&(*(*group.seat).server).wm, xkb_keycode, modifiers, xkb_state)
+            .filter(|kb| !locked || allowed_while_locked(kb.keysym))
+        {
             log::debug!("matched CCE monolithic keybind: {:?}", kb);
             KeyConsumer::CceBinding(kb)
-        } else if let Some((session, id)) = match_portal_shortcut(&(*(*group.seat).server).wm, xkb_keycode, modifiers, xkb_state) {
+        } else if let Some((session, id)) = (!locked)
+            .then(|| match_portal_shortcut(&(*(*group.seat).server).wm, xkb_keycode, modifiers, xkb_state))
+            .flatten()
+        {
             log::debug!("matched portal shortcut {} {}", session, id);
             KeyConsumer::PortalShortcut { session, id }
-        } else if let Some(binding) = (*group.seat).match_xkb_binding(xkb_keycode, &mut group.wlr_keyboard) {
+        } else if let Some(binding) = (!locked)
+            .then(|| (*group.seat).match_xkb_binding(xkb_keycode, &mut group.wlr_keyboard))
+            .flatten()
+        {
             log::debug!("matched xkb binding");
             (*group.seat).xkb_bindings_seat.ensure_next_key_eaten = false;
             KeyConsumer::Binding(if (*binding).sent_pressed {
@@ -449,7 +495,8 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             } else {
                 KeyConsumer::Focus
             }
-        } else if !group.get_input_method_grab().is_null() {
+        } else if !locked && !group.get_input_method_grab().is_null() {
+            // Never while locked: an input method would read the password.
             KeyConsumer::ImGrab
         } else {
             KeyConsumer::Focus
@@ -649,4 +696,35 @@ unsafe extern "C" fn handle_group_modifiers(listener: *mut ffi::wl_listener, _da
     (*(*group.seat).server).wm.refresh_adjust_held();
 
     group.send_state();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_locked_session_keeps_only_vt_switching_and_the_media_keys() {
+        for sym in [
+            ffi::XKB_KEY_XF86Switch_VT_1,
+            ffi::XKB_KEY_XF86Switch_VT_12,
+            ffi::XKB_KEY_XF86AudioRaiseVolume,
+            ffi::XKB_KEY_XF86AudioMute,
+            ffi::XKB_KEY_XF86MonBrightnessDown,
+        ] {
+            assert!(allowed_while_locked(sym), "{sym:#x} should act while locked");
+        }
+        // The keys a bind like super+q or super+d is made of, and media-range
+        // keys that launch things.
+        for sym in [
+            ffi::XKB_KEY_q,
+            ffi::XKB_KEY_d,
+            ffi::XKB_KEY_Return,
+            ffi::XKB_KEY_Escape,
+            ffi::XKB_KEY_XF86Calculator,
+            ffi::XKB_KEY_XF86WWW,
+            ffi::XKB_KEY_XF86PowerOff,
+        ] {
+            assert!(!allowed_while_locked(sym), "{sym:#x} must go to the lock screen");
+        }
+    }
 }

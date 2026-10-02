@@ -1789,6 +1789,10 @@ impl WindowManager {
 
     pub unsafe fn start_ipc(&mut self, display_socket: Option<String>) {
         if self.ipc_rx.is_none() {
+            // Lock before logind's sleeps (lid, power key) — a real seat only.
+            if !(*self.server).session.is_null() {
+                crate::sleep_lock::spawn(display_socket.clone());
+            }
             let (rx, wake) = crate::ipc_server::spawn_ipc_server(display_socket);
             let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
             self.ipc_source = ffi::wl_event_loop_add_fd(
@@ -5957,6 +5961,21 @@ impl WindowManager {
                 "ok\n".to_string()
             }
             "idle" => unsafe { (*self.server).idle.ipc(&parts[1..]) },
+            // Lock the session (`LockManager::lock_now`). The reply waits for
+            // the lock to complete, which is what the lock-before-sleep
+            // thread (`sleep_lock`) holds logind's sleep for: `ok locked`
+            // once every output shows the locked scene.
+            "lock" => unsafe {
+                let lock = &mut (*self.server).lock_manager;
+                lock.lock_now();
+                match self.pending_ipc_reply.take() {
+                    Some(tx) => {
+                        lock.reply_when_locked(tx);
+                        String::new()
+                    }
+                    None => "ok\n".to_string(),
+                }
+            },
             // Live key repeat for every hardware keyboard, like `idle
             // timeouts`: it lasts until the next config load, which puts
             // `input { repeat_rate repeat_delay }` back.

@@ -449,6 +449,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "xkbcommon",
+ "zbus",
 ]
 
 [[package]]
