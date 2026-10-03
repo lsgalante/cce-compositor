@@ -14,6 +14,14 @@ pub struct XdgPopup {
     /// from here, because wlroots wants the unconstrain box in the root
     /// toplevel surface's coordinates, not the immediate parent's.
     pub root_tree: *mut ffi::wlr_scene_tree,
+    /// The server, found once at creation through the root's scene node —
+    /// a destroyed popup's own tree may already be gone when its destroy
+    /// signal runs, so nothing can be looked up then. Null for a root that
+    /// is neither a window nor a shell surface.
+    pub server: *mut crate::server::Server,
+    /// Where the popup stood and how big it was at its last commit, layout
+    /// coordinates: to tell a map, a move or a resize.
+    pub last_box: (i32, i32, i32, i32),
 
     pub destroy: ffi::wl_listener,
     pub commit: ffi::wl_listener,
@@ -51,6 +59,8 @@ impl XdgPopup {
             tree,
             capture_tree,
             root_tree: root,
+            server: tree_server(root),
+            last_box: (0, 0, 0, 0),
             destroy: std::mem::zeroed(),
             commit: std::mem::zeroed(),
             new_popup: std::mem::zeroed(),
@@ -78,8 +88,25 @@ impl XdgPopup {
     }
 }
 
+/// A popup coming, going, moving or changing size under a pointer that is
+/// standing still changes what is under it, and nothing else would say so:
+/// wlroots moves pointer focus on MOTION. So a menu closed under the pointer
+/// left the window beneath it without focus until the pointer moved — the
+/// designer's network menu turning into its Add Node list, a swipe back on
+/// the list going nowhere — and a menu opened under it took no focus either.
+/// The same deferred re-evaluation a toplevel's commit asks for when its
+/// mapping moves (`InputManager::schedule_pointer_refresh`), coalesced and
+/// run once the scene has caught up.
+unsafe fn refresh_pointer_under(popup: *mut XdgPopup) {
+    let server = (*popup).server;
+    if !server.is_null() {
+        (*server).input_manager.schedule_pointer_refresh();
+    }
+}
+
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let popup = crate::container_of!(listener, XdgPopup, destroy);
+    refresh_pointer_under(popup);
 
     wl_listener_remove(&mut (*popup).destroy);
     wl_listener_remove(&mut (*popup).commit);
@@ -97,6 +124,33 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         return;
     }
     update_blur(popup, base_surface);
+    // Mapped (its first buffer), moved or resized: what is under the
+    // pointer changed. Not on every commit — a refresh sends the client a
+    // motion, and an animating menu commits every frame.
+    let surface = ffi::river_wlr_xdg_surface_get_surface(base_surface);
+    let (mut lx, mut ly) = (0, 0);
+    ffi::wlr_scene_node_coords((*popup).tree as *mut ffi::wlr_scene_node, &mut lx, &mut ly);
+    let at = (lx, ly, ffi::river_wlr_surface_get_width(surface), ffi::river_wlr_surface_get_height(surface));
+    if at != (*popup).last_box {
+        (*popup).last_box = at;
+        refresh_pointer_under(popup);
+    }
+}
+
+/// The server a scene tree belongs to, through its node data — a window's
+/// or a shell surface's. Null for any other tree.
+unsafe fn tree_server(tree: *mut ffi::wlr_scene_tree) -> *mut crate::server::Server {
+    if tree.is_null() {
+        return std::ptr::null_mut();
+    }
+    match crate::scene_node_data::SceneNodeData::from_node(tree as *mut ffi::wlr_scene_node) {
+        Some(node_data) => match node_data.data {
+            crate::scene_node_data::SceneNodeDataVal::Window(w) => (*w).server,
+            crate::scene_node_data::SceneNodeDataVal::ShellSurface(s) => (*s).server,
+            _ => std::ptr::null_mut(),
+        },
+        None => std::ptr::null_mut(),
+    }
 }
 
 /// Blur behind the popup as behind a window: a translucent menu is frosted
