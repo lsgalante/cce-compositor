@@ -4442,7 +4442,18 @@ impl Window {
                 return true;
             }
             let (w, h) = (*output).sent.dimensions();
-            ((*output).sent.x as f64, (*output).sent.y as f64, w as f64, h as f64)
+            if self.fs_on_desk {
+                // Toggled in overview: it grows into its slab on the desk
+                // (`place_fullscreen_windows`), not over the whole output.
+                (
+                    self.rendering_requested.x as f64,
+                    self.rendering_requested.y as f64,
+                    w as f64 * self.scale,
+                    h as f64 * self.scale,
+                )
+            } else {
+                ((*output).sent.x as f64, (*output).sent.y as f64, w as f64, h as f64)
+            }
         } else {
             let w = self.configure_sent.width.map(|w| w as i32).unwrap_or(self.box_geom.width);
             let h = self.configure_sent.height.map(|h| h as i32).unwrap_or(self.box_geom.height);

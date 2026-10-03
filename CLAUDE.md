@@ -955,7 +955,14 @@ zoom, so the camera pans away from it. Focusing it again pans the camera to
 exactly that spot (`Window::fullscreen_anchor_pan`, from `focus_follow_pan`)
 and it rides the desk until the ease lands, then pins — no jump at either
 end. `save_state` records `saved_virtual_x/y` for a fullscreen window, as it
-did before the spot existed.
+did before the spot existed. **Overview treats it the same way**: there a
+fullscreen window is never on top (`fullscreen_on_top`), so it is a slab on
+the desk stacked behind every window even while focused (hover focuses it
+in overview, and pinning it then would cover the desk), and through any
+camera flight (`camera_ramp_anim`, an eased zoom) it flies with the desk.
+An overview exit onto it lands exactly on its spot — `exit_onto_window`
+centres its output-sized rect — and only then pins; `set_mode` dirties
+windowing while a fullscreen window exists so the restack runs.
 
 ### xdg-activation
 

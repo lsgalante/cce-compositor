@@ -2509,6 +2509,12 @@ impl WindowManager {
             return;
         }
         self.mode = mode;
+        // Overview decides whether a fullscreen window owns the top of the
+        // stack (`fullscreen_on_top`), and the stacking pass runs only on a
+        // transaction.
+        if self.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
+            self.dirty_windowing();
+        }
         // The selection belongs to overview: it is made there, and the
         // group move it exists for is an overview drag.
         if mode != WindowManagerMode::Overview {
@@ -2999,8 +3005,9 @@ impl WindowManager {
                                 (*self.server).scene.layers.fullscreen
                             } else if rendered_fullscreen(window) {
                                 // Stepped aside for a focused window (alt-tab
-                                // out): behind every window but above the
-                                // grid, which the pass below re-asserts. It
+                                // out), or in overview: behind every window
+                                // but above the grid, which the pass below
+                                // re-asserts. It
                                 // sits on the desk there
                                 // (`place_fullscreen_windows`), like the grid
                                 // beneath it.
@@ -4259,7 +4266,8 @@ impl WindowManager {
     }
 
     /// A fullscreen window is pinned to its output only while it owns the
-    /// top of the stack. Stepped aside (`Window::fullscreen_yields`) it
+    /// top of the stack outside overview. Stepped aside
+    /// (`Window::fullscreen_yields`), or in overview, it
     /// sits on the desk at the spot it covered — `virtual_x/y`, at output
     /// size, scaled with the zoom — so a focus chord's pan leaves it behind
     /// like any other window. Until 2026-10-03 it stayed pinned behind the
@@ -4292,7 +4300,16 @@ impl WindowManager {
                 (Some((ax, ay)), Some(tx), Some(ty)) => (tx - ax).abs() < 0.5 && (ty - ay).abs() < 0.5,
                 _ => false,
             };
-            let on_desk = returning || (*w).fullscreen_yields();
+            // Overview shows the desk, so the window is on it there; and
+            // through a camera flight (the overview ramp, or an eased zoom)
+            // it flies with the desk rather than snapping to the output at
+            // either end — an exit onto it lands exactly on its spot
+            // (`exit_onto_window` centres its output-sized rect).
+            let flying = self.camera_ramp_anim.is_some() || self.target_desk_zoom.is_some();
+            let on_desk = returning
+                || flying
+                || self.mode == WindowManagerMode::Overview
+                || (*w).fullscreen_yields();
             if on_desk {
                 let (sx, sy) = (*w).virtual_to_screen((*w).virtual_x, (*w).virtual_y);
                 (*w).rendering_requested.x = sx;
@@ -7208,10 +7225,15 @@ unsafe fn rendered_fullscreen(window: *mut Window) -> bool {
     (*window).is_fullscreen() && !(*window).rendering_requested.hidden
 }
 
-/// A fullscreen window that owns the top of the stack: rendered fullscreen
-/// and not stepped aside for another focused window (`fullscreen_yields`).
+/// A fullscreen window that owns the top of the stack: rendered fullscreen,
+/// not stepped aside for another focused window (`fullscreen_yields`), and
+/// not in overview — where it is a slab on the desk like a stepped-aside
+/// one (`place_fullscreen_windows`) and stacks behind every window with
+/// it, so it never hides the windows overview is there to show.
 unsafe fn fullscreen_on_top(window: *mut Window) -> bool {
-    rendered_fullscreen(window) && !(*window).fullscreen_yields()
+    rendered_fullscreen(window)
+        && (*(*window).server).wm.mode != WindowManagerMode::Overview
+        && !(*window).fullscreen_yields()
 }
 
 /// Prefer the installed `~/.local/bin/cce-cloud`, falling back to PATH lookup.
