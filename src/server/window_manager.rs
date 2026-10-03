@@ -1375,8 +1375,10 @@ impl WindowManager {
                 title: title.clone(),
                 tiling_mode: (*w).tiling_mode,
                 minimized: (*w).minimized,
-                virtual_x: (*w).virtual_x,
-                virtual_y: (*w).virtual_y,
+                // Fullscreen, virtual_x/y is the desk spot the window
+                // covers (`place_fullscreen_windows`), not where it lives.
+                virtual_x: if (*w).was_fullscreen { (*w).saved_virtual_x } else { (*w).virtual_x },
+                virtual_y: if (*w).was_fullscreen { (*w).saved_virtual_y } else { (*w).virtual_y },
                 scale: (*w).scale,
                 width: (*w).box_geom.width as u32,
                 height: (*w).box_geom.height as u32,
@@ -2998,11 +3000,10 @@ impl WindowManager {
                             } else if rendered_fullscreen(window) {
                                 // Stepped aside for a focused window (alt-tab
                                 // out): behind every window but above the
-                                // grid, which the pass below re-asserts.
-                                // Not layers.wm, which carries the camera's
-                                // sub-pixel desk offset — the window is
-                                // pinned to its output, like the layer it
-                                // left.
+                                // grid, which the pass below re-asserts. It
+                                // sits on the desk there
+                                // (`place_fullscreen_windows`), like the grid
+                                // beneath it.
                                 (*self.server).scene.layers.bottom
                             } else if (*window).tiling_mode == crate::tiling::TilingMode::Popup {
                                 (*self.server).scene.layers.popups
@@ -4193,6 +4194,8 @@ impl WindowManager {
             }
         }
 
+        self.place_fullscreen_windows();
+
         // Force configure for all status bar windows so they receive the new
         // geometry immediately, and apply the planned position DIRECTLY.
         // Positions normally land in render_finish, which only reaches
@@ -4252,6 +4255,58 @@ impl WindowManager {
         // adjust target, or no longer: let the overlap dim re-evaluate.
         if self.window_adjust_active() {
             self.arm_border_fade();
+        }
+    }
+
+    /// A fullscreen window is pinned to its output only while it owns the
+    /// top of the stack. Stepped aside (`Window::fullscreen_yields`) it
+    /// sits on the desk at the spot it covered — `virtual_x/y`, at output
+    /// size, scaled with the zoom — so a focus chord's pan leaves it behind
+    /// like any other window. Until 2026-10-03 it stayed pinned behind the
+    /// windows the camera panned to, as if it were the backdrop. It also
+    /// rides the desk while the camera eases back onto it after a refocus
+    /// (`Seat::focus_follow_pan` aims at `fullscreen_anchor_pan`), so it
+    /// slides in and lands pinned with nothing to jump.
+    ///
+    /// While pinned, its desk spot follows the camera: whatever the camera
+    /// shows is what the window covers, so a pan made while it is on top
+    /// moves where it will be left. The policy reads the same spot, so
+    /// directional focus measures from it. Not before `was_fullscreen`:
+    /// `manage_finish` saves `virtual_x/y` as the restore position on the
+    /// entering transition (and sets the first desk spot there), which
+    /// this would overwrite.
+    unsafe fn place_fullscreen_windows(&mut self) {
+        let zoom = self.desk_zoom;
+        for &w in self.windows.iter() {
+            if w.is_null() || (*w).closed {
+                continue;
+            }
+            let fullscreen = rendered_fullscreen(w)
+                && (*w).was_fullscreen
+                && matches!((*w).state, crate::window::WindowState::Mapped);
+            if !fullscreen {
+                (*w).fs_on_desk = false;
+                continue;
+            }
+            let returning = match ((*w).fullscreen_anchor_pan(), self.target_desk_pan_x, self.target_desk_pan_y) {
+                (Some((ax, ay)), Some(tx), Some(ty)) => (tx - ax).abs() < 0.5 && (ty - ay).abs() < 0.5,
+                _ => false,
+            };
+            let on_desk = returning || (*w).fullscreen_yields();
+            if on_desk {
+                let (sx, sy) = (*w).virtual_to_screen((*w).virtual_x, (*w).virtual_y);
+                (*w).rendering_requested.x = sx;
+                (*w).rendering_requested.y = sy;
+                (*w).scale = zoom;
+            } else {
+                let output = (*w).fullscreen_output();
+                if !output.is_null() {
+                    let (vx, vy) = (*w).screen_to_virtual((*output).sent.x, (*output).sent.y);
+                    (*w).virtual_x = vx;
+                    (*w).virtual_y = vy;
+                }
+            }
+            (*w).fs_on_desk = on_desk;
         }
     }
 

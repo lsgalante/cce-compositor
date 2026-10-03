@@ -944,6 +944,19 @@ over the window you switched to. `Seat::focus` dirties windowing whenever a
 fullscreen window exists, because the stacking pass that applies this only
 runs on a transaction.
 
+**Stepped aside, it stays on the desk** (since 2026-10-03; before, it stayed
+pinned to the output, so a focus chord's pan left it fixed behind the new
+window like a backdrop). While fullscreen, `virtual_x/y` is the desk spot
+the window covers — set on the enter transition in `manage_finish` (after
+`saved_virtual_x/y` takes the restore position) and kept in step with the
+camera while the window is on top — and `place_fullscreen_windows`
+(`arrange_views`) draws a yielded one there at output size, scaled with the
+zoom, so the camera pans away from it. Focusing it again pans the camera to
+exactly that spot (`Window::fullscreen_anchor_pan`, from `focus_follow_pan`)
+and it rides the desk until the ease lands, then pins — no jump at either
+end. `save_state` records `saved_virtual_x/y` for a fullscreen window, as it
+did before the spot existed.
+
 ### xdg-activation
 
 `handle_request_activate` (`server.rs`) runs for every activation wlroots

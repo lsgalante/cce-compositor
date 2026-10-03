@@ -1038,9 +1038,9 @@ impl Seat {
 
     /// Focus-follow: pan the camera to a focused Floating/Maximized window —
     /// centering when it is mostly hidden, nudging a clipped edge into view
-    /// otherwise. Fullscreen is pinned to an output and popups/overlays are
-    /// not desk citizens, so other modes no-op, as do cce-cloud and windows
-    /// already fully visible.
+    /// otherwise. Fullscreen pans back onto the desk spot it covers (see
+    /// below); popups/overlays are not desk citizens, so other modes no-op,
+    /// as do cce-cloud and windows already fully visible.
     pub unsafe fn focus_follow_pan(&mut self, window: *mut crate::window::Window) {
         if self.suppress_focus_pan {
             return;
@@ -1050,6 +1050,25 @@ impl Seat {
         // target computed from it is stale by construction. Never retarget
         // out from under the ramp.
         if (*self.server).wm.camera_ramp_anim.is_some() {
+            return;
+        }
+        // A fullscreen window that stepped aside was left on the desk
+        // (`WindowManager::place_fullscreen_windows`); focusing it brings
+        // the camera back to exactly the spot it covers, so it slides in
+        // and lands on its output. Not in overview, where the desk is the
+        // point and the camera stays put.
+        if !window.is_null() && (*window).is_fullscreen() {
+            let wm = &mut (*self.server).wm;
+            if wm.mode == crate::window_manager::WindowManagerMode::Overview {
+                return;
+            }
+            if let Some((px, py)) = (*window).fullscreen_anchor_pan() {
+                if (wm.desk_pan_x - px).abs() >= 0.5 || (wm.desk_pan_y - py).abs() >= 0.5 {
+                    wm.target_desk_pan_x = Some(px);
+                    wm.target_desk_pan_y = Some(py);
+                    wm.start_panning_animation();
+                }
+            }
             return;
         }
         if window.is_null()
