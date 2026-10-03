@@ -532,6 +532,10 @@ pub struct Window {
     pub blur: bool,
     pub scale: f64,
     pub last_applied_scale: f64,
+    /// The last scale pass left the surface buffers at a dest size other
+    /// than their natural one. Landing back on 1.0 has to undo that once —
+    /// see `scale_only_render_finish`.
+    pub buffers_scaled: bool,
     pub virtual_x: f64,
     pub virtual_y: f64,
     pub resize_start_vx: f64,
@@ -564,6 +568,10 @@ pub struct Window {
     pub status_commit_size: (i32, i32),
     pub commit: ffi::wl_listener,
     pub was_fullscreen: bool,
+    /// A fullscreen window drawn on the desk rather than pinned to its
+    /// output: stepped aside, or sliding back in under the camera. Set by
+    /// `WindowManager::place_fullscreen_windows`, read by the render pass.
+    pub fs_on_desk: bool,
     pub saved_width: i32,
     pub saved_height: i32,
     pub saved_virtual_x: f64,
@@ -649,6 +657,11 @@ impl Window {
     /// fullscreen one back over it. Only a desk window displaces it — not
     /// its own popups or dialogs, a status segment, or a window that has
     /// since been minimized or unmapped.
+    ///
+    /// Stepped aside, it is drawn on the desk at the spot it covered
+    /// (`virtual_x/y`, kept in step with the camera while it is on top), so
+    /// the camera pans away from it like any other window rather than
+    /// leaving it fixed behind the screen.
     pub unsafe fn fullscreen_yields(&self) -> bool {
         let me = self as *const Window as *mut Window;
         for &w in (*self.server).wm.focus_history.iter() {
@@ -682,6 +695,23 @@ impl Window {
             return true;
         }
         false
+    }
+
+    /// The camera pan that puts this fullscreen window's desk spot exactly
+    /// on its output — where focusing it pans back to, so a window that
+    /// stepped aside slides in and lands pinned without a jump. `None`
+    /// without an output to fill.
+    pub unsafe fn fullscreen_anchor_pan(&self) -> Option<(f64, f64)> {
+        let output = self.fullscreen_output();
+        if output.is_null() {
+            return None;
+        }
+        let zoom = (*self.server).wm.desk_zoom.max(0.01);
+        let (first_x, first_y, _, _) = self.first_enabled_output_box();
+        Some((
+            self.virtual_x - ((*output).sent.x as f64 - first_x) / zoom,
+            self.virtual_y - ((*output).sent.y as f64 - first_y) / zoom,
+        ))
     }
 
     pub unsafe fn role(&self) -> crate::policy::api::WindowRole {
@@ -890,6 +920,7 @@ impl Window {
             blur: false,
             scale: 1.0,
             last_applied_scale: 1.0,
+            buffers_scaled: false,
             virtual_x: unsafe { (*server).wm.desk_pan_x + 100.0 },
             virtual_y: unsafe { (*server).wm.desk_pan_y + 100.0 },
             resize_start_vx: 0.0,
@@ -904,6 +935,7 @@ impl Window {
             status_commit_size: (0, 0),
             commit: std::mem::zeroed(),
             was_fullscreen: false,
+            fs_on_desk: false,
             saved_width: 0,
             saved_height: 0,
             saved_virtual_x: 0.0,
@@ -3002,6 +3034,13 @@ impl Window {
                 self.saved_virtual_x = self.virtual_x;
                 self.saved_virtual_y = self.virtual_y;
                 self.was_fullscreen = true;
+                // From here on virtual_x/y is the desk spot the window covers
+                // — where the camera is now — so stepping aside leaves it
+                // there (`WindowManager::place_fullscreen_windows`, which
+                // keeps it in step while the window is on top).
+                let (vx, vy) = self.screen_to_virtual((*output).sent.x, (*output).sent.y);
+                self.virtual_x = vx;
+                self.virtual_y = vy;
                 log::info!("[Fullscreen] Saved window {:?} geometry: {}x{} at ({}, {})", self.get_title_string().as_deref().unwrap_or(""), self.saved_width, self.saved_height, self.saved_virtual_x, self.saved_virtual_y);
             }
         } else if !new_fullscreen && self.was_fullscreen {
@@ -3456,6 +3495,7 @@ impl Window {
                 &scale_data_popup as *const ScaleData as *mut std::ffi::c_void,
             );
             self.last_applied_scale = self.scale;
+            self.buffers_scaled = scale_x != 1.0 || scale_y != 1.0;
         }
 
         // During an interactive resize, size the box from the client's
@@ -3511,8 +3551,15 @@ impl Window {
         };
 
         if !output.is_null() {
-            self.box_geom.x = (*output).sent.x;
-            self.box_geom.y = (*output).sent.y;
+            if self.fs_on_desk {
+                // Stepped aside: at its desk spot, which the arrange pass
+                // put in rendering_requested (`place_fullscreen_windows`).
+                self.box_geom.x = requested.x;
+                self.box_geom.y = requested.y;
+            } else {
+                self.box_geom.x = (*output).sent.x;
+                self.box_geom.y = (*output).sent.y;
+            }
 
             let app_id_ptr = self.get_app_id();
             let (is_status_bar, is_wallpaper) = if !app_id_ptr.is_null() {
@@ -3524,7 +3571,7 @@ impl Window {
 
             ffi::wlr_scene_node_set_enabled(self.fullscreen_background as *mut ffi::wlr_scene_node, !is_status_bar && !is_wallpaper);
             let (width, height) = (*output).sent.dimensions();
-            ffi::wlr_scene_rect_set_size(self.fullscreen_background, width as i32, height as i32);
+            self.size_fullscreen_background(width as i32, height as i32);
             clip = ffi::wlr_box { x: 0, y: 0, width: width as i32, height: height as i32 };
             content_clip = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
 
@@ -3624,9 +3671,18 @@ impl Window {
         // The zoom the overview asks for, times 1/output-scale for an X11
         // surface whose buffer is physical pixels (`x11_buffer_scale`).
         let eff_scale = self.scale * self.x11_buffer_scale();
+        // At 1.0 there is nothing to apply — unless the previous pass left
+        // the buffers shrunk. An overview exit's landing frame runs on the
+        // viewport path (`render_viewport_update` -> here), not through
+        // `render_finish`, so returning early there left every window drawn
+        // at the ramp's second-to-last zoom (~98%) until the 120ms viewport
+        // settle, or its own next commit, popped it to full size: the
+        // windows visibly "settled" a beat after the animation ended.
         if eff_scale == 1.0 {
             self.last_applied_scale = 1.0;
-            return;
+            if !self.buffers_scaled {
+                return;
+            }
         }
 
         // No last_applied_scale short-circuit here: wlroots' scene-surface
@@ -3637,7 +3693,10 @@ impl Window {
         // per rendered frame (output.rs render_and_commit), after commits and
         // before build_state, and every setter below is change-checked — an
         // already-correct tree produces no damage.
-        self.last_applied_scale = self.scale;
+        if eff_scale != 1.0 {
+            self.last_applied_scale = self.scale;
+        }
+        self.buffers_scaled = eff_scale != 1.0;
 
         struct ScaleData {
             scale: f64,
@@ -3714,7 +3773,7 @@ impl Window {
             while curr != list_head {
                 let next = (*curr).next;
                 let dec = crate::container_of!(curr, Decoration, link);
-                (*dec).scale_only_render_finish();
+                (*dec).scale_only_render_finish(eff_scale);
                 curr = next;
             }
         }
@@ -3834,6 +3893,14 @@ impl Window {
                 self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
                 self.sync_backdrop_compress();
+            }
+
+            if self.fs_on_desk && self.fs_anim.is_none() {
+                let output = self.fullscreen_output();
+                if !output.is_null() {
+                    let (w, h) = (*output).sent.dimensions();
+                    self.size_fullscreen_background(w as i32, h as i32);
+                }
             }
 
             self.scale_only_render_finish();
@@ -4285,6 +4352,18 @@ impl Window {
             self.draw_borders();
         }
         moving
+    }
+
+    /// The black backdrop under a fullscreen surface, at the output's size
+    /// — scaled with the window when it sits on a zoomed-out desk, since
+    /// the surface's buffers shrink with `scale` and the backdrop does not.
+    unsafe fn size_fullscreen_background(&mut self, width: i32, height: i32) {
+        let s = if self.fs_on_desk { self.scale } else { 1.0 };
+        ffi::wlr_scene_rect_set_size(
+            self.fullscreen_background,
+            (width as f64 * s).round() as i32,
+            (height as f64 * s).round() as i32,
+        );
     }
 
     /// The output a fullscreen window fills: the one the WM pinned it to, or
@@ -5706,11 +5785,9 @@ impl Decoration {
         }
     }
 
-    pub unsafe fn scale_only_render_finish(&mut self) {
-        let scale = (*self.window).scale;
-        if scale * (*self.window).x11_buffer_scale() == 1.0 {
-            return;
-        }
+    /// Driven by the window's own pass, which decides when to run it
+    /// (including the one reset pass back at `eff_scale` 1.0).
+    pub unsafe fn scale_only_render_finish(&mut self, eff_scale: f64) {
 
         struct ScaleData {
             scale: f64,
@@ -5759,7 +5836,7 @@ impl Decoration {
             // leaves it briefly at the old zoom, which restore corrects.
         }
 
-        let scale_data = ScaleData { scale: scale * (*self.window).x11_buffer_scale(), ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
+        let scale_data = ScaleData { scale: eff_scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
         ffi::wlr_scene_node_for_each_buffer(
             self.surfaces.tree as *mut ffi::wlr_scene_node,
             Some(set_overview_scale_iterator),
@@ -5767,7 +5844,7 @@ impl Decoration {
         );
 
         if self.surfaces.saved {
-            let scale_data_saved = ScaleData { scale: scale * (*self.window).x11_buffer_scale(), ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
+            let scale_data_saved = ScaleData { scale: eff_scale, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
             ffi::wlr_scene_node_for_each_buffer(
                 self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
                 Some(set_overview_scale_iterator),
