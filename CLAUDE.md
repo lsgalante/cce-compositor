@@ -213,13 +213,17 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Thirteen modules carry unit tests — `window_manager.rs` (the most of any, among
+Seventeen modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
 `config.rs` (among them `backdrop_compress_params`), `idle.rs`,
 `idle_inhibit_manager.rs`, `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
 `text.rs`, `global_shortcuts.rs` (trigger parsing),
 `cursor.rs` (the swipe lean's direction, `swipe_lean`), `min_sizes.rs`,
-`selection.rs` (the rubber band's rect and its hit rule). They cluster where the logic is
+`selection.rs` (the rubber band's rect and its hit rule),
+`ipc_server.rs` (command framing and cutting off a stalled subscriber),
+`status_server.rs` (a slow reader, and a client that never reads),
+`keyboard_group.rs` (the keys a locked session keeps) and
+`sleep_lock.rs` (logind's sleep delay). They cluster where the logic is
 pure and the FFI is not, which is the only kind of thing testable in a crate
 this deep in wlroots. The arrange/slotmap tests live in the sibling
 `cce-window-manager` crate — run them with `cargo test -p cce-window-manager`.
@@ -367,7 +371,7 @@ treats them as opaque.
   server, loads config + persisted state, adds the wayland socket, spawns the init
   program (`~/.config/cce/init` via `sh -c`) and the IPC + status servers, then
   `wl_display_run`.
-- **`window_manager.rs`** (~7.5k lines) — the heart of the mechanism side. Holds the
+- **`window_manager.rs`** (~8.4k lines) — the heart of the mechanism side. Holds the
   WM state, the camera fields, window lists, the IPC command dispatcher
   `process_ipc_command()`, the `Policy::action` snapshot builder
   (`build_action_ctx`) and the `Compositor` command applier. IPC requests arrive on
