@@ -1,0 +1,9 @@
+# Hides the uxplay package's own entry (/usr/share/applications/uxplay.desktop),
+# which runs the receiver in a terminal: cce-airplay.desktop is the way to
+# start it here. A same-named entry in $XDG_DATA_HOME/applications shadows the
+# system one, and Hidden=true makes every launcher treat it as deleted.
+[Desktop Entry]
+Type=Application
+Name=UxPlay
+Exec=uxplay
+Hidden=true

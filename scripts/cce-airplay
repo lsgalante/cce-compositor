@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# cce-airplay — this computer as an AirPlay screen-mirroring receiver
+#
+# A wrapper around UxPlay (pacman: uxplay), which does the AirPlay work; this
+# script only makes it behave like a cce app. Launched from
+# cce-airplay.desktop with no argument it TOGGLES: the first launch starts the
+# receiver, the next stops it, so the launcher entry is the on/off switch.
+#
+#   cce-airplay [toggle|start|stop|status]
+#
+# Status reaches the user as notifications, because nothing else of UxPlay's
+# is visible: it has no window until a phone is mirroring, and it prints the
+# pairing PIN only to its terminal (as ASCII art, LOGI in uxplay.cpp's
+# display_pin), which a launcher-started process does not have. So its output
+# is read line by line, and the lines below are matched as they appear in
+# UxPlay 1.73's source at its default (INFO) log level — the "Open
+# connections" count is debug-only, which is why there is no "disconnected"
+# notice:
+#
+#   *** CLIENT MUST NOW ENTER PIN = "1234" AS AIRPLAY PASSWORD
+#   connection request from <name> (<model>) with deviceID = <id>
+#   registered new client: <name> DeviceID = <id> PK = ...
+#
+# Access control is a PIN on first contact (-pin, random each time) and a
+# register of the devices that passed it (-reg), so a phone pairs once and
+# connects freely after — while anyone else on the network gets a PIN prompt
+# rather than the screen. The server key (-key) must persist with it: the
+# registration is against that key, and UxPlay with no -key path makes a new
+# one per run, which would ask for the PIN every time.
+#
+# The video window is GStreamer's waylandsink, chosen explicitly. The default
+# (autovideosink) ranks xvimagesink first, an X11 window through Xwayland;
+# glimagesink always maps at 320x240 whatever the stream. waylandsink maps at
+# the stream's size and letterboxes into any size the compositor configures,
+# and its app_id is "uxplay" (the process name), which is what the
+# config.kdl rule `mode_rule mode="floating" app_id="uxplay" center=(bool)true`
+# keys on to open it in the middle of the current view rather than at the
+# desk's origin. -s asks the phone for a stream that fits 90% of the smallest
+# output in LOGICAL pixels, because waylandsink's window is the stream's size
+# in logical pixels: UxPlay's 1920x1080 default puts a portrait phone 1080
+# tall on a 1200-tall screen, under the bar.
+#
+# Options of your own go in ~/.uxplayrc (one per line, no leading dash); the
+# command line here is read after it and wins where they overlap. The
+# receiver's name is the hostname unless CCE_AIRPLAY_NAME is set.
+
+set -u
+
+CCE_CTL="$HOME/.local/bin/ccectl"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cce/airplay"
+LOG="${XDG_RUNTIME_DIR:-/tmp}/cce-airplay.log"
+PIDFILE="${XDG_RUNTIME_DIR:-/tmp}/cce-airplay.pid"
+NAME="${CCE_AIRPLAY_NAME:-$(uname -n)}"
+
+notify() {
+    notify-send -a AirPlay -i cce-airplay "$@"
+}
+
+# UxPlay instances of this user, however started. A session restore relaunches
+# a window's process by its own argv — uxplay, not this script — so a receiver
+# can be running with no wrapper above it; stop has to reach that one too.
+receiver_pids() {
+    pgrep -u "$UID" -x uxplay
+}
+
+# "-s WxH" for 90% of the smallest enabled output's logical size, so the
+# window fits whichever screen it opens on, or nothing (UxPlay's default) when
+# the compositor cannot be asked. `outputs --json` is one object per line.
+stream_size() {
+    "$CCE_CTL" outputs --json 2>/dev/null | python3 -c '
+import json, sys
+outs = []
+for line in sys.stdin:
+    try:
+        o = json.loads(line)
+    except ValueError:
+        continue
+    if o.get("enabled") and o.get("logical_w") and o.get("logical_h"):
+        outs.append(o)
+if outs:
+    w = min(o["logical_w"] for o in outs)
+    h = min(o["logical_h"] for o in outs)
+    print("-s %dx%d" % (int(w * 0.9) // 2 * 2, int(h * 0.9) // 2 * 2))
+'
+}
+
+stop() {
+    local pids
+    pids=$(receiver_pids) || { echo "cce-airplay: not running"; return 0; }
+    # Asked before the kill: the wrapper drops its pidfile as the receiver
+    # exits, so afterwards it always reads as absent.
+    local wrapped=false
+    wrapper_alive && wrapped=true
+    # SIGTERM is UxPlay's clean exit (a g_unix_signal_add handler), which
+    # withdraws its mDNS record so the phone stops listing this computer.
+    kill $pids
+    for _ in $(seq 30); do
+        receiver_pids >/dev/null || break
+        sleep 0.1
+    done
+    # A wrapper above it reports the exit itself; a bare restored receiver
+    # has nobody to, so report here.
+    if ! $wrapped; then
+        notify "AirPlay stopped" "$NAME is no longer an AirPlay screen."
+    fi
+}
+
+# Whether a `start` is still alive above the receiver. A pidfile rather than
+# pgrep -f on this script's name: every subshell this script forks carries the
+# same cmdline until it execs, so a name match can find the caller itself.
+wrapper_alive() {
+    local pid
+    pid=$(cat "$PIDFILE" 2>/dev/null) && [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+start() {
+    if receiver_pids >/dev/null; then
+        echo "cce-airplay: already running"
+        return 0
+    fi
+    if ! command -v uxplay >/dev/null; then
+        notify -u critical "AirPlay unavailable" "UxPlay is not installed (pacman -S uxplay)."
+        return 1
+    fi
+    if ! systemctl is-active --quiet avahi-daemon; then
+        notify -u critical "AirPlay unavailable" \
+            "avahi-daemon is not running, so no iPhone can find this computer."
+        return 1
+    fi
+    mkdir -p "$STATE_DIR"
+    chmod 700 "$STATE_DIR"
+
+    local args=(-n "$NAME" -nh
+        -pin -reg "$STATE_DIR/register" -key "$STATE_DIR/key.pem"
+        -vs waylandsink)
+    local size
+    size=$(stream_size)
+    [[ -n "$size" ]] && args+=($size)
+
+    notify "AirPlay ready" \
+        "Mirror to “$NAME” from Control Center › Screen Mirroring. Open AirPlay again to stop."
+
+    local pin_id="" device="" line
+    : >"$LOG"
+    echo $$ >"$PIDFILE"
+    trap 'rm -f "$PIDFILE"' EXIT
+    # stdbuf: UxPlay's stdout is block-buffered into a pipe, which would hold
+    # the PIN back until 4 KiB of later output pushed it through.
+    stdbuf -oL -eL uxplay "${args[@]}" 2>&1 | while IFS= read -r line; do
+        printf '%s\n' "$line" >>"$LOG"
+        case "$line" in
+            *'CLIENT MUST NOW ENTER PIN = "'*)
+                local pin=${line#*PIN = \"}
+                pin=${pin%%\"*}
+                # Persistent (-t 0) until the pairing settles it: the phone
+                # waits on the user, however long that takes.
+                pin_id=$(notify -p -u critical -t 0 ${pin_id:+-r "$pin_id"} \
+                    "AirPlay PIN: $pin" \
+                    "Enter $pin on ${device:-your iPhone} to pair it with $NAME.")
+                ;;
+            *'registered new client: '*)
+                local who=${line#*registered new client: }
+                who=${who%% DeviceID = *}
+                notify ${pin_id:+-r "$pin_id"} -t 5000 "AirPlay paired" \
+                    "$who can now mirror to $NAME without a PIN."
+                pin_id=""
+                ;;
+            *'connection request from '*)
+                device=${line#*connection request from }
+                device=${device%% (*}
+                notify -t 4000 "AirPlay" "Mirroring from $device"
+                ;;
+        esac
+    done
+    local status=${PIPESTATUS[0]}
+
+    # 0 is a clean stop (SIGTERM from `stop`); 143 is the same signal landing
+    # before UxPlay's main loop installed its handler.
+    if [[ $status -eq 0 || $status -eq 143 ]]; then
+        notify "AirPlay stopped" "$NAME is no longer an AirPlay screen."
+    else
+        local why
+        why=$(grep -E 'ERROR|error|cannot|failed|Failed|not found|instances' "$LOG" | tail -n 3)
+        notify -u critical "AirPlay stopped unexpectedly" \
+            "${why:-UxPlay exited with status $status.} Log: $LOG"
+    fi
+    return "$status"
+}
+
+case "${1:-toggle}" in
+    toggle)
+        if receiver_pids >/dev/null; then stop; else start; fi
+        ;;
+    start) start ;;
+    stop) stop ;;
+    status)
+        if receiver_pids >/dev/null; then
+            echo "running as \"$NAME\" (log: $LOG)"
+        else
+            echo "stopped"
+            exit 1
+        fi
+        ;;
+    *)
+        echo "usage: cce-airplay [toggle|start|stop|status]" >&2
+        exit 2
+        ;;
+esac

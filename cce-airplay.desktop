@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AirPlay
+GenericName=Screen Mirroring Receiver
+Comment=Mirror an iPhone or iPad to this screen (launch again to stop)
+Exec=cce-airplay
+Icon=cce-airplay
+Terminal=false
+Categories=AudioVideo;
+Keywords=airplay;iphone;ipad;mirror;cast;uxplay;
+NoDisplay=false
