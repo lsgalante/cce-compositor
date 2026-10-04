@@ -93,6 +93,16 @@ pub struct Seat {
     pub wlr_seat: *mut ffi::wlr_seat,
     pub cursor: Cursor,
     pub focused: Focus,
+    /// Touchscreens attached to this seat. The seat offers the touch
+    /// capability only while there is one: a client that sees it binds
+    /// `wl_touch`, and from then on a finger on its surface reaches it as
+    /// touch instead of an emulated pointer (`cursor::TouchRoute`). A
+    /// toolkit with no touch handling would otherwise take a capability it
+    /// cannot use and get nothing.
+    pub touch_devices: u32,
+    /// `ccectl touch` has run: offer touch as if a touchscreen were here,
+    /// so a headless shadow can exercise the touch-client route.
+    pub touch_injected: bool,
     pub relay: crate::input_relay::InputRelay,
     pub layer_shell: crate::layer_shell::LayerShellSeat,
     pub xkb_bindings_seat: crate::xkb_bindings::XkbBindingsSeat,
@@ -172,6 +182,8 @@ impl Seat {
             wlr_seat,
             cursor: Cursor::default(),
             focused: Focus::None,
+            touch_devices: 0,
+            touch_injected: false,
             relay: std::mem::zeroed(),
             layer_shell: crate::layer_shell::LayerShellSeat::default(),
             xkb_bindings_seat: crate::xkb_bindings::XkbBindingsSeat::default(),
@@ -390,6 +402,9 @@ impl Seat {
                 ffi::wlr_cursor_attach_input_device(self.cursor.wlr_cursor, (*device).wlr_device);
             }
             ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH | ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TABLET => {
+                if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH {
+                    self.touch_devices += 1;
+                }
                 ffi::wlr_cursor_attach_input_device(self.cursor.wlr_cursor, (*device).wlr_device);
                 if !(*device).config.map_to_output.is_null() {
                     ffi::wlr_cursor_map_input_to_output(self.cursor.wlr_cursor, (*device).wlr_device, (*device).config.map_to_output);
@@ -405,6 +420,17 @@ impl Seat {
         ffi::wlr_cursor_detach_input_device(self.cursor.wlr_cursor, (*device).wlr_device);
 
         let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device);
+        if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH {
+            self.touch_devices = self.touch_devices.saturating_sub(1);
+            // An unplugged touchscreen sends no up for the fingers it had
+            // down; one driving the pointer would leave the button held.
+            if self.touch_devices == 0 && !self.touch_injected {
+                let ids: Vec<i32> = self.cursor.touch_points.keys().copied().collect();
+                for id in ids {
+                    self.cursor.touch_cancel(id);
+                }
+            }
+        }
         if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD {
             let keyboard = (*device).destroy_data as *mut crate::keyboard::Keyboard;
             if !keyboard.is_null() {
@@ -428,8 +454,11 @@ impl Seat {
     }
 
     pub unsafe fn update_capabilities(&mut self) {
-        let caps = ffi::wl_seat_capability_WL_SEAT_CAPABILITY_POINTER
+        let mut caps = ffi::wl_seat_capability_WL_SEAT_CAPABILITY_POINTER
             | ffi::wl_seat_capability_WL_SEAT_CAPABILITY_KEYBOARD;
+        if self.touch_devices > 0 || self.touch_injected {
+            caps |= ffi::wl_seat_capability_WL_SEAT_CAPABILITY_TOUCH;
+        }
         ffi::wlr_seat_set_capabilities(self.wlr_seat, caps);
     }
 
@@ -2007,6 +2036,13 @@ unsafe extern "C" fn handle_request_set_cursor(
     };
     let is_wm = !wm_client.is_null() && event_client == wm_client;
 
+    // While a touch has the image off, nothing may put one back: the
+    // emulated pointer's every enter draws this request.
+    // `Cursor::unhide_after_touch` re-enters the surface, so the client
+    // asks again once the image is wanted.
+    if seat.cursor.hidden_by_touch {
+        return;
+    }
     if focused_client == (*event).seat_client || is_wm {
         // The client owns the cursor image from here; a compositor-driven
         // xcursor animation would paint over it on its next tick.

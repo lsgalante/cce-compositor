@@ -108,6 +108,9 @@ fn usage(name: &str, to_stderr: bool) {
     print("  pointer-click [button]             (left|right|middle|back|forward or evdev code)");
     print("  pointer-press [button]             (held until pointer-release — drives drags)");
     print("  pointer-release [button]");
+    print("  touch down <id> <x> <y> | motion <id> <x> <y> | up <id> | cancel <id> | tap <x> <y>");
+    print("                                     (a touchscreen finger, layout pixels; a client that");
+    print("                                      bound wl_touch gets touch, anything else the pointer)");
     print("  migrate-input                      (local: move config.kdl keybindings to input.kdl)");
     print("  keypress <keycode>                 (evdev code; press+release to the focused client)");
     print("  key-down <keycode>                 (modifier codes — ctrl 29/97, shift 42/54,");

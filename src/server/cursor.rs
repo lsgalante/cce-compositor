@@ -5,6 +5,37 @@ use crate::scene_node_data::SceneNodeDataVal;
 use crate::drag_icon::DragIcon;
 use std::collections::{HashMap, HashSet};
 
+/// One finger on a touchscreen (`Cursor::touch_points`).
+#[derive(Clone, Copy, Debug)]
+pub struct TouchPoint {
+    pub lx: f64,
+    pub ly: f64,
+    pub route: TouchRoute,
+}
+
+/// Where a touch point's events go, fixed at touch-down for its lifetime —
+/// a finger that slides onto another window keeps talking to the one it
+/// went down on, exactly like a held button's implicit grab.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TouchRoute {
+    /// A client that bound `wl_touch` gets real touch events. Positions are
+    /// surface-local through the frame frozen at down: `origin` is the
+    /// surface's layout origin and `scale` its surface-per-layout-pixel
+    /// ratio, the same mapping the pointer's implicit grab uses
+    /// (`grab_origin` / `grab_scale`).
+    Client { origin: (f64, f64), scale: f64 },
+    /// This finger drives the pointer: a left button held at its position.
+    /// Everything that is not a touch-capable client goes this way — cce-ui
+    /// apps, the status bar, the lock screen, the desktop, and every press
+    /// the compositor itself handles (overview, the adjust-mode handles,
+    /// drag-selection) — so all of those work by touch without a touch path
+    /// of their own. One finger at a time: the pointer is singular.
+    Pointer,
+    /// Swallowed until it lifts: a second finger while another drives the
+    /// pointer, or a touch while a real button is held.
+    Ignored,
+}
+
 pub struct Cursor {
     pub seat: *mut Seat,
     pub wlr_cursor: *mut ffi::wlr_cursor,
@@ -58,7 +89,15 @@ pub struct Cursor {
     pub tablet_tool_tip_listener: ffi::wl_listener,
     pub tablet_tool_button_listener: ffi::wl_listener,
 
-    pub touch_points: HashMap<i32, (f64, f64)>,
+    /// Every finger on a touchscreen, by touch id: where it is (layout
+    /// coordinates; the drag icon of a touch drag follows it) and where its
+    /// events go, decided once at touch-down (`TouchRoute`).
+    pub touch_points: HashMap<i32, TouchPoint>,
+    /// The cursor image is off because the last input was a touchscreen.
+    /// A finger has no pointer to show, and the emulated pointer warping to
+    /// every tap would otherwise leave an arrow wherever the hand last was.
+    /// Real pointer motion brings it back (`unhide_after_touch`).
+    pub hidden_by_touch: bool,
     pub pressed: HashMap<u32, Option<*mut crate::pointer_binding::PointerBinding>>,
     /// Buttons whose PRESS was forwarded to the focused client. The paired
     /// release must reach the client no matter what the compositor is doing
@@ -179,6 +218,7 @@ impl Default for Cursor {
             tablet_tool_button_listener: unsafe { std::mem::zeroed() },
 
             touch_points: HashMap::new(),
+            hidden_by_touch: false,
             pressed: HashMap::new(),
             notified_pressed: HashSet::new(),
             grab_origin: (0.0, 0.0),
@@ -591,6 +631,9 @@ impl Cursor {
     }
 
     pub unsafe fn set_xcursor(&mut self, name: *const std::os::raw::c_char) {
+        if self.hidden_by_touch {
+            return;
+        }
         ffi::wlr_cursor_set_xcursor(
             self.wlr_cursor,
             self.xcursor_manager,
@@ -1011,6 +1054,33 @@ impl Cursor {
         self.clear_focus();
     }
 
+    /// Take the cursor image off for a touch (see `hidden_by_touch`).
+    unsafe fn hide_for_touch(&mut self) {
+        if self.hidden_by_touch {
+            return;
+        }
+        self.hidden_by_touch = true;
+        self.stop_xcursor_animation();
+        ffi::wlr_cursor_unset_image(self.wlr_cursor);
+    }
+
+    /// Bring the cursor image back once a real pointer moves. Called before
+    /// the motion's passthrough, which re-enters the surface under the
+    /// pointer: the clear here is what makes that enter fresh, so the
+    /// client sets its cursor again — `handle_request_set_cursor` dropped
+    /// whatever it asked for while the image was off. Not while a client
+    /// holds an implicit grab: clearing pointer focus would end it.
+    pub unsafe fn unhide_after_touch(&mut self) {
+        if !self.hidden_by_touch {
+            return;
+        }
+        self.hidden_by_touch = false;
+        if self.notified_pressed.is_empty() {
+            ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+        }
+        self.set_xcursor(b"default\0".as_ptr() as *const _);
+    }
+
     pub unsafe fn clear_focus(&mut self) {
         ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
         self.set_xcursor(b"default\0".as_ptr() as *const _);
@@ -1030,6 +1100,13 @@ impl Cursor {
     /// layout pixels — `wlr_cursor_warp_absolute` is 0..1-normalized, which is the
     /// bug the old `pointer-move-to` had.
     pub unsafe fn inject_motion_to(&mut self, x: f64, y: f64) {
+        self.unhide_after_touch();
+        self.warp_to(x, y);
+    }
+
+    /// `inject_motion_to` without bringing a touch-hidden cursor back: the
+    /// emulated pointer of a touch (`TouchRoute::Pointer`) moves this way.
+    unsafe fn warp_to(&mut self, x: f64, y: f64) {
         (*self.seat).handle_activity();
         ffi::wlr_cursor_warp(self.wlr_cursor, std::ptr::null_mut(), x, y);
         self.update_hovered();
@@ -1304,6 +1381,8 @@ unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut s
         cursor.end_hscroll_shift("motion");
     }
     
+    cursor.unhide_after_touch();
+
     let mut dx = (*event).delta_x;
     let mut dy = (*event).delta_y;
 
@@ -1358,6 +1437,7 @@ unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, dat
     let cursor = &mut *crate::container_of!(listener, Cursor, motion_absolute_listener);
     let event = data as *mut ffi::wlr_pointer_motion_absolute_event;
     (*cursor.seat).handle_activity();
+    cursor.unhide_after_touch();
     
     let wlr_device = if (*event).pointer.is_null() {
         std::ptr::null_mut()
@@ -1406,6 +1486,74 @@ unsafe fn layer_takes_click_focus(layer_surface: *mut crate::layer_shell::LayerS
     }
     (*(*layer_surface).wlr_layer_surface).current.keyboard_interactive
         != ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE
+}
+
+/// What every press does before anyone handles it: close the menus it
+/// lands outside of. Shared by a pointer press (`handle_button`) and a
+/// touch that goes to a client as touch (`handle_touch_down`); an
+/// emulated touch arrives as a pointer press and runs it there.
+unsafe fn press_dismissals(server: *mut crate::server::Server, lx: f64, ly: f64) {
+    // Click-away-close for in-surface status menus: if any status
+    // segment is expanded (menu open) and this press did not land on it,
+    // push a one-shot dismiss over the status socket. The line carries
+    // the pressed segment's app_id so a press ON an expanded segment
+    // exempts that segment (it handles its own clicks) while still
+    // dismissing any other open menu.
+    {
+        let mut target_status: *mut crate::window::Window = std::ptr::null_mut();
+        if let Some(result) = (*server).scene.at(lx, ly) {
+            if let SceneNodeDataVal::Window(window) = result.data {
+                if (*window).is_status_bar() {
+                    target_status = window;
+                }
+            }
+        }
+        let any_other_expanded = (*server).wm.any_expanded_status_segment(target_status);
+        if any_other_expanded {
+            let except = if target_status.is_null() {
+                "-".to_string()
+            } else {
+                (*target_status).get_app_id_string().unwrap_or_else(|| "-".to_string())
+            };
+            if let Some(ref sender) = (*server).wm.status_sender {
+                sender.send_menu_dismiss(&except);
+            }
+        }
+    }
+
+    // Click-away for X11 popups. Xwayland only sees the pointer over
+    // its own surfaces, so a popup menu an X11 app opened (Wine's, most
+    // of all — a tray icon's menu opened through cce-xembed-tray) never
+    // hears a press on a Wayland window and stays open; only a click on
+    // one of the app's own X windows used to close it. So a press that
+    // lands on no X11 surface while some override-redirect window is
+    // showing is reported on the status socket's `clickaway` topic, and
+    // the bridge closes the popup it opened. The tray bridge's own
+    // containers have no scene tree, so they never count as showing.
+    {
+        let or_showing = (*server)
+            .wm
+            .override_redirects
+            .iter()
+            .any(|&or| !or.is_null() && !(*or).surface_tree.is_null());
+        if or_showing {
+            let on_x11 = match (*server).scene.at(lx, ly) {
+                Some(result) => match result.data {
+                    SceneNodeDataVal::Window(window) => {
+                        matches!((*window).impl_type, crate::window::WindowImpl::Xwayland(_))
+                    }
+                    SceneNodeDataVal::OverrideRedirect(_) => true,
+                    _ => false,
+                },
+                None => false,
+            };
+            if !on_x11 {
+                if let Some(ref sender) = (*server).wm.status_sender {
+                    sender.send_click_away();
+                }
+            }
+        }
+    }
 }
 
 unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -1476,67 +1624,7 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             return;
         }
 
-        // Click-away-close for in-surface status menus: if any status
-        // segment is expanded (menu open) and this press did not land on it,
-        // push a one-shot dismiss over the status socket. The line carries
-        // the pressed segment's app_id so a press ON an expanded segment
-        // exempts that segment (it handles its own clicks) while still
-        // dismissing any other open menu.
-        {
-            let mut target_status: *mut crate::window::Window = std::ptr::null_mut();
-            if let Some(result) = (*server).scene.at(lx, ly) {
-                if let SceneNodeDataVal::Window(window) = result.data {
-                    if (*window).is_status_bar() {
-                        target_status = window;
-                    }
-                }
-            }
-            let any_other_expanded = (*server).wm.any_expanded_status_segment(target_status);
-            if any_other_expanded {
-                let except = if target_status.is_null() {
-                    "-".to_string()
-                } else {
-                    (*target_status).get_app_id_string().unwrap_or_else(|| "-".to_string())
-                };
-                if let Some(ref sender) = (*server).wm.status_sender {
-                    sender.send_menu_dismiss(&except);
-                }
-            }
-        }
-
-        // Click-away for X11 popups. Xwayland only sees the pointer over
-        // its own surfaces, so a popup menu an X11 app opened (Wine's, most
-        // of all — a tray icon's menu opened through cce-xembed-tray) never
-        // hears a press on a Wayland window and stays open; only a click on
-        // one of the app's own X windows used to close it. So a press that
-        // lands on no X11 surface while some override-redirect window is
-        // showing is reported on the status socket's `clickaway` topic, and
-        // the bridge closes the popup it opened. The tray bridge's own
-        // containers have no scene tree, so they never count as showing.
-        {
-            let or_showing = (*server)
-                .wm
-                .override_redirects
-                .iter()
-                .any(|&or| !or.is_null() && !(*or).surface_tree.is_null());
-            if or_showing {
-                let on_x11 = match (*server).scene.at(lx, ly) {
-                    Some(result) => match result.data {
-                        SceneNodeDataVal::Window(window) => {
-                            matches!((*window).impl_type, crate::window::WindowImpl::Xwayland(_))
-                        }
-                        SceneNodeDataVal::OverrideRedirect(_) => true,
-                        _ => false,
-                    },
-                    None => false,
-                };
-                if !on_x11 {
-                    if let Some(ref sender) = (*server).wm.status_sender {
-                        sender.send_click_away();
-                    }
-                }
-            }
-        }
+        press_dismissals(server, lx, ly);
 
         // Status-bar segments are dragged either in adjust-position mode or
         // directly with super+left-drag (0x40 = WLR_MODIFIER_LOGO).
@@ -3497,8 +3585,11 @@ unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, da
 }
 
 unsafe extern "C" fn handle_tablet_tool_proximity(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let _cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_proximity_listener);
+    let cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_proximity_listener);
     let event = data as *mut ffi::wlr_tablet_tool_proximity_event;
+    // A stylus sets its own image (`TabletTool::proximity`); the touch
+    // hide must not then block the compositor's next one.
+    cursor.hidden_by_touch = false;
 
     let wlr_tablet = (*event).tablet;
     let wlr_device = &mut (*wlr_tablet).base as *mut ffi::wlr_input_device;
@@ -3565,219 +3656,215 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
     }
 }
 
+// ── Touchscreen ──────────────────────────────────────────────────────────────
+// A finger is routed once, at touch-down (`TouchRoute`): a surface whose
+// client bound `wl_touch` gets real touch events; anything else gets the
+// pointer, a left button held where the finger is. The `Cursor` methods take
+// layout coordinates, so the device handlers below and `ccectl touch` (a
+// headless shadow has no touchscreen) share every line of the routing.
+
+impl Cursor {
+    /// Decide where a new finger at `lx, ly` goes. In window-adjust mode
+    /// (overview, or Super held) every press is the compositor's to spend
+    /// — the handles, a window body's drag, the rubber band — and those live
+    /// on the pointer path, so the finger becomes the pointer even over a
+    /// touch-capable window.
+    unsafe fn touch_route_at(&self, lx: f64, ly: f64) -> TouchRoute {
+        let seat = &*self.seat;
+        let server = seat.server;
+        if let Some(result) = (*server).scene.at(lx, ly) {
+            // Locked, only the lock surface may hear a finger, as only it
+            // may hear the pointer (`passthrough`).
+            let locked = (*server).lock_manager.state != crate::lock_manager::LockState::Unlocked;
+            let lock_ok = !locked || matches!(result.data, SceneNodeDataVal::LockSurface(_));
+            if lock_ok
+                && !result.surface.is_null()
+                && !(*server).wm.window_adjust_active()
+                && ffi::wlr_surface_accepts_touch(result.surface, seat.wlr_seat)
+            {
+                // The implicit grab's frame (see the button path): the
+                // surface's scene buffer may be drawn scaled, so map through
+                // its destination size rather than assume 1:1.
+                let mut scale = 1.0;
+                if !result.node.is_null() {
+                    let dest_w = ffi::river_scene_buffer_get_dest_width(result.node as *mut ffi::wlr_scene_buffer);
+                    let surf_w = ffi::river_wlr_surface_get_width(result.surface);
+                    if dest_w > 0 && surf_w > 0 {
+                        scale = surf_w as f64 / dest_w as f64;
+                    }
+                }
+                let origin = (lx - result.sx / scale, ly - result.sy / scale);
+                return TouchRoute::Client { origin, scale };
+            }
+        }
+        // The pointer is singular: a second finger cannot also drive it, and
+        // a real button held (or a seat op it started) owns it already.
+        let pointer_busy = self.touch_points.values().any(|p| p.route == TouchRoute::Pointer)
+            || !self.pressed.is_empty()
+            || seat.op.is_some();
+        if pointer_busy {
+            TouchRoute::Ignored
+        } else {
+            TouchRoute::Pointer
+        }
+    }
+
+    pub unsafe fn touch_down(&mut self, id: i32, lx: f64, ly: f64, time_msec: u32) {
+        (*self.seat).handle_activity();
+        let server = (*self.seat).server;
+        // A touch is deliberate input, like a press (see `Seat::focus`).
+        (*server).wm.startup_input_seen = true;
+        self.hide_for_touch();
+        // A device that reuses a live id without lifting it first has lost
+        // the up; finish the old point so its button or client is released.
+        if self.touch_points.contains_key(&id) {
+            log::warn!("touch: down for live touch id {id}; lifting the old point first");
+            self.touch_up(id, time_msec);
+        }
+
+        let route = self.touch_route_at(lx, ly);
+        self.touch_points.insert(id, TouchPoint { lx, ly, route });
+        log::debug!("touch: down id={id} at ({lx:.0}, {ly:.0}) -> {route:?}");
+
+        match route {
+            TouchRoute::Client { origin, scale } => {
+                press_dismissals(server, lx, ly);
+                let Some(result) = (*server).scene.at(lx, ly) else { return };
+                // Focus as a click would (`handle_button`).
+                let seat = &mut *self.seat;
+                match result.data {
+                    SceneNodeDataVal::Window(window) => {
+                        if !(*window).is_status_bar() && !(*window).is_wallpaper() {
+                            seat.focus(Focus::Window(window));
+                        }
+                    }
+                    SceneNodeDataVal::LayerSurface(layer_surface) => {
+                        if layer_takes_click_focus(layer_surface) {
+                            seat.focus(Focus::LayerSurface(result.surface));
+                        }
+                    }
+                    _ => {}
+                }
+                ffi::wlr_seat_touch_notify_down(
+                    seat.wlr_seat,
+                    result.surface,
+                    time_msec,
+                    id,
+                    (lx - origin.0) * scale,
+                    (ly - origin.1) * scale,
+                );
+            }
+            TouchRoute::Pointer => {
+                self.warp_to(lx, ly);
+                self.inject_button(BTN_LEFT, true);
+            }
+            TouchRoute::Ignored => {}
+        }
+    }
+
+    pub unsafe fn touch_motion(&mut self, id: i32, lx: f64, ly: f64, time_msec: u32) {
+        (*self.seat).handle_activity();
+        let Some(point) = self.touch_points.get_mut(&id) else { return };
+        point.lx = lx;
+        point.ly = ly;
+        let route = point.route;
+        match route {
+            TouchRoute::Client { origin, scale } => {
+                ffi::wlr_seat_touch_notify_motion(
+                    (*self.seat).wlr_seat,
+                    time_msec,
+                    id,
+                    (lx - origin.0) * scale,
+                    (ly - origin.1) * scale,
+                );
+                // A touch drag's icon follows the finger.
+                self.update_drag_icons();
+            }
+            TouchRoute::Pointer => self.warp_to(lx, ly),
+            TouchRoute::Ignored => {}
+        }
+    }
+
+    pub unsafe fn touch_up(&mut self, id: i32, time_msec: u32) {
+        (*self.seat).handle_activity();
+        let Some(point) = self.touch_points.remove(&id) else { return };
+        match point.route {
+            TouchRoute::Client { .. } => {
+                ffi::wlr_seat_touch_notify_up((*self.seat).wlr_seat, time_msec, id);
+            }
+            TouchRoute::Pointer => self.inject_button(BTN_LEFT, false),
+            TouchRoute::Ignored => {}
+        }
+    }
+
+    /// The device gave up on a finger (a palm, a gesture the kernel took).
+    /// A client is told `wl_touch.cancel`, which voids its whole sequence; a
+    /// finger driving the pointer releases the button — a cancelled tap
+    /// still clicks, but a held button must never be left behind.
+    pub unsafe fn touch_cancel(&mut self, id: i32) {
+        (*self.seat).handle_activity();
+        let Some(point) = self.touch_points.remove(&id) else { return };
+        match point.route {
+            TouchRoute::Client { .. } => ffi::river_wlr_seat_touch_cancel_point((*self.seat).wlr_seat, id),
+            TouchRoute::Pointer => self.inject_button(BTN_LEFT, false),
+            TouchRoute::Ignored => {}
+        }
+    }
+
+    pub unsafe fn touch_frame(&mut self) {
+        // The emulated pointer frames each of its own events; only touch
+        // clients are waiting on this one.
+        if self.touch_points.values().any(|p| matches!(p.route, TouchRoute::Client { .. }))
+            || ffi::wlr_seat_touch_num_points((*self.seat).wlr_seat) > 0
+        {
+            ffi::wlr_seat_touch_notify_frame((*self.seat).wlr_seat);
+        }
+    }
+
+    /// Layout coordinates of a touch event's normalized `x, y`, through the
+    /// device's output mapping (`map_to_output` / `map_to_region`).
+    unsafe fn touch_layout_coords(&self, touch: *mut ffi::wlr_touch, x: f64, y: f64) -> (f64, f64) {
+        let wlr_device = if touch.is_null() {
+            std::ptr::null_mut()
+        } else {
+            &mut (*touch).base as *mut ffi::wlr_input_device
+        };
+        let mut lx = 0.0;
+        let mut ly = 0.0;
+        ffi::wlr_cursor_absolute_to_layout_coords(self.wlr_cursor, wlr_device, x, y, &mut lx, &mut ly);
+        (lx, ly)
+    }
+}
+
 unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, touch_down_listener);
     let event = data as *mut ffi::wlr_touch_down_event;
-
-    let seat = &mut *cursor.seat;
-    seat.handle_activity();
-
-    let mut lx = 0.0;
-    let mut ly = 0.0;
-    let wlr_device = &mut (*(*event).touch).base as *mut ffi::wlr_input_device;
-    ffi::wlr_cursor_absolute_to_layout_coords(
-        cursor.wlr_cursor,
-        wlr_device,
-        (*event).x,
-        (*event).y,
-        &mut lx,
-        &mut ly,
-    );
-
-    cursor.touch_points.insert((*event).touch_id, (lx, ly));
-
-    let server = seat.server;
-    if let Some(result) = (*server).scene.at(lx, ly) {
-        match result.data {
-            SceneNodeDataVal::LayerSurface(layer_surface) => {
-                if layer_takes_click_focus(layer_surface) {
-                    seat.focus(Focus::LayerSurface(result.surface));
-                }
-            }
-            _ => {}
-        }
-        
-        let mut is_app_surface = false;
-        let mut is_overlay_window = false;
-        match result.data {
-            SceneNodeDataVal::Window(window) => {
-                if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                    is_app_surface = true;
-                    // Popup counts as chrome like Overlay: the cce-cloud
-                    // launcher must keep receiving clicks in overview.
-                    if (*window).tiling_mode == crate::tiling::TilingMode::Overlay
-                        || (*window).tiling_mode == crate::tiling::TilingMode::Popup
-                    {
-                        is_overlay_window = true;
-                    }
-                }
-            }
-            SceneNodeDataVal::LayerSurface(layer_surface) => {
-                if !layer_surface.is_null() {
-                    is_app_surface = true;
-                    if is_cloud_layer(layer_surface) {
-                        is_overlay_window = true;
-                    }
-                }
-            }
-            SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
-                is_app_surface = true;
-            }
-            _ => {}
-        }
-        let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface && !is_overlay_window;
-
-        if !result.surface.is_null() && !should_block_touch {
-            ffi::wlr_seat_touch_notify_down(
-                seat.wlr_seat,
-                result.surface,
-                (*event).time_msec,
-                (*event).touch_id,
-                result.sx,
-                result.sy,
-            );
-        }
-    }
+    let (lx, ly) = cursor.touch_layout_coords((*event).touch, (*event).x, (*event).y);
+    cursor.touch_down((*event).touch_id, lx, ly, (*event).time_msec);
 }
 
 unsafe extern "C" fn handle_touch_motion(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, touch_motion_listener);
     let event = data as *mut ffi::wlr_touch_motion_event;
-
-    let seat = &mut *cursor.seat;
-    seat.handle_activity();
-
-    if cursor.touch_points.contains_key(&(*event).touch_id) {
-        let wlr_device = &mut (*(*event).touch).base as *mut ffi::wlr_input_device;
-        let mut lx: f64 = 0.0;
-        let mut ly: f64 = 0.0;
-        ffi::wlr_cursor_absolute_to_layout_coords(
-            cursor.wlr_cursor,
-            wlr_device,
-            (*event).x,
-            (*event).y,
-            &mut lx,
-            &mut ly,
-        );
-
-        cursor.touch_points.insert((*event).touch_id, (lx, ly));
-
-        cursor.update_drag_icons();
-
-        let server = seat.server;
-        if let Some(result) = (*server).scene.at(lx, ly) {
-            let mut is_app_surface = false;
-            let mut is_overlay_window = false;
-            match result.data {
-                SceneNodeDataVal::Window(window) => {
-                    if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                        is_app_surface = true;
-                        if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
-                            is_overlay_window = true;
-                        }
-                    }
-                }
-                SceneNodeDataVal::LayerSurface(layer_surface) => {
-                    if !layer_surface.is_null() {
-                        is_app_surface = true;
-                        let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
-                        if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
-                            let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-                            if ns.starts_with("cce-cloud") {
-                                is_overlay_window = true;
-                            }
-                        }
-                    }
-                }
-                SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
-                    is_app_surface = true;
-                }
-                _ => {}
-            }
-            let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface && !is_overlay_window;
-
-            if !should_block_touch {
-                ffi::wlr_seat_touch_notify_motion(
-                    seat.wlr_seat,
-                    (*event).time_msec,
-                    (*event).touch_id,
-                    result.sx,
-                    result.sy,
-                );
-            }
-        }
-    }
+    let (lx, ly) = cursor.touch_layout_coords((*event).touch, (*event).x, (*event).y);
+    cursor.touch_motion((*event).touch_id, lx, ly, (*event).time_msec);
 }
 
 unsafe extern "C" fn handle_touch_up(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, touch_up_listener);
     let event = data as *mut ffi::wlr_touch_up_event;
-
-    let seat = &mut *cursor.seat;
-    seat.handle_activity();
-
-    if let Some((lx, ly)) = cursor.touch_points.remove(&(*event).touch_id) {
-        let server = seat.server;
-        let mut is_app_surface = false;
-        let mut is_overlay_window = false;
-        if let Some(result) = (*server).scene.at(lx, ly) {
-            match result.data {
-                SceneNodeDataVal::Window(window) => {
-                    if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                        is_app_surface = true;
-                        if (*window).tiling_mode == crate::tiling::TilingMode::Overlay {
-                            is_overlay_window = true;
-                        }
-                    }
-                }
-                SceneNodeDataVal::LayerSurface(layer_surface) => {
-                    if !layer_surface.is_null() {
-                        is_app_surface = true;
-                        let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
-                        if !wlr_layer_surface.is_null() && !(*wlr_layer_surface).namespace.is_null() {
-                            let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
-                            if ns.starts_with("cce-cloud") {
-                                is_overlay_window = true;
-                            }
-                        }
-                    }
-                }
-                SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
-                    is_app_surface = true;
-                }
-                _ => {}
-            }
-        }
-        let should_block_touch = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface && !is_overlay_window;
-
-        if !should_block_touch {
-            ffi::wlr_seat_touch_notify_up(
-                seat.wlr_seat,
-                (*event).time_msec,
-                (*event).touch_id,
-            );
-        }
-    }
+    cursor.touch_up((*event).touch_id, (*event).time_msec);
 }
 
-unsafe extern "C" fn handle_touch_cancel(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+unsafe extern "C" fn handle_touch_cancel(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, touch_cancel_listener);
-    
-    let seat = &mut *cursor.seat;
-    seat.handle_activity();
-
-    cursor.touch_points.clear();
-
-    ffi::river_wlr_seat_touch_cancel_all(seat.wlr_seat);
+    let event = data as *mut ffi::wlr_touch_cancel_event;
+    cursor.touch_cancel((*event).touch_id);
 }
 
 unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, touch_frame_listener);
-    
-    let seat = &mut *cursor.seat;
-    seat.handle_activity();
-
-    ffi::wlr_seat_touch_notify_frame(seat.wlr_seat);
+    cursor.touch_frame();
 }
 
 /// A directional swipe bind fires once the accumulated travel (libinput

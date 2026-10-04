@@ -1106,6 +1106,55 @@ headless seat has no keyboard and Chromium crashes in
   measurement and window-content readbacks ran every frame to feed a bar-side
   scrim.
 
+### Touchscreens
+
+Until 2026-10-04 the seat never offered the touch capability, so no client
+ever bound `wl_touch` and every `wlr_seat_touch_notify_*` call went
+nowhere: a touchscreen did nothing. The seat now offers it while a touch
+device is attached (`Seat::touch_devices`, counted in `attach_device` /
+`detach_device`), and **each finger is routed once, at touch-down**
+(`cursor::TouchRoute`, decided by `Cursor::touch_route_at`):
+
+- **`Client`** — the surface under it belongs to a client that bound
+  `wl_touch` (`wlr_surface_accepts_touch`: GTK, Qt, Chromium, Xwayland,
+  foot) and the compositor is not in window-adjust mode. It gets real touch
+  events, focus as a click would give, and the press-time menu dismissals
+  (`press_dismissals`, shared with `handle_button`). Motion is mapped through
+  the surface frame frozen at down (origin plus the scene buffer's scale,
+  the pointer implicit grab's `grab_origin`/`grab_scale`), so a finger that
+  slides off the window keeps reporting surface-local positions to it.
+- **`Pointer`** — everything else: a left button held where the finger is,
+  run through the real `handle_button` and motion path. That covers every
+  cce-ui app (the toolkit has no `wl_touch` handling), the status bar, the
+  lock screen, the desktop, and all the compositor's own presses — overview
+  (where every finger takes this route, even over a touch client), the
+  adjust handles, window body drags and the rubber band — none of which
+  needed a touch path of its own. One finger at a time, since the pointer is
+  singular.
+- **`Ignored`** — a second finger while one drives the pointer, or any
+  finger while a real button or seat op holds it.
+
+A cancel on a `Pointer` finger releases the button (a stuck button is worse
+than a stray click), and on a `Client` finger sends `wl_touch.cancel`
+(`river_wlr_seat_touch_cancel_point`, which voids that client's whole
+sequence, the protocol's unit). Unplugging the last touchscreen cancels any
+fingers still down. The cursor image goes away on touch-down
+(`Cursor::hidden_by_touch`; `set_xcursor` and `handle_request_set_cursor`
+both honour it) and real pointer motion brings it back
+(`unhide_after_touch`, which clears pointer focus so the client under it
+re-enters and sets its cursor again).
+
+**Not yet done:** touch gestures (edge swipes, a two-finger pan or pinch of
+the desk) and finger scrolling in cce-ui apps, where a drag is a held button
+and so selects rather than scrolls.
+
+Drive it in a shadow with `ccectl touch down <id> <x> <y>`, `motion <id> <x>
+<y>`, `up <id>`, `cancel <id>` and `tap <x> <y>` (layout pixels). The first
+use sets `Seat::touch_injected`, which offers the capability as a
+touchscreen would, so `weston-simple-touch` under `WAYLAND_DEBUG=1` shows
+the `Client` route's `wl_touch` traffic and a cce-ui app shows the
+`Pointer` route.
+
 ### Portal global shortcuts
 
 A native Wayland app cannot grab a key; it asks xdg-desktop-portal's

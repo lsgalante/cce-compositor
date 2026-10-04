@@ -66,7 +66,7 @@ impl DragIcon {
             }
             ffi::wlr_drag_grab_type_WLR_DRAG_GRAB_KEYBOARD_TOUCH => {
                 let touch_id = ffi::river_wlr_drag_get_touch_id((*self.wlr_drag_icon).drag);
-                if let Some(&(lx, ly)) = (*cursor).touch_points.get(&touch_id) {
+                if let Some(&crate::cursor::TouchPoint { lx, ly, .. }) = (*cursor).touch_points.get(&touch_id) {
                     ffi::wlr_scene_node_set_position(
                         self.scene_drag_icon as *mut ffi::wlr_scene_node,
                         lx as i32,

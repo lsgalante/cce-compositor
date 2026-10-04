@@ -645,9 +645,12 @@ struct wlr_tablet_tool *river_wlr_tablet_v2_tablet_tool_get_wlr_tool(struct wlr_
 	return tool->wlr_tool;
 }
 
-void river_wlr_seat_touch_cancel_all(struct wlr_seat *wlr_seat) {
-	struct wlr_touch_point *point, *tmp;
-	wl_list_for_each_safe(point, tmp, &wlr_seat->touch_state.touch_points, link) {
+// wl_touch.cancel is per client: it voids every point that client holds,
+// and wlr_seat_touch_notify_cancel destroys them all. So cancelling one
+// finger cancels its client's whole sequence — the protocol's unit.
+void river_wlr_seat_touch_cancel_point(struct wlr_seat *wlr_seat, int32_t touch_id) {
+	struct wlr_touch_point *point = wlr_seat_touch_get_point(wlr_seat, touch_id);
+	if (point != NULL && point->client != NULL) {
 		wlr_seat_touch_notify_cancel(wlr_seat, point->client);
 	}
 }

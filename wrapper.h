@@ -250,7 +250,7 @@ bool river_wlr_tablet_v2_tablet_tool_get_is_down(struct wlr_tablet_v2_tablet_too
 size_t river_wlr_tablet_v2_tablet_tool_get_num_buttons(struct wlr_tablet_v2_tablet_tool *tool);
 struct wlr_tablet_tool *river_wlr_tablet_v2_tablet_tool_get_wlr_tool(struct wlr_tablet_v2_tablet_tool *tool);
 
-void river_wlr_seat_touch_cancel_all(struct wlr_seat *wlr_seat);
+void river_wlr_seat_touch_cancel_point(struct wlr_seat *wlr_seat, int32_t touch_id);
 struct wlr_surface *river_wlr_seat_get_keyboard_focused_surface(struct wlr_seat *seat);
 
 int river_wlr_surface_get_width(struct wlr_surface *surface);

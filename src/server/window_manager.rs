@@ -6485,6 +6485,62 @@ impl WindowManager {
                     "error: invalid x or y\n".to_string()
                 }
             }
+            // ── Synthetic touch (`ccectl touch …`), in layout pixels. Runs the
+            // same `Cursor::touch_*` routing a touchscreen does; the first use
+            // offers the touch capability as a touchscreen would, so clients
+            // in a headless shadow bind `wl_touch` and the client route can be
+            // exercised too.
+            "touch" => {
+                let usage = "error: usage: touch down <id> <x> <y> | motion <id> <x> <y> | up <id> | cancel <id> | tap <x> <y>\n";
+                let id = |i: usize| parts.get(i).and_then(|v| v.parse::<i32>().ok());
+                let num = |i: usize| parts.get(i).and_then(|v| parse_finite(v).ok());
+                let stage = parts.get(1).copied().unwrap_or("");
+                let time = crate::util::msec_timestamp();
+                let ok = match stage {
+                    "down" | "motion" => match (id(2), num(3), num(4)) {
+                        (Some(id), Some(x), Some(y)) => {
+                            self.for_each_seat_touch(|cursor| {
+                                if stage == "down" {
+                                    cursor.touch_down(id, x, y, time);
+                                } else {
+                                    cursor.touch_motion(id, x, y, time);
+                                }
+                                cursor.touch_frame();
+                            });
+                            true
+                        }
+                        _ => false,
+                    },
+                    "up" | "cancel" => match id(2) {
+                        Some(id) => {
+                            self.for_each_seat_touch(|cursor| {
+                                if stage == "up" {
+                                    cursor.touch_up(id, time);
+                                } else {
+                                    cursor.touch_cancel(id);
+                                }
+                                cursor.touch_frame();
+                            });
+                            true
+                        }
+                        None => false,
+                    },
+                    "tap" => match (num(2), num(3)) {
+                        (Some(x), Some(y)) => {
+                            self.for_each_seat_touch(|cursor| {
+                                cursor.touch_down(0, x, y, time);
+                                cursor.touch_frame();
+                                cursor.touch_up(0, time);
+                                cursor.touch_frame();
+                            });
+                            true
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                if ok { "ok\n".to_string() } else { usage.to_string() }
+            }
             "pointer-move-by" => {
                 if parts.len() < 3 { return "error: usage: pointer-move-by <dx> <dy>\n".to_string(); }
                 if let (Ok(dx), Ok(dy)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
@@ -6770,6 +6826,23 @@ impl WindowManager {
         while curr_seat != seats_list {
             let next_seat = (*curr_seat).next;
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+            f(&mut (*seat).cursor);
+            curr_seat = next_seat;
+        }
+    }
+
+    /// `for_each_cursor` for `ccectl touch`: marks each seat as having had
+    /// touch injected first, which offers clients the touch capability.
+    unsafe fn for_each_seat_touch(&mut self, mut f: impl FnMut(&mut crate::cursor::Cursor)) {
+        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+        let mut curr_seat = (*seats_list).next;
+        while curr_seat != seats_list {
+            let next_seat = (*curr_seat).next;
+            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+            if !(*seat).touch_injected {
+                (*seat).touch_injected = true;
+                (*seat).update_capabilities();
+            }
             f(&mut (*seat).cursor);
             curr_seat = next_seat;
         }
