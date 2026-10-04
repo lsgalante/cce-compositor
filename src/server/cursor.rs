@@ -1395,6 +1395,19 @@ unsafe fn is_cloud_layer(layer_surface: *mut crate::layer_shell::LayerSurface) -
         .starts_with("cce-cloud")
 }
 
+/// Whether a click or touch on this layer surface may give it keyboard
+/// focus. Not when it asked for none: per wlr-layer-shell such a surface is
+/// never given keyboard focus, and the one that relies on it — an on-screen
+/// keyboard (cce-keyboard), typing into the window it was clicked over —
+/// cannot work if a click on its keys takes focus off that window.
+unsafe fn layer_takes_click_focus(layer_surface: *mut crate::layer_shell::LayerSurface) -> bool {
+    if layer_surface.is_null() || (*layer_surface).wlr_layer_surface.is_null() {
+        return false;
+    }
+    (*(*layer_surface).wlr_layer_surface).current.keyboard_interactive
+        != ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE
+}
+
 unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, button_listener);
     let event = data as *mut ffi::wlr_pointer_button_event;
@@ -2246,9 +2259,11 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         }
                     }
                 }
-                SceneNodeDataVal::LayerSurface(_) => {
+                SceneNodeDataVal::LayerSurface(layer_surface) => {
                     clicked_something = true;
-                    seat.focus(Focus::LayerSurface(result.surface));
+                    if layer_takes_click_focus(layer_surface) {
+                        seat.focus(Focus::LayerSurface(result.surface));
+                    }
                 }
                 SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                     clicked_something = true;
@@ -3574,8 +3589,10 @@ unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *m
     let server = seat.server;
     if let Some(result) = (*server).scene.at(lx, ly) {
         match result.data {
-            SceneNodeDataVal::LayerSurface(_) => {
-                seat.focus(Focus::LayerSurface(result.surface));
+            SceneNodeDataVal::LayerSurface(layer_surface) => {
+                if layer_takes_click_focus(layer_surface) {
+                    seat.focus(Focus::LayerSurface(result.surface));
+                }
             }
             _ => {}
         }
