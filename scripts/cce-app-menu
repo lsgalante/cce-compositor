@@ -52,54 +52,38 @@ fi
 
 # The window's current mode, so the submenu can mark it. `windows --json` is
 # one object per line; a window that has gone since the click yields "".
-current_mode=$("$CCE_CTL" windows --json 2>/dev/null | python3 -c '
-import sys, json
-want = sys.argv[1]
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    try:
-        w = json.loads(line)
-    except ValueError:
-        continue
-    if str(w.get("id")) == want:
-        print(str(w.get("mode", "")).lower())
-        break
-' "$window_index")
+# jq, not python, here and below: the popup waits on everything before it,
+# and each python start costs 100-200 ms (more under load) where jq costs a
+# few. cce-desktop-menu builds its menu the same way.
+current_mode=$("$CCE_CTL" windows --json 2>/dev/null | jq -Rrn --arg want "$window_index" '
+    first(inputs | fromjson? | select((.id | tostring) == $want)
+          | .mode // "" | tostring | ascii_downcase)' 2>/dev/null)
 
-# Build the layout in python so the app_id (client-chosen text) is escaped
+# Build the layout in jq so the app_id (client-chosen text) is escaped
 # for JSON rather than spliced into it.
-json_layout=$(python3 - "$app_id" "$current_mode" <<'PY'
-import sys, json
-app_id, current = sys.argv[1], sys.argv[2]
-def mode(text, ident):
-    mark = "● " if ident == current else "   "
-    return {"type": "button", "text": mark + text, "id": ident}
-layout = {"pages": [
-    {"title": app_id, "justify": "left", "widgets": [
-        {"type": "button", "text": "Window Mode >", "id": "mode_page", "target_page": 1},
-        {"type": "button", "text": "Minimize", "id": "minimize"},
-        {"type": "button", "text": "Close Window", "id": "close"},
+json_layout=$(jq -nc --arg app_id "$app_id" --arg current "$current_mode" '
+def btn($text; $id): {type: "button", text: $text, id: $id};
+def mode($text; $id): btn((if $id == $current then "● " else "   " end) + $text; $id);
+{pages: [
+    {title: $app_id, justify: "left", widgets: [
+        btn("Window Mode >"; "mode_page") + {target_page: 1},
+        btn("Minimize"; "minimize"),
+        btn("Close Window"; "close")
     ]},
-    {"title": "Window Mode", "justify": "left", "widgets": [
-        mode("Floating", "floating"),
-        mode("Tiled", "tiled"),
-        mode("Fullscreen", "fullscreen"),
-        {"type": "button", "text": "< Back", "id": "back", "target_page": 0},
-    ]},
-]}
-print(json.dumps(layout))
-PY
-)
+    {title: "Window Mode", justify: "left", widgets: [
+        mode("Floating"; "floating"),
+        mode("Tiled"; "tiled"),
+        mode("Fullscreen"; "fullscreen"),
+        btn("< Back"; "back") + {target_page: 0}
+    ]}
+]}')
 
 # Spawn cce-cloud with the json layout and coordinates
 selected=$(echo "$json_layout" | $CLEAR_CLOUD --json $x_arg $y_arg 2>/dev/null)
 
 [[ -z "$selected" ]] && exit 0
 
-# Parse button using python for reliability and robustness
-btn=$(echo "$selected" | python3 -c "import sys, json; print(json.load(sys.stdin).get('button', ''))")
+btn=$(jq -r '.button // ""' <<<"$selected" 2>/dev/null)
 
 [[ -z "$btn" ]] && exit 0
 
