@@ -213,13 +213,14 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Seventeen modules carry unit tests — `window_manager.rs` (the most of any, among
+Eighteen modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
 `config.rs` (among them `backdrop_compress_params`), `idle.rs`,
 `idle_inhibit_manager.rs`, `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
 `text.rs`, `global_shortcuts.rs` (trigger parsing),
 `cursor.rs` (the swipe lean's direction, `swipe_lean`), `min_sizes.rs`,
 `selection.rs` (the rubber band's rect and its hit rule),
+`touch.rs` (edge-swipe progress, finger centroid/spread tracking, swipe vs pinch),
 `ipc_server.rs` (command framing and cutting off a stalled subscriber),
 `status_server.rs` (a slow reader, and a client that never reads),
 `keyboard_group.rs` (the keys a locked session keeps) and
@@ -1108,54 +1109,91 @@ headless seat has no keyboard and Chromium crashes in
 
 ### Touchscreens
 
-Until 2026-10-04 the seat never offered the touch capability, so no client
-ever bound `wl_touch` and every `wlr_seat_touch_notify_*` call went
-nowhere: a touchscreen did nothing. The seat now offers it while a touch
-device is attached (`Seat::touch_devices`, counted in `attach_device` /
-`detach_device`), and **each finger is routed once, at touch-down**
-(`cursor::TouchRoute`, decided by `Cursor::touch_route_at`):
+`src/server/touch.rs`. Until 2026-10-04 the seat never offered the touch
+capability, so no client ever bound `wl_touch` and a touchscreen did
+nothing. The seat now offers it while a touch device is attached
+(`Seat::touch_devices`, counted in `attach_device` / `detach_device`), and
+**each finger is routed once, at touch-down** (`touch::TouchRoute`, decided
+by `Cursor::touch_route_at`):
 
 - **`Client`** — the surface under it belongs to a client that bound
   `wl_touch` (`wlr_surface_accepts_touch`: GTK, Qt, Chromium, Xwayland,
-  foot) and the compositor is not in window-adjust mode. It gets real touch
-  events, focus as a click would give, and the press-time menu dismissals
+  foot, and every cce-ui app since cce-ui's `backend/touch.rs`) and the
+  compositor is not in window-adjust mode. It gets real touch events,
+  focus as a click would give, and the press-time menu dismissals
   (`press_dismissals`, shared with `handle_button`). Motion is mapped through
   the surface frame frozen at down (origin plus the scene buffer's scale,
   the pointer implicit grab's `grab_origin`/`grab_scale`), so a finger that
   slides off the window keeps reporting surface-local positions to it.
 - **`Pointer`** — everything else: a left button held where the finger is,
-  run through the real `handle_button` and motion path. That covers every
-  cce-ui app (the toolkit has no `wl_touch` handling), the status bar, the
-  lock screen, the desktop, and all the compositor's own presses — overview
-  (where every finger takes this route, even over a touch client), the
-  adjust handles, window body drags and the rubber band — none of which
-  needed a touch path of its own. One finger at a time, since the pointer is
-  singular.
+  run through the real `handle_button` and motion path, which is how the
+  desktop and all the compositor's own presses — overview (where every
+  finger takes this route, even over a touch client), the adjust handles,
+  window body drags and the rubber band — work by finger with no touch path
+  of their own. One finger at a time, since the pointer is singular. **The
+  press waits** (since 2026-10-05): the pointer hovers at the down point,
+  and the press lands there only once the finger moves past `TAP_SLOP`
+  (10 px; then the drag follows) or lifts (a tap). That is what lets a
+  second or third finger turn the touch into a gesture with no half-made
+  click to take back.
 - **`Ignored`** — a second finger while one drives the pointer, or any
   finger while a real button or seat op holds it.
+- **`Claimed`** — owned by a gesture, below.
 
-A cancel on a `Pointer` finger releases the button (a stuck button is worse
-than a stray click), and on a `Client` finger sends `wl_touch.cancel`
-(`river_wlr_seat_touch_cancel_point`, which voids that client's whole
-sequence, the protocol's unit). Unplugging the last touchscreen cancels any
-fingers still down. The cursor image goes away on touch-down
-(`Cursor::hidden_by_touch`; `set_xcursor` and `handle_request_set_cursor`
-both honour it) and real pointer motion brings it back
-(`unhide_after_touch`, which clears pointer focus so the client under it
-re-enters and sets its cursor again).
+**Gestures** (since 2026-10-05, `touch::Claim`). While one is live every
+finger is the compositor's; fingers already given to clients get
+`wl_touch.cancel` when it begins.
 
-cce-ui binds `wl_touch` since 2026-10-05, so its windows take the `Client`
-route and decide tap / scroll / hold-drag themselves (`cce-ui`'s
-`backend/touch.rs`); before that a finger drag in one was a held button and
-selected rather than scrolled. **Not yet done:** touch gestures (edge
-swipes, a two-finger pan or pinch of the desk).
+- **Desk pan and zoom.** One finger dragged on the bare desk pans it, in
+  normal mode (in overview it stays the selection band). A second finger
+  joining a finger that went down on the desk — in either mode — makes it
+  a two-finger pan that pinch-zooms about the midpoint
+  (`queue_pan`/`queue_pinch`, as the trackpad's). The lift coasts on the
+  pan's velocity, like a trackpad pan, unless the fingers had rested. Two
+  fingers that start on a window are the app's (a browser's pinch-zoom).
+- **Three or four fingers**, anywhere, claim as the third lands (unless a
+  pointer finger is mid-drag). `decide` waits for `DECIDE_TRAVEL` of
+  centroid travel (a swipe) or a `DECIDE_SCALE` spread change (a pinch),
+  counting the most fingers seen, so four fingers landing one at a time are
+  a four-finger gesture. A swipe runs through the touchpad's own
+  `handle_swipe_*` (`gesture_from_touch` keeps it off clients'
+  pointer-gesture streams and past the trackpad's `gestures { swipe }`
+  switch), so the `swipe3_*`/`swipe4_*` binds, the lean, repeat steps and
+  focus aim all apply, with travel in layout px against the same
+  thresholds. **A touchscreen swipe is natural**: the desk follows the
+  fingers, so the bind that fires is the way the CAMERA goes — fingers
+  dragging left fire `swipe3_right`, four fingers dragging up fire
+  `swipe4_down`. A pinch fires the `pinch3_*`/`pinch4_*` binds
+  (`pinch_hits`, the trackpad's thresholds) once.
+- **Edge swipes** bind like any gesture, in input.kdl:
+  `overview (gesture)"edge_bottom"` (`config::parse_edge_gesture`;
+  `edge_left|right|top|bottom`, the edge the finger starts from, optional
+  modifiers). A first finger landing within `EDGE_ZONE` (24 px) of a
+  screen edge — one no other output continues past — is held only when
+  such a bind exists; `EDGE_FIRE` (60 px) inward fires it once. A finger
+  that goes along the edge or back out is handed to the normal route from
+  its down point (`edge_release`), one that lifts where it landed is
+  delivered as the tap it was, late, and a second finger ends the edge
+  claim the same way. So a bound `edge_top` delays every tap on the status
+  bar's top 24 px until the lift.
+
+A cancel on a `Pointer` finger releases the button if it was pressed (a
+stuck button is worse than a stray drop), and on a `Client` finger sends
+`wl_touch.cancel` (`river_wlr_seat_touch_cancel_point`, which voids that
+client's whole sequence, the protocol's unit). Unplugging the last
+touchscreen cancels any fingers still down. The cursor image goes away on
+touch-down (`Cursor::hidden_by_touch`; `set_xcursor` and
+`handle_request_set_cursor` both honour it) and real pointer motion brings
+it back (`unhide_after_touch`, which clears pointer focus so the client
+under it re-enters and sets its cursor again).
 
 Drive it in a shadow with `ccectl touch down <id> <x> <y>`, `motion <id> <x>
-<y>`, `up <id>`, `cancel <id>` and `tap <x> <y>` (layout pixels). The first
-use sets `Seat::touch_injected`, which offers the capability as a
-touchscreen would, so `weston-simple-touch` under `WAYLAND_DEBUG=1` shows
-the `Client` route's `wl_touch` traffic and a cce-ui app shows the
-`Pointer` route.
+<y>`, `up <id>`, `cancel <id>` and `tap <x> <y>` (layout pixels; several ids
+down at once are several fingers). The first use sets
+`Seat::touch_injected`, which offers the capability as a touchscreen would,
+so `weston-simple-touch` under `WAYLAND_DEBUG=1` shows the `Client` route's
+`wl_touch` traffic — and the `cancel` a third finger sends it. A shadow's
+input.kdl is its own copy: add `edge_*`/`pinch3_*` binds there to try them.
 
 ### Portal global shortcuts
 

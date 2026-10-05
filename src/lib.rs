@@ -95,6 +95,8 @@ pub mod xwayland_window;
 pub mod min_sizes;
 #[path = "server/selection.rs"]
 pub mod selection;
+#[path = "server/touch.rs"]
+pub mod touch;
 #[path = "server/xwayland_override_redirect.rs"]
 pub mod xwayland_override_redirect;
 #[path = "server/text_input.rs"]

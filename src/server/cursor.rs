@@ -5,36 +5,7 @@ use crate::scene_node_data::SceneNodeDataVal;
 use crate::drag_icon::DragIcon;
 use std::collections::{HashMap, HashSet};
 
-/// One finger on a touchscreen (`Cursor::touch_points`).
-#[derive(Clone, Copy, Debug)]
-pub struct TouchPoint {
-    pub lx: f64,
-    pub ly: f64,
-    pub route: TouchRoute,
-}
-
-/// Where a touch point's events go, fixed at touch-down for its lifetime —
-/// a finger that slides onto another window keeps talking to the one it
-/// went down on, exactly like a held button's implicit grab.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum TouchRoute {
-    /// A client that bound `wl_touch` gets real touch events. Positions are
-    /// surface-local through the frame frozen at down: `origin` is the
-    /// surface's layout origin and `scale` its surface-per-layout-pixel
-    /// ratio, the same mapping the pointer's implicit grab uses
-    /// (`grab_origin` / `grab_scale`).
-    Client { origin: (f64, f64), scale: f64 },
-    /// This finger drives the pointer: a left button held at its position.
-    /// Everything that is not a touch-capable client goes this way — cce-ui
-    /// apps, the status bar, the lock screen, the desktop, and every press
-    /// the compositor itself handles (overview, the adjust-mode handles,
-    /// drag-selection) — so all of those work by touch without a touch path
-    /// of their own. One finger at a time: the pointer is singular.
-    Pointer,
-    /// Swallowed until it lifts: a second finger while another drives the
-    /// pointer, or a touch while a real button is held.
-    Ignored,
-}
+pub use crate::touch::{TouchPoint, TouchRoute};
 
 pub struct Cursor {
     pub seat: *mut Seat,
@@ -98,6 +69,15 @@ pub struct Cursor {
     /// every tap would otherwise leave an arrow wherever the hand last was.
     /// Real pointer motion brings it back (`unhide_after_touch`).
     pub hidden_by_touch: bool,
+    /// A gesture the compositor has taken from the touchscreen: an edge
+    /// swipe, a desk pan/zoom, or a three/four-finger swipe or pinch
+    /// (`touch::Claim`). While one is live, every finger is its.
+    pub touch_claim: crate::touch::Claim,
+    /// The swipe being run through `handle_swipe_*` comes from the
+    /// touchscreen (`touch::Claim::Multi`), not a touchpad: the trackpad's
+    /// gesture switches do not gate it, and no client hears it as a
+    /// pointer gesture.
+    pub gesture_from_touch: bool,
     pub pressed: HashMap<u32, Option<*mut crate::pointer_binding::PointerBinding>>,
     /// Buttons whose PRESS was forwarded to the focused client. The paired
     /// release must reach the client no matter what the compositor is doing
@@ -219,6 +199,8 @@ impl Default for Cursor {
 
             touch_points: HashMap::new(),
             hidden_by_touch: false,
+            touch_claim: crate::touch::Claim::None,
+            gesture_from_touch: false,
             pressed: HashMap::new(),
             notified_pressed: HashSet::new(),
             grab_origin: (0.0, 0.0),
@@ -383,35 +365,35 @@ impl Cursor {
         );
 
         let touch_down_ptr = &mut self.touch_down_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*touch_down_ptr).notify = Some(handle_touch_down);
+        (*touch_down_ptr).notify = Some(crate::touch::handle_touch_down);
         wl_signal_add(
             ffi::river_wlr_cursor_get_touch_down_signal(wlr_cursor),
             &mut self.touch_down_listener,
         );
 
         let touch_motion_ptr = &mut self.touch_motion_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*touch_motion_ptr).notify = Some(handle_touch_motion);
+        (*touch_motion_ptr).notify = Some(crate::touch::handle_touch_motion);
         wl_signal_add(
             ffi::river_wlr_cursor_get_touch_motion_signal(wlr_cursor),
             &mut self.touch_motion_listener,
         );
 
         let touch_up_ptr = &mut self.touch_up_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*touch_up_ptr).notify = Some(handle_touch_up);
+        (*touch_up_ptr).notify = Some(crate::touch::handle_touch_up);
         wl_signal_add(
             ffi::river_wlr_cursor_get_touch_up_signal(wlr_cursor),
             &mut self.touch_up_listener,
         );
 
         let touch_cancel_ptr = &mut self.touch_cancel_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*touch_cancel_ptr).notify = Some(handle_touch_cancel);
+        (*touch_cancel_ptr).notify = Some(crate::touch::handle_touch_cancel);
         wl_signal_add(
             ffi::river_wlr_cursor_get_touch_cancel_signal(wlr_cursor),
             &mut self.touch_cancel_listener,
         );
 
         let touch_frame_ptr = &mut self.touch_frame_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*touch_frame_ptr).notify = Some(handle_touch_frame);
+        (*touch_frame_ptr).notify = Some(crate::touch::handle_touch_frame);
         wl_signal_add(
             ffi::river_wlr_cursor_get_touch_frame_signal(wlr_cursor),
             &mut self.touch_frame_listener,
@@ -1055,7 +1037,7 @@ impl Cursor {
     }
 
     /// Take the cursor image off for a touch (see `hidden_by_touch`).
-    unsafe fn hide_for_touch(&mut self) {
+    pub(crate) unsafe fn hide_for_touch(&mut self) {
         if self.hidden_by_touch {
             return;
         }
@@ -1106,7 +1088,7 @@ impl Cursor {
 
     /// `inject_motion_to` without bringing a touch-hidden cursor back: the
     /// emulated pointer of a touch (`TouchRoute::Pointer`) moves this way.
-    unsafe fn warp_to(&mut self, x: f64, y: f64) {
+    pub(crate) unsafe fn warp_to(&mut self, x: f64, y: f64) {
         (*self.seat).handle_activity();
         ffi::wlr_cursor_warp(self.wlr_cursor, std::ptr::null_mut(), x, y);
         self.update_hovered();
@@ -1480,7 +1462,7 @@ unsafe fn is_cloud_layer(layer_surface: *mut crate::layer_shell::LayerSurface) -
 /// never given keyboard focus, and the one that relies on it — an on-screen
 /// keyboard (cce-keyboard), typing into the window it was clicked over —
 /// cannot work if a click on its keys takes focus off that window.
-unsafe fn layer_takes_click_focus(layer_surface: *mut crate::layer_shell::LayerSurface) -> bool {
+pub(crate) unsafe fn layer_takes_click_focus(layer_surface: *mut crate::layer_shell::LayerSurface) -> bool {
     if layer_surface.is_null() || (*layer_surface).wlr_layer_surface.is_null() {
         return false;
     }
@@ -1492,7 +1474,7 @@ unsafe fn layer_takes_click_focus(layer_surface: *mut crate::layer_shell::LayerS
 /// lands outside of. Shared by a pointer press (`handle_button`) and a
 /// touch that goes to a client as touch (`handle_touch_down`); an
 /// emulated touch arrives as a pointer press and runs it there.
-unsafe fn press_dismissals(server: *mut crate::server::Server, lx: f64, ly: f64) {
+pub(crate) unsafe fn press_dismissals(server: *mut crate::server::Server, lx: f64, ly: f64) {
     // Click-away-close for in-surface status menus: if any status
     // segment is expanded (menu open) and this press did not land on it,
     // push a one-shot dismiss over the status socket. The line carries
@@ -3656,217 +3638,6 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
     }
 }
 
-// ── Touchscreen ──────────────────────────────────────────────────────────────
-// A finger is routed once, at touch-down (`TouchRoute`): a surface whose
-// client bound `wl_touch` gets real touch events; anything else gets the
-// pointer, a left button held where the finger is. The `Cursor` methods take
-// layout coordinates, so the device handlers below and `ccectl touch` (a
-// headless shadow has no touchscreen) share every line of the routing.
-
-impl Cursor {
-    /// Decide where a new finger at `lx, ly` goes. In window-adjust mode
-    /// (overview, or Super held) every press is the compositor's to spend
-    /// — the handles, a window body's drag, the rubber band — and those live
-    /// on the pointer path, so the finger becomes the pointer even over a
-    /// touch-capable window.
-    unsafe fn touch_route_at(&self, lx: f64, ly: f64) -> TouchRoute {
-        let seat = &*self.seat;
-        let server = seat.server;
-        if let Some(result) = (*server).scene.at(lx, ly) {
-            // Locked, only the lock surface may hear a finger, as only it
-            // may hear the pointer (`passthrough`).
-            let locked = (*server).lock_manager.state != crate::lock_manager::LockState::Unlocked;
-            let lock_ok = !locked || matches!(result.data, SceneNodeDataVal::LockSurface(_));
-            if lock_ok
-                && !result.surface.is_null()
-                && !(*server).wm.window_adjust_active()
-                && ffi::wlr_surface_accepts_touch(result.surface, seat.wlr_seat)
-            {
-                // The implicit grab's frame (see the button path): the
-                // surface's scene buffer may be drawn scaled, so map through
-                // its destination size rather than assume 1:1.
-                let mut scale = 1.0;
-                if !result.node.is_null() {
-                    let dest_w = ffi::river_scene_buffer_get_dest_width(result.node as *mut ffi::wlr_scene_buffer);
-                    let surf_w = ffi::river_wlr_surface_get_width(result.surface);
-                    if dest_w > 0 && surf_w > 0 {
-                        scale = surf_w as f64 / dest_w as f64;
-                    }
-                }
-                let origin = (lx - result.sx / scale, ly - result.sy / scale);
-                return TouchRoute::Client { origin, scale };
-            }
-        }
-        // The pointer is singular: a second finger cannot also drive it, and
-        // a real button held (or a seat op it started) owns it already.
-        let pointer_busy = self.touch_points.values().any(|p| p.route == TouchRoute::Pointer)
-            || !self.pressed.is_empty()
-            || seat.op.is_some();
-        if pointer_busy {
-            TouchRoute::Ignored
-        } else {
-            TouchRoute::Pointer
-        }
-    }
-
-    pub unsafe fn touch_down(&mut self, id: i32, lx: f64, ly: f64, time_msec: u32) {
-        (*self.seat).handle_activity();
-        let server = (*self.seat).server;
-        // A touch is deliberate input, like a press (see `Seat::focus`).
-        (*server).wm.startup_input_seen = true;
-        self.hide_for_touch();
-        // A device that reuses a live id without lifting it first has lost
-        // the up; finish the old point so its button or client is released.
-        if self.touch_points.contains_key(&id) {
-            log::warn!("touch: down for live touch id {id}; lifting the old point first");
-            self.touch_up(id, time_msec);
-        }
-
-        let route = self.touch_route_at(lx, ly);
-        self.touch_points.insert(id, TouchPoint { lx, ly, route });
-        log::debug!("touch: down id={id} at ({lx:.0}, {ly:.0}) -> {route:?}");
-
-        match route {
-            TouchRoute::Client { origin, scale } => {
-                press_dismissals(server, lx, ly);
-                let Some(result) = (*server).scene.at(lx, ly) else { return };
-                // Focus as a click would (`handle_button`).
-                let seat = &mut *self.seat;
-                match result.data {
-                    SceneNodeDataVal::Window(window) => {
-                        if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                            seat.focus(Focus::Window(window));
-                        }
-                    }
-                    SceneNodeDataVal::LayerSurface(layer_surface) => {
-                        if layer_takes_click_focus(layer_surface) {
-                            seat.focus(Focus::LayerSurface(result.surface));
-                        }
-                    }
-                    _ => {}
-                }
-                ffi::wlr_seat_touch_notify_down(
-                    seat.wlr_seat,
-                    result.surface,
-                    time_msec,
-                    id,
-                    (lx - origin.0) * scale,
-                    (ly - origin.1) * scale,
-                );
-            }
-            TouchRoute::Pointer => {
-                self.warp_to(lx, ly);
-                self.inject_button(BTN_LEFT, true);
-            }
-            TouchRoute::Ignored => {}
-        }
-    }
-
-    pub unsafe fn touch_motion(&mut self, id: i32, lx: f64, ly: f64, time_msec: u32) {
-        (*self.seat).handle_activity();
-        let Some(point) = self.touch_points.get_mut(&id) else { return };
-        point.lx = lx;
-        point.ly = ly;
-        let route = point.route;
-        match route {
-            TouchRoute::Client { origin, scale } => {
-                ffi::wlr_seat_touch_notify_motion(
-                    (*self.seat).wlr_seat,
-                    time_msec,
-                    id,
-                    (lx - origin.0) * scale,
-                    (ly - origin.1) * scale,
-                );
-                // A touch drag's icon follows the finger.
-                self.update_drag_icons();
-            }
-            TouchRoute::Pointer => self.warp_to(lx, ly),
-            TouchRoute::Ignored => {}
-        }
-    }
-
-    pub unsafe fn touch_up(&mut self, id: i32, time_msec: u32) {
-        (*self.seat).handle_activity();
-        let Some(point) = self.touch_points.remove(&id) else { return };
-        match point.route {
-            TouchRoute::Client { .. } => {
-                ffi::wlr_seat_touch_notify_up((*self.seat).wlr_seat, time_msec, id);
-            }
-            TouchRoute::Pointer => self.inject_button(BTN_LEFT, false),
-            TouchRoute::Ignored => {}
-        }
-    }
-
-    /// The device gave up on a finger (a palm, a gesture the kernel took).
-    /// A client is told `wl_touch.cancel`, which voids its whole sequence; a
-    /// finger driving the pointer releases the button — a cancelled tap
-    /// still clicks, but a held button must never be left behind.
-    pub unsafe fn touch_cancel(&mut self, id: i32) {
-        (*self.seat).handle_activity();
-        let Some(point) = self.touch_points.remove(&id) else { return };
-        match point.route {
-            TouchRoute::Client { .. } => ffi::river_wlr_seat_touch_cancel_point((*self.seat).wlr_seat, id),
-            TouchRoute::Pointer => self.inject_button(BTN_LEFT, false),
-            TouchRoute::Ignored => {}
-        }
-    }
-
-    pub unsafe fn touch_frame(&mut self) {
-        // The emulated pointer frames each of its own events; only touch
-        // clients are waiting on this one.
-        if self.touch_points.values().any(|p| matches!(p.route, TouchRoute::Client { .. }))
-            || ffi::wlr_seat_touch_num_points((*self.seat).wlr_seat) > 0
-        {
-            ffi::wlr_seat_touch_notify_frame((*self.seat).wlr_seat);
-        }
-    }
-
-    /// Layout coordinates of a touch event's normalized `x, y`, through the
-    /// device's output mapping (`map_to_output` / `map_to_region`).
-    unsafe fn touch_layout_coords(&self, touch: *mut ffi::wlr_touch, x: f64, y: f64) -> (f64, f64) {
-        let wlr_device = if touch.is_null() {
-            std::ptr::null_mut()
-        } else {
-            &mut (*touch).base as *mut ffi::wlr_input_device
-        };
-        let mut lx = 0.0;
-        let mut ly = 0.0;
-        ffi::wlr_cursor_absolute_to_layout_coords(self.wlr_cursor, wlr_device, x, y, &mut lx, &mut ly);
-        (lx, ly)
-    }
-}
-
-unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let cursor = &mut *crate::container_of!(listener, Cursor, touch_down_listener);
-    let event = data as *mut ffi::wlr_touch_down_event;
-    let (lx, ly) = cursor.touch_layout_coords((*event).touch, (*event).x, (*event).y);
-    cursor.touch_down((*event).touch_id, lx, ly, (*event).time_msec);
-}
-
-unsafe extern "C" fn handle_touch_motion(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let cursor = &mut *crate::container_of!(listener, Cursor, touch_motion_listener);
-    let event = data as *mut ffi::wlr_touch_motion_event;
-    let (lx, ly) = cursor.touch_layout_coords((*event).touch, (*event).x, (*event).y);
-    cursor.touch_motion((*event).touch_id, lx, ly, (*event).time_msec);
-}
-
-unsafe extern "C" fn handle_touch_up(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let cursor = &mut *crate::container_of!(listener, Cursor, touch_up_listener);
-    let event = data as *mut ffi::wlr_touch_up_event;
-    cursor.touch_up((*event).touch_id, (*event).time_msec);
-}
-
-unsafe extern "C" fn handle_touch_cancel(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let cursor = &mut *crate::container_of!(listener, Cursor, touch_cancel_listener);
-    let event = data as *mut ffi::wlr_touch_cancel_event;
-    cursor.touch_cancel((*event).touch_id);
-}
-
-unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let cursor = &mut *crate::container_of!(listener, Cursor, touch_frame_listener);
-    cursor.touch_frame();
-}
-
 /// A directional swipe bind fires once the accumulated travel (libinput
 /// units) passes `window_manager { swipe_threshold }`
 /// (`WindowManager::swipe_threshold`, default 70). Until then the camera
@@ -3983,7 +3754,8 @@ unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *
 
     let seat = &mut *cursor.seat;
     let wm = &(*seat.server).wm;
-    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true);
+    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
+        || cursor.gesture_from_touch;
     if !swipe_enabled {
         return;
     }
@@ -4007,7 +3779,7 @@ unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *
 
     let server = seat.server;
     let pointer_gestures = (*server).input_manager.pointer_gestures;
-    if !pointer_gestures.is_null() {
+    if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
         ffi::wlr_pointer_gestures_v1_send_swipe_begin(
             pointer_gestures,
             seat.wlr_seat,
@@ -4023,7 +3795,8 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
 
     let seat = &mut *cursor.seat;
     let wm = &(*seat.server).wm;
-    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true);
+    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
+        || cursor.gesture_from_touch;
     if !swipe_enabled {
         return;
     }
@@ -4176,7 +3949,7 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
 
         if first_fire {
             let pointer_gestures = (*seat.server).input_manager.pointer_gestures;
-            if !pointer_gestures.is_null() {
+            if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
                 ffi::wlr_pointer_gestures_v1_send_swipe_end(
                     pointer_gestures,
                     seat.wlr_seat,
@@ -4238,7 +4011,7 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     }
     let server = seat.server;
     let pointer_gestures = (*server).input_manager.pointer_gestures;
-    if !pointer_gestures.is_null() {
+    if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
         ffi::wlr_pointer_gestures_v1_send_swipe_update(
             pointer_gestures,
             seat.wlr_seat,
@@ -4255,7 +4028,8 @@ unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mu
 
     let seat = &mut *cursor.seat;
     let wm = &(*seat.server).wm;
-    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true);
+    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
+        || cursor.gesture_from_touch;
     if !swipe_enabled {
         return;
     }
@@ -4289,7 +4063,7 @@ unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mu
 
     let server = seat.server;
     let pointer_gestures = (*server).input_manager.pointer_gestures;
-    if !pointer_gestures.is_null() {
+    if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
         ffi::wlr_pointer_gestures_v1_send_swipe_end(
             pointer_gestures,
             seat.wlr_seat,
@@ -4297,6 +4071,59 @@ unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mu
             (*event).cancelled,
         );
     }
+}
+
+/// The modifiers a gesture bind is matched under: the keyboard's, less
+/// Caps and Num Lock (`& 0x4d`), as for every gesture.
+pub(crate) unsafe fn gesture_mods(seat: &Seat) -> u32 {
+    let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+    if wlr_keyboard.is_null() {
+        0
+    } else {
+        ffi::wlr_keyboard_get_modifiers(wlr_keyboard) & 0x4d
+    }
+}
+
+/// The first gesture bind of `kind` ("swipe", "pinch", "edge") for this
+/// finger count and modifiers whose direction `hit` accepts. First match
+/// wins, as everywhere in the bind table.
+pub(crate) fn gesture_bind(
+    wm: &crate::window_manager::WindowManager,
+    kind: &str,
+    fingers: u32,
+    mods: u32,
+    hit: impl Fn(&str) -> bool,
+) -> Option<(crate::config::Action, Option<String>)> {
+    wm.gesture_binds
+        .iter()
+        .find(|gb| gb.gesture_type == kind && gb.fingers == fingers && gb.mods == mods && hit(&gb.direction))
+        .map(|gb| (gb.action, gb.command.clone()))
+}
+
+/// Whether a pinch at `scale` (the fingers' spread relative to the start)
+/// has gone far enough to fire a bind on `direction`.
+pub(crate) fn pinch_hits(direction: &str, scale: f64) -> bool {
+    match direction {
+        "in" => scale < 0.7,
+        "out" => scale > 1.3,
+        _ => false,
+    }
+}
+
+/// Run a gesture's bound action. The overview toggle lands on the hovered
+/// window, else on the FOCUSED one — never on the empty desktop under the
+/// pointer.
+pub(crate) unsafe fn run_gesture_action(
+    wm: &mut crate::window_manager::WindowManager,
+    action: crate::config::Action,
+    command: Option<&str>,
+) {
+    let action = if action == crate::config::Action::Overview {
+        wm.overview_action_for_gesture()
+    } else {
+        action
+    };
+    wm.execute_action(&action, command);
 }
 
 unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -4408,41 +4235,13 @@ unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: 
 
     cursor.gesture_scale = (*event).scale;
 
-    let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
-    let modifiers = if !wlr_keyboard.is_null() {
-        ffi::wlr_keyboard_get_modifiers(wlr_keyboard) & 0x4d
-    } else {
-        0
-    };
+    let modifiers = gesture_mods(seat);
+    let scale = cursor.gesture_scale;
+    let bind = gesture_bind(&(*seat.server).wm, "pinch", (*event).fingers, modifiers, |d| pinch_hits(d, scale));
 
-    let mut matched_action = crate::config::Action::None;
-    let mut matched_command = None;
-
-    for gb in &(*seat.server).wm.gesture_binds {
-        if gb.gesture_type == "pinch" && gb.fingers == (*event).fingers && gb.mods == modifiers {
-            let matched = match gb.direction.as_str() {
-                "in" => cursor.gesture_scale < 0.7,
-                "out" => cursor.gesture_scale > 1.3,
-                _ => false,
-            };
-            if matched {
-                matched_action = gb.action;
-                matched_command = gb.command.clone();
-                break;
-            }
-        }
-    }
-
-    if matched_action != crate::config::Action::None {
+    if let Some((matched_action, matched_command)) = bind {
         cursor.gesture_triggered = true;
-        // The overview toggle lands on the hovered window, else on the
-        // FOCUSED one — never on the empty desktop under the pointer.
-        let matched_action = if matched_action == crate::config::Action::Overview {
-            (*seat.server).wm.overview_action_for_gesture()
-        } else {
-            matched_action
-        };
-        (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref());
+        run_gesture_action(&mut (*seat.server).wm, matched_action, matched_command.as_deref());
 
         let pointer_gestures = (*seat.server).input_manager.pointer_gestures;
         if !pointer_gestures.is_null() {

@@ -1228,6 +1228,21 @@ pub fn parse_modifiers(mod_str: &str) -> u32 {
     mods
 }
 
+/// A touchscreen edge-swipe chord: `edge_left`, `edge_right`, `edge_top`
+/// or `edge_bottom` — the edge the finger starts from — optionally behind
+/// modifiers (`super+edge_top`). Returns the modifier mask and the edge.
+/// Kept apart from `cce_window_manager::bindings::parse_gesture`, whose
+/// gestures are the touchpad's and carry a finger count.
+pub fn parse_edge_gesture(chord: &str) -> Option<(u32, String)> {
+    let lower = chord.trim().to_lowercase().replace('-', "_");
+    let (mods, gesture) = match lower.rsplit_once('+') {
+        Some((mods, gesture)) => (parse_modifiers(mods), gesture.trim()),
+        None => (0, lower.as_str()),
+    };
+    let edge = gesture.strip_prefix("edge_")?;
+    matches!(edge, "left" | "right" | "top" | "bottom").then(|| (mods, edge.to_string()))
+}
+
 pub fn parse_button(s: &str) -> u32 {
     match s.trim() {
         "left" => 0x110,   // BTN_LEFT
@@ -2935,6 +2950,22 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             }
             _ => None,
         };
+        // A touchscreen edge swipe: `edge_left` fires on a finger swiped in
+        // from the left edge (`touch::Claim::Edge`).
+        if let Some((mods, edge)) = parse_edge_gesture(&entry.chord) {
+            if input_gesture_binds.iter().any(|b| b.mods == mods && b.gesture_type == "edge" && b.direction == edge) {
+                eprintln!("[WARNING] input.kdl: {:?} is bound more than once", entry.chord);
+            }
+            input_gesture_binds.push(GestureBind {
+                mods,
+                gesture_type: "edge".to_string(),
+                fingers: 1,
+                direction: edge,
+                action,
+                command: command.clone(),
+            });
+            continue;
+        }
         // A touchpad gesture rides in the chord slot: `swipe3_left`,
         // `super+pinch_out`. The fingerless spelling binds three AND four
         // fingers, as `toggle_overview "swipe_down"` always has.
@@ -3440,6 +3471,16 @@ style {
             InputConfig::default().repeat_info(),
             (crate::keyboard::DEFAULT_REPEAT_RATE, crate::keyboard::DEFAULT_REPEAT_DELAY)
         );
+    }
+
+    #[test]
+    fn test_parse_edge_gesture() {
+        assert_eq!(parse_edge_gesture("edge_left"), Some((0, "left".to_string())));
+        assert_eq!(parse_edge_gesture("Edge-Bottom"), Some((0, "bottom".to_string())));
+        assert_eq!(parse_edge_gesture("super+edge_top"), Some((0x40, "top".to_string())));
+        assert_eq!(parse_edge_gesture("edge_middle"), None);
+        assert_eq!(parse_edge_gesture("swipe3_left"), None);
+        assert_eq!(parse_edge_gesture("super+t"), None);
     }
 
     #[test]
