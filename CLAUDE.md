@@ -1144,9 +1144,11 @@ both honour it) and real pointer motion brings it back
 (`unhide_after_touch`, which clears pointer focus so the client under it
 re-enters and sets its cursor again).
 
-**Not yet done:** touch gestures (edge swipes, a two-finger pan or pinch of
-the desk) and finger scrolling in cce-ui apps, where a drag is a held button
-and so selects rather than scrolls.
+cce-ui binds `wl_touch` since 2026-10-05, so its windows take the `Client`
+route and decide tap / scroll / hold-drag themselves (`cce-ui`'s
+`backend/touch.rs`); before that a finger drag in one was a held button and
+selected rather than scrolled. **Not yet done:** touch gestures (edge
+swipes, a two-finger pan or pinch of the desk).
 
 Drive it in a shadow with `ccectl touch down <id> <x> <y>`, `motion <id> <x>
 <y>`, `up <id>`, `cancel <id>` and `tap <x> <y>` (layout pixels). The first
