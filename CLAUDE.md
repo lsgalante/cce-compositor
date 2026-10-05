@@ -668,6 +668,22 @@ two of them is a strip, so touching is enough.
   report, the band, both grab sides, the click rules, the exit — against a
   cce-grid it runs itself (`CCE_GRID`, else the workspace's release build).
 
+### Launching from overview
+
+An app launched while in overview **does not leave it** (since 2026-10-05).
+When a desk window (anything but Popup/Overlay, a status segment, the
+wallpaper or the grid) maps during overview, `Window::map` calls
+`WindowManager::pan_overview_to_window`, which keeps the zoom and pans
+just far enough to show the whole window (`pan_to_virtual_rect`, the same
+`pan_into_view` rule focus follows). A window that already fits moves
+nothing. The new window still takes focus. The pan runs whatever
+`center_on_spawn` says, since the focus loop's pan skips a first focus
+without it, and not while a camera ramp (an overview enter still flying)
+owns the camera. Before this, `exit_overview_to_window` flew the camera
+to zoom 1 on the new window and switched to Normal. In a shadow:
+`ctl overview`, `spawn foot`, then `ctl camera` still reads
+`mode=Overview`.
+
 ### Config
 
 Loaded on startup from **`$XDG_CONFIG_HOME/cce/config.kdl`** (falls back to
