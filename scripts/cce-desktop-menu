@@ -55,69 +55,54 @@ done
 
 # The named window's current mode, so the submenu can mark it. One JSON
 # object per line; a window gone since the click yields "" and the page is
-# left out.
+# left out. jq, not python, here and below: the popup waits on everything
+# before it, and each python start costs 100-200 ms (more under load) where
+# jq costs a few.
 current_mode=""
 if [[ -n "$window_index" ]]; then
-    current_mode=$("$CCE_CTL" windows --json 2>/dev/null | python3 -c '
-import sys, json
-want = sys.argv[1]
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    try:
-        w = json.loads(line)
-    except ValueError:
-        continue
-    if str(w.get("id")) == want:
-        print(str(w.get("mode", "")).lower())
-        break
-' "$window_index")
+    current_mode=$("$CCE_CTL" windows --json 2>/dev/null | jq -Rrn --arg want "$window_index" '
+        first(inputs | fromjson? | select((.id | tostring) == $want)
+              | .mode // "" | tostring | ascii_downcase)' 2>/dev/null)
 fi
 
-# Build the layout in python so the app_id (client-chosen text) is escaped
+# Build the layout in jq so the app_id (client-chosen text) is escaped
 # for JSON rather than spliced into it. The "Window Mode" entry sits with
 # Overview, the other window-manager verb; a `target_page` button switches
 # pages without closing the popup.
-json_layout=$(python3 - "$app_id" "$current_mode" <<'PY'
-import sys, json
-app_id, current = sys.argv[1], sys.argv[2]
-def mode(text, ident):
-    mark = "● " if ident == current else "   "
-    return {"type": "button", "text": mark + text, "id": ident}
-main = [
-    {"type": "button", "text": "Terminal", "id": "terminal"},
-    {"type": "button", "text": "Files", "id": "files"},
-    {"type": "button", "text": "Data Editor", "id": "data_editor"},
-    {"type": "button", "text": "Applications", "id": "apps"},
-    {"type": "button", "text": "System Settings", "id": "settings"},
-    {"type": "button", "text": "Overview", "id": "overview"},
+json_layout=$(jq -nc --arg app_id "$app_id" --arg current "$current_mode" '
+def btn($text; $id): {type: "button", text: $text, id: $id};
+def mode($text; $id): btn((if $id == $current then "● " else "   " end) + $text; $id);
+[
+    btn("Terminal"; "terminal"),
+    btn("Files"; "files"),
+    btn("Data Editor"; "data_editor"),
+    btn("Applications"; "apps"),
+    btn("System Settings"; "settings"),
+    btn("Overview"; "overview")
 ]
-pages = [{"title": "Desktop Context Menu", "justify": "left", "widgets": main}]
-if current:
-    # The focused-window verbs, together, the same three cce-app-menu has.
-    main.append({"type": "button", "text": "Window Mode >", "id": "mode_page", "target_page": 1})
-    main.append({"type": "button", "text": "Minimize", "id": "minimize"})
-    main.append({"type": "button", "text": "Close Window", "id": "close"})
-    pages.append({"title": app_id, "justify": "left", "widgets": [
-        mode("Floating", "floating"),
-        mode("Tiled", "tiled"),
-        mode("Fullscreen", "fullscreen"),
-        {"type": "button", "text": "< Back", "id": "back", "target_page": 0},
-    ]})
-main.append({"type": "button", "text": "Reload Config", "id": "reload"})
-main.append({"type": "button", "text": "Logout", "id": "exit"})
-print(json.dumps({"pages": pages}))
-PY
-)
+# The focused-window verbs, together, the same three cce-app-menu has.
++ (if $current != "" then [
+    btn("Window Mode >"; "mode_page") + {target_page: 1},
+    btn("Minimize"; "minimize"),
+    btn("Close Window"; "close")
+] else [] end)
++ [btn("Reload Config"; "reload"), btn("Logout"; "exit")]
+| {pages: (
+    [{title: "Desktop Context Menu", justify: "left", widgets: .}]
+    + (if $current != "" then [{title: $app_id, justify: "left", widgets: [
+        mode("Floating"; "floating"),
+        mode("Tiled"; "tiled"),
+        mode("Fullscreen"; "fullscreen"),
+        btn("< Back"; "back") + {target_page: 0}
+    ]}] else [] end)
+)}')
 
 # Spawn cce-cloud with the json layout and coordinates
 selected=$(echo "$json_layout" | $CLEAR_CLOUD --json $x_arg $y_arg 2>/dev/null)
 
 [[ -z "$selected" ]] && exit 0
 
-# Parse button using python for reliability and robustness
-btn=$(echo "$selected" | python3 -c "import sys, json; print(json.load(sys.stdin).get('button', ''))")
+btn=$(jq -r '.button // ""' <<<"$selected" 2>/dev/null)
 
 case "$btn" in
     "terminal")
