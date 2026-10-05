@@ -3365,47 +3365,19 @@ impl WindowManager {
 
 
 
-    /// Snap the camera out of overview and onto `win`: zoom 1, centered,
-    /// mode Normal. The overview click-release path in cursor.rs does the
-    /// same dance inline (plus its focus/seat-event bookkeeping); this is
-    /// the map-time variant for windows SPAWNED during overview.
-    pub unsafe fn exit_overview_to_window(&mut self, win: *mut Window) {
-        if win.is_null() {
+    /// Pan the overview camera, at its current zoom, just far enough to
+    /// show all of `win` — the map-time treatment for a window SPAWNED
+    /// during overview, which leaves the mode alone. A camera ramp (an
+    /// overview enter still flying) owns the camera, and its mid-flight
+    /// sample would give a stale target, so the window is left to land
+    /// wherever the flight shows it.
+    pub unsafe fn pan_overview_to_window(&mut self, win: *mut Window) {
+        if win.is_null() || self.camera_ramp_anim.is_some() {
             return;
-        }
-        let (mut viewport_w, mut viewport_h) = (1920.0_f64, 1080.0_f64);
-        let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-        while curr_out != outputs_list {
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                let wlr_box = (*output).sent.box_layout();
-                viewport_w = wlr_box.width as f64;
-                viewport_h = wlr_box.height as f64;
-                break;
-            }
-            curr_out = (*curr_out).next;
         }
         let win_w = if (*win).box_geom.width > 0 { (*win).box_geom.width as f64 } else { 800.0 };
         let win_h = if (*win).box_geom.height > 0 { (*win).box_geom.height as f64 } else { 600.0 };
-        let center_x = (*win).virtual_x + win_w / 2.0;
-        let center_y = (*win).virtual_y + win_h / 2.0;
-        // Same animated flight as the Overview toggle's exit: SetCamera
-        // owns the ramp/target bookkeeping and flips the mode by fiat.
-        self.stop_panning_animation();
-        crate::policy::api::Compositor::apply(
-            self,
-            &crate::policy::api::Command::SetCamera {
-                camera: crate::policy::camera::Camera {
-                    pan_x: center_x - viewport_w / 2.0,
-                    pan_y: center_y - viewport_h / 2.0,
-                    zoom: 1.0,
-                },
-                overview: Some(false),
-                animate: true,
-            },
-        );
-        crate::policy::api::Compositor::apply(self, &crate::policy::api::Command::RefreshCamera);
+        self.pan_to_virtual_rect((*win).virtual_x, (*win).virtual_y, win_w, win_h);
     }
 
     /// Issue grid_patch events to grid clients whose current patch no

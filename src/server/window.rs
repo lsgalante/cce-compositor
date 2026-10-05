@@ -2269,12 +2269,15 @@ impl Window {
                 }
             }
 
-            // A WORLD window spawning during overview pulls the session
-            // out of it, landing at zoom 1 on the new window — the user
-            // asked for it (launcher pick, spawn keybind). Chrome
-            // (Popup/Overlay), status, wallpaper and the grid spawn without
-            // disturbing the overview. Before the focus loop, so the
-            // focus-follow pan sees the settled zoom-1 camera and no-ops.
+            // A WORLD window spawning during overview stays in overview:
+            // the camera keeps its zoom and only pans, as little as it
+            // must, to show the whole new window. Until 2026-10-05 it
+            // flew out to zoom 1 on the window, so launching from the
+            // overview left it. Chrome (Popup/Overlay), status, wallpaper
+            // and the grid spawn without touching the camera. Here rather
+            // than left to the focus loop's focus-follow pan, which skips
+            // a first focus unless `center_on_spawn` allows it — the exit
+            // this replaced always moved the camera.
             if should_focus
                 && (*self.server).wm.mode == crate::window_manager::WindowManagerMode::Overview
                 && !self.is_grid()
@@ -2286,7 +2289,7 @@ impl Window {
                     resolved,
                     crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
                 ) {
-                    (*self.server).wm.exit_overview_to_window(self as *mut Window);
+                    (*self.server).wm.pan_overview_to_window(self as *mut Window);
                 }
             }
 
