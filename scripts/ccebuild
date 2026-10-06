@@ -42,6 +42,11 @@ die() { printf 'ccebuild: %s\n' "$*" >&2; exit 1; }
 # the environment. Written on every install, so it tracks a moved tree.
 WS_STAMP="${XDG_STATE_HOME:-$HOME/.local/state}/cce/workspace"
 
+# How long each binary last took to build, one `bin<TAB>seconds<TAB>epoch` line
+# per bin target, merged after every build (see record_build_times). The
+# settings app's System page reads it; cargo itself keeps no such record.
+BUILD_TIMES="${XDG_STATE_HOME:-$HOME/.local/state}/cce/build-times"
+
 # The workspace root. Never hardcoded: honour $CCE_WORKSPACE, else ask cargo
 # about the current directory (this script lives in ~/.local/bin once installed,
 # so its own path says nothing about where the source tree is), else the last
@@ -327,12 +332,87 @@ file_crate_dir() {
     printf '%s\n' "$dir"
 }
 
+# Fold the `--timings` reports a build just wrote into BUILD_TIMES. A report
+# lists the build's units as JSON in its UNIT_DATA block: lib units have
+# target "", bins ` name "bin"`, build scripts ` build-script` /
+# ` build-script (run)`. Fresh units are listed too, with a duration of 0
+# (real ones are reported to 0.01s), so a bin at 0 was not rebuilt and keeps
+# the time already on file — a no-op build must not zero every entry. A binary's time is its own bin unit
+# plus every non-bin unit of its package — the lib and build script it cannot
+# be built without — so an incremental relink of a bin alone records just
+# that relink, which is what that build took. Dependencies (cce-ui included)
+# are not charged to anyone: one compile of them serves every app at once.
+#
+# Reports newer than the marker are this build's; a concurrent session's build
+# landing in the same window is a real build too, so recording it is right.
+# They are deleted once read — cargo writes a new one per invocation and they
+# would otherwise pile up in target/ forever.
+record_build_times() {
+    local marker=$1 report new
+    local dir="$WS/target/cargo-timings"
+    [ -d "$dir" ] || return 0
+    new=$(mktemp)
+    while read -r report; do
+        [ -n "$report" ] || continue
+        awk '/^const UNIT_DATA = /,/^\];/' "$report" \
+            | sed -e '1s/^const UNIT_DATA = //' -e '$s/;$//' \
+            | jq -r --arg now "$(date -r "$report" +%s)" '
+                group_by(.name)[]
+                | (map(select(.target | endswith("\"bin\"") | not) | .duration) | add // 0) as $shared
+                | .[] | select((.target | endswith("\"bin\"")) and .duration > 0)
+                | [(.target | ltrimstr(" ") | split(" ")[0]),
+                   ((.duration + $shared) * 100 | round / 100), $now]
+                | @tsv' >> "$new" 2>/dev/null || true
+        rm -f "$report"
+    done < <(find "$dir" -maxdepth 1 -name 'cargo-timing-*.html' -newer "$marker" 2>/dev/null | sort)
+    if [ -s "$new" ]; then
+        mkdir -p "$(dirname "$BUILD_TIMES")"
+        # Last line per bin wins: the old file first, then this build's
+        # reports in the order they were written (their names sort by time).
+        # (A missing file is the first build, not a failure — pipefail would
+        # otherwise drop the whole merge.)
+        { cat "$BUILD_TIMES" 2>/dev/null || true; cat "$new"; } \
+            | awk -F'\t' 'NF == 3 { t[$1] = $0 } END { for (b in t) print t[b] }' \
+            | sort > "$BUILD_TIMES.tmp" && mv "$BUILD_TIMES.tmp" "$BUILD_TIMES"
+    fi
+    rm -f "$new"
+}
+
+# `cargo build --release` in the workspace with ARGS, recording how long each
+# binary took. The build's own exit status is returned untouched. A failed
+# build records nothing: its report carries the failed unit's time to the
+# error as if it were a build, and nothing it produced gets installed anyway.
+cargo_release_build() {
+    local marker status=0
+    marker=$(mktemp)
+    ( cd "$WS" && cargo build --release --timings "$@" ) || status=$?
+    if [ "$status" -eq 0 ]; then
+        record_build_times "$marker"
+    else
+        find "$WS/target/cargo-timings" -maxdepth 1 -name 'cargo-timing-*.html' \
+             -newer "$marker" -delete 2>/dev/null || true
+    fi
+    rm -f "$marker"
+    return "$status"
+}
+
+# build [PKG...] — no packages means the whole workspace. The scoped form is
+# for sweeps (`ccebuild build a b c`, then `install --no-build` each): the same
+# single cargo invocation over the dependents, with build times recorded,
+# which a bare `cargo build -p …` would not do.
 cmd_build() {
+    if [ "$#" -gt 0 ]; then
+        assert_packages "$@"
+        printf '==> building %s (release)\n' "$*"
+        local args=("$@")
+        cargo_release_build "${args[@]/#/-p}"
+        return
+    fi
     printf '==> building workspace (release)\n'
     # One invocation for the whole workspace. Building per-crate with -p would
     # resolve a different unified feature set and re-invalidate crates on every
     # alternation between the two command shapes.
-    ( cd "$WS" && cargo build --release --workspace )
+    cargo_release_build --workspace
 }
 
 # install [--no-build] [PKG...] — no packages means the whole workspace; named
@@ -346,12 +426,7 @@ cmd_install() {
     [ ${#pkgs[@]} -gt 0 ] && assert_packages "${pkgs[@]}"
 
     if [ "$build" -eq 1 ]; then
-        if [ ${#pkgs[@]} -gt 0 ]; then
-            printf '==> building %s (release)\n' "${pkgs[*]}"
-            ( cd "$WS" && cargo build --release "${pkgs[@]/#/-p}" )
-        else
-            cmd_build
-        fi
+        cmd_build "${pkgs[@]}"
     fi
 
     mkdir -p "$BINDIR" "$UNITDIR" "$DESKTOPDIR" "$DBUSDIR"
@@ -855,7 +930,8 @@ usage() {
     cat <<'EOF'
 usage: ccebuild <command>
 
-  build                 cargo build --release --workspace
+  build [PKG...]        cargo build --release --workspace (or -p each PKG),
+                        recording each binary's build time
   install [--no-build]  build, then install every bin target, helper script
                         and user unit (derived from cargo metadata)
   status                show built-vs-installed drift, and running processes
@@ -886,7 +962,7 @@ command -v jq >/dev/null || die "jq is required"
 WS=$(resolve_workspace)
 
 case "${1:-}" in
-    build)          cmd_build ;;
+    build)          shift; cmd_build "$@" ;;
     install)        shift; cmd_install "$@" ;;
     status)         cmd_status ;;
     restart)        shift; cmd_restart "$@" ;;
