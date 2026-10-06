@@ -6000,6 +6000,55 @@ impl WindowManager {
                 self.dirty_windowing();
                 format!("ok w={} h={}\n", w, h)
             }
+            "min-size" => {
+                // The minimum sizes X11 apps revealed by refusing a smaller
+                // configure (`min_sizes`). `list` numbers the stored entries;
+                // `forget <app_id|id>` drops an open window's entry and the
+                // minimum it is held to now; `forget-entry <n>` drops one by
+                // its `list` number, for an app that is not running. A
+                // forgotten minimum is learned again on the next drag the
+                // app refuses.
+                match parts.get(1).copied().unwrap_or("list") {
+                    "list" => {
+                        let mut out = String::new();
+                        for (i, e) in self.min_sizes.entries().iter().enumerate() {
+                            out.push_str(&format!(
+                                "{} {}x{} app_id={} title={:?} program={:?}\n",
+                                i, e.width, e.height, e.app_id, e.title, e.program
+                            ));
+                        }
+                        if out.is_empty() { "none\n".to_string() } else { out }
+                    }
+                    "forget" if parts.len() >= 3 => {
+                        let target = self.find_window_by_query(&parts[2..].join(" "));
+                        if target.is_null() {
+                            return "error: window not found\n".to_string();
+                        }
+                        let crate::window::WindowImpl::Xwayland(xw) = (*target).impl_type else {
+                            return "error: not an X11 window; only those have a learned minimum\n".to_string();
+                        };
+                        if xw.is_null() {
+                            return "error: window not found\n".to_string();
+                        }
+                        match (*xw).forget_min_size() {
+                            Some((w, h)) => format!("ok forgot {}x{}\n", w, h),
+                            None => "ok none stored\n".to_string(),
+                        }
+                    }
+                    "forget-entry" if parts.len() == 3 => {
+                        let Some(e) = parts[2]
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|i| self.min_sizes.entries().get(i).cloned())
+                        else {
+                            return format!("error: no entry '{}' (see min-size list)\n", parts[2]);
+                        };
+                        self.min_sizes.set(&e.app_id, &e.program, &e.title, 0, 0);
+                        format!("ok forgot {}x{} app_id={} title={:?}\n", e.width, e.height, e.app_id, e.title)
+                    }
+                    _ => "error: usage: min-size [list] | forget <app_id|id> | forget-entry <n>\n".to_string(),
+                }
+            }
             "center-window" | "bring-window" => {
                 // Pan the desktop so the target window (given app_id/id, or the
                 // focused window if omitted) is centered in the output, then focus

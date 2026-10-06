@@ -57,6 +57,9 @@ fn usage(name: &str, to_stderr: bool) {
     print("  move-window <square> [<app_id>] # put focused/named window on a desktop square (e.g. C-9)");
     print("  resize-window <w> <h> [<app_id|id>] # set focused/named window's size (logical px),");
     print("                              # top-left fixed, clamped to its min/max hints");
+    print("  min-size [list]            # X11 minimum sizes learned from refusals (X11 px), numbered");
+    print("  min-size forget <app_id|id> # drop an open X11 window's learned minimum (relearned on refusal)");
+    print("  min-size forget-entry <n>  # drop stored entry n from `min-size list`");
     print("  move-window-left|-right|-up|-down    # step the focused window one grid cell;");
     print("                              # tiled swaps with the tiled window already there,");
     print("                              # floating just moves");

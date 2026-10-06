@@ -882,7 +882,14 @@ minimum for a resizable window, so Ubisoft Connect fought every shrink past
 1214x804. Only a floor counts (two different sizes answered with the same
 one, `xwayland_window::learned_min`), since a stored value is permanent;
 it is keyed by app_id, program and title, kept in X11 pixels, applied at
-map, and lowered when a window maps smaller than it.
+map, and lowered when a window maps smaller than it. The table is read once
+and held in memory, so editing the file under a running compositor does
+nothing (the next learned value rewrites it): `ccectl min-size list` shows
+it, `min-size forget <app_id|id>` drops an open window's entry and the
+minimum it is held to, and `forget-entry <n>` drops one for an app that is
+not running. A minimum the app's DPI decided (Ubisoft Connect: ~1214x689
+DIPs, so 2428x1378 X11 px at Wine's default 192 from `Xft.dpi`) is lowered
+in the prefix's `Control Panel\Desktop` `LogPixels`, not here.
 A restored **floating** window is recalled into the current view
 (`policy::camera::recalled_origin`, applied at the end of `try_restore`)
 when its remembered position would show less than a quarter of it: the

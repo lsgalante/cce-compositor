@@ -56,6 +56,12 @@ impl MinSizes {
             .map(|e| (e.width, e.height))
     }
 
+    /// Every stored entry, in file order (`ccectl min-size list`).
+    pub fn entries(&mut self) -> &[MinSize] {
+        self.ensure_loaded();
+        &self.entries
+    }
+
     /// Store this window's minimum, X11 pixels; written to disk at once
     /// (it changes only on a refusal, a handful of times per app, ever).
     /// 0x0 forgets the entry.

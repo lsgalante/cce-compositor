@@ -582,6 +582,27 @@ impl XwaylandWindow {
         (*(*self.window).server).wm.min_sizes.set(&app_id, &program, &title, w, h);
     }
 
+    /// Drop this window's stored minimum and the one it is held to now, and
+    /// start learning afresh (`ccectl min-size forget`). The learned value
+    /// is the only minimum an X11 window carries here, so the hint's min
+    /// goes to 0. Returns what was stored, X11 pixels.
+    pub unsafe fn forget_min_size(&mut self) -> Option<(u32, u32)> {
+        let stored = self.min_size_key().and_then(|(app_id, program, title)| {
+            let min_sizes = &mut (*(*self.window).server).wm.min_sizes;
+            let stored = min_sizes.get(&app_id, &program, &title);
+            min_sizes.set(&app_id, &program, &title, 0, 0);
+            stored
+        });
+        self.refusals = [None, None];
+        let hint = crate::window::DimensionsHint {
+            min_width: 0,
+            min_height: 0,
+            ..(*self.window).wm_scheduled.dimensions_hint
+        };
+        (*self.window).set_dimensions_hint(hint);
+        stored
+    }
+
     /// Hand the window the minimum a previous run learned, before its first
     /// arrange, so the first drag past it already stops there.
     unsafe fn apply_stored_min_size(&self) {
