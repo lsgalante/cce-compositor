@@ -768,7 +768,12 @@ and `WindowManager::focus_toward` hands it to the policy crate's
 `vector_focus`: the nearest window center within `window_manager {
 swipe_focus_cone }` degrees (default 45; `swipe_focus_cone_deg`) of a ray
 from the focused window's center takes focus, and a swipe toward nothing
-in the cone changes nothing (logged `focus_toward …: no window within`).
+in the cone changes nothing (logged `focus_toward …: no window within`) —
+the camera included: such a step puts back the previous step's pan into
+view, which both action paths stop up front, and eases its own lean out as
+a lift would. Until 2026-10-06 a long swipe run on past the last window
+froze that pan part way and kept each step's lean, walking the camera off
+the window it had just focused.
 With no focused window there is no ray, and the four-way action runs for
 its entry rule. The keyboard's focus chords stay four-way. Only binds whose
 action `cursor::action_navigates` (focus/pan left/right/up/down) peek, and

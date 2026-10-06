@@ -3931,9 +3931,33 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         // `swipe3_right` mirrors them), and the window manager picks the
         // nearest window center along the result.
         let focus_vector = swipe_focus_vector(&(*seat.server).wm.gesture_binds, (*event).fingers, modifiers, travel);
+        let focused_before = (*seat.server).wm.focused_window();
+        let ease_before = ((*seat.server).wm.target_desk_pan_x, (*seat.server).wm.target_desk_pan_y);
         match focus_vector {
             Some(v) if is_directional_focus(matched_action) => (*seat.server).wm.focus_toward(v, &matched_action),
             _ => (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref()),
+        }
+
+        // A focus step that found no window (a long swipe run on past the
+        // last one) must leave the camera where the last real step was
+        // taking it. Both action paths stop the camera ease up front, so
+        // without this the previous step's pan into view froze part way
+        // with the window still clipped, and the lean since that step —
+        // committed above, or carried in the ease's target — stayed, so
+        // each further threshold walked the camera off the window. Put the
+        // ease back and take the lean out of it, as a lift would
+        // (`handle_swipe_end`). A step that did set a target of its own is
+        // left to it.
+        let wm = &mut (*seat.server).wm;
+        if is_directional_focus(matched_action)
+            && wm.focused_window() == focused_before
+            && wm.target_desk_pan_x.is_none()
+            && wm.target_desk_pan_y.is_none()
+            && (lean != [0.0, 0.0] || ease_before != (None, None))
+        {
+            wm.target_desk_pan_x = Some(ease_before.0.unwrap_or(wm.desk_pan_x) - lean[0]);
+            wm.target_desk_pan_y = Some(ease_before.1.unwrap_or(wm.desk_pan_y) - lean[1]);
+            wm.start_panning_animation();
         }
 
         // The action ran against the leaned camera. It set a pan target
