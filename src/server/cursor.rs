@@ -3816,7 +3816,7 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
     cursor.gesture_dx += (*event).dx;
     cursor.gesture_dy += (*event).dy;
 
-    log::info!(
+    log::debug!(
         "handle_swipe_update: fingers={}, dx={}, dy={}, accumulated_dx={}, accumulated_dy={}",
         (*event).fingers,
         (*event).dx,

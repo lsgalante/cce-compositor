@@ -250,13 +250,13 @@ pub unsafe fn wl_list_remove_and_reinit(elm: *mut WlList) {
 }
 
 pub unsafe fn wl_signal_add(signal: *mut ffi::wl_signal, listener: *mut ffi::wl_listener) {
-    log::info!("wl_signal_add: signal={:?}, listener={:?}", signal, listener);
+    log::trace!("wl_signal_add: signal={:?}, listener={:?}", signal, listener);
     if signal.is_null() {
         log::error!("wl_signal_add: signal is null!");
         return;
     }
     let sig_list = &mut (*signal).listener_list as *mut ffi::wl_list as *mut WlList;
-    log::info!("wl_signal_add: sig_list={:?}, prev={:?}, next={:?}", sig_list, (*sig_list).prev, (*sig_list).next);
+    log::trace!("wl_signal_add: sig_list={:?}, prev={:?}, next={:?}", sig_list, (*sig_list).prev, (*sig_list).next);
     let listener_custom = listener as *mut WlListener;
     wl_list_insert((*sig_list).prev, &mut (*listener_custom).link);
 }
@@ -1016,6 +1016,7 @@ impl Default for Server {
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.startup_pids, Vec::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.status_sender, None);
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.last_saved_state_json, None);
+            std::ptr::write(&mut (*server.as_mut_ptr()).wm.proc_args_cache, std::collections::HashMap::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).wm.min_sizes, crate::min_sizes::MinSizes::default());
             std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());

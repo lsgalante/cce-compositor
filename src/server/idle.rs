@@ -74,13 +74,16 @@ pub const PLAN_SLEEP_FILE: &str = "idle_sleep";
 /// one process, for testing: /run/cce is root's, and a shadow session must
 /// not read the live machine's plan files either.
 fn plan_path(file: &str) -> String {
-    let dir = std::env::var("CCE_IDLE_PLAN_DIR").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| PLAN_DIR.to_string());
-    format!("{}/{}", dir, file)
+    format!("{}/{}", plan_dir(), file)
 }
 
-/// How often the plan files are stat'ed. A mode change is a plug or an
-/// unplug, so a second is instant to a person and two stats a second is
-/// nothing.
+fn plan_dir() -> String {
+    std::env::var("CCE_IDLE_PLAN_DIR").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| PLAN_DIR.to_string())
+}
+
+/// How often the plan files are stat'ed when the directory cannot be
+/// watched (`watch_plan_dir`). A mode change is a plug or an unplug, so a
+/// second is instant to a person.
 const PLAN_POLL_MS: i32 = 1000;
 
 /// One plan file's contents as a timeout: seconds on a line, nothing else.
@@ -124,8 +127,15 @@ pub struct IdleManager {
     /// /run/cce; None while a file is absent or unparsable.
     plan_display_off_ms: Option<i64>,
     plan_sleep_ms: Option<i64>,
-    /// Polls the plan files; see `PLAN_POLL_MS`.
+    /// Polls the plan files when they cannot be watched; see `PLAN_POLL_MS`.
     plan_timer: *mut ffi::wl_event_source,
+    /// An inotify fd on the plan directory, and its event-loop source: the
+    /// plan files are re-read when the directory reports a change, and
+    /// nothing runs at rest. -1 / null while polling instead. Until
+    /// 2026-10-05 the timer above stat'ed both files every second, forever —
+    /// the one thing that still ticked in an idle compositor.
+    plan_inotify: i32,
+    plan_inotify_source: *mut ffi::wl_event_source,
     /// `plan_stamp` of each file at the last poll: the files are only
     /// re-read when one changes.
     plan_stamps: [u128; 2],
@@ -212,7 +222,12 @@ impl IdleManager {
         self.plan_display_off_ms = None;
         self.plan_sleep_ms = None;
         self.plan_stamps = [0, 0];
-        ffi::wl_event_source_timer_update(self.plan_timer, PLAN_POLL_MS);
+        // Zeroed by `Server::new`: 0 is a real fd (stdin), so say "none".
+        self.plan_inotify = -1;
+        self.plan_inotify_source = std::ptr::null_mut();
+        if !self.watch_plan_dir(event_loop) {
+            ffi::wl_event_source_timer_update(self.plan_timer, PLAN_POLL_MS);
+        }
         self.sleep_command = None;
         self.inhibited = false;
         self.inhibitors = None;
@@ -250,6 +265,7 @@ impl IdleManager {
             ffi::wl_event_source_remove(self.plan_timer);
             self.plan_timer = std::ptr::null_mut();
         }
+        self.unwatch_plan_dir();
         if !self.lock_fallback_timer.is_null() {
             ffi::wl_event_source_remove(self.lock_fallback_timer);
             self.lock_fallback_timer = std::ptr::null_mut();
@@ -299,7 +315,54 @@ impl IdleManager {
         )
     }
 
-    /// From `plan_timer`: re-read the plan files when either changed, and
+    /// Watch the plan directory for any file appearing, changing or going
+    /// away. False — and the caller polls — when the directory does not
+    /// exist or cannot be watched.
+    unsafe fn watch_plan_dir(&mut self, event_loop: *mut ffi::wl_event_loop) -> bool {
+        let Ok(dir) = std::ffi::CString::new(plan_dir()) else { return false };
+        let fd = libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC);
+        if fd < 0 {
+            return false;
+        }
+        let mask = libc::IN_CLOSE_WRITE
+            | libc::IN_MOVED_TO
+            | libc::IN_MOVED_FROM
+            | libc::IN_CREATE
+            | libc::IN_DELETE
+            | libc::IN_DELETE_SELF
+            | libc::IN_MOVE_SELF;
+        if libc::inotify_add_watch(fd, dir.as_ptr(), mask) < 0 {
+            libc::close(fd);
+            return false;
+        }
+        let source = ffi::wl_event_loop_add_fd(
+            event_loop,
+            fd,
+            ffi::WL_EVENT_READABLE as u32,
+            Some(handle_plan_inotify),
+            self as *mut IdleManager as *mut _,
+        );
+        if source.is_null() {
+            libc::close(fd);
+            return false;
+        }
+        self.plan_inotify = fd;
+        self.plan_inotify_source = source;
+        true
+    }
+
+    unsafe fn unwatch_plan_dir(&mut self) {
+        if !self.plan_inotify_source.is_null() {
+            ffi::wl_event_source_remove(self.plan_inotify_source);
+            self.plan_inotify_source = std::ptr::null_mut();
+        }
+        if self.plan_inotify >= 0 {
+            libc::close(self.plan_inotify);
+            self.plan_inotify = -1;
+        }
+    }
+
+    /// From `plan_timer` or the directory watch: re-read the plan files when either changed, and
     /// put the new timeouts in force from now.
     pub unsafe fn poll_plan(&mut self) {
         let (off_path, sleep_path) = (plan_path(PLAN_DISPLAY_OFF_FILE), plan_path(PLAN_SLEEP_FILE));
@@ -547,9 +610,47 @@ fn plan_field(ms: Option<i64>) -> String {
     ms.map(|v| format!("{}s", v / 1000)).unwrap_or_else(|| "none".to_string())
 }
 
+/// The plan directory changed: drain the events, then re-read. The
+/// directory itself going away ends the watch, and polling takes over.
+unsafe extern "C" fn handle_plan_inotify(_fd: i32, _mask: u32, data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let idle = &mut *(data as *mut IdleManager);
+    let mut buf = [0u8; 4096];
+    let mut dir_gone = false;
+    loop {
+        let n = libc::read(idle.plan_inotify, buf.as_mut_ptr() as *mut _, buf.len());
+        if n <= 0 {
+            break;
+        }
+        let mut off = 0usize;
+        while off + std::mem::size_of::<libc::inotify_event>() <= n as usize {
+            let ev = std::ptr::read_unaligned(buf.as_ptr().add(off) as *const libc::inotify_event);
+            if ev.mask & (libc::IN_IGNORED | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF) != 0 {
+                dir_gone = true;
+            }
+            off += std::mem::size_of::<libc::inotify_event>() + ev.len as usize;
+        }
+    }
+    if dir_gone {
+        log::info!("idle: power-plan directory went away; polling for it");
+        idle.unwatch_plan_dir();
+        if !idle.plan_timer.is_null() {
+            ffi::wl_event_source_timer_update(idle.plan_timer, PLAN_POLL_MS);
+        }
+    }
+    idle.poll_plan();
+    0
+}
+
 unsafe extern "C" fn handle_plan_poll(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let idle = &mut *(data as *mut IdleManager);
     idle.poll_plan();
+    // The directory may exist now: watch it, and stop polling.
+    let event_loop = ffi::wl_display_get_event_loop((*idle.server).wl_server);
+    if idle.watch_plan_dir(event_loop) {
+        log::info!("idle: watching the power-plan directory");
+        idle.poll_plan();
+        return 0;
+    }
     // wl timers fire once; re-arm for the next look.
     if !idle.plan_timer.is_null() {
         ffi::wl_event_source_timer_update(idle.plan_timer, PLAN_POLL_MS);

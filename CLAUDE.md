@@ -804,6 +804,12 @@ handler; `systemctl suspend` returns as soon as the job is queued, so resume
 is detected from the wlroots session's `active` signal instead (the
 `river_wlr_session_get_active_signal` shim — `wlr_session` is opaque to
 bindgen), treated as activity so a lid-open lights the screen without a key.
+The Power plan's per-mode overrides (`/run/cce/idle_display_off`,
+`idle_sleep`; `CCE_IDLE_PLAN_DIR` moves them) are followed by an inotify watch
+on that directory, an fd source on the event loop, so nothing ticks at rest;
+the 1 s stat poll that was the only mechanism until 2026-10-05 is now the
+fallback while the directory is missing, and it switches back to the watch
+once the directory appears.
 Note that until 2026-09-16 the hardware pointer handlers (`handle_motion`,
 `handle_motion_absolute`, `handle_button`, `handle_axis`) and `handle_group_key`
 never called `handle_activity` at all — only tablet, touch and gestures did —
@@ -1081,7 +1087,11 @@ headless seat has no keyboard and Chromium crashes in
   adds a full backtrace per call (expensive). The state file is written by a
   one-shot timer (`schedule_save_state`, at most once a second) rather than
   on every transaction: `save_state` reads `/proc` for every window, and a
-  drag is one transaction per pointer event.
+  drag is one transaction per pointer event. Each window's argv is cached by
+  pid (`proc_args_cache`, pruned to live windows each save) — `proc_args`
+  stats every `PATH` entry; only foot's shell cwd is read fresh. The
+  unchanged check compares compact JSON, and a write goes to
+  `state.json.tmp` and is renamed over, so a crash cannot truncate it.
 
   **Per-frame work is gated too.** The `/tmp/cce-ovdbg` scene dump needs `CCE_OVDBG=1` in the environment
   before the file is even looked for. The window-stream tick runs only while

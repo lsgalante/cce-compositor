@@ -521,7 +521,15 @@ pub struct WindowManager {
     /// serialization is byte-identical keeps the file exactly as current as
     /// before while making an idle session silent on disk. `None` until the
     /// first write, so a fresh start always writes once.
+    ///
+    /// Compared as compact JSON: the pretty form is only built for a write.
     pub last_saved_state_json: Option<String>,
+    /// `proc_args` per window pid. A save reads every window's argv, and each
+    /// read is `/proc/<pid>/cmdline` plus a stat per `PATH` entry and two
+    /// canonicalizes (`path_shadowed_name`) — once a second while anything
+    /// moves. A live window's pid cannot be reused, and the entries of pids
+    /// no longer on a window are dropped at each save.
+    pub proc_args_cache: std::collections::HashMap<i32, Vec<String>>,
     /// X11 apps' learned minimum sizes, persisted in `min-sizes.json`.
     pub min_sizes: crate::min_sizes::MinSizes,
     /// One-shot placement hints (`place-next <app_id> <x> <y>` over IPC):
@@ -1285,6 +1293,7 @@ impl WindowManager {
         // (app_id, title, program) of each live shy window, whose own
         // entries are scrubbed after the loop — see the skip below.
         let mut shy: Vec<(String, String, String)> = Vec::new();
+        let mut live_pids: Vec<i32> = Vec::new();
 
         for &w in self.windows.iter() {
             if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
@@ -1324,7 +1333,17 @@ impl WindowManager {
             let title = (*w).get_title_string().unwrap_or_default();
             
             let pid = (*w).unreliable_pid();
-            let mut args = proc_args(pid);
+            live_pids.push(pid);
+            let mut args = match self.proc_args_cache.get(&pid) {
+                Some(args) if pid > 0 => args.clone(),
+                _ => {
+                    let args = proc_args(pid);
+                    if pid > 0 && !args.is_empty() {
+                        self.proc_args_cache.insert(pid, args.clone());
+                    }
+                    args
+                }
+            };
             // A shy helper (`Window::is_shy`) is never restored — its app
             // places it — so saving it can only do harm: it takes the app's
             // one slot in `last_window_states`, holding a geometry nothing
@@ -1440,20 +1459,30 @@ impl WindowManager {
             grid: Some(crate::policy::state::SavedGrid::from_params(&self.layout.snap_params())),
         };
         
-        if let Ok(json_str) = serde_json::to_string_pretty(&state) {
-            if self.last_saved_state_json.as_deref() == Some(json_str.as_str()) {
-                return;
-            }
-            log::debug!("Saving state to {}", path_str);
-            let path = std::path::Path::new(&path_str);
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            match std::fs::write(path, &json_str) {
-                // Only remember it once it is actually on disk, so a failed
-                // write is retried on the next transaction rather than latched.
-                Ok(()) => self.last_saved_state_json = Some(json_str),
-                Err(e) => log::error!("Failed to write state file: {}", e),
+        self.proc_args_cache.retain(|pid, _| live_pids.contains(pid));
+
+        // Unchanged is skipped, compared compactly: the pretty form costs
+        // more and is only wanted for the file.
+        let Ok(compact) = serde_json::to_string(&state) else { return };
+        if self.last_saved_state_json.as_deref() == Some(compact.as_str()) {
+            return;
+        }
+        let Ok(json_str) = serde_json::to_string_pretty(&state) else { return };
+        log::debug!("Saving state to {}", path_str);
+        let path = std::path::Path::new(&path_str);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Whole or not at all: a crash mid-write used to leave a truncated
+        // state.json, which the next login could not restore from.
+        let tmp = path.with_extension("json.tmp");
+        match std::fs::write(&tmp, &json_str).and_then(|()| std::fs::rename(&tmp, path)) {
+            // Only remember it once it is actually on disk, so a failed
+            // write is retried on the next transaction rather than latched.
+            Ok(()) => self.last_saved_state_json = Some(compact),
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                log::error!("Failed to write state file: {}", e);
             }
         }
     }
@@ -2742,7 +2771,10 @@ impl WindowManager {
             if (*w).is_linked() {
                 continue;
             }
-            if (*w).get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+            // Borrowed (`is_status_bar`), not `get_app_id_string`: this runs
+            // three times a transaction — once a vblank during a drag — and
+            // allocated a String per window to prefix-match it.
+            if (*w).is_status_bar() {
                 log::info!("[LinkDbg] UNLINKED-MAPPED at {}: app={:?} link.prev_self={} link.prev_null={}",
                     phase,
                     (*w).get_app_id_string(),
@@ -2784,7 +2816,7 @@ impl WindowManager {
             if !matches!((*w).state, crate::window::WindowState::Mapped) {
                 continue;
             }
-            if !(*w).get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+            if !(*w).is_status_bar() {
                 continue;
             }
             let node = &(*w).node.link as *const ffi::wl_list as *mut WlList;
