@@ -1095,6 +1095,20 @@ impl Window {
         }
     }
 
+    /// The app_id borrowed, for hot paths that only compare it (the per-
+    /// commit and per-transaction passes): `get_app_id_string` allocates.
+    /// `None` when absent or not UTF-8.
+    pub unsafe fn app_id_str(&self) -> Option<&str> {
+        let ptr = self.get_app_id();
+        if ptr.is_null() { None } else { std::ffi::CStr::from_ptr(ptr).to_str().ok() }
+    }
+
+    /// The title borrowed — see `app_id_str`.
+    pub unsafe fn title_str(&self) -> Option<&str> {
+        let ptr = self.get_title();
+        if ptr.is_null() { None } else { std::ffi::CStr::from_ptr(ptr).to_str().ok() }
+    }
+
     pub unsafe fn get_app_id_string(&self) -> Option<String> {
         let ptr = self.get_app_id();
         if ptr.is_null() {

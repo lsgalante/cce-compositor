@@ -718,6 +718,12 @@ impl Output {
 
         if !ffi::wlr_output_commit_state(self.wlr_output, &state) {
             ffi::wlr_output_state_finish(&mut state);
+            // The damage this frame carried is still pending (only a
+            // successful commit clears it), but nothing else asks for
+            // another frame: a refused commit (the panel's EBUSY bursts)
+            // left the screen stale until something unrelated moved. Retry
+            // at the next vblank.
+            ffi::wlr_output_schedule_frame(self.wlr_output);
             return Err("Failed to commit state");
         }
 
@@ -1042,6 +1048,17 @@ impl Output {
             rect
         };
 
+        // A forced rebuild resizes, recolours and moves every pooled cell
+        // rect and rim — hundreds at overview zoom, every frame of a zoom
+        // flight. Each setter on a live node re-walks the scene for the
+        // region it touched; under a disabled ancestor it returns at once
+        // (scene_node_update). So the tree is off while the pools are
+        // redrawn and on again after: two walks for the whole rebuild.
+        let suspended = force && !grid_tree.is_null();
+        if suspended {
+            ffi::wlr_scene_node_set_enabled(grid_tree as *mut ffi::wlr_scene_node, false);
+        }
+
         match &spec {
             crate::policy::api::BackgroundSpec::Grid(grid) => {
                 let frame = crate::policy::background::grid_frame(
@@ -1164,6 +1181,9 @@ impl Output {
         }
 
         self.draw_cell_labels();
+        if suspended {
+            ffi::wlr_scene_node_set_enabled(grid_tree as *mut ffi::wlr_scene_node, true);
+        }
     }
 
     /// Name every visible desktop square, chess style, while overview is open.
@@ -1430,6 +1450,26 @@ impl Output {
     }
 }
 
+/// Log a failed frame, at most once per 10 s with a count: a refused commit
+/// can repeat at frame rate for minutes (38,784 lines in one session), and
+/// wlroots logs each one itself as well.
+fn log_render_error(e: &str) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+    static SUPPRESSED: AtomicU64 = AtomicU64::new(0);
+    static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap();
+    if last.is_some_and(|t| t.elapsed().as_secs() < 10) {
+        SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    *last = Some(std::time::Instant::now());
+    match SUPPRESSED.swap(0, Ordering::Relaxed) {
+        0 => log::error!("{}", e),
+        n => log::error!("{} (and {} more in the last 10 s)", e, n),
+    }
+}
+
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let output = &mut *crate::container_of!(listener, Output, frame);
     // The camera steps here, on the vblank, to where it should be at the
@@ -1445,7 +1485,7 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
         None
     };
     if let Err(e) = output.render_and_commit() {
-        log::error!("{}", e);
+        log_render_error(e);
     }
     if let Some(start) = render_start {
         // Epoch ms mod 100000 — the shared tracer time base (see cce-ui's

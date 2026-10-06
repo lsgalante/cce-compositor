@@ -1093,6 +1093,17 @@ headless seat has no keyboard and Chromium crashes in
   unchanged check compares compact JSON, and a write goes to
   `state.json.tmp` and is renamed over, so a crash cannot truncate it.
 
+  **A forced grid rebuild runs with the grid tree disabled** (`draw_grid`,
+  since 2026-10-06): every frame of a zoom flight resizes and moves every
+  pooled cell rect and rim, and a scene setter on a live node re-walks the
+  scene for what it touched, while under a disabled ancestor it returns at
+  once — so the tree goes off around the rebuild and on after (6 overview
+  flights in a shadow: 440-540 ms of compositor CPU -> 180-200 ms). **A
+  refused commit schedules the next frame** (`render_and_commit`): the
+  damage stays pending, but nothing else asked for a frame, so the EBUSY
+  bursts the panel's commits hit left the screen stale until something
+  else moved; the error is logged once per 10 s with a count.
+
   **Per-frame work is gated too.** The `/tmp/cce-ovdbg` scene dump needs `CCE_OVDBG=1` in the environment
   before the file is even looked for. The window-stream tick runs only while
   the stream hub has subscribers (the accept thread's eventfd arms it), and a

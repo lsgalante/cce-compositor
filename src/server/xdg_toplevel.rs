@@ -681,7 +681,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         }
     }
 
-    let app_id = (*window).get_app_id_string().unwrap_or_default();
+    // Borrowed: this runs on every commit of every client.
+    let app_id = (*window).app_id_str().unwrap_or_default();
     let mut ignore_transparent = (*(*window).server).wm.layout.window_backdrop_blur_ignore_transparent;
     if app_id.starts_with("cce-status") {
         ignore_transparent = (*(*window).server).wm.layout.status_backdrop_blur_ignore_transparent;

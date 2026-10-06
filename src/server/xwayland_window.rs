@@ -218,8 +218,10 @@ pub unsafe fn x11_scale_for(
         return 1.0;
     }
     if !xsurface.is_null() && !(*server).wm.xwayland_hidpi_except.is_empty() {
-        let text = |p: *const libc::c_char| -> String {
-            if p.is_null() { String::new() } else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() }
+        // Borrowed (no copy for valid UTF-8): this runs every frame for
+        // every X11 window, and allocated all three fields each time.
+        let text = |p: *const libc::c_char| -> std::borrow::Cow<'_, str> {
+            if p.is_null() { std::borrow::Cow::Borrowed("") } else { std::ffi::CStr::from_ptr(p).to_string_lossy() }
         };
         let class = text((*xsurface).class);
         let instance = text((*xsurface).instance);

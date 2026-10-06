@@ -3277,19 +3277,32 @@ impl WindowManager {
     pub fn sent_outputs_compat(&self) {}
 
     pub unsafe fn get_rule_for_window(&self, win: *mut Window) -> Option<&crate::config::ModeRule> {
-        let app_id = (*win).get_app_id_string();
-        let title = (*win).get_title_string();
-        self.mode_rules
-            .iter()
-            .find(|rule| mode_rule_matches(rule, app_id.as_deref(), title.as_deref()))
+        self.rule_for((*win).app_id_str(), (*win).title_str())
+    }
+
+    /// The first mode rule matching this app_id and title. Borrowed: the
+    /// arrange snapshot asks once per window per transaction — once a vblank
+    /// during a drag — and used to allocate both strings, twice.
+    fn rule_for(&self, app_id: Option<&str>, title: Option<&str>) -> Option<&crate::config::ModeRule> {
+        self.mode_rules.iter().find(|rule| mode_rule_matches(rule, app_id, title))
     }
 
     pub unsafe fn get_mode_for_window(&self, win: *mut Window) -> crate::tiling::TilingMode {
+        self.mode_for_window(win, (*win).app_id_str(), || self.get_rule_for_window(win))
+    }
+
+    /// `get_mode_for_window` with the app_id already in hand and the mode
+    /// rule asked for only if it is needed.
+    unsafe fn mode_for_window<'a>(
+        &'a self,
+        win: *mut Window,
+        app_id: Option<&str>,
+        rule: impl FnOnce() -> Option<&'a crate::config::ModeRule>,
+    ) -> crate::tiling::TilingMode {
         if (*win).is_status_bar() {
             return crate::tiling::TilingMode::Status;
         }
-        let app_id = (*win).get_app_id_string();
-        if app_id.as_deref() == Some("cce-notifier") || app_id.as_deref() == Some("cce-notification-daemon") || app_id.as_deref() == Some("clear-notification-daemon") {
+        if app_id == Some("cce-notifier") || app_id == Some("cce-notification-daemon") || app_id == Some("clear-notification-daemon") {
             return crate::tiling::TilingMode::Popup;
         }
         // An explicit set_popup via the cce window-management protocol beats the
@@ -3299,7 +3312,7 @@ impl WindowManager {
         if (*win).tiling_mode == crate::tiling::TilingMode::Popup {
             return crate::tiling::TilingMode::Popup;
         }
-        if app_id.as_deref().map_or(false, |id| id.starts_with("cce-cloud")) {
+        if app_id.map_or(false, |id| id.starts_with("cce-cloud")) {
             return crate::tiling::TilingMode::Overlay;
         }
 
@@ -3313,7 +3326,7 @@ impl WindowManager {
             return crate::tiling::TilingMode::Floating;
         }
 
-        if let Some(rule) = self.get_rule_for_window(win) {
+        if let Some(rule) = rule() {
             return rule.mode;
         }
 
@@ -3977,8 +3990,12 @@ impl WindowManager {
             if win_ptr.is_null() || (*win_ptr).closed {
                 continue;
             }
+            // Read once per window: the rule lookup, the status test and the
+            // mode below all need them (they each re-read and allocated).
+            let app_id = (*win_ptr).app_id_str();
+            let rule = self.rule_for(app_id, (*win_ptr).title_str());
             let rule_ssd = if !(*win_ptr).mode_locked {
-                self.get_rule_for_window(win_ptr).and_then(|rule| rule.ssd)
+                rule.and_then(|rule| rule.ssd)
             } else {
                 None
             };
@@ -3987,7 +4004,7 @@ impl WindowManager {
             // surface is thicker than the bar) keep the frozen value and
             // raise the segment above its siblings and the windows the open
             // menu now overlaps.
-            if (*win_ptr).get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+            if app_id.map_or(false, |id| id.starts_with("cce-status")) {
                 let bg = (*win_ptr).box_geom;
                 let (len, thickness) = match (*win_ptr).status_edge {
                     crate::policy::arrange::StatusEdge::Left
@@ -4008,7 +4025,7 @@ impl WindowManager {
                 role: (*win_ptr).role(),
                 minimized: (*win_ptr).minimized,
                 closing_or_init: matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init),
-                mode: self.get_mode_for_window(win_ptr),
+                mode: self.mode_for_window(win_ptr, app_id, || rule),
                 status_collapsed_len: (*win_ptr).status_collapsed_len,
                 rule_ssd,
                 being_moved: self.is_window_being_moved(win_ptr),

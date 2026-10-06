@@ -46,9 +46,18 @@ static bool cce_scene_blur_debug(void);
 #define HIGHLIGHT_DAMAGE_FADEOUT_TIME   250
 
 #define CURSOR_HISTORY_SIZE 16
+// Only this many of the most recent footprints are damage: a stale cursor
+// can only be baked into a buffer the swapchain still hands back, and a
+// wlroots swapchain holds at most WLR_SWAPCHAIN_CAP (4) — so twice that is
+// a margin, not a guess. Until 2026-10-06 all 16 counted, forever: the
+// trail of a moving cursor was re-rendered (and re-blurred) every frame, and
+// after it stopped, every unrelated frame still pulled in the old trail.
+#define CURSOR_HISTORY_DAMAGE 8
 static struct {
 	int x, y, w, h;
 	bool valid;
+	// The footprint is in this output's coordinates.
+	struct wlr_output *output;
 } g_cursor_history[CURSOR_HISTORY_SIZE];
 static int g_cursor_history_index = 0;
 
@@ -4422,14 +4431,18 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 				g_cursor_history[g_cursor_history_index].w = cursor->width;
 				g_cursor_history[g_cursor_history_index].h = cursor->height;
 				g_cursor_history[g_cursor_history_index].valid = true;
+				g_cursor_history[g_cursor_history_index].output = output;
 				g_cursor_history_index =
 					(g_cursor_history_index + 1) % CURSOR_HISTORY_SIZE;
 			}
 
-			for (int i = 0; i < CURSOR_HISTORY_SIZE; i++) {
-				if (!g_cursor_history[i].valid) {
+			// Newest first, this output's only, the most recent few.
+			for (int k = 1, taken = 0; k <= CURSOR_HISTORY_SIZE && taken < CURSOR_HISTORY_DAMAGE; k++) {
+				int i = (g_cursor_history_index - k + CURSOR_HISTORY_SIZE) % CURSOR_HISTORY_SIZE;
+				if (!g_cursor_history[i].valid || g_cursor_history[i].output != output) {
 					continue;
 				}
+				taken++;
 				pixman_region32_union_rect(&render_data.damage, &render_data.damage,
 						g_cursor_history[i].x - 16,
 						g_cursor_history[i].y - 16,
