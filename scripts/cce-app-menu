@@ -63,10 +63,14 @@ current_mode=$("$CCE_CTL" windows --json 2>/dev/null | jq -Rrn --arg want "$wind
 # for JSON rather than spliced into it.
 json_layout=$(jq -nc --arg app_id "$app_id" --arg current "$current_mode" '
 def btn($text; $id): {type: "button", text: $text, id: $id};
-def mode($text; $id): btn((if $id == $current then "● " else "   " end) + $text; $id);
+# The mode page is a radio group: cce-cloud draws the toolkit leading
+# marks ("● " on, "○ " off) as the circle glyphs, and a `target_page` button
+# as a page row (chevron-right) or, turning back to an earlier page, a back
+# row (chevron-left) -- so no label spells a mark or an arrow of its own.
+def mode($text; $id): btn((if $id == $current then "● " else "○ " end) + $text; $id);
 {pages: [
     {title: $app_id, justify: "left", widgets: [
-        btn("Window Mode >"; "mode_page") + {target_page: 1},
+        btn("Window Mode"; "mode_page") + {target_page: 1},
         btn("Minimize"; "minimize"),
         btn("Close Window"; "close")
     ]},
@@ -74,7 +78,7 @@ def mode($text; $id): btn((if $id == $current then "● " else "   " end) + $tex
         mode("Floating"; "floating"),
         mode("Tiled"; "tiled"),
         mode("Fullscreen"; "fullscreen"),
-        btn("< Back"; "back") + {target_page: 0}
+        btn("Back"; "back") + {target_page: 0}
     ]}
 ]}')
 

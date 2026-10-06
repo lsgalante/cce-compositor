@@ -586,7 +586,10 @@ sat outside the edges and the ring that followed hugged them.
   bodies are excluded. The menu's "Window Mode" page — a second JSON page
   reached through a `target_page` button, which switches pages without
   closing the popup — sets the mode with `ccectl set-mode <mode> <id>`, one
-  window by id. Not `ccectl mode`, which appends a persistent app_id rule.
+  window by id. Its marks and arrows are cce-cloud's glyphs, not text: the
+  mode rows lead with `"● "` / `"○ "` (drawn as the circle glyphs), and the
+  page and Back rows carry only their words, cce-cloud adding the chevrons
+  from `target_page` (see cce-cloud's CLAUDE.md, the `Json` mode). Not `ccectl mode`, which appends a persistent app_id rule.
   `cce-desktop-menu` carries the same page for the FOCUSED window: the
   background right-click passes it as `-i <id> -a <app_id>` (settable modes
   only) because it drops focus right after the spawn, so the script could
