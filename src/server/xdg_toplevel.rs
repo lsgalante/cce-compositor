@@ -1025,6 +1025,13 @@ unsafe extern "C" fn handle_request_move(
 
     if ffi::wlr_seat_validate_pointer_grab_serial((*seat).wlr_seat, std::ptr::null_mut(), (*event).serial) {
         let initial_mode = (*window).tiling_mode;
+        // A client's move (a cce-ui window-plate drag) is the bound edit-mode
+        // drag in every way that matters: read the Tiled grab BEFORE the
+        // un-tile below, so the drag snaps to whole cells and lands grid-
+        // aligned, which re-tiles it (op_end's `settle_tiling`). Read after,
+        // as it was until 2026-10-06, it was always false: the drag moved
+        // freely and the window stayed floating wherever it was dropped.
+        let grabbed_tiled = initial_mode == crate::tiling::TilingMode::Tiled;
         if initial_mode != crate::tiling::TilingMode::Floating
             && initial_mode != crate::tiling::TilingMode::Popup
             && initial_mode != crate::tiling::TilingMode::Fullscreen
@@ -1032,6 +1039,9 @@ unsafe extern "C" fn handle_request_move(
             // A move must not cost a window its Utility mode.
             && initial_mode != crate::tiling::TilingMode::Utility
         {
+            // As the bound drag: un-tile for the drag but keep the
+            // cell-quantized geometry (cursor.rs).
+            (*window).was_tiled = false;
             (*window).tiling_mode = crate::tiling::TilingMode::Floating;
             (*window).mode_locked = true;
         }
@@ -1058,7 +1068,7 @@ unsafe extern "C" fn handle_request_move(
             start_win_virtual_x: (*window).virtual_x,
             start_win_virtual_y: (*window).virtual_y,
             start_tiling_mode: (*window).tiling_mode,
-            start_was_tiled: (*window).tiling_mode == crate::tiling::TilingMode::Tiled,
+            start_was_tiled: grabbed_tiled,
             start_mode_locked: (*window).mode_locked,
             start_pan_x: (*(*window).server).wm.desk_pan_x,
             start_pan_y: (*(*window).server).wm.desk_pan_y,
@@ -1091,10 +1101,16 @@ unsafe extern "C" fn handle_request_resize(
 
     if ffi::wlr_seat_validate_pointer_grab_serial((*seat).wlr_seat, std::ptr::null_mut(), (*event).serial) {
         let initial_mode = (*window).tiling_mode;
+        // As in `handle_request_move`: read the Tiled grab before the
+        // un-tile, so a client's edge resize snaps to whole cells like the
+        // bound one and re-tiles where it lands, instead of leaving the
+        // window floating.
+        let grabbed_tiled = initial_mode == crate::tiling::TilingMode::Tiled;
         if initial_mode != crate::tiling::TilingMode::Floating
             && initial_mode != crate::tiling::TilingMode::Popup
             && initial_mode != crate::tiling::TilingMode::Fullscreen
         {
+            (*window).was_tiled = false;
             (*window).tiling_mode = crate::tiling::TilingMode::Floating;
             (*window).mode_locked = true;
         }
@@ -1124,7 +1140,7 @@ unsafe extern "C" fn handle_request_resize(
             start_win_virtual_x: (*window).virtual_x,
             start_win_virtual_y: (*window).virtual_y,
             start_tiling_mode: (*window).tiling_mode,
-            start_was_tiled: (*window).tiling_mode == crate::tiling::TilingMode::Tiled,
+            start_was_tiled: grabbed_tiled,
             start_mode_locked: (*window).mode_locked,
             start_pan_x: (*(*window).server).wm.desk_pan_x,
             start_pan_y: (*(*window).server).wm.desk_pan_y,
