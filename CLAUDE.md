@@ -929,6 +929,16 @@ title reaches the second. Reproduce with `float-pair --app-id X
 center` rules: pan the camera, respawn, and `ctl windows` shows the
 dialog at the screen's centre while the main window sits where it was.
 
+**A window with no title matches `title=""`** (since 2026-10-05,
+`mode_rule_matches`): an unset title counts as the empty string, which
+every `title=` substring rule is tested against, so only `title=""` can
+reach it. The Claude app's quick-entry popup is an untitled parentless
+toplevel under the main window's app_id; with no rule able to name it, it
+borrowed the main window's Tiled entry (the border drawn at the main
+window's size around a far smaller popup, and focus panning the camera to
+it). The live config names the main window `title="Claude"` first and then
+`title="" center`. `float-pair --untitled-dialog` reproduces it.
+
 **A client reconnecting maps unfocused**: a window that vanishes without
 the compositor asking it to close (`Window::unmap` → `note_vanished`) lets
 the next window of the same app_id AND the same program (`proc_args`

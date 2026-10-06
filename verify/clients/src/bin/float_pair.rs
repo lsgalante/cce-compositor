@@ -11,6 +11,8 @@
 // Args: --app-id ID  --delay SECS  --main WxH  --dialog WxH
 //       --dialog-honours-configure  --no-activate  --no-decoration
 //       --bare-token (no seat/serial/surface on the token)
+//       --untitled-dialog  never set the dialog's title (the Claude app's
+//                          quick-entry popup sets none)
 //       --reactivate SECS  that long after the dialog, request activation of
 //                          the (by then unfocused) MAIN window — an activation
 //                          for an already-mapped window
@@ -217,6 +219,7 @@ fn main() {
     let mut activate = true;
     let mut decoration = true;
     let mut bare_token = false;
+    let mut untitled_dialog = false;
     let mut reactivate: Option<f64> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -229,6 +232,7 @@ fn main() {
             "--no-activate" => activate = false,
             "--no-decoration" => decoration = false,
             "--bare-token" => bare_token = true,
+            "--untitled-dialog" => untitled_dialog = true,
             "--reactivate" => reactivate = Some(args.next().unwrap().parse().unwrap()),
             other => panic!("unknown arg {other}"),
         }
@@ -252,7 +256,9 @@ fn main() {
         let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
         let toplevel = xdg.get_toplevel(&qh, ());
         toplevel.set_app_id(app_id.clone());
-        toplevel.set_title(title.into());
+        if !title.is_empty() {
+            toplevel.set_title(title.into());
+        }
         if fixed {
             toplevel.set_min_size(want.0, want.1);
             toplevel.set_max_size(want.0, want.1);
@@ -339,7 +345,8 @@ fn main() {
         }
         if !dialog_created && start.elapsed() >= Duration::from_secs_f64(delay) {
             dialog_created = true;
-            make_win(&mut state, "Authorize", dialog_size, dialog_honours, 0xffd9_8c2b, true, "dialog");
+            let dialog_title = if untitled_dialog { "" } else { "Authorize" };
+            make_win(&mut state, dialog_title, dialog_size, dialog_honours, 0xffd9_8c2b, true, "dialog");
             println!("dialog created");
             if let Some(t) = state.token.clone() {
                 activated = true;

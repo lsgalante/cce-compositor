@@ -3229,6 +3229,17 @@ pub struct WindowManagerSentCompat {
     pub outputs: ffi::wl_list,
     pub output_config: *mut ffi::wlr_output_configuration_v1,
 }
+/// Whether `rule` names a window with this app_id and title. Both match
+/// as substrings. A window that never set a title matches as the empty
+/// string, so `title=""` (which every title contains) reaches an untitled
+/// popup too — the Claude app's quick-entry window sets none, and without
+/// this it fell through to its main window's saved entry.
+pub fn mode_rule_matches(rule: &crate::config::ModeRule, app_id: Option<&str>, title: Option<&str>) -> bool {
+    let match_app = rule.app_id_pattern == "*" || app_id.map_or(false, |aid| aid.contains(&rule.app_id_pattern));
+    let match_title = rule.title_pattern.as_deref().map_or(true, |tp| title.unwrap_or("").contains(tp));
+    match_app && match_title
+}
+
 impl WindowManager {
     // Add legacy fields so structural offsets are preserved if layout-based code is compiled
     pub fn sent_outputs_compat(&self) {}
@@ -3236,19 +3247,9 @@ impl WindowManager {
     pub unsafe fn get_rule_for_window(&self, win: *mut Window) -> Option<&crate::config::ModeRule> {
         let app_id = (*win).get_app_id_string();
         let title = (*win).get_title_string();
-
-        for rule in &self.mode_rules {
-            let match_app = rule.app_id_pattern == "*"
-                || app_id.as_ref().map_or(false, |aid| aid.contains(&rule.app_id_pattern));
-            let match_title = rule.title_pattern.as_ref().map_or(true, |tp| {
-                title.as_ref().map_or(false, |t| t.contains(tp))
-            });
-
-            if match_app && match_title {
-                return Some(rule);
-            }
-        }
-        None
+        self.mode_rules
+            .iter()
+            .find(|rule| mode_rule_matches(rule, app_id.as_deref(), title.as_deref()))
     }
 
     pub unsafe fn get_mode_for_window(&self, win: *mut Window) -> crate::tiling::TilingMode {
@@ -7940,6 +7941,33 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rule(app_id: &str, title: Option<&str>) -> crate::config::ModeRule {
+        crate::config::ModeRule {
+            mode: crate::tiling::TilingMode::Floating,
+            app_id_pattern: app_id.to_string(),
+            title_pattern: title.map(str::to_string),
+            single_instance: false,
+            tag: -1,
+            circular: false,
+            ssd: None,
+            over_sibling: false,
+            center: true,
+        }
+    }
+
+    #[test]
+    fn an_empty_title_rule_reaches_an_untitled_window() {
+        let any = rule("com.anthropic.Claude", Some(""));
+        assert!(mode_rule_matches(&any, Some("com.anthropic.Claude"), None), "never set a title");
+        assert!(mode_rule_matches(&any, Some("com.anthropic.Claude"), Some("")));
+        assert!(mode_rule_matches(&any, Some("com.anthropic.Claude"), Some("Claude")), "substring: every title");
+        let named = rule("com.anthropic.Claude", Some("Claude"));
+        assert!(!mode_rule_matches(&named, Some("com.anthropic.Claude"), None), "a named title needs a title");
+        assert!(mode_rule_matches(&named, Some("com.anthropic.Claude"), Some("Claude")));
+        assert!(!mode_rule_matches(&named, Some("other"), Some("Claude")));
+        assert!(mode_rule_matches(&rule("*", None), None, None));
+    }
 
     #[test]
     fn point_in_view_regions_is_half_open() {
