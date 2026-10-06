@@ -55,6 +55,8 @@ fn usage(name: &str, to_stderr: bool) {
     print("  close-window <app_id|id> [title-substring]  # close a specific window");
     print("  center-window [<app_id>]   # pan focused/named window on-screen; replies x= y= w= h=");
     print("  move-window <square> [<app_id>] # put focused/named window on a desktop square (e.g. C-9)");
+    print("  resize-window <w> <h> [<app_id|id>] # set focused/named window's size (logical px),");
+    print("                              # top-left fixed, clamped to its min/max hints");
     print("  move-window-left|-right|-up|-down    # step the focused window one grid cell;");
     print("                              # tiled swaps with the tiled window already there,");
     print("                              # floating just moves");

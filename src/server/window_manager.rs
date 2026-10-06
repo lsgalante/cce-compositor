@@ -5957,6 +5957,49 @@ impl WindowManager {
                 );
                 format!("ok cell={} vx={:.1} vy={:.1}\n", cell, x, y)
             }
+            "resize-window" => {
+                // resize-window <w> <h> [app_id|id] — set a window's content
+                // size in logical px, top-left fixed; the focused window with
+                // no query. Clamped to the client's min/max hints like a drag
+                // (`DimensionsHint::clamp`). A Tiled window then covers the
+                // cells that size touches, as a client maximize does. The
+                // reply is the size asked for: the client answers in its own
+                // time (an X11 app may insist on its minimum), so read the
+                // outcome back with `windows`.
+                let usage = "error: usage: resize-window <w> <h> [app_id|id]\n";
+                let (Some(w), Some(h)) = (
+                    parts.get(1).and_then(|s| s.parse::<u32>().ok()).filter(|&v| v > 0),
+                    parts.get(2).and_then(|s| s.parse::<u32>().ok()).filter(|&v| v > 0),
+                ) else {
+                    return usage.to_string();
+                };
+                let target: *mut Window = if parts.len() >= 4 {
+                    self.find_window_by_query(&parts[3..].join(" "))
+                } else if let Some(seat) = self.first_seat() {
+                    match (*seat).focused {
+                        crate::seat::Focus::Window(w) => w,
+                        _ => std::ptr::null_mut(),
+                    }
+                } else {
+                    std::ptr::null_mut()
+                };
+                if target.is_null() {
+                    return "error: window not found\n".to_string();
+                }
+                if matches!(
+                    (*target).tiling_mode,
+                    crate::tiling::TilingMode::Fullscreen
+                        | crate::tiling::TilingMode::Utility
+                        | crate::tiling::TilingMode::Status
+                ) {
+                    return "error: a fullscreen, utility or status window sizes itself\n".to_string();
+                }
+                let (w, h) = (*target).wm_scheduled.dimensions_hint.clamp(w, h);
+                (*target).box_geom.width = w as i32;
+                (*target).box_geom.height = h as i32;
+                self.dirty_windowing();
+                format!("ok w={} h={}\n", w, h)
+            }
             "center-window" | "bring-window" => {
                 // Pan the desktop so the target window (given app_id/id, or the
                 // focused window if omitted) is centered in the output, then focus
