@@ -125,6 +125,11 @@ pub struct Cursor {
     /// of the gesture fires nothing more, so one swipe toggles the
     /// overview once however far the fingers go. Cleared at swipe begin.
     pub swipe_spent: bool,
+    /// A focus bind the in-flight swipe reached with no window that way
+    /// (`WindowManager::focus_toward_lands`): it does not fire, and while
+    /// the swipe keeps matching it the lean holds at its limit rather than
+    /// stepping. Cleared at swipe begin and by a step that lands.
+    pub swipe_dead_end: Option<crate::config::Action>,
     /// Camera offset (virtual units, `[x, y]`) the in-flight swipe has
     /// peeked the desktop by so far — see `swipe_peek_for`. Zero outside a
     /// swipe, and restarts from zero at each fire, like the travel.
@@ -228,6 +233,7 @@ impl Default for Cursor {
             gesture_scale: 1.0,
             gesture_triggered: false,
             swipe_spent: false,
+            swipe_dead_end: None,
             swipe_peek: [0.0, 0.0],
             inject_swipe_fingers: 3,
             panning_gesture_active: false,
@@ -3773,6 +3779,7 @@ unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *
     cursor.gesture_dy = 0.0;
     cursor.gesture_triggered = false;
     cursor.swipe_spent = false;
+    cursor.swipe_dead_end = None;
     cursor.swipe_peek = [0.0, 0.0];
 
     log::info!("handle_swipe_begin: fingers={}", (*event).fingers);
@@ -3858,13 +3865,13 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
                 "down" => (cursor.gesture_dy > threshold, Some(3)),
                 _ => (false, None),
             };
-            if matched {
+            // First match wins in this table. The scan goes on past it
+            // because a focus step that turns out to have nowhere to go
+            // (below) leans instead, and the lean needs every direction.
+            if matched && matched_action == crate::config::Action::None {
                 matched_action = gb.action;
                 matched_command = gb.command.clone();
-                break;
             }
-            // First match wins in this table, so only the first bind per
-            // direction decides whether that way peeks.
             if let Some(i) = slot {
                 if !navigates[i] && action_navigates(gb.action) {
                     navigates[i] = true;
@@ -3873,8 +3880,41 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         }
     }
 
+    // A focus step with no window that way does not fire. Firing it moved
+    // nothing but the camera: the step took the lean, restarted the
+    // travel, and the camera eased back while the fingers were still
+    // going out, then leaned out again toward the next threshold and
+    // snapped back at it — a sawtooth for as long as the swipe ran on.
+    // Instead the lean holds at its limit, as at a wall, and the lift eases
+    // it out (`handle_swipe_end`). The travel is scaled back onto the
+    // threshold, keeping its direction, so turning the fingers round
+    // unwinds the lean at once rather than first spending the overshoot.
+    // The answer is kept for the rest of the swipe, so the policy is asked
+    // once per dead end, not once per event.
+    if is_directional_focus(matched_action) {
+        let travel = (cursor.gesture_dx, cursor.gesture_dy);
+        let dead = cursor.swipe_dead_end == Some(matched_action) || {
+            let v = swipe_focus_vector(&(*seat.server).wm.gesture_binds, (*event).fingers, modifiers, travel);
+            !(*seat.server).wm.focus_toward_lands(v, &matched_action)
+        };
+        if dead {
+            if cursor.swipe_dead_end != Some(matched_action) {
+                log::info!("Swipe gesture {:?}: no window that way, holding the lean", matched_action);
+            }
+            cursor.swipe_dead_end = Some(matched_action);
+            let over = travel.0.abs().max(travel.1.abs()) / threshold;
+            if over > 1.0 {
+                cursor.gesture_dx /= over;
+                cursor.gesture_dy /= over;
+            }
+            matched_action = crate::config::Action::None;
+            matched_command = None;
+        }
+    }
+
     if matched_action != crate::config::Action::None {
         log::info!("Swipe gesture matched action: {:?}", matched_action);
+        cursor.swipe_dead_end = None;
         // This step's travel, before it restarts below: a focus swipe
         // aims along it (`swipe_focus_vector`).
         let travel = (cursor.gesture_dx, cursor.gesture_dy);
@@ -3931,33 +3971,9 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         // `swipe3_right` mirrors them), and the window manager picks the
         // nearest window center along the result.
         let focus_vector = swipe_focus_vector(&(*seat.server).wm.gesture_binds, (*event).fingers, modifiers, travel);
-        let focused_before = (*seat.server).wm.focused_window();
-        let ease_before = ((*seat.server).wm.target_desk_pan_x, (*seat.server).wm.target_desk_pan_y);
         match focus_vector {
             Some(v) if is_directional_focus(matched_action) => (*seat.server).wm.focus_toward(v, &matched_action),
             _ => (*seat.server).wm.execute_action(&matched_action, matched_command.as_deref()),
-        }
-
-        // A focus step that found no window (a long swipe run on past the
-        // last one) must leave the camera where the last real step was
-        // taking it. Both action paths stop the camera ease up front, so
-        // without this the previous step's pan into view froze part way
-        // with the window still clipped, and the lean since that step —
-        // committed above, or carried in the ease's target — stayed, so
-        // each further threshold walked the camera off the window. Put the
-        // ease back and take the lean out of it, as a lift would
-        // (`handle_swipe_end`). A step that did set a target of its own is
-        // left to it.
-        let wm = &mut (*seat.server).wm;
-        if is_directional_focus(matched_action)
-            && wm.focused_window() == focused_before
-            && wm.target_desk_pan_x.is_none()
-            && wm.target_desk_pan_y.is_none()
-            && (lean != [0.0, 0.0] || ease_before != (None, None))
-        {
-            wm.target_desk_pan_x = Some(ease_before.0.unwrap_or(wm.desk_pan_x) - lean[0]);
-            wm.target_desk_pan_y = Some(ease_before.1.unwrap_or(wm.desk_pan_y) - lean[1]);
-            wm.start_panning_animation();
         }
 
         // The action ran against the leaned camera. It set a pan target

@@ -5108,6 +5108,22 @@ impl WindowManager {
         }
     }
 
+    /// Whether a focus swipe's step would move focus — `focus_toward(v,
+    /// action)` with a vector, `execute_action(action)` without one — asked
+    /// of the policy without applying anything or touching the camera. A
+    /// directional focus with nowhere to go is an empty command list on
+    /// both paths, and the legacy arms do nothing with it either.
+    pub unsafe fn focus_toward_lands(&mut self, v: Option<(f64, f64)>, action: &crate::config::Action) -> bool {
+        use crate::policy::api::Policy;
+        let ctx = self.build_action_ctx();
+        let has_ray = ctx.windows.iter().any(|w| w.focus_cyclable && Some(w.id) == ctx.focused);
+        let cmds = match v {
+            Some(v) if has_ray => crate::policy::actions::focus_toward(&ctx, v, self.swipe_focus_cone_deg),
+            _ => crate::policy::actions::DefaultPolicy.action(&ctx, *action, None),
+        };
+        !cmds.is_empty()
+    }
+
     pub unsafe fn execute_action(&mut self, action: &crate::config::Action, command: Option<&str>) {
         use crate::config::Action;
         self.stop_panning_animation();
