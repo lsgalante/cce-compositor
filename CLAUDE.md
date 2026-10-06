@@ -213,7 +213,7 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Eighteen modules carry unit tests — `window_manager.rs` (the most of any, among
+Nineteen modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
 `config.rs` (among them `backdrop_compress_params`), `idle.rs`,
 `idle_inhibit_manager.rs`, `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
@@ -223,7 +223,8 @@ them the saved-state matchers: same-program borrowing, untitled entries),
 `touch.rs` (edge-swipe progress, finger centroid/spread tracking, swipe vs pinch),
 `ipc_server.rs` (command framing and cutting off a stalled subscriber),
 `status_server.rs` (a slow reader, and a client that never reads),
-`keyboard_group.rs` (the keys a locked session keeps) and
+`keyboard_group.rs` (the keys a locked session keeps),
+`osk.rs` (a touch shows the keyboard once, and only while it is fresh) and
 `sleep_lock.rs` (logind's sleep delay). They cluster where the logic is
 pure and the FFI is not, which is the only kind of thing testable in a crate
 this deep in wlroots. The arrange/slotmap tests live in the sibling
