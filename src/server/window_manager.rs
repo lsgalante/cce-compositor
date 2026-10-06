@@ -466,6 +466,8 @@ pub struct WindowManager {
     pub touchpad_view_swipe_tumble: bool,
     pub touchpad_view_sensitivity: f64,
     pub touchpad_view_invert: bool,
+    /// `window_manager { osk_on_touch }` (`osk.rs`).
+    pub osk_on_touch: bool,
     /// `window_manager { swipe_peek }`: the desktop's lean toward a
     /// directional swipe bind at its threshold, screen px (default 60;
     /// 0 disables). See `cursor::swipe_peek_for`.
@@ -800,6 +802,7 @@ impl WindowManager {
         self.swipe_threshold = 70.0;
         self.swipe_repeat_threshold = 280.0;
         self.touchpad_view_invert = false;
+        self.osk_on_touch = true;
         self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();
         self.input_rules = Vec::new();
@@ -886,6 +889,7 @@ impl WindowManager {
         self.swipe_threshold = 70.0;
         self.swipe_repeat_threshold = 280.0;
         self.touchpad_view_invert = false;
+        self.osk_on_touch = true;
         self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();
         self.has_restored_focused_window = false;

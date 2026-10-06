@@ -1211,6 +1211,25 @@ so `weston-simple-touch` under `WAYLAND_DEBUG=1` shows the `Client` route's
 `wl_touch` traffic — and the `cancel` a third finger sends it. A shadow's
 input.kdl is its own copy: add `edge_*`/`pinch3_*` binds there to try them.
 
+**The on-screen keyboard follows a touched field** (`osk.rs`, since
+2026-10-05). A finger on an app's window (`note_touch` at a `Client` down
+or lift, or a `Pointer` tap's lift; never a layer surface, so taps on the
+board itself do not count) arms it for `TOUCH_WINDOW` (800 ms), and the
+first text-input-v3 enable or commit inside that window spends the touch and
+runs `cce-keyboard show`. When the field goes (`disable_text_input`: a
+disable, a destroy, or focus moving), `cce-keyboard hide` runs after
+`HIDE_DELAY_MS` (250 ms) — cancelled by any enable, so moving field to field
+keeps one board — and only if this module showed it, so a board summoned by
+Super+O stays. Off with `window_manager { osk_on_touch (bool)false }`. It
+needed the relay to **enter text inputs without an input method**:
+`InputRelay::focus` used to send `enter` only when one was registered
+(river's rule), so no client ever enabled a field. It now enters always, a
+refocus of the same surface is no longer a leave (it was an `assert`), a
+text input bound after its client took focus is entered at creation, and an
+input method arriving or leaving no longer re-runs focus. Shadow check:
+`ctl touch tap` on a cce-gallery TextBox brings `cce-keyboard show` up;
+`pointer-click` on it does not.
+
 ### Portal global shortcuts
 
 A native Wayland app cannot grab a key; it asks xdg-desktop-portal's

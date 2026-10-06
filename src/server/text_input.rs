@@ -71,6 +71,17 @@ impl TextInput {
         connect_listener(&mut (*wlr_text_input).events.disable, &mut (*raw).disable, handle_disable);
         connect_listener(&mut (*wlr_text_input).events.destroy, &mut (*raw).destroy, handle_destroy);
 
+        // A client that binds its text input after its surface took focus
+        // (cce-ui binds lazily) is entered now; `InputRelay::focus` only
+        // enters on a focus change.
+        let focused = (*seat).focused.surface();
+        if !focused.is_null()
+            && ffi::wl_resource_get_client(ffi::river_wlr_surface_get_resource(focused))
+                == ffi::wl_resource_get_client((*wlr_text_input).resource)
+        {
+            ffi::wlr_text_input_v3_send_enter(wlr_text_input, focused);
+        }
+
         Ok(())
     }
 }
@@ -95,6 +106,7 @@ unsafe extern "C" fn handle_enable(listener: *mut ffi::wl_listener, _data: *mut 
     }
 
     (*seat).relay.text_input = text_input;
+    (*seat).relay.osk.field_active();
 
     let input_method = (*seat).relay.input_method;
     if !input_method.is_null() {
@@ -115,6 +127,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         return;
     }
 
+    (*seat).relay.osk.field_active();
     if !(*seat).relay.input_method.is_null() {
         (*seat).relay.send_input_method_state();
     }

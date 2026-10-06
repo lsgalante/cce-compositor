@@ -20,6 +20,9 @@ pub struct InputRelay {
     pub input_method_new_popup: ffi::wl_listener,
 
     pub grab_keyboard_destroy: ffi::wl_listener,
+
+    /// The on-screen keyboard following a touched field (`osk.rs`).
+    pub osk: crate::osk::Osk,
 }
 
 unsafe fn connect_listener(
@@ -54,6 +57,8 @@ impl InputRelay {
         self.input_method_destroy = std::mem::zeroed();
         self.input_method_new_popup = std::mem::zeroed();
         self.grab_keyboard_destroy = std::mem::zeroed();
+        // The relay starts as zeroed memory: write, don't assign over it.
+        std::ptr::write(&mut self.osk, crate::osk::Osk::new((*seat).server));
     }
 
     pub unsafe fn new_input_method(&mut self, input_method: *mut ffi::wlr_input_method_v2) {
@@ -76,15 +81,19 @@ impl InputRelay {
         connect_listener(&mut (*input_method).events.destroy, &mut self.input_method_destroy, handle_input_method_destroy);
         connect_listener(&mut (*input_method).events.new_popup_surface, &mut self.input_method_new_popup, handle_input_method_new_popup);
 
-        let focused_surface = (*seat).focused.surface();
-        if !focused_surface.is_null() {
-            self.focus(focused_surface);
+        // Text inputs are entered whether or not an input method exists
+        // (`focus`), so one that arrives late only needs telling about the
+        // field already enabled.
+        if !self.text_input.is_null() {
+            ffi::wlr_input_method_v2_send_activate(input_method);
+            self.send_input_method_state();
         }
     }
 
     pub unsafe fn disable_text_input(&mut self) {
         assert!(!self.text_input.is_null());
         self.text_input = std::ptr::null_mut();
+        self.osk.field_gone();
 
         if !self.input_method.is_null() {
             let mut pos = self.input_popups.next;
@@ -143,40 +152,50 @@ impl InputRelay {
         ffi::wlr_input_method_v2_send_done(input_method);
     }
 
+    /// Keyboard focus moved to `new_focus` (null: nowhere). Text inputs of
+    /// the client that lost it are left, and those of the client that got it
+    /// entered — whether or not an input method is running. river entered
+    /// them only with one, but then no client ever enabled a field, and the
+    /// on-screen keyboard (`osk.rs`) is driven by exactly that enable.
     pub unsafe fn focus(&mut self, new_focus: *mut ffi::wlr_surface) {
-        // Send leave events
+        let head_ptr = &self.text_inputs as *const ffi::wl_list as *mut ffi::wl_list;
+
+        // Send leave events. A text input already on the new surface keeps
+        // it: a refocus of the same surface is not a leave.
         let mut pos = self.text_inputs.next;
-        let head_ptr = &self.text_inputs as *const ffi::wl_list;
-        while pos != head_ptr as *mut ffi::wl_list {
+        while pos != head_ptr {
             let next_pos = (*pos).next;
             let text_input = crate::container_of!(pos, TextInput, link);
             let focused = (*(*text_input).wlr_text_input).focused_surface;
-            if !focused.is_null() {
-                assert!(focused != new_focus);
+            if !focused.is_null() && focused != new_focus {
                 ffi::wlr_text_input_v3_send_leave((*text_input).wlr_text_input);
             }
             pos = next_pos;
         }
 
-        // Clear currently enabled text input
+        // Clear the enabled text input unless its surface kept focus
         if !self.text_input.is_null() {
-            self.disable_text_input();
+            let focused = (*(*self.text_input).wlr_text_input).focused_surface;
+            if focused.is_null() || focused != new_focus {
+                self.disable_text_input();
+            }
         }
 
-        // Send enter events if we have an input method
-        if !new_focus.is_null() && !self.input_method.is_null() {
-            let new_client = ffi::wl_resource_get_client(ffi::river_wlr_surface_get_resource(new_focus));
-            let mut pos = self.text_inputs.next;
-            while pos != head_ptr as *mut ffi::wl_list {
-                let next_pos = (*pos).next;
-                let text_input = crate::container_of!(pos, TextInput, link);
-                let text_input_resource = (*(*text_input).wlr_text_input).resource;
-                let client = ffi::wl_resource_get_client(text_input_resource);
-                if client == new_client {
-                    ffi::wlr_text_input_v3_send_enter((*text_input).wlr_text_input, new_focus);
-                }
-                pos = next_pos;
+        if new_focus.is_null() {
+            return;
+        }
+        let new_client = ffi::wl_resource_get_client(ffi::river_wlr_surface_get_resource(new_focus));
+        let mut pos = self.text_inputs.next;
+        while pos != head_ptr {
+            let next_pos = (*pos).next;
+            let text_input = crate::container_of!(pos, TextInput, link);
+            let wlr_text_input = (*text_input).wlr_text_input;
+            if (*wlr_text_input).focused_surface.is_null()
+                && ffi::wl_resource_get_client((*wlr_text_input).resource) == new_client
+            {
+                ffi::wlr_text_input_v3_send_enter(wlr_text_input, new_focus);
             }
+            pos = next_pos;
         }
     }
 }
@@ -230,10 +249,8 @@ unsafe extern "C" fn handle_input_method_destroy(listener: *mut ffi::wl_listener
     wl_listener_remove_safe(&mut (*relay).input_method_destroy);
     wl_listener_remove_safe(&mut (*relay).input_method_new_popup);
     (*relay).input_method = std::ptr::null_mut();
-
-    (*relay).focus(std::ptr::null_mut());
-
-    assert!((*relay).text_input.is_null());
+    // The text inputs stay entered and enabled: they never depended on the
+    // input method (`InputRelay::focus`).
 }
 
 unsafe extern "C" fn handle_input_method_grab_keyboard(

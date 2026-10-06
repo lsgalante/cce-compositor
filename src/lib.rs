@@ -103,6 +103,8 @@ pub mod xwayland_override_redirect;
 pub mod text_input;
 #[path = "server/input_relay.rs"]
 pub mod input_relay;
+#[path = "server/osk.rs"]
+pub mod osk;
 #[path = "server/input_popup.rs"]
 pub mod input_popup;
 #[path = "server/drag_icon.rs"]

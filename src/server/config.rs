@@ -504,6 +504,10 @@ pub struct WindowManagerConfig {
     /// delivered as a vertical scroll with Shift held for the gesture. KDL:
     /// `touchpad_hscroll_shift_apps "Houdini FX"`.
     pub touchpad_hscroll_shift_apps: Option<Vec<String>>,
+    /// Show the on-screen keyboard when a touch activates a text field, and
+    /// hide it when the field lets go (`osk.rs`). Default on. KDL:
+    /// `osk_on_touch (bool)false`.
+    pub osk_on_touch: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
@@ -2640,7 +2644,8 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
         let swipe_repeat_threshold = get_child_arg_f64_opt(node, "swipe_repeat_threshold");
         let touchpad_view_invert = get_child_arg_bool_opt(node, "touchpad_view_invert");
         let touchpad_hscroll_shift_apps = get_child_args_string_vec_opt(node, "touchpad_hscroll_shift_apps");
-        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, on_app_exit, corner_shape, rounded_apps, bevel_apps, xwayland_hidpi, xwayland_hidpi_except, touchpad_view_apps, touchpad_view_swipe, touchpad_view_sensitivity, swipe_peek, swipe_repeat_peek, swipe_focus_cone, swipe_threshold, swipe_repeat_threshold, touchpad_view_invert, touchpad_hscroll_shift_apps });
+        let osk_on_touch = get_child_arg_bool_opt(node, "osk_on_touch");
+        window_manager = Some(WindowManagerConfig { close_window, toggle_fullscreen, toggle_overview, window_switcher, window_switcher_prev, center_on_spawn, on_app_exit, corner_shape, rounded_apps, bevel_apps, xwayland_hidpi, xwayland_hidpi_except, touchpad_view_apps, touchpad_view_swipe, touchpad_view_sensitivity, swipe_peek, swipe_repeat_peek, swipe_focus_cone, swipe_threshold, swipe_repeat_threshold, touchpad_view_invert, touchpad_hscroll_shift_apps, osk_on_touch });
     }
 
     Ok(Config {
@@ -2736,6 +2741,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             .unwrap_or(state.swipe_threshold * 4.0);
         state.touchpad_view_invert = tv.and_then(|w| w.touchpad_view_invert).unwrap_or(false);
         state.touchpad_hscroll_shift_apps = tv.and_then(|w| w.touchpad_hscroll_shift_apps.clone()).unwrap_or_default();
+        state.osk_on_touch = tv.and_then(|w| w.osk_on_touch).unwrap_or(true);
     }
     state.display = config.display.clone();
     state.on_app_exit = config
@@ -3481,6 +3487,14 @@ style {
         assert_eq!(parse_edge_gesture("edge_middle"), None);
         assert_eq!(parse_edge_gesture("swipe3_left"), None);
         assert_eq!(parse_edge_gesture("super+t"), None);
+    }
+
+    #[test]
+    fn test_kdl_osk_on_touch() {
+        let off = parse_kdl_config("window_manager {\n osk_on_touch (bool)false\n}").unwrap();
+        assert_eq!(off.window_manager.unwrap().osk_on_touch, Some(false));
+        let unset = parse_kdl_config("window_manager {\n}").unwrap();
+        assert_eq!(unset.window_manager.unwrap().osk_on_touch, None);
     }
 
     #[test]

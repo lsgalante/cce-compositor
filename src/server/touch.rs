@@ -367,6 +367,18 @@ impl Cursor {
         self.touch_begin(id, lx, ly, time_msec);
     }
 
+    /// Arm the on-screen keyboard (`osk.rs`) when the finger is on an
+    /// app's window — not the board itself, a layer surface, nor the bar.
+    unsafe fn note_touch_for_osk(&mut self, lx: f64, ly: f64) {
+        let server = (*self.seat).server;
+        let Some(result) = (*server).scene.at(lx, ly) else { return };
+        if let SceneNodeDataVal::Window(window) = result.data {
+            if !(*window).is_status_bar() && !(*window).is_wallpaper() {
+                (*self.seat).relay.osk.note_touch();
+            }
+        }
+    }
+
     /// Route a finger normally (`touch_route_at`) and deliver its down.
     unsafe fn touch_begin(&mut self, id: i32, lx: f64, ly: f64, time_msec: u32) {
         let server = (*self.seat).server;
@@ -384,6 +396,7 @@ impl Cursor {
                     SceneNodeDataVal::Window(window) => {
                         if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                             seat.focus(Focus::Window(window));
+                            seat.relay.osk.note_touch();
                         }
                     }
                     SceneNodeDataVal::LayerSurface(layer_surface) => {
@@ -466,10 +479,14 @@ impl Cursor {
         match point.route {
             TouchRoute::Claimed => self.claim_lift(id, point, time_msec, false),
             TouchRoute::Client { .. } => {
+                // A field that starts editing on the release is still this
+                // touch's (`osk.rs`).
+                self.note_touch_for_osk(point.lx, point.ly);
                 ffi::wlr_seat_touch_notify_up((*self.seat).wlr_seat, time_msec, id);
             }
             TouchRoute::Pointer { start, pressed: false, .. } => {
                 // A tap.
+                self.note_touch_for_osk(start.0, start.1);
                 self.warp_to(start.0, start.1);
                 self.inject_button(BTN_LEFT, true);
                 self.inject_button(BTN_LEFT, false);
