@@ -7,7 +7,7 @@ edition = "2021"
 doctest = false
 
 [dependencies]
-cce-ui = { git = "https://github.com/lsgalante/cce-ui.git", rev = "75af570c46fe154ff191a000bdceb92e357bdc83" }
+cce-ui = { git = "https://github.com/lsgalante/cce-ui.git", rev = "b9481a42424903545fff647e5e5a255a7da5b153" }
 cce-window-manager = { git = "https://github.com/lsgalante/cce-window-manager.git", rev = "a55a5b02151f52e84d92a75994e00aa3c8f0a61f" }
 xkbcommon = "0.7"
 serde = { version = "1", features = ["derive"] }
