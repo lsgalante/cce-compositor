@@ -72,6 +72,8 @@ fn usage(name: &str, to_stderr: bool) {
     print("  idle [status]              # idle timeouts in force, idle time, inhibited and by whom (app ids), displays_off/sleeping, and the power plan's override of each (plan_*)");
     print("  idle wake|sleep|display on|display off   # act now: wake darkened outputs, lock, then run the sleep command; darken/wake outputs");
     print("  idle timeouts <display_off_s> <sleep_s>  # set the config timeouts live (0 = off); config.kdl `idle { }` on reload; a Power-plan file under /run/cce overrides either while it exists");
+    print("  idle inhibit <token> <ttl_s> <who>  # hold the idle timers off for a holder with no surface (cce-desktop-portal: portal Inhibit, org.freedesktop.ScreenSaver); lapses after ttl_s (1-600) unless renewed");
+    print("  idle uninhibit <token> | idle inhibit-clear  # end one lease now / drop every lease");
     print("  lock                       # lock the session now (cce-lock takes the prompt); replies `ok locked` once every output shows the locked scene");
     print("  status-hide-mode [true|false]");
     print("  adjust-position-mode [true|false|query]");

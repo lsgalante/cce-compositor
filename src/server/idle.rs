@@ -149,6 +149,14 @@ pub struct IdleManager {
     /// in creation order; empty when nobody does. `Option` for the same
     /// reason as `sleep_command`: null-niche safe under the zeroed init.
     inhibitors: Option<Vec<String>>,
+    /// The Wayland half of `inhibitors`, as `IdleInhibitManager` last
+    /// reported it; `external` is the other half.
+    wayland_inhibitors: Option<Vec<String>>,
+    /// External leases (see the module doc), in grant order. `Option` for
+    /// the zeroed init, like `inhibitors`.
+    external: Option<Vec<ExternalLease>>,
+    /// Fires at the earliest lease expiry; disarmed when there are none.
+    lease_timer: *mut ffi::wl_event_source,
     /// The display timeout fired and outputs were darkened by us.
     displays_off: bool,
     /// The sleep command was spawned; cleared by the next activity.
@@ -162,6 +170,46 @@ pub struct IdleManager {
     last_activity_ms: u64,
     session_active: ffi::wl_listener,
     session_listening: bool,
+}
+
+/// One `idle inhibit` lease.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalLease {
+    pub token: String,
+    pub who: String,
+    pub expires_ms: u64,
+}
+
+/// The longest lease one request may take: a holder that wants longer
+/// renews. Bounds how long a dead holder's lease can outlive it.
+pub const MAX_LEASE_S: u64 = 600;
+
+/// `idle inhibit <token> <ttl_s> <who...>`: the lease it asks for, or the
+/// usage error. `who` is what `idle status` reports (`steam`, `org.mozilla.firefox`).
+pub fn parse_lease(args: &[&str], now: u64) -> Result<ExternalLease, String> {
+    let usage = || "error: idle inhibit <token> <ttl_s 1-600> <who>\n".to_string();
+    let [token, ttl, who @ ..] = args else { return Err(usage()) };
+    if who.is_empty() {
+        return Err(usage());
+    }
+    let ttl: u64 = ttl.parse().map_err(|_| usage())?;
+    if ttl == 0 || ttl > MAX_LEASE_S {
+        return Err(usage());
+    }
+    Ok(ExternalLease { token: token.to_string(), who: who.join(" "), expires_ms: now + ttl * 1000 })
+}
+
+/// The inhibitor names `idle status` and the log show: the Wayland holders,
+/// then each external holder once, as `portal:<who>`.
+pub fn merge_inhibitors(wayland: &[String], external: &[ExternalLease]) -> Vec<String> {
+    let mut names: Vec<String> = wayland.to_vec();
+    for lease in external {
+        let name = format!("portal:{}", lease.who);
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
 }
 
 fn now_ms() -> u64 {
@@ -215,6 +263,20 @@ impl IdleManager {
             self.sleep_timer = std::ptr::null_mut();
             return Err("Failed to create idle plan-poll timer");
         }
+        self.lease_timer = ffi::wl_event_loop_add_timer(
+            event_loop,
+            Some(handle_lease_expiry),
+            self as *mut IdleManager as *mut _,
+        );
+        if self.lease_timer.is_null() {
+            ffi::wl_event_source_remove(self.display_timer);
+            ffi::wl_event_source_remove(self.sleep_timer);
+            ffi::wl_event_source_remove(self.plan_timer);
+            self.display_timer = std::ptr::null_mut();
+            self.sleep_timer = std::ptr::null_mut();
+            self.plan_timer = std::ptr::null_mut();
+            return Err("Failed to create idle lease timer");
+        }
         self.display_off_ms = 0;
         self.sleep_ms = 0;
         self.cfg_display_off_ms = 0;
@@ -231,6 +293,8 @@ impl IdleManager {
         self.sleep_command = None;
         self.inhibited = false;
         self.inhibitors = None;
+        self.wayland_inhibitors = None;
+        self.external = None;
         self.displays_off = false;
         self.sleeping = false;
         self.sleep_after_lock = false;
@@ -264,6 +328,10 @@ impl IdleManager {
         if !self.plan_timer.is_null() {
             ffi::wl_event_source_remove(self.plan_timer);
             self.plan_timer = std::ptr::null_mut();
+        }
+        if !self.lease_timer.is_null() {
+            ffi::wl_event_source_remove(self.lease_timer);
+            self.lease_timer = std::ptr::null_mut();
         }
         self.unwatch_plan_dir();
         if !self.lock_fallback_timer.is_null() {
@@ -412,6 +480,16 @@ impl IdleManager {
     /// log report, so a display that never darkens can be traced to the app
     /// keeping it on rather than to a bare `inhibited=true`.
     pub unsafe fn set_inhibitors(&mut self, names: Vec<String>) {
+        self.wayland_inhibitors = Some(names);
+        self.apply_inhibitors();
+    }
+
+    /// Recompute the holder list from both halves and act on a change.
+    unsafe fn apply_inhibitors(&mut self) {
+        let names = merge_inhibitors(
+            self.wayland_inhibitors.as_deref().unwrap_or(&[]),
+            self.external.as_deref().unwrap_or(&[]),
+        );
         if self.inhibitors.as_deref().unwrap_or(&[]) == names.as_slice() {
             return;
         }
@@ -545,6 +623,58 @@ impl IdleManager {
     }
 
     /// `ccectl idle` report.
+    /// Grant or renew a lease (`idle inhibit`).
+    unsafe fn grant_lease(&mut self, lease: ExternalLease) {
+        let leases = self.external.get_or_insert_with(Vec::new);
+        match leases.iter_mut().find(|l| l.token == lease.token) {
+            Some(existing) => *existing = lease,
+            None => {
+                log::info!("idle: lease {} granted to {}", lease.token, lease.who);
+                leases.push(lease);
+            }
+        }
+        self.arm_lease_timer();
+        self.apply_inhibitors();
+    }
+
+    /// End leases: one by token, or every one (`None`).
+    unsafe fn end_leases(&mut self, token: Option<&str>) {
+        if let Some(leases) = self.external.as_mut() {
+            leases.retain(|l| token.is_some_and(|t| l.token != t));
+        }
+        self.arm_lease_timer();
+        self.apply_inhibitors();
+    }
+
+    /// Drop the leases whose time is up.
+    unsafe fn expire_leases(&mut self) {
+        let now = now_ms();
+        if let Some(leases) = self.external.as_mut() {
+            leases.retain(|l| {
+                let live = l.expires_ms > now;
+                if !live {
+                    log::warn!("idle: lease {} ({}) lapsed without renewal", l.token, l.who);
+                }
+                live
+            });
+        }
+        self.arm_lease_timer();
+        self.apply_inhibitors();
+    }
+
+    unsafe fn arm_lease_timer(&mut self) {
+        if self.lease_timer.is_null() {
+            return;
+        }
+        let next = self.external.as_deref().unwrap_or(&[]).iter().map(|l| l.expires_ms).min();
+        let ms = match next {
+            // A timer of 0 disarms, so an already-due lease fires in 1 ms.
+            Some(at) => at.saturating_sub(now_ms()).clamp(1, i32::MAX as u64) as i32,
+            None => 0,
+        };
+        ffi::wl_event_source_timer_update(self.lease_timer, ms);
+    }
+
     pub fn status(&self) -> String {
         let idle_s = now_ms().saturating_sub(self.last_activity_ms) / 1000;
         format!(
@@ -582,6 +712,21 @@ impl IdleManager {
                 self.lock_then_sleep();
                 "ok\n".to_string()
             }
+            ["inhibit", rest @ ..] => match parse_lease(rest, now_ms()) {
+                Ok(lease) => {
+                    self.grant_lease(lease);
+                    "ok\n".to_string()
+                }
+                Err(e) => e,
+            },
+            ["uninhibit", token] => {
+                self.end_leases(Some(*token));
+                "ok\n".to_string()
+            }
+            ["inhibit-clear"] => {
+                self.end_leases(None);
+                "ok\n".to_string()
+            }
             ["timeouts", display, sleep] => {
                 match (display.parse::<i64>(), sleep.parse::<i64>()) {
                     (Ok(d), Ok(s)) if d >= 0 && s >= 0 => {
@@ -600,7 +745,7 @@ impl IdleManager {
                     _ => "error: idle timeouts <display_off_s> <sleep_s> (non-negative seconds, 0 = off)\n".to_string(),
                 }
             }
-            _ => "error: usage: idle [status|wake|display on|display off|sleep|timeouts <display_off_s> <sleep_s>]\n".to_string(),
+            _ => "error: usage: idle [status|wake|display on|display off|sleep|timeouts <display_off_s> <sleep_s>|inhibit <token> <ttl_s> <who>|uninhibit <token>|inhibit-clear]\n".to_string(),
         }
     }
 }
@@ -655,6 +800,12 @@ unsafe extern "C" fn handle_plan_poll(data: *mut std::ffi::c_void) -> std::os::r
     if !idle.plan_timer.is_null() {
         ffi::wl_event_source_timer_update(idle.plan_timer, PLAN_POLL_MS);
     }
+    0
+}
+
+unsafe extern "C" fn handle_lease_expiry(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let idle = &mut *(data as *mut IdleManager);
+    idle.expire_leases();
     0
 }
 
@@ -716,6 +867,28 @@ mod tests {
         assert_eq!(effective_ms(600_000, None), 600_000);
         assert_eq!(plan_field(Some(120_000)), "120s");
         assert_eq!(plan_field(None), "none");
+    }
+
+    #[test]
+    fn a_lease_request_is_token_ttl_and_who() {
+        let lease = parse_lease(&["portal-7", "90", "steam"], 1_000).unwrap();
+        assert_eq!(lease, ExternalLease { token: "portal-7".into(), who: "steam".into(), expires_ms: 91_000 });
+        let spaced = parse_lease(&["ss-2", "30", "Firefox", "video"], 0).unwrap();
+        assert_eq!(spaced.who, "Firefox video", "who keeps its spaces");
+        for bad in [&["t", "0", "x"][..], &["t", "601", "x"], &["t", "ten", "x"], &["t", "30"], &[]] {
+            assert!(parse_lease(bad, 0).is_err(), "{bad:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn external_holders_follow_the_wayland_ones_once_each() {
+        let lease = |t: &str, w: &str| ExternalLease { token: t.into(), who: w.into(), expires_ms: 0 };
+        let names = merge_inhibitors(
+            &["mpv".to_string()],
+            &[lease("a", "steam"), lease("b", "firefox"), lease("c", "steam")],
+        );
+        assert_eq!(names, ["mpv", "portal:steam", "portal:firefox"]);
+        assert!(merge_inhibitors(&[], &[]).is_empty());
     }
 
     #[test]
