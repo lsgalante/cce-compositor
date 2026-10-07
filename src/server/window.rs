@@ -572,6 +572,14 @@ pub struct Window {
     /// output: stepped aside, or sliding back in under the camera. Set by
     /// `WindowManager::place_fullscreen_windows`, read by the render pass.
     pub fs_on_desk: bool,
+    /// The desk spot this window covered when its previous incarnation was
+    /// last saved fullscreen (`SavedWindowState::fullscreen_at`), set by
+    /// `try_restore` and spent by the first fullscreen enter, which lands
+    /// there and brings the camera along instead of anchoring to the view.
+    pub restore_fullscreen_at: Option<(f64, f64)>,
+    /// The desk spot this window covered the last time it LEFT fullscreen,
+    /// so `save_state` can still name one for a window closed windowed.
+    pub last_fullscreen_at: Option<(f64, f64)>,
     pub saved_width: i32,
     pub saved_height: i32,
     pub saved_virtual_x: f64,
@@ -712,6 +720,36 @@ impl Window {
             self.virtual_x - ((*output).sent.x as f64 - first_x) / zoom,
             self.virtual_y - ((*output).sent.y as f64 - first_y) / zoom,
         ))
+    }
+
+    /// Eases the camera onto a fullscreen enter's restored desk spot, so the
+    /// window rides the desk there (`place_fullscreen_windows` reads the
+    /// target as `returning`) and pins on landing — the same slide a
+    /// stepped-aside window takes back. Only for a window that will be on
+    /// top: a stepped-aside one stays at its spot until it is focused, and
+    /// that focus pans (`Seat::focus_follow_pan`). Not in overview or under
+    /// a camera flight, where the window is a slab on the desk anyway and
+    /// the camera is not the enter's to move.
+    unsafe fn pan_to_restored_fullscreen_spot(&self) {
+        let wm = &mut (*self.server).wm;
+        if wm.mode == crate::window_manager::WindowManagerMode::Overview
+            || wm.camera_ramp_anim.is_some()
+            || self.fullscreen_yields()
+        {
+            return;
+        }
+        let Some((px, py)) = self.fullscreen_anchor_pan() else { return };
+        if (wm.desk_pan_x - px).abs() >= 0.5 || (wm.desk_pan_y - py).abs() >= 0.5 {
+            log::info!(
+                "[Fullscreen] {:?} enters at its saved desk spot ({:.0}, {:.0}); panning there",
+                self.get_title_string().as_deref().unwrap_or(""),
+                self.virtual_x,
+                self.virtual_y
+            );
+            wm.target_desk_pan_x = Some(px);
+            wm.target_desk_pan_y = Some(py);
+            wm.start_panning_animation();
+        }
     }
 
     pub unsafe fn role(&self) -> crate::policy::api::WindowRole {
@@ -936,6 +974,8 @@ impl Window {
             commit: std::mem::zeroed(),
             was_fullscreen: false,
             fs_on_desk: false,
+            restore_fullscreen_at: None,
+            last_fullscreen_at: None,
             saved_width: 0,
             saved_height: 0,
             saved_virtual_x: 0.0,
@@ -1302,11 +1342,22 @@ impl Window {
         // the screen; restoring a saved size onto it is what shrank
         // Trackmania to the launcher's 1214x689 — the game then pinned that
         // size in its hints and no fullscreen could take. Mark it restored
-        // so nothing else tries.
+        // so nothing else tries. Where on the desk it was fullscreen is the
+        // compositor's to remember, though, not the game's: that alone is
+        // taken from its entry (`restore_fullscreen_at`).
         if crate::xwayland_window::window_is_hidpi_exempt(self as *const Window) {
+            let app_id = self.get_app_id_string().unwrap_or_default();
+            let title = self.get_title_string().unwrap_or_default();
+            let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
+            let wm = &mut (*self.server).wm;
+            let saved = wm
+                .match_and_remove_restore_state(&app_id, &title, program.as_deref())
+                .or_else(|| wm.match_last_window_state(&app_id, &title, program.as_deref()));
+            self.restore_fullscreen_at = saved.and_then(|s| s.fullscreen_at);
             log::info!(
-                "Not restoring saved state for {:?}: named in xwayland_hidpi_except, it places itself",
-                self.get_title_string().unwrap_or_default()
+                "Not restoring saved state for {:?}: named in xwayland_hidpi_except, it places itself (saved fullscreen spot: {:?})",
+                title,
+                self.restore_fullscreen_at
             );
             self.restored = true;
             return;
@@ -1399,6 +1450,7 @@ impl Window {
             }
             self.virtual_x = saved.virtual_x;
             self.virtual_y = saved.virtual_y;
+            self.restore_fullscreen_at = saved.fullscreen_at;
             self.scale = saved.scale;
             self.box_geom.width = saved.width as i32;
             self.box_geom.height = saved.height as i32;
@@ -3055,9 +3107,20 @@ impl Window {
                 // — where the camera is now — so stepping aside leaves it
                 // there (`WindowManager::place_fullscreen_windows`, which
                 // keeps it in step while the window is on top).
-                let (vx, vy) = self.screen_to_virtual((*output).sent.x, (*output).sent.y);
+                //
+                // Unless a previous incarnation was saved fullscreen
+                // somewhere (`try_restore`): then the spot is that one, and
+                // the camera goes to it. Trackmania reopened wherever the
+                // user happened to be looking, because the enter always
+                // took the view and only the pre-fullscreen spot was saved.
+                let restored_spot = self.restore_fullscreen_at.take();
+                let (vx, vy) = restored_spot
+                    .unwrap_or_else(|| self.screen_to_virtual((*output).sent.x, (*output).sent.y));
                 self.virtual_x = vx;
                 self.virtual_y = vy;
+                if restored_spot.is_some() {
+                    self.pan_to_restored_fullscreen_spot();
+                }
                 log::info!("[Fullscreen] Saved window {:?} geometry: {}x{} at ({}, {})", self.get_title_string().as_deref().unwrap_or(""), self.saved_width, self.saved_height, self.saved_virtual_x, self.saved_virtual_y);
             }
         } else if !new_fullscreen && self.was_fullscreen {
@@ -3065,6 +3128,7 @@ impl Window {
                 // Captures the on-screen fullscreen rect before the restore
                 // below rewrites box_geom.
                 self.start_fs_anim();
+                self.last_fullscreen_at = Some((self.virtual_x, self.virtual_y));
                 self.box_geom.width = self.saved_width;
                 self.box_geom.height = self.saved_height;
                 self.virtual_x = self.saved_virtual_x;

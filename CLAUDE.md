@@ -1021,6 +1021,24 @@ An overview exit onto it lands exactly on its spot — `exit_onto_window`
 centres its output-sized rect — and only then pins; `set_mode` dirties
 windowing while a fullscreen window exists so the restack runs.
 
+**The spot survives a relaunch** (since 2026-10-06). `save_state` records
+it as `fullscreen_at` beside the pre-fullscreen `virtual_x/y` (still the
+spot it had when it left fullscreen, `last_fullscreen_at`, for a window
+closed windowed), and `try_restore` hands it to the window as
+`restore_fullscreen_at` — even for an `xwayland_hidpi_except` game, which
+takes nothing else from its entry. The first fullscreen enter lands there
+instead of on the view and eases the camera along
+(`pan_to_restored_fullscreen_spot`). Before, every enter took the view,
+so Trackmania opened wherever the user was looking. A camera pan relays
+out without a transaction, so `place_fullscreen_windows` schedules the
+save itself when a pinned spot moves. `last_window_states` is keyed on
+app_id AND program (`last_state_slot`) for the same game: every Proton
+program is `steam_proton`, and Ubisoft Connect, still up after the game
+closed, used to overwrite its entry. In a shadow, an X11 client named in
+`xwayland_hidpi_except` stands in (`mpv --vo=x11`, toggled with `xdotool
+windowstate --remove/--add FULLSCREEN`, since a fullscreen set before map
+sends no request).
+
 ### xdg-activation
 
 `handle_request_activate` (`server.rs`) runs for every activation wlroots

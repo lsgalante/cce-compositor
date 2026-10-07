@@ -157,6 +157,14 @@ fn borrowable(saved: &SavedWindowState, program: Option<&str>) -> bool {
     !saved.title.is_empty() && same_program(saved, program)
 }
 
+/// Whether `saved` is the `last_window_states` slot a window of `app_id`
+/// running `program` writes to: one per app_id and program. An entry or a
+/// window with no program to tell by shares the app_id's slot, as every
+/// entry did before programs counted (`same_program`'s leniency).
+fn last_state_slot(saved: &SavedWindowState, app_id: &str, program: Option<&str>) -> bool {
+    saved.app_id == app_id && same_program(saved, program)
+}
+
 /// Whether the session restore can relaunch a window from this saved
 /// command. A Wine/Proton window records its WINDOWS-side exe path
 /// (`C:\...` or `C:/...`) — /bin/sh can never run it — and an empty
@@ -1408,6 +1416,11 @@ impl WindowManager {
                 cmdline,
                 focused: is_focused,
                 argv: (!args.is_empty()).then(|| args.clone()),
+                fullscreen_at: if (*w).was_fullscreen {
+                    Some(((*w).virtual_x, (*w).virtual_y))
+                } else {
+                    (*w).last_fullscreen_at.or((*w).restore_fullscreen_at)
+                },
             };
 
             saved_wins.push(win_state.clone());
@@ -1419,7 +1432,12 @@ impl WindowManager {
             if title.is_empty() {
                 continue;
             }
-            if let Some(pos) = last_states.iter().position(|s| s.app_id == app_id) {
+            // One slot per app_id AND program: every Proton program is
+            // `steam_proton`, so keyed on the app_id alone Trackmania and
+            // the Ubisoft Connect it launches from took turns evicting each
+            // other, and the game's entry was gone by the time it was next
+            // launched — Connect is still up after the game closes.
+            if let Some(pos) = last_states.iter().position(|s| last_state_slot(s, &app_id, args.first().map(String::as_str))) {
                 last_states[pos] = win_state;
             } else {
                 last_states.push(win_state);
@@ -4311,6 +4329,7 @@ impl WindowManager {
     /// this would overwrite.
     unsafe fn place_fullscreen_windows(&mut self) {
         let zoom = self.desk_zoom;
+        let mut spot_moved = false;
         for &w in self.windows.iter() {
             if w.is_null() || (*w).closed {
                 continue;
@@ -4345,11 +4364,19 @@ impl WindowManager {
                 let output = (*w).fullscreen_output();
                 if !output.is_null() {
                     let (vx, vy) = (*w).screen_to_virtual((*output).sent.x, (*output).sent.y);
+                    // The spot is saved (`fullscreen_at`), and a camera
+                    // pan relays out without a transaction, which is
+                    // what normally schedules the save — so a game closed
+                    // after a pan would reopen where the pan began.
+                    spot_moved |= (vx - (*w).virtual_x).abs() >= 0.5 || (vy - (*w).virtual_y).abs() >= 0.5;
                     (*w).virtual_x = vx;
                     (*w).virtual_y = vy;
                 }
             }
             (*w).fs_on_desk = on_desk;
+        }
+        if spot_moved {
+            self.schedule_save_state();
         }
     }
 
@@ -8215,6 +8242,7 @@ mod tests {
             cmdline: "test-app".to_string(),
             focused: false,
             argv: None,
+            fullscreen_at: None,
         });
 
         unsafe {
@@ -8257,6 +8285,7 @@ mod tests {
             cmdline: cmdline.to_string(),
             focused: false,
             argv: None,
+            fullscreen_at: None,
         }
     }
 
@@ -8341,6 +8370,23 @@ mod tests {
 
     const UPC: &str = r"C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\upc.exe";
     const EXPLORER: &str = r"C:\windows\system32\explorer.exe";
+
+    /// Trackmania and the Ubisoft Connect it launches from are both
+    /// `steam_proton`; each keeps its own `last_window_states` slot, while
+    /// an entry or window with no program still shares the app_id's one.
+    #[test]
+    fn last_state_slots_are_per_program() {
+        const TM: &str = "C:/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/games/Trackmania/Trackmania.exe";
+        let upc = proton_entry("Ubisoft Connect", &format!("{UPC} -upc_desktop_mode"));
+        let tm = proton_entry("Trackmania", &format!("{TM}      "));
+        assert!(last_state_slot(&upc, "steam_proton", Some(UPC)));
+        assert!(!last_state_slot(&upc, "steam_proton", Some(TM)));
+        assert!(last_state_slot(&tm, "steam_proton", Some(TM)));
+        assert!(!last_state_slot(&tm, "steam_proton", Some(UPC)));
+        assert!(!last_state_slot(&tm, "other", Some(TM)));
+        assert!(last_state_slot(&tm, "steam_proton", None));
+        assert!(last_state_slot(&proton_entry("x", "steam_proton"), "steam_proton", Some(TM)));
+    }
 
     #[test]
     fn same_program_compares_argv0_by_prefix() {
