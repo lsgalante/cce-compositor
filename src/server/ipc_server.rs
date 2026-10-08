@@ -279,9 +279,11 @@ fn handle_client(mut stream: UnixStream, tx: IpcSender) {
                 // `lock` answers once the session IS locked: a frame on every
                 // output plus a locker starting, and the lock-before-sleep
                 // thread holds logind's sleep (5s at most) on that reply.
+                // `focus-window --wait` answers once the window holds still,
+                // `SETTLE_TIMEOUT_MS` (3s) at most.
                 let timeout = if cmd.starts_with("screenshot") {
                     std::time::Duration::from_secs(5)
-                } else if cmd == "lock" {
+                } else if cmd == "lock" || cmd.starts_with("focus-window --wait") {
                     std::time::Duration::from_secs(4)
                 } else {
                     std::time::Duration::from_millis(1000)

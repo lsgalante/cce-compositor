@@ -386,6 +386,50 @@ pub struct WindowManagerRenderingRequested {
 
 pub use crate::policy::state::{SavedState, SavedWindowState};
 
+/// The longest `focus-window --wait` holds its reply. A focus pan lands in
+/// well under a second; this only bounds a window that never holds still.
+pub const SETTLE_TIMEOUT_MS: u64 = 3000;
+/// How often a held `focus-window --wait` looks at its window.
+const SETTLE_POLL_MS: i32 = 16;
+/// Consecutive polls with nothing moving that count as settled: one poll
+/// can fall between two steps of an animation that is not the camera's.
+const SETTLE_STILL_POLLS: u32 = 3;
+
+/// A `focus-window --wait` caller, answered once its window has stopped
+/// moving on screen.
+///
+/// Focusing a window can move it: a window hanging off the view is panned
+/// into it, and the pan is animated. A script that clicks right after
+/// `focus-window` clicked where the window was going to be, mid-flight —
+/// cce-fonts' search box "did not take focus" in a shadow, while its large
+/// preview box, which a mid-flight click still lands in, did.
+pub struct SettleWaiter {
+    pub tx: std::sync::mpsc::Sender<String>,
+    pub window: crate::slotmap::Key,
+    pub started_ns: u64,
+    last_box: Option<(i32, i32, i32, i32)>,
+    still: u32,
+}
+
+impl SettleWaiter {
+    pub fn new(tx: std::sync::mpsc::Sender<String>, window: crate::slotmap::Key, started_ns: u64) -> Self {
+        Self { tx, window, started_ns, last_box: None, still: 0 }
+    }
+
+    /// One poll: the window's box on screen now, and whether anything that
+    /// moves windows is still in flight (the camera, a pending relayout).
+    /// True once the box has held still for [`SETTLE_STILL_POLLS`] polls.
+    fn observe(&mut self, screen_box: (i32, i32, i32, i32), moving: bool) -> bool {
+        if moving || self.last_box != Some(screen_box) {
+            self.still = 0;
+        } else {
+            self.still += 1;
+        }
+        self.last_box = Some(screen_box);
+        self.still >= SETTLE_STILL_POLLS
+    }
+}
+
 pub struct WindowManager {
     pub server: *mut Server,
     pub global: *mut ffi::wl_global,
@@ -459,6 +503,12 @@ pub struct WindowManager {
     /// dispatched, alongside `pending_ipc_reply`. `fade-out` resolves "the
     /// caller's own window" with it. 0 outside a dispatch.
     pub pending_ipc_peer_pid: i32,
+    /// `focus-window --wait` callers whose reply is held until the window
+    /// stops moving on screen (see [`SettleWaiter`]).
+    pub settle_waiters: Vec<SettleWaiter>,
+    /// Polls `settle_waiters`; created on the first wait, armed while any
+    /// waiter is left.
+    pub settle_timer: *mut ffi::wl_event_source,
     pub startup: Vec<crate::config::StartupConfig>,
     pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
     pub status_sender: Option<crate::status_server::StatusSender>,
@@ -879,6 +929,7 @@ impl WindowManager {
         self.pending_screenshot = None;
         self.pending_ipc_reply = None;
         self.pending_ipc_peer_pid = 0;
+        self.settle_timer = std::ptr::null_mut();
         self.mode = WindowManagerMode::Normal;
         self.on_app_exit = crate::config::OnAppExit::FocusPrevious;
         self.grid_cells_enabled = true;
@@ -2001,6 +2052,13 @@ impl WindowManager {
             ffi::wl_event_source_remove(self.edge_pan_timer);
             self.edge_pan_timer = std::ptr::null_mut();
         }
+        if !self.settle_timer.is_null() {
+            ffi::wl_event_source_remove(self.settle_timer);
+            self.settle_timer = std::ptr::null_mut();
+        }
+        // Dropping a waiter drops its reply channel: the caller is told the
+        // command timed out rather than left hanging.
+        self.settle_waiters.clear();
         if !self.restore_placeholder_timer.is_null() {
             ffi::wl_event_source_remove(self.restore_placeholder_timer);
             self.restore_placeholder_timer = std::ptr::null_mut();
@@ -2280,6 +2338,57 @@ impl WindowManager {
         }
         if !self.animation_timer.is_null() {
             ffi::wl_event_source_timer_update(self.animation_timer, CAMERA_WATCHDOG_MS);
+        }
+    }
+
+    /// Poll the held `focus-window --wait` replies in [`SETTLE_POLL_MS`].
+    unsafe fn arm_settle_timer(&mut self) {
+        if self.settle_timer.is_null() {
+            let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+            self.settle_timer = ffi::wl_event_loop_add_timer(
+                event_loop,
+                Some(handle_settle_tick),
+                self as *mut WindowManager as *mut _,
+            );
+        }
+        if self.settle_timer.is_null() {
+            // No timer: answer now rather than never.
+            for w in self.settle_waiters.drain(..) {
+                let _ = w.tx.send("ok\n".to_string());
+            }
+            return;
+        }
+        ffi::wl_event_source_timer_update(self.settle_timer, SETTLE_POLL_MS);
+    }
+
+    /// Answer each `focus-window --wait` whose window has stopped moving
+    /// on screen, or has waited [`SETTLE_TIMEOUT_MS`], or has closed.
+    unsafe fn poll_settle_waiters(&mut self) {
+        let moving = self.camera_anim_active
+            || self.pan_pending != [0.0, 0.0]
+            || self.pinch_pending.is_some()
+            || self.scheduled.dirty;
+        let now = crate::util::timestamp_ns();
+        let mut waiters = std::mem::take(&mut self.settle_waiters);
+        let mut kept = Vec::new();
+        for mut w in waiters.drain(..) {
+            let win = self.windows.get(w.window).copied().filter(|&p| !p.is_null() && !(*p).closed);
+            let Some(win) = win else {
+                let _ = w.tx.send("error: window closed before it settled\n".to_string());
+                continue;
+            };
+            let b = (*win).box_geom;
+            if w.observe((b.x, b.y, b.width, b.height), moving) {
+                let _ = w.tx.send("ok\n".to_string());
+            } else if now.saturating_sub(w.started_ns) >= SETTLE_TIMEOUT_MS * 1_000_000 {
+                let _ = w.tx.send(format!("ok (still moving after {} ms)\n", SETTLE_TIMEOUT_MS));
+            } else {
+                kept.push(w);
+            }
+        }
+        self.settle_waiters = kept;
+        if !self.settle_waiters.is_empty() {
+            self.arm_settle_timer();
         }
     }
 
@@ -5900,9 +6009,15 @@ impl WindowManager {
                 "ok\n".to_string()
             }
             "focus-window" => {
-                if parts.len() < 2 { return "error: missing app_id/id\n".to_string(); }
+                // `--wait` holds the reply until the window has stopped
+                // moving on screen (`SettleWaiter`) — ccectl sends it. Apps
+                // forwarding a launch (`cce_core::ipc::focus_window`) do not:
+                // they wait a second at most and need no settling.
+                let wait = parts.get(1) == Some(&"--wait");
+                let query = parts[if wait { 2 } else { 1 }..].join(" ");
+                if query.is_empty() { return "error: missing app_id/id\n".to_string(); }
                 if let Some(seat) = self.first_seat() {
-                    let best_target = self.find_window_by_query(&parts[1..].join(" "));
+                    let best_target = self.find_window_by_query(&query);
                     if !best_target.is_null() {
                         if (*best_target).minimized {
                             (*best_target).minimized = false;
@@ -5910,6 +6025,14 @@ impl WindowManager {
                         (*seat).focus(crate::seat::Focus::Window(best_target));
                         self.raise_window(best_target);
                         self.dirty_windowing();
+                        if wait {
+                            if let Some(tx) = self.pending_ipc_reply.take() {
+                                let started = crate::util::timestamp_ns();
+                                self.settle_waiters.push(SettleWaiter::new(tx, (*best_target).ref_key, started));
+                                self.arm_settle_timer();
+                                return String::new();
+                            }
+                        }
                         "ok\n".to_string()
                     } else {
                         "error: window not found\n".to_string()
@@ -8116,6 +8239,15 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
     0
 }
 
+/// The `focus-window --wait` poll (`WindowManager::poll_settle_waiters`).
+unsafe extern "C" fn handle_settle_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = data as *mut WindowManager;
+    if !wm.is_null() {
+        (*wm).poll_settle_waiters();
+    }
+    0
+}
+
 /// Steps every window's border hover fade, map/close dissolve, and any
 /// in-flight fullscreen-toggle animation — until all of them have settled. Windows at
 /// rest cost one comparison per zone and no repaint, so leaving this running
@@ -8177,6 +8309,25 @@ mod tests {
             over_sibling: false,
             center: true,
         }
+    }
+
+    #[test]
+    fn a_window_settles_once_its_box_holds_still_with_nothing_in_flight() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let key = crate::slotmap::Key { generation: 0, index: 0 };
+        let mut w = SettleWaiter::new(tx, key, 0);
+        // A pan in flight: the box moves, never settled.
+        for x in [100, 95, 62, 57, 56] {
+            assert!(!w.observe((x, 24, 1200, 720), true));
+        }
+        // The camera has landed but the box has not been seen still yet.
+        assert!(!w.observe((56, 24, 1200, 720), false));
+        assert!(!w.observe((56, 24, 1200, 720), false));
+        // A step of some other animation restarts the count.
+        assert!(!w.observe((57, 24, 1200, 720), false));
+        assert!(!w.observe((57, 24, 1200, 720), false));
+        assert!(!w.observe((57, 24, 1200, 720), false));
+        assert!(w.observe((57, 24, 1200, 720), false));
     }
 
     #[test]

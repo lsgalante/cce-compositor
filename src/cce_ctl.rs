@@ -51,7 +51,8 @@ fn usage(name: &str, to_stderr: bool) {
     print("  pan-down");
     print("  overlay-left");
     print("  overlay-right");
-    print("  focus-window <app_id>");
+    print("  focus-window [--no-wait] <app_id|id>  # focus and raise; replies once the window");
+    print("                              # stops moving (a pan into view), 3s at most");
     print("  close-window <app_id|id> [title-substring]  # close a specific window");
     print("  center-window [<app_id>]   # pan focused/named window on-screen; replies x= y= w= h=");
     print("  move-window <square> [<app_id>] # put focused/named window on a desktop square (e.g. C-9)");
@@ -127,6 +128,25 @@ fn usage(name: &str, to_stderr: bool) {
     print("  shortcut unbind <session> [<id>] | clear | list");
 }
  
+/// The line sent for `args` (the command and its arguments). `focus-window`
+/// waits for the window to settle unless told `--no-wait`: focusing can pan
+/// the window into view, and a script's next pointer command would
+/// otherwise land where the window was mid-flight. Apps reach the
+/// compositor directly and keep the immediate reply.
+fn command_line(args: &[String]) -> String {
+    let mut args: Vec<&str> = args.iter().map(String::as_str).collect();
+    if args.first() == Some(&"focus-window") {
+        match args.get(1) {
+            Some(&"--no-wait") => {
+                args.remove(1);
+            }
+            Some(&"--wait") => {}
+            _ => args.insert(1, "--wait"),
+        }
+    }
+    args.join(" ") + "\n"
+}
+
 pub fn run_cce_ctl(args: Vec<String>) {
     if args.len() < 2 {
         usage(&args[0], true);
@@ -156,7 +176,7 @@ pub fn run_cce_ctl(args: Vec<String>) {
  
     let mut stream = stream;
     // Build command string from args
-    let cmd = args[1..].join(" ") + "\n";
+    let cmd = command_line(&args[1..]);
     if let Err(e) = stream.write_all(cmd.as_bytes()) {
         eprintln!("write: {}", e);
         process::exit(1);
@@ -176,5 +196,22 @@ pub fn run_cce_ctl(args: Vec<String>) {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_line;
+
+    fn line(args: &[&str]) -> String {
+        command_line(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn focus_window_waits_unless_told_not_to() {
+        assert_eq!(line(&["focus-window", "cce-fonts"]), "focus-window --wait cce-fonts\n");
+        assert_eq!(line(&["focus-window", "--wait", "12"]), "focus-window --wait 12\n");
+        assert_eq!(line(&["focus-window", "--no-wait", "cce-fonts"]), "focus-window cce-fonts\n");
+        assert_eq!(line(&["windows", "--json"]), "windows --json\n");
     }
 }
