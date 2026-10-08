@@ -3,11 +3,11 @@
 Guidance for working anywhere in the `cce` Wayland desktop workspace — the layout,
 the multi-repo rule, the build/install entry point, config, and IPC.
 
-**This file lives here, not at the workspace root, because the root is not a git
-repository** (see the multi-repo section below) — anything written there is
-unversioned and lost on a fresh clone. The root `CLAUDE.md` is a pointer to this
-file and repeats only the two rules that must not be acted against before reading
-it. Per-crate notes stay in each crate's own `CLAUDE.md`; compositor-specific
+**This file lives here, not at the workspace root, because the root's repository
+is deliberately narrow** (see the multi-repo section below): it versions only
+what ties the crates together, and the guide to the crates belongs with the build
+tooling it documents. The root `CLAUDE.md` is a pointer to this file and repeats
+only the three rules that must not be acted against before reading it. Per-crate notes stay in each crate's own `CLAUDE.md`; compositor-specific
 detail is in the adjacent `CLAUDE.md`.
 
 **Paths below are relative to the workspace root** — the parent of this crate — so
@@ -22,11 +22,11 @@ desktop environment written in Rust, split into two halves:
   as `cce`), built on wlroots 0.20 via FFI with vendored scenefx. This crate is its own
   world: it has a `build.rs` native-build pipeline, a `Makefile`, and its own detailed
   **`cce-compositor/CLAUDE.md`** — read that before working inside `cce-compositor/`.
-- **~18 `cce-*` client apps** (`cce-status-interface`, `cce-system-interface`,
+- **~30 `cce-*` client apps and services** (`cce-status-interface`, `cce-system-interface`,
   `cce-designer`, `cce-files`, `cce-color-editor`, `cce-mail`, `cce-graph`, `cce-notifier`,
-  `cce-authenticator`, `cce-display-manager`, `cce-text-editor`,
-  `cce-data-editor`, `cce-fonts`, `cce-cloud`, `cce-layout-interface`,
-  `cce-screenaver`, `cce-gallery`, `cce-terminal`, …) — Wayland client GUIs that connect to the
+  `cce-authenticator`, `cce-display-manager`, `cce-text-editor`, `cce-data-editor`,
+  `cce-fonts`, `cce-cloud`, `cce-browser`, `cce-notes`, `cce-model`, `cce-screenaver`,
+  `cce-gallery`, `cce-terminal`, …; the root `Cargo.toml` lists them) — Wayland client GUIs that connect to the
   compositor and to each other over Unix sockets. (The desktop background is drawn
   natively by the compositor — the former `cce-wallpaper` client was retired.)
 
@@ -44,9 +44,12 @@ re-exports it as `crate::policy` / `crate::tiling` / `crate::slotmap`.
 
 ### Version control: this is a MULTI-repo, not a monorepo
 
-The workspace root itself (this directory — holding `Cargo.toml`, `Cargo.lock`,
-`target/`) is **not** under version control. Instead, **each member crate is its own
-independent git repository** with its own committed `Cargo.lock`. The crates sit
+**Each member crate is its own independent git repository** with its own committed
+`Cargo.lock`. The workspace root is a git repository too, but a deliberately narrow
+one: it versions only `Cargo.toml` (the member list and the `[patch]` block),
+`Cargo.lock`, `.cargo/config.toml`, its `CLAUDE.md` and `bump-revs.sh`, and its
+`.gitignore` excludes every subdirectory by glob, so no crate can be swallowed as an
+embedded repo and adding a crate needs no change there. The crates sit
 side-by-side under this directory to form the build workspace, but are versioned and
 published separately.
 
@@ -82,8 +85,9 @@ rev from GitHub itself, and refuses while the dependency's work tree is dirty
 or ahead of origin.
 
 Consequences to respect:
-- **Do not `git init` at the root** — it would swallow every crate as an embedded repo.
-  Commit inside the relevant crate's own repo.
+- **Commit crate changes inside the crate's own repo.** The root repo tracks only the
+  workspace files above; its glob `.gitignore` is what keeps the crates out of it, so
+  never force-add a crate's files there.
 - **Each crate must build standalone.** Do not introduce `[workspace.dependencies]` /
   `<dep>.workspace = true`: a standalone clone of a single crate's repo has no
   `[workspace]` parent, so inherited deps fail to resolve. Dependency versions are
@@ -251,8 +255,9 @@ framework. Understanding it is the prerequisite for touching any client.
   vertex batches (quads, rounded rects, vectors, arcs, circles) — see the re-export
   list in `cce-ui/src/engine.rs`. There is no HTML/DOM; the UI is drawn as GPU
   primitives.
-- **The `Application` trait** (`cce-ui/src/backend/window_runner.rs`) is the contract
-  every client implements. Key methods: `new`, `settings`, `update(msg)`, `tick(dt)`,
+- **The `Application` trait** (`cce-ui/src/backend/app.rs`, re-exported from
+  `cce_ui::engine`) is the contract every client implements. Key methods:
+  `create(sender)`, `settings`, `update(msg)`, `tick(dt)`,
   `display_list` (the single paint path) plus `overlay_quads` / `custom_vertices`,
   and the input hooks (`handle_pointer_move`, `handle_mouse_input`, …). Apps needing
   direct renderer access (3D scenes, app-shaped text, non-rect window chrome) use the
@@ -260,13 +265,18 @@ framework. Understanding it is the prerequisite for touching any client.
   `take_window_action` — `cce-designer` is the reference consumer. A client's
   `main.rs` is typically a struct implementing `Application` plus a one-line
   `cce_ui::engine::run::<MyApp>();`.
-- **Modules**: `widget/` (containers, inputs, editor, `json_layout`), `layout.rs`
-  (fonts + sizing, lots of `*_font_parsed()` getters), `color.rs`, `config.rs`,
-  `protocol.rs` (talking to the compositor), `context.rs`, `process.rs`,
-  `file_dialog.rs`, `scale.rs` (HiDPI), `units.rs` (lengths with units — `(mm)` config
-  values — and the display metric from EDID), `mcp.rs` (tools-only MCP server over
-  Streamable HTTP so apps can expose their state/actions to AI agents —
-  `cce-designer` is the reference consumer, see its CLAUDE.md).
+- **Modules**: `widget/` (containers, inputs, display, editors), `scene/` (the arena,
+  box-model layout, display list and paint walk), `backend/` (the `Application` contract,
+  the driver, frame building, the Wayland shell), `draw/` and `vk/` (what a renderer draws,
+  and the Vulkan renderer), `web/` and `mac/` (the browser and AppKit shells), `layout/`
+  (style getters — fonts + sizing, lots of `*_font_parsed()` — plus the legacy layout
+  engines), `color/`, `context.rs` (`UiContext`), `protocol.rs` (talking to the compositor),
+  `file_dialog.rs`, `scale.rs` (HiDPI), `mcp.rs` (tools-only MCP server over Streamable
+  HTTP so apps can expose their state/actions to AI agents — `cce-designer` is the
+  reference consumer, see its CLAUDE.md). `config`, `input`, `motion`, `units` (lengths
+  with units — `(mm)` config values — and the display metric from EDID) and `ipc` live in
+  `cce-core` and are re-exported at the same paths. cce-ui's own `CLAUDE.md` has the full
+  module map.
 
 When adding a widget or a client, mirror an existing client (e.g.
 `cce-status-interface`) rather than inventing a new structure.
