@@ -191,6 +191,24 @@ full-output capture works anywhere, but `screenshot window` reads the client's
 imported dmabuf and reports read format `0x0` when the compositor is on the
 NVIDIA node and the client rendered elsewhere.
 
+**`ccectl focus-window` returns once the window holds still** (since
+2026-10-08). Focusing a window that hangs off the view pans it in, animated
+over about half a second, and the window's real geometry moves with the
+camera — so a `pointer-move-to` + `pointer-press` sent straight after
+landed where the window was mid-flight. It cost a session a phantom bug:
+cce-fonts' 20 px search box "would not take focus" while its large preview
+box, which a mid-flight click still hits, did. ccectl now sends
+`focus-window --wait`, and the compositor holds the reply
+(`SettleWaiter`, `poll_settle_waiters`) until no camera pan, pinch or
+relayout is in flight and the window's on-screen box has held still for
+three 16 ms polls — ~80 ms for a window already in view, ~500 ms after a
+pan, `SETTLE_TIMEOUT_MS` (3 s) at most, which replies
+`ok (still moving after 3000 ms)`. `--no-wait` gives the old immediate reply.
+Apps are untouched: `cce_core::ipc::focus_window` sends no flag and still
+gets `ok` at once (it waits a second at most, and wants exactly `ok`).
+`cce-shadow ctl` runs the INSTALLED ccectl, so this reaches it after
+`ccebuild install --no-build cce-fx`.
+
 Not reachable this way, so still live-session work: real DRM/KMS modesetting and
 page-flip timing, suspend/resume, and libinput hardware paths (gestures, accel)
 — injected events do not exercise them.
