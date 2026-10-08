@@ -149,8 +149,12 @@ pub fn widen_corner_radius(nominal: i32, width: i32, height: i32) -> i32 {
     widened.min(width.min(height) / 2)
 }
 
-/// One of the 8 interactive border zones. Each draws as its own visual
-/// element (corners as two-rect Ls) and highlights independently on hover.
+/// Number of handle discs: the eight resize zones and the three buttons.
+pub const HANDLE_COUNT: usize = 11;
+
+/// One of the interactive handle discs: the eight resize zones, then the
+/// three window buttons beside the top-right disc. Each is its own disc
+/// and highlights independently on hover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BorderElement {
     Top,
@@ -161,11 +165,15 @@ pub enum BorderElement {
     TopRight,
     BottomLeft,
     BottomRight,
+    /// The window buttons (`window_takes_buttons`): a click, not a grab.
+    Minimize,
+    Maximize,
+    ToggleTile,
 }
 
 impl BorderElement {
     /// Every zone, in `index()` order.
-    pub const ALL: [BorderElement; 8] = [
+    pub const ALL: [BorderElement; HANDLE_COUNT] = [
         BorderElement::Top,
         BorderElement::Bottom,
         BorderElement::Left,
@@ -174,7 +182,15 @@ impl BorderElement {
         BorderElement::TopRight,
         BorderElement::BottomLeft,
         BorderElement::BottomRight,
+        BorderElement::Minimize,
+        BorderElement::Maximize,
+        BorderElement::ToggleTile,
     ];
+
+    /// A window button rather than a resize handle.
+    pub fn is_button(self) -> bool {
+        matches!(self, BorderElement::Minimize | BorderElement::Maximize | BorderElement::ToggleTile)
+    }
 
     /// Index into `Window::border_reveal`. Declaration order; kept in one
     /// place so the reveal array and the enum can't drift apart.
@@ -188,6 +204,9 @@ impl BorderElement {
             BorderElement::TopRight => 5,
             BorderElement::BottomLeft => 6,
             BorderElement::BottomRight => 7,
+            BorderElement::Minimize => 8,
+            BorderElement::Maximize => 9,
+            BorderElement::ToggleTile => 10,
         }
     }
 }
@@ -265,31 +284,56 @@ pub fn border_band_width(configured_width: u32) -> f64 {
     (configured_width as f64 * 2.0).max(HOVER_BAND_MIN)
 }
 
-/// Where the eight resize handles sit — one disc per zone, in
+/// Centre-to-centre spacing of the top row's discs when the window buttons
+/// are shown, in disc diameters. The frame shader's `STEP`.
+pub const HANDLE_BUTTON_STEP: f64 = 1.25;
+
+/// Where the handle discs sit — one disc per zone, in
 /// `BorderElement::index()` order — for a window whose content is `w`×`h`
 /// ON SCREEN, with silhouette corner radius `r_in` and handle diameter `d`
-/// (all screen px). Returns the centres and the disc radius. The side discs
-/// are tangent to their side; a corner disc sits on the corner's diagonal,
-/// tangent to the rounded corner arc when that arc is wider than the disc
-/// and tucked into the two straight edges otherwise. The frame shader
-/// (scenefx `frame.frag`) lays out the same discs from the same inputs;
-/// `draw_borders` (the catchers) and `cursor::get_border_zone` (the hit
-/// test) both call this, so what is drawn is what grabs. Keep the shader
-/// and this in step.
-pub fn handle_disc_layout(w: f64, h: f64, r_in: f64, d: f64) -> ([(f64, f64); 8], f64) {
+/// (all screen px). Returns the centres, the disc radius and how many of
+/// the discs are live: 8 (the resize handles), or all [`HANDLE_COUNT`]
+/// when `buttons` asks for the window buttons and the top row has room for
+/// all six of its discs.
+///
+/// Every disc sits the same distance in from the edges it touches, so the
+/// three along an edge are inline: a corner disc sits on the corner's
+/// diagonal, tangent to the rounded corner arc when that arc is wider than
+/// the disc and tucked into the two straight edges otherwise, and the side
+/// discs take that same inset. The buttons run leftward from the
+/// top-right disc — minimize, maximize, float/tile toggle, then the corner
+/// — and the Top disc leaves the midpoint only when it would crowd them.
+///
+/// The frame shader (scenefx `frame.frag`) lays out the same discs from the
+/// same inputs; `draw_borders` (the catchers) and `cursor::get_border_zone`
+/// (the hit test) both call this, so what is drawn is what grabs. Keep the
+/// shader and this in step.
+pub fn handle_disc_layout(
+    w: f64,
+    h: f64,
+    r_in: f64,
+    d: f64,
+    buttons: bool,
+) -> ([(f64, f64); HANDLE_COUNT], f64, usize) {
     let r = 0.5 * d;
     let t = if r_in > r { r_in - (r_in - r) / std::f64::consts::SQRT_2 } else { r };
+    let s = HANDLE_BUTTON_STEP * d;
+    let with_buttons = buttons && w >= 2.0 * t + 5.0 * s;
+    let top_x = if with_buttons { (0.5 * w).min(w - t - 4.0 * s) } else { 0.5 * w };
     let centres = [
-        (0.5 * w, r),     // Top
-        (0.5 * w, h - r), // Bottom
-        (r, 0.5 * h),     // Left
-        (w - r, 0.5 * h), // Right
-        (t, t),           // TopLeft
-        (w - t, t),       // TopRight
-        (t, h - t),       // BottomLeft
-        (w - t, h - t),   // BottomRight
+        (top_x, t),             // Top
+        (0.5 * w, h - t),       // Bottom
+        (t, 0.5 * h),           // Left
+        (w - t, 0.5 * h),       // Right
+        (t, t),                 // TopLeft
+        (w - t, t),             // TopRight
+        (t, h - t),             // BottomLeft
+        (w - t, h - t),         // BottomRight
+        (w - t - 3.0 * s, t),   // Minimize
+        (w - t - 2.0 * s, t),   // Maximize
+        (w - t - s, t),         // ToggleTile
     ];
-    (centres, r)
+    (centres, r, if with_buttons { HANDLE_COUNT } else { 8 })
 }
 
 pub struct BorderRects {
@@ -303,8 +347,8 @@ pub struct BorderRects {
     /// Invisible square catchers, one per handle disc, indexed by
     /// `BorderElement::index()`: they make a scene hit on a disc resolve to
     /// this window even where the client's input region does not cover it.
-    pub segments: [*mut ffi::wlr_scene_rect; 8],
-    /// The resize handles: all eight discs in one shader-drawn node.
+    pub segments: [*mut ffi::wlr_scene_rect; HANDLE_COUNT],
+    /// The handles: every disc, buttons included, in one shader-drawn node.
     pub frame: *mut ffi::wlr_scene_frame,
     /// Parent of `segments`, living in the global border overlay layer rather
     /// than in the window tree. Tracks the window tree's position so the
@@ -460,7 +504,7 @@ pub struct Window {
     /// zone under the pointer fades in. Deliberately NOT part of
     /// `rendering_requested.border`, which the arrange pass rewrites wholesale
     /// every pass and would otherwise clobber.
-    pub border_reveal: [f32; 8],
+    pub border_reveal: [f32; HANDLE_COUNT],
     /// How far this window is dimmed for lying OVER the adjust target, 0.0
     /// (full opacity) to 1.0 (`border.overlap_opacity`): a Floating window
     /// overlapping the window whose handles are up would hide them, so it
@@ -885,15 +929,15 @@ impl Window {
             ffi::wlr_scene_node_destroy(&mut (*capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
             return Err("Failed to create window border tree");
         }
-        let mut border_segments = [std::ptr::null_mut(); 8];
+        let mut border_segments = [std::ptr::null_mut(); HANDLE_COUNT];
         for seg in border_segments.iter_mut() {
             *seg = ffi::wlr_scene_rect_create(border_tree, 0, 0, clear_color.as_ptr());
         }
-        // The resize handles: one node draws all eight discs (scenefx
-        // frame.frag). Not eight rounded scene rects, because a scene rect
-        // takes the renderer's global corner shape — a squircle — so a rect
-        // with radius half its size would not be a circle. The eight rects
-        // above are the discs' invisible hit catchers.
+        // The handles: one node draws every disc, the window buttons
+        // included (scenefx frame.frag). Not rounded scene rects, because a
+        // scene rect takes the renderer's global corner shape — a squircle —
+        // so a rect with radius half its size would not be a circle. The
+        // rects above are the discs' invisible hit catchers.
         let border_frame = ffi::wlr_scene_frame_create(border_tree, 0, 0, 0, clear_color.as_ptr());
 
         let decorations_above_tree = ffi::wlr_scene_tree_create(tree);
@@ -926,7 +970,7 @@ impl Window {
             },
             hovered_border_element: None,
             border_hover_drawn: None,
-            border_reveal: [0.0; 8],
+            border_reveal: [0.0; HANDLE_COUNT],
             adjust_dim: 0.0,
             // 1.0, not 0.0: a window only starts its fade in `map()`, and
             // one that never fades (fading disabled, a status segment) must
@@ -3379,7 +3423,7 @@ impl Window {
         if !enabled {
             // The segment tree is not a child of `tree`, so disabling the
             // window does not hide a revealed border with it.
-            self.border_reveal = [0.0; 8];
+            self.border_reveal = [0.0; HANDLE_COUNT];
             ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
         }
 
@@ -3665,7 +3709,7 @@ impl Window {
             // lives outside this window's tree, so it has to be taken down
             // explicitly or a revealed edge would hang over the fullscreen
             // surface.
-            self.border_reveal = [0.0; 8];
+            self.border_reveal = [0.0; HANDLE_COUNT];
             ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
         } else {
             self.box_geom.x = requested.x;
@@ -3701,7 +3745,7 @@ impl Window {
             ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.border.bottom as *mut ffi::wlr_scene_node, false);
             ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, false);
-            self.border_reveal = [0.0; 8];
+            self.border_reveal = [0.0; HANDLE_COUNT];
             ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
         }
 
@@ -3867,7 +3911,7 @@ impl Window {
         ffi::wlr_scene_node_set_enabled(self.tree as *mut ffi::wlr_scene_node, enabled);
         ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
         if !enabled {
-            self.border_reveal = [0.0; 8];
+            self.border_reveal = [0.0; HANDLE_COUNT];
             ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
         }
 
@@ -4672,6 +4716,32 @@ pub unsafe fn window_takes_handles(window: *mut Window) -> bool {
         && !(*window).rendering_requested.hidden
 }
 
+/// Does this window get the minimize / maximize / float-tile buttons beside
+/// its top-right handle? Only a window with handles, and only a Floating or
+/// Tiled one: those are the modes the toggle flips between, and an Overlay
+/// dock has no business being minimized or tiled from its chrome. Asked by
+/// `draw_borders` and `cursor::get_border_zone` alike, like
+/// [`window_takes_handles`].
+pub unsafe fn window_takes_buttons(window: *mut Window) -> bool {
+    window_takes_handles(window)
+        && matches!(
+            (*window).tiling_mode,
+            crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Tiled
+        )
+}
+
+/// The frame shader's `buttons` value for `window`: 0 none, 1 Floating,
+/// 2 Tiled (the toggle's glyph shows the mode a click goes to).
+unsafe fn frame_buttons_value(window: *mut Window) -> f32 {
+    if !window_takes_buttons(window) {
+        0.0
+    } else if (*window).tiling_mode == crate::tiling::TilingMode::Tiled {
+        2.0
+    } else {
+        1.0
+    }
+}
+
 impl Window {
     pub unsafe fn draw_borders(&mut self) {
         // Taken before `requested` borrows self: `window_takes_handles` is
@@ -4867,13 +4937,19 @@ impl Window {
             // by the same function the hit test uses. `apply` takes unscaled
             // boxes, so the screen-px layout is divided back out (a px of
             // rounding on an invisible catcher is nothing).
-            let (centres, disc_r) = handle_disc_layout(
+            let buttons = frame_buttons_value(self_ptr);
+            let (centres, disc_r, live) = handle_disc_layout(
                 cw as f64 * sc,
                 ch as f64 * sc,
                 px(r_in) as f64,
                 band_screen,
+                buttons > 0.0,
             );
             for (i, &(cx, cy)) in centres.iter().enumerate() {
+                if i >= live {
+                    ffi::wlr_scene_node_set_enabled(self.border.segments[i] as *mut ffi::wlr_scene_node, false);
+                    continue;
+                }
                 let b = ffi::wlr_box {
                     x: ((cx - disc_r) / sc).floor() as i32,
                     y: ((cy - disc_r) / sc).floor() as i32,
@@ -4922,6 +4998,7 @@ impl Window {
                 None => [0.0; 4],
             };
             ffi::wlr_scene_frame_set_exclusion(self.border.frame, ex.as_ptr());
+            ffi::wlr_scene_frame_set_buttons(self.border.frame, buttons);
             // The ring exists only for the SEAT-focused window — `handles_on`
             // above says so, and so does step_border_fade's reveal — so it
             // paints in the focused color, taken from the layout rather than
@@ -6203,28 +6280,78 @@ mod handle_disc_tests {
 
     #[test]
     fn discs_follow_border_element_order_and_stay_inside() {
-        let (c, r) = handle_disc_layout(400.0, 300.0, 0.0, 32.0);
+        let (c, r, n) = handle_disc_layout(400.0, 300.0, 0.0, 32.0, false);
         assert_eq!(r, 16.0);
+        assert_eq!(n, 8);
         assert_eq!(c[BorderElement::Top.index()], (200.0, 16.0));
         assert_eq!(c[BorderElement::Bottom.index()], (200.0, 284.0));
         assert_eq!(c[BorderElement::Left.index()], (16.0, 150.0));
         assert_eq!(c[BorderElement::Right.index()], (384.0, 150.0));
         assert_eq!(c[BorderElement::TopLeft.index()], (16.0, 16.0));
         assert_eq!(c[BorderElement::BottomRight.index()], (384.0, 284.0));
-        for &(x, y) in &c {
+        for &(x, y) in &c[..n] {
             assert!(x - r >= 0.0 && x + r <= 400.0 && y - r >= 0.0 && y + r <= 300.0);
         }
     }
 
     #[test]
     fn corner_disc_is_tangent_to_a_wider_corner_arc() {
-        let (c, r) = handle_disc_layout(400.0, 300.0, 40.0, 32.0);
+        let (c, r, _) = handle_disc_layout(400.0, 300.0, 40.0, 32.0, false);
         let (tx, ty) = c[BorderElement::TopLeft.index()];
         assert_eq!(tx, ty);
         // Distance from the arc centre (40, 40) plus the disc radius is the
         // arc radius: tangent from the inside.
         let d = ((tx - 40.0).powi(2) + (ty - 40.0).powi(2)).sqrt();
         assert!((d + r - 40.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn discs_sharing_an_edge_are_inline() {
+        use BorderElement::*;
+        // A corner arc wider than the disc pulls the corners in; the side
+        // discs must come in with them.
+        let (c, _, n) = handle_disc_layout(800.0, 600.0, 40.0, 32.0, true);
+        assert_eq!(n, HANDLE_COUNT);
+        let y = |e: BorderElement| c[e.index()].1;
+        let x = |e: BorderElement| c[e.index()].0;
+        for e in [Top, TopRight, Minimize, Maximize, ToggleTile] {
+            assert_eq!(y(e), y(TopLeft));
+        }
+        assert_eq!(y(Bottom), y(BottomLeft));
+        assert_eq!(y(BottomRight), y(BottomLeft));
+        assert_eq!(x(Left), x(TopLeft));
+        assert_eq!(x(BottomLeft), x(TopLeft));
+        assert_eq!(x(Right), x(TopRight));
+        assert_eq!(x(BottomRight), x(TopRight));
+    }
+
+    #[test]
+    fn buttons_run_left_from_the_top_right_disc_without_overlap() {
+        use BorderElement::*;
+        let (c, r, n) = handle_disc_layout(800.0, 600.0, 0.0, 32.0, true);
+        assert_eq!(n, HANDLE_COUNT);
+        let x = |e: BorderElement| c[e.index()].0;
+        let row = [TopLeft, Top, Minimize, Maximize, ToggleTile, TopRight];
+        for pair in row.windows(2) {
+            assert!(x(pair[1]) - x(pair[0]) >= 2.0 * r, "{:?} crowds {:?}", pair[0], pair[1]);
+        }
+        // A wide window keeps the Top disc on its midpoint.
+        assert_eq!(x(Top), 400.0);
+    }
+
+    #[test]
+    fn top_disc_steps_aside_and_buttons_drop_when_the_row_is_full() {
+        use BorderElement::*;
+        // 32 px discs, 40 px step: the six-disc row needs 2*16 + 5*40 = 232.
+        let (c, r, n) = handle_disc_layout(240.0, 300.0, 0.0, 32.0, true);
+        assert_eq!(n, HANDLE_COUNT);
+        let top = c[Top.index()].0;
+        assert!(top < 120.0);
+        assert!(c[Minimize.index()].0 - top >= 2.0 * r);
+        assert!(top - c[TopLeft.index()].0 >= 2.0 * r);
+        let (c, _, n) = handle_disc_layout(200.0, 300.0, 0.0, 32.0, true);
+        assert_eq!(n, 8);
+        assert_eq!(c[Top.index()].0, 100.0);
     }
 }
 

@@ -472,9 +472,11 @@ sat outside the edges and the ring that followed hugged them.
 - The handles are drawn by **one scenefx node**, `wlr_scene_frame`
   (`scenefx/render/fx_renderer/shaders/frame.frag`): eight discs of
   diameter `band` (= `border.handle_width`, screen px), each its own zone.
-  The side discs are tangent to their side; a corner disc sits on the
-  corner's 45° diagonal, tangent to the rounded corner arc when that arc is
-  wider than the disc and tucked into the two straight edges otherwise.
+  A corner disc sits on the corner's 45° diagonal, tangent to the rounded
+  corner arc when that arc is wider than the disc and tucked into the two
+  straight edges otherwise, and **the side discs take the same inset**, so
+  the three discs along an edge are inline (since 2026-10-07; before, the
+  side discs hugged their side and sat outboard of a rounded corner's).
   **`window::handle_disc_layout` is the one layout function**: `draw_borders`
   places the eight invisible square catchers (`border.segments`) from it,
   `cursor::get_border_zone` hit-tests the discs from it (a pixel of slack
@@ -529,6 +531,24 @@ sat outside the edges and the ring that followed hugged them.
   still parsed and passed to the node, no longer drawn.
 - The shader's zone numbering MUST match `BorderElement::index()`; it is what
   the hovered-zone uniform selects on.
+- **Three window buttons sit in the top row** (since 2026-10-07), left of
+  the top-right disc: minimize, maximize, float/tile toggle — zones 8-10,
+  `BorderElement::{Minimize, Maximize, ToggleTile}`, inline with the
+  handles and `HANDLE_BUTTON_STEP` diameters apart. Only a Floating or
+  Tiled window takes them (`window::window_takes_buttons`, asked by the hit
+  test and `draw_borders`, which hands the shader `buttons` = 0/1/2 —
+  none/Floating/Tiled, the last two picking the toggle's glyph). They drop
+  out when the top row cannot fit all six discs, and the Top disc leaves
+  the midpoint only when it would crowd them; `handle_disc_layout` returns
+  how many discs are live, and the shader repeats that rule. A button is a
+  click, not a grab: `get_border_zone` returns `BorderZone::Button`, the
+  adjust-mode press records it in `Cursor::button_press` and returns, and
+  the release acts (`WindowManager::press_window_button`) only if the
+  pointer is still on that button. Minimize and maximize focus the window
+  and run the `minimize` / `toggle_fullscreen` actions — maximize is
+  fullscreen, since Tiled already reports xdg maximized — and the toggle
+  is `set-mode floating|tiled`. A fullscreen window takes no handles, so it
+  leaves fullscreen by the key, not a button.
 - `window::window_takes_handles` is the single predicate for which windows get
   handles (excluding Popup, Fullscreen, Status, Utility, circular, hidden),
   used by both the hit test and the drawing. Keep those in step: a handle that

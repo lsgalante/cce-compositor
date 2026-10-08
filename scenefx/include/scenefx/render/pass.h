@@ -145,6 +145,8 @@ struct fx_render_frame_options {
 	/* Box-local rect the ring must not draw over; w/h <= 0 disables. */
 	float exclusion[4];
 	struct wlr_render_color color;
+	/* Window buttons: 0 none, 1 Floating, 2 Tiled. */
+	float buttons;
 };
 
 struct fx_render_droplet_options {

@@ -407,6 +407,7 @@ bool link_frame_program(struct frame_shader *shader) {
 	shader->swell_curve = glGetUniformLocation(prog, "swell_curve");
 	shader->bulge = glGetUniformLocation(prog, "bulge");
 	shader->exclusion = glGetUniformLocation(prog, "exclusion");
+	shader->buttons = glGetUniformLocation(prog, "buttons");
 
 	return true;
 }

@@ -1166,6 +1166,7 @@ void fx_render_pass_add_frame(struct fx_gles_render_pass *pass,
 	glUniform1f(renderer->shaders.frame.hovered, options->hovered);
 	glUniform1f(renderer->shaders.frame.swell_curve, options->swell_curve);
 	glUniform1f(renderer->shaders.frame.bulge, options->bulge);
+	glUniform1f(renderer->shaders.frame.buttons, options->buttons);
 	glUniform4f(renderer->shaders.frame.exclusion, options->exclusion[0],
 			options->exclusion[1], options->exclusion[2], options->exclusion[3]);
 	glUniform4f(renderer->shaders.frame.hover_color,

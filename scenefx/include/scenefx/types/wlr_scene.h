@@ -248,6 +248,9 @@ struct wlr_scene_frame {
 	/** Node-local rect (x, y, w, h) the ring must not draw over — an
 	 * in-surface client popover. w or h <= 0 disables. */
 	float exclusion[4];
+	/** Window buttons beside the top-right disc: 0 none, 1 for a
+	 * Floating window, 2 for a Tiled one (the toggle's glyph). */
+	float buttons;
 	float color[4];
 };
 
@@ -795,6 +798,7 @@ void wlr_scene_frame_set_hover(struct wlr_scene_frame *frame, float hovered,
 	const float color[static 4]);
 void wlr_scene_frame_set_exclusion(struct wlr_scene_frame *frame,
 	const float rect[static 4]);
+void wlr_scene_frame_set_buttons(struct wlr_scene_frame *frame, float buttons);
 
 void wlr_scene_bevel_set_size(struct wlr_scene_bevel *bevel, int width, int height);
 void wlr_scene_bevel_set_corner_radius(struct wlr_scene_bevel *bevel, int radius);

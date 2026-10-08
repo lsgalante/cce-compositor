@@ -1238,6 +1238,7 @@ struct wlr_scene_frame *wlr_scene_frame_create(struct wlr_scene_tree *parent,
 	scene_frame->hovered = -1.0f;
 	scene_frame->swell_curve = 1.0f;
 	scene_frame->bulge = 0.0f;
+	scene_frame->buttons = 0.0f;
 	memcpy(scene_frame->color, color, sizeof(scene_frame->color));
 	memcpy(scene_frame->hover_color, color, sizeof(scene_frame->hover_color));
 
@@ -1285,6 +1286,14 @@ void wlr_scene_frame_set_exclusion(struct wlr_scene_frame *frame,
 		return;
 	}
 	memcpy(frame->exclusion, rect, sizeof(frame->exclusion));
+	scene_node_update(&frame->node, NULL);
+}
+
+void wlr_scene_frame_set_buttons(struct wlr_scene_frame *frame, float buttons) {
+	if (frame->buttons == buttons) {
+		return;
+	}
+	frame->buttons = buttons;
 	scene_node_update(&frame->node, NULL);
 }
 
@@ -3050,6 +3059,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.hovered = scene_frame->hovered,
 			.swell_curve = scene_frame->swell_curve,
 			.bulge = scene_frame->bulge * data->scale,
+			.buttons = scene_frame->buttons,
 			.exclusion = {
 				scene_frame->exclusion[0] * data->scale,
 				scene_frame->exclusion[1] * data->scale,

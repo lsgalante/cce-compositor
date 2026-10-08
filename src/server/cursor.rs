@@ -161,7 +161,7 @@ pub struct Cursor {
     /// on hover transitions. May dangle after a close — validate against
     /// `wm.windows` before dereferencing.
     pub hovered_border_window: *mut crate::window::Window,
-    /// Which of that window's 8 border zones is highlighted.
+    /// Which of that window's handle discs is highlighted.
     pub hovered_border_element: Option<crate::window::BorderElement>,
     /// The toplevel under the pointer while adjust mode (overview, or Super
     /// held) is on: the window the ring lands on and whose handles are live,
@@ -172,6 +172,11 @@ pub struct Cursor {
     pub adjust_hover: *mut crate::window::Window,
     pub right_click_on_bg: bool,
     pub right_click_on_border: bool,
+    /// A left press on a window button (minimize / maximize / float-tile),
+    /// waiting for its release: a button acts on the release, and only when
+    /// the pointer is still on the same button of the same window. May
+    /// dangle after a close — validated against `wm.windows` at release.
+    pub button_press: Option<(*mut crate::window::Window, crate::window::BorderElement)>,
     /// The grid surface's node mapping — (node_x, node_y, scale) — FROZEN at
     /// the start of an implicit grab that landed on the grid, cleared when
     /// the grab's last button releases. Motion during the grab is mapped
@@ -253,6 +258,7 @@ impl Default for Cursor {
             adjust_hover: std::ptr::null_mut(),
             right_click_on_bg: false,
             right_click_on_border: false,
+            button_press: None,
             grab_grid: None,
         }
     }
@@ -942,6 +948,12 @@ impl Cursor {
                                 self.set_border_hover(window, Some(crate::window::BorderElement::Top));
                                 ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
                                 self.set_xcursor(b"grab\0".as_ptr() as *const _);
+                                return;
+                            }
+                            BorderZone::Button(elem) => {
+                                self.set_border_hover(window, Some(elem));
+                                ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+                                self.set_xcursor(b"pointer\0".as_ptr() as *const _);
                                 return;
                             }
                             BorderZone::None => {}
@@ -1721,6 +1733,14 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
             } else {
                 BorderZone::None
             };
+            // A window button is a click: nothing is grabbed, the client
+            // never sees the press, and the release decides
+            // (`Cursor::button_press`, answered in the release path).
+            if let BorderZone::Button(elem) = overview_border_zone {
+                cursor.button_press = Some((clicked_win, elem));
+                cursor.pressed.insert((*event).button, None);
+                return;
+            }
             // A press on a SELECTED desktop image grabs the whole selection
             // — windows and images — from the image's side: the grid never
             // sees the press, the compositor moves everything and tells the
@@ -2257,6 +2277,10 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                         return;
                     }
                 }
+                // Answered in the adjust-mode block above, which a button
+                // zone always passes through (get_border_zone gives none
+                // outside adjust mode).
+                BorderZone::Button(_) => {}
                 BorderZone::None => {}
             }
         }
@@ -2635,6 +2659,16 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     (*(*seat).server).wm.dirty_windowing();
                 }
                 return;
+            }
+
+            if (*event).button == 0x110 {
+                if let Some((win, elem)) = cursor.button_press.take() {
+                    let alive = (*server).wm.windows.iter().any(|&w| w == win) && !(*win).closed;
+                    if alive && get_border_zone(win, lx, ly) == BorderZone::Button(elem) {
+                        (*server).wm.press_window_button(win, elem);
+                    }
+                    return;
+                }
             }
 
             if (*event).button == 0x111 && (cursor.right_click_on_bg || cursor.right_click_on_border) {
@@ -4393,6 +4427,8 @@ pub enum BorderZone {
     None,
     Move,
     Resize(crate::window::Edges),
+    /// A window button disc (`BorderElement::is_button`).
+    Button(crate::window::BorderElement),
 }
 
 pub use crate::window::HOVER_BAND_MIN;
@@ -4458,11 +4494,12 @@ pub unsafe fn grid_node_info(
     None
 }
 
-/// Which resize handle, if any, a layout point falls on.
+/// Which handle disc, if any, a layout point falls on.
 ///
-/// The handles are eight discs INSIDE the content rect — one at the
-/// midpoint of each side, one on each corner — and exist only in adjust
-/// mode (overview, or Super held). Two consequences worth stating, because
+/// The handles are eight discs INSIDE the content rect — one on each side,
+/// one on each corner — plus, for a Floating or Tiled window, the three
+/// window buttons in the top row (`BorderZone::Button`), and exist only in
+/// adjust mode (overview, or Super held). Two consequences worth stating, because
 /// both are deliberate:
 ///
 ///   - Outside adjust mode there are no handles at all, so a window cannot
@@ -4543,14 +4580,22 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
         geom.height,
     ) as f64;
     let r_in = (r_in * scale) as i32 as f64;
-    let (centres, r) = crate::window::handle_disc_layout(content_w, content_h, r_in, bw);
+    let (centres, r, live) = crate::window::handle_disc_layout(
+        content_w,
+        content_h,
+        r_in,
+        bw,
+        crate::window::window_takes_buttons(window),
+    );
     let reach = (r + 1.0) * (r + 1.0);
-    for (i, &(cx, cy)) in centres.iter().enumerate() {
+    for (i, &(cx, cy)) in centres[..live].iter().enumerate() {
         let (dx, dy) = (rx - cx, ry - cy);
         if dx * dx + dy * dy <= reach {
-            return BorderZone::Resize(edges_for_border_element(
-                crate::window::BorderElement::ALL[i],
-            ));
+            let elem = crate::window::BorderElement::ALL[i];
+            if elem.is_button() {
+                return BorderZone::Button(elem);
+            }
+            return BorderZone::Resize(edges_for_border_element(elem));
         }
     }
     // In the body, between the discs: not ours. This is what leaves the
@@ -4571,6 +4616,8 @@ pub fn edges_for_border_element(element: crate::window::BorderElement) -> crate:
         TopRight => (true, false, false, true),
         BottomLeft => (false, true, true, false),
         BottomRight => (false, true, false, true),
+        // A button resizes nothing.
+        Minimize | Maximize | ToggleTile => (false, false, false, false),
     };
     crate::window::Edges { top, bottom, left, right }
 }

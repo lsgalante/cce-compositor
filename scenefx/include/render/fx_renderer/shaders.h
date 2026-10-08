@@ -205,6 +205,7 @@ struct frame_shader {
 	GLint swell_curve;
 	GLint bulge;
 	GLint exclusion;
+	GLint buttons;
 };
 
 bool link_frame_program(struct frame_shader *shader);

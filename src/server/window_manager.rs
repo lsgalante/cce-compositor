@@ -5151,6 +5151,45 @@ impl WindowManager {
         !cmds.is_empty()
     }
 
+    /// A click on one of a window's buttons — the discs left of its
+    /// top-right handle (`window::window_takes_buttons`). Minimize and
+    /// maximize run the keyboard's own actions, which act on the focused
+    /// window, so the window is focused first: a click is a choice of
+    /// window. Maximize is the fullscreen toggle — a Tiled window already
+    /// reports xdg maximized here, so the step up from it is fullscreen —
+    /// and the toggle flips Floating and Tiled exactly as `set-mode` does.
+    pub unsafe fn press_window_button(&mut self, window: *mut Window, elem: crate::window::BorderElement) {
+        use crate::policy::api::{Command, Compositor, WindowId};
+        use crate::window::BorderElement;
+        if !crate::window::window_takes_buttons(window) {
+            return;
+        }
+        match elem {
+            BorderElement::Minimize | BorderElement::Maximize => {
+                if let Some(seat) = self.first_seat() {
+                    (*seat).focus(crate::seat::Focus::Window(window));
+                }
+                let action = if elem == BorderElement::Minimize {
+                    crate::config::Action::Minimize
+                } else {
+                    crate::config::Action::Fullscreen
+                };
+                self.execute_action(&action, None);
+            }
+            BorderElement::ToggleTile => {
+                let mode = if (*window).tiling_mode == crate::tiling::TilingMode::Tiled {
+                    crate::tiling::TilingMode::Floating
+                } else {
+                    crate::tiling::TilingMode::Tiled
+                };
+                let id = WindowId((*window).ref_key);
+                self.apply(&Command::SetWindowMode { id, mode, locked: true });
+                self.apply(&Command::Relayout);
+            }
+            _ => {}
+        }
+    }
+
     pub unsafe fn execute_action(&mut self, action: &crate::config::Action, command: Option<&str>) {
         use crate::config::Action;
         self.stop_panning_animation();
