@@ -10,8 +10,8 @@ doctest = false
 # The GUI-free half of the toolkit: config, input bindings, the animations
 # switch and the relief/droplet spec parsers. It depended on cce-ui for these
 # until 2026-10-07, linking the whole Wayland/Vulkan/text stack it never used.
-cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "39e989d6ebc7850a1e5aa96bf228fe8714e538e0" }
-cce-window-manager = { git = "https://github.com/lsgalante/cce-window-manager.git", rev = "a55a5b02151f52e84d92a75994e00aa3c8f0a61f" }
+cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "de8a6ff818874b38f3958b0bd562377390e7af34" }
+cce-window-manager = { git = "https://github.com/lsgalante/cce-window-manager.git", rev = "8ea59bb3e42991c9ee19976be572fd9561af4872" }
 xkbcommon = "0.7"
 serde = { version = "1", features = ["derive"] }
 nix = { version = "0.29", features = ["signal", "process", "fs", "poll", "resource"] }
