@@ -1320,7 +1320,7 @@ pub fn default_config_path() -> Option<String> {
 /// `<state_home>/cce/state.json`; `None` when neither `$XDG_STATE_HOME` nor
 /// `$HOME` is set, rather than a path relative to wherever we were started.
 pub fn default_state_path() -> Option<String> {
-    let path = cce_ui::config::cce_state_dir().join("state.json");
+    let path = cce_core::config::cce_state_dir().join("state.json");
     path.is_absolute().then(|| path.to_string_lossy().into_owned())
 }
 
@@ -1782,7 +1782,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
     // ~/.config/cce/cce-status-interface/config.kdl, `module { spacing height }`.
     // Re-read on every config (re)load, so `ccectl reload` picks up edits.
     {
-        let app_cfg = cce_ui::config::get_app_config_path("cce-status-interface");
+        let app_cfg = cce_core::config::get_app_config_path("cce-status-interface");
         if let Ok(content) = std::fs::read_to_string(&app_cfg) {
             if let Ok(app_doc) = content.parse::<kdl::KdlDocument>() {
                 if let Some(module) = app_doc.nodes().iter().find(|n| n.name().value() == "module") {
@@ -2236,7 +2236,7 @@ fn parse_kdl_config(content: &str) -> Result<Config, String> {
                                             // installs the full material,
                                             // but the scenefx chamfer has no
                                             // custom profile to install.
-                                            if let Some(spec) = cce_ui::relief_spec::ReliefSpec::parse(s) {
+                                            if let Some(spec) = cce_core::relief_spec::ReliefSpec::parse(s) {
                                                 surface.desktop_line_relief = spec.width.round() as i64;
                                             }
                                         }
@@ -2678,15 +2678,15 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
 
     let path_buf = std::path::Path::new(path);
     let input_path = path_buf.parent().unwrap_or_else(|| std::path::Path::new(".")).join("input.kdl");
-    let mut wm_domain_entries: Vec<cce_ui::input::BindingEntry> = Vec::new();
+    let mut wm_domain_entries: Vec<cce_core::input::BindingEntry> = Vec::new();
     if input_path.exists() {
         if let Ok(input_content) = fs::read_to_string(&input_path) {
             // New domain-scoped format: a `cce-window-manager { ... }` block
             // of `<action_name> "<chord>"` bindings. Other domains belong to
             // clients/widgets and are ignored here.
-            match cce_ui::input::InputConfig::parse(&input_content) {
+            match cce_core::input::InputConfig::parse(&input_content) {
                 Ok(ic) => {
-                    wm_domain_entries = ic.domain(cce_ui::input::WINDOW_MANAGER_DOMAIN).to_vec();
+                    wm_domain_entries = ic.domain(cce_core::input::WINDOW_MANAGER_DOMAIN).to_vec();
                 }
                 Err(e) => eprintln!("[WARNING] {}: {}", input_path.display(), e),
             }

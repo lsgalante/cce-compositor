@@ -31,8 +31,13 @@ desktop environment written in Rust, split into two halves:
   natively by the compositor — the former `cce-wallpaper` client was retired.)
 
 The one thing tying every crate together is **`cce-ui`**, the shared GUI toolkit. Every
-client depends on it (`cce-ui = { path = "../cce-ui" }`); the compositor depends on it
-too. There is one other shared crate: **`cce-window-manager`** — the compositor's
+client depends on it (a git pin that the root `[patch]` redirects to `../cce-ui`). Its
+GUI-free half is **`cce-core`** — config, input bindings, the animations switch, units, the
+socket IPC and the DE's spec parsers — which cce-ui re-exports at the old paths
+(`cce_ui::config`, …) and which a process that draws nothing depends on directly: the
+compositor (since 2026-10-07; it linked the whole toolkit for its config before), the
+browser's launch helper and cce-window-manager. The other shared crate is
+**`cce-window-manager`** — the compositor's
 pure-Rust window-management policy layer (arrange pass, `TilingMode`, saved state,
 slotmap; no FFI), extracted from `cce-compositor/` and consumed only by it. The compositor
 re-exports it as `crate::policy` / `crate::tiling` / `crate::slotmap`.
@@ -269,13 +274,13 @@ When adding a widget or a client, mirror an existing client (e.g.
 ## Configuration (shared across the whole DE)
 
 Config is **KDL** (`kdl` crate), loaded from `~/.config/cce/` (honoring
-`XDG_CONFIG_HOME`), via `cce-ui/src/config.rs`:
+`XDG_CONFIG_HOME`), via `cce-core/src/config.rs` (re-exported as `cce_ui::config`):
 
 - **`~/.config/cce/config.kdl`** — the shared/global config (`get_config_path()`).
 - **`~/.config/cce/<app-name>/config.kdl`** — per-app override
   (`get_app_config_path(app_name)`).
 - **`~/.config/cce/input.kdl`** — DE-wide keybindings and pointer input settings,
-  domain-scoped (`cce-ui/src/input.rs`): top-level nodes are domains
+  domain-scoped (`cce-core/src/input.rs`, re-exported as `cce_ui::input`): top-level nodes are domains
   (`cce-window-manager` for compositor actions, `cce-ui` for toolkit-wide widget
   defaults, `cce-<app>` for per-app bindings), children are `name "chord"`
   bindings. Resolution for an app is `<app>.<name>` → `cce-ui.<name>` (the
@@ -454,7 +459,7 @@ the others. The rules:
   with `ps -eo pid,ppid,cmd`, confirm it is yours via
   `/proc/<pid>/cgroup` (a unit's processes name their unit), `kill` it
   explicitly, then relaunch detached.
-- **Shared crates are exclusive.** Before editing `cce-ui`,
+- **Shared crates are exclusive.** Before editing `cce-ui`, `cce-core`,
   `cce-window-manager`, or `cce-icons`, run `git status` there. Foreign dirt
   means another session owns that crate right now — coordinate or stop; don't
   edit around it. Commit your own crate's work promptly so other sessions

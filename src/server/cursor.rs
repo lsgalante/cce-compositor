@@ -2614,8 +2614,8 @@ unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut s
                     _ => "top-left",
                 };
                 let key_path = format!("layout.status_bar.{}", name);
-                cce_ui::config::write_config_value(
-                    &cce_ui::config::get_config_path().to_string_lossy(),
+                cce_core::config::write_config_value(
+                    &cce_core::config::get_config_path().to_string_lossy(),
                     &key_path,
                     &format!("\"{}\"", edge_str),
                     "layout"
@@ -4049,11 +4049,11 @@ unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: 
         // reaches `swipe_repeat_peek` (default half of `swipe_peek`) at the
         // repeat threshold, so a swipe that has just switched focus does
         // not tug the camera toward the next window as eagerly. With
-        // animations off (`cce_ui::motion`) there is no lean at all: the
+        // animations off (`cce_core::motion`) there is no lean at all: the
         // camera stays put until the bind fires, then jumps (the step's
         // ease is instant then, `advance_camera_animation`). A lean
         // already showing when they were turned off goes back the same way.
-        let peek_px = if !cce_ui::motion::enabled() {
+        let peek_px = if !cce_core::motion::enabled() {
             0.0
         } else if cursor.gesture_triggered {
             wm.swipe_repeat_peek_px

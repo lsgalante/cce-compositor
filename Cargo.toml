@@ -7,14 +7,16 @@ edition = "2021"
 doctest = false
 
 [dependencies]
-cce-ui = { git = "https://github.com/lsgalante/cce-ui.git", rev = "4dcb970d84f0a6aeeef5311ac1d4cacb0c63a803" }
+# The GUI-free half of the toolkit: config, input bindings, the animations
+# switch and the relief/droplet spec parsers. It depended on cce-ui for these
+# until 2026-10-07, linking the whole Wayland/Vulkan/text stack it never used.
+cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "39e989d6ebc7850a1e5aa96bf228fe8714e538e0" }
 cce-window-manager = { git = "https://github.com/lsgalante/cce-window-manager.git", rev = "a55a5b02151f52e84d92a75994e00aa3c8f0a61f" }
 xkbcommon = "0.7"
 serde = { version = "1", features = ["derive"] }
 nix = { version = "0.29", features = ["signal", "process", "fs", "poll", "resource"] }
 libc = "0.2"
-# logind's sleep-delay inhibitor (`sleep_lock`). Already in the tree through
-# cce-ui (rfd -> ashpd), so this adds the blocking API, not a dependency.
+# logind's sleep-delay inhibitor (`sleep_lock`).
 zbus = "5"
 bitflags = "2"
 tokio = { version = "1.35", features = ["full"] }

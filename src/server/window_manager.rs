@@ -2406,10 +2406,10 @@ impl WindowManager {
     /// nothing is left to animate.
     unsafe fn advance_camera_animation(&mut self, dt: f64, frame_target_ns: u64) -> bool {
         let mut done = true;
-        // Animations off (`cce_ui::motion`): every ease below covers its
+        // Animations off (`cce_core::motion`): every ease below covers its
         // whole distance in this step, the ramp lands, and a flick does not
         // coast — the camera still goes where it was sent, just at once.
-        let animate = cce_ui::motion::enabled();
+        let animate = cce_core::motion::enabled();
         // Frame-rate independent exponential approach: the same fraction of
         // the remaining distance per unit time whatever the frame pacing.
         let factor = if animate { 1.0 - (-self.scroll_ease_rate() * dt).exp() } else { 1.0 };
@@ -5336,7 +5336,7 @@ impl WindowManager {
             "fade-out" => {
                 // Animations off answers 0 like a disabled fade: the client
                 // exits at once and nothing ramps.
-                let ms = if cce_ui::motion::enabled() { self.layout.fade_out_ms } else { 0 };
+                let ms = if cce_core::motion::enabled() { self.layout.fade_out_ms } else { 0 };
                 let pid = self.pending_ipc_peer_pid;
                 if pid <= 0 {
                     return "0\n".to_string();

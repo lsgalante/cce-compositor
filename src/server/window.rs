@@ -218,9 +218,9 @@ pub const BORDER_FADE_STEP: f32 = 0.15;
 pub const BORDER_FADE_EPSILON: f32 = 0.004;
 
 /// The hover/dim step in force: [`BORDER_FADE_STEP`], or the whole distance
-/// when animations are off (`cce_ui::motion`), which lands in one tick.
+/// when animations are off (`cce_core::motion`), which lands in one tick.
 fn border_fade_step() -> f32 {
-    if cce_ui::motion::enabled() { BORDER_FADE_STEP } else { 1.0 }
+    if cce_core::motion::enabled() { BORDER_FADE_STEP } else { 1.0 }
 }
 
 /// Per-tick step of the fullscreen-toggle animation, as a fraction of the
@@ -2235,8 +2235,8 @@ impl Window {
                 let mut loaded_edge = None;
                 if name == "light_source" {
                     let mut light_pos = 2.356194490192345_f32; // Default 135 deg in rad
-                    if let Ok(content) = std::fs::read_to_string(cce_ui::config::get_config_path()) {
-                        let val = cce_ui::config::parse_kdl_to_json(&content);
+                    if let Ok(content) = std::fs::read_to_string(cce_core::config::get_config_path()) {
+                        let val = cce_core::config::parse_kdl_to_json(&content);
                         if let Some(wm_obj) = val.get("window_manager") {
                             if let Some(pos_val) = wm_obj.get("light_source_position") {
                                 if let Some(f) = pos_val.as_f64() {
@@ -2278,8 +2278,8 @@ impl Window {
                         StatusEdge::BottomRight
                     };
                     loaded_edge = Some(edge);
-                } else if let Ok(content) = std::fs::read_to_string(cce_ui::config::get_config_path()) {
-                    let val = cce_ui::config::parse_kdl_to_json(&content);
+                } else if let Ok(content) = std::fs::read_to_string(cce_core::config::get_config_path()) {
+                    let val = cce_core::config::parse_kdl_to_json(&content);
                     if let Some(layout_obj) = val.get("layout") {
                         if let Some(status_bar_obj) = layout_obj.get("status_bar") {
                             if let Some(edge_val) = status_bar_obj.get(name) {
@@ -2424,9 +2424,9 @@ impl Window {
         // that failed to map never starts one. `start_map_fade` snaps rather
         // than ramps when fading is off or this surface opts out (status
         // segments, wallpaper), so there is no second branch here.
-        // Animations off (`cce_ui::motion`) is a zero-length fade, the
+        // Animations off (`cce_core::motion`) is a zero-length fade, the
         // same as `surface { fade in_ms=0 }`.
-        let fade_ms = if cce_ui::motion::enabled() { (*self.server).wm.layout.fade_in_ms } else { 0 };
+        let fade_ms = if cce_core::motion::enabled() { (*self.server).wm.layout.fade_in_ms } else { 0 };
         if self.wants_map_fade() && fade_ms > 0 {
             self.map_fade = 0.0;
         }
@@ -4254,7 +4254,7 @@ impl Window {
             ffi::wlr_scene_node_set_enabled(node, false);
             return;
         }
-        let spec = cce_ui::scene::paint::DropletSpec::parse(
+        let spec = cce_core::droplet::DropletSpec::parse(
             layout.status_droplet.as_deref().unwrap_or(""),
         );
         if spec.refr <= 0.0 && spec.ghost <= 0.0 {
@@ -4293,7 +4293,7 @@ impl Window {
         }
         match (*self.server).wm.layout.status_droplet.as_deref() {
             Some(raw) => {
-                let spec = cce_ui::scene::paint::DropletSpec::parse(raw);
+                let spec = cce_core::droplet::DropletSpec::parse(raw);
                 spec.refr > 0.0 || spec.ghost > 0.0
             }
             None => false,
@@ -4518,7 +4518,7 @@ impl Window {
     /// pass in this same cycle.
     unsafe fn start_fs_anim(&mut self) {
         // Animations off: the window is simply drawn at its new rect.
-        if !cce_ui::motion::enabled() {
+        if !cce_core::motion::enabled() {
             self.fs_anim = None;
             return;
         }
@@ -4555,7 +4555,7 @@ impl Window {
             return false;
         };
         // Switched off mid-flight: land now, with the settling frame.
-        if !cce_ui::motion::enabled() {
+        if !cce_core::motion::enabled() {
             self.fs_anim = None;
             return true;
         }

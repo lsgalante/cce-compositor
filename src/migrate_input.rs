@@ -14,7 +14,7 @@
 // The brightness spawn binds synthesized from the `display` section are NOT
 // migrated — they stay derived from the display config at load time.
 
-use cce_ui::input::{BindingEntry, InputConfig, UI_DOMAIN, WINDOW_MANAGER_DOMAIN};
+use cce_core::input::{BindingEntry, InputConfig, UI_DOMAIN, WINDOW_MANAGER_DOMAIN};
 use cce_window_manager::api::Action;
 use cce_window_manager::bindings::parse_chord;
 
@@ -182,7 +182,7 @@ fn backup(path: &std::path::Path) -> Option<std::path::PathBuf> {
     if !path.exists() {
         return None;
     }
-    let backups = cce_ui::config::cce_config_dir().join("backups");
+    let backups = cce_core::config::cce_config_dir().join("backups");
     let _ = std::fs::create_dir_all(&backups);
     for n in 1..1000 {
         let candidate = backups.join(format!("input.kdl.{}.bak", n));
@@ -194,7 +194,7 @@ fn backup(path: &std::path::Path) -> Option<std::path::PathBuf> {
 }
 
 pub fn run() {
-    let config_path = cce_ui::config::get_config_path();
+    let config_path = cce_core::config::get_config_path();
     let content = match std::fs::read_to_string(&config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -217,7 +217,7 @@ pub fn run() {
         return;
     }
 
-    let input_path = cce_ui::input::get_input_path();
+    let input_path = cce_core::input::get_input_path();
     let existing_content = std::fs::read_to_string(&input_path).unwrap_or_default();
     let existing = match InputConfig::parse(&existing_content) {
         Ok(c) => c,
@@ -241,7 +241,7 @@ pub fn run() {
         if added == 0 {
             return;
         }
-        match cce_ui::input::write_domain(&input_path, domain, entries) {
+        match cce_core::input::write_domain(&input_path, domain, entries) {
             Ok(()) => println!("{}: migrated {} binding(s)", domain, added),
             Err(e) => {
                 eprintln!("failed to write {}: {}", input_path.display(), e);

@@ -435,11 +435,11 @@ fn spawn_encode(rgba: Vec<u8>, w: u32, h: u32, path: PathBuf) {
 /// typically an isolated one (a headless shadow session, say) whose toasts
 /// would land on someone else's screen. Stay quiet there.
 fn notifications_enabled() -> bool {
-    let Ok(content) = std::fs::read_to_string(cce_ui::config::get_config_path()) else {
+    let Ok(content) = std::fs::read_to_string(cce_core::config::get_config_path()) else {
         log::debug!("screenshot: config unreadable, staying quiet about the capture");
         return false;
     };
-    cce_ui::config::parse_kdl_to_json(&content)
+    cce_core::config::parse_kdl_to_json(&content)
         .pointer("/notifications/screenshots")
         .and_then(|v| v.as_bool())
         .unwrap_or(true)
