@@ -430,6 +430,14 @@ impl SettleWaiter {
     }
 }
 
+/// Whether a relayout is pending or under way. `manage_start` clears
+/// `scheduled.dirty` as the sequence begins, but a window's on-screen box
+/// only moves at `render_finish`, so a transaction waiting on a client's
+/// configure ack reads as a window at rest unless the state counts too.
+fn layout_in_flight(state: WindowManagerState, dirty: bool) -> bool {
+    dirty || !matches!(state, WindowManagerState::Idle)
+}
+
 pub struct WindowManager {
     pub server: *mut Server,
     pub global: *mut ffi::wl_global,
@@ -2367,7 +2375,7 @@ impl WindowManager {
         let moving = self.camera_anim_active
             || self.pan_pending != [0.0, 0.0]
             || self.pinch_pending.is_some()
-            || self.scheduled.dirty;
+            || layout_in_flight(self.state, self.scheduled.dirty);
         let now = crate::util::timestamp_ns();
         let mut waiters = std::mem::take(&mut self.settle_waiters);
         let mut kept = Vec::new();
@@ -8328,6 +8336,16 @@ mod tests {
         assert!(!w.observe((57, 24, 1200, 720), false));
         assert!(!w.observe((57, 24, 1200, 720), false));
         assert!(w.observe((57, 24, 1200, 720), false));
+    }
+
+    #[test]
+    fn a_transaction_awaiting_acks_counts_as_layout_in_flight() {
+        // The sequence has cleared `dirty`, but the box has not moved yet.
+        assert!(layout_in_flight(WindowManagerState::InflightConfigures(1), false));
+        assert!(layout_in_flight(WindowManagerState::Manage, false));
+        assert!(layout_in_flight(WindowManagerState::Render, false));
+        assert!(layout_in_flight(WindowManagerState::Idle, true));
+        assert!(!layout_in_flight(WindowManagerState::Idle, false));
     }
 
     #[test]

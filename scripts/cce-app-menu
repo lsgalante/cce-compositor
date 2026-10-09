@@ -97,11 +97,11 @@ case "$btn" in
         ;;
     "minimize")
         # minimize/close act on the focused window: focus this one first.
-        $CCE_CTL focus-window "$window_index"
+        $CCE_CTL focus-window --no-wait "$window_index"
         $CCE_CTL minimize
         ;;
     "close")
-        $CCE_CTL focus-window "$window_index"
+        $CCE_CTL focus-window --no-wait "$window_index"
         $CCE_CTL close
         ;;
 esac

@@ -152,14 +152,14 @@ case "$btn" in
         # the window just acted on is the one to hand it back to.
         if [[ -n "$window_index" ]]; then
             $CCE_CTL set-mode "$btn" "$window_index"
-            $CCE_CTL focus-window "$window_index"
+            $CCE_CTL focus-window --no-wait "$window_index"
         fi
         ;;
     "minimize"|"close")
         # Both act on the focused window, and focus was dropped: refocus
         # the named window first.
         if [[ -n "$window_index" ]]; then
-            $CCE_CTL focus-window "$window_index"
+            $CCE_CTL focus-window --no-wait "$window_index"
             $CCE_CTL "$btn"
         fi
         ;;
