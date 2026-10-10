@@ -458,7 +458,9 @@ treats them as opaque.
   `xdg_toplevel.rs`, which sizes it and `Status` from their own content, and
   `xwayland_window.rs`, which excludes it from the tiled report alongside
   `Floating`/`Popup`).
-- Input stack: `input_manager.rs`, `seat.rs`, `cursor.rs`, `keyboard*.rs`,
+- Input stack: `input_manager.rs`, `seat.rs`, `cursor.rs` (with `cursor/button.rs`
+  — `handle_button` —, `cursor/axis.rs` — the wheel and its view-drag, popup-wheel and
+  hscroll-shift states —, `cursor/gestures.rs`, `cursor/border_zone.rs`), `keyboard*.rs`,
   `xkb_*.rs`, `libinput_*.rs`, `pointer_*.rs`, `tablet*.rs`, `text_input.rs`,
   `input_relay.rs`/`input_popup.rs` (IME).
 - Shell/surface: `xdg_toplevel.rs`, `xdg_popup.rs`, `shell_surface.rs`,
