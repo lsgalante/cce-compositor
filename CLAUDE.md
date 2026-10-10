@@ -762,7 +762,8 @@ to zoom 1 on the new window and switched to Normal. In a shadow:
 Loaded on startup from **`$XDG_CONFIG_HOME/cce/config.kdl`** (falls back to
 `~/.config/cce/config.kdl`). An adjacent `input.kdl` is merged in for key bindings and
 input settings. **The format is KDL** (via the `kdl` crate; `parse_kdl_config`).
-`config.rs` maps parsed values onto `WindowManager` state (layout gaps,
+`config.rs` (the types and value parsers; `config/parse.rs` is `parse_kdl_config`,
+`config/kdl_read.rs` the KDL accessors, `config/apply.rs` is `parse_config`) maps parsed values onto `WindowManager` state (layout gaps,
 border/blur/desktop styling, keybindings → `Action`s, startup programs, output/display
 settings). Live reconfiguration comes in over IPC (`ccectl reload`, `bind`, `layout …`,
 `config-done`, etc.).
