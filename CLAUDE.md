@@ -208,6 +208,13 @@ Apps are untouched: `cce_core::ipc::focus_window` sends no flag and still
 gets `ok` at once (it waits a second at most, and wants exactly `ok`).
 `cce-shadow ctl` runs the INSTALLED ccectl, so this reaches it after
 `ccebuild install --no-build cce-fx`.
+An install replaces ccectl at once but the session's compositor only at the
+next login, and a compositor older than the flag reads `--wait <id>` as the
+query and replies `error: window not found`. That broke every unflagged
+`ccectl focus-window` on the live desk (the status bar's Windows menu among
+them) from 2026-10-08 until a relogin. So ccectl retries without the flag on
+that exact reply when it added `--wait` itself (`pre_wait_fallback`); an
+explicit `--wait` or `--no-wait` is sent once, as given.
 
 Not reachable this way, so still live-session work: real DRM/KMS modesetting and
 page-flip timing, suspend/resume, and libinput hardware paths (gestures, accel)

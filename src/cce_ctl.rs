@@ -147,6 +147,45 @@ fn command_line(args: &[String]) -> String {
     args.join(" ") + "\n"
 }
 
+/// The line to retry with when `command_line` added a `--wait` the
+/// compositor may not know. One older than af2797d9 reads `--wait <id>` as
+/// the query, finds nothing and says so; the session's compositor only
+/// changes at login, so a fresh ccectl meets an old one after every install.
+fn pre_wait_fallback(args: &[String]) -> Option<String> {
+    let injected = args.first().map(String::as_str) == Some("focus-window")
+        && !matches!(args.get(1).map(String::as_str), Some("--wait" | "--no-wait"));
+    injected.then(|| args.join(" ") + "\n")
+}
+
+/// Whether `reply` is an older compositor's answer to an injected `--wait`.
+fn is_unknown_wait_reply(reply: &str) -> bool {
+    reply.trim() == "error: window not found"
+}
+
+fn connect_and_send(cmd: &str) -> UnixStream {
+    let mut stream = match UnixStream::connect(get_socket_path()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("connect: {}", e);
+            process::exit(1);
+        }
+    };
+    if let Err(e) = stream.write_all(cmd.as_bytes()) {
+        eprintln!("write: {}", e);
+        process::exit(1);
+    }
+    stream
+}
+
+/// The whole reply, for a command whose answer decides whether to retry.
+fn read_reply(stream: &mut UnixStream) -> String {
+    let mut reply = Vec::new();
+    if let Err(e) = stream.read_to_end(&mut reply) {
+        eprintln!("read: {}", e);
+    }
+    String::from_utf8_lossy(&reply).into_owned()
+}
+
 pub fn run_cce_ctl(args: Vec<String>) {
     if args.len() < 2 {
         usage(&args[0], true);
@@ -165,21 +204,17 @@ pub fn run_cce_ctl(args: Vec<String>) {
     }
  
  
-    // Connect to IPC socket
-    let stream = match UnixStream::connect(get_socket_path()) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("connect: {}", e);
-            process::exit(1);
-        }
-    };
- 
-    let mut stream = stream;
-    // Build command string from args
     let cmd = command_line(&args[1..]);
-    if let Err(e) = stream.write_all(cmd.as_bytes()) {
-        eprintln!("write: {}", e);
-        process::exit(1);
+    let mut stream = connect_and_send(&cmd);
+
+    if let Some(fallback) = pre_wait_fallback(&args[1..]) {
+        let reply = read_reply(&mut stream);
+        if is_unknown_wait_reply(&reply) {
+            print!("{}", read_reply(&mut connect_and_send(&fallback)));
+        } else {
+            print!("{}", reply);
+        }
+        return;
     }
  
     // Read response
@@ -201,7 +236,7 @@ pub fn run_cce_ctl(args: Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::command_line;
+    use super::{command_line, is_unknown_wait_reply, pre_wait_fallback};
 
     fn line(args: &[&str]) -> String {
         command_line(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
@@ -213,5 +248,20 @@ mod tests {
         assert_eq!(line(&["focus-window", "--wait", "12"]), "focus-window --wait 12\n");
         assert_eq!(line(&["focus-window", "--no-wait", "cce-fonts"]), "focus-window cce-fonts\n");
         assert_eq!(line(&["windows", "--json"]), "windows --json\n");
+    }
+
+    fn fallback(args: &[&str]) -> Option<String> {
+        pre_wait_fallback(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn only_an_injected_wait_falls_back_to_the_bare_command() {
+        assert_eq!(fallback(&["focus-window", "12"]), Some("focus-window 12\n".into()));
+        assert_eq!(fallback(&["focus-window", "--wait", "12"]), None);
+        assert_eq!(fallback(&["focus-window", "--no-wait", "12"]), None);
+        assert_eq!(fallback(&["windows"]), None);
+        assert!(is_unknown_wait_reply("error: window not found\n"));
+        assert!(!is_unknown_wait_reply("ok\n"));
+        assert!(!is_unknown_wait_reply("error: window closed before it settled\n"));
     }
 }
