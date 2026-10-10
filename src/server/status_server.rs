@@ -84,18 +84,21 @@ enum Subscription {
 }
 
 impl Subscription {
+    /// The topic names are cce-core's (`ipc::ctl::StatusTopic`), the same
+    /// ones subscribers send; the match is exhaustive, so a topic added
+    /// there does not build here until it is served.
     fn from_str(s: &str) -> Self {
-        let s = s.trim();
-        match s {
-            "layout" => Subscription::Layout,
-            "title" => Subscription::Title,
-            "modifiers" => Subscription::Modifiers,
-            "adjust" => Subscription::Adjust,
-            "dismiss" => Subscription::Dismiss,
-            "shortcuts" => Subscription::Shortcuts,
-            "clickaway" => Subscription::ClickAway,
-            "selection" => Subscription::Selection,
-            _ => Subscription::Unknown,
+        use cce_core::ipc::ctl::StatusTopic as T;
+        match T::parse(s) {
+            Some(T::Layout) => Subscription::Layout,
+            Some(T::Title) => Subscription::Title,
+            Some(T::Modifiers) => Subscription::Modifiers,
+            Some(T::Adjust) => Subscription::Adjust,
+            Some(T::Dismiss) => Subscription::Dismiss,
+            Some(T::Shortcuts) => Subscription::Shortcuts,
+            Some(T::ClickAway) => Subscription::ClickAway,
+            Some(T::Selection) => Subscription::Selection,
+            None => Subscription::Unknown,
         }
     }
 }
@@ -249,11 +252,7 @@ impl Drop for StatusSender {
 }
 
 pub fn get_status_socket_path(display_socket: Option<&str>) -> String {
-    if let Some(display) = display_socket {
-        format!("/tmp/cce-status-interface-{}.sock", display)
-    } else {
-        "/tmp/cce-status-interface.sock".to_string()
-    }
+    cce_core::ipc::ctl::status_socket_for(display_socket)
 }
 
 /// Spawn the status server thread. Returns a StatusSender for the main loop.

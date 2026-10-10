@@ -6021,9 +6021,9 @@ impl WindowManager {
                 // moving on screen (`SettleWaiter`) — ccectl sends it. Apps
                 // forwarding a launch (`cce_core::ipc::focus_window`) do not:
                 // they wait a second at most and need no settling.
-                let wait = parts.get(1) == Some(&"--wait");
-                let query = parts[if wait { 2 } else { 1 }..].join(" ");
-                if query.is_empty() { return "error: missing app_id/id\n".to_string(); }
+                let Some(cce_core::ipc::ctl::Request::FocusWindow { query, wait }) = cce_core::ipc::ctl::Request::parse(cmd) else {
+                    return "error: missing app_id/id\n".to_string();
+                };
                 if let Some(seat) = self.first_seat() {
                     let best_target = self.find_window_by_query(&query);
                     if !best_target.is_null() {
@@ -6599,36 +6599,39 @@ impl WindowManager {
                             sp.gap_width,
                         );
                         if as_json {
-                            out.push_str(&serde_json::json!({
-                                "id": (*w).ref_key.index,
-                                "app_id": app_id,
-                                "title": title,
-                                "mode": (*w).tiling_mode.as_str(),
-                                "x": (*w).box_geom.x,
-                                "y": (*w).box_geom.y,
-                                "w": (*w).box_geom.width,
-                                "h": (*w).box_geom.height,
-                                "vx": (*w).virtual_x,
-                                "vy": (*w).virtual_y,
-                                "x11": match (*w).impl_type {
+                            // The line is cce-core's `ctl::WindowInfo`, which
+                            // the status bar, its OSD and cce-remote parse.
+                            let info = cce_core::ipc::ctl::WindowInfo {
+                                id: (*w).ref_key.index as u64,
+                                app_id: app_id.clone(),
+                                title: title.clone(),
+                                mode: (*w).tiling_mode.as_str().to_string(),
+                                x: (*w).box_geom.x,
+                                y: (*w).box_geom.y,
+                                w: (*w).box_geom.width,
+                                h: (*w).box_geom.height,
+                                vx: (*w).virtual_x,
+                                vy: (*w).virtual_y,
+                                x11: match (*w).impl_type {
                                     crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => Some((*(*xw).xsurface).window_id),
                                     _ => None,
                                 },
-                                "cell": cell,
-                                "minimized": (*w).minimized,
-                                "has_parent": (*w).has_parent,
-                                "focused": w == focused_window,
-                                "stack": stack,
-                                "ssd": (*w).wm_requested.ssd,
+                                cell: cell.clone(),
+                                minimized: (*w).minimized,
+                                has_parent: (*w).has_parent,
+                                focused: w == focused_window,
+                                stack,
+                                ssd: (*w).wm_requested.ssd,
                                 // Why a window has (or lacks) rounded corners,
                                 // blur and shadow. Without it the only way to
                                 // tell is a full-output screenshot: a
                                 // per-window capture reads the client's
                                 // dmabuf, which is pre-composite and never
                                 // shows the compositor's clip.
-                                "decorated": self.is_decorated_app(&app_id),
-                                "beveled": self.is_beveled_app(&app_id),
-                            }).to_string());
+                                decorated: self.is_decorated_app(&app_id),
+                                beveled: self.is_beveled_app(&app_id),
+                            };
+                            out.push_str(&info.to_json_line());
                             out.push('\n');
                         } else {
                             out.push_str(&format!(
@@ -7012,16 +7015,13 @@ impl WindowManager {
                 // position (top-left, clamped on-screen) instead of its
                 // remembered spot. Widgets send it with the pointer location
                 // just before spawning a picker so it opens at the control.
-                if parts.len() < 4 {
-                    return "error: usage: place-next <app_id> <x> <y>\n".to_string();
-                }
-                let (x, y) = match (parse_finite(parts[2]), parse_finite(parts[3])) {
-                    (Ok(x), Ok(y)) => (x, y),
-                    _ => return "error: x/y must be numbers\n".to_string(),
+                // The grammar is cce-core's (`ctl::Request::PlaceNext`),
+                // shared with the widgets that send it; `cell` is false here.
+                let Some(cce_core::ipc::ctl::Request::PlaceNext { app_id, x, y, cell }) = cce_core::ipc::ctl::Request::parse(cmd) else {
+                    return "error: usage: place-next <app_id> <x> <y> (x/y finite numbers)\n".to_string();
                 };
-                let app_id = parts[1].to_string();
                 self.pending_placements.retain(|(id, _, _, _, _)| id != &app_id);
-                self.pending_placements.push((app_id, x, y, false, std::time::Instant::now()));
+                self.pending_placements.push((app_id, x, y, cell, std::time::Instant::now()));
                 "ok\n".to_string()
             }
             "place-next-cell" => {
@@ -7032,16 +7032,11 @@ impl WindowManager {
                 // What the desktop menu and the launcher send: you asked for
                 // the window somewhere, so it opens there rather than wherever
                 // it happened to be last time.
-                if parts.len() < 4 {
-                    return "error: usage: place-next-cell <app_id> <x> <y>\n".to_string();
-                }
-                let (x, y) = match (parse_finite(parts[2]), parse_finite(parts[3])) {
-                    (Ok(x), Ok(y)) => (x, y),
-                    _ => return "error: x/y must be numbers\n".to_string(),
+                let Some(cce_core::ipc::ctl::Request::PlaceNext { app_id, x, y, cell }) = cce_core::ipc::ctl::Request::parse(cmd) else {
+                    return "error: usage: place-next-cell <app_id> <x> <y> (x/y finite numbers)\n".to_string();
                 };
-                let app_id = parts[1].to_string();
                 self.pending_placements.retain(|(id, _, _, _, _)| id != &app_id);
-                self.pending_placements.push((app_id, x, y, true, std::time::Instant::now()));
+                self.pending_placements.push((app_id, x, y, cell, std::time::Instant::now()));
                 "ok\n".to_string()
             }
             "pointer-location" => {
@@ -7690,10 +7685,7 @@ fn run_window_switcher(
         None => return,
     };
 
-    let sock = match display_env {
-        Some(d) => format!("/tmp/cce-{}.sock", d),
-        None => "/tmp/cce.sock".to_string(),
-    };
+    let sock = cce_core::ipc::ctl::control_socket_for(display_env.as_deref());
     if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&sock) {
         let _ = stream.write_all(format!("focus-window {}\n", id).as_bytes());
         let _ = stream.flush();

@@ -55,10 +55,7 @@ pub struct StreamHub {
 }
 
 pub fn get_stream_socket_path(display_socket: Option<&str>) -> String {
-    match display_socket {
-        Some(display) => format!("/tmp/cce-stream-{}.sock", display),
-        None => "/tmp/cce-stream.sock".to_string(),
-    }
+    cce_core::ipc::ctl::stream_socket_for(display_socket)
 }
 
 /// Spawn the accept thread; returns the hub for the main loop's timer.

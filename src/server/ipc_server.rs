@@ -68,11 +68,7 @@ pub fn new_wake_fd() -> std::io::Result<Arc<OwnedFd>> {
 }
 
 pub fn get_ipc_socket_path(display_socket: Option<&str>) -> String {
-    if let Some(display) = display_socket {
-        format!("/tmp/cce-{}.sock", display)
-    } else {
-        "/tmp/cce.sock".to_string()
-    }
+    cce_core::ipc::ctl::control_socket_for(display_socket)
 }
 
 /// Spawn the IPC listener thread. Returns the request receiver and the

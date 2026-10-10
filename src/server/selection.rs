@@ -61,37 +61,14 @@ const SELECTED_FILL: f32 = 0.12;
 const MARQUEE_RADIUS: f64 = 6.0;
 
 /// One of the grid's desktop images, as it last reported it: a
-/// per-process id the grid assigns, and its rect in virtual units.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DesktopItem {
-    pub id: u64,
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-}
-
-impl DesktopItem {
-    pub fn rect(&self) -> (f64, f64, f64, f64) {
-        (self.x, self.y, self.w, self.h)
-    }
-}
+/// per-process id the grid assigns, and its rect in virtual units. The type
+/// and its token format are cce-core's, shared with the grid that sends it.
+pub use cce_core::ipc::ctl::DesktopItem;
 
 /// Parse the grid's report: whitespace-separated `id:x:y:w:h` tokens, any
 /// malformed one skipped. An empty report is an empty desk.
 pub fn parse_desktop_items(tokens: &[&str]) -> Vec<DesktopItem> {
-    tokens
-        .iter()
-        .filter_map(|tok| {
-            let mut f = tok.split(':');
-            let id = f.next()?.parse::<u64>().ok()?;
-            let x = f.next()?.parse::<f64>().ok()?;
-            let y = f.next()?.parse::<f64>().ok()?;
-            let w = f.next()?.parse::<f64>().ok()?;
-            let h = f.next()?.parse::<f64>().ok()?;
-            Some(DesktopItem { id, x, y, w, h })
-        })
-        .collect()
+    tokens.iter().filter_map(|tok| DesktopItem::parse(tok)).collect()
 }
 
 /// The topmost item under a virtual point. The grid draws its list in

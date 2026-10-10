@@ -62,13 +62,10 @@ impl Default for IdleConfig {
 /// measured in minutes.
 const REARM_MIN_MS: u64 = 1000;
 
-/// The Power plan's per-mode timeouts, written by `cce-power-apply`
-/// (`cce_settings::power_plan::IDLE_DISPLAY_OFF_PATH` / `IDLE_SLEEP_PATH`;
-/// the paths are repeated here because that crate is an app, not a
-/// dependency). Seconds, 0 = never; absent = use the config.
-pub const PLAN_DIR: &str = "/run/cce";
-pub const PLAN_DISPLAY_OFF_FILE: &str = "idle_display_off";
-pub const PLAN_SLEEP_FILE: &str = "idle_sleep";
+/// The Power plan's per-mode timeouts, written by `cce-power-apply`;
+/// cce-core's `plan` spells the paths for both sides. Seconds, 0 = never;
+/// absent = use the config.
+pub use cce_core::plan::{DIR as PLAN_DIR, IDLE_DISPLAY_OFF_FILE as PLAN_DISPLAY_OFF_FILE, IDLE_SLEEP_FILE as PLAN_SLEEP_FILE};
 
 /// Where one plan file lives. `CCE_IDLE_PLAN_DIR` moves the directory for
 /// one process, for testing: /run/cce is root's, and a shadow session must
@@ -850,6 +847,22 @@ unsafe extern "C" fn handle_session_active(listener: *mut ffi::wl_listener, _dat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_portal_lease_line_cce_core_builds_parses_here() {
+        use cce_core::ipc::ctl::{IdleRequest, Request};
+        let line = Request::Idle(IdleRequest::Inhibit {
+            token: "tok-1".into(),
+            ttl_s: 60,
+            who: "org.example.Player playing video".into(),
+        })
+        .to_string();
+        let words: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(&words[..2], ["idle", "inhibit"]);
+        let lease = parse_lease(&words[2..], 1_000).expect("the compositor accepts the line clients send");
+        assert_eq!((lease.token.as_str(), lease.who.as_str()), ("tok-1", "org.example.Player playing video"));
+        assert_eq!(lease.expires_ms, 61_000);
+    }
 
     #[test]
     fn a_plan_file_is_seconds_and_nothing_else() {

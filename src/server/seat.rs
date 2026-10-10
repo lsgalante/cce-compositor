@@ -1830,7 +1830,7 @@ impl Seat {
             });
             if moved {
                 if let Some(ref sender) = (*self.server).wm.status_sender {
-                    sender.send_selection_line("drop");
+                    sender.send_selection_line(&cce_core::ipc::ctl::SelectionEvent::Drop.to_string());
                 }
             }
             match op.input {
@@ -1891,7 +1891,7 @@ unsafe fn carry_group_items(server: *mut crate::server::Server, items: &[(u64, f
         return;
     }
     let wm = &mut (*server).wm;
-    let mut line = String::from("move");
+    let mut moves = Vec::with_capacity(items.len());
     let mut changed = false;
     for &(id, start_x, start_y) in items.iter() {
         let Some(item) = wm.desktop_item_mut(id) else { continue };
@@ -1901,13 +1901,13 @@ unsafe fn carry_group_items(server: *mut crate::server::Server, items: &[(u64, f
         }
         item.x = nx;
         item.y = ny;
-        line.push_str(&format!(" {}:{:.2}:{:.2}", id, nx, ny));
+        moves.push((id, nx, ny));
     }
     if !changed {
         return;
     }
     if let Some(ref sender) = wm.status_sender {
-        sender.send_selection_line(&line);
+        sender.send_selection_line(&cce_core::ipc::ctl::SelectionEvent::Move(moves).to_string());
     }
     wm.schedule_frame_all_outputs();
 }

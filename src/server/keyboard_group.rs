@@ -537,13 +537,15 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             // same variant the press recorded.
             let pressed = (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED;
             if let Some(ref sender) = (*(*group.seat).server).wm.status_sender {
-                sender.send_shortcut_event(&format!(
-                    "{} {} {} {}",
-                    if pressed { "activated" } else { "deactivated" },
-                    session,
-                    id,
-                    (*event).time_msec
-                ));
+                sender.send_shortcut_event(
+                    &cce_core::ipc::ctl::ShortcutEvent {
+                        activated: pressed,
+                        session: session.to_string(),
+                        id: id.to_string(),
+                        time_msec: (*event).time_msec,
+                    }
+                    .to_string(),
+                );
             }
         }
         KeyConsumer::Binding(binding) => {

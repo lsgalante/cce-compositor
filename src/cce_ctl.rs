@@ -1,23 +1,11 @@
 // cce-ctl — IPC client for cce
  
-use std::env;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::process;
  
 fn get_socket_path() -> String {
-    match env::var("WAYLAND_DISPLAY") {
-        Ok(display) => format!("/tmp/cce-{}.sock", display),
-        Err(_) => "/tmp/cce.sock".to_string(),
-    }
-}
- 
-#[allow(dead_code)]
-fn get_windows_path() -> String {
-    match env::var("WAYLAND_DISPLAY") {
-        Ok(display) => format!("/tmp/cce-windows-{}", display),
-        Err(_) => "/tmp/cce-windows".to_string(),
-    }
+    cce_core::ipc::ctl::control_socket()
 }
  
 fn usage(name: &str, to_stderr: bool) {
