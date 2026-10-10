@@ -1697,47 +1697,7 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
 mod tests {
     use super::*;
 
-    const ALL: [bool; 4] = [true; 4];
-    const EPS: f64 = 1e-9;
-
-    #[test]
-    fn straight_swipe_leans_on_its_axis() {
-        // Halfway to the threshold: half the peek, and no drift below 15°.
-        assert_eq!(swipe_lean(35.0, 5.0, ALL, 70.0, 120.0, 1.0), [60.0, 0.0]);
-        assert_eq!(swipe_lean(-4.0, -35.0, ALL, 70.0, 120.0, 1.0), [0.0, -60.0]);
-    }
-
-    #[test]
-    fn diagonal_swipe_leans_diagonally() {
-        let [x, y] = swipe_lean(35.0, -35.0, ALL, 70.0, 120.0, 1.0);
-        assert!((x - 60.0).abs() < EPS && (y + 60.0).abs() < EPS, "{x} {y}");
-    }
-
-    #[test]
-    fn lean_turns_smoothly_off_the_axis() {
-        // Just past the straight band a little; halfway through it, half.
-        let slope_mid = (SWIPE_LEAN_STRAIGHT_SLOPE + 1.0) / 2.0;
-        let [x, y] = swipe_lean(70.0, 70.0 * slope_mid, ALL, 70.0, 120.0, 1.0);
-        assert!((x - 120.0).abs() < EPS && (y - 60.0).abs() < 1e-6, "{x} {y}");
-        let [_, y] = swipe_lean(70.0, 70.0 * (SWIPE_LEAN_STRAIGHT_SLOPE + 0.01), ALL, 70.0, 120.0, 1.0);
-        assert!(y > 0.0 && y < 3.0, "{y}");
-    }
-
-    #[test]
-    fn lean_respects_bound_directions() {
-        // No up bind: a right-and-up swipe leans only right.
-        assert_eq!(swipe_lean(35.0, -35.0, [true, true, false, true], 70.0, 120.0, 1.0), [60.0, 0.0]);
-        // Nothing bound right: no lean at all, not even the minor part.
-        assert_eq!(swipe_lean(35.0, -30.0, [true, false, true, true], 70.0, 120.0, 1.0), [0.0, 0.0]);
-    }
-
-    #[test]
-    fn lean_is_clamped_and_zoom_scaled() {
-        // Past the threshold the size stops growing; zoomed out, the same
-        // screen distance is a longer virtual one.
-        let [x, y] = swipe_lean(140.0, 140.0, ALL, 70.0, 120.0, 0.5);
-        assert!((x - 240.0).abs() < EPS && (y - 240.0).abs() < EPS, "{x} {y}");
-    }
+    // The swipe-lean tests live with the arithmetic, in cce_window_manager::gesture.
 
     fn bind(direction: &str, action: crate::config::Action) -> crate::config::GestureBind {
         crate::config::GestureBind {

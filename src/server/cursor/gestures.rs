@@ -3,54 +3,19 @@
 
 use super::*;
 
-/// Does firing `action` carry the view in the swipe's direction? Only
-/// such binds peek the camera beforehand: an overview toggle or a spawn
-/// on a swipe has no direction the desktop could lean toward.
-pub(crate) fn action_navigates(action: crate::config::Action) -> bool {
-    use crate::config::Action::*;
-    matches!(action, FocusLeft | FocusRight | FocusUp | FocusDown | PanLeft | PanRight | PanUp | PanDown)
-}
+// The gesture arithmetic and what an action means for navigation are the
+// policy crate's (`cce_window_manager::gesture`); re-exported under the names
+// the handlers here use.
+pub(crate) use crate::policy::gesture::{action_navigates, is_directional_focus, swipe_lean};
 
-/// The peek the accumulated travel `d` along one axis calls for, in
-/// virtual units: proportional and clamped at `threshold`, `peek_px` on
-/// screen there, and only toward a direction that has a navigating bind
-/// (`neg` / `pos`) — a swipe with nothing bound its way leaves the
-/// desktop still.
-pub(crate) fn swipe_peek_for(d: f64, neg: bool, pos: bool, threshold: f64, peek_px: f64, zoom: f64) -> f64 {
-    if (d < 0.0 && neg) || (d > 0.0 && pos) {
-        (d / threshold).clamp(-1.0, 1.0) * peek_px / zoom.max(1e-6)
-    } else {
-        0.0
-    }
-}
-
-pub(crate) fn is_directional_focus(action: crate::config::Action) -> bool {
-    use crate::config::Action;
-    matches!(action, Action::FocusLeft | Action::FocusRight | Action::FocusUp | Action::FocusDown)
-}
-
-/// The sense a swipe along `finger_dir` ("left", "right", "up", "down")
-/// gives its axis when aiming focus: +1 when its bind focuses the way the
-/// fingers moved, -1 when it focuses the opposite way, `None` when the
-/// first bind that way is not a focus on that axis (so the axis does not
-/// aim). First match wins, as in the fire itself.
+/// The sense a swipe along `finger_dir` gives its axis when aiming focus,
+/// from the first bind that matches it (first match wins, as in the fire
+/// itself): `gesture::focus_sense` of that bind's action.
 pub(crate) fn focus_axis_sense(binds: &[crate::config::GestureBind], fingers: u32, mods: u32, finger_dir: &str) -> Option<f64> {
-    use crate::config::Action;
     let gb = binds
         .iter()
         .find(|gb| gb.gesture_type == "swipe" && gb.fingers == fingers && gb.mods == mods && gb.direction == finger_dir)?;
-    let focus_dir = match gb.action {
-        Action::FocusLeft => "left",
-        Action::FocusRight => "right",
-        Action::FocusUp => "up",
-        Action::FocusDown => "down",
-        _ => return None,
-    };
-    let axis = |d: &str| if d == "left" || d == "right" { 0 } else { 1 };
-    if axis(focus_dir) != axis(finger_dir) {
-        return None;
-    }
-    Some(if focus_dir == finger_dir { 1.0 } else { -1.0 })
+    crate::policy::gesture::focus_sense(gb.action, finger_dir)
 }
 
 /// The direction a focus swipe aims in, from this step's `travel`: each
@@ -63,42 +28,6 @@ pub(crate) fn swipe_focus_vector(binds: &[crate::config::GestureBind], fingers: 
     let sy = if dy != 0.0 { focus_axis_sense(binds, fingers, mods, if dy < 0.0 { "up" } else { "down" }) } else { None };
     let v = (sx.map_or(0.0, |s| s * dx), sy.map_or(0.0, |s| s * dy));
     (v != (0.0, 0.0)).then_some(v)
-}
-
-/// Slope (minor over major travel) below which a swipe counts as straight:
-/// tan 15°. Within it the lean stays on the dominant axis, since a hand
-/// swiping left drifts a little up or down, and leaning with that drift
-/// is a wobble, not a direction.
-pub(crate) const SWIPE_LEAN_STRAIGHT_SLOPE: f64 = 0.268;
-
-/// The lean `[x, y]` (virtual units) the swipe's travel so far calls for.
-/// Its size is set by the dominant axis (`swipe_peek_for`: proportional,
-/// `peek_px` on screen at `threshold`), and its direction follows the
-/// fingers: the minor axis leans in proportion to the swipe's slope, so a
-/// 45° swipe leans 45°. The slope is measured past the straight band and
-/// rescaled, `SWIPE_LEAN_STRAIGHT_SLOPE` mapping to 0 and a diagonal to 1,
-/// so the lean turns smoothly off the axis rather than jumping at 15°.
-/// Each axis only leans toward a direction with a navigating bind
-/// (`navigates`: left, right, up, down), and nothing leans at all when the
-/// dominant direction has none.
-pub(crate) fn swipe_lean(dx: f64, dy: f64, navigates: [bool; 4], threshold: f64, peek_px: f64, zoom: f64) -> [f64; 2] {
-    let horizontal = dx.abs() >= dy.abs();
-    let (major, minor) = if horizontal { (dx, dy) } else { (dy, dx) };
-    let (major_nav, minor_nav) = if horizontal {
-        ((navigates[0], navigates[1]), (navigates[2], navigates[3]))
-    } else {
-        ((navigates[2], navigates[3]), (navigates[0], navigates[1]))
-    };
-    let lean_major = swipe_peek_for(major, major_nav.0, major_nav.1, threshold, peek_px, zoom);
-    let minor_allowed = (minor < 0.0 && minor_nav.0) || (minor > 0.0 && minor_nav.1);
-    let lean_minor = if lean_major != 0.0 && minor_allowed {
-        let slope = minor.abs() / major.abs();
-        let turn = ((slope - SWIPE_LEAN_STRAIGHT_SLOPE) / (1.0 - SWIPE_LEAN_STRAIGHT_SLOPE)).clamp(0.0, 1.0);
-        lean_major.abs() * turn * minor.signum()
-    } else {
-        0.0
-    };
-    if horizontal { [lean_major, lean_minor] } else { [lean_minor, lean_major] }
 }
 
 pub(crate) unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
