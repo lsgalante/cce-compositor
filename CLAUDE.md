@@ -427,8 +427,13 @@ treats them as opaque.
   now `poll()`s its sockets plus a wake eventfd. Nothing in the compositor should
   tick while idle: a timer that re-arms itself unconditionally is a bug.) Decision logic (camera math, action
   dispatch, snapping, refocus, grid geometry) lives in `cce-window-manager`.
-- **`window.rs`** (~6.4k lines) — per-window model and rendering (borders, blur,
-  viewport transforms).
+- **`window.rs`** (~3.4k lines) — per-window model: creation, map/unmap, the
+  manage/render passes, viewport transforms. Child modules in `window/`:
+  `placement.rs` (where a new window maps: saved spot, siblings, hints, the
+  invocation cell, view centring), `effects.rs` (shadow, bevel, droplet, fades,
+  the fullscreen animation, border extents), `borders.rs` (`draw_borders`, the
+  surface clip), `protocol.rs` (the `zcce_window_v1` handlers) and `decoration.rs`
+  (`Decoration`, `zcce_decoration_v1`).
 - **`crate::tiling`** (from `cce-window-manager`) — `TilingMode` enum: `Floating`,
   `Tiled` (grid-aligned; the window reports xdg maximized), `Fullscreen`,
   `Popup`, `Overlay`, `Status`, `Utility`. A Wine window answers "maximized"
