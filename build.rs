@@ -10,9 +10,6 @@ fn main() {
     println!("cargo:rerun-if-changed=scenefx/types");
     println!("cargo:rerun-if-changed=scenefx/render");
     println!("cargo:rerun-if-changed=scenefx/include");
-    println!("cargo:rerun-if-changed=protocol/river-xkb-bindings-v1.xml");
-    println!("cargo:rerun-if-changed=protocol/river-layer-shell-v1.xml");
-    println!("cargo:rerun-if-changed=protocol/river-input-management-v1.xml");
 
     // Build local scenefx
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -96,6 +93,7 @@ fn main() {
     ];
 
     for (name, path) in upstream_protocols {
+        println!("cargo:rerun-if-changed={}", path);
         let temp_xml = out_dir.join(format!("{}-temp.xml", name));
         clean_xml(path, &temp_xml);
         let header_name = name.replace(".xml", "-protocol.h");
@@ -124,6 +122,10 @@ fn main() {
     let mut generated_c_files = Vec::new();
 
     for (name, path) in custom_protocols {
+        // Every XML that is generated from is also a rerun trigger, from the
+        // same list: the triggers used to be a hand-kept subset (3 of 7), so
+        // an edit to cce-window-management-v1.xml left stale bindings.
+        println!("cargo:rerun-if-changed={}", path);
         let temp_xml = out_dir.join(format!("{}-temp.xml", name));
         clean_xml(path, &temp_xml);
 

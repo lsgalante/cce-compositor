@@ -838,7 +838,7 @@
         This event will be followed by a render_start event after all other new
         state has been sent by the server.
       </description>
-      <arg name="hint" type="uint" enum="river_output_v1.presentation_mode" summary="presentation hint"/>
+      <arg name="hint" type="uint" summary="presentation hint"/>
     </event>
     <event name="identifier" since="4">
       <description summary="unique window identifier">
