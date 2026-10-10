@@ -52,6 +52,22 @@ pub struct OutputManager {
 }
 
 impl OutputManager {
+    /// The layout box `(x, y, w, h)` of every enabled output, as last sent.
+    pub unsafe fn enabled_output_boxes(&self) -> Vec<(f64, f64, f64, f64)> {
+        let mut boxes = Vec::new();
+        let head = &self.outputs as *const ffi::wl_list as *mut WlList;
+        let mut curr = (*head).next;
+        while curr != head {
+            let output = crate::container_of!(curr, Output, link);
+            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                let b = (*output).sent.box_layout();
+                boxes.push((b.x as f64, b.y as f64, b.width as f64, b.height as f64));
+            }
+            curr = (*curr).next;
+        }
+        boxes
+    }
+
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.first_modeset = true;
         

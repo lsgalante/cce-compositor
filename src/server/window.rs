@@ -82,6 +82,12 @@ pub struct Edges {
     pub right: bool,
 }
 
+impl From<Edges> for crate::policy::drag::Edges {
+    fn from(e: Edges) -> Self {
+        Self { top: e.top, bottom: e.bottom, left: e.left, right: e.right }
+    }
+}
+
 impl Edges {
     pub fn new() -> Self {
         Self { top: false, bottom: false, left: false, right: false }

@@ -1292,6 +1292,36 @@ impl WindowManager {
         crate::tiling::TilingMode::Floating
     }
 
+    /// How far a pointer op has carried, in virtual units
+    /// (`policy::drag::virtual_delta`): its travel over the zoom, plus the
+    /// camera's pan since the grab.
+    pub(crate) fn op_virtual_delta(&self, op: &crate::seat::SeatOp) -> (f64, f64) {
+        crate::policy::drag::virtual_delta(
+            op.x - op.start_x,
+            op.y - op.start_y,
+            self.desk_zoom,
+            (self.desk_pan_x, self.desk_pan_y),
+            (op.start_pan_x, op.start_pan_y),
+        )
+    }
+
+    /// The size a resize op gives its window (`policy::drag::resize_to`),
+    /// before the client's min/max hint is applied. The seat op's Resize arm
+    /// and `get_active_resize_dimensions` both ask this, so the arrange
+    /// snapshot cannot disagree with the drag.
+    pub(crate) fn op_resize_size(&self, op: &crate::seat::SeatOp, edges: crate::window::Edges) -> (u32, u32) {
+        // Zoom-aware: the felt grab distance stays constant in screen px.
+        let sp = self.layout.snap_params().for_zoom(self.desk_zoom);
+        crate::policy::drag::resize_to(
+            (op.start_win_virtual_x, op.start_win_virtual_y),
+            (op.start_win_w, op.start_win_h),
+            self.op_virtual_delta(op),
+            edges.into(),
+            op.start_was_tiled,
+            &sp,
+        )
+    }
+
     pub unsafe fn get_active_resize_dimensions(&self, win_ptr: *mut Window) -> Option<(u32, u32)> {
         let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
         let mut curr_seat = (*seats_list).next;
@@ -1300,40 +1330,7 @@ impl WindowManager {
             if let Some(ref op) = (*seat).op {
                 if op.window_ptr == win_ptr {
                     if let crate::seat::PointerOpType::Resize { edges } = op.op_type {
-                        let scale = self.desk_zoom;
-                        let dx = op.x - op.start_x;
-                        let dy = op.y - op.start_y;
-                        let virtual_dx = dx as f64 / scale + (self.desk_pan_x - op.start_pan_x);
-                        let virtual_dy = dy as f64 / scale + (self.desk_pan_y - op.start_pan_y);
-                        // Same math (and snapping) as the seat op's Resize
-                        // arm — this recomputation feeds the arrange
-                        // snapshot and must not diverge from it: hard
-                        // whole-cell snap for a window grabbed Tiled,
-                        // magnetic pull for a Floating one.
-                        let sp = self.layout.snap_params().for_zoom(self.desk_zoom);
-                        let (new_w, new_h) = if op.start_was_tiled {
-                            (
-                                crate::policy::snap::resize_axis_tiled(
-                                    op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
-                                    edges.left, edges.right, &sp.x(),
-                                ) as u32,
-                                crate::policy::snap::resize_axis_tiled(
-                                    op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
-                                    edges.top, edges.bottom, &sp.y(),
-                                ) as u32,
-                            )
-                        } else {
-                            (
-                                crate::policy::snap::resize_axis(
-                                    op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
-                                    edges.left, edges.right, 50.0, &sp.x(),
-                                ) as u32,
-                                crate::policy::snap::resize_axis(
-                                    op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
-                                    edges.top, edges.bottom, 50.0, &sp.y(),
-                                ) as u32,
-                            )
-                        };
+                        let (new_w, new_h) = self.op_resize_size(op, edges);
                         // Same clamp as the seat op (see its Resize arm).
                         return Some((*win_ptr).wm_scheduled.dimensions_hint.clamp(new_w, new_h));
                     }

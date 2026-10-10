@@ -1036,21 +1036,13 @@ impl Seat {
                 // group's, snapped to whole cells when a Tiled window is
                 // along (measured on that window, so it lands on cells).
                 let op = *op;
-                let scale = (*self.server).wm.desk_zoom;
-                let pan_x = (*self.server).wm.desk_pan_x;
-                let pan_y = (*self.server).wm.desk_pan_y;
-                let virtual_dx = dx as f64 / scale + (pan_x - op.start_pan_x);
-                let virtual_dy = dy as f64 / scale + (pan_y - op.start_pan_y);
-                let (gdx, gdy) = if op.start_was_tiled {
-                    let (sx, sy) = crate::policy::snap::snap_move_tiled(
-                        op.start_win_virtual_x + virtual_dx,
-                        op.start_win_virtual_y + virtual_dy,
-                        &sp,
-                    );
-                    (sx - op.start_win_virtual_x, sy - op.start_win_virtual_y)
-                } else {
-                    (virtual_dx, virtual_dy)
-                };
+                let delta = (*self.server).wm.op_virtual_delta(&op);
+                let (gdx, gdy) = crate::policy::drag::group_offset(
+                    (op.start_win_virtual_x, op.start_win_virtual_y),
+                    delta,
+                    op.start_was_tiled,
+                    &sp,
+                );
                 (*self.server).wm.arm_border_fade();
                 carry_group_windows(self.server, &self.group_move, std::ptr::null_mut(), gdx, gdy);
                 carry_group_items(self.server, &self.group_items, gdx, gdy);
@@ -1080,7 +1072,6 @@ impl Seat {
                 
                 match op.op_type {
                     PointerOpType::Move => {
-                        #[allow(unused_assignments)]
                         if (*win).is_status_bar() {
                             let final_x = op.start_win_x + dx;
                             let final_y = op.start_win_y + dy;
@@ -1089,140 +1080,15 @@ impl Seat {
                             (*win).box_geom.x = final_x;
                             (*win).box_geom.y = final_y;
 
-                            // Dynamically update orientation during drag
-                            let lx = x as f64;
-                            let ly = y as f64;
-                            let mut closest_edge = crate::window::StatusEdge::TopLeft;
-                            let mut min_dist = f64::MAX;
-
-                            let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                            let mut curr_out = (*outputs_list).next;
-                            let mut best_output: *mut crate::output::Output = std::ptr::null_mut();
-                            let mut min_output_dist = f64::MAX;
-                            
-                            while curr_out != outputs_list {
-                                let output = crate::container_of!(curr_out, crate::output::Output, link);
-                                if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                                    let wlr_box = (*output).sent.box_layout();
-                                    let ox = wlr_box.x as f64;
-                                    let oy = wlr_box.y as f64;
-                                    let ow = wlr_box.width as f64;
-                                    let oh = wlr_box.height as f64;
-                                    
-                                    let clamp = |val: f64, min: f64, max: f64| {
-                                        if val < min { min } else if val > max { max } else { val }
-                                    };
-                                    let cx = clamp(lx, ox, ox + ow);
-                                    let cy = clamp(ly, oy, oy + oh);
-                                    let dx = lx - cx;
-                                    let dy = ly - cy;
-                                    let dist = dx * dx + dy * dy;
-                                    if dist < min_output_dist {
-                                        min_output_dist = dist;
-                                        best_output = output;
-                                    }
-                                }
-                                curr_out = (*curr_out).next;
-                            }
-
-                            let mut found_out = false;
-                            if !best_output.is_null() {
-                                found_out = true;
-                                let wlr_box = (*best_output).sent.box_layout();
-                                let ox = wlr_box.x as f64;
-                                let oy = wlr_box.y as f64;
-                                let ow = wlr_box.width as f64;
-                                let oh = wlr_box.height as f64;
-
-                                let dt = ly - oy;
-                                let db = (oy + oh) - ly;
-                                let dl = lx - ox;
-                                let dr = (ox + ow) - lx;
-
-                                enum EdgeBasic { Top, Bottom, Left, Right }
-                                let mut edge = EdgeBasic::Top;
-                                if dt < min_dist { min_dist = dt; edge = EdgeBasic::Top; }
-                                if db < min_dist { min_dist = db; edge = EdgeBasic::Bottom; }
-                                if dl < min_dist { min_dist = dl; edge = EdgeBasic::Left; }
-                                if dr < min_dist { min_dist = dr; edge = EdgeBasic::Right; }
-
-                                let corner_threshold = 120.0;
-                                let is_near_top = ly < oy + corner_threshold;
-                                let is_near_bottom = ly > oy + oh - corner_threshold;
-                                let is_near_left = lx < ox + corner_threshold;
-                                let is_near_right = lx > ox + ow - corner_threshold;
-
-                                let semicircle_centers = [
-                                    (crate::window::StatusEdge::TopLeft, ox + 60.0, oy + 0.0),
-                                    (crate::window::StatusEdge::TopCenter, ox + ow / 2.0, oy + 0.0),
-                                    (crate::window::StatusEdge::TopRight, ox + ow - 60.0, oy + 0.0),
-                                    (crate::window::StatusEdge::BottomLeft, ox + 60.0, oy + oh),
-                                    (crate::window::StatusEdge::BottomCenter, ox + ow / 2.0, oy + oh),
-                                    (crate::window::StatusEdge::BottomRight, ox + ow - 60.0, oy + oh),
-                                    (crate::window::StatusEdge::Left, ox + 0.0, oy + oh / 2.0),
-                                    (crate::window::StatusEdge::Right, ox + ow, oy + oh / 2.0),
-                                ];
-
-                                let mut snapped_to_semicircle = false;
-                                for (edge_type, cx, cy) in semicircle_centers {
-                                    let dx = lx - cx;
-                                    let dy = ly - cy;
-                                    if dx * dx + dy * dy <= 60.0 * 60.0 {
-                                        closest_edge = edge_type;
-                                        snapped_to_semicircle = true;
-                                        break;
-                                    }
-                                }
-
-                                if !snapped_to_semicircle {
-                                    match edge {
-                                        EdgeBasic::Top => {
-                                            if is_near_left {
-                                                closest_edge = crate::window::StatusEdge::TopLeft;
-                                            } else if is_near_right {
-                                                closest_edge = crate::window::StatusEdge::TopRight;
-                                            } else {
-                                                closest_edge = crate::window::StatusEdge::TopCenter;
-                                            }
-                                        }
-                                        EdgeBasic::Bottom => {
-                                            if is_near_left {
-                                                closest_edge = crate::window::StatusEdge::BottomLeft;
-                                            } else if is_near_right {
-                                                closest_edge = crate::window::StatusEdge::BottomRight;
-                                            } else {
-                                                closest_edge = crate::window::StatusEdge::BottomCenter;
-                                            }
-                                        }
-                                        EdgeBasic::Left => {
-                                            if is_near_top {
-                                                closest_edge = crate::window::StatusEdge::TopLeft;
-                                            } else if is_near_bottom {
-                                                closest_edge = crate::window::StatusEdge::BottomLeft;
-                                            } else {
-                                                closest_edge = crate::window::StatusEdge::Left;
-                                            }
-                                        }
-                                        EdgeBasic::Right => {
-                                            if is_near_top {
-                                                closest_edge = crate::window::StatusEdge::TopRight;
-                                            } else if is_near_bottom {
-                                                closest_edge = crate::window::StatusEdge::BottomRight;
-                                            } else {
-                                                closest_edge = crate::window::StatusEdge::Right;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if found_out {
+                            // Re-dock the bar to the edge the pointer is at as
+                            // it goes, standing it up along a side.
+                            let outputs: Vec<(f64, f64, f64, f64)> = (*self.server)
+                                .om
+                                .enabled_output_boxes();
+                            if let Some(edge) = crate::policy::drag::status_edge_at((x as f64, y as f64), &outputs) {
                                 let bar_h = (*self.server).wm.layout.bar_height as u32;
                                 let original_length = std::cmp::max((*win).box_geom.width, (*win).box_geom.height) as u32;
-                                let (target_w, target_h) = match closest_edge {
-                                    crate::window::StatusEdge::Left | crate::window::StatusEdge::Right => (bar_h, original_length),
-                                    _ => (original_length, bar_h),
-                                };
+                                let (target_w, target_h) = crate::policy::drag::status_bar_size(edge, bar_h, original_length);
 
                                 if (*win).box_geom.width as u32 != target_w || (*win).box_geom.height as u32 != target_h {
                                     (*win).wm_requested.dimensions = Some(crate::window::Dimensions { width: target_w, height: target_h });
@@ -1231,36 +1097,17 @@ impl Seat {
                                 }
                             }
                         } else {
-                            let scale = (*(*self.server).wm.server).wm.desk_zoom;
-                            let pan_x = (*(*self.server).wm.server).wm.desk_pan_x;
-                            let pan_y = (*(*self.server).wm.server).wm.desk_pan_y;
-                            let virtual_dx = dx as f64 / scale + (pan_x - op.start_pan_x);
-                            let virtual_dy = dy as f64 / scale + (pan_y - op.start_pan_y);
-
-                            let vx = op.start_win_virtual_x + virtual_dx;
-                            let vy = op.start_win_virtual_y + virtual_dy;
-                            // A Tiled window only ever occupies whole squares,
-                            // so its drag snaps hard to the nearest one. The
-                            // magnetic snap below is for Floating windows,
-                            // which use it to decide whether they land aligned
-                            // (and so become Tiled) at op_end.
-                            //
-                            // This asks what the window was when GRABBED, not
-                            // what it is now: op_update un-tiles a tiled window
-                            // on the first motion event so the drag can follow
-                            // the pointer, so the live mode is always Floating
-                            // here and a test against it never fires.
-                            let (vx, vy) = if op.start_was_tiled {
-                                crate::policy::snap::snap_move_tiled(vx, vy, &sp)
-                            } else {
-                                crate::policy::snap::snap_move(
-                                    vx,
-                                    vy,
-                                    (*win).box_geom.width as f64,
-                                    (*win).box_geom.height as f64,
-                                    &sp,
-                                )
-                            };
+                            let (virtual_dx, virtual_dy) = (*self.server).wm.op_virtual_delta(op);
+                            // Hard snap for a window grabbed Tiled, the
+                            // magnetic pull for a Floating one
+                            // (`policy::drag::move_to`).
+                            let (vx, vy) = crate::policy::drag::move_to(
+                                (op.start_win_virtual_x, op.start_win_virtual_y),
+                                (virtual_dx, virtual_dy),
+                                ((*win).box_geom.width as f64, (*win).box_geom.height as f64),
+                                op.start_was_tiled,
+                                &sp,
+                            );
                             (*win).virtual_x = vx;
                             (*win).virtual_y = vy;
 
@@ -1300,12 +1147,6 @@ impl Seat {
                         }
                     }
                     PointerOpType::Resize { edges } => {
-                        let scale = (*(*self.server).wm.server).wm.desk_zoom;
-                        let pan_x = (*(*self.server).wm.server).wm.desk_pan_x;
-                        let pan_y = (*(*self.server).wm.server).wm.desk_pan_y;
-                        let virtual_dx = dx as f64 / scale + (pan_x - op.start_pan_x);
-                        let virtual_dy = dy as f64 / scale + (pan_y - op.start_pan_y);
-
                         let mut vx = op.start_win_virtual_x;
                         let mut vy = op.start_win_virtual_y;
 
@@ -1324,36 +1165,9 @@ impl Seat {
                             (*win).resize_edges = Some(edges);
                         }
 
-                        // A window grabbed Tiled snaps HARD: the dragged edge
-                        // lands on a cell edge from any distance and the size
-                        // stays whole cells, so it is still Tiled on release.
-                        // A Floating one gets the magnetic pull onto the
-                        // visible cell edges; the anchored edge is untouched
-                        // either way. Must match get_active_resize_dimensions,
-                        // which recomputes this for the arrange snapshot.
-                        let (new_w, new_h) = if op.start_was_tiled {
-                            (
-                                crate::policy::snap::resize_axis_tiled(
-                                    op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
-                                    edges.left, edges.right, &sp.x(),
-                                ) as u32,
-                                crate::policy::snap::resize_axis_tiled(
-                                    op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
-                                    edges.top, edges.bottom, &sp.y(),
-                                ) as u32,
-                            )
-                        } else {
-                            (
-                                crate::policy::snap::resize_axis(
-                                    op.start_win_virtual_x, op.start_win_w as f64, virtual_dx,
-                                    edges.left, edges.right, 50.0, &sp.x(),
-                                ) as u32,
-                                crate::policy::snap::resize_axis(
-                                    op.start_win_virtual_y, op.start_win_h as f64, virtual_dy,
-                                    edges.top, edges.bottom, 50.0, &sp.y(),
-                                ) as u32,
-                            )
-                        };
+                        // Shared with the arrange snapshot's
+                        // `get_active_resize_dimensions`.
+                        let (new_w, new_h) = (*self.server).wm.op_resize_size(op, edges);
                         // The client's xdg min/max size is a contract, not a
                         // suggestion: a configure below it is applied by
                         // cce-ui as-is, and a layout with less room than its
