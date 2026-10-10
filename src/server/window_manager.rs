@@ -59,7 +59,6 @@ pub struct WindowManagerScheduled {
 }
 
 pub struct WindowManagerSent {
-    pub session_locked: bool,
     pub outputs: ffi::wl_list,
     pub output_config: *mut ffi::wlr_output_configuration_v1,
     pub seats: ffi::wl_list,
@@ -150,7 +149,6 @@ pub struct WindowManager {
     pub server: *mut Server,
     pub global: *mut ffi::wl_global,
     pub server_destroy: ffi::wl_listener,
-    pub object: *mut ffi::wl_resource,
     pub state: WindowManagerState,
     pub windows: SlotMap<*mut Window>,
     /// The overview drag-selection: the selected windows, the rubber band
@@ -596,7 +594,6 @@ impl WindowManager {
     pub unsafe fn init_with_server(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.server = server;
         self.global = std::ptr::null_mut();
-        self.object = std::ptr::null_mut();
         self.state = WindowManagerState::Idle;
         self.windows = SlotMap::new();
         std::ptr::write(&mut self.selection, crate::selection::Selection::default());
@@ -607,7 +604,6 @@ impl WindowManager {
             output_config: std::ptr::null_mut(),
         };
         self.sent = WindowManagerSent {
-            session_locked: false,
             outputs: std::mem::zeroed(),
             output_config: std::ptr::null_mut(),
             seats: std::mem::zeroed(),
@@ -2796,19 +2792,9 @@ unsafe extern "C" fn handle_timeout(data: *mut std::ffi::c_void) -> std::os::raw
             (*wm).state = WindowManagerState::InflightConfigures(0);
             (*wm).render_start();
         }
-        WindowManagerState::Manage | WindowManagerState::Render => {
-            if !(*wm).object.is_null() {
-                log::error!("window manager unresponsive for more than 3 seconds, disconnecting");
-                ffi::wl_resource_post_error(
-                    (*wm).object,
-                    ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_UNRESPONSIVE,
-                    b"unresponsive for more than 3 seconds\0".as_ptr() as *const _,
-                );
-                let client = ffi::wl_resource_get_client((*wm).object);
-                ffi::wl_client_destroy(client);
-            }
-        }
-        WindowManagerState::Idle => {}
+        // Manage and Render finish synchronously in the built-in policy,
+        // so only an in-flight configure ever waits on this timer.
+        WindowManagerState::Manage | WindowManagerState::Render | WindowManagerState::Idle => {}
     }
     0
 }
@@ -2821,105 +2807,17 @@ unsafe extern "C" fn handle_server_destroy(
     (*wm).deinit();
 }
 
-// WM request handlers
-unsafe extern "C" fn wm_stop(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
-    let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
-    if !wm.is_null() {
-        (*wm).object = std::ptr::null_mut();
-        ffi::wl_resource_post_event(resource, ffi::ZCCE_WINDOW_MANAGER_V1_FINISHED);
-        ffi::wl_resource_set_implementation(
-            resource,
-            &INERT_WM_INTERFACE as *const _ as *const _,
-            std::ptr::null_mut(),
-            None,
-        );
-    }
-}
-
+// The global is kept for one request: clients (cce-ui, cce-cloud) bind it to
+// call `get_cce_toplevel`. The river-style management requests it once
+// carried (manage/render handshakes, shell surfaces, exit_session) were for an
+// external window-manager client, and the built-in policy replaced that; they
+// are unimplemented here, so a client sending one is a protocol error rather
+// than, say, a way for any client to end the session.
 unsafe extern "C" fn wm_destroy(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
     ffi::wl_resource_destroy(resource);
 }
 
-unsafe extern "C" fn wm_manage_finish(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
-    let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
-    if wm.is_null() {
-        return;
-    }
-    if !matches!((*wm).state, WindowManagerState::Manage) {
-        ffi::wl_resource_post_error(
-            resource,
-            ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
-            b"manage_finish request does not match manage_start\0".as_ptr() as *const _,
-        );
-        return;
-    }
-    (*wm).manage_finish();
-}
-
-unsafe extern "C" fn wm_manage_dirty(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
-    let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
-    if wm.is_null() {
-        return;
-    }
-    (*wm).scheduled.dirty_lazy = true;
-    (*wm).add_dirty_idle();
-}
-
-unsafe extern "C" fn wm_render_finish(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
-    let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
-    if wm.is_null() {
-        return;
-    }
-    if !matches!((*wm).state, WindowManagerState::Render) {
-        ffi::wl_resource_post_error(
-            resource,
-            ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
-            b"render_finish request does not match render_start\0".as_ptr() as *const _,
-        );
-        return;
-    }
-    (*wm).render_finish();
-}
-
-unsafe extern "C" fn wm_get_shell_surface(
-    client: *mut ffi::wl_client,
-    resource: *mut ffi::wl_resource,
-    id: u32,
-    surface_resource: *mut ffi::wl_resource,
-) {
-    let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
-    if wm.is_null() {
-        return;
-    }
-    let surface = ffi::wlr_surface_from_resource(surface_resource);
-    let version = ffi::wl_resource_get_version(resource) as u32;
-    if let Err(e) = crate::shell_surface::ShellSurface::create(client, version, id, surface, (*wm).server) {
-        log::error!("Failed to create shell surface: {}", e);
-        ffi::wl_client_post_no_memory(client);
-    }
-}
-
-unsafe extern "C" fn wm_exit_session(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
-    let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
-    if wm.is_null() {
-        return;
-    }
-    log::info!("window manager requested to exit session");
-    ffi::wl_display_terminate((*(*wm).server).wl_server);
-}
-
 static WM_INTERFACE: ffi::zcce_window_manager_v1_interface = ffi::zcce_window_manager_v1_interface {
-    stop: Some(wm_stop),
-    destroy: Some(wm_destroy),
-    manage_finish: Some(wm_manage_finish),
-    manage_dirty: Some(wm_manage_dirty),
-    render_finish: Some(wm_render_finish),
-    get_shell_surface: Some(wm_get_shell_surface),
-    exit_session: Some(wm_exit_session),
-    get_cce_toplevel: Some(crate::cce_window_management::cce_wm_get_cce_toplevel),
-};
-
-static INERT_WM_INTERFACE: ffi::zcce_window_manager_v1_interface = ffi::zcce_window_manager_v1_interface {
     stop: None,
     destroy: Some(wm_destroy),
     manage_finish: None,
@@ -2927,7 +2825,7 @@ static INERT_WM_INTERFACE: ffi::zcce_window_manager_v1_interface = ffi::zcce_win
     render_finish: None,
     get_shell_surface: None,
     exit_session: None,
-    get_cce_toplevel: None,
+    get_cce_toplevel: Some(crate::cce_window_management::cce_wm_get_cce_toplevel),
 };
 
 unsafe extern "C" fn bind(
@@ -2957,69 +2855,7 @@ unsafe extern "C" fn bind(
         return;
     }
 
-    // We do not set (*wm).object = resource, so the built-in window manager remains active.
-    // We just set the implementation to WM_INTERFACE so the client can call get_cce_toplevel.
-    ffi::wl_resource_set_implementation(
-        resource,
-        &WM_INTERFACE as *const _ as *const _,
-        wm as *mut _,
-        Some(handle_destroy_wm_resource),
-    );
-}
-
-unsafe extern "C" fn handle_destroy_wm_resource(resource: *mut ffi::wl_resource) {
-    let wm = ffi::wl_resource_get_user_data(resource) as *mut WindowManager;
-    if wm.is_null() {
-        return;
-    }
-    if (*wm).object != resource {
-        return;
-    }
-    log::debug!("active zcce_window_manager_v1 destroyed");
-    (*wm).object = std::ptr::null_mut();
-
-    let server = (*wm).server;
-
-    // Iterate over outputs and make inert
-    let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*outputs_list).next;
-    while curr != outputs_list {
-        let next = (*curr).next;
-        let output = crate::container_of!(curr, crate::output::Output, link);
-        (*output).make_inert();
-        curr = next;
-    }
-
-    // Iterate over seats and make inert
-    let seats_list = &mut (*server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-    curr = (*seats_list).next;
-    while curr != seats_list {
-        let next = (*curr).next;
-        let seat = crate::container_of!(curr, crate::seat::Seat, link);
-        (*seat).make_inert();
-        
-        let bindings_head = &mut (*seat).xkb_bindings as *mut ffi::wl_list as *mut WlList;
-        let mut curr_b = (*bindings_head).next;
-        while curr_b != bindings_head {
-            let next_b = (*curr_b).next;
-            let binding = crate::container_of!(curr_b, crate::xkb_bindings::XkbBinding, link);
-            (*binding).wm_scheduled.state_changes.clear();
-            curr_b = next_b;
-        }
-        
-        curr = next;
-    }
-
-    // Iterate over windows and make inert
-    for &window in (*wm).windows.iter() {
-        (*window).make_inert();
-    }
-
-    match (*wm).state {
-        WindowManagerState::Idle | WindowManagerState::InflightConfigures(_) => {}
-        WindowManagerState::Manage => (*wm).manage_finish(),
-        WindowManagerState::Render => (*wm).render_finish(),
-    }
+    ffi::wl_resource_set_implementation(resource, &WM_INTERFACE as *const _ as *const _, wm as *mut _, None);
 }
 
 /// Debounce, in ms, between the last viewport motion and blur being restored.

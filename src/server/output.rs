@@ -288,84 +288,14 @@ static INERT_OUTPUT_INTERFACE: ffi::zcce_output_v1_interface = ffi::zcce_output_
 };
 
 impl Output {
-    pub unsafe fn make_inert(&mut self) {
-        if !self.object.is_null() {
-            ffi::wl_resource_post_event(self.object, 0); // zcce_output.removed
-            ffi::wl_resource_set_implementation(
-                self.object,
-                &INERT_OUTPUT_INTERFACE as *const _ as *const _,
-                std::ptr::null_mut(),
-                None,
-            );
-            self.layer_shell.make_inert();
-            self.object = std::ptr::null_mut();
-            self.sent_wl_output = false;
-            self.grid_rect_pool.clear();
-            self.grid_bevel_pool.clear();
-            self.grid_bevel_tree = std::ptr::null_mut();
-            self.cell_label_pool.clear();
-            self.cell_label_tree = std::ptr::null_mut();
-        }
-    }
-
     pub unsafe fn manage_start(&mut self) {
         match self.scheduled.state {
             OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
                 assert!(!self.scheduled.mode_none());
-                let wlr_output = self.wlr_output;
 
                 let self_ptr = self as *mut Output;
                 let layer_shell_ptr = &mut self.layer_shell as *mut LayerShellOutput;
                 (*layer_shell_ptr).manage_start(self_ptr);
-
-                let wm_v1 = (*self.server).wm.object;
-                if !wm_v1.is_null() {
-                    let new = self.object.is_null();
-                    let output_v1 = if new {
-                        let client = ffi::wl_resource_get_client(wm_v1);
-                        let res = ffi::wl_resource_create(
-                            client,
-                            &ffi::zcce_output_v1_interface,
-                            ffi::wl_resource_get_version(wm_v1),
-                            0,
-                        );
-                        if res.is_null() {
-                            log::error!("out of memory");
-                            return;
-                        }
-                        self.object = res;
-                        ffi::wl_resource_set_implementation(
-                            res,
-                            &OUTPUT_INTERFACE as *const _ as *const _,
-                            self as *mut Output as *mut _,
-                            Some(handle_destroy_resource),
-                        );
-                        ffi::wl_resource_post_event(wm_v1, ffi::ZCCE_WINDOW_MANAGER_V1_OUTPUT, res); // zcce_window_manager_v1.output
-                        res
-                    } else {
-                        self.object
-                    };
-
-                    if !self.sent_wl_output {
-                        let global = ffi::river_wlr_output_get_global(wlr_output);
-                        if !global.is_null() {
-                            let client = ffi::wl_resource_get_client(output_v1);
-                            let wl_output_name = ffi::wl_global_get_name(global, client);
-                            zcce_output_send_wl_output(output_v1, wl_output_name);
-                            self.sent_wl_output = true;
-                        }
-                    }
-
-                    let (scheduled_width, scheduled_height) = self.scheduled.dimensions();
-                    let (sent_width, sent_height) = self.sent.dimensions();
-
-                    if new || scheduled_width != sent_width || scheduled_height != sent_height {
-                        zcce_output_send_dimensions(output_v1, scheduled_width, scheduled_height);
-                    }
-                    if new || self.scheduled.x != self.sent.x || self.scheduled.y != self.sent.y {
-                        zcce_output_send_position(output_v1, self.scheduled.x, self.scheduled.y);
-                    }
-                }
 
                 self.sent = self.scheduled;
 
@@ -374,8 +304,6 @@ impl Output {
                 wl_list_insert((*sent_outputs).prev, &mut self.link_sent as *mut ffi::wl_list as *mut WlList);
             }
             OutputStateValue::DisabledHard | OutputStateValue::Destroying => {
-                self.make_inert();
-
                 self.sent = self.scheduled;
 
                 if self.scheduled.state == OutputStateValue::Destroying {

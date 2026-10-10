@@ -10,13 +10,6 @@ impl WindowManager {
         match self.state {
             WindowManagerState::Manage => true,
             _ => {
-                if !self.object.is_null() {
-                    ffi::wl_resource_post_error(
-                        self.object,
-                        ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
-                        b"invalid modification of window management state\0".as_ptr() as *const _,
-                    );
-                }
                 false
             }
         }
@@ -26,13 +19,6 @@ impl WindowManager {
         match self.state {
             WindowManagerState::Manage | WindowManagerState::InflightConfigures(_) | WindowManagerState::Render => true,
             WindowManagerState::Idle => {
-                if !self.object.is_null() {
-                    ffi::wl_resource_post_error(
-                        self.object,
-                        ffi::zcce_window_manager_v1_error_ZCCE_WINDOW_MANAGER_V1_ERROR_SEQUENCE_ORDER,
-                        b"invalid modification of rendering state\0".as_ptr() as *const _,
-                    );
-                }
                 false
             }
         }
@@ -193,18 +179,6 @@ impl WindowManager {
 
         log::debug!("manage sequence start");
 
-        let session_locked = (*self.server).lock_manager.state == crate::lock_manager::LockState::Locked;
-        if session_locked != self.sent.session_locked {
-            if !self.object.is_null() {
-                if session_locked {
-                    ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_MANAGER_V1_SESSION_LOCKED);
-                } else {
-                    ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_MANAGER_V1_SESSION_UNLOCKED);
-                }
-            }
-            self.sent.session_locked = session_locked;
-        }
-
         let mt0 = if manage_debug() { Some(std::time::Instant::now()) } else { None };
 
         (*self.server).om.auto_layout();
@@ -259,12 +233,7 @@ impl WindowManager {
             );
         }
 
-        if !self.object.is_null() {
-            ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_MANAGER_V1_MANAGE_START);
-            self.start_timeout_timer(3000);
-        } else {
-            self.manage_finish();
-        }
+        self.manage_finish();
     }
 
     /// Wedge tracer: a Mapped status window outside the render list is
@@ -430,12 +399,7 @@ impl WindowManager {
             curr = next;
         }
 
-        if !self.object.is_null() {
-            ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_MANAGER_V1_RENDER_START);
-            self.start_timeout_timer(3000);
-        } else {
-            self.render_finish();
-        }
+        self.render_finish();
     }
 
     pub unsafe fn render_finish(&mut self) {

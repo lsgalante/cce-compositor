@@ -389,10 +389,6 @@ impl XkbBinding {
     }
     
     pub unsafe fn pressed(&mut self) {
-        if (*(*self.seat).server).wm.object.is_null() {
-            log::warn!("Pressed keybind while window manager is disconnected");
-            return;
-        }
         self.wm_scheduled.state_changes.push(XkbBindingStateChange::Pressed);
         (*(*self.seat).server).wm.dirty_windowing();
     }

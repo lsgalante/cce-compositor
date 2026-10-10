@@ -476,20 +476,13 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
     }
 }
 
-unsafe extern "C" fn handle_request_set_cursor_shape(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let server = container_of!(listener, Server, request_set_cursor_shape);
+unsafe extern "C" fn handle_request_set_cursor_shape(_listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let event = data as *mut ffi::wlr_cursor_shape_manager_v1_request_set_shape_event;
     
     let wlr_seat = (*(*event).seat_client).seat;
     let focused_client = ffi::river_wlr_seat_get_pointer_focused_client(wlr_seat);
     
     let event_client = ffi::river_wlr_seat_client_get_client((*event).seat_client);
-    let wm_client = if !(*server).wm.object.is_null() {
-        ffi::wl_resource_get_client((*server).wm.object)
-    } else {
-        std::ptr::null_mut()
-    };
-    let is_wm = !wm_client.is_null() && event_client == wm_client;
 
     let shape_name = ffi::wlr_cursor_shape_v1_name((*event).shape);
     let shape_str = if shape_name.is_null() {
@@ -499,15 +492,13 @@ unsafe extern "C" fn handle_request_set_cursor_shape(listener: *mut ffi::wl_list
     };
 
     log::debug!(
-        "set_cursor_shape: event_client={:?}, wm_client={:?}, is_wm={}, focused={:?}, shape={}",
+        "set_cursor_shape: event_client={:?}, focused={:?}, shape={}",
         event_client,
-        wm_client,
-        is_wm,
         focused_client,
         shape_str
     );
 
-    if focused_client == (*event).seat_client || is_wm {
+    if focused_client == (*event).seat_client {
         let seat = ffi::river_wlr_seat_get_data(wlr_seat) as *mut crate::seat::Seat;
         if !seat.is_null() {
             (*seat).cursor.set_xcursor(shape_name);

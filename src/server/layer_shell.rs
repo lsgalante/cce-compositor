@@ -71,27 +71,6 @@ impl LayerShell {
         }
     }
 
-    pub unsafe fn supported(&self) -> bool {
-        let wm_v1 = (*self.server).wm.object;
-        if wm_v1.is_null() {
-            return true;
-        }
-        let wm_client = ffi::wl_resource_get_client(wm_v1);
-
-        let objects_list = &self.objects as *const ffi::wl_list as *mut WlList;
-        let mut curr = (*objects_list).next;
-        while curr != objects_list {
-            let next = (*curr).next;
-            let obj = crate::container_of!(curr, LayerShellObject, link);
-            let obj_client = ffi::wl_resource_get_client((*obj).resource);
-            if obj_client == wm_client {
-                return true;
-            }
-            curr = next;
-        }
-        false
-    }
-
     pub unsafe fn check_exclusive_focus(&mut self) {
         let layers = [
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
@@ -250,12 +229,6 @@ unsafe extern "C" fn handle_new_surface(listener: *mut ffi::wl_listener, data: *
         (*wlr_layer_surface).current.margin.left,
         (*wlr_layer_surface).current.exclusive_zone,
     );
-
-    if !(*layer_shell).supported() {
-        log::info!("window manager did not bind river_layer_shell_v1, closing layer surface");
-        ffi::wlr_layer_surface_v1_destroy(wlr_layer_surface);
-        return;
-    }
 
     if (*wlr_layer_surface).output.is_null() {
         let outputs = &mut (*(*layer_shell).server).om.outputs as *mut ffi::wl_list as *mut WlList;

@@ -882,129 +882,9 @@ impl Seat {
         self.focus_requested = false;
         self.layer_shell.manage_start();
 
-        let wm_v1 = (*self.server).wm.object;
-        if !wm_v1.is_null() {
-            let new = self.object.is_null();
-            if new {
-                let client = ffi::wl_resource_get_client(wm_v1);
-                let version = ffi::wl_resource_get_version(wm_v1);
-                let seat_v1 = ffi::wl_resource_create(client, &ffi::zcce_seat_v1_interface, version, 0);
-                if seat_v1.is_null() {
-                    log::error!("out of memory creating zcce_seat_v1");
-                    return;
-                }
-                self.object = seat_v1;
-                
-                ffi::wl_resource_set_implementation(
-                    seat_v1,
-                    &SEAT_INTERFACE as *const _ as *const _,
-                    self as *mut Seat as *mut _,
-                    Some(handle_destroy_resource),
-                );
-                
-                ffi::wl_resource_post_event(wm_v1, ffi::ZCCE_WINDOW_MANAGER_V1_SEAT, seat_v1); // zcce_window_manager_v1.seat
-
-                crate::server::wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
-                let sent_seats = &mut (*self.server).wm.sent.seats as *mut ffi::wl_list as *mut crate::server::WlList;
-                crate::server::wl_list_insert((*sent_seats).prev, &mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
-            }
-
-            if new {
-                let seat_v1 = self.object;
-                let client = ffi::wl_resource_get_client(seat_v1);
-                let wl_seat_name = ffi::wl_global_get_name(ffi::river_wlr_seat_get_global(self.wlr_seat), client);
-                ffi::wl_resource_post_event(seat_v1, 1, wl_seat_name); // river_seat_v1.wl_seat
-            }
-
-            self.xkb_bindings_seat.manage_start();
-
-            // Dispatch xkb binding events
-            let bindings_head = &mut self.xkb_bindings as *mut ffi::wl_list as *mut crate::server::WlList;
-            let mut curr = (*bindings_head).next;
-            while curr != bindings_head {
-                let next = (*curr).next;
-                let binding = crate::container_of!(curr, crate::xkb_bindings::XkbBinding, link);
-                for state in (*binding).wm_scheduled.state_changes.drain(..) {
-                    match state {
-                        crate::xkb_bindings::XkbBindingStateChange::None => {},
-                        crate::xkb_bindings::XkbBindingStateChange::Pressed => {
-                            if !(*binding).sent_pressed {
-                                (*binding).sent_pressed = true;
-                                ffi::wl_resource_post_event((*binding).object, 0);
-                            }
-                        },
-                        crate::xkb_bindings::XkbBindingStateChange::StopRepeat => {
-                            if (*binding).sent_pressed {
-                                if ffi::wl_resource_get_version((*binding).object) >= 2 {
-                                    ffi::wl_resource_post_event((*binding).object, 2);
-                                }
-                            }
-                        },
-                        crate::xkb_bindings::XkbBindingStateChange::Released => {
-                            if (*binding).sent_pressed {
-                                (*binding).sent_pressed = false;
-                                ffi::wl_resource_post_event((*binding).object, 1);
-                            }
-                        },
-                    }
-                }
-                curr = next;
-            }
-
-            // Dispatch pointer binding events
-            let ptr_bindings_head = &mut self.pointer_bindings as *mut ffi::wl_list as *mut crate::server::WlList;
-            let mut curr_ptr = (*ptr_bindings_head).next;
-            while curr_ptr != ptr_bindings_head {
-                let next = (*curr_ptr).next;
-                let binding = crate::container_of!(curr_ptr, crate::pointer_binding::PointerBinding, link);
-                for state in (*binding).wm_scheduled.state_changes.drain(..) {
-                    match state {
-                        crate::pointer_binding::PointerBindingStateChange::None => {}
-                        crate::pointer_binding::PointerBindingStateChange::Pressed => {
-                            if !(*binding).sent_pressed {
-                                (*binding).sent_pressed = true;
-                                ffi::wl_resource_post_event((*binding).object, 0); // pressed
-                            }
-                        }
-                        crate::pointer_binding::PointerBindingStateChange::Released => {
-                            if (*binding).sent_pressed {
-                                (*binding).sent_pressed = false;
-                                ffi::wl_resource_post_event((*binding).object, 1); // released
-                            }
-                        }
-                    }
-                }
-                curr_ptr = next;
-            }
-
-            // Dispatch pointer operation events
-            if let Some(ref mut op) = self.op {
-                let dx = op.x - op.start_x;
-                let dy = op.y - op.start_y;
-                ffi::wl_resource_post_event(self.object, 6, dx, dy); // op_delta
-
-                if self.op_release && !op.sent_release {
-                    ffi::wl_resource_post_event(self.object, 7); // op_release
-                    self.op_release = false;
-                    op.sent_release = true;
-                }
-            }
-
-            // Dispatch pointer position event
-            if ffi::wl_resource_get_version(self.object) >= 2 {
-                let x = (*self.cursor.wlr_cursor).x as i32;
-                let y = (*self.cursor.wlr_cursor).y as i32;
-                if x != self.wm_sent_x || y != self.wm_sent_y {
-                    ffi::wl_resource_post_event(self.object, 8, x, y); // pointer_position
-                    self.wm_sent_x = x;
-                    self.wm_sent_y = y;
-                }
-            }
-        } else {
-            crate::server::wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
-            let sent_seats = &mut (*self.server).wm.sent.seats as *mut ffi::wl_list as *mut crate::server::WlList;
-            crate::server::wl_list_insert((*sent_seats).prev, &mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
-        }
+        crate::server::wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
+        let sent_seats = &mut (*self.server).wm.sent.seats as *mut ffi::wl_list as *mut crate::server::WlList;
+        crate::server::wl_list_insert((*sent_seats).prev, &mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
     }
 
     pub unsafe fn manage_finish(&mut self) {
@@ -2029,12 +1909,6 @@ unsafe extern "C" fn handle_request_set_cursor(
     let focused_client = ffi::river_wlr_seat_get_pointer_focused_client(seat.wlr_seat);
     
     let event_client = ffi::river_wlr_seat_client_get_client((*event).seat_client);
-    let wm_client = if !(*seat.server).wm.object.is_null() {
-        ffi::wl_resource_get_client((*seat.server).wm.object)
-    } else {
-        std::ptr::null_mut()
-    };
-    let is_wm = !wm_client.is_null() && event_client == wm_client;
 
     // While a touch has the image off, nothing may put one back: the
     // emulated pointer's every enter draws this request.
@@ -2043,7 +1917,7 @@ unsafe extern "C" fn handle_request_set_cursor(
     if seat.cursor.hidden_by_touch {
         return;
     }
-    if focused_client == (*event).seat_client || is_wm {
+    if focused_client == (*event).seat_client {
         // The client owns the cursor image from here; a compositor-driven
         // xcursor animation would paint over it on its next tick.
         seat.cursor.stop_xcursor_animation();

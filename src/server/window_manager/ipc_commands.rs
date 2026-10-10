@@ -205,13 +205,12 @@ impl WindowManager {
             // Found the tray segment mis-slot wedge; kept as a debugging tool.
             "debug-windows" => {
                 let mut out = format!(
-                    "wm state={:?} dirty={} dirty_lazy={} rendering_dirty={} dirty_idle_armed={} wm_object={}\n",
+                    "wm state={:?} dirty={} dirty_lazy={} rendering_dirty={} dirty_idle_armed={}\n",
                     self.state,
                     self.scheduled.dirty,
                     self.scheduled.dirty_lazy,
                     self.rendering_scheduled.dirty,
                     !self.dirty_idle.is_null(),
-                    !self.object.is_null(),
                 );
                 for &w in self.windows.iter() {
                     if w.is_null() {

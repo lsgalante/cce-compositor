@@ -1968,93 +1968,23 @@ impl Window {
                 if self.is_linked() {
                     wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
                 }
-
-                self.make_inert();
             }
             WindowState::Ready | WindowState::Initialized | WindowState::Mapped => {
-                let wm_v1 = (*self.server).wm.object;
-                if wm_v1.is_null() {
-                    let is_linked = self.is_linked();
-                    if !is_linked {
-                        if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
-                            log::debug!("[LinkDbg] manage_start LINK app={:?} state={:?}",
-                                self.get_app_id_string(), self.state);
-                        }
-                        if !self.node.link.prev.is_null() && !self.node.link.next.is_null() {
-                            wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
-                        }
-                        let rendering_list = &mut (*self.server).wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-                        // The tail is the top of the stack. A shy helper
-                        // window (`is_shy`) links at the head instead — beneath
-                        // the app's own windows, where its app keeps it.
-                        let anchor = if self.is_shy() { rendering_list } else { (*rendering_list).prev };
-                        wl_list_insert(anchor, &mut self.node.link as *mut ffi::wl_list as *mut WlList);
-
-                        if self.foreign_toplevel_handle.is_null() {
-                            let list = (*self.server).foreign_toplevel_list;
-                            let title = self.get_title();
-                            let app_id = self.get_app_id();
-                            let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
-                                title,
-                                app_id,
-                            };
-                            let handle = ffi::wlr_ext_foreign_toplevel_handle_v1_create(list, &state);
-                            if !handle.is_null() {
-                                self.foreign_toplevel_handle = handle;
-                                (*handle).data = self as *mut Window as *mut _;
-                            }
-                        }
-
-                        if self.wlr_toplevel_handle.is_null() {
-                            let manager = (*self.server).wlr_foreign_toplevel_manager;
-                            let handle = ffi::wlr_foreign_toplevel_handle_v1_create(manager);
-                            if !handle.is_null() {
-                                self.wlr_toplevel_handle = handle;
-                                let title = self.get_title();
-                                if !title.is_null() {
-                                    ffi::wlr_foreign_toplevel_handle_v1_set_title(handle, title);
-                                }
-                                let app_id = self.get_app_id();
-                                if !app_id.is_null() {
-                                    ffi::wlr_foreign_toplevel_handle_v1_set_app_id(handle, app_id);
-                                }
-                            }
-                        }
-                        self.rendering_scheduled.resend_dimensions = true;
-                    }
-                    return;
-                }
-                let new_resource = self.object.is_null();
-                let window_v1 = if new_resource {
-                    let client = ffi::wl_resource_get_client(wm_v1);
-                    let res = ffi::wl_resource_create(client, &ffi::zcce_window_v1_interface, ffi::wl_resource_get_version(wm_v1), 0);
-                    if res.is_null() {
-                        log::error!("out of memory");
-                        return;
-                    }
-                    self.object = res;
-                    self.rendering_scheduled.resend_dimensions = true;
-                    ffi::wl_resource_set_implementation(
-                        res,
-                        &WINDOW_INTERFACE as *const _ as *const _,
-                        self as *mut Window as *mut _,
-                        Some(handle_destroy_resource),
-                    );
-                    
-                    // Send window to manager
-                    ffi::wl_resource_post_event(wm_v1, ffi::ZCCE_WINDOW_MANAGER_V1_WINDOW, res); // zcce_window_manager_v1.window
-                    res
-                } else {
-                    self.object
-                };
-
                 let is_linked = self.is_linked();
                 if !is_linked {
+                    if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                        log::debug!("[LinkDbg] manage_start LINK app={:?} state={:?}",
+                            self.get_app_id_string(), self.state);
+                    }
                     if !self.node.link.prev.is_null() && !self.node.link.next.is_null() {
                         wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
                     }
                     let rendering_list = &mut (*self.server).wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-                    wl_list_insert((*rendering_list).prev, &mut self.node.link as *mut ffi::wl_list as *mut WlList);
+                    // The tail is the top of the stack. A shy helper
+                    // window (`is_shy`) links at the head instead — beneath
+                    // the app's own windows, where its app keeps it.
+                    let anchor = if self.is_shy() { rendering_list } else { (*rendering_list).prev };
+                    wl_list_insert(anchor, &mut self.node.link as *mut ffi::wl_list as *mut WlList);
 
                     if self.foreign_toplevel_handle.is_null() {
                         let list = (*self.server).foreign_toplevel_list;
@@ -2086,162 +2016,8 @@ impl Window {
                             }
                         }
                     }
-                };
-
-                if new_resource {
-                    let version = ffi::wl_resource_get_version(window_v1);
-                    if version >= 2 {
-                        ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_UNRELIABLE_PID, self.unreliable_pid()); // sendUnreliablePid
-                    }
-                    if version >= 4 {
-                        if !self.foreign_toplevel_handle.is_null() {
-                            let identifier = (*self.foreign_toplevel_handle).identifier;
-                            ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_IDENTIFIER, identifier);
-                        }
-                    }
+                    self.rendering_scheduled.resend_dimensions = true;
                 }
-
-                if new_resource || self.wm_scheduled.dimensions_hint != self.wm_sent.dimensions_hint {
-                    ffi::wl_resource_post_event(
-                        window_v1,
-                        ffi::ZCCE_WINDOW_V1_DIMENSIONS_HINT, // sendDimensionsHint
-                        self.wm_scheduled.dimensions_hint.min_width as i32,
-                        self.wm_scheduled.dimensions_hint.min_height as i32,
-                        self.wm_scheduled.dimensions_hint.max_width as i32,
-                        self.wm_scheduled.dimensions_hint.max_height as i32,
-                    );
-                    self.wm_sent.dimensions_hint = self.wm_scheduled.dimensions_hint;
-                }
-
-                if new_resource || self.wm_scheduled.decoration_hint != self.wm_sent.decoration_hint {
-                    ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_DECORATION_HINT, self.wm_scheduled.decoration_hint); // sendDecorationHint
-                    self.wm_sent.decoration_hint = self.wm_scheduled.decoration_hint;
-                }
-
-                if let Some(ref offset) = self.wm_scheduled.show_window_menu_requested {
-                    ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_SHOW_WINDOW_MENU_REQUESTED, offset.x, offset.y); // sendShowWindowMenuRequested
-                    self.wm_scheduled.show_window_menu_requested = None;
-                }
-
-                match self.wm_scheduled.fullscreen_requested {
-                    FullscreenRequest::NoRequest => {}
-                    FullscreenRequest::Fullscreen(output) => {
-                        let mut out_resource = if output.is_null() { std::ptr::null_mut() } else { (*output).object };
-                        if !window_v1.is_null() && !out_resource.is_null() {
-                            let client_win = ffi::wl_resource_get_client(window_v1);
-                            let client_out = ffi::wl_resource_get_client(out_resource);
-                            if client_win != client_out {
-                                log::error!(
-                                    "Fullscreen output client mismatch: win_client={:?}, out_client={:?}. Fallback to null_mut",
-                                    client_win,
-                                    client_out
-                                );
-                                out_resource = std::ptr::null_mut();
-                            }
-                        }
-                        ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_FULLSCREEN_REQUESTED, out_resource); // sendFullscreenRequested
-                    }
-                    FullscreenRequest::Exit => {
-                        ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_EXIT_FULLSCREEN_REQUESTED); // sendExitFullscreenRequested
-                    }
-                }
-                self.wm_scheduled.fullscreen_requested = FullscreenRequest::NoRequest;
-
-                match self.wm_scheduled.maximize_requested {
-                    MaximizeRequest::NoRequest => {}
-                    MaximizeRequest::Maximize => {
-                        ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_MAXIMIZE_REQUESTED); // sendMaximizeRequested
-                    }
-                    MaximizeRequest::Unmaximize => {
-                        ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_UNMAXIMIZE_REQUESTED); // sendUnmaximizeRequested
-                    }
-                }
-                self.wm_scheduled.maximize_requested = MaximizeRequest::NoRequest;
-
-                if self.wm_scheduled.minimize_requested {
-                    ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_MINIMIZE_REQUESTED); // sendMinimizeRequested
-                }
-                self.wm_scheduled.minimize_requested = false;
-
-                let parent = self.get_parent();
-                if !parent.is_null() {
-                    let parent_ref = Some((*parent).ref_key);
-                    if self.wm_sent.parent.is_none() || self.wm_sent.parent != parent_ref {
-                        let parent_obj = (*parent).object;
-                        ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_PARENT, parent_obj); // sendParent
-                        self.wm_sent.parent = parent_ref;
-                    }
-                } else if self.wm_sent.parent.is_some() {
-                    ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_PARENT, std::ptr::null_mut::<ffi::wl_resource>()); // sendParent
-                    self.wm_sent.parent = None;
-                }
-
-                if new_resource || self.wm_scheduled.dirty_app_id {
-                    let app_id = self.get_app_id();
-                    ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_APP_ID, app_id); // sendAppId
-                    self.wm_scheduled.dirty_app_id = false;
-                }
-
-                if new_resource || self.wm_scheduled.dirty_title {
-                    let title = self.get_title();
-                    ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_TITLE, title); // sendTitle
-                    self.wm_scheduled.dirty_title = false;
-                }
-
-                if let Some(seat) = self.wm_scheduled.pointer_move_requested.as_mut() {
-                    if !seat.object.is_null() {
-                        ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_POINTER_MOVE_REQUESTED, seat.object); // sendPointerMoveRequested
-                    }
-                }
-                self.wm_scheduled.pointer_move_requested = std::ptr::null_mut();
-
-                if let Some(ref data) = self.wm_scheduled.pointer_resize_requested {
-                    if let Some(seat) = unsafe { data.seat.as_ref() } {
-                        if !seat.object.is_null() {
-                            ffi::wl_resource_post_event(window_v1, ffi::ZCCE_WINDOW_V1_POINTER_RESIZE_REQUESTED, seat.object, data.edges); // sendPointerResizeRequested
-                        }
-                    }
-                }
-                self.wm_scheduled.pointer_resize_requested = None;
-            }
-        }
-    }
-
-    pub unsafe fn make_inert(&mut self) {
-        if !self.object.is_null() {
-            ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_V1_CLOSED); // sendClosed // sendClosed
-            ffi::wl_resource_set_implementation(
-                self.object,
-                &INERT_WINDOW_INTERFACE as *const _ as *const _,
-                std::ptr::null_mut(),
-                None,
-            );
-            self.object = std::ptr::null_mut();
-            (*self.server).wm.dirty_windowing();
-            self.node.make_inert();
-
-            for decorations in [&mut self.decorations_above as *mut ffi::wl_list, &mut self.decorations_below as *mut ffi::wl_list] {
-                let list_head = decorations as *mut WlList;
-                let mut curr = (*list_head).next;
-                while curr != list_head {
-                    let next = (*curr).next;
-                    let dec = crate::container_of!(curr, Decoration, link);
-                    (*dec).make_inert();
-                    curr = next;
-                }
-            }
-
-            let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-            let mut curr = (*seats).next;
-            while curr != seats {
-                let next = (*curr).next;
-                let seat = crate::container_of!(curr, crate::seat::Seat, link);
-                if let crate::seat::Focus::Window(w) = (*seat).focused {
-                    if w == self as *mut Window {
-                        (*seat).focus(crate::seat::Focus::None);
-                    }
-                }
-                curr = next;
             }
         }
     }
@@ -2527,9 +2303,8 @@ impl Window {
         self.wm_scheduled.dirty_title = true;
         self.try_restore();
         // A title is arrangement input only through a mode rule that matches
-        // on it (`title=` in a rule); the built-in policy is what runs — no
-        // external manager is ever bound to `wm.object` (see the bind
-        // handler) — so nothing else in the manage sequence reads it. A
+        // on it (`title=` in a rule); the built-in policy is what runs, so
+        // nothing else in the manage sequence reads it. A
         // terminal running a busy program retitles several times a second,
         // and each retitle used to cost a full manage/arrange/render pass.
         // Without a title rule the title's other consumers are the status
