@@ -410,10 +410,15 @@ treats them as opaque.
   server, loads config + persisted state, adds the wayland socket, spawns the init
   program (`~/.config/cce/init` via `sh -c`) and the IPC + status servers, then
   `wl_display_run`.
-- **`window_manager.rs`** (~8.4k lines) — the heart of the mechanism side. Holds the
-  WM state, the camera fields, window lists, the IPC command dispatcher
-  `process_ipc_command()`, the `Policy::action` snapshot builder
-  (`build_action_ctx`) and the `Compositor` command applier. IPC requests arrive on
+- **`window_manager.rs`** (~3.9k lines) — the heart of the mechanism side. Holds the
+  WM state, the camera fields, window lists, the `Policy::action` snapshot builder
+  (`build_action_ctx`), `arrange_views`, focus and the `Compositor` command applier.
+  Its other concerns are child modules in `window_manager/`, each an
+  `impl WindowManager` block: `ipc_commands.rs` (the dispatcher `process_ipc_command()`),
+  `session.rs` (state.json, restore placeholders and matching, relaunching, clean exit),
+  `transaction.rs` (dirty tracking, manage/render passes), `camera.rs` (pan, zoom,
+  the eased camera), `grid_patches.rs`, `switcher.rs` and `config_apply.rs`
+  (`reload_config`, input rules, key repeat). IPC requests arrive on
   an mpsc channel; the IPC thread bumps an eventfd after each send, and that fd is a
   `wl_event_loop_add_fd` source (`handle_ipc_event`) which drains the channel, so all
   mutation happens on the main thread and the loop sleeps until a command exists.
