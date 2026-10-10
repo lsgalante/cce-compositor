@@ -1158,7 +1158,12 @@ impl Seat {
                             width: new_w,
                             height: new_h,
                         };
-                        (*win).set_dimensions(new_w, new_h);
+                        // No render pass here: the op frame's transaction
+                        // renders once the client has answered. One run per
+                        // motion from the idle callback changed no size
+                        // (render_start takes it from the client's commit)
+                        // and, on a left/top edge, put the old-size buffer at
+                        // the new origin until the client caught up.
                     }
                     // Handled above: neither has a window to get here with.
                     PointerOpType::Select | PointerOpType::GroupMove => {}
