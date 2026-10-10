@@ -3,13 +3,12 @@
 
 use crate::ffi;
 use crate::cursor::Cursor;
-use crate::server::{WlListener, wl_listener_remove, wl_signal_add};
 
 #[repr(C)]
 pub struct DragIcon {
     pub wlr_drag_icon: *mut ffi::wlr_drag_icon,
     pub scene_drag_icon: *mut ffi::wlr_scene_tree,
-    pub destroy: ffi::wl_listener,
+    pub destroy: crate::listener::Listener,
 }
 
 impl DragIcon {
@@ -39,12 +38,7 @@ impl DragIcon {
         let drag_icon_ref = &mut *raw;
         drag_icon_ref.update_position(cursor);
 
-        let destroy_listener = &mut drag_icon_ref.destroy as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy_listener).notify = Some(handle_destroy);
-        wl_signal_add(
-            &mut (*wlr_drag_icon).events.destroy as *mut ffi::wl_signal,
-            &mut drag_icon_ref.destroy,
-        );
+        drag_icon_ref.destroy.connect(&mut (*wlr_drag_icon).events.destroy as *mut ffi::wl_signal, handle_destroy);
 
         Ok(())
     }
@@ -85,5 +79,5 @@ unsafe extern "C" fn handle_destroy(
 ) {
     let drag_icon_ptr = crate::container_of!(listener, DragIcon, destroy);
     let mut drag_icon = Box::from_raw(drag_icon_ptr);
-    wl_listener_remove(&mut drag_icon.destroy);
+    drag_icon.destroy.disconnect();
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, WlList, wl_listener_remove};
+use crate::server::{Server, WlList};
 use crate::slotmap::SlotMap;
 use std::hash::{Hash, Hasher};
 
@@ -147,7 +147,7 @@ mod config_apply;
 pub struct WindowManager {
     pub server: *mut Server,
     pub global: *mut ffi::wl_global,
-    pub server_destroy: ffi::wl_listener,
+    pub server_destroy: crate::listener::Listener,
     pub state: WindowManagerState,
     pub windows: SlotMap<*mut Window>,
     /// The overview drag-selection: the selected windows, the rubber band
@@ -768,9 +768,7 @@ impl WindowManager {
             return Err("Failed to create zcce_window_manager_v1 global");
         }
 
-        let server_destroy_ptr = &mut self.server_destroy as *mut ffi::wl_listener as *mut WlListener;
-        (*server_destroy_ptr).notify = Some(handle_server_destroy);
-        ffi::wl_display_add_destroy_listener((*server).wl_server, &mut self.server_destroy);
+        ffi::wl_display_add_destroy_listener((*server).wl_server, self.server_destroy.prepare(handle_server_destroy));
 
         Ok(())
     }
@@ -989,7 +987,7 @@ impl WindowManager {
             ffi::wl_event_source_remove(self.viewport_settle_timer);
             self.viewport_settle_timer = std::ptr::null_mut();
         }
-        wl_listener_remove(&mut self.server_destroy);
+        self.server_destroy.disconnect();
     }
 
     /// Snapshot for `Policy::action`: seat- and scene-dependent facts

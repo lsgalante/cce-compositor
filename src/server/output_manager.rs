@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, WlList, wl_signal_add, wl_listener_remove, wl_list_remove};
+use crate::server::{Server, WlList, wl_list_remove};
 use crate::output::{Output, OutputStateValue, OutputMode};
 
 #[repr(C)]
@@ -38,15 +38,15 @@ pub struct WlrOutputPowerManagerV1 {
 
 pub struct OutputManager {
     pub first_modeset: bool,
-    pub new_output: ffi::wl_listener,
+    pub new_output: crate::listener::Listener,
     pub output_layout: *mut ffi::wlr_output_layout,
     pub presentation: *mut ffi::wlr_presentation,
     pub xdg_output_manager: *mut ffi::wlr_xdg_output_manager_v1,
     pub wlr_output_manager: *mut ffi::wlr_output_manager_v1,
-    pub manager_apply: ffi::wl_listener,
-    pub manager_test: ffi::wl_listener,
+    pub manager_apply: crate::listener::Listener,
+    pub manager_test: crate::listener::Listener,
     pub power_manager: *mut ffi::wlr_output_power_manager_v1,
-    pub power_manager_set_mode: ffi::wl_listener,
+    pub power_manager_set_mode: crate::listener::Listener,
     pub gamma_control_manager: *mut ffi::wlr_gamma_control_manager_v1,
     pub outputs: ffi::wl_list,
 }
@@ -113,35 +113,27 @@ impl OutputManager {
 
         // Add backend new_output listener
         let backend_cast = (*server).backend as *mut crate::server::WlrBackend;
-        let new_output_ptr = &mut self.new_output as *mut ffi::wl_listener as *mut WlListener;
-        (*new_output_ptr).notify = Some(handle_new_output);
-        wl_signal_add(&mut (*backend_cast).events.new_output, &mut self.new_output);
+        self.new_output.connect(&mut (*backend_cast).events.new_output, handle_new_output);
 
         // Add apply/test listeners
         let manager_cast = self.wlr_output_manager as *mut WlrOutputManagerV1;
         
-        let apply_ptr = &mut self.manager_apply as *mut ffi::wl_listener as *mut WlListener;
-        (*apply_ptr).notify = Some(handle_manager_apply);
-        wl_signal_add(&mut (*manager_cast).events.apply, &mut self.manager_apply);
+        self.manager_apply.connect(&mut (*manager_cast).events.apply, handle_manager_apply);
 
-        let test_ptr = &mut self.manager_test as *mut ffi::wl_listener as *mut WlListener;
-        (*test_ptr).notify = Some(handle_manager_test);
-        wl_signal_add(&mut (*manager_cast).events.test, &mut self.manager_test);
+        self.manager_test.connect(&mut (*manager_cast).events.test, handle_manager_test);
 
         // Add power manager set_mode listener
         let power_cast = self.power_manager as *mut WlrOutputPowerManagerV1;
-        let set_mode_ptr = &mut self.power_manager_set_mode as *mut ffi::wl_listener as *mut WlListener;
-        (*set_mode_ptr).notify = Some(handle_power_manager_set_mode);
-        wl_signal_add(&mut (*power_cast).events.set_mode, &mut self.power_manager_set_mode);
+        self.power_manager_set_mode.connect(&mut (*power_cast).events.set_mode, handle_power_manager_set_mode);
 
         Ok(())
     }
 
     pub unsafe fn deinit(&mut self) {
-        wl_listener_remove(&mut self.manager_apply);
-        wl_listener_remove(&mut self.manager_test);
-        wl_listener_remove(&mut self.power_manager_set_mode);
-        wl_listener_remove(&mut self.new_output);
+        self.manager_apply.disconnect();
+        self.manager_test.disconnect();
+        self.power_manager_set_mode.disconnect();
+        self.new_output.disconnect();
 
         if !self.output_layout.is_null() {
             ffi::wlr_output_layout_destroy(self.output_layout);

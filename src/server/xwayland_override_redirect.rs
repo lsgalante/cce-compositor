@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, wl_signal_add};
+use crate::server::{Server};
 use crate::xwayland_window::XwaylandWindow;
 
 #[repr(C)]
@@ -11,40 +11,20 @@ pub struct XwaylandOverrideRedirect {
     pub xsurface: *mut ffi::wlr_xwayland_surface,
     pub surface_tree: *mut ffi::wlr_scene_tree,
 
-    pub request_configure: ffi::wl_listener,
-    pub destroy: ffi::wl_listener,
-    pub set_override_redirect: ffi::wl_listener,
-    pub associate: ffi::wl_listener,
-    pub dissociate: ffi::wl_listener,
+    pub request_configure: crate::listener::Listener,
+    pub destroy: crate::listener::Listener,
+    pub set_override_redirect: crate::listener::Listener,
+    pub associate: crate::listener::Listener,
+    pub dissociate: crate::listener::Listener,
 
-    pub map: ffi::wl_listener,
-    pub unmap: ffi::wl_listener,
+    pub map: crate::listener::Listener,
+    pub unmap: crate::listener::Listener,
 
-    pub set_geometry: ffi::wl_listener,
+    pub set_geometry: crate::listener::Listener,
     /// Re-applies the 1/scale dest size after every commit (the scene's
     /// commit handler resets it) — see `Window`'s commit handler for why a
     /// per-frame pass alone leaves a hit-testing gap.
-    pub commit: ffi::wl_listener,
-}
-
-unsafe fn connect_listener(
-    signal: *mut ffi::wl_signal,
-    listener: *mut ffi::wl_listener,
-    callback: unsafe extern "C" fn(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void),
-) {
-    let wl_lis = listener as *mut WlListener;
-    (*wl_lis).notify = Some(callback);
-    wl_signal_add(signal, listener);
-}
-
-unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
-    let prev = (*listener).link.prev;
-    let next = (*listener).link.next;
-    if !prev.is_null() && !next.is_null() && prev != listener as *mut ffi::wl_list && next != listener as *mut ffi::wl_list {
-        ffi::wl_list_remove(&mut (*listener).link);
-        (*listener).link.prev = std::ptr::null_mut();
-        (*listener).link.next = std::ptr::null_mut();
-    }
+    pub commit: crate::listener::Listener,
 }
 
 impl XwaylandOverrideRedirect {
@@ -78,11 +58,11 @@ impl XwaylandOverrideRedirect {
         let raw = Box::into_raw(override_redirect);
         (*server).wm.override_redirects.push(raw);
 
-        connect_listener(&mut (*xsurface).events.request_configure, &mut (*raw).request_configure, handle_request_configure);
-        connect_listener(&mut (*xsurface).events.destroy, &mut (*raw).destroy, handle_destroy);
-        connect_listener(&mut (*xsurface).events.set_override_redirect, &mut (*raw).set_override_redirect, handle_set_override_redirect);
-        connect_listener(&mut (*xsurface).events.associate, &mut (*raw).associate, handle_associate);
-        connect_listener(&mut (*xsurface).events.dissociate, &mut (*raw).dissociate, handle_dissociate);
+        (*raw).request_configure.connect(&mut (*xsurface).events.request_configure, handle_request_configure);
+        (*raw).destroy.connect(&mut (*xsurface).events.destroy, handle_destroy);
+        (*raw).set_override_redirect.connect(&mut (*xsurface).events.set_override_redirect, handle_set_override_redirect);
+        (*raw).associate.connect(&mut (*xsurface).events.associate, handle_associate);
+        (*raw).dissociate.connect(&mut (*xsurface).events.dissociate, handle_dissociate);
 
         if !(*xsurface).surface.is_null() {
             handle_associate_impl(raw);
@@ -209,11 +189,11 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, destroy);
     (*(*or).server).wm.override_redirects.retain(|&p| p != or);
 
-    wl_listener_remove_safe(&mut (*or).request_configure);
-    wl_listener_remove_safe(&mut (*or).destroy);
-    wl_listener_remove_safe(&mut (*or).associate);
-    wl_listener_remove_safe(&mut (*or).dissociate);
-    wl_listener_remove_safe(&mut (*or).set_override_redirect);
+    (*or).request_configure.disconnect();
+    (*or).destroy.disconnect();
+    (*or).associate.disconnect();
+    (*or).dissociate.disconnect();
+    (*or).set_override_redirect.disconnect();
 
     let _ = Box::from_raw(or);
 }
@@ -226,23 +206,15 @@ unsafe extern "C" fn handle_associate(listener: *mut ffi::wl_listener, _data: *m
 unsafe fn handle_associate_impl(or: *mut XwaylandOverrideRedirect) {
     let surface = (*(*or).xsurface).surface;
     if !surface.is_null() {
-        connect_listener(
-            ffi::river_wlr_surface_get_map_signal(surface),
-            &mut (*or).map,
-            handle_map,
-        );
-        connect_listener(
-            ffi::river_wlr_surface_get_unmap_signal(surface),
-            &mut (*or).unmap,
-            handle_unmap,
-        );
+        (*or).map.connect(ffi::river_wlr_surface_get_map_signal(surface), handle_map);
+        (*or).unmap.connect(ffi::river_wlr_surface_get_unmap_signal(surface), handle_unmap);
     }
 }
 
 unsafe extern "C" fn handle_dissociate(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, dissociate);
-    wl_listener_remove_safe(&mut (*or).map);
-    wl_listener_remove_safe(&mut (*or).unmap);
+    (*or).map.disconnect();
+    (*or).unmap.disconnect();
 }
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -295,9 +267,9 @@ unsafe fn handle_map_impl(or: *mut XwaylandOverrideRedirect) {
     (*or).place();
     (*or).apply_x11_scale();
 
-    connect_listener(&mut (*(*or).xsurface).events.set_geometry, &mut (*or).set_geometry, handle_set_geometry);
+    (*or).set_geometry.connect(&mut (*(*or).xsurface).events.set_geometry, handle_set_geometry);
     // After the scene's subsurface tree, so this runs after its reset.
-    connect_listener(ffi::river_wlr_surface_get_commit_signal(surface), &mut (*or).commit, handle_commit);
+    (*or).commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_commit);
 
     (*or).focus_if_desired();
 }
@@ -305,8 +277,8 @@ unsafe fn handle_map_impl(or: *mut XwaylandOverrideRedirect) {
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, unmap);
 
-    wl_listener_remove_safe(&mut (*or).set_geometry);
-    wl_listener_remove_safe(&mut (*or).commit);
+    (*or).set_geometry.disconnect();
+    (*or).commit.disconnect();
 
     let surface = (*(*or).xsurface).surface;
     if !surface.is_null() {
@@ -358,16 +330,16 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     if !surface.is_null() {
         if ffi::river_wlr_surface_is_mapped(surface) {
             // handle unmap inline
-            wl_listener_remove_safe(&mut (*or).set_geometry);
-    wl_listener_remove_safe(&mut (*or).commit);
+            (*or).set_geometry.disconnect();
+    (*or).commit.disconnect();
             ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
             if !(*or).surface_tree.is_null() {
                 ffi::wlr_scene_node_destroy((*or).surface_tree as *mut ffi::wlr_scene_node);
                 (*or).surface_tree = std::ptr::null_mut();
             }
         }
-        wl_listener_remove_safe(&mut (*or).map);
-        wl_listener_remove_safe(&mut (*or).unmap);
+        (*or).map.disconnect();
+        (*or).unmap.disconnect();
     }
 
     let server = (*or).server;
@@ -379,11 +351,11 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     // back by the XEmbed bridge and remapped as a managed window;
     // `verify/clients` `or-flip` reproduces it).
     (*server).wm.override_redirects.retain(|&p| p != or);
-    wl_listener_remove_safe(&mut (*or).request_configure);
-    wl_listener_remove_safe(&mut (*or).destroy);
-    wl_listener_remove_safe(&mut (*or).associate);
-    wl_listener_remove_safe(&mut (*or).dissociate);
-    wl_listener_remove_safe(&mut (*or).set_override_redirect);
+    (*or).request_configure.disconnect();
+    (*or).destroy.disconnect();
+    (*or).associate.disconnect();
+    (*or).dissociate.disconnect();
+    (*or).set_override_redirect.disconnect();
     let _ = Box::from_raw(or);
 
     if let Err(e) = XwaylandWindow::create(xsurface, server) {

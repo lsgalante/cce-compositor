@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, WlList, wl_listener_remove, wl_signal_add};
+use crate::server::{Server, WlList};
 use crate::window::Window;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,27 +30,27 @@ pub struct XdgToplevel {
     /// restored size.
     pub acked_once: bool,
 
-    pub destroy: ffi::wl_listener,
-    pub ack_configure: ffi::wl_listener,
-    pub map: ffi::wl_listener,
-    pub unmap: ffi::wl_listener,
-    pub commit: ffi::wl_listener,
-    pub new_popup: ffi::wl_listener,
-    pub request_show_window_menu: ffi::wl_listener,
-    pub request_fullscreen: ffi::wl_listener,
-    pub request_maximize: ffi::wl_listener,
-    pub request_minimize: ffi::wl_listener,
-    pub request_move: ffi::wl_listener,
-    pub request_resize: ffi::wl_listener,
-    pub set_parent: ffi::wl_listener,
-    pub set_title: ffi::wl_listener,
-    pub set_app_id: ffi::wl_listener,
+    pub destroy: crate::listener::Listener,
+    pub ack_configure: crate::listener::Listener,
+    pub map: crate::listener::Listener,
+    pub unmap: crate::listener::Listener,
+    pub commit: crate::listener::Listener,
+    pub new_popup: crate::listener::Listener,
+    pub request_show_window_menu: crate::listener::Listener,
+    pub request_fullscreen: crate::listener::Listener,
+    pub request_maximize: crate::listener::Listener,
+    pub request_minimize: crate::listener::Listener,
+    pub request_move: crate::listener::Listener,
+    pub request_resize: crate::listener::Listener,
+    pub set_parent: crate::listener::Listener,
+    pub set_title: crate::listener::Listener,
+    pub set_app_id: crate::listener::Listener,
 }
 
 pub struct XdgDecoration {
     pub wlr_decoration: *mut ffi::wlr_xdg_toplevel_decoration_v1,
-    pub destroy: ffi::wl_listener,
-    pub request_mode: ffi::wl_listener,
+    pub destroy: crate::listener::Listener,
+    pub request_mode: crate::listener::Listener,
 }
 
 impl XdgToplevel {
@@ -94,9 +94,7 @@ impl XdgToplevel {
         let base = ffi::river_wlr_xdg_toplevel_get_base(wlr_toplevel);
         let surface = ffi::river_wlr_xdg_surface_get_surface(base);
 
-        let unmap_listener = &mut (*raw).unmap as *mut ffi::wl_listener as *mut WlListener;
-        (*unmap_listener).notify = Some(handle_unmap);
-        wl_signal_add(ffi::river_wlr_surface_get_unmap_signal(surface), &mut (*raw).unmap);
+        (*raw).unmap.connect(ffi::river_wlr_surface_get_unmap_signal(surface), handle_unmap);
 
         let surfaces_tree = (*window).surfaces.tree;
         let capture_tree = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree;
@@ -116,61 +114,33 @@ impl XdgToplevel {
         ffi::river_wlr_xdg_surface_set_data(base, raw as *mut _);
         ffi::river_wlr_surface_set_data(surface, (*window).tree as *mut ffi::wlr_scene_node as *mut _);
 
-        let destroy_listener = &mut (*raw).destroy as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy_listener).notify = Some(handle_destroy);
-        wl_signal_add(ffi::river_wlr_xdg_toplevel_get_destroy_signal(wlr_toplevel), &mut (*raw).destroy);
+        (*raw).destroy.connect(ffi::river_wlr_xdg_toplevel_get_destroy_signal(wlr_toplevel), handle_destroy);
 
-        let ack_listener = &mut (*raw).ack_configure as *mut ffi::wl_listener as *mut WlListener;
-        (*ack_listener).notify = Some(handle_ack_configure);
-        wl_signal_add(ffi::river_wlr_xdg_surface_get_ack_configure_signal(base), &mut (*raw).ack_configure);
+        (*raw).ack_configure.connect(ffi::river_wlr_xdg_surface_get_ack_configure_signal(base), handle_ack_configure);
 
-        let map_listener = &mut (*raw).map as *mut ffi::wl_listener as *mut WlListener;
-        (*map_listener).notify = Some(handle_map);
-        wl_signal_add(ffi::river_wlr_surface_get_map_signal(surface), &mut (*raw).map);
+        (*raw).map.connect(ffi::river_wlr_surface_get_map_signal(surface), handle_map);
 
-        let commit_listener = &mut (*raw).commit as *mut ffi::wl_listener as *mut WlListener;
-        (*commit_listener).notify = Some(handle_commit);
-        wl_signal_add(ffi::river_wlr_surface_get_commit_signal(surface), &mut (*raw).commit);
+        (*raw).commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_commit);
 
-        let popup_listener = &mut (*raw).new_popup as *mut ffi::wl_listener as *mut WlListener;
-        (*popup_listener).notify = Some(handle_new_popup);
-        wl_signal_add(ffi::river_wlr_xdg_surface_get_new_popup_signal(base), &mut (*raw).new_popup);
+        (*raw).new_popup.connect(ffi::river_wlr_xdg_surface_get_new_popup_signal(base), handle_new_popup);
 
-        let menu_listener = &mut (*raw).request_show_window_menu as *mut ffi::wl_listener as *mut WlListener;
-        (*menu_listener).notify = Some(handle_request_show_window_menu);
-        wl_signal_add(ffi::river_wlr_xdg_toplevel_get_request_show_window_menu_signal(wlr_toplevel), &mut (*raw).request_show_window_menu);
+        (*raw).request_show_window_menu.connect(ffi::river_wlr_xdg_toplevel_get_request_show_window_menu_signal(wlr_toplevel), handle_request_show_window_menu);
 
-        let fs_listener = &mut (*raw).request_fullscreen as *mut ffi::wl_listener as *mut WlListener;
-        (*fs_listener).notify = Some(handle_request_fullscreen);
-        wl_signal_add(ffi::river_wlr_xdg_toplevel_get_request_fullscreen_signal(wlr_toplevel), &mut (*raw).request_fullscreen);
+        (*raw).request_fullscreen.connect(ffi::river_wlr_xdg_toplevel_get_request_fullscreen_signal(wlr_toplevel), handle_request_fullscreen);
 
-        let max_listener = &mut (*raw).request_maximize as *mut ffi::wl_listener as *mut WlListener;
-        (*max_listener).notify = Some(handle_request_maximize);
-        wl_signal_add(ffi::river_wlr_xdg_toplevel_get_request_maximize_signal(wlr_toplevel), &mut (*raw).request_maximize);
+        (*raw).request_maximize.connect(ffi::river_wlr_xdg_toplevel_get_request_maximize_signal(wlr_toplevel), handle_request_maximize);
 
-        let min_listener = &mut (*raw).request_minimize as *mut ffi::wl_listener as *mut WlListener;
-        (*min_listener).notify = Some(handle_request_minimize);
-        wl_signal_add(ffi::river_wlr_xdg_toplevel_get_request_minimize_signal(wlr_toplevel), &mut (*raw).request_minimize);
+        (*raw).request_minimize.connect(ffi::river_wlr_xdg_toplevel_get_request_minimize_signal(wlr_toplevel), handle_request_minimize);
 
-        let move_listener = &mut (*raw).request_move as *mut ffi::wl_listener as *mut WlListener;
-        (*move_listener).notify = Some(handle_request_move);
-        wl_signal_add(ffi::river_wlr_xdg_toplevel_get_request_move_signal(wlr_toplevel), &mut (*raw).request_move);
+        (*raw).request_move.connect(ffi::river_wlr_xdg_toplevel_get_request_move_signal(wlr_toplevel), handle_request_move);
 
-        let resize_listener = &mut (*raw).request_resize as *mut ffi::wl_listener as *mut WlListener;
-        (*resize_listener).notify = Some(handle_request_resize);
-        wl_signal_add(ffi::river_wlr_xdg_toplevel_get_request_resize_signal(wlr_toplevel), &mut (*raw).request_resize);
+        (*raw).request_resize.connect(ffi::river_wlr_xdg_toplevel_get_request_resize_signal(wlr_toplevel), handle_request_resize);
 
-        let parent_listener = &mut (*raw).set_parent as *mut ffi::wl_listener as *mut WlListener;
-        (*parent_listener).notify = Some(handle_set_parent);
-        wl_signal_add(ffi::river_wlr_xdg_toplevel_get_set_parent_signal(wlr_toplevel), &mut (*raw).set_parent);
+        (*raw).set_parent.connect(ffi::river_wlr_xdg_toplevel_get_set_parent_signal(wlr_toplevel), handle_set_parent);
 
-        let title_listener = &mut (*raw).set_title as *mut ffi::wl_listener as *mut WlListener;
-        (*title_listener).notify = Some(handle_set_title);
-        wl_signal_add(ffi::river_wlr_xdg_toplevel_get_set_title_signal(wlr_toplevel), &mut (*raw).set_title);
+        (*raw).set_title.connect(ffi::river_wlr_xdg_toplevel_get_set_title_signal(wlr_toplevel), handle_set_title);
 
-        let app_listener = &mut (*raw).set_app_id as *mut ffi::wl_listener as *mut WlListener;
-        (*app_listener).notify = Some(handle_set_app_id);
-        wl_signal_add(ffi::river_wlr_xdg_toplevel_get_set_app_id_signal(wlr_toplevel), &mut (*raw).set_app_id);
+        (*raw).set_app_id.connect(ffi::river_wlr_xdg_toplevel_get_set_app_id_signal(wlr_toplevel), handle_set_app_id);
 
         Ok(())
     }
@@ -413,21 +383,21 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
         XdgDecoration::deinit((*toplevel).decoration);
     }
 
-    wl_listener_remove(&mut (*toplevel).destroy);
-    wl_listener_remove(&mut (*toplevel).ack_configure);
-    wl_listener_remove(&mut (*toplevel).map);
-    wl_listener_remove(&mut (*toplevel).unmap);
-    wl_listener_remove(&mut (*toplevel).commit);
-    wl_listener_remove(&mut (*toplevel).new_popup);
-    wl_listener_remove(&mut (*toplevel).request_show_window_menu);
-    wl_listener_remove(&mut (*toplevel).request_fullscreen);
-    wl_listener_remove(&mut (*toplevel).request_maximize);
-    wl_listener_remove(&mut (*toplevel).request_minimize);
-    wl_listener_remove(&mut (*toplevel).request_move);
-    wl_listener_remove(&mut (*toplevel).request_resize);
-    wl_listener_remove(&mut (*toplevel).set_parent);
-    wl_listener_remove(&mut (*toplevel).set_title);
-    wl_listener_remove(&mut (*toplevel).set_app_id);
+    (*toplevel).destroy.disconnect();
+    (*toplevel).ack_configure.disconnect();
+    (*toplevel).map.disconnect();
+    (*toplevel).unmap.disconnect();
+    (*toplevel).commit.disconnect();
+    (*toplevel).new_popup.disconnect();
+    (*toplevel).request_show_window_menu.disconnect();
+    (*toplevel).request_fullscreen.disconnect();
+    (*toplevel).request_maximize.disconnect();
+    (*toplevel).request_minimize.disconnect();
+    (*toplevel).request_move.disconnect();
+    (*toplevel).request_resize.disconnect();
+    (*toplevel).set_parent.disconnect();
+    (*toplevel).set_title.disconnect();
+    (*toplevel).set_app_id.disconnect();
 
     let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
     ffi::river_wlr_xdg_surface_set_data(base, std::ptr::null_mut());
@@ -1230,16 +1200,12 @@ impl XdgDecoration {
 
         (*toplevel).decoration = decoration;
 
-        let destroy_ptr = &mut (*decoration).destroy as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy_ptr).notify = Some(handle_decoration_destroy);
-        wl_signal_add(&mut (*wlr_decoration).events.destroy, &mut (*decoration).destroy);
+        (*decoration).destroy.connect(&mut (*wlr_decoration).events.destroy, handle_decoration_destroy);
 
-        let req_mode_ptr = &mut (*decoration).request_mode as *mut ffi::wl_listener as *mut WlListener;
-        (*req_mode_ptr).notify = Some(handle_decoration_request_mode);
-        wl_signal_add(&mut (*wlr_decoration).events.request_mode, &mut (*decoration).request_mode);
+        (*decoration).request_mode.connect(&mut (*wlr_decoration).events.request_mode, handle_decoration_request_mode);
 
         if ffi::river_wlr_xdg_surface_get_initialized(base) {
-            handle_decoration_request_mode(&mut (*decoration).request_mode, std::ptr::null_mut());
+            handle_decoration_request_mode((*decoration).request_mode.as_ptr(), std::ptr::null_mut());
         }
 
         decoration
@@ -1249,8 +1215,8 @@ impl XdgDecoration {
         let base = ffi::river_wlr_xdg_toplevel_get_base((*(*decoration).wlr_decoration).toplevel);
         let toplevel = ffi::river_wlr_xdg_surface_get_data(base) as *mut XdgToplevel;
 
-        wl_listener_remove(&mut (*decoration).destroy);
-        wl_listener_remove(&mut (*decoration).request_mode);
+        (*decoration).destroy.disconnect();
+        (*decoration).request_mode.disconnect();
 
         assert!(!(*toplevel).decoration.is_null());
         (*toplevel).decoration = std::ptr::null_mut();

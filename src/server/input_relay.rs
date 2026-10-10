@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{WlListener, wl_signal_add};
 use crate::text_input::TextInput;
 use crate::seat::Seat;
 
@@ -14,35 +13,15 @@ pub struct InputRelay {
     pub input_popups: ffi::wl_list,
     pub text_input: *mut TextInput,
 
-    pub input_method_commit: ffi::wl_listener,
-    pub grab_keyboard: ffi::wl_listener,
-    pub input_method_destroy: ffi::wl_listener,
-    pub input_method_new_popup: ffi::wl_listener,
+    pub input_method_commit: crate::listener::Listener,
+    pub grab_keyboard: crate::listener::Listener,
+    pub input_method_destroy: crate::listener::Listener,
+    pub input_method_new_popup: crate::listener::Listener,
 
-    pub grab_keyboard_destroy: ffi::wl_listener,
+    pub grab_keyboard_destroy: crate::listener::Listener,
 
     /// The on-screen keyboard following a touched field (`osk.rs`).
     pub osk: crate::osk::Osk,
-}
-
-unsafe fn connect_listener(
-    signal: *mut ffi::wl_signal,
-    listener: *mut ffi::wl_listener,
-    callback: unsafe extern "C" fn(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void),
-) {
-    let wl_lis = listener as *mut WlListener;
-    (*wl_lis).notify = Some(callback);
-    wl_signal_add(signal, listener);
-}
-
-unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
-    let prev = (*listener).link.prev;
-    let next = (*listener).link.next;
-    if !prev.is_null() && !next.is_null() && prev != listener as *mut ffi::wl_list && next != listener as *mut ffi::wl_list {
-        ffi::wl_list_remove(&mut (*listener).link);
-        (*listener).link.prev = std::ptr::null_mut();
-        (*listener).link.next = std::ptr::null_mut();
-    }
 }
 
 impl InputRelay {
@@ -76,10 +55,10 @@ impl InputRelay {
 
         self.input_method = input_method;
 
-        connect_listener(&mut (*input_method).events.commit, &mut self.input_method_commit, handle_input_method_commit);
-        connect_listener(&mut (*input_method).events.grab_keyboard, &mut self.grab_keyboard, handle_input_method_grab_keyboard);
-        connect_listener(&mut (*input_method).events.destroy, &mut self.input_method_destroy, handle_input_method_destroy);
-        connect_listener(&mut (*input_method).events.new_popup_surface, &mut self.input_method_new_popup, handle_input_method_new_popup);
+        self.input_method_commit.connect(&mut (*input_method).events.commit, handle_input_method_commit);
+        self.grab_keyboard.connect(&mut (*input_method).events.grab_keyboard, handle_input_method_grab_keyboard);
+        self.input_method_destroy.connect(&mut (*input_method).events.destroy, handle_input_method_destroy);
+        self.input_method_new_popup.connect(&mut (*input_method).events.new_popup_surface, handle_input_method_new_popup);
 
         // Text inputs are entered whether or not an input method exists
         // (`focus`), so one that arrives late only needs telling about the
@@ -244,10 +223,10 @@ unsafe extern "C" fn handle_input_method_commit(listener: *mut ffi::wl_listener,
 unsafe extern "C" fn handle_input_method_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let relay = crate::container_of!(listener, InputRelay, input_method_destroy);
 
-    wl_listener_remove_safe(&mut (*relay).input_method_commit);
-    wl_listener_remove_safe(&mut (*relay).grab_keyboard);
-    wl_listener_remove_safe(&mut (*relay).input_method_destroy);
-    wl_listener_remove_safe(&mut (*relay).input_method_new_popup);
+    (*relay).input_method_commit.disconnect();
+    (*relay).grab_keyboard.disconnect();
+    (*relay).input_method_destroy.disconnect();
+    (*relay).input_method_new_popup.disconnect();
     (*relay).input_method = std::ptr::null_mut();
     // The text inputs stay entered and enabled: they never depended on the
     // input method (`InputRelay::focus`).
@@ -264,11 +243,7 @@ unsafe extern "C" fn handle_input_method_grab_keyboard(
     let active_keyboard = ffi::river_wlr_seat_get_keyboard((*seat).wlr_seat);
     ffi::wlr_input_method_keyboard_grab_v2_set_keyboard(keyboard_grab, active_keyboard);
 
-    connect_listener(
-        ffi::river_wlr_input_method_keyboard_grab_v2_get_destroy_signal(keyboard_grab),
-        &mut (*relay).grab_keyboard_destroy,
-        handle_input_method_grab_keyboard_destroy,
-    );
+    (*relay).grab_keyboard_destroy.connect(ffi::river_wlr_input_method_keyboard_grab_v2_get_destroy_signal(keyboard_grab), handle_input_method_grab_keyboard_destroy);
 }
 
 unsafe extern "C" fn handle_input_method_new_popup(
@@ -290,7 +265,7 @@ unsafe extern "C" fn handle_input_method_grab_keyboard_destroy(
     let relay = crate::container_of!(listener, InputRelay, grab_keyboard_destroy);
     let input_method = (*relay).input_method;
     let keyboard_grab = (*input_method).keyboard_grab;
-    wl_listener_remove_safe(&mut (*relay).grab_keyboard_destroy);
+    (*relay).grab_keyboard_destroy.disconnect();
 
     let keyboard = ffi::river_wlr_input_method_keyboard_grab_v2_get_keyboard(keyboard_grab);
     if !keyboard.is_null() {

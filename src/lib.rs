@@ -10,6 +10,8 @@ pub mod ffi;
 mod layout_probe;
 #[path = "server/server.rs"]
 pub mod server;
+#[path = "server/listener.rs"]
+pub mod listener;
 #[path = "server/process.rs"]
 pub mod process;
 #[path = "server/util.rs"]

@@ -296,4 +296,9 @@ pub fn run_server() {
     server.wm.shutting_down = true;
     std::mem::drop(_guard);
     server.deinit();
+    // `deinit` destroyed the display and every wlroots object, so a
+    // listener still linked to one of their signals now points into freed
+    // memory, and dropping it (`Listener` unlinks on drop) would write there.
+    // The process is exiting: leave the server to it.
+    std::mem::forget(server);
 }

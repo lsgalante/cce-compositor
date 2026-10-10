@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{WlListener, wl_signal_add, WlList};
+use crate::server::{WlList};
 use crate::input_relay::InputRelay;
 use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
 
@@ -13,30 +13,10 @@ pub struct InputPopup {
     pub wlr_popup: *mut ffi::wlr_input_popup_surface_v2,
     pub surface_tree: *mut ffi::wlr_scene_tree,
 
-    pub destroy: ffi::wl_listener,
-    pub map: ffi::wl_listener,
-    pub unmap: ffi::wl_listener,
-    pub commit: ffi::wl_listener,
-}
-
-unsafe fn connect_listener(
-    signal: *mut ffi::wl_signal,
-    listener: *mut ffi::wl_listener,
-    callback: unsafe extern "C" fn(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void),
-) {
-    let wl_lis = listener as *mut WlListener;
-    (*wl_lis).notify = Some(callback);
-    wl_signal_add(signal, listener);
-}
-
-unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
-    let prev = (*listener).link.prev;
-    let next = (*listener).link.next;
-    if !prev.is_null() && !next.is_null() && prev != listener as *mut ffi::wl_list && next != listener as *mut ffi::wl_list {
-        ffi::wl_list_remove(&mut (*listener).link);
-        (*listener).link.prev = std::ptr::null_mut();
-        (*listener).link.next = std::ptr::null_mut();
-    }
+    pub destroy: crate::listener::Listener,
+    pub map: crate::listener::Listener,
+    pub unmap: crate::listener::Listener,
+    pub commit: crate::listener::Listener,
 }
 
 impl InputPopup {
@@ -71,22 +51,10 @@ impl InputPopup {
         let popups_list = &mut (*input_relay).input_popups as *mut ffi::wl_list as *mut WlList;
         crate::server::wl_list_insert((*popups_list).prev, &mut (*raw).link as *mut ffi::wl_list as *mut WlList);
 
-        connect_listener(&mut (*wlr_popup).events.destroy, &mut (*raw).destroy, handle_destroy);
-        connect_listener(
-            ffi::river_wlr_surface_get_map_signal((*wlr_popup).surface),
-            &mut (*raw).map,
-            handle_map,
-        );
-        connect_listener(
-            ffi::river_wlr_surface_get_unmap_signal((*wlr_popup).surface),
-            &mut (*raw).unmap,
-            handle_unmap,
-        );
-        connect_listener(
-            ffi::river_wlr_surface_get_commit_signal((*wlr_popup).surface),
-            &mut (*raw).commit,
-            handle_commit,
-        );
+        (*raw).destroy.connect(&mut (*wlr_popup).events.destroy, handle_destroy);
+        (*raw).map.connect(ffi::river_wlr_surface_get_map_signal((*wlr_popup).surface), handle_map);
+        (*raw).unmap.connect(ffi::river_wlr_surface_get_unmap_signal((*wlr_popup).surface), handle_unmap);
+        (*raw).commit.connect(ffi::river_wlr_surface_get_commit_signal((*wlr_popup).surface), handle_commit);
 
         (*raw).update();
 
@@ -195,10 +163,10 @@ impl InputPopup {
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let input_popup = crate::container_of!(listener, InputPopup, destroy);
 
-    wl_listener_remove_safe(&mut (*input_popup).destroy);
-    wl_listener_remove_safe(&mut (*input_popup).map);
-    wl_listener_remove_safe(&mut (*input_popup).unmap);
-    wl_listener_remove_safe(&mut (*input_popup).commit);
+    (*input_popup).destroy.disconnect();
+    (*input_popup).map.disconnect();
+    (*input_popup).unmap.disconnect();
+    (*input_popup).commit.disconnect();
 
     ffi::wl_list_remove(&mut (*input_popup).link);
 

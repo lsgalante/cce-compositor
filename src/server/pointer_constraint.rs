@@ -1,6 +1,5 @@
 use crate::ffi;
 use crate::seat::{Seat, Focus};
-use crate::server::{WlListener, wl_listener_remove, wl_signal_add};
 
 #[derive(Clone, Copy)]
 pub enum PointerConstraintState {
@@ -15,9 +14,9 @@ pub enum PointerConstraintState {
 pub struct PointerConstraint {
     pub wlr_constraint: *mut ffi::wlr_pointer_constraint_v1,
     pub state: PointerConstraintState,
-    pub destroy_listener: ffi::wl_listener,
-    pub commit_listener: ffi::wl_listener,
-    pub node_destroy_listener: ffi::wl_listener,
+    pub destroy_listener: crate::listener::Listener,
+    pub commit_listener: crate::listener::Listener,
+    pub node_destroy_listener: crate::listener::Listener,
 }
 
 impl PointerConstraint {
@@ -32,18 +31,12 @@ impl PointerConstraint {
 
         (*wlr_constraint).data = constraint as *mut _;
 
-        let destroy_listener_ptr = &mut (*constraint).destroy_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy_listener_ptr).notify = Some(handle_destroy);
         
-        let commit_listener_ptr = &mut (*constraint).commit_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*commit_listener_ptr).notify = Some(handle_commit);
 
-        let node_destroy_listener_ptr = &mut (*constraint).node_destroy_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*node_destroy_listener_ptr).notify = Some(handle_node_destroy);
 
-        wl_signal_add(&mut (*wlr_constraint).events.destroy, &mut (*constraint).destroy_listener);
+        (*constraint).destroy_listener.connect(&mut (*wlr_constraint).events.destroy, handle_destroy);
         let commit_signal = ffi::river_wlr_surface_get_commit_signal((*wlr_constraint).surface);
-        wl_signal_add(commit_signal, &mut (*constraint).commit_listener);
+        (*constraint).commit_listener.connect(commit_signal, handle_commit);
 
         let seat = river_wlr_seat_get_data_safe((*wlr_constraint).seat);
         if !seat.is_null() {
@@ -97,7 +90,7 @@ impl PointerConstraint {
             };
 
             let destroy_signal = ffi::river_scene_node_get_destroy_signal(result.node);
-            wl_signal_add(destroy_signal, &mut self.node_destroy_listener);
+            self.node_destroy_listener.connect(destroy_signal, handle_node_destroy);
 
             log::info!("activating pointer constraint");
             ffi::wlr_pointer_constraint_v1_send_activated(self.wlr_constraint);
@@ -112,7 +105,7 @@ impl PointerConstraint {
         self.warp_to_hint_if_set();
 
         self.state = PointerConstraintState::Inactive;
-        wl_listener_remove(&mut self.node_destroy_listener);
+        self.node_destroy_listener.disconnect();
         ffi::wlr_pointer_constraint_v1_send_deactivated(self.wlr_constraint);
     }
 
@@ -219,11 +212,11 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 
     if matches!(constraint.state, PointerConstraintState::Active { .. }) {
         constraint.warp_to_hint_if_set();
-        wl_listener_remove(&mut constraint.node_destroy_listener);
+        constraint.node_destroy_listener.disconnect();
     }
 
-    wl_listener_remove(&mut constraint.destroy_listener);
-    wl_listener_remove(&mut constraint.commit_listener);
+    constraint.destroy_listener.disconnect();
+    constraint.commit_listener.disconnect();
 
     if !seat.is_null() && (*seat).cursor.constraint == constraint_ptr {
         (*seat).cursor.constraint = std::ptr::null_mut();

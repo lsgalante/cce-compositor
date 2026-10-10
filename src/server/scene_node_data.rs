@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{WlListener, wl_signal_add, wl_listener_remove};
 use crate::window_manager::{Window, XwaylandOverrideRedirect};
 use crate::layer_shell::LayerSurface;
 use crate::lock_manager::LockSurface;
@@ -19,7 +18,7 @@ pub enum SceneNodeDataVal {
 pub struct SceneNodeData {
     pub node: *mut ffi::wlr_scene_node,
     pub data: SceneNodeDataVal,
-    pub destroy: ffi::wl_listener,
+    pub destroy: crate::listener::Listener,
 }
 
 impl SceneNodeData {
@@ -33,9 +32,7 @@ impl SceneNodeData {
         let raw = Box::into_raw(scene_node_data);
         ffi::river_scene_node_set_data(node, raw as *mut std::ffi::c_void);
 
-        let destroy_listener = &mut (*raw).destroy as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy_listener).notify = Some(handle_destroy);
-        wl_signal_add(ffi::river_scene_node_get_destroy_signal(node), &mut (*raw).destroy);
+        (*raw).destroy.connect(ffi::river_scene_node_get_destroy_signal(node), handle_destroy);
     }
 
     pub unsafe fn from_node(node: *mut ffi::wlr_scene_node) -> Option<&'static SceneNodeData> {
@@ -75,7 +72,7 @@ impl SceneNodeData {
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let scene_node_data_ptr = crate::container_of!(listener, SceneNodeData, destroy);
     let mut scene_node_data = Box::from_raw(scene_node_data_ptr);
-    wl_listener_remove(&mut scene_node_data.destroy);
+    scene_node_data.destroy.disconnect();
     if !scene_node_data.node.is_null() {
         ffi::river_scene_node_set_data(scene_node_data.node, std::ptr::null_mut());
     }

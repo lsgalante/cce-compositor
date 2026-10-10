@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, wl_signal_add, wl_listener_remove};
+use crate::server::{Server};
 use crate::scene_node_data::SceneNodeData;
 
 pub struct IdleInhibitManager {
     pub wlr_manager: *mut ffi::wlr_idle_inhibit_manager_v1,
-    pub new_idle_inhibitor: ffi::wl_listener,
+    pub new_idle_inhibitor: crate::listener::Listener,
     pub inhibitors: ffi::wl_list,
     pub server: *mut Server,
 }
@@ -23,18 +23,13 @@ impl IdleInhibitManager {
         }
         self.wlr_manager = wlr_manager;
 
-        let new_inhibitor_listener = &mut self.new_idle_inhibitor as *mut ffi::wl_listener as *mut WlListener;
-        (*new_inhibitor_listener).notify = Some(handle_new_idle_inhibitor);
-        wl_signal_add(
-            &mut (*self.wlr_manager).events.new_inhibitor,
-            &mut self.new_idle_inhibitor,
-        );
+        self.new_idle_inhibitor.connect(&mut (*self.wlr_manager).events.new_inhibitor, handle_new_idle_inhibitor);
 
         Ok(())
     }
 
     pub unsafe fn deinit(&mut self) {
-        wl_listener_remove(&mut self.new_idle_inhibitor);
+        self.new_idle_inhibitor.disconnect();
         
         let inhibitors_head = &mut self.inhibitors as *mut ffi::wl_list as *mut crate::server::WlList;
         let mut curr = (*inhibitors_head).next;
@@ -129,7 +124,7 @@ mod tests {
 pub struct IdleInhibitor {
     pub inhibit_manager: *mut IdleInhibitManager,
     pub wlr_inhibitor: *mut ffi::wlr_idle_inhibitor_v1,
-    pub listen_destroy: ffi::wl_listener,
+    pub listen_destroy: crate::listener::Listener,
     pub link: ffi::wl_list,
 }
 
@@ -145,12 +140,7 @@ impl IdleInhibitor {
             link: std::mem::zeroed(),
         }));
 
-        let destroy_listener = &mut (*inhibitor).listen_destroy as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy_listener).notify = Some(handle_inhibitor_destroy);
-        wl_signal_add(
-            &mut (*wlr_inhibitor).events.destroy,
-            &mut (*inhibitor).listen_destroy,
-        );
+        (*inhibitor).listen_destroy.connect(&mut (*wlr_inhibitor).events.destroy, handle_inhibitor_destroy);
 
         let list_head = &mut (*inhibit_manager).inhibitors as *mut ffi::wl_list as *mut crate::server::WlList;
         crate::server::wl_list_insert((*list_head).prev, &mut (*inhibitor).link as *mut ffi::wl_list as *mut crate::server::WlList);
@@ -161,7 +151,7 @@ impl IdleInhibitor {
     }
 
     pub unsafe fn destroy(inhibitor: *mut Self) {
-        wl_listener_remove(&mut (*inhibitor).listen_destroy);
+        (*inhibitor).listen_destroy.disconnect();
         crate::server::wl_list_remove(&mut (*inhibitor).link as *mut ffi::wl_list as *mut crate::server::WlList);
         
         let manager = (*inhibitor).inhibit_manager;

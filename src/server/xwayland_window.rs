@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, wl_signal_add};
+use crate::server::{Server};
 use crate::window::{Window, WindowImpl, WindowState};
 use crate::xwayland_override_redirect::XwaylandOverrideRedirect;
 
@@ -12,22 +12,22 @@ pub struct XwaylandWindow {
     pub xsurface: *mut ffi::wlr_xwayland_surface,
     pub surface_tree: *mut ffi::wlr_scene_tree,
 
-    pub destroy: ffi::wl_listener,
-    pub request_configure: ffi::wl_listener,
-    pub set_override_redirect: ffi::wl_listener,
-    pub associate: ffi::wl_listener,
-    pub dissociate: ffi::wl_listener,
-    pub set_size_hints: ffi::wl_listener,
-    pub set_title: ffi::wl_listener,
-    pub set_class: ffi::wl_listener,
-    pub set_parent: ffi::wl_listener,
-    pub set_decorations: ffi::wl_listener,
-    pub request_maximize: ffi::wl_listener,
-    pub request_fullscreen: ffi::wl_listener,
-    pub request_minimize: ffi::wl_listener,
+    pub destroy: crate::listener::Listener,
+    pub request_configure: crate::listener::Listener,
+    pub set_override_redirect: crate::listener::Listener,
+    pub associate: crate::listener::Listener,
+    pub dissociate: crate::listener::Listener,
+    pub set_size_hints: crate::listener::Listener,
+    pub set_title: crate::listener::Listener,
+    pub set_class: crate::listener::Listener,
+    pub set_parent: crate::listener::Listener,
+    pub set_decorations: crate::listener::Listener,
+    pub request_maximize: crate::listener::Listener,
+    pub request_fullscreen: crate::listener::Listener,
+    pub request_minimize: crate::listener::Listener,
 
-    pub map: ffi::wl_listener,
-    pub unmap: ffi::wl_listener,
+    pub map: crate::listener::Listener,
+    pub unmap: crate::listener::Listener,
 
     /// The last geometry this compositor handed to X through
     /// `send_configure`, physical pixels; `None` until the first one. See
@@ -80,26 +80,6 @@ pub struct X11Geom {
 /// ConfigureNotify updates it), which the sent record cannot see.
 pub fn needs_configure(wanted: X11Geom, reported: X11Geom, sent: Option<X11Geom>) -> bool {
     wanted != reported || sent != Some(wanted)
-}
-
-unsafe fn connect_listener(
-    signal: *mut ffi::wl_signal,
-    listener: *mut ffi::wl_listener,
-    callback: unsafe extern "C" fn(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void),
-) {
-    let wl_lis = listener as *mut WlListener;
-    (*wl_lis).notify = Some(callback);
-    wl_signal_add(signal, listener);
-}
-
-unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
-    let prev = (*listener).link.prev;
-    let next = (*listener).link.next;
-    if !prev.is_null() && !next.is_null() && prev != listener as *mut ffi::wl_list && next != listener as *mut ffi::wl_list {
-        ffi::wl_list_remove(&mut (*listener).link);
-        (*listener).link.prev = std::ptr::null_mut();
-        (*listener).link.next = std::ptr::null_mut();
-    }
 }
 
 /// Wine draws its own frame in a margin around the window; the compositor
@@ -433,19 +413,19 @@ impl XwaylandWindow {
 
         (*xsurface).data = raw as *mut std::ffi::c_void;
 
-        connect_listener(&mut (*xsurface).events.destroy, &mut (*raw).destroy, handle_destroy);
-        connect_listener(&mut (*xsurface).events.associate, &mut (*raw).associate, handle_associate);
-        connect_listener(&mut (*xsurface).events.dissociate, &mut (*raw).dissociate, handle_dissociate);
-        connect_listener(&mut (*xsurface).events.request_configure, &mut (*raw).request_configure, handle_request_configure);
-        connect_listener(&mut (*xsurface).events.set_override_redirect, &mut (*raw).set_override_redirect, handle_set_override_redirect);
-        // connect_listener(&mut (*xsurface).events.set_size_hints, &mut (*raw).set_size_hints, handle_set_size_hints);
-        connect_listener(&mut (*xsurface).events.set_title, &mut (*raw).set_title, handle_set_title);
-        connect_listener(&mut (*xsurface).events.set_class, &mut (*raw).set_class, handle_set_class);
-        connect_listener(&mut (*xsurface).events.set_parent, &mut (*raw).set_parent, handle_set_parent);
-        connect_listener(&mut (*xsurface).events.set_decorations, &mut (*raw).set_decorations, handle_set_decorations);
-        connect_listener(&mut (*xsurface).events.request_maximize, &mut (*raw).request_maximize, handle_request_maximize);
-        connect_listener(&mut (*xsurface).events.request_fullscreen, &mut (*raw).request_fullscreen, handle_request_fullscreen);
-        connect_listener(&mut (*xsurface).events.request_minimize, &mut (*raw).request_minimize, handle_request_minimize);
+        (*raw).destroy.connect(&mut (*xsurface).events.destroy, handle_destroy);
+        (*raw).associate.connect(&mut (*xsurface).events.associate, handle_associate);
+        (*raw).dissociate.connect(&mut (*xsurface).events.dissociate, handle_dissociate);
+        (*raw).request_configure.connect(&mut (*xsurface).events.request_configure, handle_request_configure);
+        (*raw).set_override_redirect.connect(&mut (*xsurface).events.set_override_redirect, handle_set_override_redirect);
+        // (*raw).set_size_hints.connect(&mut (*xsurface).events.set_size_hints, handle_set_size_hints);
+        (*raw).set_title.connect(&mut (*xsurface).events.set_title, handle_set_title);
+        (*raw).set_class.connect(&mut (*xsurface).events.set_class, handle_set_class);
+        (*raw).set_parent.connect(&mut (*xsurface).events.set_parent, handle_set_parent);
+        (*raw).set_decorations.connect(&mut (*xsurface).events.set_decorations, handle_set_decorations);
+        (*raw).request_maximize.connect(&mut (*xsurface).events.request_maximize, handle_request_maximize);
+        (*raw).request_fullscreen.connect(&mut (*xsurface).events.request_fullscreen, handle_request_fullscreen);
+        (*raw).request_minimize.connect(&mut (*xsurface).events.request_minimize, handle_request_minimize);
 
         if !(*xsurface).surface.is_null() {
             handle_associate_impl(raw);
@@ -750,19 +730,19 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 }
 
 unsafe fn handle_destroy_impl(xwindow: *mut XwaylandWindow) {
-    wl_listener_remove_safe(&mut (*xwindow).destroy);
-    wl_listener_remove_safe(&mut (*xwindow).associate);
-    wl_listener_remove_safe(&mut (*xwindow).dissociate);
-    wl_listener_remove_safe(&mut (*xwindow).request_configure);
-    wl_listener_remove_safe(&mut (*xwindow).set_override_redirect);
-    wl_listener_remove_safe(&mut (*xwindow).set_size_hints);
-    wl_listener_remove_safe(&mut (*xwindow).set_title);
-    wl_listener_remove_safe(&mut (*xwindow).set_class);
-    wl_listener_remove_safe(&mut (*xwindow).set_parent);
-    wl_listener_remove_safe(&mut (*xwindow).set_decorations);
-    wl_listener_remove_safe(&mut (*xwindow).request_maximize);
-    wl_listener_remove_safe(&mut (*xwindow).request_fullscreen);
-    wl_listener_remove_safe(&mut (*xwindow).request_minimize);
+    (*xwindow).destroy.disconnect();
+    (*xwindow).associate.disconnect();
+    (*xwindow).dissociate.disconnect();
+    (*xwindow).request_configure.disconnect();
+    (*xwindow).set_override_redirect.disconnect();
+    (*xwindow).set_size_hints.disconnect();
+    (*xwindow).set_title.disconnect();
+    (*xwindow).set_class.disconnect();
+    (*xwindow).set_parent.disconnect();
+    (*xwindow).set_decorations.disconnect();
+    (*xwindow).request_maximize.disconnect();
+    (*xwindow).request_fullscreen.disconnect();
+    (*xwindow).request_minimize.disconnect();
 
     (*(*xwindow).xsurface).data = std::ptr::null_mut();
 
@@ -780,16 +760,8 @@ unsafe extern "C" fn handle_associate(listener: *mut ffi::wl_listener, _data: *m
 unsafe fn handle_associate_impl(xwindow: *mut XwaylandWindow) {
     let surface = (*(*xwindow).xsurface).surface;
     if !surface.is_null() {
-        connect_listener(
-            ffi::river_wlr_surface_get_map_signal(surface),
-            &mut (*xwindow).map,
-            handle_map,
-        );
-        connect_listener(
-            ffi::river_wlr_surface_get_unmap_signal(surface),
-            &mut (*xwindow).unmap,
-            handle_unmap,
-        );
+        (*xwindow).map.connect(ffi::river_wlr_surface_get_map_signal(surface), handle_map);
+        (*xwindow).unmap.connect(ffi::river_wlr_surface_get_unmap_signal(surface), handle_unmap);
     }
 }
 
@@ -799,8 +771,8 @@ unsafe extern "C" fn handle_dissociate(listener: *mut ffi::wl_listener, _data: *
 }
 
 unsafe fn handle_dissociate_impl(xwindow: *mut XwaylandWindow) {
-    wl_listener_remove_safe(&mut (*xwindow).map);
-    wl_listener_remove_safe(&mut (*xwindow).unmap);
+    (*xwindow).map.disconnect();
+    (*xwindow).unmap.disconnect();
 }
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

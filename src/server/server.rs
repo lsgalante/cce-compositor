@@ -255,24 +255,6 @@ pub unsafe fn wl_list_remove_and_reinit(elm: *mut WlList) {
     (*elm).next = elm;
 }
 
-pub unsafe fn wl_signal_add(signal: *mut ffi::wl_signal, listener: *mut ffi::wl_listener) {
-    log::trace!("wl_signal_add: signal={:?}, listener={:?}", signal, listener);
-    if signal.is_null() {
-        log::error!("wl_signal_add: signal is null!");
-        return;
-    }
-    let sig_list = &mut (*signal).listener_list as *mut ffi::wl_list as *mut WlList;
-    log::trace!("wl_signal_add: sig_list={:?}, prev={:?}, next={:?}", sig_list, (*sig_list).prev, (*sig_list).next);
-    let listener_custom = listener as *mut WlListener;
-    wl_list_insert((*sig_list).prev, &mut (*listener_custom).link);
-}
-
-pub unsafe fn wl_listener_remove(listener: *mut ffi::wl_listener) {
-    let listener_custom = listener as *mut WlListener;
-    wl_list_remove(&mut (*listener_custom).link);
-}
-
-
 pub struct Server {
     pub wl_server: *mut ffi::wl_display,
     pub sigint_source: *mut ffi::wl_event_source,
@@ -332,14 +314,14 @@ pub struct Server {
     pub cce_window_management: crate::cce_window_management::CceWindowManagement,
 
     // Event listeners
-    pub renderer_lost: ffi::wl_listener,
-    pub new_xdg_toplevel: ffi::wl_listener,
-    pub new_toplevel_decoration: ffi::wl_listener,
-    pub request_activate: ffi::wl_listener,
-    pub request_set_cursor_shape: ffi::wl_listener,
-    // pub toplevel_capture_request: ffi::wl_listener,
-    pub new_xsurface: ffi::wl_listener,
-    pub xwayland_ready: ffi::wl_listener,
+    pub renderer_lost: crate::listener::Listener,
+    pub new_xdg_toplevel: crate::listener::Listener,
+    pub new_toplevel_decoration: crate::listener::Listener,
+    pub request_activate: crate::listener::Listener,
+    pub request_set_cursor_shape: crate::listener::Listener,
+    // pub toplevel_capture_request: crate::listener::Listener,
+    pub new_xsurface: crate::listener::Listener,
+    pub xwayland_ready: crate::listener::Listener,
 }
 
 unsafe extern "C" fn terminate(_signum: std::os::raw::c_int, data: *mut std::ffi::c_void) -> std::os::raw::c_int {
@@ -880,48 +862,25 @@ impl Server {
             self.cce_window_management.init(server_ptr).map_err(|_| "Failed to init cce_window_management")?;
 
             // Setup listeners
-            let r_lost = &mut self.renderer_lost as *mut ffi::wl_listener as *mut WlListener;
-            (*r_lost).notify = Some(handle_renderer_lost);
-
-            let new_xdg = &mut self.new_xdg_toplevel as *mut ffi::wl_listener as *mut WlListener;
-            (*new_xdg).notify = Some(handle_new_xdg_toplevel);
-
-            let new_dec = &mut self.new_toplevel_decoration as *mut ffi::wl_listener as *mut WlListener;
-            (*new_dec).notify = Some(handle_new_toplevel_decoration);
-
-            let req_act = &mut self.request_activate as *mut ffi::wl_listener as *mut WlListener;
-            (*req_act).notify = Some(handle_request_activate);
-
-            let req_cursor = &mut self.request_set_cursor_shape as *mut ffi::wl_listener as *mut WlListener;
-            (*req_cursor).notify = Some(handle_request_set_cursor_shape);
-
-            // let cap_req = &mut self.toplevel_capture_request as *mut ffi::wl_listener as *mut WlListener;
-            // (*cap_req).notify = Some(handle_toplevel_capture_request);
-
             let xdg_shell_cast = self.xdg_shell as *mut WlrXdgShell;
             let xdg_decoration_manager_cast = self.xdg_decoration_manager as *mut WlrXdgDecorationManagerV1;
             let xdg_activation_cast = self.xdg_activation as *mut WlrXdgActivationV1;
             let cursor_shape_manager_cast = self.cursor_shape_manager as *mut WlrCursorShapeManagerV1;
             // let toplevel_capture_source_manager_cast = self.toplevel_capture_source_manager as *mut WlrExtForeignToplevelImageCaptureSourceManagerV1;
 
-            wl_signal_add(&mut (*renderer_cast).events.lost, &mut self.renderer_lost);
-            wl_signal_add(&mut (*xdg_shell_cast).events.new_toplevel, &mut self.new_xdg_toplevel);
-            wl_signal_add(&mut (*xdg_decoration_manager_cast).events.new_toplevel_decoration, &mut self.new_toplevel_decoration);
-            wl_signal_add(&mut (*xdg_activation_cast).events.request_activate, &mut self.request_activate);
-            wl_signal_add(&mut (*cursor_shape_manager_cast).events.request_set_shape, &mut self.request_set_cursor_shape);
-            // wl_signal_add(&mut (*toplevel_capture_source_manager_cast).events.new_request, &mut self.toplevel_capture_request);
+            self.renderer_lost.connect(&mut (*renderer_cast).events.lost, handle_renderer_lost);
+            self.new_xdg_toplevel.connect(&mut (*xdg_shell_cast).events.new_toplevel, handle_new_xdg_toplevel);
+            self.new_toplevel_decoration.connect(&mut (*xdg_decoration_manager_cast).events.new_toplevel_decoration, handle_new_toplevel_decoration);
+            self.request_activate.connect(&mut (*xdg_activation_cast).events.request_activate, handle_request_activate);
+            self.request_set_cursor_shape.connect(&mut (*cursor_shape_manager_cast).events.request_set_shape, handle_request_set_cursor_shape);
+            // self.toplevel_capture_request.connect(&mut (*toplevel_capture_source_manager_cast).events.new_request, handle_toplevel_capture_request);
 
             // Register Xwayland surface listener if active
             if !self.xwayland.is_null() {
-                let new_x = &mut self.new_xsurface as *mut ffi::wl_listener as *mut WlListener;
-                (*new_x).notify = Some(handle_new_xwayland_surface);
-
                 let xwayland_cast = self.xwayland as *mut WlrXwayland;
-                wl_signal_add(&mut (*xwayland_cast).events.new_surface, &mut self.new_xsurface);
+                self.new_xsurface.connect(&mut (*xwayland_cast).events.new_surface, handle_new_xwayland_surface);
 
-                let ready_x = &mut self.xwayland_ready as *mut ffi::wl_listener as *mut WlListener;
-                (*ready_x).notify = Some(handle_xwayland_ready);
-                wl_signal_add(&mut (*xwayland_cast).events.ready, &mut self.xwayland_ready);
+                self.xwayland_ready.connect(&mut (*xwayland_cast).events.ready, handle_xwayland_ready);
             }
         }
 
@@ -963,16 +922,16 @@ impl Server {
                 ffi::wl_event_source_remove(self.sigchld_source);
             }
 
-            wl_listener_remove(&mut self.renderer_lost);
-            wl_listener_remove(&mut self.new_xdg_toplevel);
-            wl_listener_remove(&mut self.new_toplevel_decoration);
-            wl_listener_remove(&mut self.request_activate);
-            wl_listener_remove(&mut self.request_set_cursor_shape);
+            self.renderer_lost.disconnect();
+            self.new_xdg_toplevel.disconnect();
+            self.new_toplevel_decoration.disconnect();
+            self.request_activate.disconnect();
+            self.request_set_cursor_shape.disconnect();
 
             // 4. Destroy Xwayland if active
             if !self.xwayland.is_null() {
-                wl_listener_remove(&mut self.new_xsurface);
-                wl_listener_remove(&mut self.xwayland_ready);
+                self.new_xsurface.disconnect();
+                self.xwayland_ready.disconnect();
                 ffi::wlr_xwayland_destroy(self.xwayland);
             }
             log::info!("[deinit] server listeners removed");

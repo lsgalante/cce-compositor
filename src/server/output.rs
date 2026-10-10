@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, WlList, wl_signal_add, wl_listener_remove, wl_list_insert, wl_list_remove};
+use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
 use crate::layer_shell::LayerShellOutput;
 use crate::lock_manager::LockState;
 use crate::util;
@@ -225,10 +225,10 @@ pub struct Output {
     /// Label point size actually in use, so a zoom change can re-rasterize.
     pub last_label_px: u32,
 
-    pub destroy: ffi::wl_listener,
-    pub request_state: ffi::wl_listener,
-    pub frame: ffi::wl_listener,
-    pub present: ffi::wl_listener,
+    pub destroy: crate::listener::Listener,
+    pub request_state: crate::listener::Listener,
+    pub frame: crate::listener::Listener,
+    pub present: crate::listener::Listener,
 }
 
 impl Output {
@@ -422,21 +422,13 @@ impl Output {
         ffi::wl_list_init(&mut (*raw).link_sent);
 
         // Add event listeners
-        let d_listener = &mut (*raw).destroy as *mut ffi::wl_listener as *mut WlListener;
-        (*d_listener).notify = Some(handle_destroy);
-        wl_signal_add(ffi::river_wlr_output_get_destroy_signal(wlr_output), &mut (*raw).destroy);
+        (*raw).destroy.connect(ffi::river_wlr_output_get_destroy_signal(wlr_output), handle_destroy);
 
-        let req_listener = &mut (*raw).request_state as *mut ffi::wl_listener as *mut WlListener;
-        (*req_listener).notify = Some(handle_request_state);
-        wl_signal_add(ffi::river_wlr_output_get_request_state_signal(wlr_output), &mut (*raw).request_state);
+        (*raw).request_state.connect(ffi::river_wlr_output_get_request_state_signal(wlr_output), handle_request_state);
 
-        let frame_listener = &mut (*raw).frame as *mut ffi::wl_listener as *mut WlListener;
-        (*frame_listener).notify = Some(handle_frame);
-        wl_signal_add(ffi::river_wlr_output_get_frame_signal(wlr_output), &mut (*raw).frame);
+        (*raw).frame.connect(ffi::river_wlr_output_get_frame_signal(wlr_output), handle_frame);
 
-        let pres_listener = &mut (*raw).present as *mut ffi::wl_listener as *mut WlListener;
-        (*pres_listener).notify = Some(handle_present);
-        wl_signal_add(ffi::river_wlr_output_get_present_signal(wlr_output), &mut (*raw).present);
+        (*raw).present.connect(ffi::river_wlr_output_get_present_signal(wlr_output), handle_present);
 
         (*raw).scheduled.state = OutputStateValue::Enabled;
         let preferred = ffi::wlr_output_preferred_mode(wlr_output);
@@ -1190,10 +1182,10 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     crate::xwayland_window::note_output_change();
 
     // Remove listeners
-    wl_listener_remove(&mut (*output).destroy);
-    wl_listener_remove(&mut (*output).request_state);
-    wl_listener_remove(&mut (*output).frame);
-    wl_listener_remove(&mut (*output).present);
+    (*output).destroy.disconnect();
+    (*output).request_state.disconnect();
+    (*output).frame.disconnect();
+    (*output).present.disconnect();
 
     if !(*output).scene_output.is_null() {
         ffi::wlr_scene_output_destroy((*output).scene_output);

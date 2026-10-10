@@ -3,7 +3,6 @@
 
 use crate::ffi;
 use crate::input_device::InputDevice;
-use crate::server::{WlListener, wl_listener_remove, wl_signal_add};
 use crate::keyboard_group::KeyboardGroup;
 use std::collections::HashSet;
 
@@ -25,12 +24,12 @@ pub struct KeyboardConfig {
 pub struct Keyboard {
     pub device: *mut InputDevice,
     pub wlr_keyboard: *mut ffi::wlr_keyboard,
-    pub key_listener: ffi::wl_listener,
-    pub modifiers_listener: ffi::wl_listener,
+    pub key_listener: crate::listener::Listener,
+    pub modifiers_listener: crate::listener::Listener,
     /// Registered for virtual keyboards only: their keymap arrives from the
     /// client *after* creation (the zwp_virtual_keyboard_v1 keymap request),
     /// so it must be forwarded to the group once it lands.
-    pub keymap_listener: ffi::wl_listener,
+    pub keymap_listener: crate::listener::Listener,
     pub pressed: HashSet<u32>,
     pub group: *mut KeyboardGroup,
     pub group_link: ffi::wl_list,
@@ -81,23 +80,17 @@ impl Keyboard {
         ffi::wl_list_init(&mut (*keyboard).group_link);
         ffi::river_wlr_keyboard_set_data(wlr_keyboard, keyboard as *mut _);
 
-        let key_listener_ptr = &mut (*keyboard).key_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*key_listener_ptr).notify = Some(handle_key);
 
-        let modifiers_listener_ptr = &mut (*keyboard).modifiers_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*modifiers_listener_ptr).notify = Some(handle_modifiers);
 
         let key_signal = ffi::river_wlr_keyboard_get_key_signal(wlr_keyboard);
-        wl_signal_add(key_signal, &mut (*keyboard).key_listener);
+        (*keyboard).key_listener.connect(key_signal, handle_key);
 
         let modifiers_signal = ffi::river_wlr_keyboard_get_modifiers_signal(wlr_keyboard);
-        wl_signal_add(modifiers_signal, &mut (*keyboard).modifiers_listener);
+        (*keyboard).modifiers_listener.connect(modifiers_signal, handle_modifiers);
 
         if virtual_device {
-            let keymap_listener_ptr = &mut (*keyboard).keymap_listener as *mut ffi::wl_listener as *mut WlListener;
-            (*keymap_listener_ptr).notify = Some(handle_keymap);
             let keymap_signal = ffi::river_wlr_keyboard_get_keymap_signal(wlr_keyboard);
-            wl_signal_add(keymap_signal, &mut (*keyboard).keymap_listener);
+            (*keyboard).keymap_listener.connect(keymap_signal, handle_keymap);
         }
 
         if !virtual_device && should_set_keymap((*(*device).seat).server) {
@@ -113,11 +106,11 @@ impl Keyboard {
     }
 
     pub unsafe fn destroy(keyboard: *mut Self) {
-        wl_listener_remove(&mut (*keyboard).key_listener);
-        wl_listener_remove(&mut (*keyboard).modifiers_listener);
+        (*keyboard).key_listener.disconnect();
+        (*keyboard).modifiers_listener.disconnect();
         // destroy_fn runs before the InputDevice is freed, so device is valid.
         if (*(*keyboard).device).virtual_device {
-            wl_listener_remove(&mut (*keyboard).keymap_listener);
+            (*keyboard).keymap_listener.disconnect();
         }
 
         if !(*keyboard).group.is_null() {

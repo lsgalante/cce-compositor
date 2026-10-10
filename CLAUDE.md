@@ -386,10 +386,34 @@ pointers into wlroots C structs, and `wl_listener` callbacks throughout.
 
 `src/server/server.rs` defines the `container_of!` macro (the Rust equivalent of
 Zig's `@fieldParentPtr` / the C `wl_container_of`). wlroots delivers events through
-embedded `wl_listener` fields; callbacks use `container_of!(listener, Struct, field)`
+embedded listener fields; callbacks use `container_of!(listener, Struct, field)`
 to recover the owning Rust struct from a listener pointer. Many wlroots structs are
 also redefined as hand-written `#[repr(C)]` mirrors in `server.rs` because bindgen
 treats them as opaque.
+
+### Listeners are `crate::listener::Listener` (since 2026-10-10)
+
+Every listener field is a `Listener` (`listener.rs`), `repr(transparent)` over
+`ffi::wl_listener`, so `container_of!` finds it as before. Register with
+`field.connect(signal, handler)`; unregister with `field.disconnect()`. A
+registration call that takes a raw listener (`wl_display_add_destroy_listener`
+and kin) gets one from `field.prepare(handler)`, and a handler called directly
+takes `field.as_ptr()`. What the type adds:
+
+- `connect` unlinks first, so connecting twice moves the listener instead of
+  linking it into a second list. A pointer constraint re-activated without a
+  deactivation used to do exactly that.
+- `disconnect` is idempotent, and dropping a `Listener` disconnects it, so a
+  struct freed with `Box::from_raw` cannot leave a listener in a live signal.
+  Disconnect explicitly anyway, in the destroy handler: wlroots asserts its
+  signals have no listeners left when it frees the object, and a drop that
+  comes after that writes into freed memory.
+- A zeroed `Listener` is a valid unconnected one, so `std::mem::zeroed()`
+  initialisers need nothing.
+
+The `Server` is `std::mem::forget`ten after `deinit` (`run_server.rs`): by
+then the display and every wlroots object are gone, and its subsystems'
+listeners must not unlink into them on drop.
 
 ### Central files (by size/importance)
 
@@ -1406,9 +1430,10 @@ straight to the focused client and never meets the chord matcher.
 
 ## Conventions
 
-- This is systems FFI code: raw pointers, `unsafe`, and manual wlroots listener wiring
-  are the norm. When adding a wlroots event handler, follow the existing pattern —
-  embed a `wl_listener`, register it, and recover `self` with `container_of!`.
+- This is systems FFI code: raw pointers and `unsafe` are the norm. When adding a
+  wlroots event handler, follow the existing pattern — embed a `Listener`,
+  `connect` it, recover `self` with `container_of!`, and `disconnect` it in the
+  struct's destroy path.
 - Keep river's SPDX/copyright headers on files that carry them.
 - `scratch/` and `scratch/*` (and the many `.png`/`.log`/`patch*.py` files in the
   parent dir) are ad-hoc debugging artifacts, not part of the build.

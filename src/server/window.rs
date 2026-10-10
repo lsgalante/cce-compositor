@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_insert, wl_list_remove_and_reinit, WlListener, wl_signal_add};
+use crate::server::{Server, WlList, wl_list_insert, wl_list_remove_and_reinit};
 use crate::wm_node::WmNode;
 use crate::xdg_toplevel::ConfigureState;
 
@@ -621,7 +621,7 @@ pub struct Window {
     /// `handle_window_commit` re-arranges only when the segment actually
     /// changed size rather than on every content refresh.
     pub status_commit_size: (i32, i32),
-    pub commit: ffi::wl_listener,
+    pub commit: crate::listener::Listener,
     pub was_fullscreen: bool,
     /// A fullscreen window drawn on the desk rather than pinned to its
     /// output: stepped aside, or sliding back in under the camera. Set by
@@ -1366,9 +1366,7 @@ impl Window {
 
         let surface = self.root_surface();
         if !surface.is_null() {
-            let commit_listener = &mut self.commit as *mut ffi::wl_listener as *mut WlListener;
-            (*commit_listener).notify = Some(handle_window_commit);
-            wl_signal_add(ffi::river_wlr_surface_get_commit_signal(surface), &mut self.commit);
+            self.commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_window_commit);
         }
 
         let app_id_ptr = self.get_app_id();
@@ -1635,7 +1633,7 @@ impl Window {
                 (*self.server).wm.note_vanished(app_id, program);
             }
         }
-        wl_listener_remove_safe(&mut self.commit);
+        self.commit.disconnect();
         self.surfaces.save();
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
         self.set_closing();
@@ -1700,7 +1698,7 @@ impl Window {
             curr = next;
         }
 
-        wl_listener_remove_safe(&mut (*window).commit);
+        (*window).commit.disconnect();
         ffi::wlr_scene_node_destroy((*window).tree as *mut ffi::wlr_scene_node);
         ffi::wlr_scene_node_destroy((*window).popup_tree as *mut ffi::wlr_scene_node);
         // The border segments hang off the global overlay layer, not off
@@ -2958,16 +2956,6 @@ unsafe fn get_parent_position_relative_to(
         }
     }
     (x, y)
-}
-
-unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
-    let prev = (*listener).link.prev;
-    let next = (*listener).link.next;
-    if !prev.is_null() && !next.is_null() && prev != listener as *mut ffi::wl_list && next != listener as *mut ffi::wl_list {
-        ffi::wl_list_remove(&mut (*listener).link);
-        (*listener).link.prev = std::ptr::null_mut();
-        (*listener).link.next = std::ptr::null_mut();
-    }
 }
 
 unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

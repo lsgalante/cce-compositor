@@ -3,7 +3,7 @@
 
 use std::ffi::CStr;
 use crate::ffi;
-use crate::server::{Server, WlListener, WlList, wl_signal_add, wl_listener_remove};
+use crate::server::{Server, WlList};
 use crate::slotmap::{SlotMap, Key};
 use crate::output::Output;
 use crate::seat::Seat;
@@ -21,7 +21,7 @@ pub struct LayerShell {
     pub server: *mut Server,
     pub wlr_shell: *mut ffi::wlr_layer_shell_v1,
     pub surfaces: SlotMap<*mut LayerSurface>,
-    pub new_surface: ffi::wl_listener,
+    pub new_surface: crate::listener::Listener,
 }
 
 impl LayerShell {
@@ -32,17 +32,13 @@ impl LayerShell {
             return Err(());
         }
 
-        let new_surface_ptr = &mut self.new_surface as *mut ffi::wl_listener as *mut WlListener;
-        (*new_surface_ptr).notify = Some(handle_new_surface);
-        wl_signal_add(&mut (*self.wlr_shell).events.new_surface, &mut self.new_surface);
+        self.new_surface.connect(&mut (*self.wlr_shell).events.new_surface, handle_new_surface);
 
         Ok(())
     }
 
     pub unsafe fn deinit(&mut self) {
-        if !self.new_surface.link.prev.is_null() {
-            wl_listener_remove(&mut self.new_surface);
-        }
+        self.new_surface.disconnect();
     }
 
     pub unsafe fn check_exclusive_focus(&mut self) {
@@ -146,11 +142,11 @@ pub struct LayerSurface {
     pub opacity_step: f32,
     pub animation_timer: *mut ffi::wl_event_source,
 
-    pub destroy: ffi::wl_listener,
-    pub map: ffi::wl_listener,
-    pub unmap: ffi::wl_listener,
-    pub commit: ffi::wl_listener,
-    pub new_popup: ffi::wl_listener,
+    pub destroy: crate::listener::Listener,
+    pub map: crate::listener::Listener,
+    pub unmap: crate::listener::Listener,
+    pub commit: crate::listener::Listener,
+    pub new_popup: crate::listener::Listener,
     pub parent_offset_applied: bool,
 }
 
@@ -197,25 +193,15 @@ impl LayerSurface {
 
         ffi::river_wlr_surface_set_data((*wlr_layer_surface).surface, (*scene_layer_surface).tree as *mut _);
 
-        let destroy_ptr = &mut (*layer_surface).destroy as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy_ptr).notify = Some(handle_layer_surface_destroy);
-        wl_signal_add(&mut (*wlr_layer_surface).events.destroy, &mut (*layer_surface).destroy);
+        (*layer_surface).destroy.connect(&mut (*wlr_layer_surface).events.destroy, handle_layer_surface_destroy);
 
-        let map_ptr = &mut (*layer_surface).map as *mut ffi::wl_listener as *mut WlListener;
-        (*map_ptr).notify = Some(handle_layer_surface_map);
-        wl_signal_add(ffi::river_wlr_surface_get_map_signal((*wlr_layer_surface).surface), &mut (*layer_surface).map);
+        (*layer_surface).map.connect(ffi::river_wlr_surface_get_map_signal((*wlr_layer_surface).surface), handle_layer_surface_map);
 
-        let unmap_ptr = &mut (*layer_surface).unmap as *mut ffi::wl_listener as *mut WlListener;
-        (*unmap_ptr).notify = Some(handle_layer_surface_unmap);
-        wl_signal_add(ffi::river_wlr_surface_get_unmap_signal((*wlr_layer_surface).surface), &mut (*layer_surface).unmap);
+        (*layer_surface).unmap.connect(ffi::river_wlr_surface_get_unmap_signal((*wlr_layer_surface).surface), handle_layer_surface_unmap);
 
-        let commit_ptr = &mut (*layer_surface).commit as *mut ffi::wl_listener as *mut WlListener;
-        (*commit_ptr).notify = Some(handle_layer_surface_commit);
-        wl_signal_add(ffi::river_wlr_surface_get_commit_signal((*wlr_layer_surface).surface), &mut (*layer_surface).commit);
+        (*layer_surface).commit.connect(ffi::river_wlr_surface_get_commit_signal((*wlr_layer_surface).surface), handle_layer_surface_commit);
 
-        let new_popup_ptr = &mut (*layer_surface).new_popup as *mut ffi::wl_listener as *mut WlListener;
-        (*new_popup_ptr).notify = Some(handle_layer_surface_new_popup);
-        wl_signal_add(&mut (*wlr_layer_surface).events.new_popup, &mut (*layer_surface).new_popup);
+        (*layer_surface).new_popup.connect(&mut (*wlr_layer_surface).events.new_popup, handle_layer_surface_new_popup);
 
         Ok(layer_surface)
     }
@@ -242,11 +228,11 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
         (*layer_surface).animation_timer = std::ptr::null_mut();
     }
 
-    wl_listener_remove(&mut (*layer_surface).destroy);
-    wl_listener_remove(&mut (*layer_surface).map);
-    wl_listener_remove(&mut (*layer_surface).unmap);
-    wl_listener_remove(&mut (*layer_surface).commit);
-    wl_listener_remove(&mut (*layer_surface).new_popup);
+    (*layer_surface).destroy.disconnect();
+    (*layer_surface).map.disconnect();
+    (*layer_surface).unmap.disconnect();
+    (*layer_surface).commit.disconnect();
+    (*layer_surface).new_popup.disconnect();
 
     (*layer_surface).destroy_popups();
 

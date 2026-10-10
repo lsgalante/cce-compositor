@@ -1,6 +1,6 @@
 use crate::ffi;
 use crate::seat::{Seat, Focus};
-use crate::server::{WlListener, wl_listener_remove, wl_signal_add, WlList};
+use crate::server::{WlList};
 use crate::scene_node_data::SceneNodeDataVal;
 use crate::drag_icon::DragIcon;
 use std::collections::{HashMap, HashSet};
@@ -62,16 +62,16 @@ pub struct Cursor {
     /// (not absolute time) picks the frame and every cursor starts at frame 0.
     pub anim_started_msec: u32,
 
-    pub motion_listener: ffi::wl_listener,
-    pub motion_absolute_listener: ffi::wl_listener,
-    pub button_listener: ffi::wl_listener,
-    pub axis_listener: ffi::wl_listener,
-    pub frame_listener: ffi::wl_listener,
+    pub motion_listener: crate::listener::Listener,
+    pub motion_absolute_listener: crate::listener::Listener,
+    pub button_listener: crate::listener::Listener,
+    pub axis_listener: crate::listener::Listener,
+    pub frame_listener: crate::listener::Listener,
 
-    pub tablet_tool_axis_listener: ffi::wl_listener,
-    pub tablet_tool_proximity_listener: ffi::wl_listener,
-    pub tablet_tool_tip_listener: ffi::wl_listener,
-    pub tablet_tool_button_listener: ffi::wl_listener,
+    pub tablet_tool_axis_listener: crate::listener::Listener,
+    pub tablet_tool_proximity_listener: crate::listener::Listener,
+    pub tablet_tool_tip_listener: crate::listener::Listener,
+    pub tablet_tool_button_listener: crate::listener::Listener,
 
     /// Every finger on a touchscreen, by touch id: where it is (layout
     /// coordinates; the drag icon of a touch drag follows it) and where its
@@ -109,22 +109,22 @@ pub struct Cursor {
     /// reached an X11 client at half speed.
     pub grab_scale: f64,
 
-    pub touch_down_listener: ffi::wl_listener,
-    pub touch_motion_listener: ffi::wl_listener,
-    pub touch_up_listener: ffi::wl_listener,
-    pub touch_cancel_listener: ffi::wl_listener,
-    pub touch_frame_listener: ffi::wl_listener,
+    pub touch_down_listener: crate::listener::Listener,
+    pub touch_motion_listener: crate::listener::Listener,
+    pub touch_up_listener: crate::listener::Listener,
+    pub touch_cancel_listener: crate::listener::Listener,
+    pub touch_frame_listener: crate::listener::Listener,
 
-    pub swipe_begin_listener: ffi::wl_listener,
-    pub swipe_update_listener: ffi::wl_listener,
-    pub swipe_end_listener: ffi::wl_listener,
+    pub swipe_begin_listener: crate::listener::Listener,
+    pub swipe_update_listener: crate::listener::Listener,
+    pub swipe_end_listener: crate::listener::Listener,
 
-    pub pinch_begin_listener: ffi::wl_listener,
-    pub pinch_update_listener: ffi::wl_listener,
-    pub pinch_end_listener: ffi::wl_listener,
+    pub pinch_begin_listener: crate::listener::Listener,
+    pub pinch_update_listener: crate::listener::Listener,
+    pub pinch_end_listener: crate::listener::Listener,
 
-    pub hold_begin_listener: ffi::wl_listener,
-    pub hold_end_listener: ffi::wl_listener,
+    pub hold_begin_listener: crate::listener::Listener,
+    pub hold_end_listener: crate::listener::Listener,
 
     pub gesture_dx: f64,
     pub gesture_dy: f64,
@@ -327,191 +327,81 @@ impl Cursor {
         self.set_xcursor(b"default\0".as_ptr() as *const _);
 
         // Setup listeners
-        let motion_ptr = &mut self.motion_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*motion_ptr).notify = Some(handle_motion);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_motion_signal(wlr_cursor),
-            &mut self.motion_listener,
-        );
+        self.motion_listener.connect(ffi::river_wlr_cursor_get_motion_signal(wlr_cursor), handle_motion);
 
-        let absolute_ptr = &mut self.motion_absolute_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*absolute_ptr).notify = Some(handle_motion_absolute);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_motion_absolute_signal(wlr_cursor),
-            &mut self.motion_absolute_listener,
-        );
+        self.motion_absolute_listener.connect(ffi::river_wlr_cursor_get_motion_absolute_signal(wlr_cursor), handle_motion_absolute);
 
-        let button_ptr = &mut self.button_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*button_ptr).notify = Some(handle_button);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_button_signal(wlr_cursor),
-            &mut self.button_listener,
-        );
+        self.button_listener.connect(ffi::river_wlr_cursor_get_button_signal(wlr_cursor), handle_button);
 
-        let axis_ptr = &mut self.axis_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*axis_ptr).notify = Some(handle_axis);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_axis_signal(wlr_cursor),
-            &mut self.axis_listener,
-        );
+        self.axis_listener.connect(ffi::river_wlr_cursor_get_axis_signal(wlr_cursor), handle_axis);
 
-        let frame_ptr = &mut self.frame_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*frame_ptr).notify = Some(handle_frame);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_frame_signal(wlr_cursor),
-            &mut self.frame_listener,
-        );
+        self.frame_listener.connect(ffi::river_wlr_cursor_get_frame_signal(wlr_cursor), handle_frame);
 
-        let tablet_axis_ptr = &mut self.tablet_tool_axis_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*tablet_axis_ptr).notify = Some(handle_tablet_tool_axis);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_tablet_tool_axis_signal(wlr_cursor),
-            &mut self.tablet_tool_axis_listener,
-        );
+        self.tablet_tool_axis_listener.connect(ffi::river_wlr_cursor_get_tablet_tool_axis_signal(wlr_cursor), handle_tablet_tool_axis);
 
-        let tablet_proximity_ptr = &mut self.tablet_tool_proximity_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*tablet_proximity_ptr).notify = Some(handle_tablet_tool_proximity);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_tablet_tool_proximity_signal(wlr_cursor),
-            &mut self.tablet_tool_proximity_listener,
-        );
+        self.tablet_tool_proximity_listener.connect(ffi::river_wlr_cursor_get_tablet_tool_proximity_signal(wlr_cursor), handle_tablet_tool_proximity);
 
-        let tablet_tip_ptr = &mut self.tablet_tool_tip_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*tablet_tip_ptr).notify = Some(handle_tablet_tool_tip);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_tablet_tool_tip_signal(wlr_cursor),
-            &mut self.tablet_tool_tip_listener,
-        );
+        self.tablet_tool_tip_listener.connect(ffi::river_wlr_cursor_get_tablet_tool_tip_signal(wlr_cursor), handle_tablet_tool_tip);
 
-        let tablet_button_ptr = &mut self.tablet_tool_button_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*tablet_button_ptr).notify = Some(handle_tablet_tool_button);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_tablet_tool_button_signal(wlr_cursor),
-            &mut self.tablet_tool_button_listener,
-        );
+        self.tablet_tool_button_listener.connect(ffi::river_wlr_cursor_get_tablet_tool_button_signal(wlr_cursor), handle_tablet_tool_button);
 
-        let touch_down_ptr = &mut self.touch_down_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*touch_down_ptr).notify = Some(crate::touch::handle_touch_down);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_touch_down_signal(wlr_cursor),
-            &mut self.touch_down_listener,
-        );
+        self.touch_down_listener.connect(ffi::river_wlr_cursor_get_touch_down_signal(wlr_cursor), crate::touch::handle_touch_down);
 
-        let touch_motion_ptr = &mut self.touch_motion_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*touch_motion_ptr).notify = Some(crate::touch::handle_touch_motion);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_touch_motion_signal(wlr_cursor),
-            &mut self.touch_motion_listener,
-        );
+        self.touch_motion_listener.connect(ffi::river_wlr_cursor_get_touch_motion_signal(wlr_cursor), crate::touch::handle_touch_motion);
 
-        let touch_up_ptr = &mut self.touch_up_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*touch_up_ptr).notify = Some(crate::touch::handle_touch_up);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_touch_up_signal(wlr_cursor),
-            &mut self.touch_up_listener,
-        );
+        self.touch_up_listener.connect(ffi::river_wlr_cursor_get_touch_up_signal(wlr_cursor), crate::touch::handle_touch_up);
 
-        let touch_cancel_ptr = &mut self.touch_cancel_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*touch_cancel_ptr).notify = Some(crate::touch::handle_touch_cancel);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_touch_cancel_signal(wlr_cursor),
-            &mut self.touch_cancel_listener,
-        );
+        self.touch_cancel_listener.connect(ffi::river_wlr_cursor_get_touch_cancel_signal(wlr_cursor), crate::touch::handle_touch_cancel);
 
-        let touch_frame_ptr = &mut self.touch_frame_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*touch_frame_ptr).notify = Some(crate::touch::handle_touch_frame);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_touch_frame_signal(wlr_cursor),
-            &mut self.touch_frame_listener,
-        );
+        self.touch_frame_listener.connect(ffi::river_wlr_cursor_get_touch_frame_signal(wlr_cursor), crate::touch::handle_touch_frame);
 
-        let swipe_begin_ptr = &mut self.swipe_begin_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*swipe_begin_ptr).notify = Some(handle_swipe_begin);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_swipe_begin_signal(wlr_cursor),
-            &mut self.swipe_begin_listener,
-        );
+        self.swipe_begin_listener.connect(ffi::river_wlr_cursor_get_swipe_begin_signal(wlr_cursor), handle_swipe_begin);
 
-        let swipe_update_ptr = &mut self.swipe_update_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*swipe_update_ptr).notify = Some(handle_swipe_update);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_swipe_update_signal(wlr_cursor),
-            &mut self.swipe_update_listener,
-        );
+        self.swipe_update_listener.connect(ffi::river_wlr_cursor_get_swipe_update_signal(wlr_cursor), handle_swipe_update);
 
-        let swipe_end_ptr = &mut self.swipe_end_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*swipe_end_ptr).notify = Some(handle_swipe_end);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_swipe_end_signal(wlr_cursor),
-            &mut self.swipe_end_listener,
-        );
+        self.swipe_end_listener.connect(ffi::river_wlr_cursor_get_swipe_end_signal(wlr_cursor), handle_swipe_end);
 
-        let pinch_begin_ptr = &mut self.pinch_begin_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*pinch_begin_ptr).notify = Some(handle_pinch_begin);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_pinch_begin_signal(wlr_cursor),
-            &mut self.pinch_begin_listener,
-        );
+        self.pinch_begin_listener.connect(ffi::river_wlr_cursor_get_pinch_begin_signal(wlr_cursor), handle_pinch_begin);
 
-        let pinch_update_ptr = &mut self.pinch_update_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*pinch_update_ptr).notify = Some(handle_pinch_update);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_pinch_update_signal(wlr_cursor),
-            &mut self.pinch_update_listener,
-        );
+        self.pinch_update_listener.connect(ffi::river_wlr_cursor_get_pinch_update_signal(wlr_cursor), handle_pinch_update);
 
-        let pinch_end_ptr = &mut self.pinch_end_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*pinch_end_ptr).notify = Some(handle_pinch_end);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_pinch_end_signal(wlr_cursor),
-            &mut self.pinch_end_listener,
-        );
+        self.pinch_end_listener.connect(ffi::river_wlr_cursor_get_pinch_end_signal(wlr_cursor), handle_pinch_end);
 
-        let hold_begin_ptr = &mut self.hold_begin_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*hold_begin_ptr).notify = Some(handle_hold_begin);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_hold_begin_signal(wlr_cursor),
-            &mut self.hold_begin_listener,
-        );
+        self.hold_begin_listener.connect(ffi::river_wlr_cursor_get_hold_begin_signal(wlr_cursor), handle_hold_begin);
 
-        let hold_end_ptr = &mut self.hold_end_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*hold_end_ptr).notify = Some(handle_hold_end);
-        wl_signal_add(
-            ffi::river_wlr_cursor_get_hold_end_signal(wlr_cursor),
-            &mut self.hold_end_listener,
-        );
+        self.hold_end_listener.connect(ffi::river_wlr_cursor_get_hold_end_signal(wlr_cursor), handle_hold_end);
 
         Ok(())
     }
 
     pub unsafe fn deinit(&mut self) {
-        wl_listener_remove(&mut self.motion_listener);
-        wl_listener_remove(&mut self.motion_absolute_listener);
-        wl_listener_remove(&mut self.button_listener);
-        wl_listener_remove(&mut self.axis_listener);
-        wl_listener_remove(&mut self.frame_listener);
+        self.motion_listener.disconnect();
+        self.motion_absolute_listener.disconnect();
+        self.button_listener.disconnect();
+        self.axis_listener.disconnect();
+        self.frame_listener.disconnect();
 
-        wl_listener_remove(&mut self.tablet_tool_axis_listener);
-        wl_listener_remove(&mut self.tablet_tool_proximity_listener);
-        wl_listener_remove(&mut self.tablet_tool_tip_listener);
-        wl_listener_remove(&mut self.tablet_tool_button_listener);
+        self.tablet_tool_axis_listener.disconnect();
+        self.tablet_tool_proximity_listener.disconnect();
+        self.tablet_tool_tip_listener.disconnect();
+        self.tablet_tool_button_listener.disconnect();
 
-        wl_listener_remove(&mut self.touch_down_listener);
-        wl_listener_remove(&mut self.touch_motion_listener);
-        wl_listener_remove(&mut self.touch_up_listener);
-        wl_listener_remove(&mut self.touch_cancel_listener);
-        wl_listener_remove(&mut self.touch_frame_listener);
+        self.touch_down_listener.disconnect();
+        self.touch_motion_listener.disconnect();
+        self.touch_up_listener.disconnect();
+        self.touch_cancel_listener.disconnect();
+        self.touch_frame_listener.disconnect();
 
-        wl_listener_remove(&mut self.swipe_begin_listener);
-        wl_listener_remove(&mut self.swipe_update_listener);
-        wl_listener_remove(&mut self.swipe_end_listener);
+        self.swipe_begin_listener.disconnect();
+        self.swipe_update_listener.disconnect();
+        self.swipe_end_listener.disconnect();
 
-        wl_listener_remove(&mut self.pinch_begin_listener);
-        wl_listener_remove(&mut self.pinch_update_listener);
-        wl_listener_remove(&mut self.pinch_end_listener);
+        self.pinch_begin_listener.disconnect();
+        self.pinch_update_listener.disconnect();
+        self.pinch_end_listener.disconnect();
 
-        wl_listener_remove(&mut self.hold_begin_listener);
-        wl_listener_remove(&mut self.hold_end_listener);
+        self.hold_begin_listener.disconnect();
+        self.hold_end_listener.disconnect();
 
         self.stop_xcursor_animation();
         if !self.anim_timer.is_null() {
@@ -1135,7 +1025,7 @@ impl Cursor {
         self.passthrough(crate::util::msec_timestamp());
         // Real devices terminate every motion batch with a frame; sctk-based clients
         // queue pointer events until they see one.
-        handle_frame(&mut self.frame_listener as *mut ffi::wl_listener, std::ptr::null_mut());
+        handle_frame(self.frame_listener.as_ptr(), std::ptr::null_mut());
     }
 
     pub unsafe fn inject_motion_by(&mut self, dx: f64, dy: f64) {
@@ -1148,10 +1038,10 @@ impl Cursor {
             unaccel_dy: dy,
         };
         handle_motion(
-            &mut self.motion_listener as *mut ffi::wl_listener,
+            self.motion_listener.as_ptr(),
             &mut ev as *mut ffi::wlr_pointer_motion_event as *mut std::ffi::c_void,
         );
-        handle_frame(&mut self.frame_listener as *mut ffi::wl_listener, std::ptr::null_mut());
+        handle_frame(self.frame_listener.as_ptr(), std::ptr::null_mut());
     }
 
     pub unsafe fn inject_button(&mut self, button: u32, pressed: bool) {
@@ -1167,10 +1057,10 @@ impl Cursor {
             state,
         };
         handle_button(
-            &mut self.button_listener as *mut ffi::wl_listener,
+            self.button_listener.as_ptr(),
             &mut ev as *mut ffi::wlr_pointer_button_event as *mut std::ffi::c_void,
         );
-        handle_frame(&mut self.frame_listener as *mut ffi::wl_listener, std::ptr::null_mut());
+        handle_frame(self.frame_listener.as_ptr(), std::ptr::null_mut());
     }
 
     /// Wheel scroll; positive `dy` scrolls down (content up), matching a real wheel.
@@ -1203,11 +1093,11 @@ impl Cursor {
                 delta_discrete: if finger { 0 } else { ((delta / 15.0) * 120.0) as i32 },
             };
             handle_axis(
-                &mut self.axis_listener as *mut ffi::wl_listener,
+                self.axis_listener.as_ptr(),
                 &mut ev as *mut ffi::wlr_pointer_axis_event as *mut std::ffi::c_void,
             );
         }
-        handle_frame(&mut self.frame_listener as *mut ffi::wl_listener, std::ptr::null_mut());
+        handle_frame(self.frame_listener.as_ptr(), std::ptr::null_mut());
         // Every libinput axis event is followed by a frame; clients
         // (Xwayland among them) deliver only on the frame, and wlroots
         // asserts if a later axis event changes source within one.
@@ -1232,7 +1122,7 @@ impl Cursor {
                 delta_discrete: 0,
             };
             handle_axis(
-                &mut self.axis_listener as *mut ffi::wl_listener,
+                self.axis_listener.as_ptr(),
                 &mut ev as *mut ffi::wlr_pointer_axis_event as *mut std::ffi::c_void,
             );
         }
@@ -1253,15 +1143,15 @@ impl Cursor {
         match stage {
             "begin" => {
                 let mut ev = ffi::wlr_pointer_pinch_begin_event { pointer: std::ptr::null_mut(), time_msec: time, fingers: 2 };
-                handle_pinch_begin(&mut self.pinch_begin_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+                handle_pinch_begin(self.pinch_begin_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
             }
             "update" => {
                 let mut ev = ffi::wlr_pointer_pinch_update_event { pointer: std::ptr::null_mut(), time_msec: time, fingers: 2, dx: 0.0, dy: 0.0, scale, rotation };
-                handle_pinch_update(&mut self.pinch_update_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+                handle_pinch_update(self.pinch_update_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
             }
             _ => {
                 let mut ev = ffi::wlr_pointer_pinch_end_event { pointer: std::ptr::null_mut(), time_msec: time, cancelled: false };
-                handle_pinch_end(&mut self.pinch_end_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+                handle_pinch_end(self.pinch_end_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
             }
         }
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1276,16 +1166,16 @@ impl Cursor {
             "begin" => {
                 self.inject_swipe_fingers = fingers;
                 let mut ev = ffi::wlr_pointer_swipe_begin_event { pointer: std::ptr::null_mut(), time_msec: time, fingers };
-                handle_swipe_begin(&mut self.swipe_begin_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+                handle_swipe_begin(self.swipe_begin_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
             }
             "update" => {
                 let fingers = self.inject_swipe_fingers;
                 let mut ev = ffi::wlr_pointer_swipe_update_event { pointer: std::ptr::null_mut(), time_msec: time, fingers, dx, dy };
-                handle_swipe_update(&mut self.swipe_update_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+                handle_swipe_update(self.swipe_update_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
             }
             _ => {
                 let mut ev = ffi::wlr_pointer_swipe_end_event { pointer: std::ptr::null_mut(), time_msec: time, cancelled: false };
-                handle_swipe_end(&mut self.swipe_end_listener as *mut ffi::wl_listener, &mut ev as *mut _ as *mut std::ffi::c_void);
+                handle_swipe_end(self.swipe_end_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
             }
         }
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1303,7 +1193,7 @@ impl Cursor {
             fingers,
         };
         handle_swipe_begin(
-            &mut self.swipe_begin_listener as *mut ffi::wl_listener,
+            self.swipe_begin_listener.as_ptr(),
             &mut begin as *mut ffi::wlr_pointer_swipe_begin_event as *mut std::ffi::c_void,
         );
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1317,7 +1207,7 @@ impl Cursor {
                 dy: dy / steps as f64,
             };
             handle_swipe_update(
-                &mut self.swipe_update_listener as *mut ffi::wl_listener,
+                self.swipe_update_listener.as_ptr(),
                 &mut update as *mut ffi::wlr_pointer_swipe_update_event as *mut std::ffi::c_void,
             );
             ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1328,7 +1218,7 @@ impl Cursor {
             cancelled: false,
         };
         handle_swipe_end(
-            &mut self.swipe_end_listener as *mut ffi::wl_listener,
+            self.swipe_end_listener.as_ptr(),
             &mut end as *mut ffi::wlr_pointer_swipe_end_event as *mut std::ffi::c_void,
         );
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1342,7 +1232,7 @@ impl Cursor {
             fingers: 2,
         };
         handle_pinch_begin(
-            &mut self.pinch_begin_listener as *mut ffi::wl_listener,
+            self.pinch_begin_listener.as_ptr(),
             &mut begin as *mut ffi::wlr_pointer_pinch_begin_event as *mut std::ffi::c_void,
         );
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1359,7 +1249,7 @@ impl Cursor {
                 rotation: rotation * t,
             };
             handle_pinch_update(
-                &mut self.pinch_update_listener as *mut ffi::wl_listener,
+                self.pinch_update_listener.as_ptr(),
                 &mut update as *mut ffi::wlr_pointer_pinch_update_event as *mut std::ffi::c_void,
             );
             ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1370,7 +1260,7 @@ impl Cursor {
             cancelled: false,
         };
         handle_pinch_end(
-            &mut self.pinch_end_listener as *mut ffi::wl_listener,
+            self.pinch_end_listener.as_ptr(),
             &mut end as *mut ffi::wlr_pointer_pinch_end_event as *mut std::ffi::c_void,
         );
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);

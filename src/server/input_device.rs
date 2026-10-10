@@ -3,7 +3,7 @@
 
 use crate::ffi;
 use crate::seat::Seat;
-use crate::server::{WlListener, wl_listener_remove, WlList, wl_list_insert, wl_list_remove};
+use crate::server::{WlList, wl_list_insert, wl_list_remove};
 
 pub struct InputDeviceConfig {
     pub scroll_factor: f64,
@@ -15,7 +15,7 @@ pub struct InputDevice {
     pub seat: *mut Seat,
     pub wlr_device: *mut ffi::wlr_input_device,
     pub virtual_device: bool,
-    pub destroy_listener: ffi::wl_listener,
+    pub destroy_listener: crate::listener::Listener,
     pub config: InputDeviceConfig,
     pub destroy_fn: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
     pub destroy_data: *mut std::ffi::c_void,
@@ -67,11 +67,9 @@ impl InputDevice {
 
         ffi::river_wlr_input_device_set_data(wlr_device, device as *mut _);
 
-        let destroy_listener_ptr = &mut (*device).destroy_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy_listener_ptr).notify = Some(handle_device_destroy);
         
         let destroy_signal = ffi::river_wlr_input_device_get_destroy_signal(wlr_device);
-        crate::server::wl_signal_add(destroy_signal, &mut (*device).destroy_listener);
+        (*device).destroy_listener.connect(destroy_signal, handle_device_destroy);
 
         if !virtual_device {
             let config_objects = &mut (*server).input_manager.objects as *mut ffi::wl_list as *mut WlList;
@@ -302,7 +300,7 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
     }
 
     // Remove destroy listener
-    wl_listener_remove(&mut device.destroy_listener);
+    device.destroy_listener.disconnect();
 
     // Remove from InputManager::devices
     wl_list_remove(&mut device.link as *mut ffi::wl_list as *mut WlList);

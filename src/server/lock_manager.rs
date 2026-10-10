@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlListener, wl_signal_add, wl_listener_remove, WlList};
+use crate::server::{Server, WlList};
 use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
 use crate::seat::Focus;
 
@@ -46,10 +46,10 @@ pub struct LockManager {
     pub lock_waiters: Option<Vec<std::sync::mpsc::Sender<String>>>,
     pub server: *mut Server,
 
-    pub new_lock: ffi::wl_listener,
-    pub unlock: ffi::wl_listener,
-    pub destroy: ffi::wl_listener,
-    pub new_surface: ffi::wl_listener,
+    pub new_lock: crate::listener::Listener,
+    pub unlock: crate::listener::Listener,
+    pub destroy: crate::listener::Listener,
+    pub new_surface: crate::listener::Listener,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -99,9 +99,7 @@ impl LockManager {
         }
         self.respawn_timer = respawn_timer;
 
-        let new_lock_ptr = &mut self.new_lock as *mut ffi::wl_listener as *mut WlListener;
-        (*new_lock_ptr).notify = Some(handle_new_lock);
-        wl_signal_add(&mut (*self.wlr_manager).events.new_lock, &mut self.new_lock);
+        self.new_lock.connect(&mut (*self.wlr_manager).events.new_lock, handle_new_lock);
 
         Ok(())
     }
@@ -115,7 +113,7 @@ impl LockManager {
             ffi::wl_event_source_remove(self.respawn_timer);
             self.respawn_timer = std::ptr::null_mut();
         }
-        wl_listener_remove(&mut self.new_lock);
+        self.new_lock.disconnect();
     }
 
     pub unsafe fn lock_surface_from_output(
@@ -326,8 +324,8 @@ pub struct LockSurface {
 
     pub idle_update_focus: *mut ffi::wl_event_source,
 
-    pub map: ffi::wl_listener,
-    pub surface_destroy: ffi::wl_listener,
+    pub map: crate::listener::Listener,
+    pub surface_destroy: crate::listener::Listener,
 }
 
 impl LockSurface {
@@ -359,19 +357,9 @@ impl LockSurface {
         SceneNodeData::attach(tree as *mut ffi::wlr_scene_node, SceneNodeDataVal::LockSurface(lock_surface));
         ffi::river_wlr_surface_set_data((*wlr_lock_surface).surface, tree as *mut ffi::wlr_scene_node as *mut _);
 
-        let map_ptr = &mut (*lock_surface).map as *mut ffi::wl_listener as *mut WlListener;
-        (*map_ptr).notify = Some(handle_lock_surface_map);
-        wl_signal_add(
-            ffi::river_wlr_surface_get_map_signal((*wlr_lock_surface).surface),
-            &mut (*lock_surface).map,
-        );
+        (*lock_surface).map.connect(ffi::river_wlr_surface_get_map_signal((*wlr_lock_surface).surface), handle_lock_surface_map);
 
-        let destroy_ptr = &mut (*lock_surface).surface_destroy as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy_ptr).notify = Some(handle_lock_surface_destroy);
-        wl_signal_add(
-            &mut (*wlr_lock_surface).events.destroy,
-            &mut (*lock_surface).surface_destroy,
-        );
+        (*lock_surface).surface_destroy.connect(&mut (*wlr_lock_surface).events.destroy, handle_lock_surface_destroy);
 
         (*lock_surface).configure();
 
@@ -414,8 +402,8 @@ impl LockSurface {
             ffi::wl_event_source_remove((*lock_surface).idle_update_focus);
         }
 
-        wl_listener_remove(&mut (*lock_surface).map);
-        wl_listener_remove(&mut (*lock_surface).surface_destroy);
+        (*lock_surface).map.disconnect();
+        (*lock_surface).surface_destroy.disconnect();
 
         ffi::river_wlr_surface_set_data((*(*lock_surface).wlr_lock_surface).surface, std::ptr::null_mut());
 
@@ -540,17 +528,11 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
         log::info!("new session lock client given control of already locked session");
     }
 
-    let unlock_ptr = &mut manager.unlock as *mut ffi::wl_listener as *mut WlListener;
-    (*unlock_ptr).notify = Some(handle_unlock);
-    wl_signal_add(&mut (*lock).events.unlock, &mut manager.unlock);
+    manager.unlock.connect(&mut (*lock).events.unlock, handle_unlock);
 
-    let destroy_ptr = &mut manager.destroy as *mut ffi::wl_listener as *mut WlListener;
-    (*destroy_ptr).notify = Some(handle_destroy);
-    wl_signal_add(&mut (*lock).events.destroy, &mut manager.destroy);
+    manager.destroy.connect(&mut (*lock).events.destroy, handle_destroy);
 
-    let new_surface_ptr = &mut manager.new_surface as *mut ffi::wl_listener as *mut WlListener;
-    (*new_surface_ptr).notify = Some(handle_surface);
-    wl_signal_add(&mut (*lock).events.new_surface, &mut manager.new_surface);
+    manager.new_surface.connect(&mut (*lock).events.new_surface, handle_surface);
 }
 
 unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -578,7 +560,7 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
         curr = next;
     }
 
-    handle_destroy(&mut manager.destroy, std::ptr::null_mut());
+    handle_destroy(manager.destroy.as_ptr(), std::ptr::null_mut());
 
     (*manager.server).wm.dirty_windowing();
 }
@@ -588,9 +570,9 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 
     log::debug!("ext_session_lock_v1 destroyed");
 
-    wl_listener_remove(&mut manager.new_surface);
-    wl_listener_remove(&mut manager.unlock);
-    wl_listener_remove(&mut manager.destroy);
+    manager.new_surface.disconnect();
+    manager.unlock.disconnect();
+    manager.destroy.disconnect();
 
     manager.lock = std::ptr::null_mut();
     if manager.state == LockState::WaitingForLockSurfaces {

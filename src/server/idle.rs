@@ -31,7 +31,7 @@
 //! without waiting for a key.
 
 use crate::ffi;
-use crate::server::{Server, WlListener, wl_signal_add, wl_listener_remove};
+use crate::server::{Server};
 use crate::output::{Output, OutputStateValue};
 
 pub const DEFAULT_SLEEP_COMMAND: &str = "systemctl suspend";
@@ -165,7 +165,7 @@ pub struct IdleManager {
     /// Monotonic ms of the last (re)arm and of the last activity.
     armed_at_ms: u64,
     last_activity_ms: u64,
-    session_active: ffi::wl_listener,
+    session_active: crate::listener::Listener,
     session_listening: bool,
 }
 
@@ -301,9 +301,7 @@ impl IdleManager {
         // Headless and nested backends have no session; only DRM does.
         let session = (*server).session;
         if !session.is_null() {
-            let listener = &mut self.session_active as *mut ffi::wl_listener as *mut WlListener;
-            (*listener).notify = Some(handle_session_active);
-            wl_signal_add(ffi::river_wlr_session_get_active_signal(session), &mut self.session_active);
+            self.session_active.connect(ffi::river_wlr_session_get_active_signal(session), handle_session_active);
             self.session_listening = true;
         }
         Ok(())
@@ -311,7 +309,7 @@ impl IdleManager {
 
     pub unsafe fn deinit(&mut self) {
         if self.session_listening {
-            wl_listener_remove(&mut self.session_active);
+            self.session_active.disconnect();
             self.session_listening = false;
         }
         if !self.display_timer.is_null() {

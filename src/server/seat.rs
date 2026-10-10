@@ -1,5 +1,5 @@
 use crate::ffi;
-use crate::server::{Server, WlList, WlListener, wl_listener_remove, wl_signal_add};
+use crate::server::{Server, WlList};
 use crate::cursor::Cursor;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,21 +137,21 @@ pub struct Seat {
     /// status topic as the move steps (`carry_group_items`).
     pub group_items: Vec<(u64, f64, f64)>,
 
-    pub request_set_cursor: ffi::wl_listener,
+    pub request_set_cursor: crate::listener::Listener,
     /// The Xwayland cursor surface currently being shown at 1/`x11_cursor_scale`,
     /// null when the pointer image is anyone else's. See
     /// `handle_x11_cursor_commit` for why an X11 cursor needs shrinking at all.
     pub x11_cursor_surface: *mut ffi::wlr_surface,
     pub x11_cursor_scale: f32,
-    pub x11_cursor_commit: ffi::wl_listener,
-    pub x11_cursor_destroy: ffi::wl_listener,
-    pub request_set_selection: ffi::wl_listener,
-    pub request_start_drag: ffi::wl_listener,
-    pub start_drag: ffi::wl_listener,
-    pub request_set_primary_selection: ffi::wl_listener,
+    pub x11_cursor_commit: crate::listener::Listener,
+    pub x11_cursor_destroy: crate::listener::Listener,
+    pub request_set_selection: crate::listener::Listener,
+    pub request_start_drag: crate::listener::Listener,
+    pub start_drag: crate::listener::Listener,
+    pub request_set_primary_selection: crate::listener::Listener,
 
     pub drag: DragState,
-    pub drag_destroy: ffi::wl_listener,
+    pub drag_destroy: crate::listener::Listener,
 
     pub link: ffi::wl_list,
     pub link_sent: ffi::wl_list,
@@ -217,40 +217,15 @@ impl Seat {
         (*seat).cursor.init(seat, output_layout)?;
 
         // Setup listeners
-        let set_cursor_ptr = &mut (*seat).request_set_cursor as *mut ffi::wl_listener as *mut WlListener;
-        (*set_cursor_ptr).notify = Some(handle_request_set_cursor);
-        wl_signal_add(
-            ffi::river_wlr_seat_get_request_set_cursor_signal(wlr_seat),
-            &mut (*seat).request_set_cursor,
-        );
+        (*seat).request_set_cursor.connect(ffi::river_wlr_seat_get_request_set_cursor_signal(wlr_seat), handle_request_set_cursor);
 
-        let set_sel_ptr = &mut (*seat).request_set_selection as *mut ffi::wl_listener as *mut WlListener;
-        (*set_sel_ptr).notify = Some(handle_request_set_selection);
-        wl_signal_add(
-            ffi::river_wlr_seat_get_request_set_selection_signal(wlr_seat),
-            &mut (*seat).request_set_selection,
-        );
+        (*seat).request_set_selection.connect(ffi::river_wlr_seat_get_request_set_selection_signal(wlr_seat), handle_request_set_selection);
 
-        let start_drag_req_ptr = &mut (*seat).request_start_drag as *mut ffi::wl_listener as *mut WlListener;
-        (*start_drag_req_ptr).notify = Some(handle_request_start_drag);
-        wl_signal_add(
-            ffi::river_wlr_seat_get_request_start_drag_signal(wlr_seat),
-            &mut (*seat).request_start_drag,
-        );
+        (*seat).request_start_drag.connect(ffi::river_wlr_seat_get_request_start_drag_signal(wlr_seat), handle_request_start_drag);
 
-        let start_drag_ptr = &mut (*seat).start_drag as *mut ffi::wl_listener as *mut WlListener;
-        (*start_drag_ptr).notify = Some(handle_start_drag);
-        wl_signal_add(
-            ffi::river_wlr_seat_get_start_drag_signal(wlr_seat),
-            &mut (*seat).start_drag,
-        );
+        (*seat).start_drag.connect(ffi::river_wlr_seat_get_start_drag_signal(wlr_seat), handle_start_drag);
 
-        let set_prim_ptr = &mut (*seat).request_set_primary_selection as *mut ffi::wl_listener as *mut WlListener;
-        (*set_prim_ptr).notify = Some(handle_request_set_primary_selection);
-        wl_signal_add(
-            ffi::river_wlr_seat_get_request_set_primary_selection_signal(wlr_seat),
-            &mut (*seat).request_set_primary_selection,
-        );
+        (*seat).request_set_primary_selection.connect(ffi::river_wlr_seat_get_request_set_primary_selection_signal(wlr_seat), handle_request_set_primary_selection);
 
         (*seat).update_capabilities();
 
@@ -277,14 +252,14 @@ impl Seat {
         crate::server::wl_list_remove(&mut (*seat).link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
 
         (*seat).unwatch_x11_cursor();
-        wl_listener_remove(&mut (*seat).request_set_cursor);
-        wl_listener_remove(&mut (*seat).request_set_selection);
-        wl_listener_remove(&mut (*seat).request_start_drag);
-        wl_listener_remove(&mut (*seat).start_drag);
-        wl_listener_remove(&mut (*seat).request_set_primary_selection);
+        (*seat).request_set_cursor.disconnect();
+        (*seat).request_set_selection.disconnect();
+        (*seat).request_start_drag.disconnect();
+        (*seat).start_drag.disconnect();
+        (*seat).request_set_primary_selection.disconnect();
 
         if (*seat).drag != DragState::None {
-            wl_listener_remove(&mut (*seat).drag_destroy);
+            (*seat).drag_destroy.disconnect();
         }
 
         ffi::wlr_seat_destroy((*seat).wlr_seat);
@@ -312,19 +287,9 @@ impl Seat {
         self.x11_cursor_surface = surface;
         self.x11_cursor_scale = scale;
 
-        let commit = &mut self.x11_cursor_commit as *mut ffi::wl_listener as *mut WlListener;
-        (*commit).notify = Some(handle_x11_cursor_commit);
-        wl_signal_add(
-            ffi::river_wlr_surface_get_commit_signal(surface),
-            &mut self.x11_cursor_commit,
-        );
+        self.x11_cursor_commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_x11_cursor_commit);
 
-        let destroy = &mut self.x11_cursor_destroy as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy).notify = Some(handle_x11_cursor_destroy);
-        wl_signal_add(
-            ffi::river_wlr_surface_get_destroy_signal(surface),
-            &mut self.x11_cursor_destroy,
-        );
+        self.x11_cursor_destroy.connect(ffi::river_wlr_surface_get_destroy_signal(surface), handle_x11_cursor_destroy);
 
         // Whatever is already committed on the surface is what wlroots reads
         // first; the fresh buffer only arrives on the commit that follows.
@@ -337,8 +302,8 @@ impl Seat {
         }
         self.x11_cursor_surface = std::ptr::null_mut();
         self.x11_cursor_scale = 1.0;
-        wl_listener_remove(&mut self.x11_cursor_commit);
-        wl_listener_remove(&mut self.x11_cursor_destroy);
+        self.x11_cursor_commit.disconnect();
+        self.x11_cursor_destroy.disconnect();
     }
 
     pub unsafe fn attach_device(&mut self, device: *mut crate::input_device::InputDevice) {
@@ -1704,12 +1669,7 @@ unsafe extern "C" fn handle_start_drag(
         _ => {}
     }
 
-    let drag_destroy_ptr = &mut seat.drag_destroy as *mut ffi::wl_listener as *mut WlListener;
-    (*drag_destroy_ptr).notify = Some(handle_drag_destroy);
-    wl_signal_add(
-        ffi::river_wlr_drag_get_destroy_signal(wlr_drag),
-        &mut seat.drag_destroy,
-    );
+    seat.drag_destroy.connect(ffi::river_wlr_drag_get_destroy_signal(wlr_drag), handle_drag_destroy);
 
     let wlr_drag_icon = ffi::river_wlr_drag_get_icon(wlr_drag);
     if !wlr_drag_icon.is_null() {
@@ -1731,7 +1691,7 @@ unsafe extern "C" fn handle_drag_destroy(
     _data: *mut std::ffi::c_void,
 ) {
     let seat = &mut *crate::container_of!(listener, Seat, drag_destroy);
-    wl_listener_remove(&mut seat.drag_destroy);
+    seat.drag_destroy.disconnect();
 
     match seat.drag {
         DragState::None => unreachable!(),

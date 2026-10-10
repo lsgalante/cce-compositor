@@ -4,7 +4,6 @@
 use crate::ffi;
 use crate::seat::Seat;
 use crate::keyboard::KeyboardConfig;
-use crate::server::wl_listener_remove;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,8 +32,8 @@ pub struct KeyboardGroup {
     pub wlr_keyboard: ffi::wlr_keyboard,
     pub modifiers_old: u32,
     pub pressed: HashMap<u32, Press>,
-    pub key_listener: ffi::wl_listener,
-    pub modifiers_listener: ffi::wl_listener,
+    pub key_listener: crate::listener::Listener,
+    pub modifiers_listener: crate::listener::Listener,
     pub keyboards: ffi::wl_list, // list of keyboards in this group
 }
 
@@ -80,15 +79,11 @@ impl KeyboardGroup {
         }
         ffi::wlr_keyboard_set_repeat_info(&mut (*group_ptr).wlr_keyboard, config.repeat_rate, config.repeat_delay);
 
-        let key_listener_ptr = &mut (*group_ptr).key_listener as *mut ffi::wl_listener as *mut crate::server::WlListener;
-        (*key_listener_ptr).notify = Some(handle_group_key);
         let key_signal = ffi::river_wlr_keyboard_get_key_signal(&mut (*group_ptr).wlr_keyboard);
-        crate::server::wl_signal_add(key_signal, &mut (*group_ptr).key_listener);
+        (*group_ptr).key_listener.connect(key_signal, handle_group_key);
 
-        let modifiers_listener_ptr = &mut (*group_ptr).modifiers_listener as *mut ffi::wl_listener as *mut crate::server::WlListener;
-        (*modifiers_listener_ptr).notify = Some(handle_group_modifiers);
         let modifiers_signal = ffi::river_wlr_keyboard_get_modifiers_signal(&mut (*group_ptr).wlr_keyboard);
-        crate::server::wl_signal_add(modifiers_signal, &mut (*group_ptr).modifiers_listener);
+        (*group_ptr).modifiers_listener.connect(modifiers_signal, handle_group_modifiers);
 
         if !config.keymap.is_null() {
             ffi::xkb_keymap_ref(config.keymap);
@@ -119,8 +114,8 @@ impl KeyboardGroup {
         }
 
         crate::server::wl_list_remove(&mut self.link as *mut ffi::wl_list as *mut crate::server::WlList);
-        wl_listener_remove(&mut self.key_listener);
-        wl_listener_remove(&mut self.modifiers_listener);
+        self.key_listener.disconnect();
+        self.modifiers_listener.disconnect();
 
         // If the currently active keyboard of a seat is destroyed, we need to set a new active keyboard.
         let active_wlr_kbd = ffi::river_wlr_seat_get_keyboard((*self.seat).wlr_seat);

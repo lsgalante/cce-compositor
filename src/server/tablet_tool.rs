@@ -1,7 +1,6 @@
 use crate::ffi;
 use crate::tablet::Tablet;
 use crate::seat::Seat;
-use crate::server::{WlListener, wl_listener_remove, wl_signal_add};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TabletToolMode {
@@ -21,8 +20,8 @@ pub struct TabletTool {
     pub tilt_x: f64,
     pub tilt_y: f64,
 
-    pub destroy_listener: ffi::wl_listener,
-    pub set_cursor_listener: ffi::wl_listener,
+    pub destroy_listener: crate::listener::Listener,
+    pub set_cursor_listener: crate::listener::Listener,
 }
 
 impl TabletTool {
@@ -76,14 +75,10 @@ impl TabletTool {
 
         (*wlr_tool).data = tool as *mut _;
 
-        let destroy_listener_ptr = &mut (*tool).destroy_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy_listener_ptr).notify = Some(handle_destroy);
-        wl_signal_add(&mut (*wlr_tool).events.destroy, &mut (*tool).destroy_listener);
+        (*tool).destroy_listener.connect(&mut (*wlr_tool).events.destroy, handle_destroy);
 
-        let set_cursor_listener_ptr = &mut (*tool).set_cursor_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*set_cursor_listener_ptr).notify = Some(handle_set_cursor);
         let set_cursor_signal = ffi::river_wlr_tablet_v2_tablet_tool_get_set_cursor_signal(wp_tool);
-        wl_signal_add(set_cursor_signal, &mut (*tool).set_cursor_listener);
+        (*tool).set_cursor_listener.connect(set_cursor_signal, handle_set_cursor);
 
         Ok(tool)
     }
@@ -342,8 +337,8 @@ unsafe extern "C" fn handle_destroy(
 
     ffi::wlr_cursor_destroy(tool.wlr_cursor);
 
-    wl_listener_remove(&mut tool.destroy_listener);
-    wl_listener_remove(&mut tool.set_cursor_listener);
+    tool.destroy_listener.disconnect();
+    tool.set_cursor_listener.disconnect();
 
     let _boxed = Box::from_raw(tool_ptr);
 }

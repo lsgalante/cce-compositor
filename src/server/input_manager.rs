@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, wl_signal_add, WlListener, wl_listener_remove, WlList, wl_list_insert, wl_list_remove};
+use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
 use crate::seat::Seat;
 
 pub struct InputManager {
@@ -23,11 +23,11 @@ pub struct InputManager {
     pub text_input_manager: *mut ffi::wlr_text_input_manager_v3,
     pub tablet_manager: *mut ffi::wlr_tablet_manager_v2,
 
-    pub new_input_listener: ffi::wl_listener,
-    pub new_text_input: ffi::wl_listener,
-    pub new_input_method: ffi::wl_listener,
-    pub new_virtual_pointer_listener: ffi::wl_listener,
-    pub new_virtual_keyboard_listener: ffi::wl_listener,
+    pub new_input_listener: crate::listener::Listener,
+    pub new_text_input: crate::listener::Listener,
+    pub new_input_method: crate::listener::Listener,
+    pub new_virtual_pointer_listener: crate::listener::Listener,
+    pub new_virtual_keyboard_listener: crate::listener::Listener,
 
     /// Pending deferred pointer-focus re-evaluation (see
     /// [`InputManager::schedule_pointer_refresh`]); null when none. One idle
@@ -84,31 +84,21 @@ impl InputManager {
             return Err("Failed to create river_input_manager_v1 global");
         }
 
-        let new_input_ptr = &mut self.new_input_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*new_input_ptr).notify = Some(handle_new_input);
         
         let signal = ffi::river_wlr_backend_get_new_input_signal((*server).backend);
-        wl_signal_add(signal, &mut self.new_input_listener);
+        self.new_input_listener.connect(signal, handle_new_input);
 
         // Connect new_text_input listener
-        let new_text_input_ptr = &mut self.new_text_input as *mut ffi::wl_listener as *mut WlListener;
-        (*new_text_input_ptr).notify = Some(handle_new_text_input);
-        wl_signal_add(&mut (*self.text_input_manager).events.new_text_input, &mut self.new_text_input);
+        self.new_text_input.connect(&mut (*self.text_input_manager).events.new_text_input, handle_new_text_input);
 
         // Connect new_input_method listener
-        let new_input_method_ptr = &mut self.new_input_method as *mut ffi::wl_listener as *mut WlListener;
-        (*new_input_method_ptr).notify = Some(handle_new_input_method);
-        wl_signal_add(&mut (*self.input_method_manager).events.new_input_method, &mut self.new_input_method);
+        self.new_input_method.connect(&mut (*self.input_method_manager).events.new_input_method, handle_new_input_method);
 
         // Connect new_virtual_pointer listener
-        let new_virtual_pointer_ptr = &mut self.new_virtual_pointer_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*new_virtual_pointer_ptr).notify = Some(handle_new_virtual_pointer);
-        wl_signal_add(&mut (*self.virtual_pointer_manager).events.new_virtual_pointer, &mut self.new_virtual_pointer_listener);
+        self.new_virtual_pointer_listener.connect(&mut (*self.virtual_pointer_manager).events.new_virtual_pointer, handle_new_virtual_pointer);
 
         // Connect new_virtual_keyboard listener
-        let new_virtual_keyboard_ptr = &mut self.new_virtual_keyboard_listener as *mut ffi::wl_listener as *mut WlListener;
-        (*new_virtual_keyboard_ptr).notify = Some(handle_new_virtual_keyboard);
-        wl_signal_add(&mut (*self.virtual_keyboard_manager).events.new_virtual_keyboard, &mut self.new_virtual_keyboard_listener);
+        self.new_virtual_keyboard_listener.connect(&mut (*self.virtual_keyboard_manager).events.new_virtual_keyboard, handle_new_virtual_keyboard);
 
         Ok(())
     }
@@ -190,11 +180,11 @@ impl InputManager {
         log::info!("[deinit] seats destroyed");
 
         log::info!("[deinit] removing input manager listeners");
-        wl_listener_remove(&mut self.new_input_listener);
-        wl_listener_remove(&mut self.new_text_input);
-        wl_listener_remove(&mut self.new_input_method);
-        wl_listener_remove(&mut self.new_virtual_pointer_listener);
-        wl_listener_remove(&mut self.new_virtual_keyboard_listener);
+        self.new_input_listener.disconnect();
+        self.new_text_input.disconnect();
+        self.new_input_method.disconnect();
+        self.new_virtual_pointer_listener.disconnect();
+        self.new_virtual_keyboard_listener.disconnect();
         log::info!("[deinit] InputManager::deinit finished");
     }
 }

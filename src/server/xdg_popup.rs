@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{WlListener, wl_listener_remove, wl_signal_add};
 
 pub struct XdgPopup {
     pub wlr_popup: *mut ffi::wlr_xdg_popup,
@@ -23,10 +22,10 @@ pub struct XdgPopup {
     /// coordinates: to tell a map, a move or a resize.
     pub last_box: (i32, i32, i32, i32),
 
-    pub destroy: ffi::wl_listener,
-    pub commit: ffi::wl_listener,
-    pub new_popup: ffi::wl_listener,
-    pub reposition: ffi::wl_listener,
+    pub destroy: crate::listener::Listener,
+    pub commit: crate::listener::Listener,
+    pub new_popup: crate::listener::Listener,
+    pub reposition: crate::listener::Listener,
 }
 
 impl XdgPopup {
@@ -67,22 +66,14 @@ impl XdgPopup {
             reposition: std::mem::zeroed(),
         }));
 
-        let destroy_ptr = &mut (*popup).destroy as *mut ffi::wl_listener as *mut WlListener;
-        (*destroy_ptr).notify = Some(handle_destroy);
-        wl_signal_add(ffi::river_wlr_xdg_popup_get_destroy_signal(wlr_popup), &mut (*popup).destroy);
+        (*popup).destroy.connect(ffi::river_wlr_xdg_popup_get_destroy_signal(wlr_popup), handle_destroy);
 
-        let commit_ptr = &mut (*popup).commit as *mut ffi::wl_listener as *mut WlListener;
-        (*commit_ptr).notify = Some(handle_commit);
         let wlr_surface = ffi::river_wlr_xdg_surface_get_surface(base_surface);
-        wl_signal_add(ffi::river_wlr_surface_get_commit_signal(wlr_surface), &mut (*popup).commit);
+        (*popup).commit.connect(ffi::river_wlr_surface_get_commit_signal(wlr_surface), handle_commit);
 
-        let new_popup_ptr = &mut (*popup).new_popup as *mut ffi::wl_listener as *mut WlListener;
-        (*new_popup_ptr).notify = Some(handle_new_popup);
-        wl_signal_add(ffi::river_wlr_xdg_surface_get_new_popup_signal(base_surface), &mut (*popup).new_popup);
+        (*popup).new_popup.connect(ffi::river_wlr_xdg_surface_get_new_popup_signal(base_surface), handle_new_popup);
 
-        let reposition_ptr = &mut (*popup).reposition as *mut ffi::wl_listener as *mut WlListener;
-        (*reposition_ptr).notify = Some(handle_reposition);
-        wl_signal_add(ffi::river_wlr_xdg_popup_get_reposition_signal(wlr_popup), &mut (*popup).reposition);
+        (*popup).reposition.connect(ffi::river_wlr_xdg_popup_get_reposition_signal(wlr_popup), handle_reposition);
 
         Ok(popup)
     }
@@ -108,10 +99,10 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     let popup = crate::container_of!(listener, XdgPopup, destroy);
     refresh_pointer_under(popup);
 
-    wl_listener_remove(&mut (*popup).destroy);
-    wl_listener_remove(&mut (*popup).commit);
-    wl_listener_remove(&mut (*popup).new_popup);
-    wl_listener_remove(&mut (*popup).reposition);
+    (*popup).destroy.disconnect();
+    (*popup).commit.disconnect();
+    (*popup).new_popup.disconnect();
+    (*popup).reposition.disconnect();
 
     let _ = Box::from_raw(popup);
 }
@@ -120,7 +111,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let popup = crate::container_of!(listener, XdgPopup, commit);
     let base_surface = ffi::river_wlr_xdg_popup_get_base((*popup).wlr_popup);
     if ffi::river_wlr_xdg_surface_get_initial_commit(base_surface) {
-        handle_reposition(&mut (*popup).reposition, std::ptr::null_mut());
+        handle_reposition((*popup).reposition.as_ptr(), std::ptr::null_mut());
         return;
     }
     update_blur(popup, base_surface);

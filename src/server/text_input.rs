@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{WlListener, wl_signal_add, WlList};
+use crate::server::{WlList};
 use crate::seat::Seat;
 
 #[repr(C)]
@@ -10,30 +10,10 @@ pub struct TextInput {
     pub link: ffi::wl_list,
     pub wlr_text_input: *mut ffi::wlr_text_input_v3,
 
-    pub enable: ffi::wl_listener,
-    pub commit: ffi::wl_listener,
-    pub disable: ffi::wl_listener,
-    pub destroy: ffi::wl_listener,
-}
-
-unsafe fn connect_listener(
-    signal: *mut ffi::wl_signal,
-    listener: *mut ffi::wl_listener,
-    callback: unsafe extern "C" fn(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void),
-) {
-    let wl_lis = listener as *mut WlListener;
-    (*wl_lis).notify = Some(callback);
-    wl_signal_add(signal, listener);
-}
-
-unsafe fn wl_listener_remove_safe(listener: *mut ffi::wl_listener) {
-    let prev = (*listener).link.prev;
-    let next = (*listener).link.next;
-    if !prev.is_null() && !next.is_null() && prev != listener as *mut ffi::wl_list && next != listener as *mut ffi::wl_list {
-        ffi::wl_list_remove(&mut (*listener).link);
-        (*listener).link.prev = std::ptr::null_mut();
-        (*listener).link.next = std::ptr::null_mut();
-    }
+    pub enable: crate::listener::Listener,
+    pub commit: crate::listener::Listener,
+    pub disable: crate::listener::Listener,
+    pub destroy: crate::listener::Listener,
 }
 
 impl TextInput {
@@ -66,10 +46,10 @@ impl TextInput {
         let text_inputs_list = &mut (*seat).relay.text_inputs as *mut ffi::wl_list as *mut WlList;
         crate::server::wl_list_insert((*text_inputs_list).prev, &mut (*raw).link as *mut ffi::wl_list as *mut WlList);
 
-        connect_listener(&mut (*wlr_text_input).events.enable, &mut (*raw).enable, handle_enable);
-        connect_listener(&mut (*wlr_text_input).events.commit, &mut (*raw).commit, handle_commit);
-        connect_listener(&mut (*wlr_text_input).events.disable, &mut (*raw).disable, handle_disable);
-        connect_listener(&mut (*wlr_text_input).events.destroy, &mut (*raw).destroy, handle_destroy);
+        (*raw).enable.connect(&mut (*wlr_text_input).events.enable, handle_enable);
+        (*raw).commit.connect(&mut (*wlr_text_input).events.commit, handle_commit);
+        (*raw).disable.connect(&mut (*wlr_text_input).events.disable, handle_disable);
+        (*raw).destroy.connect(&mut (*wlr_text_input).events.destroy, handle_destroy);
 
         // A client that binds its text input after its surface took focus
         // (cce-ui binds lazily) is entered now; `InputRelay::focus` only
@@ -156,10 +136,10 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
         (*seat).relay.disable_text_input();
     }
 
-    wl_listener_remove_safe(&mut (*text_input).enable);
-    wl_listener_remove_safe(&mut (*text_input).commit);
-    wl_listener_remove_safe(&mut (*text_input).disable);
-    wl_listener_remove_safe(&mut (*text_input).destroy);
+    (*text_input).enable.disconnect();
+    (*text_input).commit.disconnect();
+    (*text_input).disable.disconnect();
+    (*text_input).destroy.disconnect();
 
     ffi::wl_list_remove(&mut (*text_input).link);
 
