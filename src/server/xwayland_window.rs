@@ -1057,7 +1057,15 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         let log_y = from_x11(ey, s);
         let log_width = from_x11(ew, s) as u32;
         let log_height = from_x11(eh, s) as u32;
-        
+        // What the render pass applies — compared below, after `rendering_sent`
+        // has been overwritten.
+        let applied = (
+            (*window).rendering_requested.x,
+            (*window).rendering_requested.y,
+            (*window).rendering_sent.width,
+            (*window).rendering_sent.height,
+        );
+
         (*window).box_geom.x = log_x;
         (*window).box_geom.y = log_y;
         (*window).box_geom.width = log_width as i32;
@@ -1082,6 +1090,13 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
             (*window).hint_placed = true;
         }
         (*window).set_dimensions(log_width, log_height);
+        // set_dimensions sees no size change (`rendering_sent` already holds
+        // it), yet the render pass is what moves the scene node to the
+        // granted spot. A request that changes nothing renders nothing: a
+        // self-placed game re-asks for the same box many times a second.
+        if applied != (log_x, log_y, log_width, log_height) {
+            (*(*window).server).wm.dirty_rendering();
+        }
         return;
     }
 

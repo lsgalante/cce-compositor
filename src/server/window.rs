@@ -438,7 +438,6 @@ impl Configure {
 pub struct WindowRenderingScheduled {
     pub width: u32,
     pub height: u32,
-    pub resend_dimensions: bool,
 }
 
 pub struct WindowRenderingSent {
@@ -1073,7 +1072,6 @@ impl Window {
             rendering_scheduled: WindowRenderingScheduled {
                 width: 0,
                 height: 0,
-                resend_dimensions: false,
             },
             rendering_sent: WindowRenderingSent {
                 width: 0,
@@ -1750,12 +1748,21 @@ impl Window {
         }
     }
 
+    /// Record the size this window is about to have, and ask for a render
+    /// pass only when it differs from the one the last pass applied
+    /// (`rendering_sent`). A pass is not needed just because a window is
+    /// linked: the transaction that links it renders it. (A
+    /// `resend_dimensions` flag used to force one on every call; only the
+    /// external manager's dimensions event ever cleared it, so from a
+    /// window's first link on, every unchanged X11 configure request and
+    /// every resize-drag motion that left the size alone cost a render pass.)
+    /// `#[track_caller]` so `CCE_DIRTY_TRACE` names the caller.
+    #[track_caller]
     pub unsafe fn set_dimensions(&mut self, width: u32, height: u32) {
         self.rendering_scheduled.width = width;
         self.rendering_scheduled.height = height;
 
-        if self.rendering_scheduled.resend_dimensions ||
-           self.rendering_scheduled.width != self.rendering_sent.width ||
+        if self.rendering_scheduled.width != self.rendering_sent.width ||
            self.rendering_scheduled.height != self.rendering_sent.height {
             (*self.server).wm.dirty_rendering();
         }
@@ -1988,7 +1995,6 @@ impl Window {
                             }
                         }
                     }
-                    self.rendering_scheduled.resend_dimensions = true;
                 }
             }
         }
@@ -2119,13 +2125,11 @@ impl Window {
             if self.configure_sent.width != Some(w as u32) || self.configure_sent.height != Some(h as u32) {
                 self.configure_scheduled.width = Some(w as u32);
                 self.configure_scheduled.height = Some(h as u32);
-                self.rendering_scheduled.resend_dimensions = true;
                 (Some(w as u32), Some(h as u32))
             } else {
                 (None, None)
             }
         } else if let Some(dimensions) = self.wm_requested.dimensions {
-            self.rendering_scheduled.resend_dimensions = true;
             (Some(dimensions.width), Some(dimensions.height))
         } else {
             (None, None)
