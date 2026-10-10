@@ -318,7 +318,17 @@ state to `~/.local/state/cce/state.json` — details in `cce-compositor/CLAUDE.m
 
 ## How the pieces talk (IPC)
 
-Clients and compositor communicate over Unix sockets keyed by `$WAYLAND_DISPLAY`:
+Clients and compositor communicate over Unix sockets keyed by `$WAYLAND_DISPLAY`.
+**Every name and line that crosses a crate boundary is spelled once, in
+`cce_core::ipc::ctl`** (`cce_ui::ipc::ctl` in a client): the socket paths
+(`control_socket`, `status_socket`, `stream_socket`, and `*_for(display)` for the
+compositor's own side), `Request` for the control commands crates send from code,
+`StatusTopic`, `SelectionEvent`, `ShortcutEvent`, and `WindowInfo` for the
+`windows --json` line. Each has its parser beside its builder and a round-trip
+test, and the compositor parses with the same code. Build a new cross-crate
+command or topic there, not as a string in two places; commands only a person
+types (`ccectl zoom-in`) stay plain lines the compositor parses itself.
+
 
 - **Control**: `/tmp/cce-{WAYLAND_DISPLAY}.sock` — line-oriented request/reply. The
   `ccectl` binary (in `cce-compositor/`) is the CLI client; run `ccectl` with no args for the
@@ -346,6 +356,9 @@ Clients and compositor communicate over Unix sockets keyed by `$WAYLAND_DISPLAY`
   requests with `cce_ui::ipc::read_request_line` (a total deadline and a size
   cap), never a bare `read_line`: one silent client otherwise wedges the
   listener for every client after it. Don't copy either into an app again.
+  The cce-notes protocol in particular lives in `cce_vault::notes_ipc`
+  (`Command`, the `current`/`vault` queries, and `open`, the bounded off-thread
+  hand-off cce-graph, cce-grid and cce-list use).
 
 ## Window fades (DE-wide open/close dissolve)
 
@@ -433,8 +446,8 @@ not follow the live machine's files. A file that is absent means the config's va
 `ccectl idle timeouts` edits that config base, which the plan keeps
 overriding while its mode holds the lever; `ccectl idle status` reports the
 values in force plus `plan_display_off=` / `plan_sleep=` (`none` or seconds).
-The paths are spelled in both crates (the app cannot be a compositor
-dependency), so a rename must land on both sides.
+The paths are spelled once, in `cce_core::plan` (with `/run/cce/animations`),
+which both the writer and every reader take them from.
 
 ## Repo hygiene
 
