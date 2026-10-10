@@ -1664,7 +1664,7 @@ impl WindowManager {
         // A restart-compositor that stalled must not leave its flag behind
         // for the next plain logout to act on.
         let user = std::env::var("USER").unwrap_or_else(|_| format!("uid{}", libc::getuid()));
-        let _ = std::fs::remove_file(format!("/tmp/cce-restart-requested-{}", user));
+        let _ = std::fs::remove_file(cce_core::ipc::ctl::restart_flag(&user));
 
         let held_by = remaining.join(", ");
         log::info!(
@@ -6429,7 +6429,7 @@ impl WindowManager {
                 // so the restored compositor brings the session back.
                 let user = std::env::var("USER")
                     .unwrap_or_else(|_| format!("uid{}", unsafe { libc::getuid() }));
-                let flag = format!("/tmp/cce-restart-requested-{}", user);
+                let flag = cce_core::ipc::ctl::restart_flag(&user);
                 if let Err(e) = std::fs::write(&flag, b"restart\n") {
                     return format!("error: cannot write {}: {}\n", flag, e);
                 }
