@@ -355,7 +355,7 @@ looked like a window at rest. Same `--bin` passthrough as above.
 ## Build pipeline (`build.rs`)
 
 `build.rs` does a lot before Rust compiles:
-1. Runs `meson setup build` (first time) + `meson compile` inside `scenefx/`, static.
+1. Builds the vendored scenefx (static) with meson into `$OUT_DIR/scenefx-build`.
 2. Generates server headers for upstream protocols and header + `private-code` C for
    the custom `river-*` / `cce-*` protocols (`protocol/`), using `wayland-scanner`.
    `clean_xml` reorders files whose XML declaration follows a leading comment.
@@ -364,28 +364,17 @@ looked like a window at rest. Same `--bin` passthrough as above.
 4. Runs `bindgen` over `wrapper.h` → `$OUT_DIR/bindings.rs`, blocklisting a handful of
    types that are hand-defined `#[repr(C)]` in Rust instead.
 
-**"First time" means the guard is `!Path::new("scenefx/build").exists()`** (step
-1, `build.rs`) — so once that directory exists `setup` never runs again, and
-every later build is `meson compile -C build` alone, which cannot reconfigure.
-Meson bakes absolute paths into a configured build dir, so **relocating the
-workspace root kills it permanently**: the dir still points at where the tree
-used to be, and nothing in the build recovers it. `cargo clean` and `make
-clean` both only clear `../target/`; `scenefx/build/` is gitignored
-(`.gitignore:6`, `scenefx/.gitignore:2`), so a fresh clone never has one and is
-fine, while a *moved* tree carries the dead one along.
+**scenefx builds per target directory.** The meson build dir is
+`$OUT_DIR/scenefx-build`, so each target dir (and each worktree with its own
+`CARGO_TARGET_DIR`) has its own, and `cargo clean` clears it. Meson bakes
+absolute paths into a configured build dir, so `build.rs` records the source
+dir it was set up from (`cce-source-dir` beside it) and sets up again from
+scratch when that differs (a moved tree), when `build.ninja` is missing (a
+setup that died half way), or when `meson compile` fails once. The system
+protocol XMLs come from `pkg-config --variable=pkgdatadir wayland-protocols`.
 
-It surfaces in `meson compile`, not `meson setup`, which is what makes it
-confusing — ninja goes to regenerate `build.ninja` and meson dies with
-
-```
-ERROR: Neither source directory '<old absolute path>' nor build directory '.' contain a build file meson.build
-```
-
-The old path in that message is the entire diagnosis: it names where the
-workspace used to live. Recovery is `rm -rf cce-compositor/scenefx/build` and
-one more build to reconfigure, about a minute. Cost an afternoon on
-2026-08-28, when a build dir configured under the workspace's former
-`~/Dropbox/cce` path survived the move to `~/projects/cce`.
+An old `scenefx/build/` left in the source tree by earlier builds is unused
+(gitignored) and can be deleted.
 
 ## Architecture
 

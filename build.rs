@@ -11,30 +11,27 @@ fn main() {
     println!("cargo:rerun-if-changed=scenefx/types");
     println!("cargo:rerun-if-changed=scenefx/render");
     println!("cargo:rerun-if-changed=scenefx/include");
+    println!("cargo:rerun-if-changed=scenefx/meson.build");
 
-    // Build local scenefx
+    // Build the vendored scenefx into OUT_DIR, so every target directory (and
+    // worktree) has its own build and `cargo clean` clears it. Meson bakes
+    // absolute paths into a configured build dir, so the source dir it was set
+    // up from is recorded beside it: a build dir configured from anywhere else
+    // (a moved tree) is wiped and set up again, and so is one whose compile
+    // fails, once. Until 2026-10-10 the build dir was `scenefx/build` in the
+    // source tree, guarded only by its existence, and a moved workspace killed it.
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    if !std::path::Path::new("scenefx/build").exists() {
-        let status = std::process::Command::new("meson")
-            .args(&["setup", "build", "--buildtype=release", "--default-library=static"])
-            .current_dir("scenefx")
-            .status()
-            .expect("Failed to run meson setup");
-        assert!(status.success(), "meson setup failed");
-    }
-    let status = std::process::Command::new("meson")
-        .args(&["compile", "-C", "build"])
-        .current_dir("scenefx")
-        .status()
-        .expect("Failed to run meson compile");
-    assert!(status.success(), "meson compile failed");
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let scenefx_src = PathBuf::from(&manifest_dir).join("scenefx");
+    let scenefx_build = out_dir.join("scenefx-build");
+    build_scenefx(&scenefx_src, &scenefx_build);
 
-    let scenefx_inc1 = PathBuf::from(&manifest_dir).join("scenefx/include");
-    let scenefx_inc2 = PathBuf::from(&manifest_dir).join("scenefx/build/include");
-    let scenefx_inc3 = PathBuf::from(&manifest_dir).join("scenefx/build/protocol");
+    let scenefx_inc1 = scenefx_src.join("include");
+    let scenefx_inc2 = scenefx_build.join("include");
+    let scenefx_inc3 = scenefx_build.join("protocol");
     let scenefx_include_paths = vec![scenefx_inc1, scenefx_inc2, scenefx_inc3];
 
-    println!("cargo:rustc-link-search=native={}/scenefx/build", manifest_dir);
+    println!("cargo:rustc-link-search=native={}", scenefx_build.display());
     println!("cargo:rustc-link-lib=static=scenefx-0.5");
     println!("cargo:rustc-link-lib=dylib=GLESv2");
     println!("cargo:rustc-link-lib=dylib=EGL");
@@ -65,8 +62,6 @@ fn main() {
     let libevdev = pkg_config::probe_library("libevdev")
         .expect("libevdev is required");
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-
     // Helper to fix XML files starting with comments instead of the XML declaration
     let clean_xml = |src: &str, dst: &std::path::Path| {
         let content = std::fs::read_to_string(src).expect("Failed to read XML source");
@@ -78,22 +73,28 @@ fn main() {
         std::fs::write(dst, cleaned).expect("Failed to write cleaned XML");
     };
 
+    // The system's wayland-protocols, wherever pkg-config says they are.
+    let wp = pkg_config::get_variable("wayland-protocols", "pkgdatadir")
+        .expect("wayland-protocols is required (pkg-config --variable=pkgdatadir wayland-protocols)");
+    let sys = |rel: &str| format!("{wp}/{rel}");
+
     // Generate upstream protocol headers (header-only)
-    let upstream_protocols = vec![
-        ("wlr-layer-shell-unstable-v1.xml", "protocol/upstream/wlr-layer-shell-unstable-v1.xml"),
-        ("wlr-output-power-management-unstable-v1.xml", "protocol/upstream/wlr-output-power-management-unstable-v1.xml"),
-        ("virtual-keyboard-unstable-v1.xml", "protocol/upstream/virtual-keyboard-unstable-v1.xml"),
-        ("tablet-v2.xml", "/usr/share/wayland-protocols/stable/tablet/tablet-v2.xml"),
-        ("xdg-shell.xml", "/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml"),
-        ("color-management-v1.xml", "/usr/share/wayland-protocols/staging/color-management/color-management-v1.xml"),
-        ("content-type-v1.xml", "/usr/share/wayland-protocols/staging/content-type/content-type-v1.xml"),
-        ("cursor-shape-v1.xml", "/usr/share/wayland-protocols/staging/cursor-shape/cursor-shape-v1.xml"),
-        ("ext-image-copy-capture-v1.xml", "/usr/share/wayland-protocols/staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml"),
-        ("pointer-constraints-unstable-v1.xml", "/usr/share/wayland-protocols/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml"),
-        ("tearing-control-v1.xml", "/usr/share/wayland-protocols/staging/tearing-control/tearing-control-v1.xml"),
+    let upstream_protocols: Vec<(&str, String)> = vec![
+        ("wlr-layer-shell-unstable-v1.xml", "protocol/upstream/wlr-layer-shell-unstable-v1.xml".to_string()),
+        ("wlr-output-power-management-unstable-v1.xml", "protocol/upstream/wlr-output-power-management-unstable-v1.xml".to_string()),
+        ("virtual-keyboard-unstable-v1.xml", "protocol/upstream/virtual-keyboard-unstable-v1.xml".to_string()),
+        ("tablet-v2.xml", sys("stable/tablet/tablet-v2.xml")),
+        ("xdg-shell.xml", sys("stable/xdg-shell/xdg-shell.xml")),
+        ("color-management-v1.xml", sys("staging/color-management/color-management-v1.xml")),
+        ("content-type-v1.xml", sys("staging/content-type/content-type-v1.xml")),
+        ("cursor-shape-v1.xml", sys("staging/cursor-shape/cursor-shape-v1.xml")),
+        ("ext-image-copy-capture-v1.xml", sys("staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml")),
+        ("pointer-constraints-unstable-v1.xml", sys("unstable/pointer-constraints/pointer-constraints-unstable-v1.xml")),
+        ("tearing-control-v1.xml", sys("staging/tearing-control/tearing-control-v1.xml")),
     ];
 
-    for (name, path) in upstream_protocols {
+    for (name, path) in &upstream_protocols {
+        let (name, path) = (*name, path.as_str());
         println!("cargo:rerun-if-changed={}", path);
         let temp_xml = out_dir.join(format!("{}-temp.xml", name));
         clean_xml(path, &temp_xml);
@@ -227,4 +228,44 @@ fn main() {
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
+}
+
+/// Configure (when needed) and compile scenefx's static library in `build`.
+fn build_scenefx(src: &std::path::Path, build: &std::path::Path) {
+    let stamp = build.join("cce-source-dir");
+    let configured_from = std::fs::read_to_string(&stamp).ok();
+    let ours = src.display().to_string();
+    let fresh = !build.join("build.ninja").exists() || configured_from.as_deref() != Some(ours.as_str());
+    if fresh {
+        setup_scenefx(src, build);
+    }
+    if !compile_scenefx(build) {
+        // A build dir meson can no longer regenerate (it was configured under a
+        // path that has moved, or a setup died half way): start it over once.
+        setup_scenefx(src, build);
+        assert!(compile_scenefx(build), "meson compile failed for scenefx");
+    }
+    std::fs::write(&stamp, ours).expect("could not record scenefx's source dir");
+}
+
+fn setup_scenefx(src: &std::path::Path, build: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(build);
+    let status = std::process::Command::new("meson")
+        .arg("setup")
+        .arg(build)
+        .args(["--buildtype=release", "--default-library=static"])
+        .current_dir(src)
+        .status()
+        .expect("Failed to run meson setup");
+    assert!(status.success(), "meson setup failed");
+}
+
+fn compile_scenefx(build: &std::path::Path) -> bool {
+    std::process::Command::new("meson")
+        .arg("compile")
+        .arg("-C")
+        .arg(build)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
