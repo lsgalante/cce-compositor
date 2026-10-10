@@ -238,12 +238,14 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Twenty modules carry unit tests — `window_manager.rs` (the most of any, among
+Twenty-one modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
 `config.rs` (among them `backdrop_compress_params`), `idle.rs`,
 `idle_inhibit_manager.rs`, `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
 `text.rs`, `global_shortcuts.rs` (trigger parsing),
 `cce_ctl.rs` (when `focus-window` waits, and its fallback on an older compositor),
+`layout_probe.rs` (every hand-written `#[repr(C)]` mirror of a wlroots/pixman struct against
+the offsets `layout_probe.c` gets from the real headers),
 `cursor.rs` (the swipe lean's direction, `swipe_lean`), `min_sizes.rs`,
 `selection.rs` (the rubber band's rect and its hit rule),
 `touch.rs` (edge-swipe progress, finger centroid/spread tracking, swipe vs pinch),

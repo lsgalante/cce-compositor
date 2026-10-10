@@ -5,6 +5,9 @@
 // ==========================================
 #[path = "server/ffi.rs"]
 pub mod ffi;
+#[cfg(test)]
+#[path = "server/layout_probe.rs"]
+mod layout_probe;
 #[path = "server/server.rs"]
 pub mod server;
 #[path = "server/process.rs"]

@@ -80,13 +80,20 @@ pub struct WlrRendererEvents {
 
 #[repr(C)]
 pub struct WlrRendererFeatures {
+    pub input_color_transform: bool,
     pub output_color_transform: bool,
     pub timeline: bool,
 }
 
+/// The leading fields of `struct wlr_renderer` (wlroots 0.20), which bindgen
+/// leaves opaque. `layout_probe.rs` checks every field against the header:
+/// until 2026-10-10 this mirror lacked `color_encodings` and
+/// `features.input_color_transform`, so `features.timeline` read the
+/// renderer's `output_color_transform` instead.
 #[repr(C)]
 pub struct WlrRenderer {
     pub render_buffer_caps: u32,
+    pub color_encodings: u32,
     pub events: WlrRendererEvents,
     pub features: WlrRendererFeatures,
 }
@@ -842,10 +849,22 @@ impl Server {
                 self.linux_dmabuf = ffi::wlr_linux_dmabuf_v1_create_with_renderer(wl_server, 5, renderer);
             }
 
-            // Setup linux drm syncobj if supported
+            // Setup linux drm syncobj (explicit sync) if supported — opt-in
+            // for now. Until 2026-10-10 the WlrRenderer mirror was missing
+            // two fields, so `features.timeline` read the renderer's
+            // `output_color_transform`, which scenefx's fx_renderer always
+            // sets false: this global has never been advertised. With the
+            // mirror fixed, the real timeline flag would turn it on at the
+            // next login on any GPU with native fences, so it stays behind
+            // CCE_EXPLICIT_SYNC=1 until it has been tried in a shadow.
             let renderer_cast = renderer as *mut WlrRenderer;
             let backend_cast = backend as *mut WlrBackend;
-            if (*renderer_cast).features.timeline && (*backend_cast).features.timeline {
+            let explicit_sync_opt_in = std::env::var("CCE_EXPLICIT_SYNC").is_ok_and(|v| v == "1");
+            let supported = (*renderer_cast).features.timeline && (*backend_cast).features.timeline;
+            log::info!("explicit sync: renderer+backend timelines {}, CCE_EXPLICIT_SYNC {}",
+                if supported { "supported" } else { "unsupported" },
+                if explicit_sync_opt_in { "=1" } else { "unset" });
+            if supported && explicit_sync_opt_in {
                 let drm_fd = ffi::wlr_renderer_get_drm_fd(renderer);
                 if drm_fd >= 0 {
                     self.linux_drm_syncobj_manager = ffi::wlr_linux_drm_syncobj_manager_v1_create(wl_server, 1, drm_fd);

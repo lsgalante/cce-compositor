@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rerun-if-changed=src/server/wlroots_log_wrapper.c");
+    println!("cargo:rerun-if-changed=src/server/layout_probe.c");
     println!("cargo:rerun-if-changed=wrapper.h");
     // Vendored scenefx sources: without these, editing a scenefx .c/.h
     // silently ships a stale static lib (meson only reruns when build.rs
@@ -158,6 +159,7 @@ fn main() {
     // Compile the C wrapper and protocol C files
     let mut build = cc::Build::new();
     build.file("src/server/wlroots_log_wrapper.c")
+        .file("src/server/layout_probe.c")
         .define("WLR_USE_UNSTABLE", None)
         .flag("-std=c99")
         .flag("-O2")
