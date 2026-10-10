@@ -333,6 +333,15 @@ Escape with nothing expanded stays quiet. The compositor binary is whatever
 pass through to `cce-shadow start`, so `--bin ../target/release/cce-fx` pins
 the tree's own build.
 
+`./verify/focus-settle-test` proves `focus-window --wait` holds its reply
+until the transaction it raced has landed (`poll_settle_waiters`'
+`layout_in_flight`). It SIGSTOPs a `float-pair` window's client so a
+`set-mode tiled` transaction waits out the 100 ms configure timeout, then
+asserts that no `timeout occurred` is logged after the reply. Before
+2026-10-09 one was, every run: the settle poll read `scheduled.dirty`, which
+`manage_start` clears as a sequence begins, so a transaction awaiting acks
+looked like a window at rest. Same `--bin` passthrough as above.
+
 ## Build pipeline (`build.rs`)
 
 `build.rs` does a lot before Rust compiles:

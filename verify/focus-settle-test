@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# focus-settle-test — behavioral test for `ccectl focus-window --wait`
+# (SettleWaiter, af2797d9) holding its reply until the transaction it raced
+# has landed (a2fa6996).
+#
+# The settle poll used to read "nothing in flight" off `scheduled.dirty`,
+# which manage_start clears as a sequence BEGINS; a window's on-screen box
+# only moves at render_finish. So a transaction waiting on a client's
+# configure ack looked like a window at rest, and the reply could go out
+# mid-transaction. To hold a transaction open on demand, the client is
+# SIGSTOPped: its configure is never acked, and the compositor waits out its
+# 100 ms configure timeout, logging "timeout occurred" each time.
+#
+# Setup: a private cce-shadow instance, float-pair mapping one floating
+# window (its dialog is pushed an hour out). Then:
+#
+#   1. live client, window in view -> focus-window replies exactly "ok",
+#                                      in well under a second
+#   2. client frozen, `set-mode tiled` then `focus-window` (repeated):
+#        - the reply is "ok"
+#        - at least one configure timeout fired before it (the freeze took)
+#        - NO configure timeout fires after it: before a2fa6996 one did
+#          every time, i.e. the reply beat focus-window's own transaction
+#        - the window's geometry at the reply is its geometry 400 ms later
+#
+# The compositor binary is whatever cce-shadow resolves (installed first, then
+# the workspace target/release); extra args are passed to `cce-shadow start`,
+# so `focus-settle-test --bin path/to/cce-fx` pins one explicitly.
+
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(dirname "$here")
+shadow="$repo/scripts/cce-shadow"
+out=$(mktemp -d)
+inst=""
+client=""
+app_id=focus-settle-test
+runs=3
+
+cleanup() {
+    # A stopped client would outlive the shadow's stop sweep.
+    [ -n "$client" ] && kill -CONT "$client" 2>/dev/null || true
+    [ -n "$inst" ] && "$shadow" --instance "$inst" stop >/dev/null 2>&1 || true
+    rm -rf "$out"
+}
+trap cleanup EXIT
+
+fail() {
+    echo "FAIL: $*" >&2
+    echo "--- client log ---" >&2
+    cat "$out/client.log" >&2 || true
+    echo "--- compositor log tail ---" >&2
+    [ -n "$inst" ] && "$shadow" --instance "$inst" logs 2>/dev/null | tail -20 >&2 || true
+    exit 1
+}
+
+echo "==> building test clients"
+cargo build --quiet --manifest-path "$here/clients/Cargo.toml"
+bin="$here/clients/target/debug"
+
+echo "==> starting shadow instance"
+inst=$("$shadow" start --new "$@" 2>&1 | sed -n "s/.*claimed instance '\([^']*\)'.*/\1/p")
+[ -n "$inst" ] || fail "could not claim a shadow instance"
+sc() { "$shadow" --instance "$inst" "$@"; }
+sc ctl idle timeouts 0 0 >/dev/null
+log=$(sc status | awk '/^log/ { print $2 }')
+home=$(sc status | awk '/^home/ { print $2 }')
+
+win() { sc ctl windows --json 2>/dev/null | jq -c "select(.app_id == \"$app_id\")" | head -1; }
+geom() { win | jq -r '"\(.mode) \(.x),\(.y) \(.w)x\(.h)"'; }
+timeouts() { grep -c "timeout occurred" "$log" || true; }
+ms_since() { echo $(( ($(date +%s%N) - $1) / 1000000 )); }
+
+wait_for() { # <description> <timeout-seconds> <predicate...>
+    local desc=$1 timeout=$2 i=0
+    shift 2
+    until "$@"; do
+        i=$((i + 1))
+        [ "$i" -ge $((timeout * 5)) ] && fail "timed out waiting for $desc"
+        sleep 0.2
+    done
+}
+mapped() { grep -q '^main mapped' "$out/client.log" 2>/dev/null && [ -n "$(win)" ]; }
+
+echo "==> mapping one floating window"
+sc run "$bin/float-pair" --app-id "$app_id" --main 840x520 --delay 3600 --no-activate \
+    >"$out/client.log" 2>&1 &
+wait_for "float-pair's main window to map" 10 mapped
+id=$(win | jq -r .id)
+
+# The client's own pid, to freeze: `$!` is cce-shadow's shell, not the
+# client. Matched by name AND the shadow's HOME, never by name alone — the
+# live session could be running the same binary.
+for p in $(pgrep -x float-pair); do
+    if tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null | grep -qx "HOME=$home"; then
+        client=$p
+    fi
+done
+[ -n "$client" ] || fail "could not find float-pair's pid"
+
+echo "==> 1: a live window in view settles promptly"
+sc ctl set-mode floating "$id" >/dev/null
+sleep 0.6
+t0=$(date +%s%N)
+reply=$(sc ctl focus-window "$id")
+took=$(ms_since "$t0")
+[ "$reply" = ok ] || fail "focus-window replied '$reply', want 'ok'"
+[ "$took" -lt 1000 ] || fail "focus-window took ${took} ms for a window already at rest"
+echo "    ok after ${took} ms"
+
+echo "==> 2: a transaction stuck on a frozen client holds the reply"
+for i in $(seq "$runs"); do
+    sc ctl set-mode floating "$id" >/dev/null
+    sleep 0.6
+    before=$(geom)
+    c0=$(timeouts)
+    kill -STOP "$client"
+    sc ctl set-mode tiled "$id" >/dev/null
+    t0=$(date +%s%N)
+    reply=$(sc ctl focus-window "$id")
+    took=$(ms_since "$t0")
+    at_reply=$(geom)
+    c1=$(timeouts)
+    sleep 0.4
+    later=$(geom)
+    c2=$(timeouts)
+    kill -CONT "$client"
+    echo "    run $i: ok after ${took} ms, ${before} -> ${at_reply}," \
+        "timeouts before/after reply $((c1 - c0))/$((c2 - c1))"
+    [ "$reply" = ok ] || fail "run $i: focus-window replied '$reply', want 'ok'"
+    [ $((c1 - c0)) -ge 1 ] || fail "run $i: no configure timeout before the reply; the freeze did not hold a transaction open"
+    [ $((c2 - c1)) -eq 0 ] || fail "run $i: a configure timeout fired after the reply; it went out mid-transaction"
+    [ "$at_reply" = "$later" ] || fail "run $i: window moved after the reply ($at_reply -> $later)"
+    [ "$before" != "$at_reply" ] || fail "run $i: set-mode tiled did not move the window; nothing was raced"
+done
+
+echo "PASS: focus-window --wait replies only once the window's transaction has landed"
