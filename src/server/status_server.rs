@@ -1,7 +1,7 @@
 // Status socket server for monolithic cce server
 //
 // Runs in a dedicated thread. cce-status connects to
-// /tmp/cce-status-{WAYLAND_DISPLAY}.sock, sends a subscription line
+// /tmp/cce-status-interface-{WAYLAND_DISPLAY}.sock, sends a subscription line
 // ("layout", "title", "modifiers", "adjust", "dismiss", "shortcuts",
 // "clickaway" or "selection") and receives lines whenever the status changes.
 //

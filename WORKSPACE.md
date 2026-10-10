@@ -252,9 +252,9 @@ framework. Understanding it is the prerequisite for touching any client.
   path was retired), with **cosmic-text** for text shaping (depended on directly
   since the wgpu retirement — it used to be reached through glyphon, whose only
   other export was the wgpu renderer nothing here used). Widgets emit
-  vertex batches (quads, rounded rects, vectors, arcs, circles) — see the re-export
-  list in `cce-ui/src/engine.rs`. There is no HTML/DOM; the UI is drawn as GPU
-  primitives.
+  display-list prims (quads, rounded rects, vectors, arcs, circles, the lit relief
+  shapes — the `Prim` enum in `cce-ui/src/scene/paint/prim.rs`), which the backend
+  tessellates. There is no HTML/DOM; the UI is drawn as GPU primitives.
 - **The `Application` trait** (`cce-ui/src/backend/app.rs`, re-exported from
   `cce_ui::engine`) is the contract every client implements. Key methods:
   `create(sender)`, `settings`, `update(msg)`, `tick(dt)`,
@@ -270,7 +270,7 @@ framework. Understanding it is the prerequisite for touching any client.
   the driver, frame building, the Wayland shell), `draw/` and `vk/` (what a renderer draws,
   and the Vulkan renderer), `web/` and `mac/` (the browser and AppKit shells), `layout/`
   (style getters — fonts + sizing, lots of `*_font_parsed()` — plus the legacy layout
-  engines), `color/`, `context.rs` (`UiContext`), `protocol.rs` (talking to the compositor),
+  engines), `color/`, `context/` (`UiContext`), `protocol.rs` (talking to the compositor),
   `file_dialog.rs`, `scale.rs` (HiDPI), `mcp.rs` (tools-only MCP server over Streamable
   HTTP so apps can expose their state/actions to AI agents — `cce-designer` is the
   reference consumer, see its CLAUDE.md). `config`, `input`, `motion`, `units` (lengths
@@ -323,7 +323,7 @@ Clients and compositor communicate over Unix sockets keyed by `$WAYLAND_DISPLAY`
 - **Control**: `/tmp/cce-{WAYLAND_DISPLAY}.sock` — line-oriented request/reply. The
   `ccectl` binary (in `cce-compositor/`) is the CLI client; run `ccectl` with no args for the
   command list.
-- **Status**: `/tmp/cce-status-{WAYLAND_DISPLAY}.sock` — subscribe to `layout` /
+- **Status**: `/tmp/cce-status-interface-{WAYLAND_DISPLAY}.sock` — subscribe to `layout` /
   `title` / `modifiers` / `adjust` / `dismiss` / `selection`
   and receive push updates. `adjust` is "on"/"off" as window-adjust mode
   (overview, or Super held) comes and goes — what `cce-grid` keys its image
@@ -341,8 +341,8 @@ Clients and compositor communicate over Unix sockets keyed by `$WAYLAND_DISPLAY`
   `main()` before any Wayland work (true = a running instance took it, exit),
   `serve(handler)` once the loop's sender exists, `cleanup()` after `run`
   returns. It owns the connect-before-bind race, stale-socket replacement and
-  bounded reads; the app owns only its line protocol. cce-browser, cce-notes
-  and cce-graph's vault mode use it. A listener of any other shape reads
+  bounded reads; the app owns only its line protocol. cce-browser, cce-notes,
+  cce-keyboard, cce-graph's vault mode and cce-status-interface's OSD use it. A listener of any other shape reads
   requests with `cce_ui::ipc::read_request_line` (a total deadline and a size
   cap), never a bare `read_line`: one silent client otherwise wedges the
   listener for every client after it. Don't copy either into an app again.

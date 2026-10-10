@@ -238,11 +238,12 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Nineteen modules carry unit tests — `window_manager.rs` (the most of any, among
+Twenty modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
 `config.rs` (among them `backdrop_compress_params`), `idle.rs`,
 `idle_inhibit_manager.rs`, `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
 `text.rs`, `global_shortcuts.rs` (trigger parsing),
+`cce_ctl.rs` (when `focus-window` waits, and its fallback on an older compositor),
 `cursor.rs` (the swipe lean's direction, `swipe_lean`), `min_sizes.rs`,
 `selection.rs` (the rubber band's rect and its hit rule),
 `touch.rs` (edge-swipe progress, finger centroid/spread tracking, swipe vs pinch),
@@ -419,7 +420,7 @@ treats them as opaque.
   now `poll()`s its sockets plus a wake eventfd. Nothing in the compositor should
   tick while idle: a timer that re-arms itself unconditionally is a bug.) Decision logic (camera math, action
   dispatch, snapping, refocus, grid geometry) lives in `cce-window-manager`.
-- **`window.rs`** (~5.8k lines) — per-window model and rendering (borders, blur,
+- **`window.rs`** (~6.4k lines) — per-window model and rendering (borders, blur,
   viewport transforms).
 - **`crate::tiling`** (from `cce-window-manager`) — `TilingMode` enum: `Floating`,
   `Tiled` (grid-aligned; the window reports xdg maximized), `Fullscreen`,
@@ -1140,7 +1141,7 @@ headless seat has no keyboard and Chromium crashes in
   status and stream sockets read their subscription line through
   `read_line_bounded` (total deadline and size cap): a per-read timeout let a
   byte-a-second client hold the thread that serves every other subscriber.
-- **Status socket** `/tmp/cce-status-{WAYLAND_DISPLAY}.sock` (`status_server.rs`): runs
+- **Status socket** `/tmp/cce-status-interface-{WAYLAND_DISPLAY}.sock` (`status_server.rs`): runs
   on its own thread; a client sends one subscription line (`layout`, `title`,
   `modifiers`, `dismiss`, …) and receives text lines on every
   change. This feeds the status bar (`cce-status-interface`). The main loop pushes
