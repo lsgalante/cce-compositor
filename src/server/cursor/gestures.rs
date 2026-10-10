@@ -228,9 +228,6 @@ pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_liste
             }
             if !hovered_win.is_null() && !(*hovered_win).is_status_bar() && !(*hovered_win).is_wallpaper() {
                 seat.focus(Focus::Window(hovered_win));
-                if !seat.object.is_null() && !(*hovered_win).object.is_null() {
-                    ffi::wl_resource_post_event(seat.object, 4, (*hovered_win).object);
-                }
             }
         }
 
@@ -479,7 +476,7 @@ pub(crate) unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listen
                     on_background = false;
                 }
             }
-            SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+            SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                 on_background = false;
             }
         }

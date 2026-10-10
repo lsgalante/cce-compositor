@@ -399,7 +399,7 @@ treats them as opaque.
   server, loads config + persisted state, adds the wayland socket, spawns the init
   program (`~/.config/cce/init` via `sh -c`) and the IPC + status servers, then
   `wl_display_run`.
-- **`window_manager.rs`** (~3.9k lines) — the heart of the mechanism side. Holds the
+- **`window_manager.rs`** (~3.7k lines) — the heart of the mechanism side. Holds the
   WM state, the camera fields, window lists, the `Policy::action` snapshot builder
   (`build_action_ctx`), `arrange_views`, focus and the `Compositor` command applier.
   Its other concerns are child modules in `window_manager/`, each an
@@ -416,13 +416,27 @@ treats them as opaque.
   now `poll()`s its sockets plus a wake eventfd. Nothing in the compositor should
   tick while idle: a timer that re-arms itself unconditionally is a bug.) Decision logic (camera math, action
   dispatch, snapping, refocus, grid geometry) lives in `cce-window-manager`.
-- **`window.rs`** (~3.4k lines) — per-window model: creation, map/unmap, the
+- **`window.rs`** (~3.1k lines) — per-window model: creation, map/unmap, the
   manage/render passes, viewport transforms. Child modules in `window/`:
   `placement.rs` (where a new window maps: saved spot, siblings, hints, the
   invocation cell, view centring), `effects.rs` (shadow, bevel, droplet, fades,
-  the fullscreen animation, border extents), `borders.rs` (`draw_borders`, the
-  surface clip), `protocol.rs` (the `zcce_window_v1` handlers) and `decoration.rs`
-  (`Decoration`, `zcce_decoration_v1`).
+  the fullscreen animation, border extents) and `borders.rs` (`draw_borders`,
+  the surface clip).
+- **`zcce_window_manager_v1` serves one request** (since 2026-10-10). The
+  global is still advertised because cce-ui and cce-cloud bind it to call
+  `get_cce_toplevel` (`cce_window_management.rs`, the `zcce_toplevel_v1`
+  object), and that is the whole of its request table. It was river's
+  window-manager protocol, written for an EXTERNAL manager client; the
+  built-in policy replaced that client, and its bind never set `wm.object`,
+  so everything that ran with one attached was dead and went: the
+  manage/render start events and their 3 s unresponsive timeout, the
+  `zcce_window_v1` / `zcce_output_v1` / `zcce_seat_v1` / `zcce_node_v1` /
+  `zcce_decoration_v1` / `zcce_shell_surface_v1` objects and their handlers,
+  pointer and xkb bindings, and the `river_layer_shell_v1` and
+  `river_xkb_bindings_v1` globals (whose every request took one of those
+  objects). The requests a client can no longer send include `exit_session`,
+  which any client could use to end the session. The protocol XML is
+  unchanged; the manage/render passes are the built-in policy's own.
 - **`crate::tiling`** (from `cce-window-manager`) — `TilingMode` enum: `Floating`,
   `Tiled` (grid-aligned; the window reports xdg maximized), `Fullscreen`,
   `Popup`, `Overlay`, `Status`, `Utility`. A Wine window answers "maximized"
@@ -452,9 +466,9 @@ treats them as opaque.
   hscroll-shift states —, `cursor/gestures.rs`, `cursor/border_zone.rs`), `keyboard*.rs`,
   `xkb_*.rs`, `libinput_*.rs`, `pointer_*.rs`, `tablet*.rs`, `text_input.rs`,
   `input_relay.rs`/`input_popup.rs` (IME).
-- Shell/surface: `xdg_toplevel.rs`, `xdg_popup.rs`, `shell_surface.rs`,
-  `layer_shell.rs`, `xwayland_window.rs`, `xwayland_override_redirect.rs`,
-  `drag_icon.rs`, `wm_node.rs`. An override-redirect window whose WM_CLASS
+- Shell/surface: `xdg_toplevel.rs`, `xdg_popup.rs`, `layer_shell.rs`
+  (wlr-layer-shell), `xwayland_window.rs`, `xwayland_override_redirect.rs`,
+  `drag_icon.rs`, `wm_node.rs` (a window's link in the render list). An override-redirect window whose WM_CLASS
   class is `cce-xembed-tray` gets no scene node at all
   (`is_xembed_tray_container`): it is the tray bridge's container for a
   legacy X11 tray icon, which X must have mapped for the icon to draw but
@@ -1173,7 +1187,7 @@ headless seat has no keyboard and Chromium crashes in
   commit (`handle_window_commit`, now only when the surface size changed — the
   clock ticking once a second used to cost an arrange each time) and a title
   change (`notify_title`, now only when a mode rule matches on `title=`; the
-  built-in policy is the only manager, `wm.object` is never bound, so nothing
+  built-in policy is the only manager, so nothing
   else in the manage sequence reads a title — the status bar's `title` topic
   and the state file are fed directly instead). `CCE_DIRTY_TRACE=1` logs one
   debug line per dirty call with its `#[track_caller]` site; it is the tool

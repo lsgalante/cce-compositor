@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_insert, wl_list_remove, wl_list_remove_and_reinit, WlListener, wl_signal_add};
+use crate::server::{Server, WlList, wl_list_insert, wl_list_remove_and_reinit, WlListener, wl_signal_add};
 use crate::wm_node::WmNode;
 use crate::xdg_toplevel::ConfigureState;
 
@@ -460,17 +460,13 @@ mod effects;
 #[path = "window/borders.rs"]
 mod borders;
 pub use borders::*;
-#[path = "window/protocol.rs"]
-mod protocol;
-pub(crate) use protocol::*;
-#[path = "window/decoration.rs"]
-mod decoration;
-pub use decoration::*;
+pub(crate) unsafe fn clock_gettime(clk_id: libc::clockid_t, tp: &mut libc::timespec) -> libc::c_int {
+    libc::clock_gettime(clk_id, tp)
+}
 
 pub struct Window {
     pub ref_key: crate::slotmap::Key,
     pub server: *mut Server,
-    pub object: *mut ffi::wl_resource, // zcce_window_v1
     pub node: WmNode,
     pub state: WindowState,
     pub impl_type: WindowImpl,
@@ -499,8 +495,6 @@ pub struct Window {
     /// surfaces so it draws beneath the client's translucent drop. Null if
     /// creation failed (the effect is then simply absent).
     pub droplet: *mut ffi::wlr_scene_droplet,
-    pub decorations_below: ffi::wl_list,
-    pub decorations_below_tree: *mut ffi::wlr_scene_tree,
     pub surfaces: crate::scene::SaveableSurfaces,
     pub border: BorderRects,
     /// The border zone the pointer is over (set by cursor.rs); that segment
@@ -541,8 +535,6 @@ pub struct Window {
     /// exponential approach: an exponential close fade never actually
     /// reaches zero, and the client is waiting on a deadline to exit.
     pub map_fade_step: f32,
-    pub decorations_above: ffi::wl_list,
-    pub decorations_above_tree: *mut ffi::wlr_scene_tree,
     pub popup_tree: *mut ffi::wlr_scene_tree,
     pub capture_scene: *mut ffi::wlr_scene,
     pub capture_source: *mut ffi::wlr_ext_image_capture_source_v1,
@@ -895,8 +887,6 @@ impl Window {
             return Err("Failed to create fullscreen rect");
         }
 
-        let decorations_below_tree = ffi::wlr_scene_tree_create(tree);
-
         let clear_color = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
         let window_background = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
         if window_background.is_null() {
@@ -954,13 +944,10 @@ impl Window {
         // rects above are the discs' invisible hit catchers.
         let border_frame = ffi::wlr_scene_frame_create(border_tree, 0, 0, 0, clear_color.as_ptr());
 
-        let decorations_above_tree = ffi::wlr_scene_tree_create(tree);
-
-        let mut window = Box::new(Window {
+        let window = Box::new(Window {
             view_regions: None,
             ref_key: crate::slotmap::Key { generation: 0, index: 0 },
             server,
-            object: std::ptr::null_mut(),
             node: std::mem::zeroed(),
             state: WindowState::Init,
             impl_type,
@@ -970,8 +957,6 @@ impl Window {
             shadow,
             bevel,
             droplet,
-            decorations_below: std::mem::zeroed(),
-            decorations_below_tree,
             surfaces,
             border: BorderRects {
                 left: border_left,
@@ -992,8 +977,6 @@ impl Window {
             map_fade: 1.0,
             map_fade_target: 1.0,
             map_fade_step: 1.0,
-            decorations_above: std::mem::zeroed(),
-            decorations_above_tree,
             popup_tree,
             capture_scene,
             capture_source: std::ptr::null_mut(),
@@ -1113,13 +1096,11 @@ impl Window {
             status_edge: StatusEdge::Unspecified,
         });
 
-        ffi::wl_list_init(&mut window.decorations_below);
-        ffi::wl_list_init(&mut window.decorations_above);
 
         let raw = Box::into_raw(window);
         let key = (*(*raw).server).wm.windows.put(raw);
         (*raw).ref_key = key;
-        (*raw).node.init(crate::wm_node::WmNodeTag::Window);
+        (*raw).node.init();
 
         ffi::wlr_scene_node_set_enabled(tree as *mut ffi::wlr_scene_node, false);
         ffi::wlr_scene_node_set_enabled(popup_tree as *mut ffi::wlr_scene_node, false);
@@ -1695,7 +1676,6 @@ impl Window {
             }
             _ => unreachable!(),
         }
-        assert!((*window).object.is_null());
 
         let seats = &mut (*(*window).server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*seats).next;
@@ -1714,20 +1694,6 @@ impl Window {
                 }
             }
             curr = next;
-        }
-
-
-
-        // Destroy decorations
-        for decorations in [&mut (*window).decorations_above as *mut ffi::wl_list, &mut (*window).decorations_below as *mut ffi::wl_list] {
-            let list_head = decorations as *mut WlList;
-            let mut curr = (*list_head).next;
-            while curr != list_head {
-                let next = (*curr).next;
-                let dec = crate::container_of!(curr, Decoration, link);
-                (*dec).destroy();
-                curr = next;
-            }
         }
 
         wl_listener_remove_safe(&mut (*window).commit);
@@ -2263,25 +2229,9 @@ impl Window {
         let sent = &mut self.rendering_sent;
         let scheduled = &mut self.rendering_scheduled;
 
-        if matches!(self.state, WindowState::Mapped) &&
-           (scheduled.resend_dimensions ||
-            scheduled.width != sent.width || scheduled.height != sent.height) {
-            if !self.object.is_null() {
-                ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_V1_DIMENSIONS, scheduled.width as i32, scheduled.height as i32); // sendDimensions
-                scheduled.resend_dimensions = false;
-            }
-        }
         sent.width = scheduled.width;
         sent.height = scheduled.height;
-        if sent.presentation_hint != presentation_hint {
-            if !self.object.is_null() {
-                let version = ffi::wl_resource_get_version(self.object);
-                if version >= 4 {
-                    ffi::wl_resource_post_event(self.object, ffi::ZCCE_WINDOW_V1_PRESENTATION_HINT, presentation_hint); // sendPresentationHint
-                }
-            }
-            sent.presentation_hint = presentation_hint;
-        }
+        sent.presentation_hint = presentation_hint;
     }
 
     pub unsafe fn presentation_hint(&self) -> ffi::zcce_output_v1_presentation_mode {
@@ -2706,17 +2656,6 @@ impl Window {
 
         self.apply_surface_clip(&clip, &content_clip);
 
-        for decorations in [&mut self.decorations_above as *mut ffi::wl_list, &mut self.decorations_below as *mut ffi::wl_list] {
-            let list_head = decorations as *mut WlList;
-            let mut curr = (*list_head).next;
-            while curr != list_head {
-                let next = (*curr).next;
-                let dec = crate::container_of!(curr, Decoration, link);
-                (*dec).render_finish(&clip);
-                curr = next;
-            }
-        }
-
         match self.impl_type {
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
@@ -2839,17 +2778,6 @@ impl Window {
             Some(set_overview_scale_iterator),
             &scale_data_popup as *const ScaleData as *mut std::ffi::c_void,
         );
-
-        for decorations in [&mut self.decorations_above as *mut ffi::wl_list, &mut self.decorations_below as *mut ffi::wl_list] {
-            let list_head = decorations as *mut WlList;
-            let mut curr = (*list_head).next;
-            while curr != list_head {
-                let next = (*curr).next;
-                let dec = crate::container_of!(curr, Decoration, link);
-                (*dec).scale_only_render_finish(eff_scale);
-                curr = next;
-            }
-        }
     }
 
     pub unsafe fn render_viewport_update(&mut self) {

@@ -4,20 +4,17 @@
 use crate::ffi;
 use crate::seat::Seat;
 use crate::keyboard::KeyboardConfig;
-use crate::xkb_bindings::XkbBinding;
 use crate::server::wl_listener_remove;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyConsumer {
     Builtin,
-    Binding(*mut XkbBinding),
     CceBinding(crate::config::Keybind),
     /// A chord bound through the GlobalShortcuts portal backend (see
     /// `global_shortcuts`): the press and the release are both reported on
     /// the status socket's `shortcuts` topic and neither reaches the client.
     PortalShortcut { session: String, id: String },
-    EnsureEaten,
     ImGrab,
     Focus,
 }
@@ -404,22 +401,6 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         (*group.seat).cursor.end_hscroll_shift("key");
     }
 
-    // Cancel active binding repeats
-    let seat_groups_head = &mut (*group.seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
-    let mut curr_g = (*seat_groups_head).next;
-    while curr_g != seat_groups_head {
-        let next_g = (*curr_g).next;
-        let g = crate::container_of!(curr_g, KeyboardGroup, link);
-        for press in (*g).pressed.values() {
-            if let KeyConsumer::Binding(binding) = press.consumer {
-                if !binding.is_null() {
-                    (*binding).stop_repeat();
-                }
-            }
-        }
-        curr_g = next_g;
-    }
-
     let consumer: KeyConsumer = if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED {
         if let Some(kv) = group.pressed.remove(&(*event).keycode) {
             assert!(kv.count == 0);
@@ -465,36 +446,6 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         {
             log::debug!("matched portal shortcut {} {}", session, id);
             KeyConsumer::PortalShortcut { session, id }
-        } else if let Some(binding) = (!locked)
-            .then(|| (*group.seat).match_xkb_binding(xkb_keycode, &mut group.wlr_keyboard))
-            .flatten()
-        {
-            log::debug!("matched xkb binding");
-            (*group.seat).xkb_bindings_seat.ensure_next_key_eaten = false;
-            KeyConsumer::Binding(if (*binding).sent_pressed {
-                std::ptr::null_mut()
-            } else {
-                binding
-            })
-        } else if (*group.seat).xkb_bindings_seat.ensure_next_key_eaten {
-            let mut has_non_modifier = false;
-            let mut syms_ptr: *const ffi::xkb_keysym_t = std::ptr::null();
-            let num_syms = ffi::xkb_state_key_get_syms(xkb_state, xkb_keycode, &mut syms_ptr);
-            if num_syms > 0 && !syms_ptr.is_null() {
-                let syms = std::slice::from_raw_parts(syms_ptr, num_syms as usize);
-                for &sym in syms {
-                    if !crate::keyboard::keysym_is_modifier(sym) {
-                        has_non_modifier = true;
-                        break;
-                    }
-                }
-            }
-            if has_non_modifier {
-                (*group.seat).xkb_bindings_seat.ensure_next_key_eaten = false;
-                KeyConsumer::EnsureEaten
-            } else {
-                KeyConsumer::Focus
-            }
         } else if !locked && !group.get_input_method_grab().is_null() {
             // Never while locked: an input method would read the password.
             KeyConsumer::ImGrab
@@ -546,21 +497,6 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
                     }
                     .to_string(),
                 );
-            }
-        }
-        KeyConsumer::Binding(binding) => {
-            if !binding.is_null() {
-                if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED {
-                    (*binding).pressed();
-                } else {
-                    (*binding).released();
-                }
-            }
-        }
-        KeyConsumer::EnsureEaten => {
-            if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED {
-                (*group.seat).xkb_bindings_seat.scheduled_ate_unbound_key = true;
-                (*(*group.seat).server).wm.dirty_windowing();
             }
         }
         KeyConsumer::ImGrab => {
@@ -671,17 +607,7 @@ unsafe fn match_chord<T>(
 unsafe extern "C" fn handle_group_modifiers(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let group = &mut *crate::container_of!(listener, KeyboardGroup, modifiers_listener);
 
-    let old = group.modifiers_old;
-    let new = ffi::wlr_keyboard_get_modifiers(&mut group.wlr_keyboard);
-    let watched = (*group.seat).xkb_bindings_seat.requested_mods_watched;
-    if (old & watched) != (new & watched) {
-        (*group.seat).xkb_bindings_seat.scheduled_mods_update = Some(crate::xkb_bindings::XkbBindingsSeatModsUpdate {
-            old,
-            new,
-        });
-        (*(*group.seat).server).wm.dirty_windowing();
-    }
-    group.modifiers_old = new;
+    group.modifiers_old = ffi::wlr_keyboard_get_modifiers(&mut group.wlr_keyboard);
 
     let grab = group.get_input_method_grab();
     if !grab.is_null() {

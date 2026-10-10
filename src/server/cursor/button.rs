@@ -58,7 +58,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                     }
                 }
             }
-            SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+            SceneNodeDataVal::OverrideRedirect(_) => {
                 is_app_surface = true;
             }
             _ => {}
@@ -67,7 +67,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
     let should_block_button = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface && !is_overlay_window;
     
     if (*event).state == ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED {
-        if cursor.pressed.contains_key(&(*event).button) {
+        if cursor.pressed.contains(&(*event).button) {
             log::error!("ignoring duplicate pointer button {} press", (*event).button);
             return;
         }
@@ -98,7 +98,6 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
                 seat.op = Some(crate::seat::SeatOp {
-                    sent_release: false,
                     input: crate::seat::SeatOpInput::Pointer,
                     start_x: cursor_x as i32,
                     start_y: cursor_y as i32,
@@ -120,7 +119,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                     started_in_overview: false,
                 });
                 cursor.op_start_pointer();
-                cursor.pressed.insert((*event).button, None);
+                cursor.pressed.insert((*event).button);
                 cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
                 return;
             }
@@ -186,7 +185,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
             // (`Cursor::button_press`, answered in the release path).
             if let BorderZone::Button(elem) = overview_border_zone {
                 cursor.button_press = Some((clicked_win, elem));
-                cursor.pressed.insert((*event).button, None);
+                cursor.pressed.insert((*event).button);
                 return;
             }
             // A press on a SELECTED desktop image grabs the whole selection
@@ -231,7 +230,6 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                     let cursor_y = (*cursor.wlr_cursor).y;
                     let (anchor_x, anchor_y) = tiled_anchor.unwrap_or((0.0, 0.0));
                     seat.op = Some(crate::seat::SeatOp {
-                        sent_release: false,
                         input: crate::seat::SeatOpInput::Pointer,
                         start_x: cursor_x as i32,
                         start_y: cursor_y as i32,
@@ -253,7 +251,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                         started_in_overview: true,
                     });
                     cursor.op_start_pointer();
-                    cursor.pressed.insert((*event).button, None);
+                    cursor.pressed.insert((*event).button);
                     cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
                     return;
                 }
@@ -305,7 +303,6 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
                 seat.op = Some(crate::seat::SeatOp {
-                    sent_release: false,
                     input: crate::seat::SeatOpInput::Pointer,
                     start_x: cursor_x as i32,
                     start_y: cursor_y as i32,
@@ -327,7 +324,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                     started_in_overview: in_overview,
                 });
                 cursor.op_start_pointer();
-                cursor.pressed.insert((*event).button, None);
+                cursor.pressed.insert((*event).button);
                 cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
                 return;
             } else if !overview_win_valid && in_overview {
@@ -343,7 +340,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                     if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
                         if is_cloud_layer(layer_surface) {
                             seat.focus(Focus::None);
-                            cursor.pressed.insert((*event).button, None);
+                            cursor.pressed.insert((*event).button);
                             return;
                         }
                     }
@@ -358,7 +355,6 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
                 seat.op = Some(crate::seat::SeatOp {
-                    sent_release: false,
                     input: crate::seat::SeatOpInput::Pointer,
                     start_x: cursor_x as i32,
                     start_y: cursor_y as i32,
@@ -380,7 +376,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                     started_in_overview: true,
                 });
                 cursor.op_start_pointer();
-                cursor.pressed.insert((*event).button, None);
+                cursor.pressed.insert((*event).button);
                 cursor.set_xcursor(b"crosshair\0".as_ptr() as *const _);
                 return;
             }
@@ -402,7 +398,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                             clicked_interactive = true;
                         }
                     }
-                    SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                    SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                         clicked_interactive = true;
                     }
                 }
@@ -441,7 +437,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 seat.focus(Focus::None);
                 (*(*seat).server).wm.dirty_windowing();
 
-                cursor.pressed.insert((*event).button, None);
+                cursor.pressed.insert((*event).button);
                 return;
             }
         }
@@ -508,7 +504,6 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                     let cursor_x = (*cursor.wlr_cursor).x;
                     let cursor_y = (*cursor.wlr_cursor).y;
                     seat.op = Some(crate::seat::SeatOp {
-                        sent_release: false,
                         input: crate::seat::SeatOpInput::Pointer,
                         start_x: cursor_x as i32,
                         start_y: cursor_y as i32,
@@ -530,7 +525,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                         started_in_overview: (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
                     });
                     cursor.op_start_pointer();
-                    cursor.pressed.insert((*event).button, None);
+                    cursor.pressed.insert((*event).button);
 
                     match ot {
                         crate::seat::PointerOpType::Resize { edges } => {
@@ -595,7 +590,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 let cmd = format!("{}/.local/bin/cce-app-menu -x {} -y {} -i {} -a {}", home, x, y, index, app_id);
                 (*server).wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
 
-                cursor.pressed.insert((*event).button, None);
+                cursor.pressed.insert((*event).button);
                 return;
             }
 
@@ -621,7 +616,6 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                         let cursor_x = (*cursor.wlr_cursor).x;
                         let cursor_y = (*cursor.wlr_cursor).y;
                         seat.op = Some(crate::seat::SeatOp {
-                            sent_release: false,
                             input: crate::seat::SeatOpInput::Pointer,
                             start_x: cursor_x as i32,
                             start_y: cursor_y as i32,
@@ -643,7 +637,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                         started_in_overview: (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
                         });
                         cursor.op_start_pointer();
-                        cursor.pressed.insert((*event).button, None);
+                        cursor.pressed.insert((*event).button);
 
                         let cursor_name = get_resize_cursor_name(edges);
                         cursor.set_xcursor(cursor_name.as_ptr() as *const _);
@@ -697,7 +691,6 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                         let cursor_x = (*cursor.wlr_cursor).x;
                         let cursor_y = (*cursor.wlr_cursor).y;
                         seat.op = Some(crate::seat::SeatOp {
-                            sent_release: false,
                             input: crate::seat::SeatOpInput::Pointer,
                             start_x: cursor_x as i32,
                             start_y: cursor_y as i32,
@@ -719,7 +712,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                         started_in_overview: (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
                         });
                         cursor.op_start_pointer();
-                        cursor.pressed.insert((*event).button, None);
+                        cursor.pressed.insert((*event).button);
 
                         cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
                         return;
@@ -733,13 +726,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
             }
         }
 
-        if let Some(binding) = seat.match_pointer_binding((*event).button) {
-            cursor.pressed.insert((*event).button, Some(binding));
-            (*binding).pressed();
-            return;
-        }
-
-        cursor.pressed.insert((*event).button, None);
+        cursor.pressed.insert((*event).button);
 
         if !should_block_button {
             let first_grab_button = cursor.notified_pressed.is_empty();
@@ -797,14 +784,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 SceneNodeDataVal::Window(window) => {
                     clicked_something = true;
                     if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                        if !seat.object.is_null() {
-                            if !(*window).object.is_null() {
-                                ffi::wl_resource_post_event(seat.object, 4, (*window).object);
-                                (*(*seat).server).wm.dirty_windowing();
-                            }
-                        } else {
-                            seat.focus(Focus::Window(window));
-                        }
+                        seat.focus(Focus::Window(window));
                     }
                 }
                 SceneNodeDataVal::LayerSurface(layer_surface) => {
@@ -813,7 +793,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                         seat.focus(Focus::LayerSurface(result.surface));
                     }
                 }
-                SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                     clicked_something = true;
                 }
             }
@@ -1099,16 +1079,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
             cursor.pressed.remove(&(*event).button);
             return;
         }
-        if let Some(binding_opt) = cursor.pressed.remove(&(*event).button) {
-            if let Some(binding) = binding_opt {
-                (*binding).released();
-                if cursor.pressed.is_empty() && seat.op.is_some() {
-                    seat.op_release = true;
-                    (*(*seat).server).wm.dirty_windowing();
-                }
-                return;
-            }
-
+        if cursor.pressed.remove(&(*event).button) {
             if (*event).button == 0x110 {
                 if let Some((win, elem)) = cursor.button_press.take() {
                     let alive = (*server).wm.windows.iter().any(|&w| w == win) && !(*win).closed;
@@ -1123,7 +1094,6 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 cursor.right_click_on_bg = false;
                 cursor.right_click_on_border = false;
                 if cursor.pressed.is_empty() && seat.op.is_some() {
-                    seat.op_release = true;
                     (*(*seat).server).wm.dirty_windowing();
                 }
                 return;
@@ -1132,7 +1102,6 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
             // The client-facing release (when the press was forwarded) is
             // already paired at the top of the release path.
             if cursor.pressed.is_empty() && seat.op.is_some() {
-                seat.op_release = true;
                 (*(*seat).server).wm.dirty_windowing();
             }
         } else {

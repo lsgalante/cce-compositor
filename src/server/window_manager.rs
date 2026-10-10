@@ -7,7 +7,6 @@ use crate::slotmap::SlotMap;
 use std::hash::{Hash, Hasher};
 
 pub use crate::window::Window;
-pub use crate::shell_surface::ShellSurface;
 
 pub use crate::xwayland_override_redirect::XwaylandOverrideRedirect;
 
@@ -1066,10 +1065,9 @@ impl WindowManager {
         let mut curr = (*render_list).next;
         while curr != render_list {
             let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
-                if !window.is_null() {
-                    rendered.insert(window as usize);
-                }
+            let window = (*node).window();
+            if !window.is_null() {
+                rendered.insert(window as usize);
             }
             curr = (*curr).next;
         }
@@ -3001,9 +2999,6 @@ impl crate::policy::api::Compositor for WindowManager {
                         if !win.is_null() && !(*win).closed {
                             if let Some(seat) = self.first_seat() {
                                 (*seat).focus(crate::seat::Focus::Window(win));
-                                if !(*seat).object.is_null() && !(*win).object.is_null() {
-                                    ffi::wl_resource_post_event((*seat).object, 4, (*win).object);
-                                }
                             }
                         }
                     }

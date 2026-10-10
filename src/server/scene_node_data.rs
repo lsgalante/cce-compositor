@@ -3,14 +3,13 @@
 
 use crate::ffi;
 use crate::server::{WlListener, wl_signal_add, wl_listener_remove};
-use crate::window_manager::{Window, ShellSurface, XwaylandOverrideRedirect};
+use crate::window_manager::{Window, XwaylandOverrideRedirect};
 use crate::layer_shell::LayerSurface;
 use crate::lock_manager::LockSurface;
 
 #[derive(Clone, Copy)]
 pub enum SceneNodeDataVal {
     Window(*mut Window),
-    ShellSurface(*mut ShellSurface),
     LockSurface(*mut LockSurface),
     LayerSurface(*mut LayerSurface),
     OverrideRedirect(*mut XwaylandOverrideRedirect),

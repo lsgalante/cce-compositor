@@ -89,7 +89,7 @@ pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, dat
                     over_interactive = true;
                     over_chrome = is_cloud_layer(layer_surface);
                 }
-                SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
                     over_interactive = true;
                 }
             }

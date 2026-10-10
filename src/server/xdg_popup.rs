@@ -137,8 +137,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     }
 }
 
-/// The server a scene tree belongs to, through its node data — a window's
-/// or a shell surface's. Null for any other tree.
+/// The server a scene tree belongs to, through its node data — a window's.
+/// Null for any other tree.
 unsafe fn tree_server(tree: *mut ffi::wlr_scene_tree) -> *mut crate::server::Server {
     if tree.is_null() {
         return std::ptr::null_mut();
@@ -146,7 +146,6 @@ unsafe fn tree_server(tree: *mut ffi::wlr_scene_tree) -> *mut crate::server::Ser
     match crate::scene_node_data::SceneNodeData::from_node(tree as *mut ffi::wlr_scene_node) {
         Some(node_data) => match node_data.data {
             crate::scene_node_data::SceneNodeDataVal::Window(w) => (*w).server,
-            crate::scene_node_data::SceneNodeDataVal::ShellSurface(s) => (*s).server,
             _ => std::ptr::null_mut(),
         },
         None => std::ptr::null_mut(),
@@ -196,7 +195,6 @@ unsafe fn popup_server(popup: *mut XdgPopup) -> *mut crate::server::Server {
     match crate::scene_node_data::SceneNodeData::from_node(parent_tree as *mut ffi::wlr_scene_node) {
         Some(node_data) => match node_data.data {
             crate::scene_node_data::SceneNodeDataVal::Window(w) => (*w).server,
-            crate::scene_node_data::SceneNodeDataVal::ShellSurface(s) => (*s).server,
             _ => std::ptr::null_mut(),
         },
         None => std::ptr::null_mut(),

@@ -1157,9 +1157,8 @@ impl WindowManager {
                     let mut i = 0i64;
                     while !curr.is_null() && curr != render_list {
                         let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-                        if let crate::wm_node::WmNodeType::Window(win) = (*node).get() {
-                            stack_of.insert(win, i);
-                        }
+                        let win = (*node).window();
+                        stack_of.insert(win, i);
                         i += 1;
                         curr = (*curr).next;
                     }

@@ -17,8 +17,6 @@ pub mod util;
 pub use cce_window_manager::slotmap;
 #[path = "server/window_manager.rs"]
 pub mod window_manager;
-#[path = "server/xkb_bindings.rs"]
-pub mod xkb_bindings;
 #[path = "server/layer_shell.rs"]
 pub mod layer_shell;
 #[path = "server/scene.rs"]
@@ -88,8 +86,6 @@ pub mod window;
 pub mod xdg_toplevel;
 #[path = "server/xdg_popup.rs"]
 pub mod xdg_popup;
-#[path = "server/shell_surface.rs"]
-pub mod shell_surface;
 #[path = "server/wm_node.rs"]
 pub mod wm_node;
 #[path = "server/xwayland_window.rs"]
@@ -112,8 +108,6 @@ pub mod osk;
 pub mod input_popup;
 #[path = "server/drag_icon.rs"]
 pub mod drag_icon;
-#[path = "server/pointer_binding.rs"]
-pub mod pointer_binding;
 #[path = "server/keyboard_group.rs"]
 pub mod keyboard_group;
 #[path = "server/inspector.rs"]

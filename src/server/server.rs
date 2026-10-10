@@ -5,7 +5,6 @@ use crate::ffi;
 use std::ptr;
 
 use crate::window_manager::WindowManager;
-use crate::xkb_bindings::XkbBindings;
 use crate::layer_shell::LayerShell;
 use crate::scene::Scene;
 use crate::output_manager::OutputManager;
@@ -320,7 +319,6 @@ pub struct Server {
 
     // Subcomponents
     pub wm: WindowManager,
-    pub xkb_bindings: XkbBindings,
     pub layer_shell: LayerShell,
     pub scene: Scene,
     pub om: OutputManager,
@@ -869,7 +867,6 @@ impl Server {
             // Setup subcomponents stubs
             let server_ptr = self as *mut Server;
             self.wm.init_with_server(server_ptr).map_err(|_| "Failed to init wm")?;
-            self.xkb_bindings.init(server_ptr, self.wl_server).map_err(|_| "Failed to init xkb_bindings")?;
             self.layer_shell.init(server_ptr, self.wl_server).map_err(|_| "Failed to init layer_shell")?;
             self.scene.init(self.linux_dmabuf, self.color_manager).map_err(|_| "Failed to init scene")?;
             self.om.init(server_ptr).map_err(|_| "Failed to init om")?;
@@ -954,7 +951,6 @@ impl Server {
             self.lock_manager.deinit();
             self.layer_shell.deinit();
             self.inspector.deinit();
-            self.xkb_bindings.deinit();
             self.libinput_config.deinit();
             self.xkb_config.deinit();
             log::info!("[deinit] other subcomponents deinitialized");

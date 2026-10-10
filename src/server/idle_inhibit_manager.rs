@@ -67,7 +67,6 @@ impl IdleInhibitManager {
                         (*w).get_app_id_string().as_deref(),
                         (*w).get_title_string().as_deref(),
                     ),
-                    ShellSurface(_) => inhibitor_name("shell-surface", None, None),
                     LockSurface(_) => inhibitor_name("lock-surface", None, None),
                     LayerSurface(l) => {
                         let ns = (*(*l).wlr_layer_surface).namespace;

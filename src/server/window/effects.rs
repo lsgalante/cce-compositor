@@ -370,19 +370,18 @@ impl Window {
         let mut covered = false;
         while curr != list {
             let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            if let crate::wm_node::WmNodeType::Window(w) = (*node).get() {
-                if w == me {
-                    return covered;
-                }
-                if !w.is_null()
-                    && !(*w).closed
-                    && window_takes_handles(w)
-                    && (*w).is_adjust_target()
-                {
-                    let (tx, ty, tw, th) = on_screen(w);
-                    if mx < tx + tw && tx < mx + mw && my < ty + th && ty < my + mh {
-                        covered = true;
-                    }
+            let w = (*node).window();
+            if w == me {
+                return covered;
+            }
+            if !w.is_null()
+                && !(*w).closed
+                && window_takes_handles(w)
+                && (*w).is_adjust_target()
+            {
+                let (tx, ty, tw, th) = on_screen(w);
+                if mx < tx + tw && tx < mx + mw && my < ty + th && ty < my + mh {
+                    covered = true;
                 }
             }
             curr = (*curr).next;

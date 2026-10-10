@@ -6,27 +6,7 @@
 use super::*;
 
 impl WindowManager {
-    pub unsafe fn ensure_windowing(&self) -> bool {
-        match self.state {
-            WindowManagerState::Manage => true,
-            _ => {
-                false
-            }
-        }
-    }
-
-    pub unsafe fn ensure_rendering(&self) -> bool {
-        match self.state {
-            WindowManagerState::Manage | WindowManagerState::InflightConfigures(_) | WindowManagerState::Render => true,
-            WindowManagerState::Idle => {
-                false
-            }
-        }
-    }
-
-    /// Start the border hover fade if it isn't already running. Idempotent —
-    /// re-arming mid-fade would restart the timer and step it twice as fast.
-/// Switch overview on or off, arming the handle fade on a real change.
+    /// Switch overview on or off, arming the handle fade on a real change.
     ///
     /// Every site that flips the mode goes through here. Resize handles only
     /// exist in overview (`window::draw_borders`), so the transition has to
@@ -99,6 +79,8 @@ impl WindowManager {
         }
     }
 
+    /// Start the border hover fade if it isn't already running. Idempotent —
+    /// re-arming mid-fade would restart the timer and step it twice as fast.
     pub unsafe fn arm_border_fade(&mut self) {
         if self.border_fade_running || self.border_fade_timer.is_null() {
             return;
@@ -121,11 +103,6 @@ impl WindowManager {
             log::debug!("dirty_windowing from {}", std::panic::Location::caller());
         }
         self.scheduled.dirty = true;
-        self.add_dirty_idle();
-    }
- 
-    pub unsafe fn dirty_windowing_lazy(&mut self) {
-        self.scheduled.dirty_lazy = true;
         self.add_dirty_idle();
     }
  
@@ -329,17 +306,13 @@ impl WindowManager {
         while curr != render_list {
             let next = (*curr).next;
             let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            match (*node).get() {
-                crate::wm_node::WmNodeType::Window(window) => {
-                    if (*window).manage_finish() {
-                        if !(*window).wm_requested.resizing {
-                            if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
-                                *count += 1;
-                            }
-                        }
+            let window = (*node).window();
+            if (*window).manage_finish() {
+                if !(*window).wm_requested.resizing {
+                    if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
+                        *count += 1;
                     }
                 }
-                _ => {}
             }
             curr = next;
         }
@@ -390,12 +363,8 @@ impl WindowManager {
         while curr != render_list {
             let next = (*curr).next;
             let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            match (*node).get() {
-                crate::wm_node::WmNodeType::Window(window) => {
-                    (*window).render_start();
-                }
-                _ => {}
-            }
+            let window = (*node).window();
+            (*window).render_start();
             curr = next;
         }
 
@@ -446,143 +415,113 @@ impl WindowManager {
         while curr != render_list {
             let next = (*curr).next;
             let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            match (*node).get() {
-                crate::wm_node::WmNodeType::Window(window) => {
-                    (*window).ref_key.hash(&mut hasher);
-                    rendered_fullscreen(window).hash(&mut hasher);
-                    fullscreen_on_top(window).hash(&mut hasher);
-                    (*window).rendering_requested.circular.hash(&mut hasher);
-                    (*window).rendering_requested.hidden.hash(&mut hasher);
-                    (*window).tiling_mode.hash(&mut hasher);
-                    // A status segment's layer flips between top and popups
-                    // on expand/contract (see the reorder pass below), so
-                    // expansion state must participate in the hash — without
-                    // it the restack waits for an unrelated reorder, and the
-                    // open menu sits UNDER its sibling segments (their text
-                    // stays unblurred over the menu) until one happens.
-                    if (*window).tiling_mode == crate::tiling::TilingMode::Status {
-                        let bg = (*window).box_geom;
-                        let thickness = match (*window).status_edge {
-                            crate::policy::arrange::StatusEdge::Left
-                            | crate::policy::arrange::StatusEdge::Right => bg.width,
-                            _ => bg.height,
-                        };
-                        (thickness > self.layout.bar_height).hash(&mut hasher);
-                    }
-                }
-                crate::wm_node::WmNodeType::ShellSurface(shell_surface) => {
-                    (shell_surface as usize).hash(&mut hasher);
-                }
+            let window = (*node).window();
+            (*window).ref_key.hash(&mut hasher);
+            rendered_fullscreen(window).hash(&mut hasher);
+            fullscreen_on_top(window).hash(&mut hasher);
+            (*window).rendering_requested.circular.hash(&mut hasher);
+            (*window).rendering_requested.hidden.hash(&mut hasher);
+            (*window).tiling_mode.hash(&mut hasher);
+            // A status segment's layer flips between top and popups
+            // on expand/contract (see the reorder pass below), so
+            // expansion state must participate in the hash — without
+            // it the restack waits for an unrelated reorder, and the
+            // open menu sits UNDER its sibling segments (their text
+            // stays unblurred over the menu) until one happens.
+            if (*window).tiling_mode == crate::tiling::TilingMode::Status {
+                let bg = (*window).box_geom;
+                let thickness = match (*window).status_edge {
+                    crate::policy::arrange::StatusEdge::Left
+                    | crate::policy::arrange::StatusEdge::Right => bg.width,
+                    _ => bg.height,
+                };
+                (thickness > self.layout.bar_height).hash(&mut hasher);
             }
             curr = next;
         }
         let new_order_hash = hasher.finish();
         let reorder = self.rendering_requested.order_hash != new_order_hash;
         self.rendering_requested.order_hash = new_order_hash;
-        let mut found_fullscreen = false;
         curr = (*render_list).next;
         while curr != render_list {
             let next = (*curr).next;
             let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            match (*node).get() {
-                crate::wm_node::WmNodeType::Window(window) => {
-                    (*window).render_finish();
-                    if reorder {
-                        {
-                            // Viewport-hidden windows are NOT parked under the
-                            // disabled hidden_tree: they keep their normal layer
-                            // parent and stacking slot, hidden purely by their
-                            // disabled node (render_finish and
-                            // render_viewport_update both own that flag).
-                            // Un-hiding happens on camera-motion frames, which
-                            // never run this reorder pass — a window parked here
-                            // stayed invisible after scrolling into view until
-                            // the next unrelated transaction reparented it (the
-                            // off-screen reveal delay in overview/zoom).
-                            let layer = if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
-                                // Between the native backdrop and the fallback
-                                // cells, like a layer-shell Background surface.
-                                (*self.server).scene.layers.background_clients
-                            } else if (*window).is_grid() {
-                                // The grid client is a desktop fixture: above
-                                // the native backdrop and fallback cells
-                                // (layers.background) but under every window.
-                                // Left to the generic wm arm it stacks by
-                                // render-list order, burying whichever windows
-                                // happened to map before it.
-                                (*self.server).scene.layers.bottom
-                            } else if fullscreen_on_top(window) {
-                                (*self.server).scene.layers.fullscreen
-                            } else if rendered_fullscreen(window) {
-                                // Stepped aside for a focused window (alt-tab
-                                // out), or in overview: behind every window
-                                // but above the grid, which the pass below
-                                // re-asserts. It
-                                // sits on the desk there
-                                // (`place_fullscreen_windows`), like the grid
-                                // beneath it.
-                                (*self.server).scene.layers.bottom
-                            } else if (*window).tiling_mode == crate::tiling::TilingMode::Popup {
-                                (*self.server).scene.layers.popups
-                            } else if (*window).tiling_mode == crate::tiling::TilingMode::Status {
-                                // An EXPANDED segment (in-surface menu open;
-                                // thicker than the bar) stacks like a popup:
-                                // this loop re-raises every window in
-                                // render-list order each pass, so leaving it
-                                // in the shared Status layer let whichever
-                                // sibling rendered last cover the menu's
-                                // strip band (the strip-band click routing
-                                // bug — an arrange-time raise was clobbered
-                                // here every frame).
-                                let bg = (*window).box_geom;
-                                let thickness = match (*window).status_edge {
-                                    crate::policy::arrange::StatusEdge::Left
-                                    | crate::policy::arrange::StatusEdge::Right => bg.width,
-                                    _ => bg.height,
-                                };
-                                if thickness > self.layout.bar_height {
-                                    (*self.server).scene.layers.popups
-                                } else {
-                                    (*self.server).scene.layers.top
-                                }
-                            } else if (*window).rendering_requested.circular {
-                                (*self.server).scene.layers.top
-                            } else if (*window).tiling_mode == crate::tiling::TilingMode::Overlay && self.layout.overlay_behavior == "above" {
-                                (*self.server).scene.layers.top
-                            } else {
-                                (*self.server).scene.layers.wm
-                            };
-
-                            ffi::wlr_scene_node_reparent((*window).tree as *mut _, layer);
-                            if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
-                                ffi::wlr_scene_node_lower_to_bottom((*window).tree as *mut _);
-                            } else {
-                                ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
-                            }
-                            if fullscreen_on_top(window) {
-                                found_fullscreen = true;
-                            }
-
-                            ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, layer);
-                            ffi::wlr_scene_node_place_above((*window).popup_tree as *mut _, (*window).tree as *mut _);
-                        }
-                    }
-                }
-                crate::wm_node::WmNodeType::ShellSurface(shell_surface) => {
-                    (*shell_surface).render_finish();
-                    if reorder {
-                        let layer = if found_fullscreen {
-                            (*self.server).scene.layers.fullscreen
-                        } else {
-                            (*self.server).scene.layers.wm
+            let window = (*node).window();
+            (*window).render_finish();
+            if reorder {
+                {
+                    // Viewport-hidden windows are NOT parked under the
+                    // disabled hidden_tree: they keep their normal layer
+                    // parent and stacking slot, hidden purely by their
+                    // disabled node (render_finish and
+                    // render_viewport_update both own that flag).
+                    // Un-hiding happens on camera-motion frames, which
+                    // never run this reorder pass — a window parked here
+                    // stayed invisible after scrolling into view until
+                    // the next unrelated transaction reparented it (the
+                    // off-screen reveal delay in overview/zoom).
+                    let layer = if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
+                        // Between the native backdrop and the fallback
+                        // cells, like a layer-shell Background surface.
+                        (*self.server).scene.layers.background_clients
+                    } else if (*window).is_grid() {
+                        // The grid client is a desktop fixture: above
+                        // the native backdrop and fallback cells
+                        // (layers.background) but under every window.
+                        // Left to the generic wm arm it stacks by
+                        // render-list order, burying whichever windows
+                        // happened to map before it.
+                        (*self.server).scene.layers.bottom
+                    } else if fullscreen_on_top(window) {
+                        (*self.server).scene.layers.fullscreen
+                    } else if rendered_fullscreen(window) {
+                        // Stepped aside for a focused window (alt-tab
+                        // out), or in overview: behind every window
+                        // but above the grid, which the pass below
+                        // re-asserts. It
+                        // sits on the desk there
+                        // (`place_fullscreen_windows`), like the grid
+                        // beneath it.
+                        (*self.server).scene.layers.bottom
+                    } else if (*window).tiling_mode == crate::tiling::TilingMode::Popup {
+                        (*self.server).scene.layers.popups
+                    } else if (*window).tiling_mode == crate::tiling::TilingMode::Status {
+                        // An EXPANDED segment (in-surface menu open;
+                        // thicker than the bar) stacks like a popup:
+                        // this loop re-raises every window in
+                        // render-list order each pass, so leaving it
+                        // in the shared Status layer let whichever
+                        // sibling rendered last cover the menu's
+                        // strip band (the strip-band click routing
+                        // bug — an arrange-time raise was clobbered
+                        // here every frame).
+                        let bg = (*window).box_geom;
+                        let thickness = match (*window).status_edge {
+                            crate::policy::arrange::StatusEdge::Left
+                            | crate::policy::arrange::StatusEdge::Right => bg.width,
+                            _ => bg.height,
                         };
+                        if thickness > self.layout.bar_height {
+                            (*self.server).scene.layers.popups
+                        } else {
+                            (*self.server).scene.layers.top
+                        }
+                    } else if (*window).rendering_requested.circular {
+                        (*self.server).scene.layers.top
+                    } else if (*window).tiling_mode == crate::tiling::TilingMode::Overlay && self.layout.overlay_behavior == "above" {
+                        (*self.server).scene.layers.top
+                    } else {
+                        (*self.server).scene.layers.wm
+                    };
 
-                        ffi::wlr_scene_node_reparent((*shell_surface).tree as *mut _, layer);
-                        ffi::wlr_scene_node_raise_to_top((*shell_surface).tree as *mut _);
-
-                        ffi::wlr_scene_node_reparent((*shell_surface).popup_tree as *mut _, layer);
-                        ffi::wlr_scene_node_place_above((*shell_surface).popup_tree as *mut _, (*shell_surface).tree as *mut _);
+                    ffi::wlr_scene_node_reparent((*window).tree as *mut _, layer);
+                    if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
+                        ffi::wlr_scene_node_lower_to_bottom((*window).tree as *mut _);
+                    } else {
+                        ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
                     }
+                    ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, layer);
+                    ffi::wlr_scene_node_place_above((*window).popup_tree as *mut _, (*window).tree as *mut _);
                 }
             }
             curr = next;
@@ -615,25 +554,24 @@ impl WindowManager {
             while curr != render_list {
                 let next = (*curr).next;
                 let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-                if let crate::wm_node::WmNodeType::Window(window) = (*node).get() {
-                    let floats = matches!(
-                        (*window).tiling_mode,
-                        crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Utility
+                let window = (*node).window();
+                let floats = matches!(
+                    (*window).tiling_mode,
+                    crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Utility
+                );
+                let in_wm_layer = !(*window).tree.is_null()
+                    && !wm_layer.is_null()
+                    && ffi::river_scene_node_get_parent((*window).tree as *mut _) == wm_layer;
+                if floats && in_wm_layer {
+                    ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                    ffi::wlr_scene_node_place_above(
+                        (*window).popup_tree as *mut _,
+                        (*window).tree as *mut _,
                     );
-                    let in_wm_layer = !(*window).tree.is_null()
-                        && !wm_layer.is_null()
-                        && ffi::river_scene_node_get_parent((*window).tree as *mut _) == wm_layer;
-                    if floats && in_wm_layer {
-                        ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
-                        ffi::wlr_scene_node_place_above(
-                            (*window).popup_tree as *mut _,
-                            (*window).tree as *mut _,
-                        );
-                    }
-                    // Last, so an open menu clears the plane it was just
-                    // stacked behind (`raise_focused_popups`).
-                    focused_popups = if (*window).is_seat_focused() { window } else { focused_popups };
                 }
+                // Last, so an open menu clears the plane it was just
+                // stacked behind (`raise_focused_popups`).
+                focused_popups = if (*window).is_seat_focused() { window } else { focused_popups };
                 curr = next;
             }
             if !focused_popups.is_null() {

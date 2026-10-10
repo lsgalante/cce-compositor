@@ -1053,7 +1053,6 @@ unsafe extern "C" fn handle_request_move(
         let cursor_y = (*cursor.wlr_cursor).y;
 
         (*seat).op = Some(crate::seat::SeatOp {
-            sent_release: false,
             input: crate::seat::SeatOpInput::Pointer,
             start_x: cursor_x as i32,
             start_y: cursor_y as i32,
@@ -1123,7 +1122,6 @@ unsafe extern "C" fn handle_request_resize(
 
         let edges = crate::window::Edges::from_u32((*event).edges);
         (*seat).op = Some(crate::seat::SeatOp {
-            sent_release: false,
             input: crate::seat::SeatOpInput::Pointer,
             start_x: cursor_x as i32,
             start_y: cursor_y as i32,

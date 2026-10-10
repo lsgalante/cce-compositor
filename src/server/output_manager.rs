@@ -440,17 +440,6 @@ impl OutputManager {
                 continue;
             }
 
-            if !output.sent_wl_output {
-                let global = ffi::river_wlr_output_get_global(wlr_output);
-                if !global.is_null() {
-                    if !output.object.is_null() {
-                        let name = ffi::wl_global_get_name(global, ffi::wl_resource_get_client(output.object));
-                        crate::output::zcce_output_send_wl_output(output.object, name);
-                        output.sent_wl_output = true;
-                    }
-                }
-            }
-
             match output.sent.state {
                 OutputStateValue::Enabled => {
                     assert!(ffi::river_wlr_output_get_enabled(wlr_output));

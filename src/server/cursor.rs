@@ -91,7 +91,8 @@ pub struct Cursor {
     /// gesture switches do not gate it, and no client hears it as a
     /// pointer gesture.
     pub gesture_from_touch: bool,
-    pub pressed: HashMap<u32, Option<*mut crate::pointer_binding::PointerBinding>>,
+    /// Buttons the compositor has seen pressed and not yet released.
+    pub pressed: HashSet<u32>,
     /// Buttons whose PRESS was forwarded to the focused client. The paired
     /// release must reach the client no matter what the compositor is doing
     /// by then (seat op, overview, …) — an orphaned press wedges client-side
@@ -224,7 +225,7 @@ impl Default for Cursor {
             hidden_by_touch: false,
             touch_claim: crate::touch::Claim::None,
             gesture_from_touch: false,
-            pressed: HashMap::new(),
+            pressed: HashSet::new(),
             notified_pressed: HashSet::new(),
             grab_origin: (0.0, 0.0),
             grab_scale: 1.0,
@@ -973,7 +974,7 @@ impl Cursor {
                         }
                     }
                 }
-                SceneNodeDataVal::ShellSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
+                SceneNodeDataVal::OverrideRedirect(_) => {
                     is_window = true;
                     self.set_adjust_hover(std::ptr::null_mut());
                 }

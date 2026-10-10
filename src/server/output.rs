@@ -151,7 +151,6 @@ pub struct Output {
     pub adjust_tree: *mut ffi::wlr_scene_tree,
     pub adjust_rects: Vec<*mut ffi::wlr_scene_rect>,
     pub last_adjust_mode: bool,
-    pub object: *mut ffi::wl_resource, // zcce_output_v1 resource
     pub layer_shell: LayerShellOutput,
     pub lock_render_state: LockRenderState,
     pub link: ffi::wl_list,
@@ -159,7 +158,6 @@ pub struct Output {
     pub scheduled: OutputState,
     pub sent: OutputState,
     pub current: OutputState,
-    pub sent_wl_output: bool,
     pub rendering_requested: RenderingState,
     pub rendering_current: RenderingState,
 
@@ -232,60 +230,6 @@ pub struct Output {
     pub frame: ffi::wl_listener,
     pub present: ffi::wl_listener,
 }
-
-unsafe extern "C" fn handle_destroy_resource(resource: *mut ffi::wl_resource) {
-    let output = ffi::wl_resource_get_user_data(resource) as *mut Output;
-    if !output.is_null() {
-        if (*output).object != resource {
-            return;
-        }
-        (*output).object = std::ptr::null_mut();
-        (*output).sent_wl_output = false;
-    }
-}
-
-unsafe extern "C" fn output_destroy(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
-    ffi::wl_resource_destroy(resource);
-}
-
-unsafe extern "C" fn output_set_presentation_mode(
-    _client: *mut ffi::wl_client,
-    resource: *mut ffi::wl_resource,
-    mode: u32,
-) {
-    let output = ffi::wl_resource_get_user_data(resource) as *mut Output;
-    if output.is_null() {
-        return;
-    }
-    if !(*(*output).server).wm.ensure_rendering() {
-        return;
-    }
-    match mode {
-        ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_VSYNC => {
-            (*output).rendering_requested.tearing = false;
-        }
-        ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_ASYNC => {
-            (*output).rendering_requested.tearing = true;
-        }
-        _ => {
-            ffi::wl_resource_post_error(
-                resource,
-                ffi::zcce_output_v1_error_ZCCE_OUTPUT_V1_ERROR_INVALID_PRESENTATION_MODE,
-                b"invalid presentation mode enum value\0".as_ptr() as *const _,
-            );
-        }
-    }
-}
-
-static OUTPUT_INTERFACE: ffi::zcce_output_v1_interface = ffi::zcce_output_v1_interface {
-    destroy: Some(output_destroy),
-    set_presentation_mode: Some(output_set_presentation_mode),
-};
-
-static INERT_OUTPUT_INTERFACE: ffi::zcce_output_v1_interface = ffi::zcce_output_v1_interface {
-    destroy: Some(output_destroy),
-    set_presentation_mode: None,
-};
 
 impl Output {
     pub unsafe fn manage_start(&mut self) {
@@ -430,7 +374,6 @@ impl Output {
             adjust_tree: std::ptr::null_mut(),
             adjust_rects: Vec::new(),
             last_adjust_mode: false,
-            object: std::ptr::null_mut(),
             layer_shell: LayerShellOutput::default(),
             lock_render_state: LockRenderState::Blanked,
             link: std::mem::zeroed(),
@@ -438,7 +381,6 @@ impl Output {
             scheduled: initial,
             sent: initial,
             current: initial,
-            sent_wl_output: false,
             rendering_requested: RenderingState { tearing: false },
             rendering_current: RenderingState { tearing: false },
             last_rendered_pan_x: f64::NAN,
@@ -1501,21 +1443,4 @@ unsafe extern "C" fn handle_present(listener: *mut ffi::wl_listener, data: *mut 
         }
         _ => {}
     }
-}
-
-// Helpers for raw Wayland FFI protocol events
-pub unsafe fn zcce_output_send_removed(resource: *mut ffi::wl_resource) {
-    ffi::wl_resource_post_event(resource, 0);
-}
-
-pub unsafe fn zcce_output_send_wl_output(resource: *mut ffi::wl_resource, name: u32) {
-    ffi::wl_resource_post_event(resource, 1, name);
-}
-
-pub unsafe fn zcce_output_send_position(resource: *mut ffi::wl_resource, x: i32, y: i32) {
-    ffi::wl_resource_post_event(resource, 2, x, y);
-}
-
-pub unsafe fn zcce_output_send_dimensions(resource: *mut ffi::wl_resource, width: i32, height: i32) {
-    ffi::wl_resource_post_event(resource, 3, width, height);
 }

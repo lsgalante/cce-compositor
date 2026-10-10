@@ -26,7 +26,6 @@ pub enum PointerOpType {
 
 #[derive(Clone, Copy, Debug)]
 pub struct SeatOp {
-    pub sent_release: bool,
     pub input: SeatOpInput,
     pub start_x: i32,
     pub start_y: i32,
@@ -64,7 +63,6 @@ pub enum Focus {
     Window(*mut crate::window::Window),
     LockSurface(*mut crate::lock_manager::LockSurface),
     OverrideRedirect(*mut crate::xwayland_override_redirect::XwaylandOverrideRedirect),
-    ShellSurface(*mut crate::shell_surface::ShellSurface),
 }
 
 impl Focus {
@@ -75,7 +73,6 @@ impl Focus {
             Focus::Window(window) => if window.is_null() { std::ptr::null_mut() } else { (*window).root_surface() },
             Focus::LockSurface(lock_surface) => if lock_surface.is_null() { std::ptr::null_mut() } else { (*(*lock_surface).wlr_lock_surface).surface },
             Focus::OverrideRedirect(or) => if or.is_null() { std::ptr::null_mut() } else { (*(*or).xsurface).surface },
-            Focus::ShellSurface(shell_surface) => if shell_surface.is_null() { std::ptr::null_mut() } else { (*shell_surface).surface },
         }
     }
 }
@@ -105,9 +102,6 @@ pub struct Seat {
     pub touch_injected: bool,
     pub relay: crate::input_relay::InputRelay,
     pub layer_shell: crate::layer_shell::LayerShellSeat,
-    pub xkb_bindings_seat: crate::xkb_bindings::XkbBindingsSeat,
-    pub xkb_bindings: ffi::wl_list,
-    pub pointer_bindings: ffi::wl_list,
     pub keyboard_groups: ffi::wl_list,
     /// A device-less keyboard group, created on demand by
     /// [`Seat::ensure_synthetic_keyboard`] when the backend supplies no
@@ -115,7 +109,6 @@ pub struct Seat {
     pub synthetic_keyboard: *mut crate::keyboard_group::KeyboardGroup,
     pub modifiers_old: u32,
     pub op: Option<SeatOp>,
-    pub op_release: bool,
     /// One-shot focus-follow-pan suppression, set around refocuses caused
     /// by a window GOING AWAY (close/unmap/minimize): the camera stays
     /// where the user left it instead of chasing the fallback focus.
@@ -143,8 +136,6 @@ pub struct Seat {
     /// `group_move`; the positions go to the grid over the `selection`
     /// status topic as the move steps (`carry_group_items`).
     pub group_items: Vec<(u64, f64, f64)>,
-    pub wm_sent_x: i32,
-    pub wm_sent_y: i32,
 
     pub request_set_cursor: ffi::wl_listener,
     /// The Xwayland cursor surface currently being shown at 1/`x11_cursor_scale`,
@@ -164,7 +155,6 @@ pub struct Seat {
 
     pub link: ffi::wl_list,
     pub link_sent: ffi::wl_list,
-    pub object: *mut ffi::wl_resource,
     pub destroying: bool,
     pub focus_requested: bool,
 }
@@ -186,20 +176,14 @@ impl Seat {
             touch_injected: false,
             relay: std::mem::zeroed(),
             layer_shell: crate::layer_shell::LayerShellSeat::default(),
-            xkb_bindings_seat: crate::xkb_bindings::XkbBindingsSeat::default(),
-            xkb_bindings: std::mem::zeroed(),
-            pointer_bindings: std::mem::zeroed(),
             keyboard_groups: std::mem::zeroed(),
             synthetic_keyboard: std::ptr::null_mut(),
             modifiers_old: 0,
             op: None,
-            op_release: false,
             suppress_focus_pan: false,
             overview_displaced: Vec::new(),
             group_move: Vec::new(),
             group_items: Vec::new(),
-            wm_sent_x: 0,
-            wm_sent_y: 0,
             request_set_cursor: std::mem::zeroed(),
             x11_cursor_surface: std::ptr::null_mut(),
             x11_cursor_scale: 1.0,
@@ -213,15 +197,12 @@ impl Seat {
             drag_destroy: std::mem::zeroed(),
             link: std::mem::zeroed(),
             link_sent: std::mem::zeroed(),
-            object: std::ptr::null_mut(),
             destroying: false,
             focus_requested: false,
         }));
 
         ffi::wl_list_init(&mut (*seat).link);
         ffi::wl_list_init(&mut (*seat).link_sent);
-        ffi::wl_list_init(&mut (*seat).xkb_bindings);
-        ffi::wl_list_init(&mut (*seat).pointer_bindings);
         ffi::wl_list_init(&mut (*seat).keyboard_groups);
 
         // Add to input_manager seats
@@ -277,27 +258,6 @@ impl Seat {
     }
 
     pub unsafe fn destroy(seat: *mut Self) {
-        (*seat).layer_shell.make_inert();
-        (*seat).xkb_bindings_seat.make_inert();
-
-        let bindings_head = &mut (*seat).xkb_bindings as *mut ffi::wl_list as *mut crate::server::WlList;
-        let mut curr = (*bindings_head).next;
-        while curr != bindings_head {
-            let next = (*curr).next;
-            let binding = crate::container_of!(curr, crate::xkb_bindings::XkbBinding, link);
-            crate::xkb_bindings::XkbBinding::destroy(binding);
-            curr = next;
-        }
-
-        let ptr_bindings_head = &mut (*seat).pointer_bindings as *mut ffi::wl_list as *mut crate::server::WlList;
-        let mut curr_ptr = (*ptr_bindings_head).next;
-        while curr_ptr != ptr_bindings_head {
-            let next = (*curr_ptr).next;
-            let binding = crate::container_of!(curr_ptr, crate::pointer_binding::PointerBinding, link);
-            crate::pointer_binding::PointerBinding::destroy(binding);
-            curr_ptr = next;
-        }
-
         (*seat).cursor.deinit();
 
         // The synthetic keyboard has no device to outlive, so nothing else
@@ -518,7 +478,7 @@ impl Seat {
                 if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
                     let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
                     if new_focus != Focus::LayerSurface(wlr_surf) {
-                        if let Focus::Window(_) | Focus::ShellSurface(_) | Focus::OverrideRedirect(_) | Focus::None = new_focus {
+                        if let Focus::Window(_) | Focus::OverrideRedirect(_) | Focus::None = new_focus {
                             log::info!("[FocusDebug] Blocking window manager focus request because Exclusive layer surface {:?} is active", key);
                             return;
                         }
@@ -537,12 +497,11 @@ impl Seat {
             }
             Focus::LockSurface(lock) => log::info!("[FocusDebug] Seat::focus set to LockSurface {:?}", lock),
             Focus::OverrideRedirect(or) => log::info!("[FocusDebug] Seat::focus set to OverrideRedirect {:?}", or),
-            Focus::ShellSurface(ss) => log::info!("[FocusDebug] Seat::focus set to ShellSurface {:?}", ss),
         }
 
         match self.focused {
             Focus::None => {}
-            Focus::LayerSurface(_) | Focus::Window(_) | Focus::LockSurface(_) | Focus::OverrideRedirect(_) | Focus::ShellSurface(_) => {
+            Focus::LayerSurface(_) | Focus::Window(_) | Focus::LockSurface(_) | Focus::OverrideRedirect(_) => {
                 ffi::wlr_seat_keyboard_notify_clear_focus(self.wlr_seat);
                 let focused_client = ffi::river_wlr_seat_get_pointer_focused_client(self.wlr_seat);
                 // Keep pointer focus through an active implicit grab (held
@@ -733,30 +692,6 @@ impl Seat {
                     }
                 }
             }
-            Focus::ShellSurface(shell_surface) => {
-                let surface = (*shell_surface).surface;
-                if !surface.is_null() {
-                    let kbd = ffi::river_wlr_seat_get_keyboard(self.wlr_seat);
-                    if !kbd.is_null() {
-                        let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
-                        ffi::wlr_seat_keyboard_notify_enter(
-                            self.wlr_seat,
-                            surface,
-                            std::ptr::null_mut(),
-                            0,
-                            modifiers,
-                        );
-                    } else {
-                        ffi::wlr_seat_keyboard_notify_enter(
-                            self.wlr_seat,
-                            surface,
-                            std::ptr::null_mut(),
-                            0,
-                            std::ptr::null_mut(),
-                        );
-                    }
-                }
-            }
         }
         let target_surface = new_focus.surface();
         self.relay.focus(target_surface);
@@ -888,7 +823,6 @@ impl Seat {
     }
 
     pub unsafe fn manage_finish(&mut self) {
-        self.xkb_bindings_seat.manage_finish();
 
         if (*self.server).lock_manager.state != crate::lock_manager::LockState::Unlocked {
             return;
@@ -1065,101 +999,6 @@ impl Seat {
                 wm.start_panning_animation();
             }
         }
-    }
-
-    pub unsafe fn make_inert(&mut self) {
-        if !self.object.is_null() {
-            ffi::wl_resource_post_event(self.object, 0); // river_seat_v1.removed
-            ffi::wl_resource_set_implementation(
-                self.object,
-                &INERT_SEAT_INTERFACE as *const _ as *const _,
-                std::ptr::null_mut(),
-                None,
-            );
-            self.object = std::ptr::null_mut();
-            (*self.server).wm.dirty_windowing();
-        }
-        self.layer_shell.make_inert();
-        self.xkb_bindings_seat.make_inert();
-    }
-
-    pub unsafe fn match_xkb_binding(
-        &self,
-        keycode: u32,
-        wlr_keyboard: *mut ffi::wlr_keyboard,
-    ) -> Option<*mut crate::xkb_bindings::XkbBinding> {
-        let xkb_state = (*wlr_keyboard).xkb_state;
-        if xkb_state.is_null() {
-            return None;
-        }
-        
-        let modifiers = ffi::wlr_keyboard_get_modifiers(wlr_keyboard);
-        
-        let bindings_head = &self.xkb_bindings as *const ffi::wl_list as *mut crate::server::WlList;
-        let mut curr = (*bindings_head).next;
-        let mut found: Option<*mut crate::xkb_bindings::XkbBinding> = None;
-        
-        while curr != bindings_head {
-            let next = (*curr).next;
-            let binding = crate::container_of!(curr, crate::xkb_bindings::XkbBinding, link);
-            if (*binding).match_keycode(keycode, modifiers, xkb_state, false) {
-                if found.is_none() {
-                    found = Some(binding);
-                } else {
-                    log::debug!("already found a matching xkb_binding, ignoring additional match");
-                }
-            }
-            curr = next;
-        }
-        
-        if found.is_some() {
-            return found;
-        }
-        
-        curr = (*bindings_head).next;
-        while curr != bindings_head {
-            let next = (*curr).next;
-            let binding = crate::container_of!(curr, crate::xkb_bindings::XkbBinding, link);
-            if (*binding).match_keycode(keycode, modifiers, xkb_state, true) {
-                if found.is_none() {
-                    found = Some(binding);
-                } else {
-                    log::debug!("already found a matching xkb_binding, ignoring additional match");
-                }
-            }
-            curr = next;
-        }
-        
-        found
-    }
-
-    pub unsafe fn match_pointer_binding(
-        &self,
-        button: u32,
-    ) -> Option<*mut crate::pointer_binding::PointerBinding> {
-        let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(self.wlr_seat);
-        if wlr_keyboard.is_null() {
-            return None;
-        }
-        let modifiers = ffi::wlr_keyboard_get_modifiers(wlr_keyboard);
-
-        let bindings_head = &self.pointer_bindings as *const ffi::wl_list as *mut crate::server::WlList;
-        let mut curr = (*bindings_head).next;
-        let mut found: Option<*mut crate::pointer_binding::PointerBinding> = None;
-
-        while curr != bindings_head {
-            let next = (*curr).next;
-            let binding = crate::container_of!(curr, crate::pointer_binding::PointerBinding, link);
-            if (*binding).match_binding(button, modifiers) {
-                if found.is_none() {
-                    found = Some(binding);
-                } else {
-                    log::debug!("already found a matching pointer binding, ignoring additional match");
-                }
-            }
-            curr = next;
-        }
-        found
     }
 
     /// Snap parameters for interactive ops, from the current layout config.
@@ -2099,262 +1938,3 @@ unsafe extern "C" fn handle_request_set_primary_selection(
     ffi::wlr_seat_set_primary_selection(seat.wlr_seat, (*event).source, (*event).serial);
 }
 
-unsafe extern "C" fn seat_destroy(_client: *mut ffi::wl_client, resource: *mut ffi::wl_resource) {
-    ffi::wl_resource_destroy(resource);
-}
-
-unsafe extern "C" fn seat_focus_window(
-    _client: *mut ffi::wl_client,
-    resource: *mut ffi::wl_resource,
-    window_resource: *mut ffi::wl_resource,
-) {
-    let seat = ffi::wl_resource_get_user_data(resource) as *mut Seat;
-    if seat.is_null() {
-        return;
-    }
-    if !(*(*seat).server).wm.ensure_windowing() {
-        return;
-    }
-    (*seat).focus_requested = true;
-    if window_resource.is_null() {
-        (*seat).focus(Focus::None);
-        return;
-    }
-    let window = ffi::wl_resource_get_user_data(window_resource) as *mut crate::window::Window;
-    if !window.is_null() {
-        (*seat).focus(Focus::Window(window));
-    }
-}
-
-unsafe extern "C" fn seat_focus_shell_surface(
-    _client: *mut ffi::wl_client,
-    resource: *mut ffi::wl_resource,
-    shell_surface_resource: *mut ffi::wl_resource,
-) {
-    let seat = ffi::wl_resource_get_user_data(resource) as *mut Seat;
-    if seat.is_null() {
-        return;
-    }
-    if !(*(*seat).server).wm.ensure_windowing() {
-        return;
-    }
-    (*seat).focus_requested = true;
-    if shell_surface_resource.is_null() {
-        (*seat).focus(Focus::None);
-        return;
-    }
-    let shell_surface = ffi::wl_resource_get_user_data(shell_surface_resource) as *mut crate::shell_surface::ShellSurface;
-    if !shell_surface.is_null() {
-        (*seat).focus(Focus::ShellSurface(shell_surface));
-    }
-}
-
-unsafe extern "C" fn seat_clear_focus(
-    _client: *mut ffi::wl_client,
-    resource: *mut ffi::wl_resource,
-) {
-    let seat = ffi::wl_resource_get_user_data(resource) as *mut Seat;
-    if !seat.is_null() {
-        if (*(*seat).server).wm.ensure_windowing() {
-            (*seat).focus_requested = true;
-            (*seat).focus(Focus::None);
-        }
-    }
-}
-
-unsafe extern "C" fn seat_op_start_pointer(
-    _client: *mut ffi::wl_client,
-    resource: *mut ffi::wl_resource,
-) {
-    let seat = ffi::wl_resource_get_user_data(resource) as *mut Seat;
-    if seat.is_null() {
-        return;
-    }
-    if !(*(*seat).server).wm.ensure_windowing() {
-        return;
-    }
-    if (*seat).op.is_none() {
-        log::debug!("start seat op pointer");
-        let cursor_x = (*(*seat).cursor.wlr_cursor).x;
-        let cursor_y = (*(*seat).cursor.wlr_cursor).y;
-        (*seat).op = Some(SeatOp {
-            sent_release: false,
-            input: SeatOpInput::Pointer,
-            start_x: cursor_x as i32,
-            start_y: cursor_y as i32,
-            x: cursor_x as i32,
-            y: cursor_y as i32,
-            window_ptr: std::ptr::null_mut(),
-            op_type: PointerOpType::Move,
-            start_win_x: 0,
-            start_win_y: 0,
-            start_win_w: 0,
-            start_win_h: 0,
-            start_win_virtual_x: 0.0,
-            start_win_virtual_y: 0.0,
-            start_pan_x: (*(*seat).server).wm.desk_pan_x,
-            start_pan_y: (*(*seat).server).wm.desk_pan_y,
-            start_tiling_mode: crate::tiling::TilingMode::Floating,
-            start_was_tiled: false,
-            start_mode_locked: false,
-            started_in_overview: false,
-        });
-        (*(*seat).server).wm.stop_panning_animation();
-        (*seat).cursor.op_start_pointer();
-    }
-}
-
-unsafe extern "C" fn seat_op_end(
-    _client: *mut ffi::wl_client,
-    resource: *mut ffi::wl_resource,
-) {
-    let seat = ffi::wl_resource_get_user_data(resource) as *mut Seat;
-    if seat.is_null() {
-        return;
-    }
-    if !(*(*seat).server).wm.ensure_windowing() {
-        return;
-    }
-    (*seat).op_end();
-}
-
-unsafe extern "C" fn seat_get_pointer_binding(
-    client: *mut ffi::wl_client,
-    resource: *mut ffi::wl_resource,
-    id: u32,
-    button: u32,
-    modifiers: u32,
-) {
-    let seat = ffi::wl_resource_get_user_data(resource) as *mut Seat;
-    if seat.is_null() {
-        return;
-    }
-    let version = ffi::wl_resource_get_version(resource) as u32;
-    if let Err(err) = crate::pointer_binding::PointerBinding::create(
-        seat,
-        client,
-        version,
-        id,
-        button,
-        modifiers,
-    ) {
-        log::error!("failed to create pointer binding: {}", err);
-        ffi::wl_client_post_no_memory(client);
-    }
-}
-
-unsafe extern "C" fn seat_set_xcursor_theme(
-    client: *mut ffi::wl_client,
-    resource: *mut ffi::wl_resource,
-    name: *const ::std::os::raw::c_char,
-    size: u32,
-) {
-    let seat = ffi::wl_resource_get_user_data(resource) as *mut Seat;
-    if seat.is_null() {
-        return;
-    }
-    if let Err(err) = (*seat).cursor.set_theme(name, size) {
-        log::error!("failed to set xcursor theme: {}", err);
-        ffi::wl_client_post_no_memory(client);
-    }
-}
-
-unsafe extern "C" fn seat_pointer_warp(
-    _client: *mut ffi::wl_client,
-    resource: *mut ffi::wl_resource,
-    x: i32,
-    y: i32,
-) {
-    let seat = ffi::wl_resource_get_user_data(resource) as *mut Seat;
-    if seat.is_null() {
-        return;
-    }
-    if !(*(*seat).server).wm.ensure_windowing() {
-        return;
-    }
-    let cursor = &mut (*seat).cursor;
-    ffi::wlr_cursor_warp_absolute(cursor.wlr_cursor, std::ptr::null_mut(), x as f64, y as f64);
-}
-
-static SEAT_INTERFACE: ffi::zcce_seat_v1_interface = ffi::zcce_seat_v1_interface {
-    destroy: Some(seat_destroy),
-    focus_window: Some(seat_focus_window),
-    focus_shell_surface: Some(seat_focus_shell_surface),
-    clear_focus: Some(seat_clear_focus),
-    op_start_pointer: Some(seat_op_start_pointer),
-    op_end: Some(seat_op_end),
-    get_pointer_binding: Some(seat_get_pointer_binding),
-    set_xcursor_theme: Some(seat_set_xcursor_theme),
-    pointer_warp: Some(seat_pointer_warp),
-};
-
-unsafe extern "C" fn seat_inert_focus_window(
-    _client: *mut ffi::wl_client,
-    _resource: *mut ffi::wl_resource,
-    _window_resource: *mut ffi::wl_resource,
-) {}
-
-unsafe extern "C" fn seat_inert_focus_shell_surface(
-    _client: *mut ffi::wl_client,
-    _resource: *mut ffi::wl_resource,
-    _shell_surface_resource: *mut ffi::wl_resource,
-) {}
-
-unsafe extern "C" fn seat_inert_clear_focus(
-    _client: *mut ffi::wl_client,
-    _resource: *mut ffi::wl_resource,
-) {}
-
-unsafe extern "C" fn seat_inert_op_start_pointer(
-    _client: *mut ffi::wl_client,
-    _resource: *mut ffi::wl_resource,
-) {}
-
-unsafe extern "C" fn seat_inert_op_end(
-    _client: *mut ffi::wl_client,
-    _resource: *mut ffi::wl_resource,
-) {}
-
-unsafe extern "C" fn seat_inert_get_pointer_binding(
-    _client: *mut ffi::wl_client,
-    _resource: *mut ffi::wl_resource,
-    _id: u32,
-    _button: u32,
-    _modifiers: u32,
-) {}
-
-unsafe extern "C" fn seat_inert_set_xcursor_theme(
-    _client: *mut ffi::wl_client,
-    _resource: *mut ffi::wl_resource,
-    _name: *const ::std::os::raw::c_char,
-    _size: u32,
-) {}
-
-unsafe extern "C" fn seat_inert_pointer_warp(
-    _client: *mut ffi::wl_client,
-    _resource: *mut ffi::wl_resource,
-    _x: i32,
-    _y: i32,
-) {}
-
-static INERT_SEAT_INTERFACE: ffi::zcce_seat_v1_interface = ffi::zcce_seat_v1_interface {
-    destroy: Some(seat_destroy),
-    focus_window: Some(seat_inert_focus_window),
-    focus_shell_surface: Some(seat_inert_focus_shell_surface),
-    clear_focus: Some(seat_inert_clear_focus),
-    op_start_pointer: Some(seat_inert_op_start_pointer),
-    op_end: Some(seat_inert_op_end),
-    get_pointer_binding: Some(seat_inert_get_pointer_binding),
-    set_xcursor_theme: Some(seat_inert_set_xcursor_theme),
-    pointer_warp: Some(seat_inert_pointer_warp),
-};
-
-unsafe extern "C" fn handle_destroy_resource(resource: *mut ffi::wl_resource) {
-    let seat = ffi::wl_resource_get_user_data(resource) as *mut Seat;
-    if !seat.is_null() {
-        if (*seat).object != resource {
-            return;
-        }
-        (*seat).object = std::ptr::null_mut();
-    }
-}
