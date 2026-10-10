@@ -11,7 +11,7 @@ doctest = false
 # switch and the relief/droplet spec parsers. It depended on cce-ui for these
 # until 2026-10-07, linking the whole Wayland/Vulkan/text stack it never used.
 cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "5b8dcb30f1b0d7d607ab49d637069560eca0cb14" }
-cce-window-manager = { git = "https://github.com/lsgalante/cce-window-manager.git", rev = "6262a647ac216ae4096b460f5e7e8fd7f8663881" }
+cce-window-manager = { git = "https://github.com/lsgalante/cce-window-manager.git", rev = "be6f99416a43c5ce9e944c052ca4fe7f790e7061" }
 xkbcommon = "0.7"
 serde = { version = "1", features = ["derive"] }
 nix = { version = "0.29", features = ["signal", "process", "fs", "poll", "resource"] }
