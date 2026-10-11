@@ -96,7 +96,7 @@ pub unsafe fn grid_node_info(
 /// drawing, so the zones and the visuals cannot drift.
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
     // Overview, or Super held (window-adjust mode): the same ring either way.
-    if !(*crate::reentry::wm((*window).server)).window_adjust_active() {
+    if !crate::shared::window_adjust_active() {
         return BorderZone::None;
     }
     if !crate::window::window_takes_handles(window) {

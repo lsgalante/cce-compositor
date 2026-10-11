@@ -97,7 +97,7 @@ pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, dat
     };
     // Overview pans on any scroll — except over chrome, which takes the
     // event itself.
-    let is_overview = (*crate::reentry::wm((*seat).server)).mode == crate::window_manager::WindowManagerMode::Overview
+    let is_overview = crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
         && !over_chrome;
 
     let is_finger = (*event).source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_FINGER

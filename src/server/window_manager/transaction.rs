@@ -15,10 +15,10 @@ impl WindowManager {
     /// every frame, hence the equality guard.
     pub unsafe fn set_mode(&mut self, mode: WindowManagerMode) {
         crate::wm_scope!(mut);
-        if self.mode == mode {
+        if crate::shared::mode() == mode {
             return;
         }
-        self.mode = mode;
+        crate::shared::shared().store_mode(mode);
         // Overview decides whether a fullscreen window owns the top of the
         // stack (`fullscreen_on_top`), and the stacking pass runs only on a
         // transaction.
@@ -33,15 +33,6 @@ impl WindowManager {
         self.arm_border_fade();
         // The `adjust` status topic follows window_adjust_active().
         self.update_status();
-    }
-
-    /// Overview, or Super held: the focused window shows its frame and
-    /// its body drags it. Every site that gates the handles — the hit
-    /// test, the reveal, the catcher rects, hover-to-focus, the body
-    /// grab — asks this, so the two ways in cannot drift apart.
-    pub fn window_adjust_active(&self) -> bool {
-        crate::wm_scope!();
-        self.mode == WindowManagerMode::Overview || self.adjust_held
     }
 
     /// Re-read whether Super is held (the seat keyboard's live mask, or an
@@ -63,10 +54,10 @@ impl WindowManager {
             }
             curr_seat = (*curr_seat).next;
         }
-        if held == self.adjust_held {
+        if held == crate::shared::adjust_held() {
             return;
         }
-        self.adjust_held = held;
+        crate::shared::shared().store_adjust_held(held);
         self.arm_border_fade();
         // The `adjust` status topic: the desktop grid shows its image
         // handles in step with the windows'.

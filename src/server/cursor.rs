@@ -826,7 +826,7 @@ impl Cursor {
                     // pointer, focused or not. Set BEFORE the zone test
                     // below, so the band is live on the first hover. (Null
                     // for the status bar, wallpaper and grid.)
-                    self.set_adjust_hover(if (*crate::reentry::wm(server)).window_adjust_active() {
+                    self.set_adjust_hover(if crate::shared::window_adjust_active() {
                         hovered_toplevel
                     } else {
                         std::ptr::null_mut()
@@ -888,7 +888,7 @@ impl Cursor {
 
             if is_window
                 && !hovered_chrome
-                && (*crate::reentry::wm(server)).window_adjust_active()
+                && crate::shared::window_adjust_active()
             {
                 // Focus follows the pointer in overview, so a click-less
                 // hover chooses the window a focus chord or the exit lands
@@ -912,7 +912,7 @@ impl Cursor {
                 // so a focus chord pressed next acts on the window the user
                 // had — the ring follows the pointer through `adjust_hover`
                 // instead (`Window::is_adjust_target`).
-                if (*crate::reentry::wm(server)).mode == crate::window_manager::WindowManagerMode::Overview
+                if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
                     && !hovered_toplevel.is_null()
                     && !(*self.seat).focus_is_chrome()
                     && (*self.seat).focused

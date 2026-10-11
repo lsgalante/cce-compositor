@@ -864,7 +864,7 @@ impl Seat {
         // point and the camera stays put.
         if !window.is_null() && (*window).is_fullscreen() {
             let wm = &mut (*crate::reentry::wm(self.server));
-            if wm.mode == crate::window_manager::WindowManagerMode::Overview {
+            if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview {
                 return;
             }
             if let Some((px, py)) = (*window).fullscreen_anchor_pan() {
@@ -1076,7 +1076,7 @@ impl Seat {
                             // Overview moves displace what they cover: any
                             // window the drag covers past the threshold
                             // scoots to the side the drag vacated.
-                            if (*crate::reentry::wm(self.server)).mode
+                            if crate::shared::mode()
                                 == crate::window_manager::WindowManagerMode::Overview
                             {
                                 displace_covered(

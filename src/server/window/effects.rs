@@ -317,7 +317,7 @@ impl Window {
     /// hide nothing.
     pub unsafe fn adjust_dim_wanted(&self) -> bool {
         let wm = &(*crate::reentry::wm(self.server));
-        if !wm.window_adjust_active()
+        if !crate::shared::window_adjust_active()
             || self.closed
             || self.tiling_mode != crate::tiling::TilingMode::Floating
             || self.is_status_bar()
@@ -392,7 +392,7 @@ impl Window {
         // easing through this same fade. Hover still reads through on the revealed ring, as
         // `color_for` paints the hovered zone in hover_color over the full
         // reveal.
-        let all_on = (*crate::reentry::wm(self.server)).window_adjust_active()
+        let all_on = crate::shared::window_adjust_active()
             && window_takes_handles(self as *mut Window)
             && self.is_adjust_target();
         for elem in BorderElement::ALL {

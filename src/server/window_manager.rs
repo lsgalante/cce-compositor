@@ -156,7 +156,6 @@ pub struct WindowManager {
     pub desk_pan_x: f64,
     pub desk_pan_y: f64,
     pub desk_zoom: f64,
-    pub mode: WindowManagerMode,
     /// Camera reaction when the focused window goes away (config
     /// `window_manager.on_app_exit`).
     pub on_app_exit: crate::config::OnAppExit,
@@ -224,11 +223,6 @@ pub struct WindowManager {
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
     pub status_hide_mode: bool,
     pub adjust_position_mode: bool,
-    /// Window-adjust mode: Super is held. The focused window shows its
-    /// frame (handles) and its body drags it, as in overview — the two
-    /// are one predicate, `window_adjust_active`. Set from the keyboard's
-    /// modifier state (`refresh_adjust_held`), never assigned directly.
-    pub adjust_held: bool,
     /// A Super held through `ccectl key-down 125|126`, which bypasses the
     /// keyboard device the modifier mask is read from.
     pub injected_super_held: bool,
@@ -517,7 +511,7 @@ impl WindowManager {
         self.output_scale = 1.0;
         self.display = std::collections::HashMap::new();
         self.input_rules = Vec::new();
-        self.mode = WindowManagerMode::Normal;
+        crate::shared::shared().store_mode(WindowManagerMode::Normal);
         Ok(())
     }
 
@@ -567,7 +561,7 @@ impl WindowManager {
         self.pending_ipc_reply = None;
         self.pending_ipc_peer_pid = 0;
         self.settle_timer = std::ptr::null_mut();
-        self.mode = WindowManagerMode::Normal;
+        crate::shared::shared().store_mode(WindowManagerMode::Normal);
         self.on_app_exit = crate::config::OnAppExit::FocusPrevious;
         self.grid_cells_enabled = true;
         self.grid_cells_hold = false;
@@ -606,7 +600,7 @@ impl WindowManager {
         self.last_status_update = std::cell::RefCell::new(None);
         self.status_hide_mode = false;
         self.adjust_position_mode = false;
-        self.adjust_held = false;
+        crate::shared::shared().store_adjust_held(false);
         self.injected_super_held = false;
         self.injected_key_mods = 0;
 
@@ -1012,7 +1006,7 @@ impl WindowManager {
 
         ActionCtx {
             camera: self.camera(),
-            overview: self.mode == WindowManagerMode::Overview,
+            overview: crate::shared::mode() == WindowManagerMode::Overview,
             pan_target_x: self.target_desk_pan_x,
             pan_target_y: self.target_desk_pan_y,
             viewport_w,
@@ -1661,7 +1655,7 @@ impl WindowManager {
         crate::shared::pending().mark_rendering();
         // A window that just moved, resized or restacked may now cover the
         // adjust target, or no longer: let the overlap dim re-evaluate.
-        if self.window_adjust_active() {
+        if crate::shared::window_adjust_active() {
             self.arm_border_fade();
         }
     }
@@ -1711,7 +1705,7 @@ impl WindowManager {
             let flying = self.camera_ramp_anim.is_some() || self.target_desk_zoom.is_some();
             let on_desk = returning
                 || flying
-                || self.mode == WindowManagerMode::Overview
+                || crate::shared::mode() == WindowManagerMode::Overview
                 || (*w).fullscreen_yields();
             if on_desk {
                 let (sx, sy) = (*w).virtual_to_screen((*w).virtual_x, (*w).virtual_y);
@@ -2144,7 +2138,7 @@ impl WindowManager {
         }
         (*seat).suppress_focus_pan = false;
         if behavior == crate::config::OnAppExit::Overview
-            && self.mode == WindowManagerMode::Normal
+            && crate::shared::mode() == WindowManagerMode::Normal
         {
             self.execute_action(&crate::config::Action::Overview, None);
         }
@@ -2252,7 +2246,7 @@ impl WindowManager {
         }
         self.keep_status_bar_on_top();
         // Restacking changes who covers the adjust target.
-        if self.window_adjust_active() {
+        if crate::shared::window_adjust_active() {
             self.arm_border_fade();
         }
     }
@@ -2268,7 +2262,7 @@ impl WindowManager {
     /// last left. See the "overview" arm of the control handler.
     pub fn overview_action_pointerless(&self) -> crate::config::Action {
         crate::wm_scope!();
-        if self.mode == WindowManagerMode::Overview {
+        if crate::shared::mode() == WindowManagerMode::Overview {
             crate::config::Action::OverviewExit
         } else {
             crate::config::Action::OverviewEnter
@@ -2283,7 +2277,7 @@ impl WindowManager {
     /// the keyed exit takes over. Enter is the toggle's own.
     pub unsafe fn overview_action_for_gesture(&mut self) -> crate::config::Action {
         crate::wm_scope!(mut);
-        if self.mode != WindowManagerMode::Overview {
+        if crate::shared::mode() != WindowManagerMode::Overview {
             return crate::config::Action::OverviewEnter;
         }
         if self.build_action_ctx().hovered.is_some() {
@@ -2694,7 +2688,7 @@ unsafe fn rendered_fullscreen(window: *mut Window) -> bool {
 /// it, so it never hides the windows overview is there to show.
 unsafe fn fullscreen_on_top(window: *mut Window) -> bool {
     rendered_fullscreen(window)
-        && (*crate::reentry::wm((*window).server)).mode != WindowManagerMode::Overview
+        && crate::shared::mode() != WindowManagerMode::Overview
         && !(*window).fullscreen_yields()
 }
 

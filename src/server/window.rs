@@ -788,7 +788,7 @@ impl Window {
     /// the camera is not the enter's to move.
     unsafe fn pan_to_restored_fullscreen_spot(&self) {
         let wm = &mut (*crate::reentry::wm(self.server));
-        if wm.mode == crate::window_manager::WindowManagerMode::Overview
+        if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
             || wm.camera_ramp_anim.is_some()
             || self.fullscreen_yields()
         {
@@ -1536,7 +1536,7 @@ impl Window {
             // a first focus unless `center_on_spawn` allows it — the exit
             // this replaced always moved the camera.
             if should_focus
-                && (*crate::reentry::wm(self.server)).mode == crate::window_manager::WindowManagerMode::Overview
+                && crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
                 && !self.is_grid()
                 && !self.is_status_bar()
                 && !self.is_wallpaper()

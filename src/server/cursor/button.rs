@@ -64,7 +64,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
             _ => {}
         }
     }
-    let should_block_button = (*crate::reentry::wm((*seat).server)).mode == crate::window_manager::WindowManagerMode::Overview && is_app_surface && !is_overlay_window;
+    let should_block_button = crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview && is_app_surface && !is_overlay_window;
     
     if (*event).state == ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED {
         if cursor.pressed.contains(&(*event).button) {
@@ -130,8 +130,8 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
         // press on its ring falls through to the border path. Only in
         // overview does a background press mean anything (it exits); with
         // Super held at zoom 1 it falls through to the normal desktop press.
-        let in_overview = (*crate::reentry::wm((*seat).server)).mode == crate::window_manager::WindowManagerMode::Overview;
-        if (*event).button == 0x110 && (*crate::reentry::wm((*seat).server)).window_adjust_active() {
+        let in_overview = crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview;
+        if (*event).button == 0x110 && crate::shared::window_adjust_active() {
             let mut clicked_win: *mut crate::window::Window = std::ptr::null_mut();
             let mut clicked_cloud_layer = false;
             if let Some(result) = crate::shared::scene().at(lx, ly) {
@@ -522,7 +522,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                         start_mode_locked: (*target_win).mode_locked,
                         start_pan_x: (*crate::reentry::wm((*seat).server)).desk_pan_x,
                         start_pan_y: (*crate::reentry::wm((*seat).server)).desk_pan_y,
-                        started_in_overview: (*crate::reentry::wm((*seat).server)).mode == crate::window_manager::WindowManagerMode::Overview,
+                        started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
                     });
                     cursor.op_start_pointer();
                     cursor.pressed.insert((*event).button);
@@ -634,7 +634,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                             start_mode_locked: (*border_target_win).mode_locked,
                             start_pan_x: (*crate::reentry::wm((*seat).server)).desk_pan_x,
                         start_pan_y: (*crate::reentry::wm((*seat).server)).desk_pan_y,
-                        started_in_overview: (*crate::reentry::wm((*seat).server)).mode == crate::window_manager::WindowManagerMode::Overview,
+                        started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
                         });
                         cursor.op_start_pointer();
                         cursor.pressed.insert((*event).button);
@@ -709,7 +709,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                             start_mode_locked: (*border_target_win).mode_locked,
                             start_pan_x: (*crate::reentry::wm((*seat).server)).desk_pan_x,
                         start_pan_y: (*crate::reentry::wm((*seat).server)).desk_pan_y,
-                        started_in_overview: (*crate::reentry::wm((*seat).server)).mode == crate::window_manager::WindowManagerMode::Overview,
+                        started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
                         });
                         cursor.op_start_pointer();
                         cursor.pressed.insert((*event).button);

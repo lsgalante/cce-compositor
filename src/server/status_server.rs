@@ -629,7 +629,7 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
         layout_text,
         title_text,
         modifiers_text,
-        adjust_text: if wm.window_adjust_active() { "on" } else { "off" }.to_string(),
+        adjust_text: if crate::shared::window_adjust_active() { "on" } else { "off" }.to_string(),
     }
 }
 

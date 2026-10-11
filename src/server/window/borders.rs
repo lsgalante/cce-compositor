@@ -117,7 +117,7 @@ impl Window {
             // (`window_background`, above) is untouched in either mode: this
             // moved the HANDLES inward, not the border.
             // Overview, or Super held: the same adjust mode at any zoom.
-            let in_overview = (*crate::reentry::wm(self.server)).window_adjust_active();
+            let in_overview = crate::shared::window_adjust_active();
             let bw = band;
             let layout_handle_w = crate::shared::layout().border_handle_width;
             let sc = if self.scale > 0.0 { self.scale } else { 1.0 };

@@ -345,7 +345,7 @@ impl WindowManager {
                     fmt(self.target_desk_pan_x),
                     fmt(self.target_desk_pan_y),
                     self.camera_anim_active,
-                    self.mode
+                    crate::shared::mode()
                 )
             }
             "pan-by" => {
@@ -501,17 +501,17 @@ impl WindowManager {
             }
             "wm-mode" => {
                 if parts.len() < 2 {
-                    return format!("{:?}\n", self.mode).to_lowercase();
+                    return format!("{:?}\n", crate::shared::mode()).to_lowercase();
                 }
                 let target = parts[1].to_lowercase();
                 // Same pointer-less halves as the "overview" command above.
                 if target == "normal" {
-                    if self.mode == WindowManagerMode::Overview {
+                    if crate::shared::mode() == WindowManagerMode::Overview {
                         self.execute_action(&crate::config::Action::OverviewExit, None);
                     }
                     return "ok\n".to_string();
                 } else if target == "overview" {
-                    if self.mode == WindowManagerMode::Normal {
+                    if crate::shared::mode() == WindowManagerMode::Normal {
                         self.execute_action(&crate::config::Action::OverviewEnter, None);
                     }
                     return "ok\n".to_string();

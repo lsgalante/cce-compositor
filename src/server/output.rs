@@ -1043,7 +1043,7 @@ impl Output {
     /// navigation aid, not desktop furniture.
     unsafe fn draw_cell_labels(&mut self) {
         let wm = &(*crate::reentry::wm(self.server));
-        let overview = wm.mode == crate::window_manager::WindowManagerMode::Overview
+        let overview = crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
             && crate::shared::layout().desktop_cell_labels;
 
         if !overview {

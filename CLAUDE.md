@@ -422,7 +422,9 @@ listeners must not unlink into them on drop.
 and nothing ever takes `&mut` to it — every field is a `Cell` or `OnceCell`.
 It holds the scene (`crate::shared::scene()`, set once by `Server::init`;
 `Server` has no `scene` field any more), the configuration
-(`crate::shared::layout()`, below), the display, and the pending work
+(`crate::shared::layout()`, below), the window manager's `mode()` and
+`adjust_held()` (and so `window_adjust_active()`, below), the display, and
+the pending work
 (`crate::shared::pending()`): whether a manage pass and a render pass are
 wanted and the idle callback that runs them. `dirty_windowing()`,
 `dirty_rendering()`, `mark_*` (set without arming, for a caller about to run
@@ -449,6 +451,15 @@ fields. A config load builds a copy and publishes it (`set_layout`, twice in
 `parse_config`: before the input config is applied and at the end); a single
 change goes through `update_layout(|l| …)`, which edits a copy with no borrow
 held. Take the snapshot once per loop, not per access.
+
+**The mode and Super-held are shared flags** (since 2026-10-10):
+`crate::shared::mode()`, `adjust_held()` and `window_adjust_active()`
+(overview OR Super held). `WindowManager` has neither field. They are still
+written only by their window-manager methods — `set_mode` (which also fades
+the handles and dirties windowing) and `refresh_adjust_held` (which re-runs
+the pointer passthrough) — through `store_mode` / `store_adjust_held`, which
+nothing else calls. Read them from anywhere; change them through the
+methods.
 
 ### Re-entrancy tracer (`reentry.rs`, since 2026-10-10)
 
@@ -482,6 +493,13 @@ held, not config), `sent` (142 — the output manager walking the applied
 outputs), ten `let wm = &mut …` bindings (92), `mode` (19), and the calls
 that genuinely mutate, about 80 at about 20 sites — the context-passing
 scope.
+
+After the mode and Super-held became shared flags (same workload, same
+day): **363 re-entries at 68 sites**. The largest group left is `sent`
+(about 150: windows, seats and outputs walking the window manager's
+applied-state lists `sent.seats` / `sent.outputs`), then the `let wm = &mut
+…` bindings in the output manager and the gesture handlers, then the
+mutating calls.
 
 ### Scene nodes are owned handles (`scene_handle.rs`, since 2026-10-10)
 
@@ -743,7 +761,7 @@ sat outside the edges and the ring that followed hugged them.
   of rim), not a band: a press between two discs is a body press and moves.
 - **Holding Super is window-adjust mode at zoom 1**: the same handles and
   body-drag as overview, gated by one predicate,
-  `WindowManager::window_adjust_active()` (overview OR `adjust_held`).
+  `crate::shared::window_adjust_active()` (overview OR `adjust_held()`).
   But NOT hover-to-focus: the ring lands on the window **under the
   pointer** (`Cursor::adjust_hover`, set by `passthrough` — the same
   target overview uses), focused or not, and focus stays put — so pressing

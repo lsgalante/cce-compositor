@@ -334,7 +334,7 @@ impl WindowManager {
     /// grid, so the highlights follow a window through a drag and the camera
     /// through a pan; with nothing selected it is one disabled tree.
     pub unsafe fn draw_selection(&mut self) {
-        let showing = self.mode == WindowManagerMode::Overview
+        let showing = crate::shared::mode() == WindowManagerMode::Overview
             && (*self.server).lock_manager.state == crate::lock_manager::LockState::Unlocked
             && (self.selection.marquee.is_some() || self.has_selection());
         if !showing {

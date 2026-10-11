@@ -266,7 +266,7 @@ impl Cursor {
             let lock_ok = !locked || matches!(result.data, SceneNodeDataVal::LockSurface(_));
             if lock_ok
                 && !result.surface.is_null()
-                && !(*crate::reentry::wm(server)).window_adjust_active()
+                && !crate::shared::window_adjust_active()
                 && ffi::wlr_surface_accepts_touch(result.surface, seat.wlr_seat)
             {
                 // The implicit grab's frame (see the button path): the
@@ -443,7 +443,7 @@ impl Cursor {
                 if (lx - start.0).hypot(ly - start.1) < TAP_SLOP {
                     return;
                 }
-                let normal = (*crate::reentry::wm((*self.seat).server)).mode == crate::window_manager::WindowManagerMode::Normal;
+                let normal = crate::shared::mode() == crate::window_manager::WindowManagerMode::Normal;
                 if on_desk && normal && self.touch_points.len() == 1 {
                     // A drag on the bare desk pans it. The track starts at
                     // the down point, so the desk catches up with the

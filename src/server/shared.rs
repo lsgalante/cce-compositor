@@ -16,6 +16,8 @@
 //! - the scene, set once when `Server::init` has built it and only read
 //!   after ([`scene`]);
 //! - the configuration, as an `Rc` snapshot ([`layout`]);
+//! - the window manager's mode and whether Super is held, and so whether
+//!   window adjusting is active ([`window_adjust_active`]);
 //! - the display and its event loop;
 //! - the pending work: whether a manage pass and a render pass are wanted,
 //!   and the idle callback that runs them ([`pending`]).
@@ -27,6 +29,7 @@
 use crate::ffi;
 use crate::scene::Scene;
 use crate::config::Layout;
+use crate::window_manager::WindowManagerMode;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 
@@ -35,6 +38,8 @@ pub struct Shared {
     layout: RefCell<Rc<Layout>>,
     display: Cell<*mut ffi::wl_display>,
     server: Cell<*mut crate::server::Server>,
+    mode: Cell<WindowManagerMode>,
+    adjust_held: Cell<bool>,
     pending: Pending,
 }
 
@@ -44,6 +49,8 @@ thread_local! {
         layout: RefCell::new(Rc::new(Layout::default())),
         display: Cell::new(std::ptr::null_mut()),
         server: Cell::new(std::ptr::null_mut()),
+        mode: Cell::new(WindowManagerMode::Normal),
+        adjust_held: Cell::new(false),
         pending: Pending::new(),
     }));
 }
@@ -82,6 +89,24 @@ pub fn update_layout<R>(f: impl FnOnce(&mut Layout) -> R) -> R {
     r
 }
 
+/// Normal or overview. Changed only by `WindowManager::set_mode`, which
+/// also starts the handle fade.
+pub fn mode() -> WindowManagerMode {
+    shared().mode.get()
+}
+
+/// Whether Super is held (a seat keyboard's live mask, or an injected one),
+/// as `WindowManager::refresh_adjust_held` last read it.
+pub fn adjust_held() -> bool {
+    shared().adjust_held.get()
+}
+
+/// Whether window adjusting is active: in overview, or with Super held.
+/// Resize handles, the adjust target and its overlap dim follow it.
+pub fn window_adjust_active() -> bool {
+    mode() == WindowManagerMode::Overview || adjust_held()
+}
+
 /// The pending manage and render work.
 pub fn pending() -> &'static Pending {
     &shared().pending
@@ -103,6 +128,18 @@ impl Shared {
         self.server.set(server);
         self.pending.event_loop.set(ffi::wl_display_get_event_loop(display));
         self.pending.live.set(true);
+    }
+
+    /// Store the mode. `WindowManager::set_mode` is the way to change it;
+    /// this is its store.
+    pub(crate) fn store_mode(&self, mode: WindowManagerMode) {
+        self.mode.set(mode);
+    }
+
+    /// Store whether Super is held. `WindowManager::refresh_adjust_held`
+    /// is the way to change it; this is its store.
+    pub(crate) fn store_adjust_held(&self, held: bool) {
+        self.adjust_held.set(held);
     }
 
     /// Publish the scene once it is built. Panics if called twice.

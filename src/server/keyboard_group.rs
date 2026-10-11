@@ -507,7 +507,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             // windows (spatial thumbnails) have their presses eaten.
             let is_overlay_mode = (*group.seat).focus_is_chrome();
 
-            if (*crate::reentry::wm((*group.seat).server)).mode != crate::window_manager::WindowManagerMode::Overview
+            if crate::shared::mode() != crate::window_manager::WindowManagerMode::Overview
                 || is_overlay_mode
                 || (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
             {

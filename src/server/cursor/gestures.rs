@@ -215,7 +215,7 @@ pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_liste
             wm.pan_pending = [0.0, 0.0];
         }
 
-        if matched_action == crate::config::Action::Overview && (*crate::reentry::wm(seat.server)).mode == crate::window_manager::WindowManagerMode::Overview {
+        if matched_action == crate::config::Action::Overview && crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview {
             let lx = cursor.x();
             let ly = cursor.y();
             let mut hovered_win: *mut crate::window::Window = std::ptr::null_mut();
