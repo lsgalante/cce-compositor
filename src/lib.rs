@@ -12,6 +12,8 @@ mod layout_probe;
 pub mod server;
 #[path = "server/listener.rs"]
 pub mod listener;
+#[path = "server/scene_handle.rs"]
+pub mod scene_handle;
 #[path = "server/process.rs"]
 pub mod process;
 #[path = "server/util.rs"]
