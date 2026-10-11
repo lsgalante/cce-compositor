@@ -1679,9 +1679,14 @@ impl Window {
         }
     }
 
-    pub unsafe fn destroy(window: *mut Window, wm: &mut crate::window_manager::WindowManager) {
-        assert!(matches!((*window).impl_type, WindowImpl::Destroying));
-        match (*window).state {
+    /// Free a window whose protocol object has gone (`WindowImpl::
+    /// Destroying`) once its close has run through a transaction: clear the
+    /// seats' hold on it, destroy its scene trees, and take it out of the
+    /// store.
+    pub unsafe fn destroy(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let Some(this) = wm.windows.get(id) else { return };
+        assert!(matches!(this.impl_type, WindowImpl::Destroying));
+        match this.state {
             WindowState::Init => {}
             WindowState::Closing => {
                 crate::shared::pending().dirty_windowing();
@@ -1690,41 +1695,42 @@ impl Window {
             _ => unreachable!(),
         }
 
-        let seats = &mut (*(*window).server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+        let seats = &mut (*this.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*seats).next;
         while curr != seats {
             let next = (*curr).next;
             let seat = crate::container_of!(curr, crate::seat::Seat, link);
-            if (*seat).focused == crate::seat::Focus::Window((*window).id()) {
+            if (*seat).focused == crate::seat::Focus::Window(id) {
                 (*seat).focus(wm, crate::seat::Focus::None);
                 wm.focus_next_visible_window(seat);
             }
             if let Some(ref op) = (*seat).op {
-                if op.window == Some((*window).id()) {
+                if op.window == Some(id) {
                     (*seat).op = None;
                 }
             }
             curr = next;
         }
 
-        (*window).commit.disconnect();
-        (*window).tree.destroy();
-        (*window).popup_tree.destroy();
+        let this = window_mut!(wm, id);
+        this.commit.disconnect();
+        this.tree.destroy();
+        this.popup_tree.destroy();
         // The border segments hang off the global overlay layer, not off
         // `tree`, so destroying the window tree does not take them with it.
         // Left behind they would both leak and keep a SceneNodeData pointing
         // at this freed window for the next hit test to find.
-        (*window).border.tree.destroy();
-        ffi::wlr_scene_node_destroy(&mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
+        this.border.tree.destroy();
+        ffi::wlr_scene_node_destroy(&mut (*this.capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
 
-        wm.render_list_remove((*window).id());
+        wm.render_list_remove(id);
 
-        wm.remove_from_history((*window).id());
-        wm.selection_forget((*window).id());
+        wm.remove_from_history(id);
+        wm.selection_forget(id);
         // Seats and cursors that still name this window (the adjust target,
         // a group move, the border hover) hold its id, which goes stale with
         // the remove below: nothing there to clear.
-        let freed = wm.windows.remove((*window).id());
+        let freed = wm.windows.remove(id);
         wm.check_clean_exit_progress();
         drop(freed);
     }

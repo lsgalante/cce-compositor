@@ -2087,21 +2087,18 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn keep_status_bar_on_top(&mut self) {
+    pub fn keep_status_bar_on_top(&mut self) {
         crate::wm_scope!(mut);
-        let mut status_bar_windows = Vec::new();
-        for win_ptr in self.windows.iter() {
-            if win_ptr.is_null() || (*win_ptr).closed {
-                continue;
-            }
-            if (*win_ptr).is_status_bar() && matches!((*win_ptr).state, crate::window::WindowState::Mapped) {
-                status_bar_windows.push(win_ptr);
-            }
-        }
+        let status_bar_windows: Vec<crate::window::WindowId> = self
+            .windows
+            .values()
+            .filter(|w| !w.closed && w.is_status_bar() && matches!(w.state, crate::window::WindowState::Mapped))
+            .map(|w| w.id())
+            .collect();
         // Each Mapped status window moves to the top, in windows order —
         // including one the list does not hold, which this links.
-        for win_ptr in status_bar_windows {
-            self.render_list_raise((*win_ptr).id());
+        for id in status_bar_windows {
+            self.render_list_raise(id);
         }
     }
 
@@ -2162,10 +2159,10 @@ impl WindowManager {
         self.rendering_requested.list.insert(0, id);
     }
 
-    /// The render list's windows, bottom first, copied out: a loop that
-    /// hands the window manager to each window may change the list.
-    pub fn render_list(&self) -> Vec<*mut Window> {
-        self.rendering_requested.list.iter().filter_map(|&id| self.window(id)).collect()
+    /// The render list's live windows' ids, bottom first, copied out: a
+    /// loop that hands the window manager to each window may change the list.
+    pub fn render_list_ids(&self) -> Vec<crate::window::WindowId> {
+        self.rendering_requested.list.iter().copied().filter(|&id| self.windows.contains(id)).collect()
     }
 
     pub unsafe fn raise_window(&mut self, id: crate::window::WindowId) {
@@ -2996,22 +2993,20 @@ unsafe extern "C" fn handle_settle_tick(data: *mut std::ffi::c_void) -> std::os:
 unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let wm = data as *mut WindowManager;
     let mut moving = false;
-    let windows: Vec<*mut crate::window::Window> = (*wm).windows.iter().collect();
-    for window in windows {
-        if window.is_null() || (*window).closed {
-            continue;
-        }
-        if (*window).step_border_fade() {
+    for id in (*wm).windows.ids() {
+        let Some(window) = (*wm).windows.get_mut(id).filter(|w| !w.closed) else { continue };
+        if window.step_border_fade() {
             moving = true;
         }
-        if Window::step_adjust_dim(&mut *wm, (*window).id()) {
+        if Window::step_adjust_dim(&mut *wm, id) {
             moving = true;
         }
-        if (*window).step_map_fade() {
+        let Some(window) = (*wm).windows.get_mut(id) else { continue };
+        if window.step_map_fade() {
             moving = true;
         }
-        if (*window).step_fs_anim() {
-            (*window).render_finish();
+        if window.step_fs_anim() {
+            window.render_finish();
             moving = true;
         }
     }

@@ -558,7 +558,7 @@ threaded through each window (`WmNode`), and the `[LinkDbg]` tracing and the
 "healing" in `keep_status_bar_on_top` date from that list's corruption (the
 tray mis-slot wedge). Change it only through `render_list_raise` /
 `render_list_lower` / `render_list_remove`, ask `in_render_list(id)`, and walk
-it with `render_list()`, which copies the live windows out: the manage and
+it with `render_list_ids()`, which copies the live ids out: the manage and
 render passes hand the window manager to each window, and a window's pass
 may raise itself or another. The old walk saved `next` and so visited a
 window twice when its own pass moved it to the top; the copy visits each
@@ -637,10 +637,10 @@ Converted so far, the transaction pass and what it calls:
 `Seat::focus_follow_pan`, `Window::fullscreen_yields`,
 `Window::screen_to_virtual`, `start_fs_anim`, the free
 `fullscreen_on_top`. A pass that hands `self` to the windows it loops over
-loops over `self.window_snapshot()` (the pointers copied out), not
-`self.windows.iter()`: the iterator would borrow `self.windows` across the
-call, and `render_finish` used to remove windows from it mid-iteration
-(through `Window::destroy`'s back-pointer). New code in this closure
+loops over `self.windows.ids()` (the ids copied out), not
+`self.windows.values()`: the iterator would borrow `self.windows` across the
+call, and `render_finish` removes windows from it mid-iteration
+(`Window::destroy`). New code in this closure
 takes `wm`; it does not add a `reentry::wm` call. The tracer is how to
 find the next slice.
 

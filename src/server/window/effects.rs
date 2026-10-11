@@ -324,24 +324,23 @@ impl Window {
         {
             return false;
         }
-        let me = self as *const Window as *mut Window;
-        let on_screen = |w: *mut Window| -> (f64, f64, f64, f64) {
-            let sc = if (*w).scale > 0.0 { (*w).scale } else { 1.0 };
-            let g = (*w).box_geom;
+        let me = self.id();
+        let on_screen = |w: &Window| -> (f64, f64, f64, f64) {
+            let sc = if w.scale > 0.0 { w.scale } else { 1.0 };
+            let g = w.box_geom;
             (g.x as f64, g.y as f64, g.width as f64 * sc, g.height as f64 * sc)
         };
-        let (mx, my, mw, mh) = on_screen(me);
+        let (mx, my, mw, mh) = on_screen(self);
         // The render list runs bottom to top (raise_window moves to the
         // tail), so a target met before this window sits beneath it.
         let mut covered = false;
-        for w in wm.render_list() {
-            if w == me {
+        for w in wm.rendering_requested.list.iter().filter_map(|&id| wm.windows.get(id)) {
+            if w.id() == me {
                 return covered;
             }
-            if !w.is_null()
-                && !(*w).closed
-                && window_takes_handles(&*w)
-                && (*w).is_adjust_target()
+            if !w.closed
+                && window_takes_handles(w)
+                && w.is_adjust_target()
             {
                 let (tx, ty, tw, th) = on_screen(w);
                 if mx < tx + tw && tx < mx + mw && my < ty + th && ty < my + mh {
