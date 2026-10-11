@@ -276,18 +276,19 @@ impl Window {
     /// Begin a fade toward `target` (0.0 out, 1.0 in) over `ms`, and arm the
     /// timer that steps it. A `ms` of 0 (or fading disabled) snaps instead,
     /// so every caller can treat this as "put the window at `target`".
-    pub fn start_map_fade(&mut self, wm: &mut crate::window_manager::WindowManager, target: f32, ms: u32) {
-        self.map_fade_target = target.clamp(0.0, 1.0);
-        if ms == 0 || !self.wants_map_fade() {
-            self.map_fade = self.map_fade_target;
-            self.tree.set_opacity(self.effective_opacity());
+    pub fn start_map_fade(wm: &mut crate::window_manager::WindowManager, id: WindowId, target: f32, ms: u32) {
+        let this = window_mut!(wm, id);
+        this.map_fade_target = target.clamp(0.0, 1.0);
+        if ms == 0 || !this.wants_map_fade() {
+            this.map_fade = this.map_fade_target;
+            this.tree.set_opacity(this.effective_opacity());
             return;
         }
         // Ticks at 16 ms; at least one step, so a sub-frame duration still
         // lands on the target rather than dividing by zero.
         let ticks = ((ms as f32) / 16.0).max(1.0);
-        self.map_fade_step = ((self.map_fade_target - self.map_fade).abs() / ticks).max(1.0e-4);
-        self.tree.set_opacity(self.effective_opacity());
+        this.map_fade_step = ((this.map_fade_target - this.map_fade).abs() / ticks).max(1.0e-4);
+        this.tree.set_opacity(this.effective_opacity());
         wm.arm_border_fade();
     }
 
@@ -354,21 +355,22 @@ impl Window {
     /// Advance the overlap dim one tick toward where `adjust_dim_wanted`
     /// says it should rest, applying the opacity as it goes. Returns true
     /// while still in motion, like `step_border_fade`.
-    pub unsafe fn step_adjust_dim(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
-        let target = if self.adjust_dim_wanted(wm) { 1.0 } else { 0.0 };
-        let delta = target - self.adjust_dim;
+    pub unsafe fn step_adjust_dim(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> bool {
+        let target = if window_ref!(wm, id, false).adjust_dim_wanted(wm) { 1.0 } else { 0.0 };
+        let this = window_mut!(wm, id, false);
+        let delta = target - this.adjust_dim;
         let moving;
         if delta.abs() <= BORDER_FADE_EPSILON {
-            if self.adjust_dim == target {
+            if this.adjust_dim == target {
                 return false;
             }
-            self.adjust_dim = target;
+            this.adjust_dim = target;
             moving = false;
         } else {
-            self.adjust_dim += delta * border_fade_step();
+            this.adjust_dim += delta * border_fade_step();
             moving = true;
         }
-        self.tree.set_opacity(self.effective_opacity());
+        this.tree.set_opacity(this.effective_opacity());
         moving
     }
 
@@ -443,31 +445,32 @@ impl Window {
     /// last_applied_scale (the scale actually drawn) because self.scale has
     /// already been rewritten to the destination state's scale by the arrange
     /// pass in this same cycle.
-    pub(crate) fn start_fs_anim(&mut self, wm: &mut crate::window_manager::WindowManager) {
+    pub(crate) fn start_fs_anim(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let this = window_mut!(wm, id);
         // Animations off: the window is simply drawn at its new rect.
         if !cce_core::motion::enabled() {
-            self.fs_anim = None;
+            this.fs_anim = None;
             return;
         }
-        if !matches!(self.impl_type, WindowImpl::Toplevel(_))
-            || !matches!(self.state, WindowState::Mapped)
-            || self.box_geom.width <= 0
-            || self.box_geom.height <= 0
+        if !matches!(this.impl_type, WindowImpl::Toplevel(_))
+            || !matches!(this.state, WindowState::Mapped)
+            || this.box_geom.width <= 0
+            || this.box_geom.height <= 0
         {
             return;
         }
-        let (x, y, w, h) = if let Some(a) = self.fs_anim {
+        let (x, y, w, h) = if let Some(a) = this.fs_anim {
             (a.x, a.y, a.w, a.h)
         } else {
-            let s = if self.last_applied_scale > 0.0 { self.last_applied_scale } else { 1.0 };
+            let s = if this.last_applied_scale > 0.0 { this.last_applied_scale } else { 1.0 };
             (
-                self.box_geom.x as f64,
-                self.box_geom.y as f64,
-                self.box_geom.width as f64 * s,
-                self.box_geom.height as f64 * s,
+                this.box_geom.x as f64,
+                this.box_geom.y as f64,
+                this.box_geom.width as f64 * s,
+                this.box_geom.height as f64 * s,
             )
         };
-        self.fs_anim = Some(FsAnim { x, y, w, h, moved: false, ticks: 0 });
+        this.fs_anim = Some(FsAnim { x, y, w, h, moved: false, ticks: 0 });
         wm.arm_border_fade();
     }
 

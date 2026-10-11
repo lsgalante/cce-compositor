@@ -449,6 +449,34 @@ pub struct WindowRenderingRequested {
     pub blur: bool,
 }
 
+/// The window `id` names, borrowed mutably from `wm.windows`, or an early
+/// return of `$ret` (default `()`) when it has gone. Borrowing only the
+/// `windows` field, it leaves `wm`'s other fields free to read beside it;
+/// a call to a `wm` method ends it, and the window is fetched again after.
+macro_rules! window_mut {
+    ($wm:expr, $id:expr) => {
+        window_mut!($wm, $id, ())
+    };
+    ($wm:expr, $id:expr, $ret:expr) => {
+        match $wm.windows.get_mut($id) {
+            Some(w) => w,
+            None => return $ret,
+        }
+    };
+}
+
+/// `window_mut!`'s shared twin: the window borrowed from `wm.windows`
+/// alongside a shared `wm`, for the `&self` methods that read the window
+/// manager too.
+macro_rules! window_ref {
+    ($wm:expr, $id:expr, $ret:expr) => {
+        match $wm.windows.get($id) {
+            Some(w) => w,
+            None => return $ret,
+        }
+    };
+}
+
 #[path = "window/placement.rs"]
 mod placement;
 #[path = "window/effects.rs"]
@@ -797,20 +825,21 @@ impl Window {
     /// that focus pans (`Seat::focus_follow_pan`). Not in overview or under
     /// a camera flight, where the window is a slab on the desk anyway and
     /// the camera is not the enter's to move.
-    unsafe fn pan_to_restored_fullscreen_spot(&self, wm: &mut crate::window_manager::WindowManager) {
+    unsafe fn pan_to_restored_fullscreen_spot(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
             || wm.camera_ramp_anim.is_some()
-            || self.fullscreen_yields(wm)
+            || window_ref!(wm, id, ()).fullscreen_yields(wm)
         {
             return;
         }
-        let Some((px, py)) = self.fullscreen_anchor_pan(wm) else { return };
+        let Some((px, py)) = window_ref!(wm, id, ()).fullscreen_anchor_pan(wm) else { return };
         if (wm.desk_pan_x - px).abs() >= 0.5 || (wm.desk_pan_y - py).abs() >= 0.5 {
+            let this = window_mut!(wm, id);
             log::info!(
                 "[Fullscreen] {:?} enters at its saved desk spot ({:.0}, {:.0}); panning there",
-                self.get_title_string().as_deref().unwrap_or(""),
-                self.virtual_x,
-                self.virtual_y
+                this.get_title_string().as_deref().unwrap_or(""),
+                this.virtual_x,
+                this.virtual_y
             );
             wm.target_desk_pan_x = Some(px);
             wm.target_desk_pan_y = Some(py);
@@ -1334,34 +1363,41 @@ impl Window {
         (*hints).flags & input_flag != 0 && (*hints).input == 0
     }
 
-    pub unsafe fn map(&mut self, wm: &mut crate::window_manager::WindowManager) -> Result<(), &'static str> {
-        log::debug!("window '{:?}' mapped", self.get_title());
-        if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+    /// The window maps: placement, the status edge, focus and the open
+    /// fade. A function of the id, not a `&mut self` method, because it
+    /// hands the window manager on (focus, the overview pan, placement)
+    /// and those reach this window through the store.
+    pub unsafe fn map(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> Result<(), &'static str> {
+        let Some(ptr) = wm.windows.ptr(id) else { return Err("window gone before map") };
+        let this = window_mut!(wm, id, Err("window gone before map"));
+        log::debug!("window '{:?}' mapped", this.get_title());
+        if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
             log::debug!("[LinkDbg] map app={:?} was_state={:?} linked={}",
-                self.get_app_id_string(), self.state, wm.in_render_list(self.id()));
+                this.get_app_id_string(), this.state, wm.rendering_requested.list.contains(&id));
         }
-        assert!(!matches!(self.impl_type, WindowImpl::Destroying));
-        assert_eq!(self.state, WindowState::Initialized);
-        self.state = WindowState::Mapped;
+        assert!(!matches!(this.impl_type, WindowImpl::Destroying));
+        assert_eq!(this.state, WindowState::Initialized);
+        this.state = WindowState::Mapped;
 
-        self.try_restore(wm);
-        self.try_hint_placement(wm);
+        Window::try_restore(wm, id);
+        Window::try_hint_placement(wm, id);
         // Last: a session modal's placement is not negotiable, so it wins
         // over both the remembered geometry and any stale place-next hint.
-        self.try_center_on_view(wm);
-        self.try_center_on_sibling(wm);
+        Window::try_center_on_view(wm, id);
+        Window::try_center_on_sibling(wm, id);
         // After every placement decision, including the invocation-square one:
         // whichever chose this spot, a tiled window must not open stacked on
         // another. The anchor rule already avoids that when any corner is
         // clear, so this only acts when none was.
-        self.avoid_tiled_overlap(wm);
+        Window::avoid_tiled_overlap(wm, id);
 
-        let surface = self.root_surface();
+        let this = window_mut!(wm, id, Err("window gone during placement"));
+        let surface = this.root_surface();
         if !surface.is_null() {
-            self.commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_window_commit);
+            this.commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_window_commit);
         }
 
-        let app_id_ptr = self.get_app_id();
+        let app_id_ptr = this.get_app_id();
         let (is_status_bar, is_wallpaper) = if !app_id_ptr.is_null() {
             let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
             (app_id.starts_with("cce-status"), app_id.as_ref() == "cce-wallpaper")
@@ -1370,8 +1406,8 @@ impl Window {
         };
 
         if is_status_bar || is_wallpaper {
-            self.tiling_mode = crate::tiling::TilingMode::Status;
-            if is_status_bar && self.status_edge == StatusEdge::Unspecified {
+            this.tiling_mode = crate::tiling::TilingMode::Status;
+            if is_status_bar && this.status_edge == StatusEdge::Unspecified {
                 let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
                 let name = if let Some(stripped) = app_id.strip_prefix("cce-status-interface-left-").or_else(|| app_id.strip_prefix("cce-status-left-")) {
                     stripped
@@ -1448,7 +1484,7 @@ impl Window {
                         }
                     }
                 }
-                self.status_edge = if let Some(edge) = loaded_edge {
+                this.status_edge = if let Some(edge) = loaded_edge {
                     edge
                 } else {
                     if app_id.contains("viewport") {
@@ -1462,17 +1498,17 @@ impl Window {
             }
         } else {
             let mut should_focus = true;
-            if self.session_restored && self.restored_focused {
+            if this.session_restored && this.restored_focused {
                 wm.restored_focused_window_mapped = true;
                 if wm.startup_input_seen {
                     // The user already typed/clicked somewhere (e.g. into
                     // the keepassxc unlock dialog) while this window was
                     // still loading — mapping now must not yank focus out
                     // from under them.
-                    log::info!("[FocusRestore] Restored focused window {:?} mapped after user input; leaving focus alone", self.get_title());
+                    log::info!("[FocusRestore] Restored focused window {:?} mapped after user input; leaving focus alone", this.get_title());
                     should_focus = false;
                 } else {
-                    log::info!("[FocusRestore] Restored focused window mapped: {:?}", self.get_title());
+                    log::info!("[FocusRestore] Restored focused window mapped: {:?}", this.get_title());
                 }
             } else if wm.has_restored_focused_window
                 && !wm.restored_focused_window_mapped
@@ -1484,19 +1520,19 @@ impl Window {
                 // This also keeps the focus-follow pan parked at the saved
                 // camera instead of wandering to whichever window loads
                 // fastest.
-                log::info!("[FocusRestore] Holding focus for the session's focused window; {:?} maps unfocused", self.get_title());
+                log::info!("[FocusRestore] Holding focus for the session's focused window; {:?} maps unfocused", this.get_title());
                 should_focus = false;
             } else if wm.has_restored_focused_window
                 && wm.restored_focused_window_mapped
             {
-                if self.session_restored {
+                if this.session_restored {
                     // A restored sibling mapping after the session's focused
                     // window: never steal back. Only true session restores —
                     // a mid-session spawn that borrowed geometry from
                     // last_window_states is a fresh launch and must focus
                     // (and spawn-pan) normally, else it maps invisible at
                     // its remembered off-viewport spot for the whole session.
-                    log::info!("[FocusRestore] Blocking focus to non-focused restored window {:?} because restored focused window is already mapped", self.get_title());
+                    log::info!("[FocusRestore] Blocking focus to non-focused restored window {:?} because restored focused window is already mapped", this.get_title());
                     should_focus = false;
                 } else if !wm.startup_input_seen {
                     // A window mapping unbidden while the session is still
@@ -1504,7 +1540,7 @@ impl Window {
                     // like keepassxc popping up after the restored windows.
                     // It must not steal focus (or drag the focus-follow pan
                     // over to itself) from the session's focused window.
-                    log::info!("[FocusRestore] Blocking focus steal by unrestored window {:?} mapping before first input", self.get_title());
+                    log::info!("[FocusRestore] Blocking focus steal by unrestored window {:?} mapping before first input", this.get_title());
                     should_focus = false;
                 }
             }
@@ -1518,14 +1554,17 @@ impl Window {
             // close — not on matching saved state, which a mid-session spawn
             // does too and which must still focus and spawn-pan normally.
             if should_focus {
-                if let Some(app_id) = self.get_app_id_string() {
-                    let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
+                if let Some(app_id) = this.get_app_id_string() {
+                    let program = crate::window_manager::proc_args(this.unreliable_pid()).into_iter().next();
+                    let title = this.get_title();
                     if wm.take_recent_vanish(&app_id, program.as_deref()) {
-                        log::info!("[FocusRestore] Blocking focus steal by reconnecting client {:?} ({})", self.get_title(), app_id);
+                        log::info!("[FocusRestore] Blocking focus steal by reconnecting client {:?} ({})", title, app_id);
                         should_focus = false;
                     }
                 }
             }
+            let this = window_mut!(wm, id, Err("window gone"));
+            let (is_grid, server) = (this.is_grid(), this.server);
 
             // A WORLD window spawning during overview stays in overview:
             // the camera keeps its zoom and only pans, as little as it
@@ -1538,16 +1577,16 @@ impl Window {
             // this replaced always moved the camera.
             if should_focus
                 && crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
-                && !self.is_grid()
-                && !self.is_status_bar()
-                && !self.is_wallpaper()
+                && !is_grid
+                && !this.is_status_bar()
+                && !this.is_wallpaper()
             {
-                let resolved = wm.get_mode_for_window(self as *mut Window);
+                let resolved = wm.get_mode_for_window(ptr);
                 if !matches!(
                     resolved,
                     crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
                 ) {
-                    wm.pan_overview_to_window(self as *mut Window);
+                    wm.pan_overview_to_window(ptr);
                 }
             }
 
@@ -1555,17 +1594,18 @@ impl Window {
             // not a window (it is also input-transparent, so focus here
             // would be unreachable-by-click and unswitchable-away for
             // keyboard input).
-            if should_focus && !self.is_grid() {
-                let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
+            if should_focus && !is_grid {
+                let seats = &mut (*server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
                 let mut curr = (*seats).next;
                 while curr != seats {
                     let next = (*curr).next;
                     let seat = crate::container_of!(curr, crate::seat::Seat, link);
-                    (*seat).focus(wm, crate::seat::Focus::window(self as *mut Window));
+                    (*seat).focus(wm, crate::seat::Focus::Window(id));
                     curr = next;
                 }
             }
         }
+        let this = window_mut!(wm, id, Err("window gone"));
 
         // The open dissolve. Last in `map`, so the window is fully placed and
         // its scene tree built before the ramp touches it — and so a window
@@ -1575,33 +1615,39 @@ impl Window {
         // Animations off (`cce_core::motion`) is a zero-length fade, the
         // same as `surface { fade in_ms=0 }`.
         let fade_ms = if cce_core::motion::enabled() { crate::shared::layout().fade_in_ms } else { 0 };
-        if self.wants_map_fade() && fade_ms > 0 {
-            self.map_fade = 0.0;
+        if this.wants_map_fade() && fade_ms > 0 {
+            this.map_fade = 0.0;
         }
-        self.start_map_fade(wm, 1.0, fade_ms);
+        Window::start_map_fade(wm, id, 1.0, fade_ms);
 
         crate::shared::pending().dirty_windowing();
         Ok(())
     }
 
-    pub fn set_closing(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        if self.state != WindowState::Closing {
-            if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+    pub fn set_closing(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let this = window_mut!(wm, id);
+        if this.state != WindowState::Closing {
+            if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                let this = window_mut!(wm, id);
                 log::debug!("[LinkDbg] set_closing app={:?} was_state={:?} was_linked={}",
-                    self.get_app_id_string(), self.state, wm.in_render_list(self.id()));
+                    this.get_app_id_string(), this.state, wm.rendering_requested.list.contains(&id));
             }
-            self.state = WindowState::Closing;
-            wm.render_list_remove(self.id());
+            let this = window_mut!(wm, id);
+            this.state = WindowState::Closing;
+            wm.render_list_remove(id);
         }
     }
 
-    pub unsafe fn unmap(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        log::debug!("window '{:?}' unmapped", self.get_title());
-        if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+    pub unsafe fn unmap(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let this = window_mut!(wm, id);
+        log::debug!("window '{:?}' unmapped", this.get_title());
+        if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+            let this = window_mut!(wm, id);
             log::debug!("[LinkDbg] unmap app={:?} state={:?} linked={}",
-                self.get_app_id_string(), self.state, wm.in_render_list(self.id()));
+                this.get_app_id_string(), this.state, wm.rendering_requested.list.contains(&id));
         }
-        if self.state != WindowState::Mapped {
+        let this = window_mut!(wm, id);
+        if this.state != WindowState::Mapped {
             return;
         }
         // Nobody asked this window to go: either its program exited on its
@@ -1612,30 +1658,32 @@ impl Window {
         // a keyboard leave — and the next super+d inside the grace is a
         // deliberate relaunch that must focus, not a crashed client
         // reconnecting. Counting it left the reopened launcher unfocused.
-        if !self.close_requested
+        if !this.close_requested
             && !matches!(
-                self.tiling_mode,
+                this.tiling_mode,
                 crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
             )
         {
-            if let Some(app_id) = self.get_app_id_string() {
-                let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
+            if let Some(app_id) = this.get_app_id_string() {
+                let program = crate::window_manager::proc_args(this.unreliable_pid()).into_iter().next();
                 wm.note_vanished(app_id, program);
             }
         }
-        self.commit.disconnect();
-        self.surfaces.save();
-        assert!(!matches!(self.impl_type, WindowImpl::Destroying));
-        self.set_closing(wm);
+        let this = window_mut!(wm, id);
+        this.commit.disconnect();
+        this.surfaces.save();
+        assert!(!matches!(this.impl_type, WindowImpl::Destroying));
+        Window::set_closing(wm, id);
         crate::shared::pending().dirty_windowing();
 
-        if !self.foreign_toplevel_handle.is_null() {
-            ffi::wlr_ext_foreign_toplevel_handle_v1_destroy(self.foreign_toplevel_handle);
-            self.foreign_toplevel_handle = std::ptr::null_mut();
+        let this = window_mut!(wm, id);
+        if !this.foreign_toplevel_handle.is_null() {
+            ffi::wlr_ext_foreign_toplevel_handle_v1_destroy(this.foreign_toplevel_handle);
+            this.foreign_toplevel_handle = std::ptr::null_mut();
         }
-        if !self.wlr_toplevel_handle.is_null() {
-            ffi::wlr_foreign_toplevel_handle_v1_destroy(self.wlr_toplevel_handle);
-            self.wlr_toplevel_handle = std::ptr::null_mut();
+        if !this.wlr_toplevel_handle.is_null() {
+            ffi::wlr_foreign_toplevel_handle_v1_destroy(this.wlr_toplevel_handle);
+            this.wlr_toplevel_handle = std::ptr::null_mut();
         }
 
 
@@ -1775,25 +1823,29 @@ impl Window {
     /// that origin, or `None` when no resize is armed. The anchoring outlives
     /// the seat op by one commit — the last configure is usually still in
     /// flight at release — so the first commit after the op disarms it.
-    pub unsafe fn anchor_resize_commit(&mut self, wm: &mut crate::window_manager::WindowManager, committed_w: i32, committed_h: i32) -> Option<(i32, i32)> {
-        let edges = self.resize_edges?;
-        let resize_active = self.resize_op_active();
+    pub unsafe fn anchor_resize_commit(wm: &mut crate::window_manager::WindowManager, id: WindowId, committed_w: i32, committed_h: i32) -> Option<(i32, i32)> {
+        let this = window_mut!(wm, id, None);
+        let edges = this.resize_edges?;
+        let resize_active = this.resize_op_active();
 
         if edges.left {
-            self.virtual_x = self.resize_start_vx + (self.resize_start_w as f64 - committed_w as f64);
+            this.virtual_x = this.resize_start_vx + (this.resize_start_w as f64 - committed_w as f64);
         }
         if edges.top {
-            self.virtual_y = self.resize_start_vy + (self.resize_start_h as f64 - committed_h as f64);
+            this.virtual_y = this.resize_start_vy + (this.resize_start_h as f64 - committed_h as f64);
         }
 
-        let (final_x, final_y) = self.virtual_to_screen(wm, self.virtual_x, self.virtual_y);
-        self.rendering_requested.x = final_x;
-        self.rendering_requested.y = final_y;
-        self.box_geom.x = final_x;
-        self.box_geom.y = final_y;
+        let this = window_mut!(wm, id, None);
+        let (vx, vy) = (this.virtual_x, this.virtual_y);
+        let (final_x, final_y) = window_ref!(wm, id, None).virtual_to_screen(wm, vx, vy);
+        let this = window_mut!(wm, id, None);
+        this.rendering_requested.x = final_x;
+        this.rendering_requested.y = final_y;
+        this.box_geom.x = final_x;
+        this.box_geom.y = final_y;
 
         if !resize_active {
-            self.resize_edges = None;
+            this.resize_edges = None;
         }
         Some((final_x, final_y))
     }
@@ -1874,21 +1926,25 @@ impl Window {
         }
     }
 
-    pub unsafe fn manage_start(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        match self.state {
+    pub unsafe fn manage_start(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let Some(ptr) = wm.windows.ptr(id) else { return };
+        let this = window_mut!(wm, id);
+        match this.state {
             WindowState::Init => {}
             WindowState::Closing => {
-                if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                    let this = window_mut!(wm, id);
                     log::debug!("[LinkDbg] manage_start closing->init app={:?} was_linked={}",
-                        self.get_app_id_string(), wm.in_render_list(self.id()));
+                        this.get_app_id_string(), wm.rendering_requested.list.contains(&id));
                 }
-                self.state = WindowState::Init;
-                self.wm_sent = WmSentState {
+                let this = window_mut!(wm, id);
+                this.state = WindowState::Init;
+                this.wm_sent = WmSentState {
                     dimensions_hint: DimensionsHint { min_width: 0, min_height: 0, max_width: 0, max_height: 0 },
                     decoration_hint: ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_ONLY_SUPPORTS_CSD,
                     parent: None,
                 };
-                self.wm_requested = WmRequestedState {
+                this.wm_requested = WmRequestedState {
                     dimensions: None,
                     bounds: Dimensions { width: 0, height: 0 },
                     ssd: false,
@@ -1899,12 +1955,12 @@ impl Window {
                     inform_fullscreen: false,
                     close: false,
                 };
-                self.rendering_sent = WindowRenderingSent {
+                this.rendering_sent = WindowRenderingSent {
                     width: 0,
                     height: 0,
                     presentation_hint: ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_VSYNC,
                 };
-                self.rendering_requested = WindowRenderingRequested {
+                this.rendering_requested = WindowRenderingRequested {
                     x: 0,
                     y: 0,
                     hidden: false,
@@ -1916,49 +1972,51 @@ impl Window {
                     blur: false,
                 };
 
-                wm.render_list_remove(self.id());
+                wm.render_list_remove(id);
             }
             WindowState::Ready | WindowState::Initialized | WindowState::Mapped => {
-                let is_linked = wm.in_render_list(self.id());
+                let this = window_mut!(wm, id);
+                let is_linked = wm.rendering_requested.list.contains(&id);
                 if !is_linked {
-                    if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                    if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
                         log::debug!("[LinkDbg] manage_start LINK app={:?} state={:?}",
-                            self.get_app_id_string(), self.state);
+                            this.get_app_id_string(), this.state);
                     }
                     // The end is the top of the stack. A shy helper window
                     // (`is_shy`) goes in at the bottom instead — beneath the
                     // app's own windows, where its app keeps it.
-                    if self.is_shy() {
-                        wm.render_list_lower(self.id());
+                    if this.is_shy() {
+                        wm.render_list_lower(id);
                     } else {
-                        wm.render_list_raise(self.id());
+                        wm.render_list_raise(id);
                     }
 
-                    if self.foreign_toplevel_handle.is_null() {
-                        let list = (*self.server).foreign_toplevel_list;
-                        let title = self.get_title();
-                        let app_id = self.get_app_id();
+                    let this = window_mut!(wm, id);
+                    if this.foreign_toplevel_handle.is_null() {
+                        let list = (*this.server).foreign_toplevel_list;
+                        let title = this.get_title();
+                        let app_id = this.get_app_id();
                         let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
                             title,
                             app_id,
                         };
                         let handle = ffi::wlr_ext_foreign_toplevel_handle_v1_create(list, &state);
                         if !handle.is_null() {
-                            self.foreign_toplevel_handle = handle;
-                            (*handle).data = self as *mut Window as *mut _;
+                            this.foreign_toplevel_handle = handle;
+                            (*handle).data = ptr as *mut _;
                         }
                     }
 
-                    if self.wlr_toplevel_handle.is_null() {
-                        let manager = (*self.server).wlr_foreign_toplevel_manager;
+                    if this.wlr_toplevel_handle.is_null() {
+                        let manager = (*this.server).wlr_foreign_toplevel_manager;
                         let handle = ffi::wlr_foreign_toplevel_handle_v1_create(manager);
                         if !handle.is_null() {
-                            self.wlr_toplevel_handle = handle;
-                            let title = self.get_title();
+                            this.wlr_toplevel_handle = handle;
+                            let title = this.get_title();
                             if !title.is_null() {
                                 ffi::wlr_foreign_toplevel_handle_v1_set_title(handle, title);
                             }
-                            let app_id = self.get_app_id();
+                            let app_id = this.get_app_id();
                             if !app_id.is_null() {
                                 ffi::wlr_foreign_toplevel_handle_v1_set_app_id(handle, app_id);
                             }
@@ -1969,31 +2027,32 @@ impl Window {
         }
     }
 
-    pub unsafe fn manage_finish(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
-        if matches!(self.impl_type, WindowImpl::Destroying) {
-            assert_eq!(self.state, WindowState::Closing);
+    pub unsafe fn manage_finish(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> bool {
+        let this = window_mut!(wm, id, false);
+        if matches!(this.impl_type, WindowImpl::Destroying) {
+            assert_eq!(this.state, WindowState::Closing);
             return false;
         }
 
-        match self.state {
+        match this.state {
             WindowState::Init => unreachable!(),
             WindowState::Ready => {
-                if self.wm_requested.dimensions.is_none() {
+                if this.wm_requested.dimensions.is_none() {
                     return false;
                 }
-                if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+                if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
                     log::debug!("[LinkDbg] manage_finish ready->initialized app={:?} linked={}",
-                        self.get_app_id_string(), wm.in_render_list(self.id()));
+                        this.get_app_id_string(), wm.rendering_requested.list.contains(&id));
                 }
-                self.state = WindowState::Initialized;
+                this.state = WindowState::Initialized;
             }
             WindowState::Initialized | WindowState::Mapped => {}
             WindowState::Closing => return false,
         }
 
-        if self.wm_requested.close {
-            self.close();
-            self.wm_requested.close = false;
+        if this.wm_requested.close {
+            this.close();
+            this.wm_requested.close = false;
         }
 
         let mut activated = false;
@@ -2002,19 +2061,19 @@ impl Window {
         while curr != seats {
             let next = (*curr).next;
             let seat = crate::container_of!(curr, crate::seat::Seat, link_sent);
-            if (*seat).focused == crate::seat::Focus::Window(self.id()) {
+            if (*seat).focused == crate::seat::Focus::Window(id) {
                 activated = true;
                 break;
             }
             curr = next;
         }
 
-        if !self.wlr_toplevel_handle.is_null() {
-            ffi::wlr_foreign_toplevel_handle_v1_set_activated(self.wlr_toplevel_handle, activated);
+        if !this.wlr_toplevel_handle.is_null() {
+            ffi::wlr_foreign_toplevel_handle_v1_set_activated(this.wlr_toplevel_handle, activated);
         }
 
-        let output = if self.is_fullscreen() {
-            let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
+        let output = if this.is_fullscreen() {
+            let outputs_list = &mut (*this.server).om.outputs as *mut ffi::wl_list as *mut WlList;
             let mut curr = (*outputs_list).next;
             let mut found_output = std::ptr::null_mut();
             while curr != outputs_list {
@@ -2031,14 +2090,15 @@ impl Window {
         };
 
         let new_fullscreen = !output.is_null();
-        if new_fullscreen && !self.was_fullscreen {
-            if self.box_geom.width > 0 && self.box_geom.height > 0 {
-                self.start_fs_anim(wm);
-                self.saved_width = self.box_geom.width;
-                self.saved_height = self.box_geom.height;
-                self.saved_virtual_x = self.virtual_x;
-                self.saved_virtual_y = self.virtual_y;
-                self.was_fullscreen = true;
+        if new_fullscreen && !this.was_fullscreen {
+            if this.box_geom.width > 0 && this.box_geom.height > 0 {
+                Window::start_fs_anim(wm, id);
+                let this = window_mut!(wm, id, false);
+                this.saved_width = this.box_geom.width;
+                this.saved_height = this.box_geom.height;
+                this.saved_virtual_x = this.virtual_x;
+                this.saved_virtual_y = this.virtual_y;
+                this.was_fullscreen = true;
                 // From here on virtual_x/y is the desk spot the window covers
                 // — where the camera is now — so stepping aside leaves it
                 // there (`WindowManager::place_fullscreen_windows`, which
@@ -2049,75 +2109,81 @@ impl Window {
                 // the camera goes to it. Trackmania reopened wherever the
                 // user happened to be looking, because the enter always
                 // took the view and only the pre-fullscreen spot was saved.
-                let restored_spot = self.restore_fullscreen_at.take();
-                let (vx, vy) = restored_spot
-                    .unwrap_or_else(|| self.screen_to_virtual(wm, (*output).sent.x, (*output).sent.y));
-                self.virtual_x = vx;
-                self.virtual_y = vy;
+                let restored_spot = this.restore_fullscreen_at.take();
+                let (vx, vy) = match restored_spot {
+                    Some(spot) => spot,
+                    None => window_ref!(wm, id, false).screen_to_virtual(wm, (*output).sent.x, (*output).sent.y),
+                };
+                let this = window_mut!(wm, id, false);
+                this.virtual_x = vx;
+                this.virtual_y = vy;
                 if restored_spot.is_some() {
-                    self.pan_to_restored_fullscreen_spot(wm);
+                    Window::pan_to_restored_fullscreen_spot(wm, id);
                 }
-                log::info!("[Fullscreen] Saved window {:?} geometry: {}x{} at ({}, {})", self.get_title_string().as_deref().unwrap_or(""), self.saved_width, self.saved_height, self.saved_virtual_x, self.saved_virtual_y);
+                let this = window_mut!(wm, id, false);
+                log::info!("[Fullscreen] Saved window {:?} geometry: {}x{} at ({}, {})", this.get_title_string().as_deref().unwrap_or(""), this.saved_width, this.saved_height, this.saved_virtual_x, this.saved_virtual_y);
             }
-        } else if !new_fullscreen && self.was_fullscreen {
-            if self.saved_width > 0 && self.saved_height > 0 {
+        } else if !new_fullscreen && this.was_fullscreen {
+            if this.saved_width > 0 && this.saved_height > 0 {
                 // Captures the on-screen fullscreen rect before the restore
                 // below rewrites box_geom.
-                self.start_fs_anim(wm);
-                self.last_fullscreen_at = Some((self.virtual_x, self.virtual_y));
-                self.box_geom.width = self.saved_width;
-                self.box_geom.height = self.saved_height;
-                self.virtual_x = self.saved_virtual_x;
-                self.virtual_y = self.saved_virtual_y;
-                self.was_fullscreen = false;
+                Window::start_fs_anim(wm, id);
+                let this = window_mut!(wm, id, false);
+                this.last_fullscreen_at = Some((this.virtual_x, this.virtual_y));
+                this.box_geom.width = this.saved_width;
+                this.box_geom.height = this.saved_height;
+                this.virtual_x = this.saved_virtual_x;
+                this.virtual_y = this.saved_virtual_y;
+                this.was_fullscreen = false;
 
-                self.wm_requested.dimensions = Some(crate::window::Dimensions {
-                    width: self.saved_width as u32,
-                    height: self.saved_height as u32,
+                this.wm_requested.dimensions = Some(crate::window::Dimensions {
+                    width: this.saved_width as u32,
+                    height: this.saved_height as u32,
                 });
-                self.wm_requested.bounds = crate::window::Dimensions {
-                    width: self.saved_width as u32,
-                    height: self.saved_height as u32,
+                this.wm_requested.bounds = crate::window::Dimensions {
+                    width: this.saved_width as u32,
+                    height: this.saved_height as u32,
                 };
 
                 crate::shared::pending().dirty_windowing();
-                log::info!("[Fullscreen] Restored window {:?} geometry: {}x{} at ({}, {})", self.get_title_string().as_deref().unwrap_or(""), self.saved_width, self.saved_height, self.saved_virtual_x, self.saved_virtual_y);
+                log::info!("[Fullscreen] Restored window {:?} geometry: {}x{} at ({}, {})", this.get_title_string().as_deref().unwrap_or(""), this.saved_width, this.saved_height, this.saved_virtual_x, this.saved_virtual_y);
             }
         }
 
+        let this = window_mut!(wm, id, false);
         let (width, height) = if !output.is_null() {
             let (w, h) = (*output).sent.dimensions();
-            if self.configure_sent.width != Some(w as u32) || self.configure_sent.height != Some(h as u32) {
-                self.configure_scheduled.width = Some(w as u32);
-                self.configure_scheduled.height = Some(h as u32);
+            if this.configure_sent.width != Some(w as u32) || this.configure_sent.height != Some(h as u32) {
+                this.configure_scheduled.width = Some(w as u32);
+                this.configure_scheduled.height = Some(h as u32);
                 (Some(w as u32), Some(h as u32))
             } else {
                 (None, None)
             }
-        } else if let Some(dimensions) = self.wm_requested.dimensions {
+        } else if let Some(dimensions) = this.wm_requested.dimensions {
             (Some(dimensions.width), Some(dimensions.height))
         } else {
             (None, None)
         };
-        self.wm_requested.dimensions = None;
+        this.wm_requested.dimensions = None;
 
         // A tiled window thinks it is maximized: the xdg maximized state
         // follows the mode.
-        let is_maximized_layout = self.tiling_mode == crate::tiling::TilingMode::Tiled;
-        self.configure_scheduled = Configure {
+        let is_maximized_layout = this.tiling_mode == crate::tiling::TilingMode::Tiled;
+        this.configure_scheduled = Configure {
             width,
             height,
-            bounds: self.wm_requested.bounds,
+            bounds: this.wm_requested.bounds,
             activated,
-            ssd: self.wm_requested.ssd,
-            tiled: self.wm_requested.tiled,
-            capabilities: self.wm_requested.capabilities,
-            maximized: self.wm_requested.maximized || is_maximized_layout,
-            inform_fullscreen: self.wm_requested.inform_fullscreen || self.is_fullscreen(),
-            resizing: self.wm_requested.resizing,
+            ssd: this.wm_requested.ssd,
+            tiled: this.wm_requested.tiled,
+            capabilities: this.wm_requested.capabilities,
+            maximized: this.wm_requested.maximized || is_maximized_layout,
+            inform_fullscreen: this.wm_requested.inform_fullscreen || this.is_fullscreen(),
+            resizing: this.wm_requested.resizing,
         };
 
-        let track_configure = match self.impl_type {
+        let track_configure = match this.impl_type {
             WindowImpl::Toplevel(toplevel) => {
                 if toplevel.is_null() {
                     false
@@ -2135,9 +2201,9 @@ impl Window {
             WindowImpl::Destroying => unreachable!(),
         };
 
-        if track_configure && matches!(self.state, WindowState::Mapped) {
-            self.surfaces.save();
-            self.send_frame_done();
+        if track_configure && matches!(this.state, WindowState::Mapped) {
+            this.surfaces.save();
+            this.send_frame_done();
         }
 
         track_configure
@@ -2224,9 +2290,10 @@ impl Window {
         ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_VSYNC
     }
 
-    pub unsafe fn notify_title(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        self.wm_scheduled.dirty_title = true;
-        self.try_restore(wm);
+    pub unsafe fn notify_title(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let this = window_mut!(wm, id);
+        this.wm_scheduled.dirty_title = true;
+        Window::try_restore(wm, id);
         // A title is arrangement input only through a mode rule that matches
         // on it (`title=` in a rule); the built-in policy is what runs, so
         // nothing else in the manage sequence reads it. A
@@ -2241,47 +2308,50 @@ impl Window {
             wm.schedule_save_state();
         }
 
-        if !self.foreign_toplevel_handle.is_null() {
-            let title = self.get_title();
-            let app_id = self.get_app_id();
+        let this = window_mut!(wm, id);
+        if !this.foreign_toplevel_handle.is_null() {
+            let title = this.get_title();
+            let app_id = this.get_app_id();
             let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
                 title,
                 app_id,
             };
-            ffi::wlr_ext_foreign_toplevel_handle_v1_update_state(self.foreign_toplevel_handle, &state);
+            ffi::wlr_ext_foreign_toplevel_handle_v1_update_state(this.foreign_toplevel_handle, &state);
         }
 
-        if !self.wlr_toplevel_handle.is_null() {
-            let title = self.get_title();
+        if !this.wlr_toplevel_handle.is_null() {
+            let title = this.get_title();
             if !title.is_null() {
-                ffi::wlr_foreign_toplevel_handle_v1_set_title(self.wlr_toplevel_handle, title);
+                ffi::wlr_foreign_toplevel_handle_v1_set_title(this.wlr_toplevel_handle, title);
             }
         }
     }
 
-    pub unsafe fn notify_app_id(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        self.wm_scheduled.dirty_app_id = true;
-        let app_id_str = self.get_app_id_string();
+    pub unsafe fn notify_app_id(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let this = window_mut!(wm, id);
+        this.wm_scheduled.dirty_app_id = true;
+        let app_id_str = this.get_app_id_string();
         if app_id_str.as_deref().map_or(false, |id| id.starts_with("cce-status") || id == "cce-wallpaper") {
-            self.tiling_mode = crate::tiling::TilingMode::Status;
+            this.tiling_mode = crate::tiling::TilingMode::Status;
         }
-        self.try_restore(wm);
+        Window::try_restore(wm, id);
         crate::shared::pending().dirty_windowing();
 
-        if !self.foreign_toplevel_handle.is_null() {
-            let title = self.get_title();
-            let app_id = self.get_app_id();
+        let this = window_mut!(wm, id);
+        if !this.foreign_toplevel_handle.is_null() {
+            let title = this.get_title();
+            let app_id = this.get_app_id();
             let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
                 title,
                 app_id,
             };
-            ffi::wlr_ext_foreign_toplevel_handle_v1_update_state(self.foreign_toplevel_handle, &state);
+            ffi::wlr_ext_foreign_toplevel_handle_v1_update_state(this.foreign_toplevel_handle, &state);
         }
 
-        if !self.wlr_toplevel_handle.is_null() {
-            let app_id = self.get_app_id();
+        if !this.wlr_toplevel_handle.is_null() {
+            let app_id = this.get_app_id();
             if !app_id.is_null() {
-                ffi::wlr_foreign_toplevel_handle_v1_set_app_id(self.wlr_toplevel_handle, app_id);
+                ffi::wlr_foreign_toplevel_handle_v1_set_app_id(this.wlr_toplevel_handle, app_id);
             }
         }
     }
@@ -2938,7 +3008,7 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
                     w = (w - crate::xwayland_window::WINE_MARGIN * 2).max(0);
                     h = (h - crate::xwayland_window::WINE_MARGIN * 2).max(0);
                 }
-                (*window).anchor_resize_commit(&mut *crate::reentry::wm((*window).server), w, h);
+                Window::anchor_resize_commit(&mut *crate::reentry::wm((*window).server), (*window).id(), w, h);
             }
         }
     }

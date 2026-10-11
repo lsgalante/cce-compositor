@@ -3,7 +3,6 @@
 
 use crate::ffi;
 use crate::server::{Server, WlList};
-use crate::slotmap::SlotMap;
 use std::hash::{Hash, Hasher};
 
 pub use crate::window::Window;
@@ -1543,7 +1542,7 @@ impl WindowManager {
         for win_ptr in self.window_snapshot() {
             if !win_ptr.is_null() && !(*win_ptr).closed && (*win_ptr).is_status_bar() {
                 if (*win_ptr).wm_requested.dimensions.is_some() {
-                    (*win_ptr).manage_finish(self);
+                    Window::manage_finish(self, (*win_ptr).id());
                 }
                 if matches!((*win_ptr).state, crate::window::WindowState::Mapped)
                     && !self.is_window_being_moved(win_ptr)
@@ -2997,7 +2996,7 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
         if (*window).step_border_fade() {
             moving = true;
         }
-        if (*window).step_adjust_dim(&mut *wm) {
+        if Window::step_adjust_dim(&mut *wm, (*window).id()) {
             moving = true;
         }
         if (*window).step_map_fade() {

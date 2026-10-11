@@ -188,7 +188,7 @@ impl WindowManager {
             if let Some(ref op) = (*seat).op {
                 let win = op.window(self);
                 if !win.is_null() && !(*win).closed {
-                    (*win).manage_finish(self);
+                    Window::manage_finish(self, (*win).id());
                 }
             }
             curr = (*curr).next;

@@ -52,7 +52,7 @@ impl WindowManager {
                         continue;
                     }
                     if (*window).unreliable_pid() == pid && (*window).wants_map_fade() {
-                        (*window).start_map_fade(self, 0.0, ms);
+                        Window::start_map_fade(self, (*window).id(), 0.0, ms);
                         faded = true;
                     }
                 }

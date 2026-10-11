@@ -119,7 +119,7 @@ impl WindowManager {
         self.scheduled.output_config = std::ptr::null_mut();
 
         for win_ptr in self.window_snapshot() {
-            (*win_ptr).manage_start(self);
+            Window::manage_start(self, (*win_ptr).id());
         }
         let mt_windows = mt0.map(|s| s.elapsed().as_micros());
 
@@ -201,7 +201,7 @@ impl WindowManager {
         self.state = WindowManagerState::InflightConfigures(0);
 
         for window in self.render_list() {
-            if (*window).manage_finish(self) {
+            if Window::manage_finish(self, (*window).id()) {
                 if !(*window).wm_requested.resizing {
                     if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
                         *count += 1;

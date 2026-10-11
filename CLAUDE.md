@@ -532,6 +532,26 @@ what the address-scan liveness checks these replaced (`wm.windows.iter()
 exceptions are a window's own protocol objects (`XdgToplevel::window`,
 `XwaylandWindow::window`), which die before it, and its `SceneNodeData`.
 
+**A window function that hands the window manager on takes `(wm, id)`,
+not `&mut self`** (since 2026-10-11): `Window::map`, `unmap`,
+`set_closing`, `manage_start`, `manage_finish`, `notify_title`,
+`notify_app_id`, `anchor_resize_commit`, the placement steps (`try_restore`,
+`try_hint_placement`, `try_center_on_view` / `_on_sibling`,
+`apply_*_centering`, `take_pending_view_center`, `avoid_tiled_overlap`,
+`place_on_invocation_cell`), `start_map_fade`, `start_fs_anim`,
+`step_adjust_dim` and `pan_to_restored_fullscreen_spot`. A `&mut self`
+method reached through a raw pointer while `wm` rides along let focus,
+raise or a window walk reach the same window through the store while the
+compiler assumed `self` unaliased. Inside, `let this = window_mut!(wm, id);`
+borrows the window from `wm.windows` only (so `wm`'s other fields stay
+readable beside it), any `wm` method call ends that borrow, and the window
+is fetched again after (`window_mut!` returns early if it has gone;
+`window_ref!` is the shared form, for the `&self` methods that read `wm`
+too: `fullscreen_yields`, `find_sibling`, `virtual_to_screen`, …). The
+borrow checker now refuses a window borrow held across a window-manager
+call. A new method that both writes the window and takes `&mut wm` follows
+the same shape; one that only reads takes `&self` and `&WindowManager`.
+
 **The render list is a `Vec<WindowId>`** (`wm.rendering_requested.list`,
 bottom of the stack first; since 2026-10-11). It was an intrusive `wl_list`
 threaded through each window (`WmNode`), and the `[LinkDbg]` tracing and the

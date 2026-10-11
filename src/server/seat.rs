@@ -1309,7 +1309,7 @@ impl Seat {
             if !win.is_null() && !(*win).closed {
                 if let PointerOpType::Resize { .. } = op.op_type {
                     (*win).wm_requested.resizing = false;
-                    (*win).manage_finish(wm);
+                    crate::window::Window::manage_finish(wm, (*win).id());
                     crate::shared::pending().dirty_windowing();
                 }
                 if let PointerOpType::Move = op.op_type {

@@ -820,7 +820,7 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow
     (*xwindow).apply_stored_min_size(wm);
 
     (*(*xwindow).window).state = WindowState::Initialized;
-    if let Err(e) = (*(*xwindow).window).map(wm) {
+    if let Err(e) = crate::window::Window::map(wm, (*(*xwindow).window).id()) {
         log::error!("out of memory mapping window: {}", e);
         let surface_resource = ffi::river_wlr_surface_get_resource(surface);
         let client = ffi::wl_resource_get_client(surface_resource);
@@ -924,7 +924,7 @@ unsafe fn handle_unmap_impl(wm: &mut crate::window_manager::WindowManager, xwind
     if !surface.is_null() {
         ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
     }
-    (*(*xwindow).window).unmap(wm);
+    crate::window::Window::unmap(wm, (*(*xwindow).window).id());
     (*xwindow).surface_tree.destroy();
 }
 
@@ -1225,12 +1225,12 @@ unsafe extern "C" fn handle_set_size_hints(listener: *mut ffi::wl_listener, _dat
 
 unsafe extern "C" fn handle_set_title(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, set_title);
-    (*(*xwindow).window).notify_title(&mut *crate::reentry::wm((*(*xwindow).window).server));
+    crate::window::Window::notify_title(&mut *crate::reentry::wm((*(*xwindow).window).server), (*(*xwindow).window).id());
 }
 
 unsafe extern "C" fn handle_set_class(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, set_class);
-    (*(*xwindow).window).notify_app_id(&mut *crate::reentry::wm((*(*xwindow).window).server));
+    crate::window::Window::notify_app_id(&mut *crate::reentry::wm((*(*xwindow).window).server), (*(*xwindow).window).id());
 }
 
 unsafe extern "C" fn handle_set_parent(_listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

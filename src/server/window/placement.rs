@@ -6,8 +6,10 @@
 use super::*;
 
 impl Window {
-    pub unsafe fn try_restore(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        if self.restored {
+    pub unsafe fn try_restore(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let Some(ptr) = wm.windows.ptr(id) else { return };
+        let this = window_mut!(wm, id);
+        if this.restored {
             return;
         }
         // No geometry is ever saved for a Utility window, so none may be
@@ -16,7 +18,7 @@ impl Window {
         // client. (Belt over suspenders: the arrange pass restates the
         // "you choose" 0x0 for Utility anyway, so even a slipped-through
         // restore heals on the client's next commit.)
-        if self.tiling_mode == crate::tiling::TilingMode::Utility {
+        if this.tiling_mode == crate::tiling::TilingMode::Utility {
             return;
         }
         // A transient — an xdg toplevel with a parent, or an X11 window with
@@ -29,7 +31,7 @@ impl Window {
         // "Redeem Result" at the administrator's size. The save pass skips
         // transients for the same reason, so there is nothing of their own to
         // restore either; they size themselves.
-        if !self.get_parent().is_null() {
+        if !this.get_parent().is_null() {
             return;
         }
         // For an X11 window that check is only meaningful once its properties
@@ -42,7 +44,7 @@ impl Window {
         // dialog was still title-less and parentless at association.) Wait
         // for `map`, which calls back in here; by then every property the
         // client set before mapping has been read.
-        if matches!(self.impl_type, WindowImpl::Xwayland(_)) && self.state != WindowState::Mapped {
+        if matches!(this.impl_type, WindowImpl::Xwayland(_)) && this.state != WindowState::Mapped {
             return;
         }
         // A full-screen X11 game (`xwayland_hidpi_except`) sizes itself to
@@ -52,34 +54,35 @@ impl Window {
         // so nothing else tries. Where on the desk it was fullscreen is the
         // compositor's to remember, though, not the game's: that alone is
         // taken from its entry (`restore_fullscreen_at`).
-        if crate::xwayland_window::window_is_hidpi_exempt(self as *const Window) {
-            let app_id = self.get_app_id_string().unwrap_or_default();
-            let title = self.get_title_string().unwrap_or_default();
-            let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
+        if crate::xwayland_window::window_is_hidpi_exempt(&*this as *const Window) {
+            let app_id = this.get_app_id_string().unwrap_or_default();
+            let title = this.get_title_string().unwrap_or_default();
+            let program = crate::window_manager::proc_args(this.unreliable_pid()).into_iter().next();
             let saved = wm
                 .match_and_remove_restore_state(&app_id, &title, program.as_deref())
                 .or_else(|| wm.match_last_window_state(&app_id, &title, program.as_deref()));
-            self.restore_fullscreen_at = saved.and_then(|s| s.fullscreen_at);
+            let this = window_mut!(wm, id);
+            this.restore_fullscreen_at = saved.and_then(|s| s.fullscreen_at);
             log::info!(
                 "Not restoring saved state for {:?}: named in xwayland_hidpi_except, it places itself (saved fullscreen spot: {:?})",
                 title,
-                self.restore_fullscreen_at
+                this.restore_fullscreen_at
             );
-            self.restored = true;
+            this.restored = true;
             return;
         }
         // A shy helper window (no-activate, skip-taskbar) is placed by its
         // app, relative to the app's own windows — see `is_shy`.
-        if self.is_shy() {
+        if this.is_shy() {
             log::info!(
                 "Not restoring saved state for {:?} ({}): a no-activate helper window, its app places it",
-                self.get_title_string().unwrap_or_default(),
-                self.get_app_id_string().unwrap_or_default()
+                this.get_title_string().unwrap_or_default(),
+                this.get_app_id_string().unwrap_or_default()
             );
-            self.restored = true;
+            this.restored = true;
             return;
         }
-        let app_id_str = self.get_app_id_string().unwrap_or_default();
+        let app_id_str = this.get_app_id_string().unwrap_or_default();
         if app_id_str.is_empty()
             || app_id_str.starts_with("cce-status")
             || app_id_str == "cce-wallpaper"
@@ -87,7 +90,7 @@ impl Window {
         {
             return;
         }
-        let title_str = self.get_title_string().unwrap_or_default();
+        let title_str = this.get_title_string().unwrap_or_default();
         // A `mode_rule` with `title=` names one window of an app, and it can
         // only be judged once the title is in. Chromium/Electron set the
         // app_id first, and restoring on that notify handed Obsidian's
@@ -95,7 +98,7 @@ impl Window {
         // latched, at the main window's size — before the rule that floats
         // it could match. So an untitled window of an app some title rule
         // names waits for its title; `map` calls back in here regardless.
-        if title_str.is_empty() && self.state != WindowState::Mapped {
+        if title_str.is_empty() && this.state != WindowState::Mapped {
             if wm.mode_rules.iter().any(|r| {
                 r.title_pattern.is_some()
                     && (r.app_id_pattern == "*" || app_id_str.contains(&r.app_id_pattern))
@@ -110,11 +113,11 @@ impl Window {
         // sibling is, at the size it asks for.
         {
             let rule = wm
-                .get_rule_for_window(self as *mut Window)
+                .get_rule_for_window(ptr)
                 .filter(|r| r.title_pattern.is_some())
                 .map(|r| r.over_sibling);
             if let Some(over_sibling) = rule {
-                let has_sibling = over_sibling && !self.find_sibling(wm, &app_id_str).is_null();
+                let has_sibling = over_sibling && !window_ref!(wm, id, ()).find_sibling(wm, &app_id_str).is_null();
                 let own_entry = wm.has_titled_saved_entry(&app_id_str, &title_str);
                 if rule_skips_restore(has_sibling, own_entry) {
                     log::info!(
@@ -123,8 +126,9 @@ impl Window {
                         app_id_str,
                         if has_sibling { ", and it opens over its sibling" } else { "" }
                     );
-                    self.satellite = has_sibling;
-                    self.restored = true;
+                    let this = window_mut!(wm, id);
+                    this.satellite = has_sibling;
+                    this.restored = true;
                     return;
                 }
             }
@@ -132,7 +136,8 @@ impl Window {
         // Which program this window belongs to, so an entry matched by
         // app_id alone is only borrowed from a run of the same one — see
         // `window_manager::same_program`.
-        let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
+        let this = window_mut!(wm, id);
+        let program = crate::window_manager::proc_args(this.unreliable_pid()).into_iter().next();
         let program = program.as_deref();
         let mut saved_opt = wm.match_and_remove_restore_state(&app_id_str, &title_str, program);
         let from_session = saved_opt.is_some();
@@ -141,7 +146,8 @@ impl Window {
         }
         if let Some(saved) = saved_opt {
             log::info!("Restoring saved state for window: app_id={}, title={}. Position: ({}, {}), Size: {}x{}", app_id_str, title_str, saved.virtual_x, saved.virtual_y, saved.width, saved.height);
-            self.tiling_mode = saved.tiling_mode;
+            let this = window_mut!(wm, id);
+            this.tiling_mode = saved.tiling_mode;
             // `minimized` is session state, not app memory: a window the
             // user just opened must never be born hidden. On a
             // `last_window_states` borrow the flag is whatever the sibling
@@ -150,30 +156,30 @@ impl Window {
             // the LIVE main window, which the user may well have minimized
             // to get it out of the way. Focused, listed, and invisible.
             if from_session {
-                self.minimized = saved.minimized;
+                this.minimized = saved.minimized;
             }
-            self.virtual_x = saved.virtual_x;
-            self.virtual_y = saved.virtual_y;
-            self.restore_fullscreen_at = saved.fullscreen_at;
-            self.scale = saved.scale;
-            self.box_geom.width = saved.width as i32;
-            self.box_geom.height = saved.height as i32;
+            this.virtual_x = saved.virtual_x;
+            this.virtual_y = saved.virtual_y;
+            this.restore_fullscreen_at = saved.fullscreen_at;
+            this.scale = saved.scale;
+            this.box_geom.width = saved.width as i32;
+            this.box_geom.height = saved.height as i32;
             
-            self.wm_requested.dimensions = Some(crate::window::Dimensions {
+            this.wm_requested.dimensions = Some(crate::window::Dimensions {
                 width: saved.width,
                 height: saved.height,
             });
-            self.wm_requested.bounds = crate::window::Dimensions {
+            this.wm_requested.bounds = crate::window::Dimensions {
                 width: saved.width,
                 height: saved.height,
             };
             
-            self.rendering_scheduled.width = saved.width;
-            self.rendering_scheduled.height = saved.height;
-            self.rendering_sent.width = saved.width;
-            self.rendering_sent.height = saved.height;
+            this.rendering_scheduled.width = saved.width;
+            this.rendering_scheduled.height = saved.height;
+            this.rendering_sent.width = saved.width;
+            this.rendering_sent.height = saved.height;
 
-            match self.impl_type {
+            match this.impl_type {
                 WindowImpl::Toplevel(toplevel) => {
                     if !toplevel.is_null() {
                         (*toplevel).geometry.width = saved.width as i32;
@@ -189,7 +195,7 @@ impl Window {
                     // `xwayland_window::needs_configure`, which also checks
                     // the geometry the compositor has actually sent.
                     if !xwindow.is_null() && !(*xwindow).xsurface.is_null() {
-                        let s = crate::xwayland_window::x11_scale_for(self.server, (*xwindow).xsurface);
+                        let s = crate::xwayland_window::x11_scale_for(this.server, (*xwindow).xsurface);
                         (*(*xwindow).xsurface).width = crate::xwayland_window::to_x11(saved.width as i32, s) as u16;
                         (*(*xwindow).xsurface).height = crate::xwayland_window::to_x11(saved.height as i32, s) as u16;
                     }
@@ -214,7 +220,7 @@ impl Window {
             // Tiled did not. Only Floating is left unlatched here, so a window
             // with no explicit mode still resolves from the rules as before.
             if saved.tiling_mode != crate::tiling::TilingMode::Floating {
-                self.mode_locked = true;
+                this.mode_locked = true;
             }
 
             // Geometric promotion at restore time: a window whose saved
@@ -224,18 +230,18 @@ impl Window {
             // lock as the op_end detection. No demotion here — a saved
             // Tiled window off the current grid is re-snapped by the Tiled
             // arrange arm instead.
-            if self.tiling_mode == crate::tiling::TilingMode::Floating {
+            if this.tiling_mode == crate::tiling::TilingMode::Floating {
                 let sp = crate::shared::layout().snap_params();
                 if crate::policy::snap::is_cell_aligned(
-                    self.virtual_x,
-                    self.virtual_y,
+                    this.virtual_x,
+                    this.virtual_y,
                     saved.width as f64,
                     saved.height as f64,
                     &sp,
                     1.0,
                 ) {
-                    self.tiling_mode = crate::tiling::TilingMode::Tiled;
-                    self.mode_locked = true;
+                    this.tiling_mode = crate::tiling::TilingMode::Tiled;
+                    this.mode_locked = true;
                 }
             }
 
@@ -254,17 +260,18 @@ impl Window {
             // windows already up) is placed beside content the user pans
             // along, and stays where it was put — cce-data-editor parked
             // left of the first column came back mid-view every login.
-            if self.tiling_mode == crate::tiling::TilingMode::Floating && !self.minimized {
-                let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
+            if this.tiling_mode == crate::tiling::TilingMode::Floating && !this.minimized {
+                let (_, _, vp_w, vp_h) = this.first_enabled_output_box();
                 let cam = crate::policy::camera::Camera {
                     pan_x: wm.desk_pan_x,
                     pan_y: wm.desk_pan_y,
                     zoom: wm.desk_zoom,
                 };
                 let desk = wm.tiled_desk_bounds();
+                let this = window_mut!(wm, id);
                 if let Some((nx, ny)) = crate::policy::camera::recalled_origin(
-                    self.virtual_x,
-                    self.virtual_y,
+                    this.virtual_x,
+                    this.virtual_y,
                     saved.width as f64,
                     saved.height as f64,
                     cam,
@@ -274,10 +281,10 @@ impl Window {
                 ) {
                     log::info!(
                         "Recalling off-view floating window into view: app_id={} remembered=({:.0},{:.0}) -> ({:.0},{:.0}) (tiled desk: {:?})",
-                        app_id_str, self.virtual_x, self.virtual_y, nx, ny, desk
+                        app_id_str, this.virtual_x, this.virtual_y, nx, ny, desk
                     );
-                    self.virtual_x = nx;
-                    self.virtual_y = ny;
+                    this.virtual_x = nx;
+                    this.virtual_y = ny;
                 }
             }
 
@@ -290,25 +297,29 @@ impl Window {
             // sibling already sitting there, the way every stacking WM
             // offsets a new window from the last. Session entries are
             // exempt: a restored layout is where the user left it.
-            if !from_session && self.tiling_mode == crate::tiling::TilingMode::Floating {
-                let (nx, ny) = self.cascade_off_siblings(wm, &app_id_str, self.virtual_x, self.virtual_y);
-                if (nx, ny) != (self.virtual_x, self.virtual_y) {
+            let this = window_mut!(wm, id);
+            if !from_session && this.tiling_mode == crate::tiling::TilingMode::Floating {
+                let (vx, vy) = (this.virtual_x, this.virtual_y);
+                let (nx, ny) = window_ref!(wm, id, ()).cascade_off_siblings(wm, &app_id_str, vx, vy);
+                let this = window_mut!(wm, id);
+                if (nx, ny) != (this.virtual_x, this.virtual_y) {
                     log::info!(
                         "Cascading new {} window off a sibling at ({:.0},{:.0}) -> ({:.0},{:.0})",
-                        app_id_str, self.virtual_x, self.virtual_y, nx, ny
+                        app_id_str, this.virtual_x, this.virtual_y, nx, ny
                     );
-                    self.virtual_x = nx;
-                    self.virtual_y = ny;
+                    this.virtual_x = nx;
+                    this.virtual_y = ny;
                 }
             }
 
-            self.restored = true;
-            self.session_restored = from_session;
+            let this = window_mut!(wm, id);
+            this.restored = true;
+            this.session_restored = from_session;
             // The saved `focused` flag only means something for the startup
             // restore queue; on a `last_window_states` borrow it is stale
             // (whether the app happened to be focused when last closed) and
             // must not feed the settle-phase focus gates.
-            self.restored_focused = from_session && saved.focused;
+            this.restored_focused = from_session && saved.focused;
         }
     }
 
@@ -336,33 +347,36 @@ impl Window {
     /// Centre a satellite over its sibling. Like `try_center_on_view` this
     /// owns the POSITION only, and latches a redo for the commit that
     /// brings the window's real size (`pending_view_center`).
-    pub(crate) unsafe fn try_center_on_sibling(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        if !self.satellite {
+    pub(crate) unsafe fn try_center_on_sibling(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let this = window_mut!(wm, id);
+        if !this.satellite {
             return;
         }
-        self.minimized = false;
-        self.pending_view_center = self.box_geom.width <= 0 || self.box_geom.height <= 0;
-        self.apply_sibling_centering(wm);
+        this.minimized = false;
+        this.pending_view_center = this.box_geom.width <= 0 || this.box_geom.height <= 0;
+        Window::apply_sibling_centering(wm, id);
     }
 
-    pub(crate) unsafe fn apply_sibling_centering(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        let app_id = self.get_app_id_string().unwrap_or_default();
-        let sibling = self.find_sibling(wm, &app_id);
+    pub(crate) unsafe fn apply_sibling_centering(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let this = window_mut!(wm, id);
+        let app_id = this.get_app_id_string().unwrap_or_default();
+        let sibling = window_ref!(wm, id, ()).find_sibling(wm, &app_id);
         if sibling.is_null() {
             return;
         }
-        let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
+        let this = window_mut!(wm, id);
+        let (_, _, vp_w, vp_h) = this.first_enabled_output_box();
         let zoom = wm.desk_zoom.max(0.01);
-        let (w, h) = self.mapped_size_hint();
+        let (w, h) = this.mapped_size_hint();
         let (sw, sh) = (*sibling).mapped_size_hint();
         let (x, y) = centered_over(
             ((*sibling).virtual_x, (*sibling).virtual_y, sw, sh),
             (w, h),
             (wm.desk_pan_x, wm.desk_pan_y, vp_w / zoom, vp_h / zoom),
         );
-        self.virtual_x = x;
-        self.virtual_y = y;
-        self.hint_placed = true;
+        this.virtual_x = x;
+        this.virtual_y = y;
+        this.hint_placed = true;
         log::info!(
             "satellite centred over sibling: app_id={} size=({:.0}x{:.0}) sibling={:?} virtual=({:.1},{:.1})",
             app_id,
@@ -481,8 +495,9 @@ impl Window {
         (400.0, 400.0)
     }
 
-    pub(crate) unsafe fn try_hint_placement(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        let app_id = self.get_app_id_string().unwrap_or_default();
+    pub(crate) unsafe fn try_hint_placement(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let this = window_mut!(wm, id);
+        let app_id = this.get_app_id_string().unwrap_or_default();
         if app_id.is_empty() {
             return;
         }
@@ -497,8 +512,9 @@ impl Window {
             // window that reopens filling four squares is exactly the case
             // this exists for. Only the modes that do not own a position at
             // all are excluded.
+            let this = window_mut!(wm, id);
             if matches!(
-                self.tiling_mode,
+                this.tiling_mode,
                 crate::tiling::TilingMode::Fullscreen
                     | crate::tiling::TilingMode::Popup
                     | crate::tiling::TilingMode::Overlay
@@ -506,22 +522,23 @@ impl Window {
             ) {
                 return;
             }
-            self.place_on_invocation_cell(wm, &app_id, hx, hy);
+            Window::place_on_invocation_cell(wm, id, &app_id, hx, hy);
             return;
         }
         // Utility included: the hint moves only the POSITION, which a utility
         // window does not own — only its size is the client's.
+        let this = window_mut!(wm, id);
         if !matches!(
-            self.tiling_mode,
+            this.tiling_mode,
             crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Utility
         ) {
             return;
         }
 
-        let (phys_x, phys_y, vp_w, vp_h) = self.first_enabled_output_box();
+        let (phys_x, phys_y, vp_w, vp_h) = this.first_enabled_output_box();
 
         let zoom = wm.desk_zoom.max(0.01);
-        let (vw, vh) = self.mapped_size_hint();
+        let (vw, vh) = this.mapped_size_hint();
         let (w, h) = (vw * zoom, vh * zoom);
 
         const OFFSET: f64 = 12.0; // context-menu-style drop below-right of the control
@@ -534,12 +551,12 @@ impl Window {
             .max(phys_y + MARGIN);
 
         // screen = phys + (virtual - desk_pan) * zoom  →  invert for virtual.
-        self.virtual_x = wm.desk_pan_x + (sx - phys_x) / zoom;
-        self.virtual_y = wm.desk_pan_y + (sy - phys_y) / zoom;
-        self.hint_placed = true;
+        this.virtual_x = wm.desk_pan_x + (sx - phys_x) / zoom;
+        this.virtual_y = wm.desk_pan_y + (sy - phys_y) / zoom;
+        this.hint_placed = true;
         log::info!(
             "place-next hint applied: app_id={} screen=({:.0},{:.0}) virtual=({:.1},{:.1})",
-            app_id, sx, sy, self.virtual_x, self.virtual_y
+            app_id, sx, sy, this.virtual_x, this.virtual_y
         );
     }
 
@@ -559,26 +576,28 @@ impl Window {
     /// - Session restore is exempt. A restored layout is a layout the user
     ///   arranged and saved, and mapping order is arbitrary, so nudging there
     ///   would rearrange a deliberate desktop at every login.
-    pub(crate) unsafe fn avoid_tiled_overlap(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        if self.session_restored || self.tiling_mode != crate::tiling::TilingMode::Tiled {
+    pub(crate) unsafe fn avoid_tiled_overlap(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let Some(ptr) = wm.windows.ptr(id) else { return };
+        let this = window_mut!(wm, id);
+        if this.session_restored || this.tiling_mode != crate::tiling::TilingMode::Tiled {
             return;
         }
         let sp = crate::shared::layout().snap_params();
         if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
             return;
         }
-        let (vw, vh) = self.mapped_size_hint();
+        let (vw, vh) = this.mapped_size_hint();
         if vw <= 0.0 || vh <= 0.0 {
             return;
         }
         let (c0, r0, c1, r1) = crate::policy::cells::window_span(
-            self.virtual_x, self.virtual_y, vw, vh, sp.cell_w, sp.cell_h, sp.gap_width,
+            this.virtual_x, this.virtual_y, vw, vh, sp.cell_w, sp.cell_h, sp.gap_width,
         );
         let want = crate::policy::spawn::CellBlock::new(c0, r0, c1, r1);
 
         let mut occupied = Vec::new();
         for w in wm.windows.iter() {
-            if w.is_null() || w == (self as *mut Window) || (*w).closed || (*w).minimized {
+            if w.is_null() || w == ptr || (*w).closed || (*w).minimized {
                 continue;
             }
             if !matches!((*w).state, WindowState::Mapped) {
@@ -611,14 +630,16 @@ impl Window {
             free.col0, free.row0, free.col1, free.row1,
             sp.cell_w, sp.cell_h, sp.gap_width, sp.cell_inset,
         );
+        let this = window_mut!(wm, id);
         log::info!(
             "spawn overlap: {} would open on a tiled window at {} -> moved to {}",
-            self.get_app_id_string().unwrap_or_default(),
+            this.get_app_id_string().unwrap_or_default(),
             crate::policy::cells::span_label(want.col0, want.row0, want.col1, want.row1),
             crate::policy::cells::span_label(free.col0, free.row0, free.col1, free.row1),
         );
-        self.virtual_x = bx;
-        self.virtual_y = by;
+        let this = window_mut!(wm, id);
+        this.virtual_x = bx;
+        this.virtual_y = by;
     }
 
     /// Place this window on the grid square the user invoked it from, keeping
@@ -629,12 +650,14 @@ impl Window {
     /// measured in whole squares: a window last seen filling four squares
     /// opens filling four squares, at the corner of the invocation square that
     /// leaves it clear of its neighbours.
-    pub(crate) unsafe fn place_on_invocation_cell(&mut self, wm: &mut crate::window_manager::WindowManager, app_id: &str, hx: f64, hy: f64) {
+    pub(crate) unsafe fn place_on_invocation_cell(wm: &mut crate::window_manager::WindowManager, id: WindowId, app_id: &str, hx: f64, hy: f64) {
+        let Some(ptr) = wm.windows.ptr(id) else { return };
+        let this = window_mut!(wm, id);
         let sp = crate::shared::layout().snap_params();
         if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
             return;
         }
-        let (phys_x, phys_y, vp_w, vp_h) = self.first_enabled_output_box();
+        let (phys_x, phys_y, vp_w, vp_h) = this.first_enabled_output_box();
         let zoom = wm.desk_zoom.max(0.01);
         // The hint is a layout point; the grid is in virtual coordinates.
         let inv_vx = wm.desk_pan_x + (hx - phys_x) / zoom;
@@ -643,7 +666,7 @@ impl Window {
         let row = crate::policy::cells::cell_index(inv_vy, sp.cell_h, sp.gap_width);
 
         // Size in squares, from the geometry `try_restore` left in place.
-        let (vw, vh) = self.mapped_size_hint();
+        let (vw, vh) = this.mapped_size_hint();
         let (c0, r0, c1, r1) = crate::policy::cells::window_span(
             0.0, 0.0, vw, vh, sp.cell_w, sp.cell_h, sp.gap_width,
         );
@@ -653,7 +676,7 @@ impl Window {
         // canvas itself are not obstacles.
         let mut occupied = Vec::new();
         for w in wm.windows.iter() {
-            if w.is_null() || w == (self as *mut Window) || (*w).closed || (*w).minimized {
+            if w.is_null() || w == ptr || (*w).closed || (*w).minimized {
                 continue;
             }
             if !matches!((*w).state, WindowState::Mapped) {
@@ -689,20 +712,21 @@ impl Window {
             block.col0, block.row0, block.col1, block.row1,
             sp.cell_w, sp.cell_h, sp.gap_width, sp.cell_inset,
         );
-        self.virtual_x = bx;
-        self.virtual_y = by;
+        let this = window_mut!(wm, id);
+        this.virtual_x = bx;
+        this.virtual_y = by;
         // A window that was filling whole squares keeps doing so — it is the
         // same window, in the same shape, somewhere else. One that was not
         // keeps its own size and simply starts at the square's corner.
-        if self.tiling_mode == crate::tiling::TilingMode::Tiled {
-            self.box_geom.width = bw.round() as i32;
-            self.box_geom.height = bh.round() as i32;
-            self.wm_requested.dimensions = Some(crate::window::Dimensions {
+        if this.tiling_mode == crate::tiling::TilingMode::Tiled {
+            this.box_geom.width = bw.round() as i32;
+            this.box_geom.height = bh.round() as i32;
+            this.wm_requested.dimensions = Some(crate::window::Dimensions {
                 width: bw.round() as u32,
                 height: bh.round() as u32,
             });
         }
-        self.hint_placed = true;
+        this.hint_placed = true;
         log::info!(
             "place-next-cell: {} -> {} ({}x{} squares) at virtual ({:.0}, {:.0})",
             app_id,
@@ -748,16 +772,16 @@ impl Window {
     }
 
     /// The built-in modal list, or a matching `mode_rule` that says `center`.
-    pub(crate) unsafe fn wants_view_center(&mut self, wm: &crate::window_manager::WindowManager) -> bool {
+    pub(crate) unsafe fn wants_view_center(&self, wm: &crate::window_manager::WindowManager) -> bool {
         let app_id = self.get_app_id_string().unwrap_or_default();
         if Self::is_view_centered_modal(&app_id) {
             return true;
         }
-        wm.get_rule_for_window(self as *mut Window).map_or(false, |r| r.center)
+        wm.get_rule_for_window(self as *const Window as *mut Window).map_or(false, |r| r.center)
     }
 
-    pub(crate) unsafe fn try_center_on_view(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        if !self.wants_view_center(wm) {
+    pub(crate) unsafe fn try_center_on_view(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        if !window_ref!(wm, id, ()).wants_view_center(wm) {
             return;
         }
 
@@ -775,11 +799,12 @@ impl Window {
         // strip the mode — `set_utility` arrives before map, and every Utility
         // gate reads `tiling_mode` RAW — leaving the modal resizable, its
         // geometry saved, and a stale size restored over it next time.
-        if self.tiling_mode != crate::tiling::TilingMode::Utility {
-            self.tiling_mode = crate::tiling::TilingMode::Floating;
+        let this = window_mut!(wm, id);
+        if this.tiling_mode != crate::tiling::TilingMode::Utility {
+            this.tiling_mode = crate::tiling::TilingMode::Floating;
         }
-        self.mode_locked = true;
-        self.minimized = false;
+        this.mode_locked = true;
+        this.minimized = false;
 
         // A self-sizing modal has not committed its geometry yet, so
         // `mapped_size_hint` here is still the 400x400 floor — centering
@@ -795,41 +820,43 @@ impl Window {
         // 400x400 floor and stuck there, ~250px off for a 900x500 dialog.
         // A Floating modal with restored geometry still skips the latch
         // (box_geom is already filled by the time we run).
-        self.pending_view_center = self.box_geom.width <= 0 || self.box_geom.height <= 0;
-        self.apply_view_centering(wm);
+        this.pending_view_center = this.box_geom.width <= 0 || this.box_geom.height <= 0;
+        Window::apply_view_centering(wm, id);
     }
 
     /// The centering itself, split out so the self-sizing commit path can redo
     /// it once the client's real size lands.
-    pub(crate) unsafe fn apply_view_centering(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        if self.satellite {
-            self.apply_sibling_centering(wm);
+    pub(crate) unsafe fn apply_view_centering(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let this = window_mut!(wm, id);
+        if this.satellite {
+            Window::apply_sibling_centering(wm, id);
             return;
         }
-        let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
+        let (_, _, vp_w, vp_h) = this.first_enabled_output_box();
         let zoom = wm.desk_zoom.max(0.01);
-        let (w, h) = self.mapped_size_hint();
+        let (w, h) = this.mapped_size_hint();
 
         // Policy owns the camera math; the output's origin cancels out of the
         // centering, so only the extent is needed per axis.
-        self.virtual_x = crate::policy::camera::centered_window_origin(wm.desk_pan_x, vp_w, zoom, w);
-        self.virtual_y = crate::policy::camera::centered_window_origin(wm.desk_pan_y, vp_h, zoom, h);
-        self.hint_placed = true;
+        this.virtual_x = crate::policy::camera::centered_window_origin(wm.desk_pan_x, vp_w, zoom, w);
+        this.virtual_y = crate::policy::camera::centered_window_origin(wm.desk_pan_y, vp_h, zoom, h);
+        this.hint_placed = true;
         log::info!(
             "view-centered modal: app_id={} size=({:.0}x{:.0}) zoom={:.2} virtual=({:.1},{:.1})",
-            self.get_app_id_string().unwrap_or_default(),
-            w, h, zoom, self.virtual_x, self.virtual_y
+            this.get_app_id_string().unwrap_or_default(),
+            w, h, zoom, this.virtual_x, this.virtual_y
         );
     }
 
     /// Redo a latched view-centering now that a self-sizing modal's real
     /// geometry has arrived. One-shot: a later commit (or a user dragging the
     /// window) must not snap it back to the middle.
-    pub unsafe fn take_pending_view_center(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        if !self.pending_view_center || self.box_geom.width <= 0 || self.box_geom.height <= 0 {
+    pub unsafe fn take_pending_view_center(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let this = window_mut!(wm, id);
+        if !this.pending_view_center || this.box_geom.width <= 0 || this.box_geom.height <= 0 {
             return;
         }
-        self.pending_view_center = false;
-        self.apply_view_centering(wm);
+        this.pending_view_center = false;
+        Window::apply_view_centering(wm, id);
     }
 }

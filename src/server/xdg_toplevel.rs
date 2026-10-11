@@ -412,7 +412,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     match (*window).state {
         crate::window::WindowState::Init | crate::window::WindowState::Closing => {}
         crate::window::WindowState::Ready | crate::window::WindowState::Initialized | crate::window::WindowState::Mapped => {
-            (*window).set_closing(&mut *crate::reentry::wm((*window).server));
+            crate::window::Window::set_closing(&mut *crate::reentry::wm((*window).server), (*window).id());
             crate::shared::pending().dirty_windowing();
         }
     }
@@ -422,13 +422,13 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, unmap);
-    (*(*toplevel).window).unmap(&mut *crate::reentry::wm((*(*toplevel).window).server));
+    crate::window::Window::unmap(&mut *crate::reentry::wm((*(*toplevel).window).server), (*(*toplevel).window).id());
 }
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, map);
     let wm = &mut *crate::reentry::wm((*(*toplevel).window).server);
-    if let Err(e) = (*(*toplevel).window).map(wm) {
+    if let Err(e) = crate::window::Window::map(wm, (*(*toplevel).window).id()) {
         log::error!("Window map failed: {}", e);
         let client = ffi::wl_resource_get_client((*(*toplevel).wlr_toplevel).resource);
         ffi::wl_client_post_no_memory(client);
@@ -466,7 +466,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
         (*(*toplevel).window).box_geom.height = new_geometry.height;
         // A view-centered modal that is ALSO self-sizing was centered at map
         // against a size it had not committed yet; redo it now that it has.
-        (*(*toplevel).window).take_pending_view_center(wm);
+        crate::window::Window::take_pending_view_center(wm, (*(*toplevel).window).id());
         crate::shared::pending().dirty_windowing();
     } else if (*(*toplevel).window).pending_view_center
         && new_geometry.width > 0
@@ -477,7 +477,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
         // map-time 400x400-floor placement stands for a 900x500 dialog.
         (*(*toplevel).window).box_geom.width = new_geometry.width;
         (*(*toplevel).window).box_geom.height = new_geometry.height;
-        (*(*toplevel).window).take_pending_view_center(wm);
+        crate::window::Window::take_pending_view_center(wm, (*(*toplevel).window).id());
         crate::shared::pending().dirty_windowing();
     }
 }
@@ -549,7 +549,7 @@ unsafe extern "C" fn handle_ack_configure(
         (*(*toplevel).window).box_geom.height = new_geometry.height;
         // A view-centered modal that is ALSO self-sizing was centered at map
         // against a size it had not committed yet; redo it now that it has.
-        (*(*toplevel).window).take_pending_view_center(wm);
+        crate::window::Window::take_pending_view_center(wm, (*(*toplevel).window).id());
         crate::shared::pending().dirty_windowing();
     } else if (*(*toplevel).window).pending_view_center
         && new_geometry.width > 0
@@ -560,7 +560,7 @@ unsafe extern "C" fn handle_ack_configure(
         // map-time 400x400-floor placement stands for a 900x500 dialog.
         (*(*toplevel).window).box_geom.width = new_geometry.width;
         (*(*toplevel).window).box_geom.height = new_geometry.height;
-        (*(*toplevel).window).take_pending_view_center(wm);
+        crate::window::Window::take_pending_view_center(wm, (*(*toplevel).window).id());
         crate::shared::pending().dirty_windowing();
     }
 }
@@ -890,7 +890,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     // Window::anchor_resize_commit; Xwayland windows take the same path from
     // handle_window_commit.
     let geometry = (*toplevel).geometry;
-    if let Some((final_x, final_y)) = (*window).anchor_resize_commit(wm, geometry.width, geometry.height) {
+    if let Some((final_x, final_y)) = crate::window::Window::anchor_resize_commit(wm, (*window).id(), geometry.width, geometry.height) {
         // Keep the displayed buffer and the compensating position atomic.
         // Live buffer (no configure in flight): the commit is already on
         // screen, so move the scene tree in the same commit — waiting for
@@ -1118,13 +1118,13 @@ unsafe extern "C" fn handle_set_parent(_listener: *mut ffi::wl_listener, _data: 
 unsafe extern "C" fn handle_set_title(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, set_title);
     let window = (*toplevel).window;
-    (*window).notify_title(&mut *crate::reentry::wm((*window).server));
+    crate::window::Window::notify_title(&mut *crate::reentry::wm((*window).server), (*window).id());
 }
 
 unsafe extern "C" fn handle_set_app_id(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, set_app_id);
     let window = (*toplevel).window;
-    (*window).notify_app_id(&mut *crate::reentry::wm((*window).server));
+    crate::window::Window::notify_app_id(&mut *crate::reentry::wm((*window).server), (*window).id());
 }
 
 unsafe extern "C" fn handle_decoration_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
