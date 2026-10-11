@@ -567,13 +567,13 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
         .map(|s| matches!((*s).focused, crate::seat::Focus::None))
         .unwrap_or(false);
     let focused_window = if seat_focus_is_none {
-        std::ptr::null_mut()
+        None
     } else {
-        wm.focused_window()
+        wm.focused_window().and_then(|id| wm.windows.get(id))
     };
 
-    let layout_text = if !focused_window.is_null() {
-        (*focused_window).tiling_mode.as_str().to_string()
+    let layout_text = if let Some(focused_window) = focused_window {
+        focused_window.tiling_mode.as_str().to_string()
     } else {
         let focused_layer = wm.focused_layer_surface();
         let mut is_cce_cloud = false;
@@ -593,8 +593,8 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
         }
     };
 
-    let title_text = if !focused_window.is_null() {
-        let title_ptr = (*focused_window).get_title();
+    let title_text = if let Some(focused_window) = focused_window {
+        let title_ptr = focused_window.get_title();
         if !title_ptr.is_null() {
             std::ffi::CStr::from_ptr(title_ptr).to_string_lossy().into_owned()
         } else {

@@ -116,7 +116,7 @@ impl Window {
                 .filter(|r| r.title_pattern.is_some())
                 .map(|r| r.over_sibling);
             if let Some(over_sibling) = rule {
-                let has_sibling = over_sibling && !window_ref!(wm, id, ()).find_sibling(wm, &app_id_str).is_null();
+                let has_sibling = over_sibling && window_ref!(wm, id, ()).find_sibling(wm, &app_id_str).is_some();
                 let own_entry = wm.has_titled_saved_entry(&app_id_str, &title_str);
                 if rule_skips_restore(has_sibling, own_entry) {
                     log::info!(
@@ -325,22 +325,22 @@ impl Window {
     /// The window a satellite opens over: a mapped, visible window of the
     /// same app_id that is not itself a satellite — the focused one when it
     /// qualifies, since that is where the user asked for the settings.
-    pub(crate) unsafe fn find_sibling(&self, wm: &crate::window_manager::WindowManager, app_id: &str) -> *mut Window {
-        let me = self as *const Window;
-        let qualifies = |w: *mut Window| {
-            !w.is_null()
-                && w as *const Window != me
-                && !(*w).closed
-                && !(*w).minimized
-                && !(*w).satellite
-                && matches!((*w).state, WindowState::Mapped)
-                && (*w).get_app_id_string().as_deref() == Some(app_id)
+    pub(crate) fn find_sibling(&self, wm: &crate::window_manager::WindowManager, app_id: &str) -> Option<WindowId> {
+        let me = self.id();
+        let qualifies = |id: WindowId| {
+            id != me
+                && wm.windows.get(id).map_or(false, |w| {
+                    !w.closed
+                        && !w.minimized
+                        && !w.satellite
+                        && matches!(w.state, WindowState::Mapped)
+                        && w.get_app_id_string().as_deref() == Some(app_id)
+                })
         };
-        let focused = wm.focused_window();
-        if qualifies(focused) {
-            return focused;
-        }
-        wm.windows.iter().find(|&w| qualifies(w)).unwrap_or(std::ptr::null_mut())
+        // SAFETY: walks the seats through the server pointer, as every
+        // reader of seat focus does.
+        let focused = unsafe { wm.focused_window() };
+        focused.filter(|&id| qualifies(id)).or_else(|| wm.windows.ids().into_iter().find(|&id| qualifies(id)))
     }
 
     /// Centre a satellite over its sibling. Like `try_center_on_view` this
@@ -359,17 +359,19 @@ impl Window {
     pub(crate) unsafe fn apply_sibling_centering(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let this = window_mut!(wm, id);
         let app_id = this.get_app_id_string().unwrap_or_default();
-        let sibling = window_ref!(wm, id, ()).find_sibling(wm, &app_id);
-        if sibling.is_null() {
+        let Some(sibling) = window_ref!(wm, id, ()).find_sibling(wm, &app_id) else {
             return;
-        }
+        };
+        let sibling = window_ref!(wm, sibling, ());
+        let (sw, sh) = sibling.mapped_size_hint();
+        let sibling_at = (sibling.virtual_x, sibling.virtual_y);
+        let sibling_title = sibling.get_title_string().unwrap_or_default();
         let this = window_mut!(wm, id);
         let (_, _, vp_w, vp_h) = this.first_enabled_output_box();
         let zoom = wm.desk_zoom.max(0.01);
         let (w, h) = this.mapped_size_hint();
-        let (sw, sh) = (*sibling).mapped_size_hint();
         let (x, y) = centered_over(
-            ((*sibling).virtual_x, (*sibling).virtual_y, sw, sh),
+            (sibling_at.0, sibling_at.1, sw, sh),
             (w, h),
             (wm.desk_pan_x, wm.desk_pan_y, vp_w / zoom, vp_h / zoom),
         );
@@ -381,7 +383,7 @@ impl Window {
             app_id,
             w,
             h,
-            (*sibling).get_title_string().unwrap_or_default(),
+            sibling_title,
             x,
             y
         );
@@ -391,18 +393,18 @@ impl Window {
     /// window but this one) has its top-left within a few pixels of it.
     /// Bounded, so a pathological pile of siblings cannot walk a window off
     /// the desk: after `MAX_STEPS` the last candidate is taken as is.
-    pub(crate) unsafe fn cascade_off_siblings(&self, wm: &crate::window_manager::WindowManager, app_id: &str, x: f64, y: f64) -> (f64, f64) {
+    pub(crate) fn cascade_off_siblings(&self, wm: &crate::window_manager::WindowManager, app_id: &str, x: f64, y: f64) -> (f64, f64) {
         const STEP: f64 = 40.0;
         const NEAR: f64 = 4.0;
         const MAX_STEPS: usize = 8;
-        let me = self as *const Window;
+        let me = self.id();
         let origins: Vec<(f64, f64)> = wm
             .windows
-            .iter()
-            .filter(|&w| w as *const Window != me && !(*w).closed)
-            .filter(|&w| matches!((*w).state, WindowState::Mapped))
-            .filter(|&w| (*w).get_app_id_string().as_deref() == Some(app_id))
-            .map(|w| ((*w).virtual_x, (*w).virtual_y))
+            .values()
+            .filter(|w| w.id() != me && !w.closed)
+            .filter(|w| matches!(w.state, WindowState::Mapped))
+            .filter(|w| w.get_app_id_string().as_deref() == Some(app_id))
+            .map(|w| (w.virtual_x, w.virtual_y))
             .collect();
         let taken = |cx: f64, cy: f64| {
             origins

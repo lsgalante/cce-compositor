@@ -169,38 +169,36 @@ impl WindowManager {
         {
             return;
         }
-        let op_win = self
-            .first_seat()
-            .and_then(|s| (*s).op.as_ref().map(|op| op.window(self)))
-            .unwrap_or(std::ptr::null_mut());
-        let wins: Vec<*mut crate::window::Window> = self.windows.iter().collect();
-        for w in wins {
-            if w.is_null() || (*w).closed || w == op_win {
+        let op_win = self.first_seat().and_then(|s| (*s).op.as_ref().and_then(|op| op.window));
+        for id in self.windows.ids() {
+            if Some(id) == op_win {
                 continue;
             }
-            if !matches!((*w).state, crate::window::WindowState::Mapped) {
+            let Some(w) = self.windows.get(id) else { continue };
+            if w.closed || !matches!(w.state, crate::window::WindowState::Mapped) {
                 continue;
             }
-            if self.get_mode_for_window(&*w) != crate::tiling::TilingMode::Tiled {
+            if self.get_mode_for_window(w) != crate::tiling::TilingMode::Tiled {
                 continue;
             }
             let (nx, ny, nw, nh) = crate::policy::cells::remap_block(
-                (*w).virtual_x,
-                (*w).virtual_y,
-                (*w).box_geom.width as f64,
-                (*w).box_geom.height as f64,
+                w.virtual_x,
+                w.virtual_y,
+                w.box_geom.width as f64,
+                w.box_geom.height as f64,
                 &old,
                 &new,
             );
-            (*w).virtual_x = nx;
-            (*w).virtual_y = ny;
-            (*w).box_geom.width = nw.round() as i32;
-            (*w).box_geom.height = nh.round() as i32;
+            let Some(w) = self.windows.get_mut(id) else { continue };
+            w.virtual_x = nx;
+            w.virtual_y = ny;
+            w.box_geom.width = nw.round() as i32;
+            w.box_geom.height = nh.round() as i32;
             // The saved floating spot follows like move-window: a later
             // Tiled -> Floating exit restores at the remapped square rather
             // than yanking the window back across the resized grid.
-            (*w).saved_floating_virtual_x = nx;
-            (*w).saved_floating_virtual_y = ny;
+            w.saved_floating_virtual_x = nx;
+            w.saved_floating_virtual_y = ny;
         }
     }
 

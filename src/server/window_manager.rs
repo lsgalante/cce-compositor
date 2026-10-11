@@ -898,11 +898,8 @@ impl WindowManager {
         }
         // The WM's effective focus (overlay UI looked through): actions
         // triggered from a menu act on the real window underneath.
-        {
-            let fw = self.focused_window();
-            if !fw.is_null() && !(*fw).closed {
-                focused = Some(WindowId((*fw).ref_key));
-            }
+        if let Some(id) = self.focused_window().filter(|&id| self.windows.get(id).map_or(false, |w| !w.closed)) {
+            focused = Some(id);
         }
 
         // Render-list membership feeds focus_cyclable: the focus ring only
@@ -1002,12 +999,12 @@ impl WindowManager {
         let mut waiters = std::mem::take(&mut self.settle_waiters);
         let mut kept = Vec::new();
         for mut w in waiters.drain(..) {
-            let win = self.windows.ptr(crate::window::WindowId(w.window)).filter(|&p| !p.is_null() && !(*p).closed);
+            let win = self.windows.get(crate::window::WindowId(w.window)).filter(|p| !p.closed);
             let Some(win) = win else {
                 let _ = w.tx.send("error: window closed before it settled\n".to_string());
                 continue;
             };
-            let b = (*win).box_geom;
+            let b = win.box_geom;
             if w.observe((b.x, b.y, b.width, b.height), moving) {
                 let _ = w.tx.send("ok\n".to_string());
             } else if now.saturating_sub(w.started_ns) >= SETTLE_TIMEOUT_MS * 1_000_000 {
@@ -1230,11 +1227,10 @@ impl WindowManager {
         self.update_restore_placeholders();
         if arrange_debug() {
             log::debug!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
-            for (idx, win_ptr) in self.windows.iter().enumerate() {
-                if win_ptr.is_null() { continue; }
-                let title = (*win_ptr).get_title_string().unwrap_or_else(|| "None".to_string());
-                let aid = (*win_ptr).get_app_id_string().unwrap_or_else(|| "None".to_string());
-                log::debug!("  window #{}: title={:?}, app_id={:?}, state={:?}, closed={}", idx, title, aid, (*win_ptr).state, (*win_ptr).closed);
+            for (idx, win) in self.windows.values().enumerate() {
+                let title = win.get_title_string().unwrap_or_else(|| "None".to_string());
+                let aid = win.get_app_id_string().unwrap_or_else(|| "None".to_string());
+                log::debug!("  window #{}: title={:?}, app_id={:?}, state={:?}, closed={}", idx, title, aid, win.state, win.closed);
             }
         }
 
@@ -1573,11 +1569,10 @@ impl WindowManager {
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
             let mut focused_visible = false;
             match (*seat).focused {
-                crate::seat::Focus::Window(_) => {
-                    let w = (*seat).focused.as_window(self);
-                    if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
-                        focused_visible = true;
-                    }
+                crate::seat::Focus::Window(id) => {
+                    focused_visible = self.windows.get(id).map_or(false, |w| {
+                        !w.closed && !w.minimized && matches!(w.state, crate::window::WindowState::Mapped)
+                    });
                 }
                 crate::seat::Focus::None => {
                     focused_visible = true;
@@ -1859,33 +1854,33 @@ impl WindowManager {
     /// the stream's `focused` query. (Logging out via the desktop menu used
     /// to save the MENU as the session's focused window, poisoning the next
     /// restore.)
-    pub unsafe fn focused_window(&self) -> *mut crate::window::Window {
+    pub unsafe fn focused_window(&self) -> Option<crate::window::WindowId> {
         crate::wm_scope!();
         let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
-            if let Some(w) = (*seat).focused.live_window(self) {
-                if !w.is_null() && !(*w).is_overlay_ui() {
-                    return w;
+            if let crate::seat::Focus::Window(id) = (*seat).focused {
+                if let Some(w) = self.windows.get(id) {
+                    if !w.is_overlay_ui() {
+                        return Some(id);
+                    }
+                    break;
                 }
-                break;
             }
             curr_seat = (*curr_seat).next;
         }
         // Seat focus is on overlay UI (or nothing): the effective focused
         // window is the most recent real one still on screen.
-        for w in self.focus_history.iter().filter_map(|&id| self.window(id)) {
-            if !(*w).closed
-                && matches!((*w).state, crate::window::WindowState::Mapped)
-                && !(*w).is_overlay_ui()
-                && !(*w).is_status_bar()
-                && !(*w).is_wallpaper()
-            {
-                return w;
-            }
-        }
-        std::ptr::null_mut()
+        self.focus_history.iter().copied().find(|&id| {
+            self.windows.get(id).map_or(false, |w| {
+                !w.closed
+                    && matches!(w.state, crate::window::WindowState::Mapped)
+                    && !w.is_overlay_ui()
+                    && !w.is_status_bar()
+                    && !w.is_wallpaper()
+            })
+        })
     }
 
     /// The window `id` names, while it lives. A closed window's id stays
@@ -2020,37 +2015,28 @@ impl WindowManager {
     /// eligibility (mapped, not minimized, not status/background).
     pub unsafe fn focus_next_visible_window(&mut self, seat: *mut crate::seat::Seat) {
         crate::wm_scope!(mut);
-        let eligible = |w: *mut Window| -> bool {
-            if (*w).closed || (*w).minimized || !matches!((*w).state, crate::window::WindowState::Mapped) {
+        let eligible = |w: &Window| -> bool {
+            if w.closed || w.minimized || !matches!(w.state, crate::window::WindowState::Mapped) {
                 return false;
             }
-            if (*w).is_overlay_ui() {
+            if w.is_overlay_ui() {
                 return false;
             }
-            let app_id = (*w).get_app_id_string();
+            let app_id = w.get_app_id_string();
             let is_status_bar = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
             let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
-            !is_status_bar && !is_wallpaper && !(*w).is_grid()
+            !is_status_bar && !is_wallpaper && !w.is_grid()
         };
-        let candidate = |w: *mut Window| crate::policy::focus::FocusCandidate {
-            id: crate::policy::api::WindowId((*w).ref_key),
-            eligible: eligible(w),
-        };
+        let candidate = |w: &Window| crate::policy::focus::FocusCandidate { id: w.id(), eligible: eligible(w) };
         let history: Vec<_> = self
             .focus_history
             .iter()
-            .filter_map(|&id| self.window(id))
+            .filter_map(|&id| self.windows.get(id))
             .map(candidate)
             .collect();
-        let windows: Vec<_> = self
-            .windows
-            .iter()
-            .filter(|w| !w.is_null())
-            .map(candidate)
-            .collect();
+        let windows: Vec<_> = self.windows.values().map(candidate).collect();
         let next = crate::policy::focus::next_visible_focus(&history, &windows)
-            .and_then(|id| self.windows.ptr(id))
-            .unwrap_or(std::ptr::null_mut());
+            .filter(|&id| self.windows.contains(id));
         // The window the user was looking at went away. The fallback focus
         // always transfers (keyboard input needs a live target); what the
         // CAMERA does about it is the on_app_exit choice: pan to the
@@ -2060,12 +2046,10 @@ impl WindowManager {
         // Chrome departing is not an app exit: dismissing the cce-cloud
         // launcher (Popup) or an Overlay dock must never fire the camera
         // reaction — those close as part of using them.
-        let focused_window = (*seat).focused.as_window(self);
         let departing_chrome = match (*seat).focused {
-            crate::seat::Focus::Window(_) if !focused_window.is_null() => matches!(
-                (*focused_window).tiling_mode,
-                crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
-            ),
+            crate::seat::Focus::Window(id) => self.windows.get(id).map_or(false, |w| {
+                matches!(w.tiling_mode, crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay)
+            }),
             _ => false,
         };
         let behavior = if departing_chrome {
@@ -2074,8 +2058,8 @@ impl WindowManager {
             self.on_app_exit
         };
         (*seat).suppress_focus_pan = behavior != crate::config::OnAppExit::FocusPrevious;
-        if !next.is_null() {
-            (*seat).focus(self, crate::seat::Focus::window(next));
+        if let Some(next) = next {
+            (*seat).focus(self, crate::seat::Focus::Window(next));
         } else {
             (*seat).focus(self, crate::seat::Focus::None);
         }
@@ -2573,31 +2557,33 @@ unsafe extern "C" fn handle_stream_timer(data: *mut std::ffi::c_void) -> std::os
     }
 
     // Each unique window is captured at most once per tick, shared by Arc.
-    let mut captured: Vec<(*mut Window, std::sync::Arc<crate::stream_server::Frame>)> = Vec::new();
+    let mut captured: Vec<(crate::window::WindowId, std::sync::Arc<crate::stream_server::Frame>)> = Vec::new();
     let mut dead: Vec<usize> = Vec::new();
     for i in 0..subs.len() {
         let id = if subs[i].query == "focused" {
-            crate::window::id_of(wm.focused_window())
+            wm.focused_window()
         } else {
             wm.find_window_id(&subs[i].query)
         };
-        let Some(win) = id.and_then(|id| wm.windows.ptr(id)) else {
+        let Some((id, win)) = id.and_then(|id| Some((id, wm.windows.get(id)?))) else {
             continue;
         };
         let keepalive = subs[i].last_sent.elapsed().as_secs() >= 15;
-        if !(*win).stream_dirty && !subs[i].needs_frame && !keepalive {
+        if !win.stream_dirty && !subs[i].needs_frame && !keepalive {
             continue;
         }
-        let frame = match captured.iter().find(|(w, _)| *w == win) {
+        let frame = match captured.iter().find(|(w, _)| *w == id) {
             Some((_, f)) => f.clone(),
-            None => match crate::screenshot::capture_window_rgba(win) {
-                Ok((rgba, w, h)) => {
+            None => match wm.windows.ptr(id).map(|p| crate::screenshot::capture_window_rgba(p)) {
+                Some(Ok((rgba, w, h))) => {
                     let f = std::sync::Arc::new(crate::stream_server::Frame { width: w, height: h, rgba });
-                    captured.push((win, f.clone()));
-                    (*win).stream_dirty = false;
+                    captured.push((id, f.clone()));
+                    if let Some(win) = wm.windows.get_mut(id) {
+                        win.stream_dirty = false;
+                    }
                     f
                 }
-                Err(_) => continue,
+                _ => continue,
             },
         };
         match subs[i].tx.try_send(frame) {

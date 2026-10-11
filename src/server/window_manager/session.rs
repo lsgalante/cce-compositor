@@ -311,7 +311,7 @@ impl WindowManager {
                 cmdline = app_id.clone();
             }
 
-            let is_focused = std::ptr::eq(w, focused_win);
+            let is_focused = Some(w.id()) == focused_win;
 
             let win_state = SavedWindowState {
                 app_id: app_id.clone(),

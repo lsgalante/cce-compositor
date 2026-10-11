@@ -149,7 +149,7 @@ impl WindowManager {
                 let id = if parts.len() >= 2 {
                     self.find_window_id(&parts[1..].join(" "))
                 } else {
-                    crate::window::id_of(self.focused_window())
+                    self.focused_window()
                 };
                 let Some(win) = id.and_then(|id| self.windows.get(id)) else {
                     return "error: no matching window\n".to_string();
@@ -597,7 +597,7 @@ impl WindowManager {
                 let target = if parts.len() >= 3 {
                     self.find_window_id(&parts[2..].join(" "))
                 } else {
-                    crate::window::id_of(self.focused_window())
+                    self.focused_window()
                 };
                 let Some(id) = target else {
                     return "error: no target window\n".to_string();
