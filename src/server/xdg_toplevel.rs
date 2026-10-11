@@ -449,11 +449,13 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
     // output-sized window.
     if ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel) {
         let window = (*toplevel).window;
-        if (*window).box_geom.width <= 0 && (*window).box_geom.height <= 0 && new_geometry.width > 0 && new_geometry.height > 0 {
-            (*window).box_geom.width = new_geometry.width;
-            (*window).box_geom.height = new_geometry.height;
+        let id = (*window).id();
+        let this = window_mut!(wm, id);
+        if this.box_geom.width <= 0 && this.box_geom.height <= 0 && new_geometry.width > 0 && new_geometry.height > 0 {
+            this.box_geom.width = new_geometry.width;
+            this.box_geom.height = new_geometry.height;
         }
-        wm.apply_client_fullscreen((*window).id(), true);
+        wm.apply_client_fullscreen(id, true);
     }
     // Status segments and Utility windows are SELF-sizing: their bounds
     // track their own box, so the committed geometry is adopted as the box.
@@ -569,13 +571,15 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let toplevel = crate::container_of!(listener, XdgToplevel, commit);
     let window = (*toplevel).window;
     let wm = &mut *crate::reentry::wm((*window).server);
+    let id = (*window).id();
+    let this = window_mut!(wm, id);
     // Grid-patch latch: the first commit after ack_grid_patch carries the
     // buffer rendered for that patch — anchor to it from this commit on.
     // Latching here (not at ack time) means an in-flight older buffer is
     // never shown at the new anchor.
-    if let Some((serial, patch)) = (*window).grid_patch_acked.take() {
+    if let Some((serial, patch)) = this.grid_patch_acked.take() {
         log::info!("[Grid] latched patch #{serial} on commit");
-        (*window).grid_patch_current = Some(patch);
+        this.grid_patch_current = Some(patch);
         // The commit swaps the BUFFER in the scene immediately, but the
         // anchor (position/scale/box) otherwise waits for the next arrange
         // pass — up to a frame of the new buffer drawn at the OLD patch's
@@ -586,7 +590,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         {
             let zoom = crate::policy::background::sanitized_zoom(wm.desk_zoom);
             let (mut ox, mut oy) = (0i32, 0i32);
-            let outputs_list = &(*(*window).server).om.outputs as *const ffi::wl_list
+            let outputs_list = &(*this.server).om.outputs as *const ffi::wl_list
                 as *mut WlList;
             let mut curr_out = (*outputs_list).next;
             while curr_out != outputs_list {
@@ -606,13 +610,14 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
                 let (lcam, _, _) = wm.layout_camera();
                 let sx = ox + ((patch.x - lcam.pan_x) * zoom).round() as i32;
                 let sy = oy + ((patch.y - lcam.pan_y) * zoom).round() as i32;
-                (*window).rendering_requested.x = sx;
-                (*window).rendering_requested.y = sy;
-                (*window).scale = zoom / patch.scale;
-                (*window).box_geom.x = sx;
-                (*window).box_geom.y = sy;
-                (*window).box_geom.width = (patch.w * patch.scale).round() as i32;
-                (*window).box_geom.height = (patch.h * patch.scale).round() as i32;
+                let this = window_mut!(wm, id);
+                this.rendering_requested.x = sx;
+                this.rendering_requested.y = sy;
+                this.scale = zoom / patch.scale;
+                this.box_geom.x = sx;
+                this.box_geom.y = sy;
+                this.box_geom.width = (patch.w * patch.scale).round() as i32;
+                this.box_geom.height = (patch.h * patch.scale).round() as i32;
             }
         }
         // The grid sits in the optimized-blur capture set (backdrop layers):
@@ -649,21 +654,23 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             || old_geometry.height != new_geometry.height
             || surf_size != (*toplevel).last_surface_size;
         (*toplevel).last_surface_size = surf_size;
+        let this = window_mut!(wm, id);
         if mapping_changed
-            && matches!((*window).state, crate::window::WindowState::Mapped)
+            && matches!(this.state, crate::window::WindowState::Mapped)
         {
-            (*(*window).server).input_manager.schedule_pointer_refresh();
+            (*this.server).input_manager.schedule_pointer_refresh();
         }
     }
 
     // Borrowed: this runs on every commit of every client.
-    let app_id = (*window).app_id_str().unwrap_or_default();
+    let this = window_mut!(wm, id);
+    let app_id = this.app_id_str().unwrap_or_default();
     let mut ignore_transparent = crate::shared::layout().window_backdrop_blur_ignore_transparent;
     if app_id.starts_with("cce-status") {
         ignore_transparent = crate::shared::layout().status_backdrop_blur_ignore_transparent;
     }
-    let scale = (*window).scale;
-    let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status ||
+    let scale = this.scale;
+    let is_status = this.tiling_mode == crate::tiling::TilingMode::Status ||
                     app_id.starts_with("cce-status");
     let is_decorated = crate::shared::layout().is_decorated_app(&app_id);
     // Status segments are SELF-sizing (their bounds track their own box), so
@@ -675,8 +682,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         ((*toplevel).geometry.width as u32, (*toplevel).geometry.height as u32)
     } else {
         (
-            if (*window).rendering_sent.width > 0 { (*window).rendering_sent.width } else { (*toplevel).geometry.width as u32 },
-            if (*window).rendering_sent.height > 0 { (*window).rendering_sent.height } else { (*toplevel).geometry.height as u32 },
+            if this.rendering_sent.width > 0 { this.rendering_sent.width } else { (*toplevel).geometry.width as u32 },
+            if this.rendering_sent.height > 0 { this.rendering_sent.height } else { (*toplevel).geometry.height as u32 },
         )
     };
     let geom_w = (actual_w as f64 * scale) as i32;
@@ -685,9 +692,9 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     // `root_plate_radius_base`, not a mirrored copy: both paths drive the same
     // blur node, and when two copies disagreed the corners flipped between
     // rounded and square depending on which one ran last.
-    let radius = (*window).root_plate_radius_base();
+    let radius = this.root_plate_radius_base();
     // Same span widening as Window::set_rendering_state (part of the mirror).
-    let radius = if (*window).rendering_requested.circular {
+    let radius = if this.rendering_requested.circular {
         radius
     } else {
         crate::window::widen_corner_radius(radius, actual_w as i32, actual_h as i32)
@@ -704,12 +711,12 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     } else {
         crate::shared::layout().scenefx_optimized_blur
     };
-    let blur_enabled = (*window).rendering_requested.blur && ((*window).wm_requested.ssd || is_decorated || is_status);
-    (*window).tree.enable_blur(blur_enabled, use_optimized, ignore_transparent, 0, 0, geom_w, geom_h, // geom_w/h are already scaled to device px; the radius must match.
+    let blur_enabled = this.rendering_requested.blur && (this.wm_requested.ssd || is_decorated || is_status);
+    this.tree.enable_blur(blur_enabled, use_optimized, ignore_transparent, 0, 0, geom_w, geom_h, // geom_w/h are already scaled to device px; the radius must match.
         (radius as f64 * scale) as i32);
-    (*window).sync_backdrop_compress();
+    this.sync_backdrop_compress();
 
-    let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;
+    let capture_node = &mut (*this.capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;
     let mut geom = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut geom);
     ffi::wlr_scene_subsurface_tree_set_clip(capture_node, &geom);
@@ -720,7 +727,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let mut max_h = 0;
     ffi::river_wlr_xdg_toplevel_get_requested_min_max_size((*toplevel).wlr_toplevel, &mut min_w, &mut min_h, &mut max_w, &mut max_h);
 
-    (*window).set_dimensions_hint(crate::window::DimensionsHint {
+    this.set_dimensions_hint(crate::window::DimensionsHint {
         min_width: min_w as u32,
         min_height: min_h as u32,
         max_width: max_w as u32,
@@ -728,30 +735,31 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     });
 
     if ffi::river_wlr_xdg_surface_get_initial_commit(base) {
-        assert!((*window).state != crate::window::WindowState::Ready);
-        if (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
+        assert!(this.state != crate::window::WindowState::Ready);
+        if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
             log::debug!("[LinkDbg] initial commit -> ready app={:?} was_state={:?} linked={}",
-                (*window).get_app_id_string(), (*window).state, wm.in_render_list((*window).id()));
+                this.get_app_id_string(), this.state, wm.rendering_requested.list.contains(&id));
         }
-        (*window).state = crate::window::WindowState::Ready;
+        let this = window_mut!(wm, id);
+        this.state = crate::window::WindowState::Ready;
         let mut new_geometry = std::mem::zeroed();
         ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
         (*toplevel).geometry = new_geometry;
 
         let is_self_sized = matches!(
-            (*window).tiling_mode,
+            this.tiling_mode,
             crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Utility
-        ) || (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+        ) || this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
         if is_self_sized {
-            (*window).box_geom.width = new_geometry.width;
-            (*window).box_geom.height = new_geometry.height;
+            this.box_geom.width = new_geometry.width;
+            this.box_geom.height = new_geometry.height;
         }
 
         crate::shared::pending().dirty_windowing();
         return;
     }
 
-    if (*window).state != crate::window::WindowState::Mapped && (*window).state != crate::window::WindowState::Ready {
+    if this.state != crate::window::WindowState::Mapped && this.state != crate::window::WindowState::Ready {
         return;
     }
 
@@ -770,7 +778,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     // border and blur stayed at the size the popup opened at while the list
     // shrank and grew under them as the user typed.
     if matches!(
-        (*window).tiling_mode,
+        this.tiling_mode,
         crate::tiling::TilingMode::Overlay
             | crate::tiling::TilingMode::Utility
             | crate::tiling::TilingMode::Popup
@@ -778,15 +786,15 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         let mut live = std::mem::zeroed();
         ffi::river_wlr_xdg_surface_get_geometry(base, &mut live);
         if live.width > 0 && live.height > 0
-            && (live.width != (*window).box_geom.width || live.height != (*window).box_geom.height)
+            && (live.width != this.box_geom.width || live.height != this.box_geom.height)
         {
-            (*window).box_geom.width = live.width;
-            (*window).box_geom.height = live.height;
+            this.box_geom.width = live.width;
+            this.box_geom.height = live.height;
             // render_finish would otherwise reset box_geom from the render-start
             // snapshot (rendering_sent) and snap the border back to the old size.
-            (*window).self_resized = true;
-            (*window).draw_borders();
-            (*window).set_dimensions(live.width as u32, live.height as u32);
+            this.self_resized = true;
+            this.draw_borders();
+            this.set_dimensions(live.width as u32, live.height as u32);
             crate::shared::pending().dirty_windowing();
         }
     }
@@ -803,11 +811,11 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         let mut live = std::mem::zeroed();
         ffi::river_wlr_xdg_surface_get_geometry(base, &mut live);
         if live.width > 0 && live.height > 0
-            && (live.width != (*window).box_geom.width || live.height != (*window).box_geom.height)
+            && (live.width != this.box_geom.width || live.height != this.box_geom.height)
         {
-            (*window).box_geom.width = live.width;
-            (*window).box_geom.height = live.height;
-            (*window).self_resized = true;
+            this.box_geom.width = live.width;
+            this.box_geom.height = live.height;
+            this.self_resized = true;
             crate::shared::pending().dirty_windowing();
         }
     }
@@ -823,50 +831,50 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             // round trip land in the Acked arm.
         }
         ConfigureState::Inflight(..) => {
-            (*window).send_frame_done();
+            this.send_frame_done();
         }
         ConfigureState::Acked | ConfigureState::TimedOutAcked => {
             let mut new_geometry = std::mem::zeroed();
             ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
             (*toplevel).geometry = new_geometry;
 
-            (*window).rendering_scheduled.width = new_geometry.width as u32;
-            (*window).rendering_scheduled.height = new_geometry.height as u32;
+            this.rendering_scheduled.width = new_geometry.width as u32;
+            this.rendering_scheduled.height = new_geometry.height as u32;
 
-            let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status ||
-                            (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+            let is_status = this.tiling_mode == crate::tiling::TilingMode::Status ||
+                            this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
             // Overlay included so its scheduled size tracks the client's own; the
             // border itself is handled by the live-geometry sync above.
-            let is_overlay = (*window).tiling_mode == crate::tiling::TilingMode::Overlay;
-            let is_utility = (*window).tiling_mode == crate::tiling::TilingMode::Utility;
-            if matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status || is_overlay || is_utility {
-                (*window).set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
+            let is_overlay = this.tiling_mode == crate::tiling::TilingMode::Overlay;
+            let is_utility = this.tiling_mode == crate::tiling::TilingMode::Utility;
+            if matches!(this.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup) || is_status || is_overlay || is_utility {
+                this.set_dimensions(new_geometry.width as u32, new_geometry.height as u32);
                 if is_status {
                     // Only a size that actually moved re-arranges. A status
                     // segment acks a configure and commits at its old size
                     // for every content refresh; each of those used to run
                     // a full manage/arrange/render transaction.
                     let (w, h) = (new_geometry.width, new_geometry.height);
-                    if w != (*window).box_geom.width || h != (*window).box_geom.height {
-                        (*window).box_geom.width = w;
-                        (*window).box_geom.height = h;
+                    if w != this.box_geom.width || h != this.box_geom.height {
+                        this.box_geom.width = w;
+                        this.box_geom.height = h;
                         crate::shared::pending().dirty_windowing();
                     }
                 }
             }
 
-            let (dec_w, dec_h) = (*window).get_decorations_size();
-            if dec_w != (*window).last_decor_w || dec_h != (*window).last_decor_h {
-                (*window).last_decor_w = dec_w;
-                (*window).last_decor_h = dec_h;
+            let (dec_w, dec_h) = this.get_decorations_size();
+            if dec_w != this.last_decor_w || dec_h != this.last_decor_h {
+                this.last_decor_w = dec_w;
+                this.last_decor_h = dec_h;
                 crate::shared::pending().dirty_windowing();
             }
 
-            if let Some(sent_w) = (*window).configure_sent.width {
-                if !(*window).wm_requested.ssd && dec_w > 0 && new_geometry.width as u32 == sent_w.saturating_sub(dec_w as u32) {
-                    if !(*window).csd_buffer_size_bug {
-                        (*window).csd_buffer_size_bug = true;
-                        log::info!("Detected CSD buffer size bug for window '{}'. Activating workaround.", (*window).get_title_string().unwrap_or_default());
+            if let Some(sent_w) = this.configure_sent.width {
+                if !this.wm_requested.ssd && dec_w > 0 && new_geometry.width as u32 == sent_w.saturating_sub(dec_w as u32) {
+                    if !this.csd_buffer_size_bug {
+                        this.csd_buffer_size_bug = true;
+                        log::info!("Detected CSD buffer size bug for window '{}'. Activating workaround.", this.get_title_string().unwrap_or_default());
                         crate::shared::pending().dirty_windowing();
                     }
                 }
@@ -890,7 +898,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     // Window::anchor_resize_commit; Xwayland windows take the same path from
     // handle_window_commit.
     let geometry = (*toplevel).geometry;
-    if let Some((final_x, final_y)) = crate::window::Window::anchor_resize_commit(wm, (*window).id(), geometry.width, geometry.height) {
+    if let Some((final_x, final_y)) = crate::window::Window::anchor_resize_commit(wm, id, geometry.width, geometry.height) {
         // Keep the displayed buffer and the compensating position atomic.
         // Live buffer (no configure in flight): the commit is already on
         // screen, so move the scene tree in the same commit — waiting for
@@ -900,12 +908,13 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         // OLD-size buffer instead, so leave the position to the render pass
         // (which restores the new buffer and applies it together) and make
         // sure that pass runs promptly.
-        if !(*window).surfaces.saved {
-            (*window).tree.set_position_if_changed(final_x, final_y);
-            (*window).popup_tree.set_position_if_changed(final_x, final_y);
-            (*window).box_geom.width = geometry.width;
-            (*window).box_geom.height = geometry.height;
-            (*window).draw_borders();
+        let this = window_mut!(wm, id);
+        if !this.surfaces.saved {
+            this.tree.set_position_if_changed(final_x, final_y);
+            this.popup_tree.set_position_if_changed(final_x, final_y);
+            this.box_geom.width = geometry.width;
+            this.box_geom.height = geometry.height;
+            this.draw_borders();
         } else {
             crate::shared::pending().dirty_rendering();
         }
@@ -1000,29 +1009,31 @@ unsafe extern "C" fn handle_request_move(
         }
 
         let wm = &mut *crate::reentry::wm((*seat).server);
-        (*seat).focus(wm, crate::seat::Focus::window(window));
+        let id = (*window).id();
+        (*seat).focus(wm, crate::seat::Focus::Window(id));
         wm.stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = (*cursor.wlr_cursor).x;
         let cursor_y = (*cursor.wlr_cursor).y;
 
+        let this = window_mut!(wm, id);
         (*seat).op = Some(crate::seat::SeatOp {
             input: crate::seat::SeatOpInput::Pointer,
             start_x: cursor_x as i32,
             start_y: cursor_y as i32,
             x: cursor_x as i32,
             y: cursor_y as i32,
-            window: crate::window::id_of(window),
+            window: Some(id),
             op_type: crate::seat::PointerOpType::Move,
-            start_win_x: (*window).box_geom.x,
-            start_win_y: (*window).box_geom.y,
-            start_win_w: (*window).box_geom.width as u32,
-            start_win_h: (*window).box_geom.height as u32,
-            start_win_virtual_x: (*window).virtual_x,
-            start_win_virtual_y: (*window).virtual_y,
-            start_tiling_mode: (*window).tiling_mode,
+            start_win_x: this.box_geom.x,
+            start_win_y: this.box_geom.y,
+            start_win_w: this.box_geom.width as u32,
+            start_win_h: this.box_geom.height as u32,
+            start_win_virtual_x: this.virtual_x,
+            start_win_virtual_y: this.virtual_y,
+            start_tiling_mode: this.tiling_mode,
             start_was_tiled: grabbed_tiled,
-            start_mode_locked: (*window).mode_locked,
+            start_mode_locked: this.mode_locked,
             start_pan_x: wm.desk_pan_x,
             start_pan_y: wm.desk_pan_y,
             started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
@@ -1030,7 +1041,8 @@ unsafe extern "C" fn handle_request_move(
         cursor.op_start_pointer(wm);
         cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
 
-        (*window).wm_scheduled.pointer_move_requested = seat;
+        let this = window_mut!(wm, id);
+        this.wm_scheduled.pointer_move_requested = seat;
         crate::shared::pending().dirty_windowing();
     }
 }
@@ -1069,32 +1081,34 @@ unsafe extern "C" fn handle_request_resize(
         }
 
         let wm = &mut *crate::reentry::wm((*seat).server);
-        (*seat).focus(wm, crate::seat::Focus::window(window));
+        let id = (*window).id();
+        (*seat).focus(wm, crate::seat::Focus::Window(id));
         wm.stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = (*cursor.wlr_cursor).x;
         let cursor_y = (*cursor.wlr_cursor).y;
 
         let edges = crate::window::Edges::from_u32((*event).edges);
+        let this = window_mut!(wm, id);
         (*seat).op = Some(crate::seat::SeatOp {
             input: crate::seat::SeatOpInput::Pointer,
             start_x: cursor_x as i32,
             start_y: cursor_y as i32,
             x: cursor_x as i32,
             y: cursor_y as i32,
-            window: crate::window::id_of(window),
+            window: Some(id),
             op_type: crate::seat::PointerOpType::Resize {
                 edges,
             },
-            start_win_x: (*window).box_geom.x,
-            start_win_y: (*window).box_geom.y,
-            start_win_w: (*window).box_geom.width as u32,
-            start_win_h: (*window).box_geom.height as u32,
-            start_win_virtual_x: (*window).virtual_x,
-            start_win_virtual_y: (*window).virtual_y,
-            start_tiling_mode: (*window).tiling_mode,
+            start_win_x: this.box_geom.x,
+            start_win_y: this.box_geom.y,
+            start_win_w: this.box_geom.width as u32,
+            start_win_h: this.box_geom.height as u32,
+            start_win_virtual_x: this.virtual_x,
+            start_win_virtual_y: this.virtual_y,
+            start_tiling_mode: this.tiling_mode,
             start_was_tiled: grabbed_tiled,
-            start_mode_locked: (*window).mode_locked,
+            start_mode_locked: this.mode_locked,
             start_pan_x: wm.desk_pan_x,
             start_pan_y: wm.desk_pan_y,
             started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
@@ -1103,7 +1117,8 @@ unsafe extern "C" fn handle_request_resize(
         let cursor_name = crate::cursor::get_resize_cursor_name(edges);
         cursor.set_xcursor(cursor_name.as_ptr() as *const _);
 
-        (*window).wm_scheduled.pointer_resize_requested = Some(crate::window::PointerResizeRequest {
+        let this = window_mut!(wm, id);
+        this.wm_scheduled.pointer_resize_requested = Some(crate::window::PointerResizeRequest {
             seat,
             edges: (*event).edges,
         });

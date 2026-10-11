@@ -21,6 +21,9 @@ pub mod shared;
 #[path = "server/reentry.rs"]
 #[macro_use]
 pub mod reentry;
+#[path = "server/window_macros.rs"]
+#[macro_use]
+mod window_macros;
 #[path = "server/process.rs"]
 pub mod process;
 #[path = "server/util.rs"]

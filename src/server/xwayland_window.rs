@@ -779,7 +779,10 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
 }
 
 unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow: *mut XwaylandWindow) {
-    let surfaces_tree = (*(*xwindow).window).surfaces.tree.raw();
+    let window = (*xwindow).window;
+    let id = (*window).id();
+    let this = window_mut!(wm, id);
+    let surfaces_tree = this.surfaces.tree.raw();
     let surface = (*(*xwindow).xsurface).surface;
     let surface_tree = ffi::wlr_scene_subsurface_tree_create(surfaces_tree, surface);
     if surface_tree.is_null() {
@@ -793,16 +796,16 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow
 
     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
 
-    if (*(*xwindow).window).is_wine() && !has_parent && !(*(*xwindow).window).is_fullscreen() {
+    if this.is_wine() && !has_parent && !this.is_fullscreen() {
         ffi::wlr_scene_node_set_position(surface_tree as *mut ffi::wlr_scene_node, -WINE_MARGIN, -WINE_MARGIN);
     }
 
     // A scene node, as every other surface's data is: `SceneNodeData::
     // from_surface` reads it as one. This was `&window.node` (the render-list
     // link), which that lookup read past into the Window's other fields.
-    ffi::river_wlr_surface_set_data(surface, (*(*xwindow).window).tree.node() as *mut _);
+    ffi::river_wlr_surface_set_data(surface, this.tree.node() as *mut _);
 
-    let capture_tree = &mut (*(*(*xwindow).window).capture_scene).tree as *mut ffi::wlr_scene_tree;
+    let capture_tree = &mut (*this.capture_scene).tree as *mut ffi::wlr_scene_tree;
     let capture_surface = ffi::wlr_scene_surface_create(capture_tree, surface);
     if capture_surface.is_null() {
         log::error!("out of memory creating capture surface");
@@ -816,8 +819,9 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow
     place_shy_where_it_is(wm, xwindow);
     (*xwindow).apply_stored_min_size(wm);
 
-    (*(*xwindow).window).state = WindowState::Initialized;
-    if let Err(e) = crate::window::Window::map(wm, (*(*xwindow).window).id()) {
+    let this = window_mut!(wm, id);
+    this.state = WindowState::Initialized;
+    if let Err(e) = crate::window::Window::map(wm, id) {
         log::error!("out of memory mapping window: {}", e);
         let surface_resource = ffi::river_wlr_surface_get_resource(surface);
         let client = ffi::wl_resource_get_client(surface_resource);
@@ -864,18 +868,21 @@ unsafe fn place_transient_where_it_asked(wm: &mut crate::window_manager::WindowM
     }
 
     let window = (*xwindow).window;
-    let s = x11_scale_for((*window).server, xsurface);
+    let id = (*window).id();
+    let this = window_mut!(wm, id);
+    let s = x11_scale_for(this.server, xsurface);
     let log_x = from_x11(asked.x as i32, s);
     let log_y = from_x11(asked.y as i32, s);
-    let (vx, vy) = (*window).screen_to_virtual(wm, log_x, log_y);
-    (*window).virtual_x = vx;
-    (*window).virtual_y = vy;
+    let (vx, vy) = window_ref!(wm, id, ()).screen_to_virtual(wm, log_x, log_y);
+    let this = window_mut!(wm, id);
+    this.virtual_x = vx;
+    this.virtual_y = vy;
     // Placed by the client, like a picker placed by its hint: the camera
     // must not pan to it on spawn or first focus.
-    (*window).hint_placed = true;
+    this.hint_placed = true;
     log::info!(
         "XWayland transient mapped where it asked: title='{}' x11=({}, {}) logical=({}, {}) virtual=({:.1}, {:.1})",
-        (*window).get_title_string().unwrap_or_default(),
+        this.get_title_string().unwrap_or_default(),
         asked.x, asked.y, log_x, log_y, vx, vy,
     );
 }
@@ -887,26 +894,29 @@ unsafe fn place_transient_where_it_asked(wm: &mut crate::window_manager::WindowM
 /// default origin, in front of everything, as a blank white window.
 unsafe fn place_shy_where_it_is(wm: &mut crate::window_manager::WindowManager, xwindow: *mut XwaylandWindow) {
     let window = (*xwindow).window;
-    if !(*window).is_shy() {
+    let id = (*window).id();
+    let this = window_mut!(wm, id);
+    if !this.is_shy() {
         return;
     }
     let xsurface = (*xwindow).xsurface;
-    let s = x11_scale_for((*window).server, xsurface);
+    let s = x11_scale_for(this.server, xsurface);
     let log_x = from_x11((*xsurface).x as i32, s);
     let log_y = from_x11((*xsurface).y as i32, s);
-    let (vx, vy) = (*window).screen_to_virtual(wm, log_x, log_y);
-    (*window).virtual_x = vx;
-    (*window).virtual_y = vy;
-    (*window).box_geom.x = log_x;
-    (*window).box_geom.y = log_y;
-    (*window).rendering_requested.x = log_x;
-    (*window).rendering_requested.y = log_y;
+    let (vx, vy) = window_ref!(wm, id, ()).screen_to_virtual(wm, log_x, log_y);
+    let this = window_mut!(wm, id);
+    this.virtual_x = vx;
+    this.virtual_y = vy;
+    this.box_geom.x = log_x;
+    this.box_geom.y = log_y;
+    this.rendering_requested.x = log_x;
+    this.rendering_requested.y = log_y;
     // Placed by the client: no spawn pan to it, ever.
-    (*window).hint_placed = true;
+    this.hint_placed = true;
     log::info!(
         "XWayland no-activate helper window mapped where it is: title='{}' class='{}' x11=({}, {}) logical=({}, {}) virtual=({:.1}, {:.1})",
-        (*window).get_title_string().unwrap_or_default(),
-        (*window).get_app_id_string().unwrap_or_default(),
+        this.get_title_string().unwrap_or_default(),
+        this.get_app_id_string().unwrap_or_default(),
         (*xsurface).x, (*xsurface).y, log_x, log_y, vx, vy,
     );
 }
@@ -927,7 +937,10 @@ unsafe fn handle_unmap_impl(wm: &mut crate::window_manager::WindowManager, xwind
 
 unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, request_configure);
-    let wm = &mut *crate::reentry::wm((*(*xwindow).window).server);
+    let window = (*xwindow).window;
+    let wm = &mut *crate::reentry::wm((*window).server);
+    let id = (*window).id();
+    let this = window_mut!(wm, id);
     let event = data as *mut ffi::wlr_xwayland_surface_configure_event;
 
     let surface = (*(*xwindow).xsurface).surface;
@@ -945,11 +958,10 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     let class = if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") };
     let title_ptr = (*(*xwindow).xsurface).title;
     let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
-    let window = (*xwindow).window;
-    let is_wine = (*window).is_wine();
+    let is_wine = this.is_wine();
 
     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
-    let s = x11_scale_for((*window).server, (*xwindow).xsurface);
+    let s = x11_scale_for(this.server, (*xwindow).xsurface);
     log::info!(
         "XWayland configure request: title='{}' class='{}' has_parent={} is_wine={} event=({}, {}, {}, {}) xsurface=({}, {}, {}, {})",
         title,
@@ -961,9 +973,9 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     );
 
     let is_tiled = unsafe {
-        (*window).wm_requested.tiled != 0 || !matches!((*window).tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Utility)
+        this.wm_requested.tiled != 0 || !matches!(this.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Utility)
     };
-    let is_fullscreen = unsafe { (*window).is_fullscreen() };
+    let is_fullscreen = unsafe { this.is_fullscreen() };
 
     // A window named in `xwayland_hidpi_except` is a full-screen X11 game
     // that sizes AND places itself to the screen (Trackmania's
@@ -976,7 +988,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     let exempt_self_placed = !has_parent && !is_fullscreen && !is_tiled && window_is_hidpi_exempt(&*window);
     // A shy helper window (`Window::is_shy`) is placed by its app, which
     // moves it to track its main window: position and size granted.
-    let shy_self_placed = !has_parent && !is_fullscreen && !is_tiled && (*window).is_shy();
+    let shy_self_placed = !has_parent && !is_fullscreen && !is_tiled && this.is_shy();
 
     if has_parent || exempt_self_placed || shy_self_placed {
         // Granted on the logical grid rather than verbatim — see `snap_x11`.
@@ -994,7 +1006,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
             // second. So the request is answered with at most the output's
             // logical box, kept on that output: the whole root becomes the
             // whole screen, which is what the game meant.
-            let out = (*window).fullscreen_output();
+            let out = this.fullscreen_output();
             if !out.is_null() {
                 let ob = (*out).sent.box_layout();
                 let (ox, oy, ow, oh) = (ob.x, ob.y, ob.width, ob.height);
@@ -1027,20 +1039,20 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         // What the render pass applies — compared below, after `rendering_sent`
         // has been overwritten.
         let applied = (
-            (*window).rendering_requested.x,
-            (*window).rendering_requested.y,
-            (*window).rendering_sent.width,
-            (*window).rendering_sent.height,
+            this.rendering_requested.x,
+            this.rendering_requested.y,
+            this.rendering_sent.width,
+            this.rendering_sent.height,
         );
 
-        (*window).box_geom.x = log_x;
-        (*window).box_geom.y = log_y;
-        (*window).box_geom.width = log_width as i32;
-        (*window).box_geom.height = log_height as i32;
-        (*window).rendering_requested.x = log_x;
-        (*window).rendering_requested.y = log_y;
-        (*window).rendering_sent.width = log_width;
-        (*window).rendering_sent.height = log_height;
+        this.box_geom.x = log_x;
+        this.box_geom.y = log_y;
+        this.box_geom.width = log_width as i32;
+        this.box_geom.height = log_height as i32;
+        this.rendering_requested.x = log_x;
+        this.rendering_requested.y = log_y;
+        this.rendering_sent.width = log_width;
+        this.rendering_sent.height = log_height;
         // The screen origin above is only half the move: the arrange pass
         // places a floating window from its VIRTUAL origin, so leaving that
         // stale meant the very next transaction recomputed the window back
@@ -1049,14 +1061,15 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         // is a runaway: Houdini's Edit Theme dialog walked 270px left across
         // one tab switch, re-requesting 15 times in a second and never
         // converging on a size either.
-        let (vx, vy) = (*window).screen_to_virtual(wm, log_x, log_y);
-        (*window).virtual_x = vx;
-        (*window).virtual_y = vy;
+        let (vx, vy) = window_ref!(wm, id, ()).screen_to_virtual(wm, log_x, log_y);
+        let this = window_mut!(wm, id);
+        this.virtual_x = vx;
+        this.virtual_y = vy;
         if exempt_self_placed || shy_self_placed {
             // Placed by the client: the camera must not pan to it on spawn.
-            (*window).hint_placed = true;
+            this.hint_placed = true;
         }
-        (*window).set_dimensions(log_width, log_height);
+        this.set_dimensions(log_width, log_height);
         // set_dimensions sees no size change (`rendering_sent` already holds
         // it), yet the render pass is what moves the scene node to the
         // granted spot. A request that changes nothing renders nothing: a
@@ -1088,8 +1101,8 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     // lowered it — so it follows the app down.
     {
         let (req_w, req_h) = (from_x11((*event).width as i32, s) as u32, from_x11((*event).height as i32, s) as u32);
-        let hint = (*window).wm_scheduled.dimensions_hint;
-        let (min_w, min_h) = if (*window).wm_requested.resizing {
+        let hint = this.wm_scheduled.dimensions_hint;
+        let (min_w, min_h) = if this.wm_requested.resizing {
             let axis = |i: usize, sent: Option<u32>, req: u32, known: u32| {
                 let sent = sent?;
                 let (learned, prev) = learned_min((*xwindow).refusals[i], sent, req, known);
@@ -1097,8 +1110,8 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
                 learned
             };
             (
-                axis(0, (*window).configure_sent.width, req_w, hint.min_width),
-                axis(1, (*window).configure_sent.height, req_h, hint.min_height),
+                axis(0, this.configure_sent.width, req_w, hint.min_width),
+                axis(1, this.configure_sent.height, req_h, hint.min_height),
             )
         } else {
             (
@@ -1115,11 +1128,11 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
             log::info!(
                 "XWayland configure request: '{}' {}; minimum now {}x{}",
                 title,
-                if (*window).wm_requested.resizing { "refused a smaller size" } else { "went below its minimum" },
+                if this.wm_requested.resizing { "refused a smaller size" } else { "went below its minimum" },
                 learned.min_width,
                 learned.min_height,
             );
-            (*window).set_dimensions_hint(learned);
+            this.set_dimensions_hint(learned);
             (*xwindow).store_min_size(wm, learned.min_width, learned.min_height, s);
         }
     }
@@ -1133,8 +1146,9 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     }
 
     let (phys_width, phys_height) = if hold_size {
-        let log_w = (*window).configure_sent.width.unwrap_or((*window).box_geom.width as u32);
-        let log_h = (*window).configure_sent.height.unwrap_or((*window).box_geom.height as u32);
+        let this = window_mut!(wm, id);
+        let log_w = this.configure_sent.width.unwrap_or(this.box_geom.width as u32);
+        let log_h = this.configure_sent.height.unwrap_or(this.box_geom.height as u32);
         if log_w > 0 && log_h > 0 {
             let mut w = log_w;
             let mut h = log_h;
@@ -1153,8 +1167,9 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         (snap_x11((*event).width as i32, s) as u16, snap_x11((*event).height as i32, s) as u16)
     };
 
-    let mut phys_x = to_x11((*window).box_geom.x, s) as i16;
-    let mut phys_y = to_x11((*window).box_geom.y, s) as i16;
+    let this = window_mut!(wm, id);
+    let mut phys_x = to_x11(this.box_geom.x, s) as i16;
+    let mut phys_y = to_x11(this.box_geom.y, s) as i16;
 
     if is_wine && !has_parent && !is_fullscreen {
         phys_x -= to_x11(WINE_MARGIN, s) as i16;
@@ -1168,7 +1183,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         log_width = log_width.saturating_sub((WINE_MARGIN * 2) as u32);
         log_height = log_height.saturating_sub((WINE_MARGIN * 2) as u32);
     }
-    (*window).set_dimensions(log_width, log_height);
+    this.set_dimensions(log_width, log_height);
 }
 
 unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
