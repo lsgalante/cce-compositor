@@ -16,11 +16,11 @@
 #   2. a band over the red image picks it, live, and the pick survives the
 #      release
 #   3. a press on the selected image drags it (PointerOpType::GroupMove):
-#      the compositor's rect follows mid-drag, the grid saves the sidecar
+#      the compositor's rect follows mid-drag, the grid saves the board
 #      on `drop`
 #   4. a band over everything, then a drag of the terminal, moves both
 #      images by exactly the terminal's offset (snap included) and the
-#      sidecar agrees
+#      board agrees
 #   5. a background click drops the selection and stays in overview — also
 #      with only images selected (has_selection), where it used to exit
 #   6. a press on an UNSELECTED image drops the selection and the grid
@@ -33,6 +33,15 @@
 # is $CCE_GRID, else the workspace's target/release/cce-grid, else the one
 # on PATH — build it with `cargo build --release -p cce-grid` to test the
 # tree's.
+#
+# The images are seeded as, and read back from, cce-grid's board: a JSON
+# Canvas file (cce-grid/src/board.rs), `Desktop.canvas` at the vault root.
+# The grid is run with CCE_VAULT pointing at a private directory in the
+# shadow's HOME, so the board's place does not depend on the vault the
+# copied config.kdl names — and a shadow grid can never write the user's
+# real vault. The grid copies the seeded images (outside the vault) into it
+# at startup and repoints their nodes vault-relative, so they are found by
+# file name.
 
 set -euo pipefail
 
@@ -75,7 +84,9 @@ home=$(sc env | sed -n 's/^export HOME=//p')
 [ -n "$home" ] || fail "could not read the shadow's HOME"
 
 echo "==> seeding two desktop images"
-mkdir -p "$home/Desktop" "$home/.local/share/cce"
+vault="$home/vault"
+board="$vault/Desktop.canvas"
+mkdir -p "$home/Desktop" "$vault"
 python3 - "$home/Desktop" <<'EOF'
 import struct, sys, zlib
 def png(path, w, h, rgb):
@@ -86,20 +97,22 @@ def png(path, w, h, rgb):
 png(sys.argv[1] + "/red.png", 100, 100, (220, 60, 60))
 png(sys.argv[1] + "/blue.png", 60, 100, (60, 120, 220))
 EOF
-cat > "$home/.local/share/cce/desktop-items.json" <<EOF
-[{"path":"$home/Desktop/red.png","x":960,"y":150,"w":100,"h":100},
- {"path":"$home/Desktop/blue.png","x":-90,"y":150,"w":60,"h":100}]
+cat > "$board" <<EOF
+{"nodes":[
+ {"id":"00000000000000a1","type":"file","file":"$home/Desktop/red.png","x":960,"y":150,"width":100,"height":100},
+ {"id":"00000000000000b1","type":"file","file":"$home/Desktop/blue.png","x":-90,"y":150,"width":60,"height":100}
+],"edges":[]}
 EOF
 
 echo "==> starting the grid ($grid) and a terminal"
-sc run "$grid" >"$out/grid.log" 2>&1 &
+sc run env CCE_VAULT="$vault" "$grid" >"$out/grid.log" 2>&1 &
 sc ctl spawn cce-terminal >/dev/null
 sleep 4
 
 echo "==> driving"
-python3 - "$shadow" "$inst" "$home" "$out/grid.log" <<'EOF' || fail "assertions failed"
+python3 - "$shadow" "$inst" "$board" "$out/grid.log" <<'EOF' || fail "assertions failed"
 import json, re, subprocess, sys, time
-S, INST, H, GRIDLOG = sys.argv[1:5]
+S, INST, BOARD, GRIDLOG = sys.argv[1:5]
 fails = 0
 
 def ctl(*a):
@@ -149,8 +162,8 @@ def band(x0, y0, x1, y1):
     move((x0 + x1) / 2, (y0 + y1) / 2); move(x1, y1); time.sleep(0.2)
     mid = sel(); release(); return mid, sel()
 
-def sidecar():
-    return {d["path"].rsplit("/", 1)[1]: (d["x"], d["y"]) for d in json.load(open(f"{H}/.local/share/cce/desktop-items.json"))}
+def saved():
+    return {n["file"].rsplit("/", 1)[-1]: (n["x"], n["y"]) for n in json.load(open(BOARD))["nodes"] if n.get("type") == "file"}
 
 def center(r): return (r[0] + r[2] / 2, r[1] + r[3] / 2)
 
@@ -181,7 +194,7 @@ check("image follows the drag mid-move", abs(mid["desk"][red][1] - (r[1] + 100))
 release(); time.sleep(0.5)
 after = sel()
 check("image stays where dropped, still selected", abs(after["desk"][red][1] - (r[1] + 100)) < 1 and after["items"] == [red], after["raw"])
-check("grid saved the new position", abs(sidecar()["red.png"][1] - (r[1] + 100)) < 1, str(sidecar()))
+check("grid saved the new position", abs(saved()["red.png"][1] - (r[1] + 100)) < 1, str(saved()))
 check("grid logged the drop", "group move dropped" in open(GRIDLOG).read())
 
 # 4. band over everything, drag the terminal, images follow by its offset
@@ -200,8 +213,8 @@ check("terminal moved", dt != (0.0, 0.0), f"dt={dt}")
 for name, i in (("red", red), ("blue", blue)):
     di = (d1[i][0] - d0[i][0], d1[i][1] - d0[i][1])
     check(f"{name} image moved by the terminal's offset", abs(di[0] - dt[0]) < 1 and abs(di[1] - dt[1]) < 1, f"image {di} terminal {dt}")
-sc = sidecar()
-check("sidecar matches the compositor's rects", abs(sc["red.png"][1] - d1[red][1]) < 1 and abs(sc["blue.png"][1] - d1[blue][1]) < 1, f"{sc} vs {d1}")
+sv = saved()
+check("board matches the compositor's rects", abs(sv["red.png"][1] - d1[red][1]) < 1 and abs(sv["blue.png"][1] - d1[blue][1]) < 1, f"{sv} vs {d1}")
 
 # 5. background clicks
 t = term()
