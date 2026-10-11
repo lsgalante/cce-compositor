@@ -84,7 +84,7 @@ impl OutputManager {
         self.gamma_control_manager = gamma_control_manager;
         ffi::wlr_scene_set_gamma_control_manager_v1(crate::shared::scene().wlr_scene, gamma_control_manager);
 
-        let presentation = ffi::wlr_presentation_create((*server).wl_server, (*server).backend, 2);
+        let presentation = ffi::wlr_presentation_create((*server).wl_server, crate::shared::handles().backend.get(), 2);
         if presentation.is_null() {
             return Err("Failed to create wlr_presentation");
         }
@@ -109,7 +109,7 @@ impl OutputManager {
         self.power_manager = power_manager;
 
         // Add backend new_output listener
-        let backend_cast = (*server).backend as *mut crate::server::WlrBackend;
+        let backend_cast = crate::shared::handles().backend.get() as *mut crate::server::WlrBackend;
         self.new_output.connect(&mut (*backend_cast).events.new_output, handle_new_output);
 
         // Add apply/test listeners
@@ -141,7 +141,7 @@ impl OutputManager {
         output_at(lx, ly)
     }
 
-    pub unsafe fn commit_output_state(&mut self, server: *mut Server, outputs: &crate::output::Outputs) {
+    pub unsafe fn commit_output_state(&mut self, lock: &crate::lock_manager::LockManager, outputs: &crate::output::Outputs) {
 
         let head = crate::shared::sent().outputs.head();
         let mut link = (*head).next;
@@ -156,7 +156,7 @@ impl OutputManager {
                     OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
                         ffi::wlr_scene_output_set_position(output.scene_output, output.sent.x, output.sent.y);
                         ffi::wlr_output_layout_add(self.output_layout, wlr_output, output.sent.x, output.sent.y);
-                        if let Some(lock_surface) = (*server).lock_manager.lock_surface_from_output(output) {
+                        if let Some(lock_surface) = lock.lock_surface_from_output(output) {
                             (*lock_surface).tree.set_position(output.sent.x, output.sent.y);
                         }
 
@@ -304,7 +304,7 @@ impl OutputManager {
             }
 
             let mut swapchain_manager = std::mem::zeroed();
-            ffi::wlr_output_swapchain_manager_init(&mut swapchain_manager, (*server).backend);
+            ffi::wlr_output_swapchain_manager_init(&mut swapchain_manager, crate::shared::handles().backend.get());
 
             if !ffi::wlr_output_swapchain_manager_prepare(
                 &mut swapchain_manager,
@@ -312,7 +312,7 @@ impl OutputManager {
                 states_vec.len(),
             ) {
                 log::error!("failed to prepare new output configuration");
-                self.modeset_failed(server);
+                self.modeset_failed();
                 for state in &mut states_vec {
                     ffi::wlr_output_state_finish(&mut state.base);
                 }
@@ -332,9 +332,9 @@ impl OutputManager {
                 }
             }
 
-            if !ffi::wlr_backend_commit((*server).backend, states_vec.as_ptr(), states_vec.len()) {
+            if !ffi::wlr_backend_commit(crate::shared::handles().backend.get(), states_vec.as_ptr(), states_vec.len()) {
                 log::error!("failed to commit new output configuration");
-                self.modeset_failed(server);
+                self.modeset_failed();
                 for state in &mut states_vec {
                     ffi::wlr_output_state_finish(&mut state.base);
                 }
@@ -392,11 +392,11 @@ impl OutputManager {
         let _ = self.send_config(outputs);
     }
 
-    pub unsafe fn modeset_failed(&mut self, server: *mut Server) {
+    pub unsafe fn modeset_failed(&mut self) {
 
         if self.first_modeset {
             log::error!("initial modeset failed, exiting river");
-            ffi::wl_display_terminate((*server).wl_server);
+            ffi::wl_display_terminate(crate::shared::shared().display());
             return;
         }
 
@@ -594,7 +594,7 @@ unsafe extern "C" fn handle_manager_test(listener: *mut ffi::wl_listener, data: 
     }
 
     let mut swapchain_manager = std::mem::zeroed();
-    ffi::wlr_output_swapchain_manager_init(&mut swapchain_manager, (*server).backend);
+    ffi::wlr_output_swapchain_manager_init(&mut swapchain_manager, crate::shared::handles().backend.get());
 
     if ffi::wlr_output_swapchain_manager_prepare(&mut swapchain_manager, states, states_len) {
         ffi::wlr_output_configuration_v1_send_succeeded(config);

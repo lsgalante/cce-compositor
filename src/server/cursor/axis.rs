@@ -5,15 +5,16 @@
 use super::*;
 
 pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
     let cursor = &mut *crate::container_of!(listener, Cursor, axis_listener);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    on_axis(cursor, wm, data);
+    on_axis(cursor, wm, data, sys);
 }
 
 /// `handle_axis` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
-pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void) {
+pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
     let event = data as *mut ffi::wlr_pointer_axis_event;
-    (*cursor.seat).handle_activity(wm);
+    (*cursor.seat).handle_activity(wm, sys);
     
     let seat = &mut *cursor.seat;
     

@@ -909,7 +909,15 @@ impl Server {
             log::info!("[deinit] self.om.deinit finished");
 
             log::info!("[deinit] self.input_manager.deinit started");
-            self.input_manager.deinit(&mut self.wm);
+            // The other subsystems, borrowed beside the input manager: its
+            // teardown detaches devices, which runs the activity path.
+            let mut sys = crate::ctx::Sys {
+                om: &mut self.om,
+                idle: &mut self.idle,
+                lock: &mut self.lock_manager,
+                inhibit: &mut self.idle_inhibit_manager,
+            };
+            self.input_manager.deinit(&mut self.wm, &mut sys);
             log::info!("[deinit] self.input_manager.deinit finished");
 
             log::info!("[deinit] deinitializing other subcomponents");

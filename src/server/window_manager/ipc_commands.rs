@@ -6,7 +6,90 @@
 use super::*;
 
 impl WindowManager {
-    pub unsafe fn process_ipc_command(&mut self, cmd: &str) -> String {
+    /// `ccectl screenshot …` — also the screenshot action, which goes
+    /// straight here rather than through the whole dispatcher.
+    pub unsafe fn screenshot_command(&mut self, parts: &[&str]) -> String {
+        crate::wm_scope!(mut);
+        // screenshot                        → the enabled output's next frame
+        // screenshot region <x> <y> <w> <h> → on-screen region (logical px)
+        // screenshot window [app_id|id]     → window content, even off-viewport
+        let path = crate::screenshot::default_path();
+        match parts.get(1).copied() {
+            Some("window") => {
+                let target = if parts.len() >= 3 {
+                    self.find_window_id(&parts[2..].join(" "))
+                } else {
+                    self.seat_focused_window_id()
+                };
+                let Some(target) = target.and_then(|id| self.windows.get(id)) else {
+                    return "error: window not found\n".to_string();
+                };
+                match crate::screenshot::capture_window(target, path) {
+                    Ok(p) => format!("ok {}\n", p),
+                    Err(e) => format!("error: {}\n", e),
+                }
+            }
+            None | Some("region") => {
+                // Region args are logical on-screen coordinates relative to
+                // the output; the capture crops the physical buffer.
+                let region_logical = if parts.get(1) == Some(&"region") {
+                    let vals: Vec<f64> = parts[2..].iter().filter_map(|p| p.parse().ok()).collect();
+                    if vals.len() != 4 {
+                        return "error: usage: screenshot region <x> <y> <w> <h>\n".to_string();
+                    }
+                    Some((vals[0], vals[1], vals[2], vals[3]))
+                } else {
+                    None
+                };
+
+                // First enabled output (same walk as center-window).
+                let mut target_out: *mut crate::output::Output = std::ptr::null_mut();
+                for output in self.outputs.ptrs() {
+                    if (*output).sent.state == crate::output::OutputStateValue::Enabled {
+                        target_out = output;
+                        break;
+                    }
+                }
+                if target_out.is_null() {
+                    return "error: no enabled output\n".to_string();
+                }
+
+                let region = region_logical.map(|(x, y, w, h)| {
+                    // logical → buffer px via the output's effective scale.
+                    let buf_w = ffi::river_wlr_output_get_width((*target_out).wlr_output) as f64;
+                    let layout_w = (*target_out).sent.box_layout().width.max(1) as f64;
+                    let scale = buf_w / layout_w;
+                    ffi::wlr_box {
+                        x: (x * scale).round() as i32,
+                        y: (y * scale).round() as i32,
+                        width: (w * scale).round() as i32,
+                        height: (h * scale).round() as i32,
+                    }
+                });
+
+                // The capture happens a frame from now, in
+                // `Output::render_and_commit`, so the reply channel
+                // rides along with it: answering `ok <path>` here
+                // claimed success for captures that then failed (an
+                // unsupported readback format, a failed commit) and
+                // named a file that never appeared. Taking the
+                // channel is what tells `handle_ipc_event` not to
+                // answer, so the returned string goes nowhere.
+                self.pending_screenshot = Some(crate::screenshot::PendingScreenshot::new(
+                    (*target_out).id,
+                    region,
+                    path,
+                    self.pending_ipc_reply.take(),
+                ));
+                ffi::wlr_output_schedule_frame((*target_out).wlr_output);
+                String::new()
+            }
+            Some(other) => format!("error: unknown screenshot target: {}\n", other),
+        }
+    
+    }
+
+    pub unsafe fn process_ipc_command(&mut self, cmd: &str, sys: &mut crate::ctx::Sys, input: &mut crate::input_manager::InputManager) -> String {
         crate::wm_scope!(mut);
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
@@ -880,84 +963,7 @@ impl WindowManager {
                     (h * self.desk_zoom).round() as i32,
                 )
             }
-            "screenshot" => {
-                // screenshot                        → the enabled output's next frame
-                // screenshot region <x> <y> <w> <h> → on-screen region (logical px)
-                // screenshot window [app_id|id]     → window content, even off-viewport
-                let path = crate::screenshot::default_path();
-                match parts.get(1).copied() {
-                    Some("window") => {
-                        let target = if parts.len() >= 3 {
-                            self.find_window_id(&parts[2..].join(" "))
-                        } else {
-                            self.seat_focused_window_id()
-                        };
-                        let Some(target) = target.and_then(|id| self.windows.get(id)) else {
-                            return "error: window not found\n".to_string();
-                        };
-                        match crate::screenshot::capture_window(target, path) {
-                            Ok(p) => format!("ok {}\n", p),
-                            Err(e) => format!("error: {}\n", e),
-                        }
-                    }
-                    None | Some("region") => {
-                        // Region args are logical on-screen coordinates relative to
-                        // the output; the capture crops the physical buffer.
-                        let region_logical = if parts.get(1) == Some(&"region") {
-                            let vals: Vec<f64> = parts[2..].iter().filter_map(|p| p.parse().ok()).collect();
-                            if vals.len() != 4 {
-                                return "error: usage: screenshot region <x> <y> <w> <h>\n".to_string();
-                            }
-                            Some((vals[0], vals[1], vals[2], vals[3]))
-                        } else {
-                            None
-                        };
-
-                        // First enabled output (same walk as center-window).
-                        let mut target_out: *mut crate::output::Output = std::ptr::null_mut();
-                        for output in self.outputs.ptrs() {
-                            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                                target_out = output;
-                                break;
-                            }
-                        }
-                        if target_out.is_null() {
-                            return "error: no enabled output\n".to_string();
-                        }
-
-                        let region = region_logical.map(|(x, y, w, h)| {
-                            // logical → buffer px via the output's effective scale.
-                            let buf_w = ffi::river_wlr_output_get_width((*target_out).wlr_output) as f64;
-                            let layout_w = (*target_out).sent.box_layout().width.max(1) as f64;
-                            let scale = buf_w / layout_w;
-                            ffi::wlr_box {
-                                x: (x * scale).round() as i32,
-                                y: (y * scale).round() as i32,
-                                width: (w * scale).round() as i32,
-                                height: (h * scale).round() as i32,
-                            }
-                        });
-
-                        // The capture happens a frame from now, in
-                        // `Output::render_and_commit`, so the reply channel
-                        // rides along with it: answering `ok <path>` here
-                        // claimed success for captures that then failed (an
-                        // unsupported readback format, a failed commit) and
-                        // named a file that never appeared. Taking the
-                        // channel is what tells `handle_ipc_event` not to
-                        // answer, so the returned string goes nowhere.
-                        self.pending_screenshot = Some(crate::screenshot::PendingScreenshot::new(
-                            (*target_out).id,
-                            region,
-                            path,
-                            self.pending_ipc_reply.take(),
-                        ));
-                        ffi::wlr_output_schedule_frame((*target_out).wlr_output);
-                        String::new()
-                    }
-                    Some(other) => format!("error: unknown screenshot target: {}\n", other),
-                }
-            }
+            "screenshot" => self.screenshot_command(&parts),
             "exit" => {
                 if matches!(parts.get(1), Some(&"force") | Some(&"--force")) {
                     // No waiting on close requests: whatever has not closed
@@ -995,7 +1001,7 @@ impl WindowManager {
             }
             "reload" => {
                 unsafe {
-                    match self.reload_config() {
+                    match self.reload_config(sys, input) {
                         Ok(()) => "ok\n".to_string(),
                         Err(e) => format!("error: failed to reload config: {}\n", e),
                     }
@@ -1006,18 +1012,16 @@ impl WindowManager {
                 "ok\n".to_string()
             }
             "idle" => unsafe {
-                let server = self.server;
-                (*server).idle.ipc(self, &mut (*server).lock_manager, &parts[1..])
+                sys.idle.ipc(self, sys.lock, &parts[1..])
             },
             // Lock the session (`LockManager::lock_now`). The reply waits for
             // the lock to complete, which is what the lock-before-sleep
             // thread (`sleep_lock`) holds logind's sleep for: `ok locked`
             // once every output shows the locked scene.
             "lock" => unsafe {
-                let server = self.server;
-                let lock = &mut (*server).lock_manager;
+                let lock = &mut *sys.lock;
                 if lock.lock_now(self) {
-                    (*server).idle.on_locked();
+                    sys.idle.on_locked();
                 }
                 match self.pending_ipc_reply.take() {
                     Some(tx) => {
@@ -1040,7 +1044,7 @@ impl WindowManager {
                 } else if parts.len() != 1 {
                     return "error: usage: repeat [<rate> <delay>]\n".to_string();
                 }
-                let keyboards = unsafe { self.apply_key_repeat() };
+                let keyboards = unsafe { self.apply_key_repeat(input) };
                 let (rate, delay) = crate::shared::layout().input_config.repeat_info();
                 format!("rate={} delay={} keyboards={}\n", rate, delay, keyboards)
             }
@@ -1325,7 +1329,7 @@ impl WindowManager {
                             return "error: scroll factor cannot be negative\n".to_string();
                         }
                         let mut found = false;
-                        let devices_head = &mut (*self.server).input_manager.devices as *mut ffi::wl_list as *mut WlList;
+                        let devices_head = &mut input.devices as *mut ffi::wl_list as *mut WlList;
                         let mut curr = (*devices_head).next;
                         while curr != devices_head {
                             let next = (*curr).next;
@@ -1358,7 +1362,7 @@ impl WindowManager {
             "pointer-move-to" => {
                 if parts.len() < 3 { return "error: usage: pointer-move-to <x> <y>\n".to_string(); }
                 if let (Ok(x), Ok(y)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
-                    self.for_each_cursor(|wm, cursor| cursor.inject_motion_to(wm, x, y));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_motion_to(wm, x, y, sys));
                     "ok\n".to_string()
                 } else {
                     "error: invalid x or y\n".to_string()
@@ -1380,9 +1384,9 @@ impl WindowManager {
                         (Some(id), Some(x), Some(y)) => {
                             self.for_each_seat_touch(|wm, cursor| {
                                 if stage == "down" {
-                                    cursor.touch_down(wm, id, x, y, time);
+                                    cursor.touch_down(wm, id, x, y, time, sys);
                                 } else {
-                                    cursor.touch_motion(wm, id, x, y, time);
+                                    cursor.touch_motion(wm, id, x, y, time, sys);
                                 }
                                 cursor.touch_frame();
                             });
@@ -1394,9 +1398,9 @@ impl WindowManager {
                         Some(id) => {
                             self.for_each_seat_touch(|wm, cursor| {
                                 if stage == "up" {
-                                    cursor.touch_up(wm, id, time);
+                                    cursor.touch_up(wm, id, time, sys);
                                 } else {
-                                    cursor.touch_cancel(wm, id);
+                                    cursor.touch_cancel(wm, id, sys);
                                 }
                                 cursor.touch_frame();
                             });
@@ -1407,9 +1411,9 @@ impl WindowManager {
                     "tap" => match (num(2), num(3)) {
                         (Some(x), Some(y)) => {
                             self.for_each_seat_touch(|wm, cursor| {
-                                cursor.touch_down(wm, 0, x, y, time);
+                                cursor.touch_down(wm, 0, x, y, time, sys);
                                 cursor.touch_frame();
-                                cursor.touch_up(wm, 0, time);
+                                cursor.touch_up(wm, 0, time, sys);
                                 cursor.touch_frame();
                             });
                             true
@@ -1423,7 +1427,7 @@ impl WindowManager {
             "pointer-move-by" => {
                 if parts.len() < 3 { return "error: usage: pointer-move-by <dx> <dy>\n".to_string(); }
                 if let (Ok(dx), Ok(dy)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
-                    self.for_each_cursor(|wm, cursor| cursor.inject_motion_by(wm, dx, dy));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_motion_by(wm, dx, dy, sys));
                     "ok\n".to_string()
                 } else {
                     "error: invalid dx or dy\n".to_string()
@@ -1435,11 +1439,11 @@ impl WindowManager {
                     None => return "error: unknown button (left|right|middle|back|forward or an evdev code)\n".to_string(),
                 };
                 match action {
-                    "pointer-press" => self.for_each_cursor(|wm, cursor| cursor.inject_button(wm, button, true)),
-                    "pointer-release" => self.for_each_cursor(|wm, cursor| cursor.inject_button(wm, button, false)),
+                    "pointer-press" => self.for_each_cursor(|wm, cursor| cursor.inject_button(wm, button, true, sys)),
+                    "pointer-release" => self.for_each_cursor(|wm, cursor| cursor.inject_button(wm, button, false, sys)),
                     _ => self.for_each_cursor(|wm, cursor| {
-                        cursor.inject_button(wm, button, true);
-                        cursor.inject_button(wm, button, false);
+                        cursor.inject_button(wm, button, true, sys);
+                        cursor.inject_button(wm, button, false, sys);
                     }),
                 }
                 "ok\n".to_string()
@@ -1447,7 +1451,7 @@ impl WindowManager {
             "pointer-scroll" => {
                 if parts.len() < 2 { return "error: usage: pointer-scroll <dy> [dx] [finger|finger-stop]\n".to_string(); }
                 if parts[1] == "finger-stop" {
-                    self.for_each_cursor(|wm, cursor| cursor.inject_finger_stop(wm));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_finger_stop(wm, sys));
                     return "ok\n".to_string();
                 }
                 // `natural` marks the swipe as coming from a natural-scrolling
@@ -1460,7 +1464,7 @@ impl WindowManager {
                 if let (Ok(dy), Ok(dx)) = (dy, dx) {
                     self.for_each_cursor(|wm, cursor| {
                         cursor.inject_natural = natural;
-                        cursor.inject_scroll(wm, dy, dx, finger);
+                        cursor.inject_scroll(wm, dy, dx, finger, sys);
                         cursor.inject_natural = false;
                     });
                     "ok\n".to_string()
@@ -1484,7 +1488,7 @@ impl WindowManager {
                         _ => (3, 0.0, 0.0),
                     };
                     // The begin fixes the finger count; updates reuse it.
-                    self.for_each_cursor(|wm, cursor| cursor.inject_swipe_stage(wm, &stage, fingers, dx, dy));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_swipe_stage(wm, &stage, fingers, dx, dy, sys));
                     return "ok\n".to_string();
                 }
                 if parts.len() < 4 { return usage.to_string(); }
@@ -1493,7 +1497,7 @@ impl WindowManager {
                 let dy = parse_finite(parts[3]);
                 let steps = parts.get(4).map(|v| v.parse::<u32>()).unwrap_or(Ok(10)).map(|n| n.clamp(1, MAX_INJECTED_STEPS));
                 if let (Ok(fingers), Ok(dx), Ok(dy), Ok(steps)) = (fingers, dx, dy, steps) {
-                    self.for_each_cursor(|wm, cursor| cursor.inject_swipe(wm, fingers, dx, dy, steps));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_swipe(wm, fingers, dx, dy, steps, sys));
                     "ok\n".to_string()
                 } else {
                     "error: invalid swipe arguments\n".to_string()
@@ -1507,14 +1511,14 @@ impl WindowManager {
                     let scale = parts.get(2).and_then(|v| parse_finite(v).ok()).unwrap_or(1.0);
                     let rotation = parts.get(3).and_then(|v| parse_finite(v).ok()).unwrap_or(0.0);
                     let stage = parts[1].to_string();
-                    self.for_each_cursor(|wm, cursor| cursor.inject_pinch_stage(wm, &stage, scale, rotation));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_pinch_stage(wm, &stage, scale, rotation, sys));
                     return "ok\n".to_string();
                 }
                 let scale = parse_finite(parts[1]);
                 let rotation = parts.get(2).map(|v| parse_finite(v)).unwrap_or(Ok(0.0));
                 let steps = parts.get(3).map(|v| v.parse::<u32>()).unwrap_or(Ok(10)).map(|n| n.clamp(1, MAX_INJECTED_STEPS));
                 if let (Ok(scale), Ok(rotation), Ok(steps)) = (scale, rotation, steps) {
-                    self.for_each_cursor(|wm, cursor| cursor.inject_pinch(wm, scale, rotation, steps));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_pinch(wm, scale, rotation, steps, sys));
                     "ok\n".to_string()
                 } else {
                     "error: invalid pinch arguments\n".to_string()
@@ -1618,7 +1622,7 @@ impl WindowManager {
                     };
                     for seat in self.seats.ptrs() {
                         (*seat).ensure_synthetic_keyboard();
-                        (*seat).handle_activity(self);
+                        (*seat).handle_activity(self, sys);
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, crate::util::msec_timestamp(), keycode, state);
                         if let Some(name) = mod_name {
                             let kb = ffi::river_wlr_seat_get_keyboard((*seat).wlr_seat);
@@ -1659,7 +1663,7 @@ impl WindowManager {
                         // without a keymap, and a keymap-less client drops
                         // every key we notify. Attach one first.
                         (*seat).ensure_synthetic_keyboard();
-                        (*seat).handle_activity(self);
+                        (*seat).handle_activity(self, sys);
                         let time = crate::util::msec_timestamp();
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time + 1, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);

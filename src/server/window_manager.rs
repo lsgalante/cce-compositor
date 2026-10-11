@@ -137,7 +137,6 @@ use ipc_commands::parse_finite;
 mod config_apply;
 
 pub struct WindowManager {
-    pub server: *mut Server,
     pub global: *mut ffi::wl_global,
     pub server_destroy: crate::listener::Listener,
     pub state: WindowManagerState,
@@ -155,6 +154,9 @@ pub struct WindowManager {
     /// The `zcce_toplevel_v1` resources (this window manager's protocol):
     /// where grid patches are sent.
     pub cce_window_management: crate::cce_window_management::CceWindowManagement,
+    /// A `reload` action is waiting for the pending-work idle callback,
+    /// which holds the subsystems a reload configures (`reload_and_notify`).
+    pub reload_requested: bool,
     /// The overview drag-selection: the selected windows, the rubber band
     /// while one is being dragged out, and the nodes that draw both. See
     /// [`crate::selection`].
@@ -525,7 +527,6 @@ impl WindowManager {
 
     pub unsafe fn init_with_server(&mut self, server: *mut Server) -> Result<(), &'static str> {
         crate::wm_scope!(mut);
-        self.server = server;
         self.global = std::ptr::null_mut();
         self.state = WindowManagerState::Idle;
         self.windows = crate::window::Windows::new();
@@ -2296,26 +2297,7 @@ impl WindowManager {
             Action::None => {}
             Action::Spawn => {
                 if let Some(cmd) = command {
-                    log::info!("executing spawn: {}, WAYLAND_DISPLAY: {:?}", cmd, std::env::var("WAYLAND_DISPLAY"));
-                    match nix::unistd::fork() {
-                        Ok(nix::unistd::ForkResult::Child) => {
-                            crate::process::cleanup_child();
-                            let env: Vec<std::ffi::CString> = std::env::vars()
-                                .map(|(k, v)| std::ffi::CString::new(format!("{}={}", k, v)).unwrap())
-                                .collect();
-                            let env_ptrs: Vec<&std::ffi::CStr> = env.iter().map(|s| s.as_c_str()).collect();
-                            let sh_c = std::ffi::CString::new("/bin/sh").unwrap();
-                            let c_c = std::ffi::CString::new("-c").unwrap();
-                            let cmd_c = std::ffi::CString::new(cmd).unwrap();
-                            let args = [sh_c.as_c_str(), c_c.as_c_str(), cmd_c.as_c_str()];
-                            let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
-                            std::process::exit(1);
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            log::error!("failed to fork child process: {}", e);
-                        }
-                    }
+                    crate::process::spawn_shell(cmd);
                 }
             }
             Action::WindowSwitcher => {
@@ -2334,31 +2316,43 @@ impl WindowManager {
                 // hand this capture's verdict to whoever asked for the
                 // *action*, and leave them waiting a frame for it.
                 let borrowed = self.pending_ipc_reply.take();
-                let _ = self.process_ipc_command("screenshot");
+                let _ = self.screenshot_command(&["screenshot"]);
                 self.pending_ipc_reply = borrowed;
             }
             Action::Reload => {
+                // A reload configures the input devices and the idle
+                // manager, which an action (a key, a gesture, a menu) has no
+                // path to; the pending-work idle callback, later in this
+                // same loop iteration, does it (`reload_and_notify`).
                 log::info!("monolithic execute_action: Reload requested");
-                match self.reload_config() {
-                    Ok(()) => {
-                        let _ = std::process::Command::new("notify-send")
-                            .arg("cce")
-                            .arg("Configuration reloaded successfully")
-                            .spawn();
-                    }
-                    Err(e) => {
-                        let _ = std::process::Command::new("notify-send")
-                            .arg("cce")
-                            .arg(format!("Failed to reload config:\n{}", e))
-                            .spawn();
-                    }
-                }
+                self.reload_requested = true;
+                crate::shared::pending().dirty_windowing();
             }
             Action::Exit => {
                 log::info!("monolithic execute_action: Exit requested");
                 self.start_clean_exit();
             }
             _ => {}
+        }
+    }
+
+    /// Reload the config and say how it went (a desktop notification): the
+    /// `reload` action, run from the pending-work idle callback.
+    pub unsafe fn reload_and_notify(&mut self, sys: &mut crate::ctx::Sys, input: &mut crate::input_manager::InputManager) {
+        crate::wm_scope!(mut);
+        match self.reload_config(sys, input) {
+            Ok(()) => {
+                let _ = std::process::Command::new("notify-send")
+                    .arg("cce")
+                    .arg("Configuration reloaded successfully")
+                    .spawn();
+            }
+            Err(e) => {
+                let _ = std::process::Command::new("notify-send")
+                    .arg("cce")
+                    .arg(format!("Failed to reload config:\n{}", e))
+                    .spawn();
+            }
         }
     }
 
@@ -2432,6 +2426,8 @@ unsafe extern "C" fn handle_save_state_timer(data: *mut std::ffi::c_void) -> std
 
 /// The IPC wake fd fired: clear it and dispatch every queued request.
 unsafe extern "C" fn handle_ipc_event(fd: std::os::raw::c_int, _mask: u32, data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
+    let input = &mut *std::ptr::addr_of_mut!((*crate::shared::server_ptr()).input_manager);
     let wm = data as *mut WindowManager;
     if wm.is_null() {
         return 0;
@@ -2451,7 +2447,7 @@ unsafe extern "C" fn handle_ipc_event(fd: std::os::raw::c_int, _mask: u32, data:
             // which aborts the process — the whole desktop — over one bad
             // command. Contain it to the command: the caller gets an error.
             let reply = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                (*wm).process_ipc_command(&req.command)
+                (*wm).process_ipc_command(&req.command, sys, input)
             })) {
                 Ok(reply) => reply,
                 Err(_) => {
@@ -2581,6 +2577,7 @@ unsafe extern "C" fn handle_clean_exit_timeout(data: *mut std::ffi::c_void) -> s
 }
 
 unsafe extern "C" fn handle_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
     let wm = data as *mut WindowManager;
     if wm.is_null() {
         return 0;
@@ -2591,7 +2588,7 @@ unsafe extern "C" fn handle_timeout(data: *mut std::ffi::c_void) -> std::os::raw
             log::error!("timeout occurred, some imperfect frames may be shown");
             assert!(count > 0);
             (*wm).state = WindowManagerState::InflightConfigures(0);
-            (*wm).render_start();
+            (*wm).render_start(sys);
         }
         // Manage and Render finish synchronously in the built-in policy,
         // so only an in-flight configure ever waits on this timer.

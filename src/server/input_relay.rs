@@ -72,7 +72,7 @@ impl InputRelay {
     pub unsafe fn disable_text_input(&mut self, wm: &mut crate::window_manager::WindowManager) {
         assert!(!self.text_input.is_null());
         self.text_input = std::ptr::null_mut();
-        self.osk.field_gone(wm);
+        self.osk.field_gone();
 
         if !self.input_method.is_null() {
             let mut pos = self.input_popups.next;

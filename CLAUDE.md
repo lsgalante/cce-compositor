@@ -563,35 +563,39 @@ A function holding `&mut wm` reads the stores THROUGH it (`wm.outputs`,
 lock)` — never as a separate argument beside it, which would borrow the same
 memory twice.
 
-**Server back-pointers** (RFC step 4, 2026-10-11): only `WindowManager` still
-holds `server: *mut Server`. The wlroots objects created once at init — the
-backend, session, Xwayland, output layout, idle notifier, pointer gestures,
-tablet manager, default keymap and default seat — are recorded in
-`crate::shared::handles()` where their owner creates them, so a seat's cursor
-or a device being attached reads them there (`output_manager::output_at(lx,
-ly)` is the layout lookup without the output manager). A seat or cursor path
-that needs a mutable subsystem (the idle manager, the lock state, the layer
-surfaces) takes it through `wm.server` — `Seat::handle_activity(wm)` — the
-window manager's one remaining reach until it is handed a Ctx; the input
-devices' constructors (`InputDevice::new`, `Tablet::create`, the libinput and
-xkb `init`s, `create_object`, `KeyboardGroup::send_state`) take the server
-from the input manager's callback that starts them. `Window`'s drawing, effect
-and placement code runs with the window borrowed from `wm.windows`, so it
-cannot take the window manager; it takes `crate::ctx::Stores` instead — the
-output and seat stores, `Copy`, borrowed to read (`stores.seats.focuses(id)`,
-`adjust_hovers`, `resizing`, `stores.outputs.first_enabled_box()`). Code
-holding `wm` gets one from `wm.stores()`, taken BEFORE a `window_mut!`
-borrow, or `stores!(wm)` inside one (it borrows only the two store fields);
-an entry point uses `Stores::of(crate::shared::server_ptr())`. The others take what they
-need as parameters (`LockManager::maybe_lock(&Outputs)`,
-`IdleManager::set_displays(&mut Outputs, on)`,
-`Output::render_and_commit(wm, renderer)` + `note_lock_state(&LockManager)`, …)
-or, in their own wlroots callbacks, take the server from
-`crate::shared::server_ptr()` and an event loop from the shared display. The
-X11 scale (`xwayland_window::x11_scale`, read every frame per X11 window) is
-published by `note_output_scale` wherever the first output's applied scale
-can change — an output created or removed, a committed configuration — so it
-needs no server. A new struct does not get a `server` field.
+**No struct holds a server back-pointer** (RFC step 4, done 2026-10-11).
+Each subsystem gets what it needs another way:
+- Entity stores live on the window manager beside `windows`: `outputs`,
+  `seats`, `layer_surfaces`, and its own protocol registry
+  `cce_window_management`. They hold raw pointers, so a `&mut
+  WindowManager` borrows none of their entries' memory.
+- wlroots objects created once at init are in `crate::shared::handles()`
+  (backend, session, Xwayland, output layout, idle notifier, pointer
+  gestures, tablet manager, default keymap and seat, foreign-toplevel
+  globals). The session lock's state is `shared::lock_state()`.
+- **The other subsystems travel as `crate::ctx::Sys`** (`ctx.rs`):
+  disjoint `&mut` borrows of the output manager, idle manager, lock manager
+  and idle inhibitors. A `wlroots` entry point that reaches them builds one
+  (`Sys::of(crate::shared::server_ptr())`) beside its window manager and
+  hands both down. That covers the pointer, touch and gesture handlers
+  (activity wakes the idle manager), the manage and render passes (the
+  transaction's end commits outputs and recounts inhibitors), the IPC
+  dispatcher and the config reload. `Server::deinit` builds it from its own
+  fields.
+- The input manager is NOT in `Sys`: its teardown detaches devices, which
+  runs the activity path, so the config reload and the IPC device commands
+  take it as a parameter of its own.
+- A subsystem method never takes a `Sys` that contains it.
+- `Window`'s drawing code takes the read-only `Stores` (`wm.stores()`,
+  `stores!(wm)` beside a `window_mut!` borrow).
+- The `reload` *action* is deferred to the pending-work idle callback
+  (`reload_requested`), which holds a `Sys`; the on-screen keyboard spawns
+  through `process::spawn_shell`, not `execute_action`. Each of those two
+  had pulled the context into every caller of `execute_action` and
+  `Seat::focus`.
+
+A new struct does not get a `server` field. A new path that needs another
+subsystem takes `sys` or the specific store.
 
 **A window function that hands the window manager on takes `(wm, id)`,
 not `&mut self`** (since 2026-10-11): `Window::map`, `unmap`,

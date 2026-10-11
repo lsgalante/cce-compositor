@@ -4,7 +4,14 @@
 
 use super::*;
 
-pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager) -> Result<(), String> {
+/// `live` is the live server's subsystems and input manager; `None` (a
+/// unit test's default-constructed server) skips the idle timeouts and the
+/// input devices, which have nothing to apply to.
+pub fn parse_config(
+    path: &str,
+    state: &mut crate::window_manager::WindowManager,
+    mut live: Option<(&mut crate::ctx::Sys, &mut crate::input_manager::InputManager)>,
+) -> Result<(), String> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => return Err(format!("cannot open {}: {}", path, e)),
@@ -223,8 +230,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     next_layout.scenefx_optimized_blur = config.output.as_ref().map(|o| o.scenefx_optimized_blur).unwrap_or(true);
     // Idle timeouts live on the server, not the window manager; a reload
     // re-arms them from now with the new figures.
-    if !state.server.is_null() {
-        unsafe { (*state.server).idle.configure(&config.idle); }
+    if let Some((sys, _)) = live.as_mut() {
+        unsafe { sys.idle.configure(&config.idle); }
     }
     next_layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
     next_layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
@@ -266,8 +273,10 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     unsafe {
         // Config first (its per-class scroll factors are defaults), then the
         // name-based device rules so they stay the most specific override.
-        state.apply_input_config();
-        state.apply_input_rules();
+        if let Some((_, input)) = live.as_mut() {
+            state.apply_input_config(input);
+            state.apply_input_rules(input);
+        }
     }
 
     state.keybinds.clear();
@@ -500,11 +509,9 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     crate::shared::set_layout(next_layout);
 
     unsafe {
-        if !state.server.is_null() {
-            for output_ptr in state.outputs.ptrs() {
-                let output = &mut *output_ptr;
-                output.update_background_color();
-            }
+        for output_ptr in state.outputs.ptrs() {
+            let output = &mut *output_ptr;
+            output.update_background_color();
         }
     }
 

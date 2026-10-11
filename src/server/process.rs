@@ -59,3 +59,33 @@ pub fn cleanup_child() {
         }
     }
 }
+
+/// Run `cmd` through `/bin/sh -c`, forked and detached like every other
+/// client the compositor starts (the `spawn` action; the on-screen
+/// keyboard's show and hide).
+///
+/// # Safety
+/// Forks a multithreaded process: the child runs only until `execve`, as
+/// every spawn path here does.
+pub unsafe fn spawn_shell(cmd: &str) {
+    log::info!("executing spawn: {}, WAYLAND_DISPLAY: {:?}", cmd, std::env::var("WAYLAND_DISPLAY"));
+    match nix::unistd::fork() {
+        Ok(nix::unistd::ForkResult::Child) => {
+            crate::process::cleanup_child();
+            let env: Vec<std::ffi::CString> = std::env::vars()
+                .map(|(k, v)| std::ffi::CString::new(format!("{}={}", k, v)).unwrap())
+                .collect();
+            let env_ptrs: Vec<&std::ffi::CStr> = env.iter().map(|s| s.as_c_str()).collect();
+            let sh_c = std::ffi::CString::new("/bin/sh").unwrap();
+            let c_c = std::ffi::CString::new("-c").unwrap();
+            let cmd_c = std::ffi::CString::new(cmd).unwrap();
+            let args = [sh_c.as_c_str(), c_c.as_c_str(), cmd_c.as_c_str()];
+            let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
+            std::process::exit(1);
+        }
+        Ok(_) => {}
+        Err(e) => {
+            log::error!("failed to fork child process: {}", e);
+        }
+    }
+}

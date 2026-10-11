@@ -348,7 +348,7 @@ impl Seat {
         self.update_capabilities();
     }
 
-    pub unsafe fn detach_device(&mut self, wm: &mut crate::window_manager::WindowManager, device: *mut crate::input_device::InputDevice) {
+    pub unsafe fn detach_device(&mut self, wm: &mut crate::window_manager::WindowManager, device: *mut crate::input_device::InputDevice, sys: &mut crate::ctx::Sys) {
         ffi::wlr_cursor_detach_input_device(self.cursor.wlr_cursor, (*device).wlr_device);
 
         let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device);
@@ -359,7 +359,7 @@ impl Seat {
             if self.touch_devices == 0 && !self.touch_injected {
                 let ids: Vec<i32> = self.cursor.touch_points.keys().copied().collect();
                 for id in ids {
-                    self.cursor.touch_cancel(wm, id);
+                    self.cursor.touch_cancel(wm, id, sys);
                 }
             }
         }
@@ -380,9 +380,8 @@ impl Seat {
     /// Input arrived on this seat: wake the idle manager (and the outputs
     /// it darkened) and tell idle-notify clients. Through `wm.server` until
     /// the window manager is handed a Ctx (RFC step 4).
-    pub unsafe fn handle_activity(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        let server = wm.server;
-        (*server).idle.on_activity(&mut wm.outputs);
+    pub unsafe fn handle_activity(&mut self, wm: &mut crate::window_manager::WindowManager, sys: &mut crate::ctx::Sys) {
+        sys.idle.on_activity(&mut wm.outputs);
         let notifier = crate::shared::handles().idle_notifier.get();
         if !notifier.is_null() {
             ffi::wlr_idle_notifier_v1_notify_activity(notifier, self.wlr_seat);

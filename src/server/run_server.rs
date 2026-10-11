@@ -147,7 +147,17 @@ pub fn run_server() {
 
     if let Some(path) = crate::config::default_config_path() {
         log::info!("loading config from {}", path);
-        if let Err(e) = crate::config::parse_config(&path, &mut server.wm) {
+        let server_ptr: *mut server::Server = &mut *server;
+        // SAFETY: the server is initialised; `Sys` borrows its subsystems,
+        // disjoint from the window manager handed beside it.
+        let result = unsafe {
+            crate::config::parse_config(
+                &path,
+                &mut (*server_ptr).wm,
+                Some((&mut crate::ctx::Sys::of(server_ptr), &mut *std::ptr::addr_of_mut!((*server_ptr).input_manager))),
+            )
+        };
+        if let Err(e) = result {
             log::error!("failed to parse config at {}: {}", path, e);
         }
     } else {

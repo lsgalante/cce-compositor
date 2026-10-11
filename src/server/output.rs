@@ -1300,6 +1300,7 @@ fn log_render_error(e: &str) {
 }
 
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
     let output = &mut *crate::container_of!(listener, Output, frame);
     // The camera steps here, on the vblank, to where it should be at the
     // instant THIS frame is presented (see WindowManager::step_camera_frame).
@@ -1309,14 +1310,14 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
     wm.step_camera_frame(frame_target_ns);
     // Likewise the interactive move/resize: one configure + relayout per
     // vblank, for the pointer's latest position.
-    wm.step_op_frame();
+    wm.step_op_frame(sys);
     let render_start = if frame_debug() {
         Some(std::time::Instant::now())
     } else {
         None
     };
     match output.render_and_commit(wm, (*server).renderer) {
-        Ok(true) => output.note_lock_state(&(*server).lock_manager),
+        Ok(true) => output.note_lock_state(&*sys.lock),
         Ok(false) => {}
         Err(e) => log_render_error(e),
     }

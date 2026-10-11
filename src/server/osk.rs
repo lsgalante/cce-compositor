@@ -66,7 +66,7 @@ impl Osk {
 
     /// The seat's text input was enabled, or committed new state while
     /// enabled.
-    pub unsafe fn field_active(&mut self, wm: &mut crate::window_manager::WindowManager) {
+    pub unsafe fn field_active(&mut self) {
         // Whatever raised the field, a hide queued by the last one is moot.
         self.cancel_hide();
         if !self.enabled() {
@@ -76,12 +76,12 @@ impl Osk {
             return;
         }
         log::debug!("osk: a touched field activated; showing the board");
-        wm.execute_action(&crate::config::Action::Spawn, Some(SHOW_CMD));
+        crate::process::spawn_shell(SHOW_CMD);
         self.shown_by_us = true;
     }
 
     /// The seat's text input went away (disabled, destroyed, or focus left).
-    pub unsafe fn field_gone(&mut self, wm: &mut crate::window_manager::WindowManager) {
+    pub unsafe fn field_gone(&mut self) {
         let display = crate::shared::shared().display();
         if !self.shown_by_us || display.is_null() {
             return;
@@ -91,7 +91,7 @@ impl Osk {
             self.hide_timer = crate::event_source::Timer::add(event_loop, handle_hide_timer, self as *mut Osk as *mut _);
             if !self.hide_timer.is_set() {
                 log::error!("osk: failed to create the hide timer; hiding now");
-                self.hide_now(wm);
+                self.hide_now();
                 return;
             }
         }
@@ -102,19 +102,19 @@ impl Osk {
         self.hide_timer.arm(0);
     }
 
-    unsafe fn hide_now(&mut self, wm: &mut crate::window_manager::WindowManager) {
+    unsafe fn hide_now(&mut self) {
         if !self.shown_by_us {
             return;
         }
         self.shown_by_us = false;
         log::debug!("osk: the field let go; hiding the board");
-        wm.execute_action(&crate::config::Action::Spawn, Some(HIDE_CMD));
+        crate::process::spawn_shell(HIDE_CMD);
     }
 }
 
 unsafe extern "C" fn handle_hide_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let osk = &mut *(data as *mut Osk);
-    osk.hide_now(&mut *crate::reentry::wm(crate::shared::server_ptr()));
+    osk.hide_now();
     0
 }
 

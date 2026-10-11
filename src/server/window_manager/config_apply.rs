@@ -5,12 +5,9 @@
 use super::*;
 
 impl WindowManager {
-    pub unsafe fn apply_input_rules(&mut self) {
+    pub unsafe fn apply_input_rules(&mut self, input: &mut crate::input_manager::InputManager) {
         crate::wm_scope!(mut);
-        if self.server.is_null() {
-            return;
-        }
-        let devices_head = &mut (*self.server).input_manager.devices as *mut ffi::wl_list as *mut WlList;
+        let devices_head = &mut input.devices as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*devices_head).next;
         while curr != devices_head {
             let next = (*curr).next;
@@ -30,12 +27,9 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn apply_input_config(&mut self) {
+    pub unsafe fn apply_input_config(&mut self, input: &mut crate::input_manager::InputManager) {
         crate::wm_scope!(mut);
-        if self.server.is_null() {
-            return;
-        }
-        let devices_head = &mut (*self.server).input_manager.devices as *mut ffi::wl_list as *mut WlList;
+        let devices_head = &mut input.devices as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*devices_head).next;
         while curr != devices_head {
             let next = (*curr).next;
@@ -45,20 +39,17 @@ impl WindowManager {
             }
             curr = next;
         }
-        self.apply_key_repeat();
+        self.apply_key_repeat(input);
     }
 
     /// Push `input_config`'s repeat rate/delay to every hardware keyboard and
     /// return how many there are. A keyboard regroups on a change (groups are
     /// keyed by repeat info), so one already matching is left alone.
-    pub unsafe fn apply_key_repeat(&mut self) -> usize {
+    pub unsafe fn apply_key_repeat(&mut self, input: &mut crate::input_manager::InputManager) -> usize {
         crate::wm_scope!(mut);
-        if self.server.is_null() {
-            return 0;
-        }
         let (rate, delay) = crate::shared::layout().input_config.repeat_info();
         let mut count = 0;
-        let devices_head = &mut (*self.server).input_manager.devices as *mut ffi::wl_list as *mut WlList;
+        let devices_head = &mut input.devices as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*devices_head).next;
         while curr != devices_head {
             let next = (*curr).next;
@@ -202,12 +193,12 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn reload_config(&mut self) -> Result<(), String> {
+    pub unsafe fn reload_config(&mut self, sys: &mut crate::ctx::Sys, input: &mut crate::input_manager::InputManager) -> Result<(), String> {
         crate::wm_scope!(mut);
         if let Some(path) = crate::config::default_config_path() {
             let old_sp = crate::shared::layout().snap_params();
             let old_pids = std::mem::take(&mut self.startup_pids);
-            match crate::config::parse_config(&path, self) {
+            match crate::config::parse_config(&path, self, Some((sys, input))) {
                 Ok(()) => {
                     // Update scales of existing outputs from the newly loaded config
                     for output_ptr in self.outputs.ptrs() {

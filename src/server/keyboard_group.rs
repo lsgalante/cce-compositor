@@ -353,6 +353,7 @@ unsafe extern "C" fn led_update(wlr_keyboard: *mut ffi::wlr_keyboard, leds: u32)
 }
 
 unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
     let group = &mut *crate::container_of!(listener, KeyboardGroup, key_listener);
     let event = data as *mut ffi::wlr_keyboard_key_event;
 
@@ -367,7 +368,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
     // exactly as pointer events are; before 2026-09-16 only tablet, touch
     // and gestures counted, so idle-notify clients never saw a key.
     if !group.seat.is_null() {
-        (*group.seat).handle_activity(wm);
+        (*group.seat).handle_activity(wm, sys);
     }
 
     // A real key press ends an emulated view drag (see `cursor::ViewDrag`):

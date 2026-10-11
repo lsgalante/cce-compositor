@@ -1432,7 +1432,7 @@ mod tests {
     fn test_my_config() {
         if let Some(path) = default_config_path() {
             let mut server = crate::server::Server::default();
-            parse_config(&path, &mut server.wm).unwrap();
+            parse_config(&path, &mut server.wm, None).unwrap();
             assert!(!crate::shared::layout().desktop_gap_color.is_empty());
             assert!(crate::shared::layout().desktop_gap_width >= 0);
             assert!(crate::shared::layout().root_plate_corner_radius >= 0);

@@ -585,6 +585,7 @@ unsafe extern "C" fn handle_ack_configure(
 }
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
     let stores = crate::ctx::Stores::of(crate::shared::server_ptr());
     let toplevel = crate::container_of!(listener, XdgToplevel, commit);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
@@ -893,7 +894,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             match (*toplevel).configure_state {
                 ConfigureState::Acked => {
                     (*toplevel).configure_state = ConfigureState::Committed;
-                    wm.notify_configured();
+                    wm.notify_configured(sys);
                 }
                 ConfigureState::TimedOutAcked => {
                     (*toplevel).configure_state = ConfigureState::Idle;

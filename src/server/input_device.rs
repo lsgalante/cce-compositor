@@ -138,13 +138,13 @@ impl InputDevice {
         device
     }
 
-    pub unsafe fn assign_to_seat(&mut self, wm: &mut crate::window_manager::WindowManager, new_seat: *mut Seat) {
+    pub unsafe fn assign_to_seat(&mut self, wm: &mut crate::window_manager::WindowManager, new_seat: *mut Seat, sys: &mut crate::ctx::Sys) {
         let old_seat = self.seat;
         if old_seat == new_seat {
             return;
         }
         if !old_seat.is_null() {
-            (*old_seat).detach_device(wm, self);
+            (*old_seat).detach_device(wm, self, sys);
         }
         self.seat = new_seat;
         if !new_seat.is_null() {
@@ -246,6 +246,7 @@ impl InputDevice {
 }
 
 unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
     let device_ptr = crate::container_of!(listener, InputDevice, destroy_listener) as *mut InputDevice;
     let device = &mut *device_ptr;
     
@@ -256,7 +257,7 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
 
     // Detach from seat if attached
     if !device.seat.is_null() {
-        (*device.seat).detach_device(&mut *crate::reentry::wm(crate::shared::server_ptr()), device);
+        (*device.seat).detach_device(&mut *crate::reentry::wm(crate::shared::server_ptr()), device, sys);
         (*device.seat).update_capabilities();
     }
 
@@ -343,6 +344,7 @@ unsafe extern "C" fn input_device_assign_to_seat(
     resource: *mut ffi::wl_resource,
     name: *const std::os::raw::c_char,
 ) {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
     let obj = ffi::wl_resource_get_user_data(resource) as *mut InputDeviceObject;
     if obj.is_null() {
         return;
@@ -357,7 +359,7 @@ unsafe extern "C" fn input_device_assign_to_seat(
     for seat in (*crate::reentry::wm(server)).seats.ptrs() {
         let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
         if seat_name == name_str {
-            (*device).assign_to_seat(&mut *crate::reentry::wm(server), seat);
+            (*device).assign_to_seat(&mut *crate::reentry::wm(server), seat, sys);
             found = true;
             break;
         }

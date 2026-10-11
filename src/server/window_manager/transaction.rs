@@ -77,7 +77,7 @@ impl WindowManager {
         self.border_fade_timer.arm(16);
     }
 
-    pub unsafe fn manage_start(&mut self) {
+    pub unsafe fn manage_start(&mut self, sys: &mut crate::ctx::Sys) {
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Idle));
         assert!(crate::shared::pending().windowing());
@@ -139,7 +139,7 @@ impl WindowManager {
             );
         }
 
-        self.manage_finish();
+        self.manage_finish(sys);
     }
 
     /// Wedge tracer: a Mapped status window outside the render list is
@@ -166,7 +166,7 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn manage_finish(&mut self) {
+    pub unsafe fn manage_finish(&mut self, sys: &mut crate::ctx::Sys) {
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Manage));
         self.cancel_timeout_timer();
@@ -200,7 +200,7 @@ impl WindowManager {
             if count > 0 {
                 self.start_timeout_timer(100);
             } else {
-                self.render_start();
+                self.render_start(sys);
             }
         }
     }
@@ -215,18 +215,18 @@ impl WindowManager {
         self.timeout.arm(0);
     }
 
-    pub unsafe fn notify_configured(&mut self) {
+    pub unsafe fn notify_configured(&mut self, sys: &mut crate::ctx::Sys) {
         crate::wm_scope!(mut);
         if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
             *count -= 1;
             if *count == 0 {
                 self.cancel_timeout_timer();
-                self.render_start();
+                self.render_start(sys);
             }
         }
     }
 
-    pub unsafe fn render_start(&mut self) {
+    pub unsafe fn render_start(&mut self, sys: &mut crate::ctx::Sys) {
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::InflightConfigures(0)) ||
                 (matches!(self.state, WindowManagerState::Idle) && crate::shared::pending().rendering()));
@@ -240,10 +240,10 @@ impl WindowManager {
             window.render_start();
         }
 
-        self.render_finish();
+        self.render_finish(sys);
     }
 
-    pub unsafe fn render_finish(&mut self) {
+    pub unsafe fn render_finish(&mut self, sys: &mut crate::ctx::Sys) {
         let stores = self.stores();
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Render));
@@ -465,14 +465,14 @@ impl WindowManager {
             }
         }
 
-        (*self.server).om.commit_output_state(self.server, &self.outputs);
+        sys.om.commit_output_state(sys.lock, &self.outputs);
 
         for seat in self.seats.ptrs() {
             (*seat).cursor.update_hovered();
         }
 
-        let holders = (*self.server).idle_inhibit_manager.holders(self);
-        crate::idle_inhibit_manager::publish(holders, crate::shared::handles().idle_notifier.get(), &mut (*self.server).idle);
+        let holders = sys.inhibit.holders(self);
+        crate::idle_inhibit_manager::publish(holders, crate::shared::handles().idle_notifier.get(), sys.idle);
 
         log::debug!("finished committing transaction");
         self.debug_check_unlinked_status("render_finish end");
