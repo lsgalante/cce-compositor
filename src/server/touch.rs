@@ -257,12 +257,11 @@ impl Cursor {
     /// touch-capable window.
     unsafe fn touch_route_at(&self, wm: &crate::window_manager::WindowManager, lx: f64, ly: f64) -> TouchRoute {
         let seat = &*self.seat;
-        let server = wm.server;
         let result = crate::shared::scene().at(wm, lx, ly);
         if let Some(ref result) = result {
             // Locked, only the lock surface may hear a finger, as only it
             // may hear the pointer (`passthrough`).
-            let locked = (*server).lock_manager.state != crate::lock_manager::LockState::Unlocked;
+            let locked = crate::shared::lock_state() != crate::lock_manager::LockState::Unlocked;
             let lock_ok = !locked || matches!(result.data, SceneNodeDataVal::LockSurface(_));
             if lock_ok
                 && !result.surface.is_null()
@@ -293,7 +292,7 @@ impl Cursor {
             return TouchRoute::Ignored;
         }
         let on_desk = match result {
-            None => (*server).lock_manager.state == crate::lock_manager::LockState::Unlocked,
+            None => crate::shared::lock_state() == crate::lock_manager::LockState::Unlocked,
             Some(r) => matches!(r.data, SceneNodeDataVal::Window(id) if wm.windows.get(id).is_some_and(|w| w.is_wallpaper())),
         };
         TouchRoute::Pointer { start: (lx, ly), pressed: false, on_desk }

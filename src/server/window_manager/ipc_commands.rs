@@ -965,7 +965,7 @@ impl WindowManager {
                     log::info!("Forced exit requested; terminating without waiting for windows to close.");
                     self.save_state();
                     self.shutting_down = true;
-                    ffi::wl_display_terminate((*self.server).wl_server);
+                    ffi::wl_display_terminate(crate::shared::shared().display());
                     return "ok\n".to_string();
                 }
                 self.execute_action(&crate::config::Action::Exit, None);
@@ -976,7 +976,7 @@ impl WindowManager {
                 // the session greeter-free, so a restart sent while locked
                 // (only a process of the user's can send one then) came back
                 // unlocked. The user unlocks first.
-                if unsafe { (*self.server).lock_manager.state } != crate::lock_manager::LockState::Unlocked {
+                if crate::shared::lock_state() != crate::lock_manager::LockState::Unlocked {
                     return "error: the session is locked; unlock before restarting the compositor\n".to_string();
                 }
                 // Leave the restart flag for cce-display-manager's daemon (it

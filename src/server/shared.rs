@@ -44,6 +44,7 @@ pub struct Shared {
     server: Cell<*mut crate::server::Server>,
     mode: Cell<WindowManagerMode>,
     adjust_held: Cell<bool>,
+    lock_state: Cell<crate::lock_manager::LockState>,
     sent: Sent,
     pending: Pending,
     handles: Handles,
@@ -75,6 +76,7 @@ thread_local! {
         server: Cell::new(std::ptr::null_mut()),
         mode: Cell::new(WindowManagerMode::Normal),
         adjust_held: Cell::new(false),
+        lock_state: Cell::new(crate::lock_manager::LockState::Unlocked),
         sent: Sent::new(),
         pending: Pending::new(),
         handles: Handles {
@@ -150,6 +152,17 @@ pub fn server_ptr() -> *mut crate::server::Server {
     shared().server.get()
 }
 
+/// The session lock's state. Written only by `LockManager::set_state`, so
+/// anything may read it without a path to the lock manager.
+pub fn lock_state() -> crate::lock_manager::LockState {
+    shared().lock_state.get()
+}
+
+/// Whether the session is unlocked (`lock_state()` is `Unlocked`).
+pub fn unlocked() -> bool {
+    lock_state() == crate::lock_manager::LockState::Unlocked
+}
+
 /// The wlroots objects created once at init.
 pub fn handles() -> &'static Handles {
     &shared().handles
@@ -176,6 +189,11 @@ impl Shared {
     }
 
     /// The display; null before `Server::init`.
+    /// For `LockManager::set_state` only.
+    pub(crate) fn store_lock_state(&self, state: crate::lock_manager::LockState) {
+        self.lock_state.set(state);
+    }
+
     pub fn display(&self) -> *mut ffi::wl_display {
         self.display.get()
     }

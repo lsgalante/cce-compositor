@@ -472,7 +472,7 @@ impl WindowManager {
         }
 
         let holders = (*self.server).idle_inhibit_manager.holders(self);
-        crate::idle_inhibit_manager::publish(holders, (*self.server).input_manager.idle_notifier, &mut (*self.server).idle);
+        crate::idle_inhibit_manager::publish(holders, crate::shared::handles().idle_notifier.get(), &mut (*self.server).idle);
 
         log::debug!("finished committing transaction");
         self.debug_check_unlinked_status("render_finish end");

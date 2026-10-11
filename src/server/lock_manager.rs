@@ -30,6 +30,8 @@ fn cce_lock_cmd() -> String {
 
 pub struct LockManager {
     pub wlr_manager: *mut ffi::wlr_session_lock_manager_v1,
+    /// Read freely; write through [`LockManager::set_state`], which keeps
+    /// `crate::shared::lock_state()` in step.
     pub state: LockState,
     pub lock: *mut ffi::wlr_session_lock_v1,
     pub lock_surfaces_timer: crate::event_source::Timer,
@@ -66,8 +68,13 @@ impl Default for LockManager {
 }
 
 impl LockManager {
+    pub fn set_state(&mut self, state: LockState) {
+        self.state = state;
+        crate::shared::shared().store_lock_state(state);
+    }
+
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        self.state = LockState::Unlocked;
+        self.set_state(LockState::Unlocked);
         std::ptr::write(&mut self.lock_waiters, None);
 
         let wlr_manager = ffi::wlr_session_lock_manager_v1_create((*server).wl_server);
@@ -183,7 +190,7 @@ impl LockManager {
         if !self.lock.is_null() {
             ffi::wlr_session_lock_v1_send_locked(self.lock);
         }
-        self.state = LockState::Locked;
+        self.set_state(LockState::Locked);
         for tx in self.lock_waiters.take().unwrap_or_default() {
             let _ = tx.send("ok locked\n".to_string());
         }
@@ -217,7 +224,7 @@ impl LockManager {
             return false;
         }
         log::info!("locking the session (compositor-initiated)");
-        self.state = LockState::WaitingForBlank;
+        self.set_state(LockState::WaitingForBlank);
         let scene = crate::shared::scene();
         scene.locked_tree.set_enabled(true);
         scene.normal_tree.set_enabled(false);
@@ -410,7 +417,7 @@ unsafe extern "C" fn handle_lock_surfaces_timeout(data: *mut std::ffi::c_void) -
     log::error!("waiting for lock surfaces timed out, imperfect frames may be shown");
 
     assert!(manager.state == LockState::WaitingForLockSurfaces);
-    manager.state = LockState::WaitingForBlank;
+    manager.set_state(LockState::WaitingForBlank);
 
     crate::shared::scene().normal_tree.set_enabled(false);
 
@@ -493,7 +500,7 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
     manager.cancel_locker_respawn();
 
     if manager.state == LockState::Unlocked {
-        manager.state = LockState::WaitingForLockSurfaces;
+        manager.set_state(LockState::WaitingForLockSurfaces);
 
         crate::shared::scene().locked_tree.set_enabled(true);
 
@@ -521,7 +528,7 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
 unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let manager = &mut *crate::container_of!(listener, LockManager, unlock);
 
-    manager.state = LockState::Unlocked;
+    manager.set_state(LockState::Unlocked);
     log::info!("session unlocked");
     // Nobody is waiting for a lock that is over.
     manager.lock_waiters = None;
@@ -556,7 +563,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 
     manager.lock = std::ptr::null_mut();
     if manager.state == LockState::WaitingForLockSurfaces {
-        manager.state = LockState::WaitingForBlank;
+        manager.set_state(LockState::WaitingForBlank);
         manager.lock_surfaces_timer.arm(0);
     }
 

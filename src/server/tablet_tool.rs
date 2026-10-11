@@ -303,15 +303,14 @@ impl TabletTool {
     }
 
     pub unsafe fn passthrough(&mut self, wm: &crate::window_manager::WindowManager, tablet: *mut Tablet) {
-        let server = wm.server;
         let lx = self.cursor_x();
         let ly = self.cursor_y();
 
         if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
             if matches!(result.data, crate::scene_node_data::SceneNodeDataVal::LockSurface(_)) {
-                assert!((*server).lock_manager.state != crate::lock_manager::LockState::Unlocked);
+                assert!(crate::shared::lock_state() != crate::lock_manager::LockState::Unlocked);
             } else {
-                assert!((*server).lock_manager.state != crate::lock_manager::LockState::Locked);
+                assert!(crate::shared::lock_state() != crate::lock_manager::LockState::Locked);
             }
 
             if !result.surface.is_null() {

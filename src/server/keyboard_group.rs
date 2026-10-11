@@ -406,7 +406,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         let modifiers = ffi::wlr_keyboard_get_modifiers(&mut group.wlr_keyboard);
         // While the session is locked (or locking) a key is the lock
         // screen's: see `allowed_while_locked` for the few that still act.
-        let locked = (*crate::shared::server_ptr()).lock_manager.state != crate::lock_manager::LockState::Unlocked;
+        let locked = crate::shared::lock_state() != crate::lock_manager::LockState::Unlocked;
         
         let mut matched_builtin = false;
         let mut syms_ptr: *const ffi::xkb_keysym_t = std::ptr::null();

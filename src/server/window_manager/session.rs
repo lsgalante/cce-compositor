@@ -99,7 +99,7 @@ impl WindowManager {
         }
         self.update_restore_placeholders();
         // Sweep leftovers whose programs never came back.
-        let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+        let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
         self.restore_placeholder_timer = crate::event_source::Timer::add(event_loop, handle_restore_placeholder_timeout, self as *mut WindowManager as *mut _);
         self.restore_placeholder_timer.arm(60_000);
     }
@@ -436,7 +436,7 @@ impl WindowManager {
 
         if normal_windows.is_empty() {
             log::info!("No active windows to close. Exiting immediately.");
-            ffi::wl_display_terminate((*self.server).wl_server);
+            ffi::wl_display_terminate(crate::shared::shared().display());
             return;
         }
 
@@ -547,7 +547,7 @@ impl WindowManager {
         if normal_windows_count == 0 {
             log::info!("All windows closed cleanly. Exiting display server.");
             self.clean_exit_timer.remove();
-            ffi::wl_display_terminate((*self.server).wl_server);
+            ffi::wl_display_terminate(crate::shared::shared().display());
         } else {
             log::info!("Clean exit: waiting for {} remaining windows to close...", normal_windows_count);
         }

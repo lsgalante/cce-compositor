@@ -281,7 +281,7 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, server:
 
     (*or).focus_if_desired(
         wm,
-        (*server).lock_manager.state == crate::lock_manager::LockState::Unlocked,
+        crate::shared::lock_state() == crate::lock_manager::LockState::Unlocked,
         (*server).input_manager.default_seat,
     );
 }

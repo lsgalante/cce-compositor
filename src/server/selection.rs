@@ -322,7 +322,7 @@ impl WindowManager {
     /// through a pan; with nothing selected it is one disabled tree.
     pub unsafe fn draw_selection(&mut self) {
         let showing = crate::shared::mode() == WindowManagerMode::Overview
-            && (*self.server).lock_manager.state == crate::lock_manager::LockState::Unlocked
+            && crate::shared::lock_state() == crate::lock_manager::LockState::Unlocked
             && (self.selection.marquee.is_some() || self.has_selection());
         if !showing {
             if !self.selection.tree.is_null() {

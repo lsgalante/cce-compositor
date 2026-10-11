@@ -87,8 +87,8 @@ impl WindowManager {
             Ok(nix::unistd::ForkResult::Child) => {
                 crate::process::cleanup_child();
 
-                if !self.server.is_null() && !(*self.server).xwayland.is_null() {
-                    let xwayland_cast = (*self.server).xwayland as *mut crate::server::WlrXwayland;
+                if !crate::shared::handles().xwayland.get().is_null() {
+                    let xwayland_cast = crate::shared::handles().xwayland.get() as *mut crate::server::WlrXwayland;
                     if !(*xwayland_cast).display_name.is_null() {
                         let display_name = std::ffi::CStr::from_ptr((*xwayland_cast).display_name)
                             .to_string_lossy()

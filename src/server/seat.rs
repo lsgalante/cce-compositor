@@ -809,7 +809,7 @@ impl Seat {
     pub unsafe fn manage_finish(&mut self, wm: &mut crate::window_manager::WindowManager) {
 
         let server = wm.server;
-        if (*server).lock_manager.state != crate::lock_manager::LockState::Unlocked {
+        if crate::shared::lock_state() != crate::lock_manager::LockState::Unlocked {
             return;
         }
 

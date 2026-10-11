@@ -727,7 +727,6 @@ impl Cursor {
         let stores = wm.stores();
         let lx = self.x();
         let ly = self.y();
-        let server = wm.server;
 
         // Implicit grab (standard Wayland drag semantics): while any button
         // the focused client saw pressed is still held, motion keeps flowing
@@ -786,7 +785,7 @@ impl Cursor {
         }
 
         if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
-            let lock_state = (*server).lock_manager.state;
+            let lock_state = crate::shared::lock_state();
             if lock_state != crate::lock_manager::LockState::Unlocked {
                 if !matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
                     self.set_border_hover(wm, None, None);
