@@ -905,45 +905,45 @@ impl WindowManager {
 
         // Render-list membership feeds focus_cyclable: the focus ring only
         // walks windows that are actually being rendered.
-        let rendered: std::collections::HashSet<usize> =
-            self.render_list().into_iter().map(|w| w as usize).collect();
+        let rendered: std::collections::HashSet<WindowId> =
+            self.rendering_requested.list.iter().copied().collect();
 
         let mut windows = Vec::new();
-        for w in self.windows.iter() {
-            if w.is_null() || (*w).closed {
+        for w in self.windows.values() {
+            if w.closed {
                 continue;
             }
-            let app_id = (*w).get_app_id_string();
+            let app_id = w.get_app_id_string();
             let is_status = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
             let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
-            let visible = !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
-            let resolved_mode = self.get_mode_for_window(&*w);
-            let overview_eligible = !(*w).minimized
+            let visible = !matches!(w.state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
+            let resolved_mode = self.get_mode_for_window(w);
+            let overview_eligible = !w.minimized
                 && !is_status
                 && !is_wallpaper
-                && !(*w).is_grid()
+                && !w.is_grid()
                 && visible
                 && resolved_mode != crate::tiling::TilingMode::Popup
                 && resolved_mode != crate::tiling::TilingMode::Overlay;
-            let focus_cyclable = rendered.contains(&(w as usize))
-                && !(*w).minimized
+            let focus_cyclable = rendered.contains(&w.id())
+                && !w.minimized
                 && !is_status
-                && !(*w).is_grid()
-                && !(*w).is_overlay_ui()
-                && !(*w).is_shy();
+                && !w.is_grid()
+                && !w.is_overlay_ui()
+                && !w.is_shy();
             windows.push(ActionWindow {
-                id: WindowId((*w).ref_key),
+                id: w.id(),
                 app_id,
-                title: (*w).get_title_string(),
-                mapped: matches!((*w).state, crate::window::WindowState::Mapped),
-                x: (*w).virtual_x,
-                y: (*w).virtual_y,
-                w: if (*w).box_geom.width > 0 { (*w).box_geom.width as f64 } else { 800.0 },
-                h: if (*w).box_geom.height > 0 { (*w).box_geom.height as f64 } else { 600.0 },
-                scale: (*w).scale,
-                mode: (*w).tiling_mode,
+                title: w.get_title_string(),
+                mapped: matches!(w.state, crate::window::WindowState::Mapped),
+                x: w.virtual_x,
+                y: w.virtual_y,
+                w: if w.box_geom.width > 0 { w.box_geom.width as f64 } else { 800.0 },
+                h: if w.box_geom.height > 0 { w.box_geom.height as f64 } else { 600.0 },
+                scale: w.scale,
+                mode: w.tiling_mode,
                 resolved_mode,
-                pre_fullscreen: (*w).pre_fullscreen,
+                pre_fullscreen: w.pre_fullscreen,
                 visible,
                 focus_cyclable,
                 overview_eligible,
@@ -1288,73 +1288,75 @@ impl WindowManager {
             });
         }
 
-        let mut win_ptrs: Vec<*mut Window> = Vec::new();
+        // Status segments: refresh the frozen collapsed slot length while at
+        // bar thickness; while EXPANDED (in-surface menu, the surface is
+        // thicker than the bar) keep the frozen value. Stacking of the
+        // expanded segment lives in the render_finish reorder pass
+        // (→ layers.popups), which re-stacks every window each frame — a
+        // raise here was clobbered by it.
+        let bar_height = crate::shared::layout().bar_height;
+        for w in self.windows.values_mut() {
+            if w.closed || !w.app_id_str().map_or(false, |id| id.starts_with("cce-status")) {
+                continue;
+            }
+            let bg = w.box_geom;
+            let (len, thickness) = match w.status_edge {
+                crate::policy::arrange::StatusEdge::Left
+                | crate::policy::arrange::StatusEdge::Right => (bg.height, bg.width),
+                _ => (bg.width, bg.height),
+            };
+            if thickness > 0 && thickness <= bar_height {
+                w.status_collapsed_len = len;
+            }
+        }
+
+        let mut win_ids: Vec<crate::window::WindowId> = Vec::new();
         let mut window_snaps: Vec<crate::policy::arrange::WindowSnapshot> = Vec::new();
-        for win_ptr in self.windows.iter() {
-            if win_ptr.is_null() || (*win_ptr).closed {
+        for w in self.windows.values() {
+            if w.closed {
                 continue;
             }
             // Read once per window: the rule lookup, the status test and the
             // mode below all need them (they each re-read and allocated).
-            let app_id = (*win_ptr).app_id_str();
-            let rule = self.rule_for(app_id, (*win_ptr).title_str());
-            let rule_ssd = if !(*win_ptr).mode_locked {
+            let app_id = w.app_id_str();
+            let rule = self.rule_for(app_id, w.title_str());
+            let rule_ssd = if !w.mode_locked {
                 rule.and_then(|rule| rule.ssd)
             } else {
                 None
             };
-            // Status segments: refresh the frozen collapsed slot length
-            // while at bar thickness; while EXPANDED (in-surface menu, the
-            // surface is thicker than the bar) keep the frozen value and
-            // raise the segment above its siblings and the windows the open
-            // menu now overlaps.
-            if app_id.map_or(false, |id| id.starts_with("cce-status")) {
-                let bg = (*win_ptr).box_geom;
-                let (len, thickness) = match (*win_ptr).status_edge {
-                    crate::policy::arrange::StatusEdge::Left
-                    | crate::policy::arrange::StatusEdge::Right => (bg.height, bg.width),
-                    _ => (bg.width, bg.height),
-                };
-                if thickness > 0 && thickness <= crate::shared::layout().bar_height {
-                    (*win_ptr).status_collapsed_len = len;
-                }
-                // Stacking of the expanded segment lives in the
-                // render_finish reorder pass (→ layers.popups), which
-                // re-stacks every window each frame — a raise here was
-                // clobbered by it.
-            }
             window_snaps.push(crate::policy::arrange::WindowSnapshot {
-                app_id: (*win_ptr).get_app_id_string(),
-                title: (*win_ptr).get_title_string(),
-                role: (*win_ptr).role(),
-                minimized: (*win_ptr).minimized,
-                closing_or_init: matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init),
-                mode: self.mode_for_window(&*win_ptr, app_id, || rule),
-                status_collapsed_len: (*win_ptr).status_collapsed_len,
+                app_id: w.get_app_id_string(),
+                title: w.get_title_string(),
+                role: w.role(),
+                minimized: w.minimized,
+                closing_or_init: matches!(w.state, crate::window::WindowState::Closing | crate::window::WindowState::Init),
+                mode: self.mode_for_window(w, app_id, || rule),
+                status_collapsed_len: w.status_collapsed_len,
                 rule_ssd,
-                being_moved: self.is_window_being_moved((*win_ptr).id()),
-                status_edge: (*win_ptr).status_edge,
-                is_focused: win_ptr == focused_window,
+                being_moved: self.is_window_being_moved(w.id()),
+                status_edge: w.status_edge,
+                is_focused: std::ptr::eq(w, focused_window),
                 box_geom: crate::policy::api::Rect {
-                    x: (*win_ptr).box_geom.x,
-                    y: (*win_ptr).box_geom.y,
-                    width: (*win_ptr).box_geom.width,
-                    height: (*win_ptr).box_geom.height,
+                    x: w.box_geom.x,
+                    y: w.box_geom.y,
+                    width: w.box_geom.width,
+                    height: w.box_geom.height,
                 },
                 min_size: (
-                    (*win_ptr).wm_scheduled.dimensions_hint.min_width as i32,
-                    (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32,
+                    w.wm_scheduled.dimensions_hint.min_width as i32,
+                    w.wm_scheduled.dimensions_hint.min_height as i32,
                 ),
-                virtual_pos: ((*win_ptr).virtual_x, (*win_ptr).virtual_y),
-                active_resize: self.get_active_resize_dimensions(&*win_ptr),
-                ssd: (*win_ptr).wm_requested.ssd,
-                decorations_size: (*win_ptr).measure_decorations(),
-                was_tiled: (*win_ptr).was_tiled,
-                saved_floating_size: ((*win_ptr).saved_floating_width, (*win_ptr).saved_floating_height),
-                saved_floating_virtual: ((*win_ptr).saved_floating_virtual_x, (*win_ptr).saved_floating_virtual_y),
-                grid_patch: (*win_ptr).grid_patch_current,
+                virtual_pos: (w.virtual_x, w.virtual_y),
+                active_resize: self.get_active_resize_dimensions(w),
+                ssd: w.wm_requested.ssd,
+                decorations_size: w.measure_decorations(),
+                was_tiled: w.was_tiled,
+                saved_floating_size: (w.saved_floating_width, w.saved_floating_height),
+                saved_floating_virtual: (w.saved_floating_virtual_x, w.saved_floating_virtual_y),
+                grid_patch: w.grid_patch_current,
             });
-            win_ptrs.push(win_ptr);
+            win_ids.push(w.id());
         }
 
         // Placement sees the pan floored to a layout pixel; the remainder
@@ -1467,45 +1469,46 @@ impl WindowManager {
             ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene);
         }
 
-        for (&win_ptr, wp) in win_ptrs.iter().zip(plan.windows.iter()) {
+        for (&id, wp) in win_ids.iter().zip(plan.windows.iter()) {
+            let Some(w) = self.windows.get_mut(id) else { continue };
             if let Some(enabled) = wp.scene_enabled {
-                (*win_ptr).tree.set_enabled(enabled);
+                w.tree.set_enabled(enabled);
             }
             if let Some(hidden) = wp.hidden {
-                (*win_ptr).rendering_requested.hidden = hidden;
+                w.rendering_requested.hidden = hidden;
             }
             if let Some(mode) = wp.tiling_mode {
-                (*win_ptr).tiling_mode = mode;
+                w.tiling_mode = mode;
             }
             if let Some(tiled) = wp.tiled {
-                (*win_ptr).wm_requested.tiled = tiled;
+                w.wm_requested.tiled = tiled;
             }
             if let Some(ssd) = wp.ssd {
-                (*win_ptr).wm_requested.ssd = ssd;
+                w.wm_requested.ssd = ssd;
             }
             if let Some(scale) = wp.scale {
-                (*win_ptr).scale = scale;
+                w.scale = scale;
             }
             if let Some((x, y)) = wp.pos {
-                (*win_ptr).rendering_requested.x = x;
-                (*win_ptr).rendering_requested.y = y;
+                w.rendering_requested.x = x;
+                w.rendering_requested.y = y;
             }
             if let Some(bg) = wp.box_geom {
-                (*win_ptr).box_geom.x = bg.x;
-                (*win_ptr).box_geom.y = bg.y;
-                (*win_ptr).box_geom.width = bg.width;
-                (*win_ptr).box_geom.height = bg.height;
+                w.box_geom.x = bg.x;
+                w.box_geom.y = bg.y;
+                w.box_geom.width = bg.width;
+                w.box_geom.height = bg.height;
             }
             if let Some((vx, vy)) = wp.virtual_pos {
-                (*win_ptr).virtual_x = vx;
-                (*win_ptr).virtual_y = vy;
+                w.virtual_x = vx;
+                w.virtual_y = vy;
             }
             if let Some((width, height)) = wp.size {
-                (*win_ptr).wm_requested.dimensions = Some(crate::window::Dimensions { width, height });
-                (*win_ptr).wm_requested.bounds = crate::window::Dimensions { width, height };
+                w.wm_requested.dimensions = Some(crate::window::Dimensions { width, height });
+                w.wm_requested.bounds = crate::window::Dimensions { width, height };
             }
             if let Some(dec) = wp.decoration {
-                (*win_ptr).rendering_requested.border = crate::window::Border {
+                w.rendering_requested.border = crate::window::Border {
                     edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
                     width: dec.border_width.max(0) as u32,
                     color: dec.border_color.0,
@@ -1513,19 +1516,19 @@ impl WindowManager {
                 };
             }
             if let Some(blur) = wp.blur {
-                (*win_ptr).rendering_requested.blur = blur;
+                w.rendering_requested.blur = blur;
             }
             if let Some(opacity) = wp.opacity {
-                (*win_ptr).rendering_requested.opacity = opacity;
+                w.rendering_requested.opacity = opacity;
             }
             if let Some(((width, height), (vx, vy))) = wp.saved_floating {
-                (*win_ptr).saved_floating_width = width;
-                (*win_ptr).saved_floating_height = height;
-                (*win_ptr).saved_floating_virtual_x = vx;
-                (*win_ptr).saved_floating_virtual_y = vy;
+                w.saved_floating_width = width;
+                w.saved_floating_height = height;
+                w.saved_floating_virtual_x = vx;
+                w.saved_floating_virtual_y = vy;
             }
             if let Some(was_tiled) = wp.was_tiled {
-                (*win_ptr).was_tiled = was_tiled;
+                w.was_tiled = was_tiled;
             }
         }
 
@@ -1540,21 +1543,23 @@ impl WindowManager {
         // correct one. The arrange pass is the authority on segment slots,
         // so make every pass re-slot every segment except one the user is
         // dragging (the seat op owns its position until release).
-        for win_ptr in self.window_snapshot() {
-            if !win_ptr.is_null() && !(*win_ptr).closed && (*win_ptr).is_status_bar() {
-                if (*win_ptr).wm_requested.dimensions.is_some() {
-                    Window::manage_finish(self, (*win_ptr).id());
-                }
-                if matches!((*win_ptr).state, crate::window::WindowState::Mapped)
-                    && !self.is_window_being_moved((*win_ptr).id())
-                {
-                    let x = (*win_ptr).rendering_requested.x;
-                    let y = (*win_ptr).rendering_requested.y;
-                    (*win_ptr).box_geom.x = x;
-                    (*win_ptr).box_geom.y = y;
-                    (*win_ptr).tree.set_position_if_changed(x, y);
-                    (*win_ptr).popup_tree.set_position_if_changed(x, y);
-                }
+        for id in self.windows.ids() {
+            let Some(w) = self.windows.get(id) else { continue };
+            if w.closed || !w.is_status_bar() {
+                continue;
+            }
+            if w.wm_requested.dimensions.is_some() {
+                Window::manage_finish(self, id);
+            }
+            let moving = self.is_window_being_moved(id);
+            let Some(w) = self.windows.get_mut(id) else { continue };
+            if matches!(w.state, crate::window::WindowState::Mapped) && !moving {
+                let x = w.rendering_requested.x;
+                let y = w.rendering_requested.y;
+                w.box_geom.x = x;
+                w.box_geom.y = y;
+                w.tree.set_position_if_changed(x, y);
+                w.popup_tree.set_position_if_changed(x, y);
             }
         }
 
@@ -1616,50 +1621,63 @@ impl WindowManager {
         crate::wm_scope!(mut);
         let zoom = self.desk_zoom;
         let mut spot_moved = false;
-        for w in self.windows.iter() {
-            if w.is_null() || (*w).closed {
+        for id in self.windows.ids() {
+            // Read with the window shared (the queries take the window
+            // manager), then write it back.
+            let Some(w) = self.windows.get(id) else { continue };
+            if w.closed {
                 continue;
             }
-            let fullscreen = rendered_fullscreen(&*w)
-                && (*w).was_fullscreen
-                && matches!((*w).state, crate::window::WindowState::Mapped);
-            if !fullscreen {
-                (*w).fs_on_desk = false;
-                continue;
-            }
-            let returning = match ((*w).fullscreen_anchor_pan(self), self.target_desk_pan_x, self.target_desk_pan_y) {
-                (Some((ax, ay)), Some(tx), Some(ty)) => (tx - ax).abs() < 0.5 && (ty - ay).abs() < 0.5,
-                _ => false,
-            };
-            // Overview shows the desk, so the window is on it there; and
-            // through a camera flight (the overview ramp, or an eased zoom)
-            // it flies with the desk rather than snapping to the output at
-            // either end — an exit onto it lands exactly on its spot
-            // (`exit_onto_window` centres its output-sized rect).
-            let flying = self.camera_ramp_anim.is_some() || self.target_desk_zoom.is_some();
-            let on_desk = returning
-                || flying
-                || crate::shared::mode() == WindowManagerMode::Overview
-                || (*w).fullscreen_yields(self);
-            if on_desk {
-                let (sx, sy) = (*w).virtual_to_screen(self, (*w).virtual_x, (*w).virtual_y);
-                (*w).rendering_requested.x = sx;
-                (*w).rendering_requested.y = sy;
-                (*w).scale = zoom;
+            let fullscreen = rendered_fullscreen(w)
+                && w.was_fullscreen
+                && matches!(w.state, crate::window::WindowState::Mapped);
+            // (on the desk, its screen spot there, its desk spot when pinned)
+            let placed = if !fullscreen {
+                None
             } else {
-                let output = (*w).fullscreen_output();
-                if !output.is_null() {
-                    let (vx, vy) = (*w).screen_to_virtual(self, (*output).sent.x, (*output).sent.y);
-                    // The spot is saved (`fullscreen_at`), and a camera
-                    // pan relays out without a transaction, which is
-                    // what normally schedules the save — so a game closed
-                    // after a pan would reopen where the pan began.
-                    spot_moved |= (vx - (*w).virtual_x).abs() >= 0.5 || (vy - (*w).virtual_y).abs() >= 0.5;
-                    (*w).virtual_x = vx;
-                    (*w).virtual_y = vy;
+                let returning = match (w.fullscreen_anchor_pan(self), self.target_desk_pan_x, self.target_desk_pan_y) {
+                    (Some((ax, ay)), Some(tx), Some(ty)) => (tx - ax).abs() < 0.5 && (ty - ay).abs() < 0.5,
+                    _ => false,
+                };
+                // Overview shows the desk, so the window is on it there; and
+                // through a camera flight (the overview ramp, or an eased zoom)
+                // it flies with the desk rather than snapping to the output at
+                // either end — an exit onto it lands exactly on its spot
+                // (`exit_onto_window` centres its output-sized rect).
+                let flying = self.camera_ramp_anim.is_some() || self.target_desk_zoom.is_some();
+                let on_desk = returning
+                    || flying
+                    || crate::shared::mode() == WindowManagerMode::Overview
+                    || w.fullscreen_yields(self);
+                if on_desk {
+                    Some((true, Some(w.virtual_to_screen(self, w.virtual_x, w.virtual_y)), None))
+                } else {
+                    let output = w.fullscreen_output();
+                    let spot = (!output.is_null())
+                        .then(|| w.screen_to_virtual(self, (*output).sent.x, (*output).sent.y));
+                    Some((false, None, spot))
                 }
+            };
+            let Some(w) = self.windows.get_mut(id) else { continue };
+            let Some((on_desk, screen, spot)) = placed else {
+                w.fs_on_desk = false;
+                continue;
+            };
+            if let Some((sx, sy)) = screen {
+                w.rendering_requested.x = sx;
+                w.rendering_requested.y = sy;
+                w.scale = zoom;
             }
-            (*w).fs_on_desk = on_desk;
+            if let Some((vx, vy)) = spot {
+                // The spot is saved (`fullscreen_at`), and a camera
+                // pan relays out without a transaction, which is
+                // what normally schedules the save — so a game closed
+                // after a pan would reopen where the pan began.
+                spot_moved |= (vx - w.virtual_x).abs() >= 0.5 || (vy - w.virtual_y).abs() >= 0.5;
+                w.virtual_x = vx;
+                w.virtual_y = vy;
+            }
+            w.fs_on_desk = on_desk;
         }
         if spot_moved {
             self.schedule_save_state();
@@ -2781,76 +2799,64 @@ impl crate::policy::api::Compositor for WindowManager {
                     }
                 }
                 Command::Raise(id) => {
-                    if let Some(win) = self.windows.ptr(id) {
-                        if !win.is_null() && !(*win).closed {
-                            self.raise_window((*win).id());
-                        }
+                    if self.windows.get(id).is_some_and(|w| !w.closed) {
+                        self.raise_window(id);
                     }
                 }
                 Command::CloseWindow(id) => {
-                    if let Some(win) = self.windows.ptr(id) {
-                        if !win.is_null() && !(*win).closed {
-                            (*win).close();
-                        }
+                    if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
+                        win.close();
                     }
                 }
                 Command::SetMinimized { id, minimized } => {
-                    if let Some(win) = self.windows.ptr(id) {
-                        if !win.is_null() && !(*win).closed {
-                            (*win).minimized = minimized;
-                        }
+                    if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
+                        win.minimized = minimized;
                     }
                 }
                 Command::SetWindowMode { id, mode, locked } => {
-                    if let Some(win) = self.windows.ptr(id) {
-                        if !win.is_null() && !(*win).closed {
-                            // Remember what Fullscreen replaced, so the
-                            // toggle's exit can put it back (policy
-                            // `actions::fullscreen`). A re-lock while
-                            // already Fullscreen keeps the first record.
-                            if mode == crate::tiling::TilingMode::Fullscreen {
-                                if (*win).tiling_mode != crate::tiling::TilingMode::Fullscreen {
-                                    (*win).pre_fullscreen = Some(((*win).tiling_mode, (*win).mode_locked));
-                                }
-                            } else {
-                                // Coming back Tiled from Fullscreen is a
-                                // RETURN, not a fresh entry: the arrange
-                                // pass's Enter transition would snapshot
-                                // the current box — still the output-sized
-                                // fullscreen box at this point — as the
-                                // window's floating geometry, and a later
-                                // un-tile would pop it to screen size.
-                                // Restoring `was_tiled` with the mode keeps
-                                // the floating geometry saved before the
-                                // window was tiled in the first place.
-                                if (*win).tiling_mode == crate::tiling::TilingMode::Fullscreen
-                                    && mode == crate::tiling::TilingMode::Tiled
-                                    && matches!((*win).pre_fullscreen, Some((crate::tiling::TilingMode::Tiled, _)))
-                                {
-                                    (*win).was_tiled = true;
-                                }
-                                (*win).pre_fullscreen = None;
+                    if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
+                        // Remember what Fullscreen replaced, so the
+                        // toggle's exit can put it back (policy
+                        // `actions::fullscreen`). A re-lock while
+                        // already Fullscreen keeps the first record.
+                        if mode == crate::tiling::TilingMode::Fullscreen {
+                            if win.tiling_mode != crate::tiling::TilingMode::Fullscreen {
+                                win.pre_fullscreen = Some((win.tiling_mode, win.mode_locked));
                             }
-                            (*win).tiling_mode = mode;
-                            (*win).mode_locked = locked;
+                        } else {
+                            // Coming back Tiled from Fullscreen is a
+                            // RETURN, not a fresh entry: the arrange
+                            // pass's Enter transition would snapshot
+                            // the current box — still the output-sized
+                            // fullscreen box at this point — as the
+                            // window's floating geometry, and a later
+                            // un-tile would pop it to screen size.
+                            // Restoring `was_tiled` with the mode keeps
+                            // the floating geometry saved before the
+                            // window was tiled in the first place.
+                            if win.tiling_mode == crate::tiling::TilingMode::Fullscreen
+                                && mode == crate::tiling::TilingMode::Tiled
+                                && matches!(win.pre_fullscreen, Some((crate::tiling::TilingMode::Tiled, _)))
+                            {
+                                win.was_tiled = true;
+                            }
+                            win.pre_fullscreen = None;
                         }
+                        win.tiling_mode = mode;
+                        win.mode_locked = locked;
                     }
                 }
                 Command::Focus(id) => {
-                    if let Some(win) = self.windows.ptr(id) {
-                        if !win.is_null() && !(*win).closed {
-                            if let Some(seat) = self.first_seat() {
-                                (*seat).focus(self, crate::seat::Focus::window(win));
-                            }
+                    if self.windows.get(id).is_some_and(|w| !w.closed) {
+                        if let Some(seat) = self.first_seat() {
+                            (*seat).focus(self, crate::seat::Focus::Window(id));
                         }
                     }
                 }
                 Command::MoveWindow { id, x, y } => {
-                    if let Some(win) = self.windows.ptr(id) {
-                        if !win.is_null() && !(*win).closed {
-                            (*win).virtual_x = x;
-                            (*win).virtual_y = y;
-                        }
+                    if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
+                        win.virtual_x = x;
+                        win.virtual_y = y;
                     }
                 }
                 Command::SetOverlayPosition(side) => {
