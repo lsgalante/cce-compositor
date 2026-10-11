@@ -900,7 +900,7 @@ impl WindowManager {
                         } else {
                             self.seat_focused_window_id()
                         };
-                        let Some(target) = target.and_then(|id| self.windows.ptr(id)) else {
+                        let Some(target) = target.and_then(|id| self.windows.get(id)) else {
                             return "error: window not found\n".to_string();
                         };
                         match crate::screenshot::capture_window(target, path) {

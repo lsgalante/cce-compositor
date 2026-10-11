@@ -186,9 +186,8 @@ impl WindowManager {
         while curr != seats_list {
             let seat = crate::container_of!(curr, crate::seat::Seat, link);
             if let Some(ref op) = (*seat).op {
-                let win = op.window(self);
-                if !win.is_null() && !(*win).closed {
-                    Window::manage_finish(self, (*win).id());
+                if let Some(id) = op.window.filter(|&id| self.windows.get(id).map_or(false, |w| !w.closed)) {
+                    Window::manage_finish(self, id);
                 }
             }
             curr = (*curr).next;

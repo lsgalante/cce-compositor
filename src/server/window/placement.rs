@@ -578,7 +578,6 @@ impl Window {
     ///   arranged and saved, and mapping order is arbitrary, so nudging there
     ///   would rearrange a deliberate desktop at every login.
     pub(crate) unsafe fn avoid_tiled_overlap(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
-        let Some(ptr) = wm.windows.ptr(id) else { return };
         let this = window_mut!(wm, id);
         if this.session_restored || this.tiling_mode != crate::tiling::TilingMode::Tiled {
             return;
@@ -598,7 +597,7 @@ impl Window {
 
         let mut occupied = Vec::new();
         for w in wm.windows.values() {
-            if std::ptr::eq(w, ptr) || w.closed || w.minimized {
+            if w.id() == id || w.closed || w.minimized {
                 continue;
             }
             if !matches!(w.state, WindowState::Mapped) {
@@ -652,7 +651,6 @@ impl Window {
     /// opens filling four squares, at the corner of the invocation square that
     /// leaves it clear of its neighbours.
     pub(crate) unsafe fn place_on_invocation_cell(wm: &mut crate::window_manager::WindowManager, id: WindowId, app_id: &str, hx: f64, hy: f64) {
-        let Some(ptr) = wm.windows.ptr(id) else { return };
         let this = window_mut!(wm, id);
         let sp = crate::shared::layout().snap_params();
         if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
@@ -677,7 +675,7 @@ impl Window {
         // canvas itself are not obstacles.
         let mut occupied = Vec::new();
         for w in wm.windows.values() {
-            if std::ptr::eq(w, ptr) || w.closed || w.minimized {
+            if w.id() == id || w.closed || w.minimized {
                 continue;
             }
             if !matches!(w.state, WindowState::Mapped) {

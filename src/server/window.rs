@@ -473,14 +473,6 @@ impl Window {
     }
 }
 
-/// `window`'s id, or `None` for null.
-///
-/// # Safety
-/// `window` is null or points at a live `Window`.
-pub unsafe fn id_of(window: *mut Window) -> Option<WindowId> {
-    if window.is_null() { None } else { Some((*window).id()) }
-}
-
 pub struct Window {
     pub ref_key: crate::slotmap::Key,
     pub server: *mut Server,

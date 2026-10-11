@@ -1251,15 +1251,17 @@ impl WindowManager {
             return;
         }
 
-        let mut focused_window: *mut Window = std::ptr::null_mut();
+        let mut focused_window: Option<crate::window::WindowId> = None;
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
             let next_seat = (*curr_seat).next;
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
-            if let Some(w) = (*seat).focused.live_window(self) {
-                focused_window = w;
-                break;
+            if let crate::seat::Focus::Window(id) = (*seat).focused {
+                if self.windows.contains(id) {
+                    focused_window = Some(id);
+                    break;
+                }
             }
             curr_seat = next_seat;
         }
@@ -1334,7 +1336,7 @@ impl WindowManager {
                 rule_ssd,
                 being_moved: self.is_window_being_moved(w.id()),
                 status_edge: w.status_edge,
-                is_focused: std::ptr::eq(w, focused_window),
+                is_focused: Some(w.id()) == focused_window,
                 box_geom: crate::policy::api::Rect {
                     x: w.box_geom.x,
                     y: w.box_geom.y,
@@ -1881,13 +1883,6 @@ impl WindowManager {
                     && !w.is_wallpaper()
             })
         })
-    }
-
-    /// The window `id` names, while it lives. A closed window's id stays
-    /// stale forever (the slot's generation moves on), so a holder that
-    /// missed the close reads `None` here rather than a reused address.
-    pub fn window(&self, id: crate::window::WindowId) -> Option<*mut Window> {
-        self.windows.ptr(id)
     }
 
     pub unsafe fn focused_layer_surface(&self) -> *mut ffi::wlr_surface {
@@ -2574,7 +2569,7 @@ unsafe extern "C" fn handle_stream_timer(data: *mut std::ffi::c_void) -> std::os
         }
         let frame = match captured.iter().find(|(w, _)| *w == id) {
             Some((_, f)) => f.clone(),
-            None => match wm.windows.ptr(id).map(|p| crate::screenshot::capture_window_rgba(p)) {
+            None => match wm.windows.get(id).map(|w| crate::screenshot::capture_window_rgba(w)) {
                 Some(Ok((rgba, w, h))) => {
                     let f = std::sync::Arc::new(crate::stream_server::Frame { width: w, height: h, rgba });
                     captured.push((id, f.clone()));

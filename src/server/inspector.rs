@@ -172,11 +172,8 @@ unsafe extern "C" fn inspector_get_inspected_surfaces(
     let server = (*inspector).server;
     let windows = &(*crate::reentry::wm(server)).windows;
 
-    for window in windows.iter() {
-        if window.is_null() {
-            continue;
-        }
-        let root_surface = (*window).root_surface();
+    for window in windows.values() {
+        let root_surface = window.root_surface();
         if root_surface.is_null() {
             continue;
         }
@@ -188,8 +185,8 @@ unsafe extern "C" fn inspector_get_inspected_surfaces(
             .cloned()
             .unwrap_or_else(|| "{}".to_string());
 
-        let title_ptr = (*window).get_title();
-        let app_id_ptr = (*window).get_app_id();
+        let title_ptr = window.get_title();
+        let app_id_ptr = window.get_app_id();
 
         let title = if title_ptr.is_null() {
             std::ffi::CString::new("").unwrap()
@@ -211,10 +208,10 @@ unsafe extern "C" fn inspector_get_inspected_surfaces(
                 0,
                 title.as_ptr(),
                 app_id.as_ptr(),
-                (*window).box_geom.x,
-                (*window).box_geom.y,
-                (*window).box_geom.width,
-                (*window).box_geom.height,
+                window.box_geom.x,
+                window.box_geom.y,
+                window.box_geom.width,
+                window.box_geom.height,
                 fd,
                 len,
             );

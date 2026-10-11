@@ -68,14 +68,14 @@ impl WindowManager {
         // Most-recently-used order (focus_history is MRU-front). The focused
         // window lands first, so cce-cloud auto-selects index 1 — the previously
         // focused window — which is the classic alt-tab default.
-        let mut ordered: Vec<*mut Window> = Vec::new();
-        for w in self.focus_history.iter().filter_map(|&id| self.window(id)) {
-            if self.is_switchable_window(&*w) && !ordered.contains(&w) {
+        let mut ordered: Vec<&Window> = Vec::new();
+        for w in self.focus_history.iter().filter_map(|&id| self.windows.get(id)) {
+            if self.is_switchable_window(w) && !ordered.iter().any(|o| std::ptr::eq(*o, w)) {
                 ordered.push(w);
             }
         }
-        for w in self.windows.iter() {
-            if self.is_switchable_window(&*w) && !ordered.contains(&w) {
+        for w in self.windows.values() {
+            if self.is_switchable_window(w) && !ordered.iter().any(|o| std::ptr::eq(*o, w)) {
                 ordered.push(w);
             }
         }
@@ -88,9 +88,9 @@ impl WindowManager {
         let mut items: Vec<(String, String)> = Vec::new();
         let mut input = String::new();
         for &w in &ordered {
-            let id = (*w).ref_key.index.to_string();
-            let app_id = (*w).get_app_id_string().unwrap_or_default();
-            let title = (*w).get_title_string().unwrap_or_default();
+            let id = w.ref_key.index.to_string();
+            let app_id = w.get_app_id_string().unwrap_or_default();
+            let title = w.get_title_string().unwrap_or_default();
             let display = if title.is_empty() {
                 app_id.clone()
             } else {

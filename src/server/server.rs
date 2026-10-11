@@ -380,80 +380,79 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
     }
 
     let wm = &mut *crate::reentry::wm(server);
-    for win_ptr in wm.windows.iter() {
-        if !win_ptr.is_null() && (*win_ptr).root_surface() == surface {
-            let title_ptr = (*win_ptr).get_title();
-            let title = if title_ptr.is_null() {
-                "Window".to_string()
-            } else {
-                std::ffi::CStr::from_ptr(title_ptr).to_string_lossy().into_owned()
-            };
-            
-            let app_id_ptr = (*win_ptr).get_app_id();
-            let app_id = if app_id_ptr.is_null() {
-                "unknown".to_string()
-            } else {
-                std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy().into_owned()
-            };
-            
-            log::info!("xdg activation request for window '{}' ({})", title, app_id);
+    let Some(win) = wm.windows.values().find(|w| w.root_surface() == surface) else {
+        return;
+    };
+    let id = win.id();
+    let title_ptr = win.get_title();
+    let title = if title_ptr.is_null() {
+        "Window".to_string()
+    } else {
+        std::ffi::CStr::from_ptr(title_ptr).to_string_lossy().into_owned()
+    };
+    
+    let app_id_ptr = win.get_app_id();
+    let app_id = if app_id_ptr.is_null() {
+        "unknown".to_string()
+    } else {
+        std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy().into_owned()
+    };
+    
+    log::info!("xdg activation request for window '{}' ({})", title, app_id);
 
-            if in_startup_activation_grace() {
-                log::info!(
-                    "activation notification suppressed during startup grace for '{}' ({})",
-                    title,
-                    app_id
-                );
-                break;
-            }
-
-            // A valid token (wlroots has already checked it against a recent
-            // input serial or the requesting surface's focus) is the user's
-            // intent to see this window, so honour it like `ccectl
-            // focus-window`: un-minimize, focus and raise — `Seat::focus`
-            // raises a Floating window itself, and `raise_window` covers
-            // the rest. Until now this handler only fired the "needs
-            // attention" notification, so an activation for an already-mapped
-            // window changed nothing: the window stayed beneath whatever
-            // covered it. A window that has not mapped yet (the request
-            // often lands between app_id and map) is left to the map path,
-            // which focuses new windows under its own settle rules.
-            if matches!((*win_ptr).state, crate::window::WindowState::Mapped) && !(*win_ptr).is_shy() {
-                if let Some(seat) = wm.first_seat() {
-                    if (*win_ptr).minimized {
-                        (*win_ptr).minimized = false;
-                    }
-                    (*seat).focus(wm, crate::seat::Focus::window(win_ptr));
-                    wm.raise_window((*win_ptr).id());
-                    crate::shared::pending().dirty_windowing();
-                    log::info!("xdg activation focused and raised '{}' ({})", title, app_id);
-                }
-            } else {
-                log::info!("xdg activation for unmapped window '{}' ({}): left to the map path", title, app_id);
-            }
-
-            let uid = unsafe { libc::getuid() };
-            let bus_address = format!("unix:path=/run/user/{}/bus", uid);
-            
-            std::process::Command::new("gdbus")
-                .env("DBUS_SESSION_BUS_ADDRESS", &bus_address)
-                .args([
-                    "call",
-                    "--session",
-                    "--dest",
-                    "org.kde.StatusNotifierWatcher",
-                    "--object-path",
-                    "/StatusInterface",
-                    "--method",
-                    "org.clear.StatusInterface.NotifyAttention",
-                    &app_id,
-                    &title,
-                ])
-                .spawn()
-                .ok();
-            break;
-        }
+    if in_startup_activation_grace() {
+        log::info!(
+            "activation notification suppressed during startup grace for '{}' ({})",
+            title,
+            app_id
+        );
+        return;
     }
+
+    // A valid token (wlroots has already checked it against a recent
+    // input serial or the requesting surface's focus) is the user's
+    // intent to see this window, so honour it like `ccectl
+    // focus-window`: un-minimize, focus and raise — `Seat::focus`
+    // raises a Floating window itself, and `raise_window` covers
+    // the rest. Until now this handler only fired the "needs
+    // attention" notification, so an activation for an already-mapped
+    // window changed nothing: the window stayed beneath whatever
+    // covered it. A window that has not mapped yet (the request
+    // often lands between app_id and map) is left to the map path,
+    // which focuses new windows under its own settle rules.
+    if matches!(win.state, crate::window::WindowState::Mapped) && !win.is_shy() {
+        if let Some(seat) = wm.first_seat() {
+            if let Some(win) = wm.windows.get_mut(id) {
+                win.minimized = false;
+            }
+            (*seat).focus(wm, crate::seat::Focus::Window(id));
+            wm.raise_window(id);
+            crate::shared::pending().dirty_windowing();
+            log::info!("xdg activation focused and raised '{}' ({})", title, app_id);
+        }
+    } else {
+        log::info!("xdg activation for unmapped window '{}' ({}): left to the map path", title, app_id);
+    }
+
+    let uid = unsafe { libc::getuid() };
+    let bus_address = format!("unix:path=/run/user/{}/bus", uid);
+    
+    std::process::Command::new("gdbus")
+        .env("DBUS_SESSION_BUS_ADDRESS", &bus_address)
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.kde.StatusNotifierWatcher",
+            "--object-path",
+            "/StatusInterface",
+            "--method",
+            "org.clear.StatusInterface.NotifyAttention",
+            &app_id,
+            &title,
+        ])
+        .spawn()
+        .ok();
 }
 
 unsafe extern "C" fn handle_request_set_cursor_shape(_listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

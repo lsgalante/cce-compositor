@@ -560,12 +560,10 @@ impl Window {
         let ay1 = ay0 + self.box_geom.height as f64 * scale;
         let mut ext = [band; 4]; // left, right, top, bottom (layout px)
 
-        let self_ptr = self as *const Window as *mut Window;
-        for other in wm.windows.values() {
-            if std::ptr::eq(other, self_ptr) {
+        for o in wm.windows.values() {
+            if std::ptr::eq(o, self) {
                 continue;
             }
-            let o = &*other;
             if o.closed
                 || o.minimized
                 || o.rendering_requested.hidden

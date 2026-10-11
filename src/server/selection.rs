@@ -339,14 +339,14 @@ impl WindowManager {
 
         // (x, y, width, height, corner radius, fill opacity), layout px.
         let mut wanted: Vec<(i32, i32, i32, i32, i32, f32)> = Vec::new();
-        for w in self.selection.windows.iter().filter_map(|&id| self.window(id)) {
-            if !self.selectable(&*w) || (*w).rendering_requested.hidden {
+        for w in self.selection.windows.iter().filter_map(|&id| self.windows.get(id)) {
+            if !self.selectable(w) || w.rendering_requested.hidden {
                 continue;
             }
-            let sc = if (*w).scale > 0.0 { (*w).scale } else { 1.0 };
-            let g = (*w).box_geom;
+            let sc = if w.scale > 0.0 { w.scale } else { 1.0 };
+            let g = w.box_geom;
             let radius = crate::window::widen_corner_radius(
-                (*w).root_plate_radius_base(),
+                w.root_plate_radius_base(),
                 g.width,
                 g.height,
             );

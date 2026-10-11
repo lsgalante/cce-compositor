@@ -460,22 +460,18 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                         // never a keyboard-focus target, so those keep the old
                         // leave-it-unfocused behavior.
                         if !parent_app_id.starts_with("cce-status") {
-                            for win_ptr in wm.windows.iter() {
-                                if win_ptr.is_null()
-                                    || (*win_ptr).closed
-                                    || (*win_ptr).minimized
-                                    || !matches!((*win_ptr).state, crate::window::WindowState::Mapped)
-                                {
-                                    continue;
-                                }
-                                if (*win_ptr).get_app_id_string().as_deref() == Some(parent_app_id.as_str()) {
-                                    // Dismissing chrome, not switching windows:
-                                    // the camera stays where the user left it.
-                                    (*seat).suppress_focus_pan = true;
-                                    (*seat).focus(wm, crate::seat::Focus::window(win_ptr));
-                                    (*seat).suppress_focus_pan = false;
-                                    break;
-                                }
+                            let parent = wm.windows.values().find(|w| {
+                                !w.closed
+                                    && !w.minimized
+                                    && matches!(w.state, crate::window::WindowState::Mapped)
+                                    && w.get_app_id_string().as_deref() == Some(parent_app_id.as_str())
+                            });
+                            if let Some(id) = parent.map(|w| w.id()) {
+                                // Dismissing chrome, not switching windows:
+                                // the camera stays where the user left it.
+                                (*seat).suppress_focus_pan = true;
+                                (*seat).focus(wm, crate::seat::Focus::Window(id));
+                                (*seat).suppress_focus_pan = false;
                             }
                         }
                     } else if !is_cce_cloud {

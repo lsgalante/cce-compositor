@@ -505,32 +505,34 @@ walked from `head()` — and the output configuration being applied
 ### Windows are named by id (since 2026-10-11)
 
 **`wm.windows` is the owner** (`crate::window::Windows`, `window/store.rs`):
-`Window::create` hands it the box (`insert`, which sets `ref_key`) and
-`Window::destroy` takes it back out (`remove`, which returns the box to
-drop); nothing else allocates or frees a window. `get` / `get_mut` give
-safe references by id, `ptr` and `iter` raw pointers for code not yet
-converted, `ids()` a copy for a loop that needs the window manager
-mutably. The store holds the allocations as raw pointers, not `Box`es,
-because a `Box` asserts uniqueness that the remaining `*mut Window` users
-would violate.
+`Window::create` hands it the box (`insert`, which sets `ref_key` and
+returns the id) and `Window::destroy` takes it back out (`remove`, which
+returns the box to drop); nothing else allocates or frees a window. Rust
+code reaches a window only by borrowing it from the store: `get` /
+`get_mut` by id, `values` / `values_mut` to walk them, `ids()` a copy for
+a loop that needs the window manager mutably. Since 2026-10-11 nothing
+outside the store holds or dereferences a `*mut Window`; `ptr` exists for
+handing the address to C (a wlroots handle's `data`), and the one
+remaining dereference is `handle_window_commit` reading its own id from
+the listener it was recovered through. The store holds the allocations
+as raw pointers, not `Box`es, because a `Box` asserts uniqueness that
+the addresses wlroots hands back (`container_of!` on a window's
+listener) would violate.
 
-Only `wm.windows` holds a window's address. Everything else
-that refers to a window holds its `WindowId` (`crate::window::WindowId`, the
-policy crate's wrapper of the slot key; `Window::id()`, or
-`window::id_of(ptr)` for a maybe-null pointer) and looks it up with
-`wm.window(id) -> Option<*mut Window>` when it needs the window:
-`focus_history`, the selection, `Seat::focused` (`Focus::Window(id)`; build
-one from a pointer with `Focus::window(ptr)`, read it with
-`focused.live_window(wm)` / `as_window(wm)`), the seat op's grabbed window
-(`SeatOp::window`, read with `op.window(wm)`), the overview displacement
-ledger and `group_move`, and the cursor's `adjust_hover`,
-`hovered_border_window`, `button_press` and `last_click_window`. Removing a
-window bumps its slot's generation, so an id that outlives its window looks
-up as `None` — never as a later window that reused the address, which is
-what the address-scan liveness checks these replaced (`wm.windows.iter()
-.any(|&w| w == p)`) could not rule out. A new holder takes an id; the
-exceptions are a window's own protocol objects (`XdgToplevel::window`,
-`XwaylandWindow::window`), which die before it, and its `SceneNodeData`.
+Everything that refers to a window holds its `WindowId`
+(`crate::window::WindowId`, the policy crate's wrapper of the slot key;
+`Window::id()`): `focus_history`, the selection, `Seat::focused`
+(`Focus::Window(id)`), the seat op's grabbed window (`SeatOp::window`),
+the overview displacement ledger and `group_move`, the cursor's
+`adjust_hover`, `hovered_border_window`, `button_press` and
+`last_click_window`, the render list, a window's own protocol objects
+(`XdgToplevel::window`, `XwaylandWindow::window`) and its
+`SceneNodeData`. `wm.focused_window()` returns an id too. Removing a
+window bumps its slot's generation, so an id that outlives its window
+looks up as `None` — never as a later window that reused the address,
+which is what the address-scan liveness checks these replaced
+(`wm.windows.iter().any(|&w| w == p)`) could not rule out. A new holder
+takes an id.
 
 **A window function that hands the window manager on takes `(wm, id)`,
 not `&mut self`** (since 2026-10-11): `Window::map`, `unmap`,

@@ -5,10 +5,6 @@ use super::*;
 
 impl Window {
     pub unsafe fn draw_borders(&mut self) {
-        // Taken before `requested` borrows self: `window_takes_handles` is
-        // the shared predicate with cursor::get_border_zone and must not be
-        // duplicated here just to satisfy borrowck.
-        let self_ptr = self as *mut Window;
         let requested = &self.rendering_requested;
 
         let border = &requested.border;
@@ -137,7 +133,7 @@ impl Window {
             // alone: a fading ring is decoration, never a grab.
             let fading_out = !handles_live && self.border_reveal.iter().any(|&a| a > 0.0);
             let handles_on = (handles_live || fading_out)
-                && window_takes_handles(&*self_ptr)
+                && window_takes_handles(self)
                 && !is_virtual_border
                 && bw > 0
                 && (cw as f64 * sc) >= 12.0
@@ -191,7 +187,7 @@ impl Window {
             // by the same function the hit test uses. `apply` takes unscaled
             // boxes, so the screen-px layout is divided back out (a px of
             // rounding on an invisible catcher is nothing).
-            let buttons = frame_buttons_value(&*self_ptr);
+            let buttons = frame_buttons_value(self);
             let (centres, disc_r, live) = handle_disc_layout(
                 cw as f64 * sc,
                 ch as f64 * sc,

@@ -57,13 +57,6 @@ pub struct SeatOp {
     pub started_in_overview: bool,
 }
 
-impl SeatOp {
-    /// The grabbed window, or null when the op grabbed none or it closed.
-    pub fn window(&self, wm: &crate::window_manager::WindowManager) -> *mut crate::window::Window {
-        self.window.and_then(|id| wm.window(id)).unwrap_or(std::ptr::null_mut())
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Focus {
     None,
@@ -74,40 +67,11 @@ pub enum Focus {
 }
 
 impl Focus {
-    /// Focus on `window`; nothing for null.
-    ///
-    /// # Safety
-    /// `window` is null or points at a live `Window`.
-    pub unsafe fn window(window: *mut crate::window::Window) -> Focus {
-        match crate::window::id_of(window) {
-            Some(id) => Focus::Window(id),
-            None => Focus::None,
-        }
-    }
-
-    /// The focused window, or null when focus is on something else or the
-    /// window has closed.
-    pub fn as_window(&self, wm: &crate::window_manager::WindowManager) -> *mut crate::window::Window {
-        match *self {
-            Focus::Window(id) => wm.window(id).unwrap_or(std::ptr::null_mut()),
-            _ => std::ptr::null_mut(),
-        }
-    }
-
-    /// The focused window while it lives; `None` when focus is on something
-    /// else or the window has closed.
-    pub fn live_window(&self, wm: &crate::window_manager::WindowManager) -> Option<*mut crate::window::Window> {
-        Some(self.as_window(wm)).filter(|w| !w.is_null())
-    }
-
     pub unsafe fn surface(&self, wm: &crate::window_manager::WindowManager) -> *mut ffi::wlr_surface {
         match *self {
             Focus::None => std::ptr::null_mut(),
             Focus::LayerSurface(surface) => surface,
-            Focus::Window(_) => {
-                let window = self.as_window(wm);
-                if window.is_null() { std::ptr::null_mut() } else { (*window).root_surface() }
-            }
+            Focus::Window(id) => wm.windows.get(id).map_or(std::ptr::null_mut(), |w| w.root_surface()),
             Focus::LockSurface(lock_surface) => if lock_surface.is_null() { std::ptr::null_mut() } else { (*(*lock_surface).wlr_lock_surface).surface },
             Focus::OverrideRedirect(or) => if or.is_null() { std::ptr::null_mut() } else { (*(*or).xsurface).surface },
         }
@@ -868,11 +832,10 @@ impl Seat {
     /// hover-to-focus leaves the ring where it is instead of pulling the
     /// keyboard out from under the launcher.
     pub unsafe fn focus_is_chrome(&self, wm: &crate::window_manager::WindowManager) -> bool {
-        let w = self.focused.as_window(wm);
         match self.focused {
-            Focus::Window(_) if !w.is_null() => matches!(
-                (*w).tiling_mode,
-                crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
+            Focus::Window(id) if wm.windows.contains(id) => matches!(
+                wm.windows.get(id).map(|w| w.tiling_mode),
+                Some(crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay)
             ),
             Focus::LayerSurface(s) if !s.is_null() => {
                 let wlr_layer_surface = ffi::wlr_layer_surface_v1_try_from_wlr_surface(s);
@@ -1245,10 +1208,10 @@ impl Seat {
                 }
                 // Grabbed by an image: no window, always a drag.
                 Some(ref op) if op.op_type == PointerOpType::GroupMove => true,
-                Some(ref op) => {
-                    let win = op.window(wm);
-                    !win.is_null() && !(*win).closed && !(*win).is_status_bar()
-                }
+                Some(ref op) => op
+                    .window
+                    .and_then(|id| wm.windows.get(id))
+                    .map_or(false, |w| !w.closed && !w.is_status_bar()),
                 None => false,
             };
         if eligible {
@@ -1500,7 +1463,7 @@ fn displace_covered(
     group: &[(crate::window::WindowId, f64, f64)],
 ) {
     // A window can close mid-drag; drop its entry before any deref.
-    ledger.retain(|&(id, _, _)| wm.window(id).is_some());
+    ledger.retain(|&(id, _, _)| wm.windows.contains(id));
     let Some(win) = wm.windows.get(moving) else { return };
     let moved = (
         win.virtual_x,

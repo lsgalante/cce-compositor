@@ -304,7 +304,7 @@ pub unsafe fn capture_state_buffer(
 /// surface's buffer is the canvas, subsurfaces composite at their offsets.
 /// Works for windows outside the visible viewport (their last committed
 /// buffers persist), but needs the client to have committed at least once.
-pub unsafe fn capture_window(window: *mut crate::window::Window, path: PathBuf) -> Result<String, String> {
+pub unsafe fn capture_window(window: &crate::window::Window, path: PathBuf) -> Result<String, String> {
     let (canvas, bw, bh) = capture_window_rgba(window)?;
     let reply = path.display().to_string();
     spawn_encode(canvas, bw as u32, bh as u32, path);
@@ -314,8 +314,8 @@ pub unsafe fn capture_window(window: *mut crate::window::Window, path: PathBuf) 
 /// The readback+composite half of [`capture_window`], PNG-free: returns the
 /// tightly packed RGBA canvas and its pixel dimensions. Also the frame source
 /// for the window-stream server.
-pub unsafe fn capture_window_rgba(window: *mut crate::window::Window) -> Result<(Vec<u8>, i32, i32), String> {
-    let root = (*window).root_surface();
+pub unsafe fn capture_window_rgba(window: &crate::window::Window) -> Result<(Vec<u8>, i32, i32), String> {
+    let root = window.root_surface();
     if root.is_null() {
         return Err("window has no surface".to_string());
     }

@@ -30,16 +30,3 @@ macro_rules! window_ref {
         }
     };
 }
-
-/// The window's address from the store, or an early return of `$ret` when
-/// it has gone: for a call that still takes `*mut Window`. Borrowing
-/// `wm.windows` for the lookup, it cannot sit inside a live `window_mut!`
-/// borrow, which keeps the raw pointer and the reference apart.
-macro_rules! window_ptr {
-    ($wm:expr, $id:expr, $ret:expr) => {
-        match $wm.windows.ptr($id) {
-            Some(p) => p,
-            None => return $ret,
-        }
-    };
-}

@@ -10,15 +10,15 @@
 //! window lives: its listeners, its scene-node data and the back-pointers
 //! of its protocol objects all hold its address. The store keeps those
 //! allocations as raw pointers, not `Box`es, because a `Box` asserts unique
-//! access to what it points at, and code still holding a `*mut Window`
-//! would then be using a pointer the box had invalidated.
+//! access to what it points at, and the addresses wlroots hands back (a
+//! listener recovered with `container_of!`, a handle's `data`) would then
+//! be pointers the box had invalidated.
 //!
 //! [`get`](Windows::get) and [`get_mut`](Windows::get_mut) are safe: a
 //! reference into the store borrows the store, so the borrow checker keeps
-//! two of them apart. Code that still works through `*mut Window` (from
-//! [`ptr`](Windows::ptr) or [`iter`](Windows::iter)) does so in `unsafe`
-//! blocks, and must not hold such a pointer's referent borrowed across a
-//! use of the store's references to the same window.
+//! two of them apart. Rust code reaches windows only through them (and
+//! [`values`](Windows::values) / [`values_mut`](Windows::values_mut));
+//! [`ptr`](Windows::ptr) is for handing an address to C.
 
 use super::{Window, WindowId};
 use std::ptr::NonNull;
@@ -51,8 +51,8 @@ impl Windows {
         self.map.remove(id.0).map(|p| unsafe { Box::from_raw(p.as_ptr()) })
     }
 
-    /// The window's address, for code that still works through raw
-    /// pointers.
+    /// The window's address, for handing to C as user data (a wlroots
+    /// handle's `data`); Rust code borrows with `get` / `get_mut`.
     pub fn ptr(&self, id: WindowId) -> Option<*mut Window> {
         self.map.get(id.0).map(|p| p.as_ptr())
     }
@@ -76,11 +76,6 @@ impl Windows {
         self.map.count()
     }
 
-    /// Every window's address, in slot order.
-    pub fn iter(&self) -> Iter<'_> {
-        Iter(self.map.iter())
-    }
-
     /// Every window, in slot order.
     pub fn values(&self) -> Values<'_> {
         Values(self.map.iter())
@@ -102,15 +97,6 @@ impl Windows {
 // Named iterator types rather than `impl Iterator`: an opaque type may have
 // drop glue that uses the borrow, so a loop that returns after handing the
 // window manager on mutably would not compile against one.
-
-pub struct Iter<'a>(crate::slotmap::Iter<'a, NonNull<Window>>);
-
-impl Iterator for Iter<'_> {
-    type Item = *mut Window;
-    fn next(&mut self) -> Option<*mut Window> {
-        self.0.next().map(|p| p.as_ptr())
-    }
-}
 
 pub struct Values<'a>(crate::slotmap::Iter<'a, NonNull<Window>>);
 
