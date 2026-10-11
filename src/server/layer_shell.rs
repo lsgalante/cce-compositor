@@ -408,7 +408,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
         for seat in (*server).input_manager.seats.ptrs() {
             if let crate::seat::Focus::LayerSurface(surface) = (*seat).focused {
                 if surface == (*wlr_layer_surface).surface {
-                    let wm = &mut *crate::reentry::wm((*seat).server);
+                    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
                     (*seat).focus(wm, crate::seat::Focus::None);
                     // cce-cloud surfaces skip the focus_next fallback: the bare
                     // launcher is about to be replaced by whatever it spawned,

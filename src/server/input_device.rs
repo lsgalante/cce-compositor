@@ -33,12 +33,14 @@ pub struct InputDeviceObject {
 }
 
 impl InputDevice {
+    /// `server` is the caller's: the device registers with the input
+    /// manager, and a physical one with the libinput and xkb configs.
     pub unsafe fn new(
+        server: *mut crate::server::Server,
         seat: *mut Seat,
         wlr_device: *mut ffi::wlr_input_device,
         virtual_device: bool,
     ) -> *mut Self {
-        let server = (*seat).server;
 
         let device = Box::into_raw(Box::new(Self {
             seat,
@@ -77,7 +79,7 @@ impl InputDevice {
             while curr != config_objects {
                 let next = (*curr).next;
                 let im_obj = crate::container_of!(curr, crate::input_manager::InputManagerObject, link);
-                (*device).create_object((*im_obj).resource);
+                (*device).create_object(server, (*im_obj).resource);
                 curr = next;
             }
 
@@ -87,14 +89,14 @@ impl InputDevice {
                 std::ptr::null_mut()
             };
             if !handle.is_null() {
-                let libinput_dev = crate::libinput_device::LibinputDevice::init(device, handle);
+                let libinput_dev = crate::libinput_device::LibinputDevice::init(server, device, handle);
                 libinput_dev.apply_config(&crate::shared::layout().input_config);
                 (*device).libinput = Some(libinput_dev);
             }
 
             let dev_type = ffi::river_wlr_input_device_get_type(wlr_device);
             if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD {
-                (*device).xkb_keyboard = Some(crate::xkb_keyboard::XkbKeyboard::init(device));
+                (*device).xkb_keyboard = Some(crate::xkb_keyboard::XkbKeyboard::init(server, device));
             }
         }
 
@@ -161,13 +163,12 @@ impl InputDevice {
             return mapping;
         }
         if !self.config.map_to_output.is_null() {
-            let server = (*self.seat).server;
-            ffi::wlr_output_layout_get_box((*server).om.output_layout, self.config.map_to_output, &mut mapping);
+            ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), self.config.map_to_output, &mut mapping);
         }
         mapping
     }
 
-    pub unsafe fn create_object(&mut self, im_v1_resource: *mut ffi::wl_resource) {
+    pub unsafe fn create_object(&mut self, server: *mut crate::server::Server, im_v1_resource: *mut ffi::wl_resource) {
         if self.virtual_device {
             return;
         }
@@ -229,7 +230,7 @@ impl InputDevice {
 
         // Connect client-side libinput device if matching exists
         if let Some(ref mut libinput) = self.libinput {
-            let libinput_config_objects = &mut (*(*self.seat).server).libinput_config.objects as *mut ffi::wl_list as *mut WlList;
+            let libinput_config_objects = &mut (*server).libinput_config.objects as *mut ffi::wl_list as *mut WlList;
             let mut curr = (*libinput_config_objects).next;
             while curr != libinput_config_objects {
                 let next = (*curr).next;
@@ -254,7 +255,7 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
 
     // Detach from seat if attached
     if !device.seat.is_null() {
-        (*device.seat).detach_device(&mut *crate::reentry::wm((*device.seat).server), device);
+        (*device.seat).detach_device(&mut *crate::reentry::wm(crate::shared::server_ptr()), device);
         (*device.seat).update_capabilities();
     }
 
@@ -349,7 +350,7 @@ unsafe extern "C" fn input_device_assign_to_seat(
     if name.is_null() {
         return;
     }
-    let server = (*(*device).seat).server;
+    let server = crate::shared::server_ptr();
     let mut found = false;
     let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
     for seat in (*server).input_manager.seats.ptrs() {

@@ -257,7 +257,7 @@ impl Cursor {
     /// touch-capable window.
     unsafe fn touch_route_at(&self, wm: &crate::window_manager::WindowManager, lx: f64, ly: f64) -> TouchRoute {
         let seat = &*self.seat;
-        let server = seat.server;
+        let server = wm.server;
         let result = crate::shared::scene().at(wm, lx, ly);
         if let Some(ref result) = result {
             // Locked, only the lock surface may hear a finger, as only it
@@ -300,7 +300,7 @@ impl Cursor {
     }
 
     pub unsafe fn touch_down(&mut self, wm: &mut crate::window_manager::WindowManager, id: i32, lx: f64, ly: f64, time_msec: u32) {
-        (*self.seat).handle_activity();
+        (*self.seat).handle_activity(wm);
         // A touch is deliberate input, like a press (see `Seat::focus`).
         wm.startup_input_seen = true;
         self.hide_for_touch();
@@ -382,7 +382,6 @@ impl Cursor {
 
     /// Route a finger normally (`touch_route_at`) and deliver its down.
     unsafe fn touch_begin(&mut self, wm: &mut crate::window_manager::WindowManager, id: i32, lx: f64, ly: f64, time_msec: u32) {
-        let server = (*self.seat).server;
         let route = self.touch_route_at(wm, lx, ly);
         self.touch_points.insert(id, TouchPoint { lx, ly, route });
         log::debug!("touch: down id={id} at ({lx:.0}, {ly:.0}) -> {route:?}");
@@ -425,7 +424,7 @@ impl Cursor {
     }
 
     pub unsafe fn touch_motion(&mut self, wm: &mut crate::window_manager::WindowManager, id: i32, lx: f64, ly: f64, time_msec: u32) {
-        (*self.seat).handle_activity();
+        (*self.seat).handle_activity(wm);
         let Some(point) = self.touch_points.get_mut(&id) else { return };
         point.lx = lx;
         point.ly = ly;
@@ -477,7 +476,7 @@ impl Cursor {
     }
 
     pub unsafe fn touch_up(&mut self, wm: &mut crate::window_manager::WindowManager, id: i32, time_msec: u32) {
-        (*self.seat).handle_activity();
+        (*self.seat).handle_activity(wm);
         let Some(point) = self.touch_points.remove(&id) else { return };
         match point.route {
             TouchRoute::Claimed => self.claim_lift(wm, id, point, time_msec, false),
@@ -505,7 +504,7 @@ impl Cursor {
     /// still drops where it was, but a held button must never be left
     /// behind — and one that never pressed clicks nothing.
     pub unsafe fn touch_cancel(&mut self, wm: &mut crate::window_manager::WindowManager, id: i32) {
-        (*self.seat).handle_activity();
+        (*self.seat).handle_activity(wm);
         let Some(point) = self.touch_points.remove(&id) else { return };
         match point.route {
             TouchRoute::Claimed => self.claim_lift(wm, id, point, crate::util::msec_timestamp(), true),
@@ -575,7 +574,6 @@ impl Cursor {
 
     unsafe fn claim_motion(&mut self, wm: &mut crate::window_manager::WindowManager, time_msec: u32) {
         let s = self.claimed_shape();
-        let server = (*self.seat).server;
         match self.touch_claim {
             Claim::None => {}
             Claim::Edge { id, edge, start, fired } => {
@@ -613,7 +611,7 @@ impl Cursor {
                 }
                 if s.count >= 2 && track.scale != 1.0 {
                     let zoom = crate::policy::camera::pinch_zoom(start_zoom, track.scale);
-                    let (ax, ay) = output_local(server, s.centroid);
+                    let (ax, ay) = output_local(s.centroid);
                     wm.queue_pinch(zoom, ax, ay);
                 }
                 self.touch_claim = Claim::Desk { track, start_zoom, vel, last_ms };
@@ -710,11 +708,10 @@ impl Cursor {
     /// for it under the current modifiers. An edge is a screen edge only
     /// where no other output continues past it.
     unsafe fn bound_edge_at(&self, lx: f64, ly: f64) -> Option<Edge> {
-        let server = (*self.seat).server;
         if !crate::shared::layout().gesture_binds.iter().any(|b| b.gesture_type == "edge") {
             return None;
         }
-        let layout = (*server).om.output_layout;
+        let layout = crate::shared::handles().output_layout.get();
         let output = ffi::wlr_output_layout_output_at(layout, lx, ly);
         if output.is_null() {
             return None;
@@ -775,13 +772,13 @@ impl Cursor {
 
 /// A layout point in its output's own coordinates, the anchor a pinch zoom
 /// takes (`WindowManager::queue_pinch`).
-unsafe fn output_local(server: *mut crate::server::Server, (x, y): (f64, f64)) -> (f64, f64) {
-    let wlr_output = (*server).om.output_at(x, y);
+unsafe fn output_local((x, y): (f64, f64)) -> (f64, f64) {
+    let wlr_output = crate::output_manager::output_at(x, y);
     if wlr_output.is_null() {
         return (x, y);
     }
     let mut b = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-    ffi::wlr_output_layout_get_box((*server).om.output_layout, wlr_output, &mut b);
+    ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut b);
     (x - b.x as f64, y - b.y as f64)
 }
 
@@ -789,26 +786,26 @@ pub(crate) unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listene
     let cursor = &mut *crate::container_of!(listener, Cursor, touch_down_listener);
     let event = data as *mut ffi::wlr_touch_down_event;
     let (lx, ly) = cursor.touch_layout_coords((*event).touch, (*event).x, (*event).y);
-    cursor.touch_down(&mut *crate::reentry::wm((*cursor.seat).server), (*event).touch_id, lx, ly, (*event).time_msec);
+    cursor.touch_down(&mut *crate::reentry::wm(crate::shared::server_ptr()), (*event).touch_id, lx, ly, (*event).time_msec);
 }
 
 pub(crate) unsafe extern "C" fn handle_touch_motion(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, touch_motion_listener);
     let event = data as *mut ffi::wlr_touch_motion_event;
     let (lx, ly) = cursor.touch_layout_coords((*event).touch, (*event).x, (*event).y);
-    cursor.touch_motion(&mut *crate::reentry::wm((*cursor.seat).server), (*event).touch_id, lx, ly, (*event).time_msec);
+    cursor.touch_motion(&mut *crate::reentry::wm(crate::shared::server_ptr()), (*event).touch_id, lx, ly, (*event).time_msec);
 }
 
 pub(crate) unsafe extern "C" fn handle_touch_up(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, touch_up_listener);
     let event = data as *mut ffi::wlr_touch_up_event;
-    cursor.touch_up(&mut *crate::reentry::wm((*cursor.seat).server), (*event).touch_id, (*event).time_msec);
+    cursor.touch_up(&mut *crate::reentry::wm(crate::shared::server_ptr()), (*event).touch_id, (*event).time_msec);
 }
 
 pub(crate) unsafe extern "C" fn handle_touch_cancel(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, touch_cancel_listener);
     let event = data as *mut ffi::wlr_touch_cancel_event;
-    cursor.touch_cancel(&mut *crate::reentry::wm((*cursor.seat).server), (*event).touch_id);
+    cursor.touch_cancel(&mut *crate::reentry::wm(crate::shared::server_ptr()), (*event).touch_id);
 }
 
 pub(crate) unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

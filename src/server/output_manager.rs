@@ -52,6 +52,20 @@ pub struct OutputManager {
     pub outputs: crate::output::Outputs,
 }
 
+/// The output at (or nearest to) a layout point, through the shared
+/// output layout: for code with no output manager in hand. Null before the
+/// layout exists or while it holds no output.
+pub unsafe fn output_at(lx: f64, ly: f64) -> *mut ffi::wlr_output {
+    let layout = crate::shared::handles().output_layout.get();
+    if layout.is_null() {
+        return std::ptr::null_mut();
+    }
+    let mut output_lx: f64 = 0.0;
+    let mut output_ly: f64 = 0.0;
+    ffi::wlr_output_layout_closest_point(layout, std::ptr::null_mut(), lx, ly, &mut output_lx, &mut output_ly);
+    ffi::wlr_output_layout_output_at(layout, output_lx, output_ly)
+}
+
 impl OutputManager {
     /// The layout box `(x, y, w, h)` of every enabled output, as last sent.
     pub unsafe fn enabled_output_boxes(&self) -> Vec<(f64, f64, f64, f64)> {
@@ -73,6 +87,7 @@ impl OutputManager {
             return Err("Failed to create wlr_output_layout");
         }
         self.output_layout = output_layout;
+        crate::shared::handles().output_layout.set(output_layout);
 
         let gamma_control_manager = ffi::wlr_gamma_control_manager_v1_create((*server).wl_server);
         if gamma_control_manager.is_null() {
@@ -136,17 +151,7 @@ impl OutputManager {
     }
 
     pub unsafe fn output_at(&mut self, lx: f64, ly: f64) -> *mut ffi::wlr_output {
-        let mut output_lx: f64 = 0.0;
-        let mut output_ly: f64 = 0.0;
-        ffi::wlr_output_layout_closest_point(
-            self.output_layout,
-            std::ptr::null_mut(),
-            lx,
-            ly,
-            &mut output_lx,
-            &mut output_ly,
-        );
-        ffi::wlr_output_layout_output_at(self.output_layout, output_lx, output_ly)
+        output_at(lx, ly)
     }
 
     pub unsafe fn auto_layout(&mut self) {

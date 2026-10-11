@@ -96,7 +96,6 @@ pub enum DragState {
 }
 
 pub struct Seat {
-    pub server: *mut Server,
     pub wlr_seat: *mut ffi::wlr_seat,
     pub cursor: Cursor,
     pub focused: Focus,
@@ -179,7 +178,6 @@ impl Seat {
         }
 
         let id = (*server).input_manager.seats.insert(Box::new(Self {
-            server,
             wlr_seat,
             cursor: Cursor::default(),
             focused: Focus::None,
@@ -379,9 +377,13 @@ impl Seat {
         self.update_capabilities();
     }
 
-    pub unsafe fn handle_activity(&mut self) {
-        (*self.server).idle.on_activity(&mut (*self.server).om.outputs);
-        let notifier = (*self.server).input_manager.idle_notifier;
+    /// Input arrived on this seat: wake the idle manager (and the outputs
+    /// it darkened) and tell idle-notify clients. Through `wm.server` until
+    /// the window manager is handed a Ctx (RFC step 4).
+    pub unsafe fn handle_activity(&mut self, wm: &crate::window_manager::WindowManager) {
+        let server = wm.server;
+        (*server).idle.on_activity(&mut (*server).om.outputs);
+        let notifier = crate::shared::handles().idle_notifier.get();
         if !notifier.is_null() {
             ffi::wlr_idle_notifier_v1_notify_activity(notifier, self.wlr_seat);
         }
@@ -455,7 +457,7 @@ impl Seat {
         // from stealing focus back to a regular window or shell surface.
         if self.focus_requested {
             if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) = self.layer_shell.scheduled_focus {
-                let server = self.server;
+                let server = wm.server;
                 if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
                     let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
                     if new_focus != Focus::LayerSurface(wlr_surf) {
@@ -698,7 +700,7 @@ impl Seat {
             return true;
         }
 
-        let keymap = (*self.server).xkb_config.default_keymap;
+        let keymap = crate::shared::handles().default_keymap.get();
         if keymap.is_null() {
             log::warn!("[seat] no keymap configured; synthetic keys cannot be delivered");
             return false;
@@ -806,13 +808,13 @@ impl Seat {
 
     pub unsafe fn manage_finish(&mut self, wm: &mut crate::window_manager::WindowManager) {
 
-        if (*self.server).lock_manager.state != crate::lock_manager::LockState::Unlocked {
+        let server = wm.server;
+        if (*server).lock_manager.state != crate::lock_manager::LockState::Unlocked {
             return;
         }
 
         match self.layer_shell.sent_focus {
             crate::layer_shell::LayerShellSeatFocus::Exclusive(key) => {
-                let server = self.server;
                 if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
                     let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
                     self.focus(wm, Focus::LayerSurface(wlr_surf));
@@ -820,7 +822,6 @@ impl Seat {
             }
             crate::layer_shell::LayerShellSeatFocus::NonExclusive(key) => {
                 if !self.focus_requested {
-                    let server = self.server;
                     if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
                         let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
                         self.focus(wm, Focus::LayerSurface(wlr_surf));
@@ -912,7 +913,7 @@ impl Seat {
             return;
         }
         let mut target_output: *mut crate::output::Output = std::ptr::null_mut();
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in wm.stores().outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 if target_output.is_null() {
                     target_output = output;
@@ -1060,7 +1061,7 @@ impl Seat {
 
                             // Re-dock the bar to the edge the pointer is at as
                             // it goes, standing it up along a side.
-                            let outputs: Vec<(f64, f64, f64, f64)> = (*self.server)
+                            let outputs: Vec<(f64, f64, f64, f64)> = (*wm.server)
                                 .om
                                 .enabled_output_boxes();
                             if let Some(edge) = crate::policy::drag::status_edge_at((x as f64, y as f64), &outputs) {
@@ -1223,10 +1224,10 @@ impl Seat {
                 None => false,
             };
         if eligible {
-            let wlr_output = (*self.server).om.output_at(lx, ly);
+            let wlr_output = crate::output_manager::output_at(lx, ly);
             if !wlr_output.is_null() {
                 let mut ob = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-                ffi::wlr_output_layout_get_box((*self.server).om.output_layout, wlr_output, &mut ob);
+                ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut ob);
                 let band = crate::shared::layout().desktop_edge_pan_band.max(1.0);
                 let speed = crate::shared::layout().desktop_edge_pan_speed.max(0.0);
                 // 0 outside the band, 1 at (or past) the screen edge.
@@ -1582,7 +1583,7 @@ unsafe extern "C" fn handle_request_set_cursor(
         // crosshair came out 96 physical px against the desktop's 48. Show it
         // at 1/scale, the way the window's own buffer already is
         // (`Window::x11_buffer_scale`), and put the hotspot in the same units.
-        let scale = if is_xwayland_client(seat.server, event_client) {
+        let scale = if is_xwayland_client(crate::shared::server_ptr(), event_client) {
             crate::xwayland_window::x11_scale_for_surface(ffi::river_wlr_seat_get_pointer_focused_surface(seat.wlr_seat))
         } else {
             1.0
@@ -1730,7 +1731,7 @@ unsafe extern "C" fn handle_drag_destroy(
     match seat.drag {
         DragState::None => unreachable!(),
         DragState::Pointer => {
-            seat.cursor.update_state(&mut *crate::reentry::wm(seat.server));
+            seat.cursor.update_state(&mut *crate::reentry::wm(crate::shared::server_ptr()));
         }
         DragState::Touch => {}
     }

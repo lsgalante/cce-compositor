@@ -6,14 +6,14 @@ use super::*;
 
 pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, axis_listener);
-    let wm = &mut *crate::reentry::wm((*cursor.seat).server);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_axis(cursor, wm, data);
 }
 
 /// `handle_axis` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
 pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void) {
     let event = data as *mut ffi::wlr_pointer_axis_event;
-    (*cursor.seat).handle_activity();
+    (*cursor.seat).handle_activity(wm);
     
     let seat = &mut *cursor.seat;
     
@@ -51,10 +51,10 @@ pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager
                 if new_zoom != base {
                     let cx = cursor.x();
                     let cy = cursor.y();
-                    let wlr_output = (*(*seat).server).om.output_at(cx, cy);
+                    let wlr_output = crate::output_manager::output_at(cx, cy);
                     let (phys_x, phys_y) = if !wlr_output.is_null() {
                         let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-                        ffi::wlr_output_layout_get_box((*(*seat).server).om.output_layout, wlr_output, &mut output_box);
+                        ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut output_box);
                         (output_box.x as f64, output_box.y as f64)
                     } else {
                         (0.0, 0.0)
@@ -705,7 +705,7 @@ impl Cursor {
 
 pub(crate) unsafe extern "C" fn handle_view_drag_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let cursor = &mut *(data as *mut Cursor);
-    cursor.end_view_drag(&mut *crate::reentry::wm((*cursor.seat).server), "idle");
+    cursor.end_view_drag(&mut *crate::reentry::wm(crate::shared::server_ptr()), "idle");
     cursor.end_popup_wheel("idle");
     cursor.end_hscroll_shift("idle");
     0

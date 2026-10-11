@@ -1625,7 +1625,7 @@ impl WindowManager {
                     };
                     for seat in (*self.server).input_manager.seats.ptrs() {
                         (*seat).ensure_synthetic_keyboard();
-                        (*seat).handle_activity();
+                        (*seat).handle_activity(self);
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, crate::util::msec_timestamp(), keycode, state);
                         if let Some(name) = mod_name {
                             let kb = ffi::river_wlr_seat_get_keyboard((*seat).wlr_seat);
@@ -1666,7 +1666,7 @@ impl WindowManager {
                         // without a keymap, and a keymap-less client drops
                         // every key we notify. Attach one first.
                         (*seat).ensure_synthetic_keyboard();
-                        (*seat).handle_activity();
+                        (*seat).handle_activity(self);
                         let time = crate::util::msec_timestamp();
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time + 1, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);

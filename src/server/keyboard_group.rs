@@ -234,7 +234,7 @@ impl KeyboardGroup {
         std::ptr::null_mut()
     }
 
-    pub unsafe fn send_state(&mut self) {
+    pub unsafe fn send_state(&mut self, server: *mut crate::server::Server) {
         let keymap = self.config.keymap;
         if keymap.is_null() {
             return;
@@ -256,7 +256,6 @@ impl KeyboardGroup {
             false
         };
 
-        let server = (*self.seat).server;
         let keyboards_head = &mut (*server).xkb_config.keyboards as *mut ffi::wl_list as *mut crate::server::WlList;
         let mut curr = (*keyboards_head).next;
         while curr != keyboards_head {
@@ -304,12 +303,11 @@ fn allowed_while_locked(keysym: u32) -> bool {
         )
 }
 
-unsafe fn handle_builtin_binding(wm: &mut crate::window_manager::WindowManager, seat: *mut Seat, keysym: u32, modifiers: u32) -> bool {
+unsafe fn handle_builtin_binding(wm: &mut crate::window_manager::WindowManager, keysym: u32, modifiers: u32) -> bool {
     match keysym {
         ffi::XKB_KEY_XF86Switch_VT_1..=ffi::XKB_KEY_XF86Switch_VT_12 => {
             log::debug!("switch VT keysym received");
-            let server = (*seat).server;
-            let session = (*server).session;
+            let session = crate::shared::handles().session.get();
             if !session.is_null() {
                 let vt = keysym - ffi::XKB_KEY_XF86Switch_VT_1 + 1;
                 log::info!("switching to VT {}", vt);
@@ -369,7 +367,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
     // exactly as pointer events are; before 2026-09-16 only tablet, touch
     // and gestures counted, so idle-notify clients never saw a key.
     if !group.seat.is_null() {
-        (*group.seat).handle_activity();
+        (*group.seat).handle_activity(wm);
     }
 
     // A real key press ends an emulated view drag (see `cursor::ViewDrag`):
@@ -408,7 +406,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         let modifiers = ffi::wlr_keyboard_get_modifiers(&mut group.wlr_keyboard);
         // While the session is locked (or locking) a key is the lock
         // screen's: see `allowed_while_locked` for the few that still act.
-        let locked = (*(*group.seat).server).lock_manager.state != crate::lock_manager::LockState::Unlocked;
+        let locked = (*crate::shared::server_ptr()).lock_manager.state != crate::lock_manager::LockState::Unlocked;
         
         let mut matched_builtin = false;
         let mut syms_ptr: *const ffi::xkb_keysym_t = std::ptr::null();
@@ -421,7 +419,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
                 if locked && !is_vt_switch(sym) {
                     continue;
                 }
-                if handle_builtin_binding(wm, group.seat, sym, modifiers) {
+                if handle_builtin_binding(wm, sym, modifiers) {
                     matched_builtin = true;
                     break;
                 }
@@ -516,7 +514,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         }
     }
 
-    group.send_state();
+    group.send_state(crate::shared::server_ptr());
 }
 
 pub unsafe fn match_cce_keybind(
@@ -615,9 +613,9 @@ unsafe extern "C" fn handle_group_modifiers(listener: *mut ffi::wl_listener, _da
     // is this group's — the DEVICE keyboard has no keymap on the DRM
     // backend (see keyboard::should_set_keymap), so its own modifiers
     // signal never fires there; this one does for every real key.
-    (*crate::reentry::wm((*group.seat).server)).refresh_adjust_held();
+    (*crate::reentry::wm(crate::shared::server_ptr())).refresh_adjust_held();
 
-    group.send_state();
+    group.send_state(crate::shared::server_ptr());
 }
 
 #[cfg(test)]

@@ -46,6 +46,7 @@ impl XkbConfig {
             return Err("Failed to create default xkb_keymap");
         }
         self.default_keymap = default_keymap;
+        crate::shared::handles().default_keymap.set(default_keymap);
 
         self.global = ffi::wl_global_create(
             (*server).wl_server,
@@ -58,6 +59,7 @@ impl XkbConfig {
             ffi::xkb_keymap_unref(self.default_keymap);
             ffi::xkb_context_unref(self.context);
             self.default_keymap = std::ptr::null_mut();
+            crate::shared::handles().default_keymap.set(std::ptr::null_mut());
             self.context = std::ptr::null_mut();
             return Err("Failed to create river_xkb_config_v1 global");
         }
@@ -81,6 +83,7 @@ impl XkbConfig {
         }
 
         if !self.default_keymap.is_null() {
+            crate::shared::handles().default_keymap.set(std::ptr::null_mut());
             ffi::xkb_keymap_unref(self.default_keymap);
             self.default_keymap = std::ptr::null_mut();
         }

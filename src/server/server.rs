@@ -620,7 +620,9 @@ impl Server {
                 return Err("Failed to autocreate wlr_backend");
             }
             self.backend = backend;
+            crate::shared::handles().backend.set(backend);
             self.session = session;
+            crate::shared::handles().session.set(session);
 
             let renderer = ffi::fx_renderer_create(backend);
             if renderer.is_null() {
@@ -809,6 +811,7 @@ impl Server {
                     return Err("Failed to create xwayland server");
                 }
                 self.xwayland = xwayland;
+                crate::shared::handles().xwayland.set(xwayland);
                 // See `xwayland_global_filter`.
                 ffi::wl_display_set_global_filter(
                     wl_server,

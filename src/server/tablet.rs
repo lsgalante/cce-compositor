@@ -9,12 +9,12 @@ pub struct Tablet {
 
 impl Tablet {
     pub unsafe fn create(
+        server: *mut crate::server::Server,
         seat: *mut Seat,
         wlr_device: *mut ffi::wlr_input_device,
         virtual_device: bool,
     ) -> Result<*mut Self, &'static str> {
-        let server = (*seat).server;
-        let tablet_manager = (*server).input_manager.tablet_manager;
+        let tablet_manager = crate::shared::handles().tablet_manager.get();
         if tablet_manager.is_null() {
             return Err("Tablet manager is null");
         }
@@ -24,7 +24,7 @@ impl Tablet {
             return Err("Failed to create wp_tablet");
         }
 
-        let device = InputDevice::new(seat, wlr_device, virtual_device);
+        let device = InputDevice::new(server, seat, wlr_device, virtual_device);
         if device.is_null() {
             return Err("Failed to create input device");
         }

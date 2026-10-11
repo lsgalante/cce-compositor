@@ -21,6 +21,8 @@
 //! - what the last manage pass applied: the outputs and seats in it, in
 //!   order, and the output configuration it carries ([`sent`]);
 //! - the display and its event loop;
+//! - the wlroots objects created once at init and never replaced
+//!   ([`handles`]);
 //! - the pending work: whether a manage pass and a render pass are wanted,
 //!   and the idle callback that runs them ([`pending`]).
 //!
@@ -44,6 +46,25 @@ pub struct Shared {
     adjust_held: Cell<bool>,
     sent: Sent,
     pending: Pending,
+    handles: Handles,
+}
+
+/// wlroots objects their owners create once in `Server::init` and never
+/// replace, recorded here so code with no path to the owner can use them —
+/// a seat's cursor, a device being attached — without a `server`
+/// back-pointer (RFC step 4). Null before the owner's init.
+pub struct Handles {
+    pub backend: Cell<*mut ffi::wlr_backend>,
+    pub session: Cell<*mut ffi::wlr_session>,
+    pub xwayland: Cell<*mut ffi::wlr_xwayland>,
+    pub output_layout: Cell<*mut ffi::wlr_output_layout>,
+    pub idle_notifier: Cell<*mut ffi::wlr_idle_notifier_v1>,
+    pub pointer_gestures: Cell<*mut ffi::wlr_pointer_gestures_v1>,
+    pub tablet_manager: Cell<*mut ffi::wlr_tablet_manager_v2>,
+    pub default_keymap: Cell<*mut ffi::xkb_keymap>,
+    /// The "default" seat, once `InputManager::init` has created it (null
+    /// while it is being created, and after the deinit).
+    pub default_seat: Cell<*mut crate::seat::Seat>,
 }
 
 thread_local! {
@@ -56,6 +77,17 @@ thread_local! {
         adjust_held: Cell::new(false),
         sent: Sent::new(),
         pending: Pending::new(),
+        handles: Handles {
+            backend: Cell::new(std::ptr::null_mut()),
+            session: Cell::new(std::ptr::null_mut()),
+            xwayland: Cell::new(std::ptr::null_mut()),
+            output_layout: Cell::new(std::ptr::null_mut()),
+            idle_notifier: Cell::new(std::ptr::null_mut()),
+            pointer_gestures: Cell::new(std::ptr::null_mut()),
+            tablet_manager: Cell::new(std::ptr::null_mut()),
+            default_keymap: Cell::new(std::ptr::null_mut()),
+            default_seat: Cell::new(std::ptr::null_mut()),
+        },
     });
 }
 
@@ -116,6 +148,11 @@ pub fn window_adjust_active() -> bool {
 /// through `reentry::wm` like any other.
 pub fn server_ptr() -> *mut crate::server::Server {
     shared().server.get()
+}
+
+/// The wlroots objects created once at init.
+pub fn handles() -> &'static Handles {
+    &shared().handles
 }
 
 /// What the last manage pass applied.

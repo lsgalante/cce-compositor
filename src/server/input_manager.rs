@@ -61,17 +61,21 @@ impl InputManager {
         ffi::wl_list_init(&mut self.objects);
 
         self.idle_notifier = ffi::wlr_idle_notifier_v1_create(wl_server);
+        crate::shared::handles().idle_notifier.set(self.idle_notifier);
         self.relative_pointer_manager = ffi::wlr_relative_pointer_manager_v1_create(wl_server);
         self.pointer_gestures = ffi::wlr_pointer_gestures_v1_create(wl_server);
+        crate::shared::handles().pointer_gestures.set(self.pointer_gestures);
         self.virtual_pointer_manager = ffi::wlr_virtual_pointer_manager_v1_create(wl_server);
         self.virtual_keyboard_manager = ffi::wlr_virtual_keyboard_manager_v1_create(wl_server);
         self.pointer_constraints = ffi::wlr_pointer_constraints_v1_create(wl_server);
         self.input_method_manager = ffi::wlr_input_method_manager_v2_create(wl_server);
         self.text_input_manager = ffi::wlr_text_input_manager_v3_create(wl_server);
         self.tablet_manager = ffi::wlr_tablet_v2_create(wl_server);
+        crate::shared::handles().tablet_manager.set(self.tablet_manager);
 
         // Create default seat
         self.default_seat = Seat::create(server, "default")?;
+        crate::shared::handles().default_seat.set(self.default_seat);
 
         if !(*server).xwayland.is_null() {
             ffi::wlr_xwayland_set_seat((*server).xwayland, (*self.default_seat).wlr_seat);
@@ -182,6 +186,7 @@ impl InputManager {
             }
         }
         self.default_seat = std::ptr::null_mut();
+        crate::shared::handles().default_seat.set(std::ptr::null_mut());
         log::info!("[deinit] seats destroyed");
 
         log::info!("[deinit] removing input manager listeners");
@@ -230,7 +235,7 @@ unsafe extern "C" fn bind_input_manager(
         let next = (*curr).next;
         let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
         if !(*device).virtual_device {
-            (*device).create_object(resource);
+            (*device).create_object(crate::shared::server_ptr(), resource);
         }
         curr = next;
     }
@@ -357,7 +362,7 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
 
     log::info!("new input device connected");
 
-    let device = crate::input_device::InputDevice::new(im.default_seat, wlr_device, false);
+    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), im.default_seat, wlr_device, false);
     
     let name_ptr = ffi::river_wlr_input_device_get_name(wlr_device);
     if !name_ptr.is_null() {
@@ -376,7 +381,7 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
     if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD {
         crate::keyboard::Keyboard::create(device);
     } else if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TABLET {
-        let _ = crate::tablet::Tablet::create(im.default_seat, wlr_device, false);
+        let _ = crate::tablet::Tablet::create(crate::shared::server_ptr(), im.default_seat, wlr_device, false);
     }
 
     // Attach device to the default seat
@@ -387,7 +392,8 @@ unsafe extern "C" fn handle_new_text_input(listener: *mut ffi::wl_listener, data
     let _im = crate::container_of!(listener, InputManager, new_text_input);
     let wlr_text_input = data as *mut ffi::wlr_text_input_v3;
 
-    if let Err(e) = crate::text_input::TextInput::create(wlr_text_input) {
+    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    if let Err(e) = crate::text_input::TextInput::create(wm, wlr_text_input) {
         log::error!("failed to create text input: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_text_input).resource);
     }
@@ -414,7 +420,7 @@ unsafe extern "C" fn handle_new_virtual_pointer(listener: *mut ffi::wl_listener,
     let virtual_pointer = (*event).new_pointer;
     let wlr_device = &mut (*virtual_pointer).pointer.base as *mut ffi::wlr_input_device;
 
-    let device = crate::input_device::InputDevice::new(im.default_seat, wlr_device, true);
+    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), im.default_seat, wlr_device, true);
 
     // Attach device to the default seat
     (*im.default_seat).attach_device(device);
@@ -435,7 +441,7 @@ unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener
         seat = im.default_seat;
     }
 
-    let device = crate::input_device::InputDevice::new(seat, wlr_device, true);
+    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), seat, wlr_device, true);
     crate::keyboard::Keyboard::create(device);
 
     // Same path a hardware keyboard takes: attach_device puts the keyboard in
@@ -447,6 +453,6 @@ unsafe extern "C" fn handle_pointer_refresh_idle(data: *mut std::ffi::c_void) {
     let manager = data as *mut InputManager;
     (*manager).pointer_refresh_idle = std::ptr::null_mut();
     for seat in (*manager).seats.ptrs() {
-        (*seat).cursor.refresh_after_scene_change(&mut *crate::reentry::wm((*seat).server));
+        (*seat).cursor.refresh_after_scene_change(&mut *crate::reentry::wm(crate::shared::server_ptr()));
     }
 }

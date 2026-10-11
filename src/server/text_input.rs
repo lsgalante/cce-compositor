@@ -17,7 +17,7 @@ pub struct TextInput {
 }
 
 impl TextInput {
-    pub unsafe fn create(wlr_text_input: *mut ffi::wlr_text_input_v3) -> Result<(), &'static str> {
+    pub unsafe fn create(wm: &crate::window_manager::WindowManager, wlr_text_input: *mut ffi::wlr_text_input_v3) -> Result<(), &'static str> {
         let wlr_seat = (*wlr_text_input).seat;
         let seat = ffi::river_wlr_seat_get_data(wlr_seat) as *mut Seat;
         if seat.is_null() {
@@ -54,7 +54,7 @@ impl TextInput {
         // A client that binds its text input after its surface took focus
         // (cce-ui binds lazily) is entered now; `InputRelay::focus` only
         // enters on a focus change.
-        let focused = (*seat).focused.surface(&*crate::reentry::wm((*seat).server));
+        let focused = (*seat).focused.surface(wm);
         if !focused.is_null()
             && ffi::wl_resource_get_client(ffi::river_wlr_surface_get_resource(focused))
                 == ffi::wl_resource_get_client((*wlr_text_input).resource)
@@ -86,7 +86,7 @@ unsafe extern "C" fn handle_enable(listener: *mut ffi::wl_listener, _data: *mut 
     }
 
     (*seat).relay.text_input = text_input;
-    let wm = &mut *crate::reentry::wm((*seat).server);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     (*seat).relay.osk.field_active(wm);
 
     let input_method = (*seat).relay.input_method;
@@ -108,7 +108,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         return;
     }
 
-    let wm = &mut *crate::reentry::wm((*seat).server);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     (*seat).relay.osk.field_active(wm);
     if !(*seat).relay.input_method.is_null() {
         (*seat).relay.send_input_method_state(wm);
@@ -123,7 +123,7 @@ unsafe extern "C" fn handle_disable(listener: *mut ffi::wl_listener, _data: *mut
     }
 
     if (*seat).relay.text_input == text_input {
-        (*seat).relay.disable_text_input(&mut *crate::reentry::wm((*seat).server));
+        (*seat).relay.disable_text_input(&mut *crate::reentry::wm(crate::shared::server_ptr()));
     }
 }
 
@@ -135,7 +135,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     }
 
     if (*seat).relay.text_input == text_input {
-        (*seat).relay.disable_text_input(&mut *crate::reentry::wm((*seat).server));
+        (*seat).relay.disable_text_input(&mut *crate::reentry::wm(crate::shared::server_ptr()));
     }
 
     (*text_input).enable.disconnect();

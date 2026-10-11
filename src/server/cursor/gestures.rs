@@ -32,7 +32,7 @@ pub(crate) fn swipe_focus_vector(binds: &[crate::config::GestureBind], fingers: 
 
 pub(crate) unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, swipe_begin_listener);
-    let wm = &mut *crate::reentry::wm((*cursor.seat).server);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_swipe_begin(cursor, wm, data);
 }
 
@@ -46,7 +46,7 @@ pub(crate) unsafe fn on_swipe_begin(cursor: &mut Cursor, wm: &mut crate::window_
     if !swipe_enabled {
         return;
     }
-    seat.handle_activity();
+    seat.handle_activity(wm);
     // A swipe or pinch is deliberate input, like a click or a key: it ends
     // the session-restore settling phase (`WindowManager::startup_input_seen`),
     // so the first focus of a restored window pans to it. Until 2026-09-26
@@ -65,8 +65,7 @@ pub(crate) unsafe fn on_swipe_begin(cursor: &mut Cursor, wm: &mut crate::window_
 
     log::info!("handle_swipe_begin: fingers={}", (*event).fingers);
 
-    let server = seat.server;
-    let pointer_gestures = (*server).input_manager.pointer_gestures;
+    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
         ffi::wlr_pointer_gestures_v1_send_swipe_begin(
             pointer_gestures,
@@ -79,7 +78,7 @@ pub(crate) unsafe fn on_swipe_begin(cursor: &mut Cursor, wm: &mut crate::window_
 
 pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, swipe_update_listener);
-    let wm = &mut *crate::reentry::wm((*cursor.seat).server);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_swipe_update(cursor, wm, data);
 }
 
@@ -93,7 +92,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
     if !swipe_enabled {
         return;
     }
-    seat.handle_activity();
+    seat.handle_activity(wm);
 
     // A step does not end the gesture: the travel restarts from zero at
     // the fire (below), so the fingers can keep going and step focus
@@ -271,7 +270,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
         // newly focused window clipped.
 
         if first_fire {
-            let pointer_gestures = (*seat.server).input_manager.pointer_gestures;
+            let pointer_gestures = crate::shared::handles().pointer_gestures.get();
             if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
                 ffi::wlr_pointer_gestures_v1_send_swipe_end(
                     pointer_gestures,
@@ -331,8 +330,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
     if cursor.gesture_triggered {
         return;
     }
-    let server = seat.server;
-    let pointer_gestures = (*server).input_manager.pointer_gestures;
+    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
         ffi::wlr_pointer_gestures_v1_send_swipe_update(
             pointer_gestures,
@@ -346,7 +344,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
 
 pub(crate) unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, swipe_end_listener);
-    let wm = &mut *crate::reentry::wm((*cursor.seat).server);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_swipe_end(cursor, wm, data);
 }
 
@@ -360,7 +358,7 @@ pub(crate) unsafe fn on_swipe_end(cursor: &mut Cursor, wm: &mut crate::window_ma
     if !swipe_enabled {
         return;
     }
-    seat.handle_activity();
+    seat.handle_activity(wm);
 
     log::info!("handle_swipe_end: cancelled={}", (*event).cancelled);
 
@@ -387,8 +385,7 @@ pub(crate) unsafe fn on_swipe_end(cursor: &mut Cursor, wm: &mut crate::window_ma
         return;
     }
 
-    let server = seat.server;
-    let pointer_gestures = (*server).input_manager.pointer_gestures;
+    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
         ffi::wlr_pointer_gestures_v1_send_swipe_end(
             pointer_gestures,
@@ -453,7 +450,7 @@ pub(crate) unsafe fn run_gesture_action(
 
 pub(crate) unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, pinch_begin_listener);
-    let wm = &mut *crate::reentry::wm((*cursor.seat).server);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_pinch_begin(cursor, wm, data);
 }
 
@@ -466,7 +463,7 @@ pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_
     if !pinch_enabled {
         return;
     }
-    seat.handle_activity();
+    seat.handle_activity(wm);
     // A swipe or pinch is deliberate input, like a click or a key: it ends
     // the session-restore settling phase (`WindowManager::startup_input_seen`),
     // so the first focus of a restored window pans to it. Until 2026-09-26
@@ -479,7 +476,6 @@ pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_
     cursor.gesture_scale = 1.0;
     cursor.gesture_triggered = false;
 
-    let server = seat.server;
 
     // A pinch starting over the desktop background (wallpaper or bare
     // desktop, same test as the right-click context menu) zooms the camera
@@ -512,7 +508,7 @@ pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_
         return;
     }
 
-    let pointer_gestures = (*server).input_manager.pointer_gestures;
+    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_pinch_begin(
             pointer_gestures,
@@ -525,7 +521,7 @@ pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_
 
 pub(crate) unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, pinch_update_listener);
-    let wm = &mut *crate::reentry::wm((*cursor.seat).server);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_pinch_update(cursor, wm, data);
 }
 
@@ -538,7 +534,7 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
     if !pinch_enabled {
         return;
     }
-    seat.handle_activity();
+    seat.handle_activity(wm);
 
     if cursor.view_drag_pinch_update((*event).scale) {
         return;
@@ -548,10 +544,10 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
         let new_zoom = crate::policy::camera::pinch_zoom(cursor.pinch_start_zoom, (*event).scale);
         let cx = cursor.x();
         let cy = cursor.y();
-        let wlr_output = (*(*seat).server).om.output_at(cx, cy);
+        let wlr_output = crate::output_manager::output_at(cx, cy);
         let (phys_x, phys_y) = if !wlr_output.is_null() {
             let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-            ffi::wlr_output_layout_get_box((*(*seat).server).om.output_layout, wlr_output, &mut output_box);
+            ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut output_box);
             (output_box.x as f64, output_box.y as f64)
         } else {
             (0.0, 0.0)
@@ -578,7 +574,7 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
         cursor.gesture_triggered = true;
         run_gesture_action(wm, matched_action, matched_command.as_deref());
 
-        let pointer_gestures = (*seat.server).input_manager.pointer_gestures;
+        let pointer_gestures = crate::shared::handles().pointer_gestures.get();
         if !pointer_gestures.is_null() {
             ffi::wlr_pointer_gestures_v1_send_pinch_end(
                 pointer_gestures,
@@ -590,8 +586,7 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
         return;
     }
 
-    let server = seat.server;
-    let pointer_gestures = (*server).input_manager.pointer_gestures;
+    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_pinch_update(
             pointer_gestures,
@@ -607,7 +602,7 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
 
 pub(crate) unsafe extern "C" fn handle_pinch_end(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, pinch_end_listener);
-    let wm = &mut *crate::reentry::wm((*cursor.seat).server);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_pinch_end(cursor, wm, data);
 }
 
@@ -620,7 +615,7 @@ pub(crate) unsafe fn on_pinch_end(cursor: &mut Cursor, wm: &mut crate::window_ma
     if !pinch_enabled {
         return;
     }
-    seat.handle_activity();
+    seat.handle_activity(wm);
 
     if cursor.view_drag_pinch_end(wm) {
         return;
@@ -638,8 +633,7 @@ pub(crate) unsafe fn on_pinch_end(cursor: &mut Cursor, wm: &mut crate::window_ma
         return;
     }
 
-    let server = seat.server;
-    let pointer_gestures = (*server).input_manager.pointer_gestures;
+    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_pinch_end(
             pointer_gestures,
@@ -655,10 +649,10 @@ pub(crate) unsafe extern "C" fn handle_hold_begin(listener: *mut ffi::wl_listene
     let event = data as *mut ffi::wlr_pointer_hold_begin_event;
 
     let seat = &mut *cursor.seat;
-    seat.handle_activity();
+    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    seat.handle_activity(wm);
 
-    let server = seat.server;
-    let pointer_gestures = (*server).input_manager.pointer_gestures;
+    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_hold_begin(
             pointer_gestures,
@@ -674,10 +668,10 @@ pub(crate) unsafe extern "C" fn handle_hold_end(listener: *mut ffi::wl_listener,
     let event = data as *mut ffi::wlr_pointer_hold_end_event;
 
     let seat = &mut *cursor.seat;
-    seat.handle_activity();
+    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    seat.handle_activity(wm);
 
-    let server = seat.server;
-    let pointer_gestures = (*server).input_manager.pointer_gestures;
+    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_hold_end(
             pointer_gestures,

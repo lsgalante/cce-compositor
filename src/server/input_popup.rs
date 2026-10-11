@@ -89,7 +89,6 @@ impl InputPopup {
             None => return,
         };
 
-        let server = (*(*self.input_relay).seat).server;
 
         let popup_tree = match focused.data {
             SceneNodeDataVal::Window(id) => match wm.windows.get(id) {
@@ -117,7 +116,7 @@ impl InputPopup {
 
         let mut cursor_box = (*(*text_input).wlr_text_input).current.cursor_rectangle;
 
-        let wlr_output = (*server).om.output_at(
+        let wlr_output = crate::output_manager::output_at(
             (focused_x + cursor_box.x) as f64,
             (focused_y + cursor_box.y) as f64,
         );
@@ -131,7 +130,7 @@ impl InputPopup {
             width: 0,
             height: 0,
         };
-        ffi::wlr_output_layout_get_box((*server).om.output_layout, wlr_output, &mut output_box);
+        ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut output_box);
 
         cursor_box.x += focused_x - output_box.x;
         cursor_box.y += focused_y - output_box.y;

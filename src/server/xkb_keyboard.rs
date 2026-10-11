@@ -26,8 +26,7 @@ pub struct XkbKeyboardObject {
 }
 
 impl XkbKeyboard {
-    pub unsafe fn init(
-        parent_device: *mut InputDevice,
+    pub unsafe fn init(server: *mut crate::server::Server, parent_device: *mut InputDevice,
     ) -> Box<Self> {
         let mut xkb_kbd = Box::new(Self {
             parent_device,
@@ -44,7 +43,6 @@ impl XkbKeyboard {
         ffi::wl_list_init(&mut xkb_kbd.objects);
         ffi::wl_list_init(&mut xkb_kbd.link);
 
-        let server = (*(*parent_device).seat).server;
         let keyboards_head = &mut (*server).xkb_config.keyboards as *mut ffi::wl_list as *mut WlList;
         crate::server::wl_list_insert((*keyboards_head).prev, &mut xkb_kbd.link as *mut ffi::wl_list as *mut WlList);
 

@@ -19,8 +19,7 @@ pub struct LibinputDeviceObject {
 }
 
 impl LibinputDevice {
-    pub unsafe fn init(
-        parent_device: *mut InputDevice,
+    pub unsafe fn init(server: *mut crate::server::Server, parent_device: *mut InputDevice,
         handle: *mut ffi::libinput_device,
     ) -> Box<Self> {
         let mut dev = Box::new(Self {
@@ -33,7 +32,6 @@ impl LibinputDevice {
         ffi::wl_list_init(&mut dev.objects);
         ffi::wl_list_init(&mut dev.link);
 
-        let server = (*(*parent_device).seat).server;
         let devices_head = &mut (*server).libinput_config.devices as *mut ffi::wl_list as *mut WlList;
         crate::server::wl_list_insert((*devices_head).prev, &mut dev.link as *mut ffi::wl_list as *mut WlList);
 

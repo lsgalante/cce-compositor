@@ -51,12 +51,11 @@ impl TabletTool {
             ffi::wlr_cursor_destroy(wlr_cursor);
             return Err("Seat data is null");
         }
-        let server = (*seat).server;
-        let output_layout = (*server).om.output_layout;
+        let output_layout = crate::shared::handles().output_layout.get();
 
         ffi::wlr_cursor_attach_output_layout(wlr_cursor, output_layout);
 
-        let tablet_manager = (*server).input_manager.tablet_manager;
+        let tablet_manager = crate::shared::handles().tablet_manager.get();
         let wp_tool = ffi::wlr_tablet_tool_create(tablet_manager, wlr_seat, wlr_tool);
         if wp_tool.is_null() {
             ffi::wlr_cursor_destroy(wlr_cursor);
@@ -304,7 +303,7 @@ impl TabletTool {
     }
 
     pub unsafe fn passthrough(&mut self, wm: &crate::window_manager::WindowManager, tablet: *mut Tablet) {
-        let server = (*(*(*tablet).device).seat).server;
+        let server = wm.server;
         let lx = self.cursor_x();
         let ly = self.cursor_y();
 

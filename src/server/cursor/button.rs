@@ -6,7 +6,7 @@ use super::*;
 
 pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, button_listener);
-    let wm = &mut *crate::reentry::wm((*cursor.seat).server);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_button(cursor, wm, data);
 }
 
@@ -14,7 +14,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
 pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void) {
     let stores = wm.stores();
     let event = data as *mut ffi::wlr_pointer_button_event;
-    (*cursor.seat).handle_activity();
+    (*cursor.seat).handle_activity(wm);
     if cursor.view_drag.is_some() {
         cursor.end_view_drag(wm, "button");
     }
@@ -26,7 +26,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
     let seat = &mut *cursor.seat;
     let lx = cursor.x();
     let ly = cursor.y();
-    let server = seat.server;
+    let server = wm.server;
 
     // First deliberate input ends the session-restore settling phase (see
     // the focus gate in Window::map).

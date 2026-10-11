@@ -553,8 +553,19 @@ the manage pass (`Seat::manage_start` returns true) and handed to
 `sent().seats` (`Seat::link_sent`) is still intrusive. Test two outputs with a copy of `cce-shadow` whose
 `WLR_HEADLESS_OUTPUTS=1` reads 2.
 
-**Server back-pointers** (RFC step 4, 2026-10-11): only `Seat` and
-`WindowManager` still hold `server: *mut Server`. `Window`'s drawing, effect
+**Server back-pointers** (RFC step 4, 2026-10-11): only `WindowManager` still
+holds `server: *mut Server`. The wlroots objects created once at init — the
+backend, session, Xwayland, output layout, idle notifier, pointer gestures,
+tablet manager, default keymap and default seat — are recorded in
+`crate::shared::handles()` where their owner creates them, so a seat's cursor
+or a device being attached reads them there (`output_manager::output_at(lx,
+ly)` is the layout lookup without the output manager). A seat or cursor path
+that needs a mutable subsystem (the idle manager, the lock state, the layer
+surfaces) takes it through `wm.server` — `Seat::handle_activity(wm)` — the
+window manager's one remaining reach until it is handed a Ctx; the input
+devices' constructors (`InputDevice::new`, `Tablet::create`, the libinput and
+xkb `init`s, `create_object`, `KeyboardGroup::send_state`) take the server
+from the input manager's callback that starts them. `Window`'s drawing, effect
 and placement code runs with the window borrowed from `wm.windows`, so it
 cannot take the window manager; it takes `crate::ctx::Stores` instead — the
 output and seat stores, `Copy`, borrowed to read (`stores.seats.focuses(id)`,

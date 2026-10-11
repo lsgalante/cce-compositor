@@ -54,8 +54,7 @@ impl Keyboard {
                 ffi::xkb_keymap_ref(keymap);
             }
         } else {
-            let server = (*(*device).seat).server;
-            keymap = (*server).xkb_config.default_keymap;
+            keymap = crate::shared::handles().default_keymap.get();
             if !keymap.is_null() {
                 ffi::xkb_keymap_ref(keymap);
             }
@@ -93,7 +92,7 @@ impl Keyboard {
             (*keyboard).keymap_listener.connect(keymap_signal, handle_keymap);
         }
 
-        if !virtual_device && should_set_keymap((*(*device).seat).server) {
+        if !virtual_device && should_set_keymap() {
             if !keymap.is_null() {
                 ffi::wlr_keyboard_set_keymap(wlr_keyboard, keymap);
             }
@@ -181,7 +180,7 @@ impl Keyboard {
 
     pub unsafe fn set_keymap(&mut self, keymap: *mut ffi::xkb_keymap) {
         assert!(!(*self.device).virtual_device);
-        if should_set_keymap((*(*self.device).seat).server) {
+        if should_set_keymap() {
             ffi::wlr_keyboard_set_keymap(self.wlr_keyboard, keymap);
         }
         if !self.config.keymap.is_null() {
@@ -205,8 +204,8 @@ unsafe extern "C" fn destroy_callback(data: *mut std::ffi::c_void) {
     Keyboard::destroy(data as *mut Keyboard);
 }
 
-unsafe fn should_set_keymap(server: *mut crate::server::Server) -> bool {
-    let backend = (*server).backend;
+unsafe fn should_set_keymap() -> bool {
+    let backend = crate::shared::handles().backend.get();
     ffi::wlr_backend_is_wl(backend) || ffi::wlr_backend_is_x11(backend)
 }
 
@@ -266,7 +265,7 @@ unsafe extern "C" fn handle_key(listener: *mut ffi::wl_listener, data: *mut std:
         // First deliberate input ends the session-restore settling phase
         // (see the focus gate in Window::map).
         if !keyboard.group.is_null() && !(*keyboard.group).seat.is_null() {
-            (*crate::reentry::wm((*(*keyboard.group).seat).server)).startup_input_seen = true;
+            (*crate::reentry::wm(crate::shared::server_ptr())).startup_input_seen = true;
         }
     }
 
@@ -315,8 +314,8 @@ unsafe extern "C" fn handle_modifiers(listener: *mut ffi::wl_listener, _data: *m
         (*keyboard.group).process_modifiers(*modifiers);
         
         let seat = (*keyboard.group).seat;
-        if !seat.is_null() && !(*seat).server.is_null() {
-            let wm = &mut *crate::reentry::wm((*seat).server);
+        if !seat.is_null() && !crate::shared::server_ptr().is_null() {
+            let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
             wm.update_status();
             wm.refresh_adjust_held();
         }
