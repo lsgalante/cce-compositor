@@ -68,7 +68,7 @@ impl Osk {
 
     /// The seat's text input was enabled, or committed new state while
     /// enabled.
-    pub unsafe fn field_active(&mut self) {
+    pub unsafe fn field_active(&mut self, wm: &mut crate::window_manager::WindowManager) {
         // Whatever raised the field, a hide queued by the last one is moot.
         self.cancel_hide();
         if !self.enabled() {
@@ -78,12 +78,12 @@ impl Osk {
             return;
         }
         log::debug!("osk: a touched field activated; showing the board");
-        (*crate::reentry::wm(self.server)).execute_action(&crate::config::Action::Spawn, Some(SHOW_CMD));
+        wm.execute_action(&crate::config::Action::Spawn, Some(SHOW_CMD));
         self.shown_by_us = true;
     }
 
     /// The seat's text input went away (disabled, destroyed, or focus left).
-    pub unsafe fn field_gone(&mut self) {
+    pub unsafe fn field_gone(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if !self.shown_by_us || self.server.is_null() {
             return;
         }
@@ -92,7 +92,7 @@ impl Osk {
             self.hide_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_hide_timer), self as *mut Osk as *mut _);
             if self.hide_timer.is_null() {
                 log::error!("osk: failed to create the hide timer; hiding now");
-                self.hide_now();
+                self.hide_now(wm);
                 return;
             }
         }
@@ -105,19 +105,19 @@ impl Osk {
         }
     }
 
-    unsafe fn hide_now(&mut self) {
+    unsafe fn hide_now(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if !self.shown_by_us {
             return;
         }
         self.shown_by_us = false;
         log::debug!("osk: the field let go; hiding the board");
-        (*crate::reentry::wm(self.server)).execute_action(&crate::config::Action::Spawn, Some(HIDE_CMD));
+        wm.execute_action(&crate::config::Action::Spawn, Some(HIDE_CMD));
     }
 }
 
 unsafe extern "C" fn handle_hide_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let osk = &mut *(data as *mut Osk);
-    osk.hide_now();
+    osk.hide_now(&mut *crate::reentry::wm(osk.server));
     0
 }
 

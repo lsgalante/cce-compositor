@@ -173,12 +173,13 @@ unsafe extern "C" fn toplevel_set_floating(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    let wm = &mut *crate::reentry::wm(server);
+    if let Some(window) = resolve_window(wm, server, window_key) {
         (*window).tiling_mode = crate::tiling::TilingMode::Floating;
         (*window).mode_locked = true;
-        if let Some(seat) = (*crate::reentry::wm(server)).first_seat() {
+        if let Some(seat) = wm.first_seat() {
             if (*seat).focused == crate::seat::Focus::Window(window) {
-                (*crate::reentry::wm(server)).raise_window(window);
+                wm.raise_window(window);
             }
         }
         crate::shared::pending().dirty_windowing();
@@ -198,7 +199,7 @@ unsafe extern "C" fn toplevel_unset_floating(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
         (*window).mode_locked = false;
         crate::shared::pending().dirty_windowing();
 
@@ -217,7 +218,7 @@ unsafe extern "C" fn toplevel_set_maximized(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
         (*window).tiling_mode = crate::tiling::TilingMode::Tiled;
         (*window).mode_locked = true;
         (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Maximize;
@@ -235,7 +236,7 @@ unsafe extern "C" fn toplevel_unset_maximized(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
         (*window).mode_locked = false;
         (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Unmaximize;
         crate::shared::pending().dirty_windowing();
@@ -252,10 +253,11 @@ unsafe extern "C" fn toplevel_set_fullscreen(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    let wm = &mut *crate::reentry::wm(server);
+    if let Some(window) = resolve_window(wm, server, window_key) {
         (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());
         crate::shared::pending().dirty_windowing();
-        (*crate::reentry::wm(server)).apply_client_fullscreen(window, true);
+        wm.apply_client_fullscreen(window, true);
     }
 }
 
@@ -269,10 +271,11 @@ unsafe extern "C" fn toplevel_unset_fullscreen(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    let wm = &mut *crate::reentry::wm(server);
+    if let Some(window) = resolve_window(wm, server, window_key) {
         (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Exit;
         crate::shared::pending().dirty_windowing();
-        (*crate::reentry::wm(server)).apply_client_fullscreen(window, false);
+        wm.apply_client_fullscreen(window, false);
     }
 }
 
@@ -286,7 +289,7 @@ unsafe extern "C" fn toplevel_set_minimized(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
         (*window).wm_scheduled.minimize_requested = true;
         crate::shared::pending().dirty_windowing();
     }
@@ -302,7 +305,7 @@ unsafe extern "C" fn toplevel_set_popup(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
         (*window).tiling_mode = crate::tiling::TilingMode::Popup;
         (*window).mode_locked = true;
         crate::shared::pending().dirty_windowing();
@@ -319,7 +322,7 @@ unsafe extern "C" fn toplevel_unset_popup(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
         (*window).mode_locked = false;
         crate::shared::pending().dirty_windowing();
     }
@@ -335,7 +338,7 @@ unsafe extern "C" fn toplevel_set_utility(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
         // mode_locked is the "explicit beats heuristic" latch (same as
         // set_popup): get_mode_for_window's app_id guessing stands down.
         (*window).tiling_mode = crate::tiling::TilingMode::Utility;
@@ -354,7 +357,7 @@ unsafe extern "C" fn toplevel_unset_utility(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
         // Unlike unset_popup, the raw field must be reset too: every Utility
         // gate (resize rejection, save exclusion, the un-tile exemptions)
         // reads `tiling_mode` directly, so leaving it at Utility with the
@@ -376,7 +379,7 @@ unsafe extern "C" fn toplevel_set_grid(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
         log::info!("[Grid] set_grid declared");
         (*window).grid_declared = true;
         crate::shared::pending().dirty_windowing();
@@ -394,7 +397,7 @@ unsafe extern "C" fn toplevel_ack_grid_patch(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
         // Only the latest outstanding patch can be acked; a stale serial
         // (superseded patch) is ignored — the client should already be
         // rendering the newer one.
@@ -422,7 +425,7 @@ unsafe extern "C" fn toplevel_set_popover_region(
     }
     let server = (*data).server;
     let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(server, window_key) {
+    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
         // Surface-local LOGICAL px; the consumers scale it themselves. No
         // dirty_windowing: this changes no geometry, and the commit that
         // drew the popover already schedules the frame that will redraw
@@ -453,10 +456,10 @@ static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_tople
     set_popover_region: Some(toplevel_set_popover_region),
 };
 
-unsafe fn resolve_window(server: *mut Server, key: SlotMapKey) -> Option<*mut Window> {
+unsafe fn resolve_window(wm: &crate::window_manager::WindowManager, server: *mut Server, key: SlotMapKey) -> Option<*mut Window> {
     if server.is_null() {
         return None;
     }
-    let windows_map = &(*crate::reentry::wm(server)).windows;
+    let windows_map = &wm.windows;
     windows_map.get(key).copied().filter(|&w| !w.is_null())
 }

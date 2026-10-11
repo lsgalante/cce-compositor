@@ -1670,7 +1670,7 @@ impl WindowManager {
                 (*w).fs_on_desk = false;
                 continue;
             }
-            let returning = match ((*w).fullscreen_anchor_pan(), self.target_desk_pan_x, self.target_desk_pan_y) {
+            let returning = match ((*w).fullscreen_anchor_pan(self), self.target_desk_pan_x, self.target_desk_pan_y) {
                 (Some((ax, ay)), Some(tx), Some(ty)) => (tx - ax).abs() < 0.5 && (ty - ay).abs() < 0.5,
                 _ => false,
             };
@@ -3053,7 +3053,7 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
         if (*window).step_border_fade() {
             moving = true;
         }
-        if (*window).step_adjust_dim() {
+        if (*window).step_adjust_dim(&mut *wm) {
             moving = true;
         }
         if (*window).step_map_fade() {

@@ -360,7 +360,7 @@ impl Cursor {
             if first_on_desk {
                 self.claim_all(wm);
                 self.touch_points.insert(id, TouchPoint { lx, ly, route: TouchRoute::Claimed });
-                self.start_desk();
+                self.start_desk(wm);
                 return;
             }
         }
@@ -558,8 +558,7 @@ impl Cursor {
         }
     }
 
-    unsafe fn start_desk(&mut self) {
-        let wm = &mut (*crate::reentry::wm((*self.seat).server));
+    unsafe fn start_desk(&mut self, wm: &mut crate::window_manager::WindowManager) {
         wm.stop_panning_animation();
         self.touch_claim = Claim::Desk {
             track: Track::new(self.claimed_shape()),
@@ -629,7 +628,7 @@ impl Cursor {
                         }
                         MultiKind::Pinch { .. } => {
                             log::info!("touch: {fingers}-finger pinch");
-                            self.touch_pinch(fingers, track.scale)
+                            self.touch_pinch(wm, fingers, track.scale)
                         }
                         MultiKind::Undecided => MultiKind::Undecided,
                     },
@@ -639,7 +638,7 @@ impl Cursor {
                         }
                         MultiKind::Swipe
                     }
-                    MultiKind::Pinch { fired: false } => self.touch_pinch(fingers, track.scale),
+                    MultiKind::Pinch { fired: false } => self.touch_pinch(wm, fingers, track.scale),
                     fired @ MultiKind::Pinch { fired: true } => fired,
                 };
                 self.touch_claim = Claim::Multi { track, kind };
@@ -743,9 +742,8 @@ impl Cursor {
     }
 
     /// Fire a pinch bind if the spread has gone far enough; once per gesture.
-    unsafe fn touch_pinch(&mut self, fingers: u32, scale: f64) -> MultiKind {
+    unsafe fn touch_pinch(&mut self, wm: &mut crate::window_manager::WindowManager, fingers: u32, scale: f64) -> MultiKind {
         let mods = gesture_mods(&*self.seat);
-        let wm = &mut (*crate::reentry::wm((*self.seat).server));
         match gesture_bind("pinch", fingers, mods, |d| pinch_hits(d, scale)) {
             Some((action, command)) => {
                 log::info!("touch: pinch fired {action:?}");

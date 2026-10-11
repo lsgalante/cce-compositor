@@ -570,6 +570,22 @@ touch claim paths, `Window::virtual_to_screen`, `start_map_fade` and
 teardown still fetch it at their call with `reentry::wm`; those are entry
 points, outside any window-manager method.
 
+**The rule now (since the last slice, 2026-10-10): `reentry::wm` appears
+only in `extern "C"` entry points, once each** — 83 of them (wlroots
+listeners, timers, idle callbacks, protocol request handlers), every one
+binding `let wm = &mut *crate::reentry::wm(…)` once, at function scope,
+and handing it down. Every other function that needs the window manager
+takes `wm` (`Window::map`/`unmap`/`create`, placement and restore,
+`Output::create` / `render_and_commit` and the grid drawing, X11 min-size
+and placement, the OSK, idle lock, keyboard builtins, …). `Server` methods
+borrow the field instead (`Server::deinit` passes `&mut self.wm` beside
+`&mut self.input_manager` — disjoint fields, no `unsafe`), and
+`Server::default` writes the window manager's fields through
+`addr_of_mut!` raw places, not through `reentry::wm`. An entry point with
+no object leading to the server (a keyboard group without a seat) uses
+`crate::shared::server_ptr()`. A new callback fetches once at its top; a
+new helper takes `wm` — it never fetches.
+
 ### Scene nodes are owned handles (`scene_handle.rs`, since 2026-10-10)
 
 `SceneTree`, `SceneRect`, `SceneBuffer`, `SceneBevel` (and the other scenefx

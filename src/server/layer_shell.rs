@@ -451,7 +451,8 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
             let seat = crate::container_of!(curr, Seat, link);
             if let crate::seat::Focus::LayerSurface(surface) = (*seat).focused {
                 if surface == (*wlr_layer_surface).surface {
-                    (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::None);
+                    let wm = &mut *crate::reentry::wm((*seat).server);
+                    (*seat).focus(wm, crate::seat::Focus::None);
                     // cce-cloud surfaces skip the focus_next fallback: the bare
                     // launcher is about to be replaced by whatever it spawned,
                     // and refocusing the old window first would fight the new
@@ -473,7 +474,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                         // never a keyboard-focus target, so those keep the old
                         // leave-it-unfocused behavior.
                         if !parent_app_id.starts_with("cce-status") {
-                            for &win_ptr in (*crate::reentry::wm(server)).windows.iter() {
+                            for &win_ptr in wm.windows.iter() {
                                 if win_ptr.is_null()
                                     || (*win_ptr).closed
                                     || (*win_ptr).minimized
@@ -485,14 +486,14 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                                     // Dismissing chrome, not switching windows:
                                     // the camera stays where the user left it.
                                     (*seat).suppress_focus_pan = true;
-                                    (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::Window(win_ptr));
+                                    (*seat).focus(wm, crate::seat::Focus::Window(win_ptr));
                                     (*seat).suppress_focus_pan = false;
                                     break;
                                 }
                             }
                         }
                     } else if !is_cce_cloud {
-                        (*crate::reentry::wm(server)).focus_next_visible_window(seat);
+                        wm.focus_next_visible_window(seat);
                     }
                 }
             }

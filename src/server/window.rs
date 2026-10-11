@@ -765,12 +765,12 @@ impl Window {
     /// on its output — where focusing it pans back to, so a window that
     /// stepped aside slides in and lands pinned without a jump. `None`
     /// without an output to fill.
-    pub unsafe fn fullscreen_anchor_pan(&self) -> Option<(f64, f64)> {
+    pub unsafe fn fullscreen_anchor_pan(&self, wm: &crate::window_manager::WindowManager) -> Option<(f64, f64)> {
         let output = self.fullscreen_output();
         if output.is_null() {
             return None;
         }
-        let zoom = (*crate::reentry::wm(self.server)).desk_zoom.max(0.01);
+        let zoom = wm.desk_zoom.max(0.01);
         let (first_x, first_y, _, _) = self.first_enabled_output_box();
         Some((
             self.virtual_x - ((*output).sent.x as f64 - first_x) / zoom,
@@ -793,7 +793,7 @@ impl Window {
         {
             return;
         }
-        let Some((px, py)) = self.fullscreen_anchor_pan() else { return };
+        let Some((px, py)) = self.fullscreen_anchor_pan(wm) else { return };
         if (wm.desk_pan_x - px).abs() >= 0.5 || (wm.desk_pan_y - py).abs() >= 0.5 {
             log::info!(
                 "[Fullscreen] {:?} enters at its saved desk spot ({:.0}, {:.0}); panning there",
@@ -843,7 +843,7 @@ impl Window {
     }
 
 
-    pub unsafe fn create(impl_type: WindowImpl, server: *mut Server) -> Result<*mut Self, &'static str> {
+    pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, impl_type: WindowImpl, server: *mut Server) -> Result<*mut Self, &'static str> {
         // Every node below is a handle: an early return drops what was made
         // so far, which destroys it. Only the capture scene, a scene root
         // rather than a node, is cleaned up by hand.
@@ -992,8 +992,8 @@ impl Window {
             scale: 1.0,
             last_applied_scale: 1.0,
             buffers_scaled: false,
-            virtual_x: unsafe { (*crate::reentry::wm(server)).desk_pan_x + 100.0 },
-            virtual_y: unsafe { (*crate::reentry::wm(server)).desk_pan_y + 100.0 },
+            virtual_x: wm.desk_pan_x + 100.0,
+            virtual_y: wm.desk_pan_y + 100.0,
             resize_start_vx: 0.0,
             resize_start_vy: 0.0,
             resize_start_w: 0,
@@ -1089,7 +1089,7 @@ impl Window {
 
 
         let raw = Box::into_raw(window);
-        let key = (*crate::reentry::wm((*raw).server)).windows.put(raw);
+        let key = wm.windows.put(raw);
         (*raw).ref_key = key;
         (*raw).node.init();
 
@@ -1332,7 +1332,7 @@ impl Window {
         (*hints).flags & input_flag != 0 && (*hints).input == 0
     }
 
-    pub unsafe fn map(&mut self) -> Result<(), &'static str> {
+    pub unsafe fn map(&mut self, wm: &mut crate::window_manager::WindowManager) -> Result<(), &'static str> {
         log::debug!("window '{:?}' mapped", self.get_title());
         if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
             log::debug!("[LinkDbg] map app={:?} was_state={:?} linked={}",
@@ -1342,17 +1342,17 @@ impl Window {
         assert_eq!(self.state, WindowState::Initialized);
         self.state = WindowState::Mapped;
 
-        self.try_restore();
-        self.try_hint_placement();
+        self.try_restore(wm);
+        self.try_hint_placement(wm);
         // Last: a session modal's placement is not negotiable, so it wins
         // over both the remembered geometry and any stale place-next hint.
-        self.try_center_on_view();
-        self.try_center_on_sibling();
+        self.try_center_on_view(wm);
+        self.try_center_on_sibling(wm);
         // After every placement decision, including the invocation-square one:
         // whichever chose this spot, a tiled window must not open stacked on
         // another. The anchor rule already avoids that when any corner is
         // clear, so this only acts when none was.
-        self.avoid_tiled_overlap();
+        self.avoid_tiled_overlap(wm);
 
         let surface = self.root_surface();
         if !surface.is_null() {
@@ -1461,8 +1461,8 @@ impl Window {
         } else {
             let mut should_focus = true;
             if self.session_restored && self.restored_focused {
-                (*crate::reentry::wm(self.server)).restored_focused_window_mapped = true;
-                if (*crate::reentry::wm(self.server)).startup_input_seen {
+                wm.restored_focused_window_mapped = true;
+                if wm.startup_input_seen {
                     // The user already typed/clicked somewhere (e.g. into
                     // the keepassxc unlock dialog) while this window was
                     // still loading — mapping now must not yank focus out
@@ -1472,9 +1472,9 @@ impl Window {
                 } else {
                     log::info!("[FocusRestore] Restored focused window mapped: {:?}", self.get_title());
                 }
-            } else if (*crate::reentry::wm(self.server)).has_restored_focused_window
-                && !(*crate::reentry::wm(self.server)).restored_focused_window_mapped
-                && !(*crate::reentry::wm(self.server)).startup_input_seen
+            } else if wm.has_restored_focused_window
+                && !wm.restored_focused_window_mapped
+                && !wm.startup_input_seen
             {
                 // Strict settle phase: until the session's focused window
                 // maps (or the user intervenes), NOTHING else auto-focuses —
@@ -1484,8 +1484,8 @@ impl Window {
                 // fastest.
                 log::info!("[FocusRestore] Holding focus for the session's focused window; {:?} maps unfocused", self.get_title());
                 should_focus = false;
-            } else if (*crate::reentry::wm(self.server)).has_restored_focused_window
-                && (*crate::reentry::wm(self.server)).restored_focused_window_mapped
+            } else if wm.has_restored_focused_window
+                && wm.restored_focused_window_mapped
             {
                 if self.session_restored {
                     // A restored sibling mapping after the session's focused
@@ -1496,7 +1496,7 @@ impl Window {
                     // its remembered off-viewport spot for the whole session.
                     log::info!("[FocusRestore] Blocking focus to non-focused restored window {:?} because restored focused window is already mapped", self.get_title());
                     should_focus = false;
-                } else if !(*crate::reentry::wm(self.server)).startup_input_seen {
+                } else if !wm.startup_input_seen {
                     // A window mapping unbidden while the session is still
                     // settling (no key/button pressed yet) — an autostart
                     // like keepassxc popping up after the restored windows.
@@ -1518,7 +1518,7 @@ impl Window {
             if should_focus {
                 if let Some(app_id) = self.get_app_id_string() {
                     let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
-                    if (*crate::reentry::wm(self.server)).take_recent_vanish(&app_id, program.as_deref()) {
+                    if wm.take_recent_vanish(&app_id, program.as_deref()) {
                         log::info!("[FocusRestore] Blocking focus steal by reconnecting client {:?} ({})", self.get_title(), app_id);
                         should_focus = false;
                     }
@@ -1540,12 +1540,12 @@ impl Window {
                 && !self.is_status_bar()
                 && !self.is_wallpaper()
             {
-                let resolved = (*crate::reentry::wm(self.server)).get_mode_for_window(self as *mut Window);
+                let resolved = wm.get_mode_for_window(self as *mut Window);
                 if !matches!(
                     resolved,
                     crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
                 ) {
-                    (*crate::reentry::wm(self.server)).pan_overview_to_window(self as *mut Window);
+                    wm.pan_overview_to_window(self as *mut Window);
                 }
             }
 
@@ -1559,7 +1559,7 @@ impl Window {
                 while curr != seats {
                     let next = (*curr).next;
                     let seat = crate::container_of!(curr, crate::seat::Seat, link);
-                    (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::Window(self as *mut Window));
+                    (*seat).focus(wm, crate::seat::Focus::Window(self as *mut Window));
                     curr = next;
                 }
             }
@@ -1576,7 +1576,7 @@ impl Window {
         if self.wants_map_fade() && fade_ms > 0 {
             self.map_fade = 0.0;
         }
-        self.start_map_fade(&mut *crate::reentry::wm(self.server), 1.0, fade_ms);
+        self.start_map_fade(wm, 1.0, fade_ms);
 
         crate::shared::pending().dirty_windowing();
         Ok(())
@@ -1595,7 +1595,7 @@ impl Window {
         }
     }
 
-    pub unsafe fn unmap(&mut self) {
+    pub unsafe fn unmap(&mut self, wm: &mut crate::window_manager::WindowManager) {
         log::debug!("window '{:?}' unmapped", self.get_title());
         if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
             log::debug!("[LinkDbg] unmap app={:?} state={:?} linked={}",
@@ -1620,7 +1620,7 @@ impl Window {
         {
             if let Some(app_id) = self.get_app_id_string() {
                 let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
-                (*crate::reentry::wm(self.server)).note_vanished(app_id, program);
+                wm.note_vanished(app_id, program);
             }
         }
         self.commit.disconnect();
@@ -1790,7 +1790,7 @@ impl Window {
     /// that origin, or `None` when no resize is armed. The anchoring outlives
     /// the seat op by one commit — the last configure is usually still in
     /// flight at release — so the first commit after the op disarms it.
-    pub unsafe fn anchor_resize_commit(&mut self, committed_w: i32, committed_h: i32) -> Option<(i32, i32)> {
+    pub unsafe fn anchor_resize_commit(&mut self, wm: &mut crate::window_manager::WindowManager, committed_w: i32, committed_h: i32) -> Option<(i32, i32)> {
         let edges = self.resize_edges?;
         let resize_active = self.resize_op_active();
 
@@ -1801,7 +1801,7 @@ impl Window {
             self.virtual_y = self.resize_start_vy + (self.resize_start_h as f64 - committed_h as f64);
         }
 
-        let (final_x, final_y) = self.virtual_to_screen(&*crate::reentry::wm(self.server), self.virtual_x, self.virtual_y);
+        let (final_x, final_y) = self.virtual_to_screen(wm, self.virtual_x, self.virtual_y);
         self.rendering_requested.x = final_x;
         self.rendering_requested.y = final_y;
         self.box_geom.x = final_x;
@@ -2247,9 +2247,9 @@ impl Window {
         ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_VSYNC
     }
 
-    pub unsafe fn notify_title(&mut self) {
+    pub unsafe fn notify_title(&mut self, wm: &mut crate::window_manager::WindowManager) {
         self.wm_scheduled.dirty_title = true;
-        self.try_restore();
+        self.try_restore(wm);
         // A title is arrangement input only through a mode rule that matches
         // on it (`title=` in a rule); the built-in policy is what runs, so
         // nothing else in the manage sequence reads it. A
@@ -2257,7 +2257,6 @@ impl Window {
         // and each retitle used to cost a full manage/arrange/render pass.
         // Without a title rule the title's other consumers are the status
         // bar's `title` topic and the saved-state file, so feed those directly.
-        let wm = &mut (*crate::reentry::wm(self.server));
         if wm.mode_rules.iter().any(|r| r.title_pattern.is_some()) {
             crate::shared::pending().dirty_windowing();
         } else {
@@ -2283,13 +2282,13 @@ impl Window {
         }
     }
 
-    pub unsafe fn notify_app_id(&mut self) {
+    pub unsafe fn notify_app_id(&mut self, wm: &mut crate::window_manager::WindowManager) {
         self.wm_scheduled.dirty_app_id = true;
         let app_id_str = self.get_app_id_string();
         if app_id_str.as_deref().map_or(false, |id| id.starts_with("cce-status") || id == "cce-wallpaper") {
             self.tiling_mode = crate::tiling::TilingMode::Status;
         }
-        self.try_restore();
+        self.try_restore(wm);
         crate::shared::pending().dirty_windowing();
 
         if !self.foreign_toplevel_handle.is_null() {
@@ -2964,7 +2963,7 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
                     w = (w - crate::xwayland_window::WINE_MARGIN * 2).max(0);
                     h = (h - crate::xwayland_window::WINE_MARGIN * 2).max(0);
                 }
-                (*window).anchor_resize_commit(w, h);
+                (*window).anchor_resize_commit(&mut *crate::reentry::wm((*window).server), w, h);
             }
         }
     }

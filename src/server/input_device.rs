@@ -140,13 +140,13 @@ impl InputDevice {
         device
     }
 
-    pub unsafe fn assign_to_seat(&mut self, new_seat: *mut Seat) {
+    pub unsafe fn assign_to_seat(&mut self, wm: &mut crate::window_manager::WindowManager, new_seat: *mut Seat) {
         let old_seat = self.seat;
         if old_seat == new_seat {
             return;
         }
         if !old_seat.is_null() {
-            (*old_seat).detach_device(self);
+            (*old_seat).detach_device(wm, self);
         }
         self.seat = new_seat;
         if !new_seat.is_null() {
@@ -259,7 +259,7 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
 
     // Detach from seat if attached
     if !device.seat.is_null() {
-        (*device.seat).detach_device(device);
+        (*device.seat).detach_device(&mut *crate::reentry::wm((*device.seat).server), device);
         (*device.seat).update_capabilities();
     }
 
@@ -364,7 +364,7 @@ unsafe extern "C" fn input_device_assign_to_seat(
         let seat = crate::container_of!(curr, Seat, link);
         let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
         if seat_name == name_str {
-            (*device).assign_to_seat(seat);
+            (*device).assign_to_seat(&mut *crate::reentry::wm(server), seat);
             found = true;
             break;
         }

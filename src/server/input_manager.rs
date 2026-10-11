@@ -128,7 +128,7 @@ impl InputManager {
         self.pointer_refresh_idle = idle;
     }
 
-    pub unsafe fn deinit(&mut self) {
+    pub unsafe fn deinit(&mut self, wm: &mut crate::window_manager::WindowManager) {
         log::info!("[deinit] InputManager::deinit started");
         if !self.pointer_refresh_idle.is_null() {
             ffi::wl_event_source_remove(self.pointer_refresh_idle);
@@ -159,7 +159,7 @@ impl InputManager {
             let device = crate::container_of!(curr_dev, crate::input_device::InputDevice, link);
             if !(*device).seat.is_null() {
                 log::info!("[deinit] detaching device from seat");
-                (*(*device).seat).detach_device(device);
+                (*(*device).seat).detach_device(wm, device);
                 (*device).seat = std::ptr::null_mut();
             }
             curr_dev = next_dev;

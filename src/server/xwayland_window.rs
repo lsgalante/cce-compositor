@@ -369,6 +369,7 @@ pub fn snap_x11(x11: i32, scale: f32) -> i32 {
 
 impl XwaylandWindow {
     pub unsafe fn create(
+    wm: &mut crate::window_manager::WindowManager,
         xsurface: *mut ffi::wlr_xwayland_surface,
         server: *mut Server,
     ) -> Result<(), &'static str> {
@@ -380,7 +381,7 @@ impl XwaylandWindow {
             if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") }
         );
 
-        let window = Window::create(WindowImpl::Xwayland(std::ptr::null_mut()), server)?;
+        let window = Window::create(wm, WindowImpl::Xwayland(std::ptr::null_mut()), server)?;
 
         let xwindow = Box::new(XwaylandWindow {
             window,
@@ -430,7 +431,7 @@ impl XwaylandWindow {
         if !(*xsurface).surface.is_null() {
             handle_associate_impl(raw);
             if ffi::river_wlr_surface_is_mapped((*xsurface).surface) {
-                handle_map_impl(raw);
+                handle_map_impl(wm, raw);
             }
         }
 
@@ -556,19 +557,19 @@ impl XwaylandWindow {
     }
 
     /// Persist a learned minimum (logical `width`x`height` at X11 scale `s`).
-    unsafe fn store_min_size(&self, width: u32, height: u32, s: f32) {
+    unsafe fn store_min_size(&self, wm: &mut crate::window_manager::WindowManager, width: u32, height: u32, s: f32) {
         let Some((app_id, program, title)) = self.min_size_key() else { return };
         let (w, h) = (to_x11(width as i32, s) as u32, to_x11(height as i32, s) as u32);
-        (*crate::reentry::wm((*self.window).server)).min_sizes.set(&app_id, &program, &title, w, h);
+        wm.min_sizes.set(&app_id, &program, &title, w, h);
     }
 
     /// Drop this window's stored minimum and the one it is held to now, and
     /// start learning afresh (`ccectl min-size forget`). The learned value
     /// is the only minimum an X11 window carries here, so the hint's min
     /// goes to 0. Returns what was stored, X11 pixels.
-    pub unsafe fn forget_min_size(&mut self) -> Option<(u32, u32)> {
+    pub unsafe fn forget_min_size(&mut self, wm: &mut crate::window_manager::WindowManager) -> Option<(u32, u32)> {
         let stored = self.min_size_key().and_then(|(app_id, program, title)| {
-            let min_sizes = &mut (*crate::reentry::wm((*self.window).server)).min_sizes;
+            let min_sizes = &mut wm.min_sizes;
             let stored = min_sizes.get(&app_id, &program, &title);
             min_sizes.set(&app_id, &program, &title, 0, 0);
             stored
@@ -585,9 +586,9 @@ impl XwaylandWindow {
 
     /// Hand the window the minimum a previous run learned, before its first
     /// arrange, so the first drag past it already stops there.
-    unsafe fn apply_stored_min_size(&self) {
+    unsafe fn apply_stored_min_size(&self, wm: &mut crate::window_manager::WindowManager) {
         let Some((app_id, program, title)) = self.min_size_key() else { return };
-        let Some((stored_w, stored_h)) = (*crate::reentry::wm((*self.window).server)).min_sizes.get(&app_id, &program, &title) else { return };
+        let Some((stored_w, stored_h)) = wm.min_sizes.get(&app_id, &program, &title) else { return };
         // Mapping at a size below the stored minimum proves the app takes
         // it: the minimum was learned too high, or the app lowered it. Kept
         // unchecked, a stale minimum outlives every restart.
@@ -597,7 +598,7 @@ impl XwaylandWindow {
         );
         if (w, h) != (stored_w, stored_h) {
             log::info!("XWayland map: '{}' maps below its stored minimum; lowered to {}x{} (X11 px)", title, w, h);
-            (*crate::reentry::wm((*self.window).server)).min_sizes.set(&app_id, &program, &title, w, h);
+            wm.min_sizes.set(&app_id, &program, &title, w, h);
         }
         let s = x11_scale_for((*self.window).server, self.xsurface);
         let hint = crate::window::DimensionsHint {
@@ -777,10 +778,10 @@ unsafe fn handle_dissociate_impl(xwindow: *mut XwaylandWindow) {
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, map);
-    handle_map_impl(xwindow);
+    handle_map_impl(&mut *crate::reentry::wm((*(*xwindow).window).server), xwindow);
 }
 
-unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
+unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow: *mut XwaylandWindow) {
     let surfaces_tree = (*(*xwindow).window).surfaces.tree.raw();
     let surface = (*(*xwindow).xsurface).surface;
     let surface_tree = ffi::wlr_scene_subsurface_tree_create(surfaces_tree, surface);
@@ -815,12 +816,12 @@ unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
         (*(*xwindow).window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());
     }
 
-    place_transient_where_it_asked(xwindow);
-    place_shy_where_it_is(xwindow);
-    (*xwindow).apply_stored_min_size();
+    place_transient_where_it_asked(wm, xwindow);
+    place_shy_where_it_is(wm, xwindow);
+    (*xwindow).apply_stored_min_size(wm);
 
     (*(*xwindow).window).state = WindowState::Initialized;
-    if let Err(e) = (*(*xwindow).window).map() {
+    if let Err(e) = (*(*xwindow).window).map(wm) {
         log::error!("out of memory mapping window: {}", e);
         let surface_resource = ffi::river_wlr_surface_get_resource(surface);
         let client = ffi::wl_resource_get_client(surface_resource);
@@ -848,7 +849,7 @@ unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
 /// compositor's placement. Top-level windows keep theirs too: restore and
 /// the placement hints own those, and a transient is the one kind of window
 /// `try_restore` refuses to touch.
-unsafe fn place_transient_where_it_asked(xwindow: *mut XwaylandWindow) {
+unsafe fn place_transient_where_it_asked(wm: &mut crate::window_manager::WindowManager, xwindow: *mut XwaylandWindow) {
     let xsurface = (*xwindow).xsurface;
     if (*xsurface).parent.is_null() {
         return;
@@ -870,7 +871,7 @@ unsafe fn place_transient_where_it_asked(xwindow: *mut XwaylandWindow) {
     let s = x11_scale_for((*window).server, xsurface);
     let log_x = from_x11(asked.x as i32, s);
     let log_y = from_x11(asked.y as i32, s);
-    let (vx, vy) = (*window).screen_to_virtual(&*crate::reentry::wm((*window).server), log_x, log_y);
+    let (vx, vy) = (*window).screen_to_virtual(wm, log_x, log_y);
     (*window).virtual_x = vx;
     (*window).virtual_y = vy;
     // Placed by the client, like a picker placed by its hint: the camera
@@ -888,7 +889,7 @@ unsafe fn place_transient_where_it_asked(xwindow: *mut XwaylandWindow) {
 /// position — for Ubisoft Connect's shadow window, exactly its main
 /// window's rect. The compositor's spawn placement would put it at the
 /// default origin, in front of everything, as a blank white window.
-unsafe fn place_shy_where_it_is(xwindow: *mut XwaylandWindow) {
+unsafe fn place_shy_where_it_is(wm: &mut crate::window_manager::WindowManager, xwindow: *mut XwaylandWindow) {
     let window = (*xwindow).window;
     if !(*window).is_shy() {
         return;
@@ -897,7 +898,7 @@ unsafe fn place_shy_where_it_is(xwindow: *mut XwaylandWindow) {
     let s = x11_scale_for((*window).server, xsurface);
     let log_x = from_x11((*xsurface).x as i32, s);
     let log_y = from_x11((*xsurface).y as i32, s);
-    let (vx, vy) = (*window).screen_to_virtual(&*crate::reentry::wm((*window).server), log_x, log_y);
+    let (vx, vy) = (*window).screen_to_virtual(wm, log_x, log_y);
     (*window).virtual_x = vx;
     (*window).virtual_y = vy;
     (*window).box_geom.x = log_x;
@@ -916,20 +917,21 @@ unsafe fn place_shy_where_it_is(xwindow: *mut XwaylandWindow) {
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, unmap);
-    handle_unmap_impl(xwindow);
+    handle_unmap_impl(&mut *crate::reentry::wm((*(*xwindow).window).server), xwindow);
 }
 
-unsafe fn handle_unmap_impl(xwindow: *mut XwaylandWindow) {
+unsafe fn handle_unmap_impl(wm: &mut crate::window_manager::WindowManager, xwindow: *mut XwaylandWindow) {
     let surface = (*(*xwindow).xsurface).surface;
     if !surface.is_null() {
         ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
     }
-    (*(*xwindow).window).unmap();
+    (*(*xwindow).window).unmap(wm);
     (*xwindow).surface_tree.destroy();
 }
 
 unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, request_configure);
+    let wm = &mut *crate::reentry::wm((*(*xwindow).window).server);
     let event = data as *mut ffi::wlr_xwayland_surface_configure_event;
 
     let surface = (*(*xwindow).xsurface).surface;
@@ -1051,7 +1053,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         // is a runaway: Houdini's Edit Theme dialog walked 270px left across
         // one tab switch, re-requesting 15 times in a second and never
         // converging on a size either.
-        let (vx, vy) = (*window).screen_to_virtual(&*crate::reentry::wm((*window).server), log_x, log_y);
+        let (vx, vy) = (*window).screen_to_virtual(wm, log_x, log_y);
         (*window).virtual_x = vx;
         (*window).virtual_y = vy;
         if exempt_self_placed || shy_self_placed {
@@ -1122,7 +1124,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
                 learned.min_height,
             );
             (*window).set_dimensions_hint(learned);
-            (*xwindow).store_min_size(learned.min_width, learned.min_height, s);
+            (*xwindow).store_min_size(wm, learned.min_width, learned.min_height, s);
         }
     }
 
@@ -1175,6 +1177,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
 
 unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, set_override_redirect);
+    let wm = &mut *crate::reentry::wm((*(*xwindow).window).server);
     let xsurface = (*xwindow).xsurface;
     log::info!("xwayland surface set override redirect: val={}", (*xsurface).override_redirect);
     assert!((*xsurface).override_redirect);
@@ -1182,14 +1185,14 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     let surface = (*xsurface).surface;
     if !surface.is_null() {
         if ffi::river_wlr_surface_is_mapped(surface) {
-            handle_unmap_impl(xwindow);
+            handle_unmap_impl(wm, xwindow);
         }
         handle_dissociate_impl(xwindow);
     }
     let server = (*(*xwindow).window).server;
     handle_destroy_impl(xwindow);
 
-    if let Err(e) = XwaylandOverrideRedirect::create(xsurface, server) {
+    if let Err(e) = XwaylandOverrideRedirect::create(wm, xsurface, server) {
         log::error!("Failed to create XwaylandOverrideRedirect: {}", e);
     }
 }
@@ -1223,12 +1226,12 @@ unsafe extern "C" fn handle_set_size_hints(listener: *mut ffi::wl_listener, _dat
 
 unsafe extern "C" fn handle_set_title(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, set_title);
-    (*(*xwindow).window).notify_title();
+    (*(*xwindow).window).notify_title(&mut *crate::reentry::wm((*(*xwindow).window).server));
 }
 
 unsafe extern "C" fn handle_set_class(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, set_class);
-    (*(*xwindow).window).notify_app_id();
+    (*(*xwindow).window).notify_app_id(&mut *crate::reentry::wm((*(*xwindow).window).server));
 }
 
 unsafe extern "C" fn handle_set_parent(_listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

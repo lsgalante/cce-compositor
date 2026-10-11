@@ -341,7 +341,7 @@ impl Seat {
         self.update_capabilities();
     }
 
-    pub unsafe fn detach_device(&mut self, device: *mut crate::input_device::InputDevice) {
+    pub unsafe fn detach_device(&mut self, wm: &mut crate::window_manager::WindowManager, device: *mut crate::input_device::InputDevice) {
         ffi::wlr_cursor_detach_input_device(self.cursor.wlr_cursor, (*device).wlr_device);
 
         let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device);
@@ -352,7 +352,7 @@ impl Seat {
             if self.touch_devices == 0 && !self.touch_injected {
                 let ids: Vec<i32> = self.cursor.touch_points.keys().copied().collect();
                 for id in ids {
-                    self.cursor.touch_cancel(&mut *crate::reentry::wm(self.server), id);
+                    self.cursor.touch_cancel(wm, id);
                 }
             }
         }
@@ -656,7 +656,7 @@ impl Seat {
             }
         }
         let target_surface = new_focus.surface();
-        self.relay.focus(target_surface);
+        self.relay.focus(wm, target_surface);
     }
 
     /// Give this seat a keyboard if the backend never supplied one, so that
@@ -761,13 +761,13 @@ impl Seat {
         );
     }
 
-    pub unsafe fn keyboard_enter_or_leave(&mut self, target_surface: *mut ffi::wlr_surface) {
+    pub unsafe fn keyboard_enter_or_leave(&mut self, wm: &mut crate::window_manager::WindowManager, target_surface: *mut ffi::wlr_surface) {
         if !target_surface.is_null() {
             self.keyboard_notify_enter(target_surface);
         } else {
             ffi::wlr_seat_keyboard_notify_clear_focus(self.wlr_seat);
         }
-        self.relay.focus(target_surface);
+        self.relay.focus(wm, target_surface);
     }
 
     pub unsafe fn manage_start(&mut self) {
@@ -864,7 +864,7 @@ impl Seat {
             if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview {
                 return;
             }
-            if let Some((px, py)) = (*window).fullscreen_anchor_pan() {
+            if let Some((px, py)) = (*window).fullscreen_anchor_pan(wm) {
                 if (wm.desk_pan_x - px).abs() >= 0.5 || (wm.desk_pan_y - py).abs() >= 0.5 {
                     wm.target_desk_pan_x = Some(px);
                     wm.target_desk_pan_y = Some(py);

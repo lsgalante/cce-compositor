@@ -367,7 +367,7 @@ impl LockSurface {
         Ok(lock_surface)
     }
 
-    pub unsafe fn destroy(lock_surface: *mut Self) {
+    pub unsafe fn destroy(wm: &mut crate::window_manager::WindowManager, lock_surface: *mut Self) {
         let mut new_focus = Focus::None;
         let surfaces_head = &mut (*(*lock_surface).lock).surfaces as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*surfaces_head).next;
@@ -392,10 +392,10 @@ impl LockSurface {
             let seat = crate::container_of!(curr, crate::seat::Seat, link);
             if let Focus::LockSurface(focused_surf) = (*seat).focused {
                 if focused_surf == lock_surface {
-                    (*seat).focus(&mut *crate::reentry::wm((*seat).server), new_focus);
+                    (*seat).focus(wm, new_focus);
                 }
             }
-            (*seat).cursor.update_state(&mut *crate::reentry::wm((*seat).server));
+            (*seat).cursor.update_state(wm);
             curr = next;
         }
 
@@ -612,6 +612,7 @@ unsafe extern "C" fn handle_surface(listener: *mut ffi::wl_listener, data: *mut 
 unsafe extern "C" fn update_focus(data: *mut std::ffi::c_void) {
     let lock_surface = data as *mut LockSurface;
     let manager = (*lock_surface).manager;
+    let wm = &mut *crate::reentry::wm((*manager).server);
 
     let seats_head = &mut (*(*manager).server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
     let mut curr = (*seats_head).next;
@@ -619,9 +620,9 @@ unsafe extern "C" fn update_focus(data: *mut std::ffi::c_void) {
         let next = (*curr).next;
         let seat = crate::container_of!(curr, crate::seat::Seat, link);
         if !matches!((*seat).focused, Focus::LockSurface(s) if s == lock_surface) {
-            (*seat).focus(&mut *crate::reentry::wm((*seat).server), Focus::LockSurface(lock_surface));
+            (*seat).focus(wm, Focus::LockSurface(lock_surface));
         }
-        (*seat).cursor.update_state(&mut *crate::reentry::wm((*seat).server));
+        (*seat).cursor.update_state(wm);
         curr = next;
     }
 
@@ -654,5 +655,5 @@ unsafe extern "C" fn handle_lock_surface_map(listener: *mut ffi::wl_listener, _d
 
 unsafe extern "C" fn handle_lock_surface_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let lock_surface = crate::container_of!(listener, LockSurface, surface_destroy);
-    LockSurface::destroy(lock_surface);
+    LockSurface::destroy(&mut *crate::reentry::wm((*(*lock_surface).manager).server), lock_surface);
 }

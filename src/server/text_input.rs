@@ -86,7 +86,7 @@ unsafe extern "C" fn handle_enable(listener: *mut ffi::wl_listener, _data: *mut 
     }
 
     (*seat).relay.text_input = text_input;
-    (*seat).relay.osk.field_active();
+    (*seat).relay.osk.field_active(&mut *crate::reentry::wm((*seat).server));
 
     let input_method = (*seat).relay.input_method;
     if !input_method.is_null() {
@@ -107,7 +107,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         return;
     }
 
-    (*seat).relay.osk.field_active();
+    (*seat).relay.osk.field_active(&mut *crate::reentry::wm((*seat).server));
     if !(*seat).relay.input_method.is_null() {
         (*seat).relay.send_input_method_state();
     }
@@ -121,7 +121,7 @@ unsafe extern "C" fn handle_disable(listener: *mut ffi::wl_listener, _data: *mut
     }
 
     if (*seat).relay.text_input == text_input {
-        (*seat).relay.disable_text_input();
+        (*seat).relay.disable_text_input(&mut *crate::reentry::wm((*seat).server));
     }
 }
 
@@ -133,7 +133,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     }
 
     if (*seat).relay.text_input == text_input {
-        (*seat).relay.disable_text_input();
+        (*seat).relay.disable_text_input(&mut *crate::reentry::wm((*seat).server));
     }
 
     (*text_input).enable.disconnect();

@@ -574,7 +574,7 @@ unsafe extern "C" fn handle_new_output(listener: *mut ffi::wl_listener, data: *m
     let wlr_output = data as *mut ffi::wlr_output;
     log::debug!("new output {:?}", std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name(wlr_output)));
     crate::xwayland_window::note_output_change();
-    if let Err(e) = Output::create(server, wlr_output) {
+    if let Err(e) = Output::create(&mut *crate::reentry::wm(server), server, wlr_output) {
         log::error!("failed to create output: {}", e);
         ffi::wlr_output_destroy(wlr_output);
     }
@@ -647,11 +647,12 @@ unsafe extern "C" fn handle_manager_apply(listener: *mut ffi::wl_listener, data:
         head_link = (*head_link).next;
     }
 
-    if !(*crate::reentry::wm(server)).scheduled.output_config.is_null() {
-        ffi::wlr_output_configuration_v1_send_failed((*crate::reentry::wm(server)).scheduled.output_config);
-        ffi::wlr_output_configuration_v1_destroy((*crate::reentry::wm(server)).scheduled.output_config);
+    let wm = &mut *crate::reentry::wm(server);
+    if !wm.scheduled.output_config.is_null() {
+        ffi::wlr_output_configuration_v1_send_failed(wm.scheduled.output_config);
+        ffi::wlr_output_configuration_v1_destroy(wm.scheduled.output_config);
     }
-    (*crate::reentry::wm(server)).scheduled.output_config = config;
+    wm.scheduled.output_config = config;
 
     crate::shared::pending().dirty_windowing();
 }

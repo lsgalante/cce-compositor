@@ -14,12 +14,13 @@
 //! - `wm_scope!` opens every `WindowManager` method: a per-thread depth
 //!   count, plus the name of the outermost method and whether it borrowed
 //!   `&mut`. Always on; two `Cell` writes.
-//! - [`wm`] is how everything outside the window manager reaches it
-//!   (`(*crate::reentry::wm(server)).foo()` where `(*server).wm.foo()` was).
-//!   It returns the same raw place, built without creating a reference, and
-//!   with `CCE_REENTRY_TRACE` set it records an access made at depth > 0:
-//!   the outer method, the access site, and whether the outer borrow was
-//!   `&mut`.
+//! - [`wm`] is how an entry point (a wlroots listener, timer or idle
+//!   callback) takes the window manager, once, before handing it down as a
+//!   parameter — nothing else calls it since the context-passing work. It
+//!   returns the raw place, built without creating a reference, and with
+//!   `CCE_REENTRY_TRACE` set it records an access made at depth > 0 (an
+//!   entry reached from inside a window-manager method): the outer method,
+//!   the access site, and whether the outer borrow was `&mut`.
 //!
 //! `ccectl debug-reentry` prints the tally, most frequent first.
 

@@ -29,6 +29,7 @@ pub struct XwaylandOverrideRedirect {
 
 impl XwaylandOverrideRedirect {
     pub unsafe fn create(
+    wm: &mut crate::window_manager::WindowManager,
         xsurface: *mut ffi::wlr_xwayland_surface,
         server: *mut Server,
     ) -> Result<(), &'static str> {
@@ -56,7 +57,7 @@ impl XwaylandOverrideRedirect {
         });
 
         let raw = Box::into_raw(override_redirect);
-        (*crate::reentry::wm(server)).override_redirects.push(raw);
+        wm.override_redirects.push(raw);
 
         (*raw).request_configure.connect(&mut (*xsurface).events.request_configure, handle_request_configure);
         (*raw).destroy.connect(&mut (*xsurface).events.destroy, handle_destroy);
@@ -67,7 +68,7 @@ impl XwaylandOverrideRedirect {
         if !(*xsurface).surface.is_null() {
             handle_associate_impl(raw);
             if ffi::river_wlr_surface_is_mapped((*xsurface).surface) {
-                handle_map_impl(raw);
+                handle_map_impl(wm, raw);
             }
         }
 
@@ -139,7 +140,7 @@ impl XwaylandOverrideRedirect {
     /// all; the cost of holding back here is keyboard navigation in a menu
     /// whose app has no focused window, e.g. a tray menu, which the pointer
     /// still drives.
-    pub unsafe fn focus_if_desired(&self) {
+    pub unsafe fn focus_if_desired(&self, wm: &mut crate::window_manager::WindowManager) {
         if (*self.server).lock_manager.state != crate::lock_manager::LockState::Unlocked {
             return;
         }
@@ -158,7 +159,7 @@ impl XwaylandOverrideRedirect {
             crate::seat::Focus::Window(window) if !window.is_null() => {
                 if let crate::window::WindowImpl::Xwayland(xwindow) = (*window).impl_type {
                     if !xwindow.is_null() && (*(*xwindow).xsurface).pid == pid {
-                        (*seat).keyboard_enter_or_leave((*self.xsurface).surface);
+                        (*seat).keyboard_enter_or_leave(wm, (*self.xsurface).surface);
                         return;
                     }
                 }
@@ -172,7 +173,7 @@ impl XwaylandOverrideRedirect {
                 return;
             }
         }
-        (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
+        (*seat).focus(wm, crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
     }
 }
 
@@ -215,7 +216,7 @@ unsafe extern "C" fn handle_dissociate(listener: *mut ffi::wl_listener, _data: *
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, map);
-    handle_map_impl(or);
+    handle_map_impl(&mut *crate::reentry::wm((*or).server), or);
 }
 
 /// WM_CLASS of the XEmbed tray bridge's container windows
@@ -233,7 +234,7 @@ unsafe fn is_xembed_tray_container(xsurface: *mut ffi::wlr_xwayland_surface) -> 
     !class.is_null() && std::ffi::CStr::from_ptr(class).to_bytes() == XEMBED_TRAY_CLASS.as_bytes()
 }
 
-unsafe fn handle_map_impl(or: *mut XwaylandOverrideRedirect) {
+unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, or: *mut XwaylandOverrideRedirect) {
     // No scene node at all: nothing to draw, hit-test or focus. Unmap
     // copes with the missing tree and the unconnected listeners.
     if is_xembed_tray_container((*or).xsurface) {
@@ -267,7 +268,7 @@ unsafe fn handle_map_impl(or: *mut XwaylandOverrideRedirect) {
     // After the scene's subsurface tree, so this runs after its reset.
     (*or).commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_commit);
 
-    (*or).focus_if_desired();
+    (*or).focus_if_desired(wm);
 }
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -293,7 +294,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
                         && (*(*xwindow).xsurface).pid == (*(*or).xsurface).pid
                         && ffi::river_wlr_seat_get_keyboard_focused_surface((*default_seat).wlr_seat) == surface
                     {
-                        (*default_seat).keyboard_enter_or_leave((*window).root_surface());
+                        (*default_seat).keyboard_enter_or_leave(&mut *crate::reentry::wm((*default_seat).server), (*window).root_surface());
                     }
                 }
             }
@@ -340,7 +341,8 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     // compositor on its next frame (2026-09-26, a Wine tray icon handed
     // back by the XEmbed bridge and remapped as a managed window;
     // `verify/clients` `or-flip` reproduces it).
-    (*crate::reentry::wm(server)).override_redirects.retain(|&p| p != or);
+    let wm = &mut *crate::reentry::wm(server);
+    wm.override_redirects.retain(|&p| p != or);
     (*or).request_configure.disconnect();
     (*or).destroy.disconnect();
     (*or).associate.disconnect();
@@ -348,7 +350,7 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     (*or).set_override_redirect.disconnect();
     let _ = Box::from_raw(or);
 
-    if let Err(e) = XwaylandWindow::create(xsurface, server) {
+    if let Err(e) = XwaylandWindow::create(wm, xsurface, server) {
         log::error!("Failed to transition OR to XwaylandWindow: {}", e);
     }
 }

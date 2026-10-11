@@ -111,6 +111,13 @@ pub fn window_adjust_active() -> bool {
     mode() == WindowManagerMode::Overview || adjust_held()
 }
 
+/// The server, for an entry point with no object that leads to it (a
+/// keyboard group without a seat); null before `Server::init`. Reached
+/// through `reentry::wm` like any other.
+pub fn server_ptr() -> *mut crate::server::Server {
+    shared().server.get()
+}
+
 /// What the last manage pass applied.
 pub fn sent() -> &'static Sent {
     &shared().sent

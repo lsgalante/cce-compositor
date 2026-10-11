@@ -593,12 +593,12 @@ impl IdleManager {
     /// `ccectl idle sleep`): a sleep used to run with the session unlocked,
     /// so the desktop was there for whoever woke the machine. A lid close is
     /// logind's sleep, not ours, and is covered by `sleep_lock`.
-    pub unsafe fn lock_then_sleep(&mut self) {
+    pub unsafe fn lock_then_sleep(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if self.sleeping || self.sleep_after_lock {
             return;
         }
         let lock = &mut (*self.server).lock_manager;
-        lock.lock_now(&mut *crate::reentry::wm(self.server));
+        lock.lock_now(wm);
         if lock.state == crate::lock_manager::LockState::Locked {
             self.sleep_now();
             return;
@@ -688,7 +688,7 @@ impl IdleManager {
     }
 
     /// `ccectl idle …` — see `cce_ctl.rs` for the surface.
-    pub unsafe fn ipc(&mut self, args: &[&str]) -> String {
+    pub unsafe fn ipc(&mut self, wm: &mut crate::window_manager::WindowManager, args: &[&str]) -> String {
         match args {
             [] | ["status"] => self.status(),
             ["wake"] => {
@@ -704,7 +704,7 @@ impl IdleManager {
                 "ok\n".to_string()
             }
             ["sleep"] => {
-                self.lock_then_sleep();
+                self.lock_then_sleep(wm);
                 "ok\n".to_string()
             }
             ["inhibit", rest @ ..] => match parse_lease(rest, now_ms()) {
@@ -817,7 +817,7 @@ unsafe extern "C" fn handle_sleep_timeout(data: *mut std::ffi::c_void) -> std::o
     let idle = &mut *(data as *mut IdleManager);
     if !idle.inhibited && !idle.sleeping {
         log::info!("idle: sleep timeout reached");
-        idle.lock_then_sleep();
+        idle.lock_then_sleep(&mut *crate::reentry::wm(idle.server));
     }
     0
 }

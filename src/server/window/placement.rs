@@ -6,7 +6,7 @@
 use super::*;
 
 impl Window {
-    pub unsafe fn try_restore(&mut self) {
+    pub unsafe fn try_restore(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if self.restored {
             return;
         }
@@ -56,7 +56,6 @@ impl Window {
             let app_id = self.get_app_id_string().unwrap_or_default();
             let title = self.get_title_string().unwrap_or_default();
             let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
-            let wm = &mut (*crate::reentry::wm(self.server));
             let saved = wm
                 .match_and_remove_restore_state(&app_id, &title, program.as_deref())
                 .or_else(|| wm.match_last_window_state(&app_id, &title, program.as_deref()));
@@ -97,7 +96,6 @@ impl Window {
         // it could match. So an untitled window of an app some title rule
         // names waits for its title; `map` calls back in here regardless.
         if title_str.is_empty() && self.state != WindowState::Mapped {
-            let wm = &(*crate::reentry::wm(self.server));
             if wm.mode_rules.iter().any(|r| {
                 r.title_pattern.is_some()
                     && (r.app_id_pattern == "*" || app_id_str.contains(&r.app_id_pattern))
@@ -111,13 +109,12 @@ impl Window {
         // own entry too while a sibling is up — the window goes where the
         // sibling is, at the size it asks for.
         {
-            let wm = &(*crate::reentry::wm(self.server));
             let rule = wm
                 .get_rule_for_window(self as *mut Window)
                 .filter(|r| r.title_pattern.is_some())
                 .map(|r| r.over_sibling);
             if let Some(over_sibling) = rule {
-                let has_sibling = over_sibling && !self.find_sibling(&app_id_str).is_null();
+                let has_sibling = over_sibling && !self.find_sibling(wm, &app_id_str).is_null();
                 let own_entry = wm.has_titled_saved_entry(&app_id_str, &title_str);
                 if rule_skips_restore(has_sibling, own_entry) {
                     log::info!(
@@ -137,10 +134,10 @@ impl Window {
         // `window_manager::same_program`.
         let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
         let program = program.as_deref();
-        let mut saved_opt = (*crate::reentry::wm(self.server)).match_and_remove_restore_state(&app_id_str, &title_str, program);
+        let mut saved_opt = wm.match_and_remove_restore_state(&app_id_str, &title_str, program);
         let from_session = saved_opt.is_some();
         if saved_opt.is_none() {
-            saved_opt = (*crate::reentry::wm(self.server)).match_last_window_state(&app_id_str, &title_str, program);
+            saved_opt = wm.match_last_window_state(&app_id_str, &title_str, program);
         }
         if let Some(saved) = saved_opt {
             log::info!("Restoring saved state for window: app_id={}, title={}. Position: ({}, {}), Size: {}x{}", app_id_str, title_str, saved.virtual_x, saved.virtual_y, saved.width, saved.height);
@@ -259,7 +256,6 @@ impl Window {
             // left of the first column came back mid-view every login.
             if self.tiling_mode == crate::tiling::TilingMode::Floating && !self.minimized {
                 let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
-                let wm = &(*crate::reentry::wm(self.server));
                 let cam = crate::policy::camera::Camera {
                     pan_x: wm.desk_pan_x,
                     pan_y: wm.desk_pan_y,
@@ -319,9 +315,8 @@ impl Window {
     /// The window a satellite opens over: a mapped, visible window of the
     /// same app_id that is not itself a satellite — the focused one when it
     /// qualifies, since that is where the user asked for the settings.
-    pub(crate) unsafe fn find_sibling(&self, app_id: &str) -> *mut Window {
+    pub(crate) unsafe fn find_sibling(&self, wm: &crate::window_manager::WindowManager, app_id: &str) -> *mut Window {
         let me = self as *const Window;
-        let wm = &(*crate::reentry::wm(self.server));
         let qualifies = |w: *mut Window| {
             !w.is_null()
                 && w as *const Window != me
@@ -341,23 +336,22 @@ impl Window {
     /// Centre a satellite over its sibling. Like `try_center_on_view` this
     /// owns the POSITION only, and latches a redo for the commit that
     /// brings the window's real size (`pending_view_center`).
-    pub(crate) unsafe fn try_center_on_sibling(&mut self) {
+    pub(crate) unsafe fn try_center_on_sibling(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if !self.satellite {
             return;
         }
         self.minimized = false;
         self.pending_view_center = self.box_geom.width <= 0 || self.box_geom.height <= 0;
-        self.apply_sibling_centering();
+        self.apply_sibling_centering(wm);
     }
 
-    pub(crate) unsafe fn apply_sibling_centering(&mut self) {
+    pub(crate) unsafe fn apply_sibling_centering(&mut self, wm: &mut crate::window_manager::WindowManager) {
         let app_id = self.get_app_id_string().unwrap_or_default();
-        let sibling = self.find_sibling(&app_id);
+        let sibling = self.find_sibling(wm, &app_id);
         if sibling.is_null() {
             return;
         }
         let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
-        let wm = &(*crate::reentry::wm(self.server));
         let zoom = wm.desk_zoom.max(0.01);
         let (w, h) = self.mapped_size_hint();
         let (sw, sh) = (*sibling).mapped_size_hint();
@@ -489,14 +483,14 @@ impl Window {
         (400.0, 400.0)
     }
 
-    pub(crate) unsafe fn try_hint_placement(&mut self) {
+    pub(crate) unsafe fn try_hint_placement(&mut self, wm: &mut crate::window_manager::WindowManager) {
         let app_id = self.get_app_id_string().unwrap_or_default();
         if app_id.is_empty() {
             return;
         }
         // Claimed before the mode is judged, so a hint aimed at this window
         // does not linger and land on the next one to open.
-        let Some((hx, hy, cell_anchored)) = (*crate::reentry::wm(self.server)).take_pending_placement(&app_id)
+        let Some((hx, hy, cell_anchored)) = wm.take_pending_placement(&app_id)
         else {
             return;
         };
@@ -514,7 +508,7 @@ impl Window {
             ) {
                 return;
             }
-            self.place_on_invocation_cell(&app_id, hx, hy);
+            self.place_on_invocation_cell(wm, &app_id, hx, hy);
             return;
         }
         // Utility included: the hint moves only the POSITION, which a utility
@@ -528,7 +522,6 @@ impl Window {
 
         let (phys_x, phys_y, vp_w, vp_h) = self.first_enabled_output_box();
 
-        let wm = &(*crate::reentry::wm(self.server));
         let zoom = wm.desk_zoom.max(0.01);
         let (vw, vh) = self.mapped_size_hint();
         let (w, h) = (vw * zoom, vh * zoom);
@@ -568,11 +561,10 @@ impl Window {
     /// - Session restore is exempt. A restored layout is a layout the user
     ///   arranged and saved, and mapping order is arbitrary, so nudging there
     ///   would rearrange a deliberate desktop at every login.
-    pub(crate) unsafe fn avoid_tiled_overlap(&mut self) {
+    pub(crate) unsafe fn avoid_tiled_overlap(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if self.session_restored || self.tiling_mode != crate::tiling::TilingMode::Tiled {
             return;
         }
-        let wm = &(*crate::reentry::wm(self.server));
         let sp = crate::shared::layout().snap_params();
         if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
             return;
@@ -639,8 +631,7 @@ impl Window {
     /// measured in whole squares: a window last seen filling four squares
     /// opens filling four squares, at the corner of the invocation square that
     /// leaves it clear of its neighbours.
-    pub(crate) unsafe fn place_on_invocation_cell(&mut self, app_id: &str, hx: f64, hy: f64) {
-        let wm = &(*crate::reentry::wm(self.server));
+    pub(crate) unsafe fn place_on_invocation_cell(&mut self, wm: &mut crate::window_manager::WindowManager, app_id: &str, hx: f64, hy: f64) {
         let sp = crate::shared::layout().snap_params();
         if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
             return;
@@ -759,16 +750,16 @@ impl Window {
     }
 
     /// The built-in modal list, or a matching `mode_rule` that says `center`.
-    pub(crate) unsafe fn wants_view_center(&mut self) -> bool {
+    pub(crate) unsafe fn wants_view_center(&mut self, wm: &crate::window_manager::WindowManager) -> bool {
         let app_id = self.get_app_id_string().unwrap_or_default();
         if Self::is_view_centered_modal(&app_id) {
             return true;
         }
-        (*crate::reentry::wm(self.server)).get_rule_for_window(self as *mut Window).map_or(false, |r| r.center)
+        wm.get_rule_for_window(self as *mut Window).map_or(false, |r| r.center)
     }
 
-    pub(crate) unsafe fn try_center_on_view(&mut self) {
-        if !self.wants_view_center() {
+    pub(crate) unsafe fn try_center_on_view(&mut self, wm: &mut crate::window_manager::WindowManager) {
+        if !self.wants_view_center(wm) {
             return;
         }
 
@@ -807,18 +798,17 @@ impl Window {
         // A Floating modal with restored geometry still skips the latch
         // (box_geom is already filled by the time we run).
         self.pending_view_center = self.box_geom.width <= 0 || self.box_geom.height <= 0;
-        self.apply_view_centering();
+        self.apply_view_centering(wm);
     }
 
     /// The centering itself, split out so the self-sizing commit path can redo
     /// it once the client's real size lands.
-    pub(crate) unsafe fn apply_view_centering(&mut self) {
+    pub(crate) unsafe fn apply_view_centering(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if self.satellite {
-            self.apply_sibling_centering();
+            self.apply_sibling_centering(wm);
             return;
         }
         let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
-        let wm = &(*crate::reentry::wm(self.server));
         let zoom = wm.desk_zoom.max(0.01);
         let (w, h) = self.mapped_size_hint();
 
@@ -837,11 +827,11 @@ impl Window {
     /// Redo a latched view-centering now that a self-sizing modal's real
     /// geometry has arrived. One-shot: a later commit (or a user dragging the
     /// window) must not snap it back to the middle.
-    pub unsafe fn take_pending_view_center(&mut self) {
+    pub unsafe fn take_pending_view_center(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if !self.pending_view_center || self.box_geom.width <= 0 || self.box_geom.height <= 0 {
             return;
         }
         self.pending_view_center = false;
-        self.apply_view_centering();
+        self.apply_view_centering(wm);
     }
 }

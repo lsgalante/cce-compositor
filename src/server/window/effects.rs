@@ -315,8 +315,7 @@ impl Window {
     /// render stack while overlapping it on screen — where it would cover
     /// the target's handles. Windows under the target are left alone; they
     /// hide nothing.
-    pub unsafe fn adjust_dim_wanted(&self) -> bool {
-        let wm = &(*crate::reentry::wm(self.server));
+    pub unsafe fn adjust_dim_wanted(&self, wm: &crate::window_manager::WindowManager) -> bool {
         if !crate::shared::window_adjust_active()
             || self.closed
             || self.tiling_mode != crate::tiling::TilingMode::Floating
@@ -362,8 +361,8 @@ impl Window {
     /// Advance the overlap dim one tick toward where `adjust_dim_wanted`
     /// says it should rest, applying the opacity as it goes. Returns true
     /// while still in motion, like `step_border_fade`.
-    pub unsafe fn step_adjust_dim(&mut self) -> bool {
-        let target = if self.adjust_dim_wanted() { 1.0 } else { 0.0 };
+    pub unsafe fn step_adjust_dim(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
+        let target = if self.adjust_dim_wanted(wm) { 1.0 } else { 0.0 };
         let delta = target - self.adjust_dim;
         let moving;
         if delta.abs() <= BORDER_FADE_EPSILON {
@@ -560,7 +559,7 @@ impl Window {
     /// Stacked windows (content rects overlapping) do not clip each other,
     /// mirroring the rings' degenerate-distance guard. Per-side, not
     /// per-span: one near neighbor claims the whole facing side.
-    pub unsafe fn border_side_extents(&self, band_unscaled: f64) -> [f64; 4] {
+    pub unsafe fn border_side_extents(&self, wm: &crate::window_manager::WindowManager, band_unscaled: f64) -> [f64; 4] {
         let scale = if self.scale > 0.0 { self.scale } else { 1.0 };
         let band = band_unscaled * scale;
         let ax0 = self.box_geom.x as f64;
@@ -570,7 +569,7 @@ impl Window {
         let mut ext = [band; 4]; // left, right, top, bottom (layout px)
 
         let self_ptr = self as *const Window as *mut Window;
-        for &other in (*crate::reentry::wm(self.server)).windows.iter() {
+        for &other in wm.windows.iter() {
             if other.is_null() || other == self_ptr {
                 continue;
             }

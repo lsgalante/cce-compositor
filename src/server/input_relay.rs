@@ -69,10 +69,10 @@ impl InputRelay {
         }
     }
 
-    pub unsafe fn disable_text_input(&mut self) {
+    pub unsafe fn disable_text_input(&mut self, wm: &mut crate::window_manager::WindowManager) {
         assert!(!self.text_input.is_null());
         self.text_input = std::ptr::null_mut();
-        self.osk.field_gone();
+        self.osk.field_gone(wm);
 
         if !self.input_method.is_null() {
             let mut pos = self.input_popups.next;
@@ -136,7 +136,7 @@ impl InputRelay {
     /// entered — whether or not an input method is running. river entered
     /// them only with one, but then no client ever enabled a field, and the
     /// on-screen keyboard (`osk.rs`) is driven by exactly that enable.
-    pub unsafe fn focus(&mut self, new_focus: *mut ffi::wlr_surface) {
+    pub unsafe fn focus(&mut self, wm: &mut crate::window_manager::WindowManager, new_focus: *mut ffi::wlr_surface) {
         let head_ptr = &self.text_inputs as *const ffi::wl_list as *mut ffi::wl_list;
 
         // Send leave events. A text input already on the new surface keeps
@@ -156,7 +156,7 @@ impl InputRelay {
         if !self.text_input.is_null() {
             let focused = (*(*self.text_input).wlr_text_input).focused_surface;
             if focused.is_null() || focused != new_focus {
-                self.disable_text_input();
+                self.disable_text_input(wm);
             }
         }
 

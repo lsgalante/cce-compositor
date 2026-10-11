@@ -344,7 +344,7 @@ unsafe extern "C" fn handle_new_xdg_toplevel(listener: *mut ffi::wl_listener, da
     let server = container_of!(listener, Server, new_xdg_toplevel);
     let xdg_toplevel = data as *mut ffi::wlr_xdg_toplevel;
     log::info!("new xdg toplevel surface");
-    if let Err(e) = crate::xdg_toplevel::XdgToplevel::create(xdg_toplevel, server) {
+    if let Err(e) = crate::xdg_toplevel::XdgToplevel::create(&mut *crate::reentry::wm(server), xdg_toplevel, server) {
         log::error!("Failed to create xdg toplevel: {}", e);
         let client = ffi::wl_resource_get_client((*xdg_toplevel).resource);
         ffi::wl_client_post_no_memory(client);
@@ -379,7 +379,8 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
         }
     }
 
-    for &win_ptr in (*crate::reentry::wm(server)).windows.iter() {
+    let wm = &mut *crate::reentry::wm(server);
+    for &win_ptr in wm.windows.iter() {
         if !win_ptr.is_null() && (*win_ptr).root_surface() == surface {
             let title_ptr = (*win_ptr).get_title();
             let title = if title_ptr.is_null() {
@@ -418,12 +419,12 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
             // often lands between app_id and map) is left to the map path,
             // which focuses new windows under its own settle rules.
             if matches!((*win_ptr).state, crate::window::WindowState::Mapped) && !(*win_ptr).is_shy() {
-                if let Some(seat) = (*crate::reentry::wm(server)).first_seat() {
+                if let Some(seat) = wm.first_seat() {
                     if (*win_ptr).minimized {
                         (*win_ptr).minimized = false;
                     }
-                    (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::Window(win_ptr));
-                    (*crate::reentry::wm(server)).raise_window(win_ptr);
+                    (*seat).focus(wm, crate::seat::Focus::Window(win_ptr));
+                    wm.raise_window(win_ptr);
                     crate::shared::pending().dirty_windowing();
                     log::info!("xdg activation focused and raised '{}' ({})", title, app_id);
                 }
@@ -492,15 +493,16 @@ unsafe extern "C" fn handle_request_set_cursor_shape(_listener: *mut ffi::wl_lis
 
 unsafe extern "C" fn handle_new_xwayland_surface(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let server = container_of!(listener, Server, new_xsurface);
+    let wm = &mut *crate::reentry::wm(server);
     let xsurface = data as *mut ffi::wlr_xwayland_surface;
     log::info!("new xwayland surface");
 
     if (*xsurface).override_redirect {
-        if let Err(e) = crate::xwayland_override_redirect::XwaylandOverrideRedirect::create(xsurface, server) {
+        if let Err(e) = crate::xwayland_override_redirect::XwaylandOverrideRedirect::create(wm, xsurface, server) {
             log::error!("Failed to create xwayland override redirect surface: {}", e);
         }
     } else {
-        if let Err(e) = crate::xwayland_window::XwaylandWindow::create(xsurface, server) {
+        if let Err(e) = crate::xwayland_window::XwaylandWindow::create(wm, xsurface, server) {
             log::error!("Failed to create xwayland window surface: {}", e);
         }
     }
@@ -904,7 +906,7 @@ impl Server {
             log::info!("[deinit] self.om.deinit finished");
 
             log::info!("[deinit] self.input_manager.deinit started");
-            self.input_manager.deinit();
+            self.input_manager.deinit(&mut self.wm);
             log::info!("[deinit] self.input_manager.deinit finished");
 
             log::info!("[deinit] deinitializing other subcomponents");
@@ -969,25 +971,25 @@ impl Default for Server {
             // Zero-initialize the memory (C structures and primitive fields)
             std::ptr::write_bytes(server.as_mut_ptr(), 0, 1);
             // Overwrite collections and SlotMap with valid instances to avoid UB/segfaults from null pointers
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).windows, crate::slotmap::SlotMap::new());
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).focus_history, Vec::new());
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).mode_rules, Vec::new());
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).keybinds, Vec::new());
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).ipc_rx, None);
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.windows), crate::slotmap::SlotMap::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.focus_history), Vec::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.mode_rules), Vec::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.keybinds), Vec::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.ipc_rx), None);
             // Same reason as ipc_rx above, and not optional: an mpsc endpoint
             // has no null niche, so `Option` tags it out of band and zeroed
             // bytes decode as `Some(<null channel>)` — dropping that segfaults.
             // pending_screenshot holds one too (its deferred IPC reply), which
             // is what makes zeroed bytes decode as a live `Some` there as well.
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).pending_ipc_reply, None);
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).pending_screenshot, None);
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).settle_waiters, Vec::new());
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).startup, Vec::new());
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).startup_pids, Vec::new());
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).status_sender, None);
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).last_saved_state_json, None);
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).proc_args_cache, std::collections::HashMap::new());
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).min_sizes, crate::min_sizes::MinSizes::default());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.pending_ipc_reply), None);
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.pending_screenshot), None);
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.settle_waiters), Vec::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.startup), Vec::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.startup_pids), Vec::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.status_sender), None);
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.last_saved_state_json), None);
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.proc_args_cache), std::collections::HashMap::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.min_sizes), crate::min_sizes::MinSizes::default());
             std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).cce_window_management, crate::cce_window_management::CceWindowManagement::new());

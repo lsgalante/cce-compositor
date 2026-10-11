@@ -275,7 +275,7 @@ impl Output {
         }
     }
 
-    pub unsafe fn create(server: *mut Server, wlr_output: *mut ffi::wlr_output) -> Result<(), &'static str> {
+    pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, server: *mut Server, wlr_output: *mut ffi::wlr_output) -> Result<(), &'static str> {
         let title = format!("river - {}\0", std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name(wlr_output)).to_string_lossy());
         
         // Check if output is Wayland/X11 and set application title/app_id
@@ -298,9 +298,9 @@ impl Output {
         let name_raw = ffi::river_wlr_output_get_name(wlr_output);
         let name = std::ffi::CStr::from_ptr(name_raw).to_string_lossy();
         let scale_key = format!("scale_{}", name);
-        let output_scale = (*crate::reentry::wm(server)).display.get(&scale_key)
+        let output_scale = wm.display.get(&scale_key)
             .map(|&s| s as f32)
-            .unwrap_or((*crate::reentry::wm(server)).output_scale);
+            .unwrap_or(wm.output_scale);
 
         // The physical size every client's wl_output geometry will carry,
         // which cce-ui's `units::Metric` measures logical px per mm against.
@@ -310,8 +310,8 @@ impl Output {
         // clients on the assumed 96 ppi, and that is worth knowing.
         let (mut edid_w, mut edid_h) = (0i32, 0i32);
         ffi::river_wlr_output_get_phys_size(wlr_output, &mut edid_w, &mut edid_h);
-        let configured = (*crate::reentry::wm(server)).display.get(&format!("mm_w_{}", name))
-            .zip((*crate::reentry::wm(server)).display.get(&format!("mm_h_{}", name)))
+        let configured = wm.display.get(&format!("mm_w_{}", name))
+            .zip(wm.display.get(&format!("mm_h_{}", name)))
             .map(|(&w, &h)| (w.round() as i32, h.round() as i32));
         match configured {
             Some((w, h)) => {
@@ -416,15 +416,14 @@ impl Output {
         Ok(())
     }
 
-    pub unsafe fn render_and_commit(&mut self) -> Result<(), &'static str> {
+    pub unsafe fn render_and_commit(&mut self, wm: &mut crate::window_manager::WindowManager) -> Result<(), &'static str> {
         // Update grid node positions and parameters first, which marks the scene output as damaged if changed
-        self.draw_grid();
-        self.draw_adjust_overlay();
-        (*crate::reentry::wm(self.server)).draw_selection();
+        self.draw_grid(wm);
+        self.draw_adjust_overlay(wm);
+        wm.draw_selection();
         // A parked `ccectl screenshot` targeting this output forces a render
         // even without damage so there is a fresh buffer to read back.
         let pending_shot = {
-            let wm = &mut (*crate::reentry::wm(self.server));
             if wm
                 .pending_screenshot
                 .as_ref()
@@ -449,7 +448,6 @@ impl Output {
         {
             // Quantized to screen pixels: a sub-pixel pan moves no node
             // (see `update_viewport_local`), so it is not a reason to paint.
-            let wm = &(*crate::reentry::wm(self.server));
             let q = wm.desk_zoom * self.current.scale as f64;
             let cam = ((wm.desk_pan_x * q).round(), (wm.desk_pan_y * q).round(), wm.desk_zoom);
             if cam != (self.last_rendered_pan_x, self.last_rendered_pan_y, self.last_rendered_zoom) {
@@ -469,7 +467,6 @@ impl Output {
         // Re-apply scale to all windows whose scale is not 1.0 right before
         // rendering — and to any whose buffers are still shrunk from a
         // scale that has just returned to 1.0, which this pass resets.
-        let wm = &(*crate::reentry::wm(self.server));
         for &window in wm.windows.iter() {
             if !window.is_null() && ((*window).scale != 1.0 || (*window).x11_buffer_scale() != 1.0 || (*window).buffers_scaled) {
                 (*window).scale_only_render_finish();
@@ -640,12 +637,11 @@ impl Output {
         self.background_rect.set_color(&color);
     }
 
-    pub unsafe fn draw_adjust_overlay(&mut self) {
+    pub unsafe fn draw_adjust_overlay(&mut self, wm: &crate::window_manager::WindowManager) {
         if self.adjust_tree.is_null() {
             return;
         }
 
-        let wm = &(*crate::reentry::wm(self.server));
         if wm.adjust_position_mode != self.last_adjust_mode {
             self.last_adjust_mode = wm.adjust_position_mode;
             ffi::wlr_output_schedule_frame(self.wlr_output);
@@ -717,12 +713,11 @@ impl Output {
     /// — tree shift, backdrop extent, cell lattice, density fade. This side
     /// keeps the scene nodes, the rect reuse pool, and scenefx's fade-inset
     /// wire encoding.
-    pub unsafe fn draw_grid(&mut self) {
+    pub unsafe fn draw_grid(&mut self, wm: &crate::window_manager::WindowManager) {
         if self.grid_tree.is_null() {
             return;
         }
 
-        let wm = &(*crate::reentry::wm(self.server));
 
         // Enable the grid tree.
         self.grid_tree.set_enabled(true);
@@ -1026,7 +1021,7 @@ impl Output {
             }
         }
 
-        self.draw_cell_labels();
+        self.draw_cell_labels(wm);
         if suspended {
             ffi::wlr_scene_node_set_enabled(grid_tree as *mut ffi::wlr_scene_node, true);
         }
@@ -1039,8 +1034,7 @@ impl Output {
     /// cell (`GridFrame::first_col/row`, computed in policy) is needed to know
     /// what to write. Outside overview every node is disabled — this is a
     /// navigation aid, not desktop furniture.
-    unsafe fn draw_cell_labels(&mut self) {
-        let wm = &(*crate::reentry::wm(self.server));
+    unsafe fn draw_cell_labels(&mut self, wm: &crate::window_manager::WindowManager) {
         let overview = crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
             && crate::shared::layout().desktop_cell_labels;
 
@@ -1295,16 +1289,17 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
     // The camera steps here, on the vblank, to where it should be at the
     // instant THIS frame is presented (see WindowManager::step_camera_frame).
     let frame_target_ns = output.predicted_present_ns();
-    (*crate::reentry::wm(output.server)).step_camera_frame(frame_target_ns);
+    let wm = &mut *crate::reentry::wm(output.server);
+    wm.step_camera_frame(frame_target_ns);
     // Likewise the interactive move/resize: one configure + relayout per
     // vblank, for the pointer's latest position.
-    (*crate::reentry::wm(output.server)).step_op_frame();
+    wm.step_op_frame();
     let render_start = if frame_debug() {
         Some(std::time::Instant::now())
     } else {
         None
     };
-    if let Err(e) = output.render_and_commit() {
+    if let Err(e) = output.render_and_commit(wm) {
         log_render_error(e);
     }
     if let Some(start) = render_start {
@@ -1335,7 +1330,7 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
     // quarter second to come back, which is longer than the overview ramp
     // and is why an exit's replacement patch used to land after the
     // animation. While a patch is in the air, drive the client directly.
-    (*crate::reentry::wm(output.server)).send_frame_done_to_grid_clients_awaiting_patch();
+    wm.send_frame_done_to_grid_clients_awaiting_patch();
 }
 
 unsafe extern "C" fn handle_present(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

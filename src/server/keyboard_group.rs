@@ -304,7 +304,7 @@ fn allowed_while_locked(keysym: u32) -> bool {
         )
 }
 
-unsafe fn handle_builtin_binding(seat: *mut Seat, keysym: u32, modifiers: u32) -> bool {
+unsafe fn handle_builtin_binding(wm: &mut crate::window_manager::WindowManager, seat: *mut Seat, keysym: u32, modifiers: u32) -> bool {
     match keysym {
         ffi::XKB_KEY_XF86Switch_VT_1..=ffi::XKB_KEY_XF86Switch_VT_12 => {
             log::debug!("switch VT keysym received");
@@ -325,12 +325,11 @@ unsafe fn handle_builtin_binding(seat: *mut Seat, keysym: u32, modifiers: u32) -
         // bindable/forwardable key, and with nothing expanded this arm never
         // fires at all.
         ffi::XKB_KEY_Escape if modifiers == 0 => {
-            let server = (*seat).server;
-            if !(*crate::reentry::wm(server)).any_expanded_status_segment(std::ptr::null_mut()) {
+            if !wm.any_expanded_status_segment(std::ptr::null_mut()) {
                 return false;
             }
             log::debug!("Escape dismisses the open status menu");
-            if let Some(ref sender) = (*crate::reentry::wm(server)).status_sender {
+            if let Some(ref sender) = wm.status_sender {
                 sender.send_menu_dismiss("-");
             }
             true
@@ -364,6 +363,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         log::error!("no xkb_state available");
         return;
     }
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
 
     // Keys are activity for the idle timeouts (and the idle-notify clients)
     // exactly as pointer events are; before 2026-09-16 only tablet, touch
@@ -381,7 +381,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         && !group.seat.is_null()
         && (*group.seat).cursor.view_drag.is_some()
     {
-        (*group.seat).cursor.end_view_drag(&mut *crate::reentry::wm((*group.seat).server), "key");
+        (*group.seat).cursor.end_view_drag(wm, "key");
     }
     if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
         && !group.seat.is_null()
@@ -421,7 +421,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
                 if locked && !is_vt_switch(sym) {
                     continue;
                 }
-                if handle_builtin_binding(group.seat, sym, modifiers) {
+                if handle_builtin_binding(wm, group.seat, sym, modifiers) {
                     matched_builtin = true;
                     break;
                 }
@@ -430,13 +430,13 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
 
         if matched_builtin {
             KeyConsumer::Builtin
-        } else if let Some(kb) = match_cce_keybind(&(*crate::reentry::wm((*group.seat).server)), xkb_keycode, modifiers, xkb_state)
+        } else if let Some(kb) = match_cce_keybind(&*wm, xkb_keycode, modifiers, xkb_state)
             .filter(|kb| !locked || allowed_while_locked(kb.keysym))
         {
             log::debug!("matched CCE monolithic keybind: {:?}", kb);
             KeyConsumer::CceBinding(kb)
         } else if let Some((session, id)) = (!locked)
-            .then(|| match_portal_shortcut(&(*crate::reentry::wm((*group.seat).server)), xkb_keycode, modifiers, xkb_state))
+            .then(|| match_portal_shortcut(&*wm, xkb_keycode, modifiers, xkb_state))
             .flatten()
         {
             log::debug!("matched portal shortcut {} {}", session, id);
@@ -463,7 +463,6 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         KeyConsumer::Builtin => {}
         KeyConsumer::CceBinding(kb) => {
             if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED {
-                let wm = &mut (*crate::reentry::wm((*group.seat).server));
                 // A key carries no pointer position: the overview toggle's
                 // exit must land on the focused window, not on whatever the
                 // pointer was left hovering (or the empty desktop under it).
@@ -482,7 +481,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             // the release comes back here through the consumer map with the
             // same variant the press recorded.
             let pressed = (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED;
-            if let Some(ref sender) = (*crate::reentry::wm((*group.seat).server)).status_sender {
+            if let Some(ref sender) = wm.status_sender {
                 sender.send_shortcut_event(
                     &cce_core::ipc::ctl::ShortcutEvent {
                         activated: pressed,

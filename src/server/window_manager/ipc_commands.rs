@@ -821,7 +821,7 @@ impl WindowManager {
                         if xw.is_null() {
                             return "error: window not found\n".to_string();
                         }
-                        match (*xw).forget_min_size() {
+                        match (*xw).forget_min_size(self) {
                             Some((w, h)) => format!("ok forgot {}x{}\n", w, h),
                             None => "ok none stored\n".to_string(),
                         }
@@ -1042,7 +1042,7 @@ impl WindowManager {
                 crate::shared::pending().dirty_windowing();
                 "ok\n".to_string()
             }
-            "idle" => unsafe { (*self.server).idle.ipc(&parts[1..]) },
+            "idle" => unsafe { (*self.server).idle.ipc(self, &parts[1..]) },
             // Lock the session (`LockManager::lock_now`). The reply waits for
             // the lock to complete, which is what the lock-before-sleep
             // thread (`sleep_lock`) holds logind's sleep for: `ok locked`

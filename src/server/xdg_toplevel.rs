@@ -55,12 +55,13 @@ pub struct XdgDecoration {
 
 impl XdgToplevel {
     pub unsafe fn create(
+    wm: &mut crate::window_manager::WindowManager,
         wlr_toplevel: *mut ffi::wlr_xdg_toplevel,
         server: *mut Server,
     ) -> Result<(), &'static str> {
         log::debug!("new xdg_toplevel");
 
-        let window = Window::create(crate::window::WindowImpl::Toplevel(std::ptr::null_mut()), server)?;
+        let window = Window::create(wm, crate::window::WindowImpl::Toplevel(std::ptr::null_mut()), server)?;
 
         let toplevel = Box::new(XdgToplevel {
             window,
@@ -419,12 +420,13 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, unmap);
-    (*(*toplevel).window).unmap();
+    (*(*toplevel).window).unmap(&mut *crate::reentry::wm((*(*toplevel).window).server));
 }
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, map);
-    if let Err(e) = (*(*toplevel).window).map() {
+    let wm = &mut *crate::reentry::wm((*(*toplevel).window).server);
+    if let Err(e) = (*(*toplevel).window).map(wm) {
         log::error!("Window map failed: {}", e);
         let client = ffi::wl_resource_get_client((*(*toplevel).wlr_toplevel).resource);
         ffi::wl_client_post_no_memory(client);
@@ -449,7 +451,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
             (*window).box_geom.width = new_geometry.width;
             (*window).box_geom.height = new_geometry.height;
         }
-        (*crate::reentry::wm((*window).server)).apply_client_fullscreen(window, true);
+        wm.apply_client_fullscreen(window, true);
     }
     // Status segments and Utility windows are SELF-sizing: their bounds
     // track their own box, so the committed geometry is adopted as the box.
@@ -462,7 +464,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
         (*(*toplevel).window).box_geom.height = new_geometry.height;
         // A view-centered modal that is ALSO self-sizing was centered at map
         // against a size it had not committed yet; redo it now that it has.
-        (*(*toplevel).window).take_pending_view_center();
+        (*(*toplevel).window).take_pending_view_center(wm);
         crate::shared::pending().dirty_windowing();
     } else if (*(*toplevel).window).pending_view_center
         && new_geometry.width > 0
@@ -473,7 +475,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
         // map-time 400x400-floor placement stands for a 900x500 dialog.
         (*(*toplevel).window).box_geom.width = new_geometry.width;
         (*(*toplevel).window).box_geom.height = new_geometry.height;
-        (*(*toplevel).window).take_pending_view_center();
+        (*(*toplevel).window).take_pending_view_center(wm);
         crate::shared::pending().dirty_windowing();
     }
 }
@@ -506,6 +508,7 @@ unsafe extern "C" fn handle_ack_configure(
     data: *mut std::ffi::c_void,
 ) {
     let toplevel = crate::container_of!(listener, XdgToplevel, ack_configure);
+    let wm = &mut *crate::reentry::wm((*(*toplevel).window).server);
     let acked_configure = data as *mut ffi::wlr_xdg_surface_configure;
     let serial = (*acked_configure).serial;
 
@@ -544,7 +547,7 @@ unsafe extern "C" fn handle_ack_configure(
         (*(*toplevel).window).box_geom.height = new_geometry.height;
         // A view-centered modal that is ALSO self-sizing was centered at map
         // against a size it had not committed yet; redo it now that it has.
-        (*(*toplevel).window).take_pending_view_center();
+        (*(*toplevel).window).take_pending_view_center(wm);
         crate::shared::pending().dirty_windowing();
     } else if (*(*toplevel).window).pending_view_center
         && new_geometry.width > 0
@@ -555,7 +558,7 @@ unsafe extern "C" fn handle_ack_configure(
         // map-time 400x400-floor placement stands for a 900x500 dialog.
         (*(*toplevel).window).box_geom.width = new_geometry.width;
         (*(*toplevel).window).box_geom.height = new_geometry.height;
-        (*(*toplevel).window).take_pending_view_center();
+        (*(*toplevel).window).take_pending_view_center(wm);
         crate::shared::pending().dirty_windowing();
     }
 }
@@ -563,6 +566,7 @@ unsafe extern "C" fn handle_ack_configure(
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, commit);
     let window = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm((*window).server);
     // Grid-patch latch: the first commit after ack_grid_patch carries the
     // buffer rendered for that patch — anchor to it from this commit on.
     // Latching here (not at ack time) means an in-flight older buffer is
@@ -578,7 +582,6 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         // exactly (virtual_to_screen's truncating cast included); the next
         // arrange re-affirms the same values.
         {
-            let wm = &(*crate::reentry::wm((*window).server));
             let zoom = crate::policy::background::sanitized_zoom(wm.desk_zoom);
             let (mut ox, mut oy) = (0i32, 0i32);
             let outputs_list = &(*(*window).server).om.outputs as *const ffi::wl_list
@@ -870,7 +873,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             match (*toplevel).configure_state {
                 ConfigureState::Acked => {
                     (*toplevel).configure_state = ConfigureState::Committed;
-                    (*crate::reentry::wm((*window).server)).notify_configured();
+                    wm.notify_configured();
                 }
                 ConfigureState::TimedOutAcked => {
                     (*toplevel).configure_state = ConfigureState::Idle;
@@ -885,7 +888,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     // Window::anchor_resize_commit; Xwayland windows take the same path from
     // handle_window_commit.
     let geometry = (*toplevel).geometry;
-    if let Some((final_x, final_y)) = (*window).anchor_resize_commit(geometry.width, geometry.height) {
+    if let Some((final_x, final_y)) = (*window).anchor_resize_commit(wm, geometry.width, geometry.height) {
         // Keep the displayed buffer and the compensating position atomic.
         // Live buffer (no configure in flight): the commit is already on
         // screen, so move the scene tree in the same commit — waiting for
@@ -1005,8 +1008,9 @@ unsafe extern "C" fn handle_request_move(
             (*window).mode_locked = true;
         }
 
-        (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::Window(window));
-        (*crate::reentry::wm((*window).server)).stop_panning_animation();
+        let wm = &mut *crate::reentry::wm((*seat).server);
+        (*seat).focus(wm, crate::seat::Focus::Window(window));
+        wm.stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = (*cursor.wlr_cursor).x;
         let cursor_y = (*cursor.wlr_cursor).y;
@@ -1028,11 +1032,11 @@ unsafe extern "C" fn handle_request_move(
             start_tiling_mode: (*window).tiling_mode,
             start_was_tiled: grabbed_tiled,
             start_mode_locked: (*window).mode_locked,
-            start_pan_x: (*crate::reentry::wm((*window).server)).desk_pan_x,
-            start_pan_y: (*crate::reentry::wm((*window).server)).desk_pan_y,
+            start_pan_x: wm.desk_pan_x,
+            start_pan_y: wm.desk_pan_y,
             started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
         });
-        cursor.op_start_pointer(&mut *crate::reentry::wm((*window).server));
+        cursor.op_start_pointer(wm);
         cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
 
         (*window).wm_scheduled.pointer_move_requested = seat;
@@ -1073,8 +1077,9 @@ unsafe extern "C" fn handle_request_resize(
             (*window).mode_locked = true;
         }
 
-        (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::Window(window));
-        (*crate::reentry::wm((*window).server)).stop_panning_animation();
+        let wm = &mut *crate::reentry::wm((*seat).server);
+        (*seat).focus(wm, crate::seat::Focus::Window(window));
+        wm.stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = (*cursor.wlr_cursor).x;
         let cursor_y = (*cursor.wlr_cursor).y;
@@ -1099,11 +1104,11 @@ unsafe extern "C" fn handle_request_resize(
             start_tiling_mode: (*window).tiling_mode,
             start_was_tiled: grabbed_tiled,
             start_mode_locked: (*window).mode_locked,
-            start_pan_x: (*crate::reentry::wm((*window).server)).desk_pan_x,
-            start_pan_y: (*crate::reentry::wm((*window).server)).desk_pan_y,
+            start_pan_x: wm.desk_pan_x,
+            start_pan_y: wm.desk_pan_y,
             started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
         });
-        cursor.op_start_pointer(&mut *crate::reentry::wm((*window).server));
+        cursor.op_start_pointer(wm);
         let cursor_name = crate::cursor::get_resize_cursor_name(edges);
         cursor.set_xcursor(cursor_name.as_ptr() as *const _);
 
@@ -1122,13 +1127,13 @@ unsafe extern "C" fn handle_set_parent(_listener: *mut ffi::wl_listener, _data: 
 unsafe extern "C" fn handle_set_title(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, set_title);
     let window = (*toplevel).window;
-    (*window).notify_title();
+    (*window).notify_title(&mut *crate::reentry::wm((*window).server));
 }
 
 unsafe extern "C" fn handle_set_app_id(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, set_app_id);
     let window = (*toplevel).window;
-    (*window).notify_app_id();
+    (*window).notify_app_id(&mut *crate::reentry::wm((*window).server));
 }
 
 unsafe extern "C" fn handle_decoration_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
