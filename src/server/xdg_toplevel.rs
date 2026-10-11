@@ -63,10 +63,11 @@ impl XdgToplevel {
     ) -> Result<(), &'static str> {
         log::debug!("new xdg_toplevel");
 
-        let window = Window::create(wm, crate::window::WindowImpl::Toplevel(std::ptr::null_mut()), server)?;
+        let id = Window::create(wm, crate::window::WindowImpl::Toplevel(std::ptr::null_mut()), server)?;
+        let this = window_mut!(wm, id, Err("window gone at creation"));
 
         let toplevel = Box::new(XdgToplevel {
-            window: (*window).id(),
+            window: id,
             wlr_toplevel,
             decoration: std::ptr::null_mut(),
             geometry: std::mem::zeroed(),
@@ -92,32 +93,32 @@ impl XdgToplevel {
         });
 
         let raw = Box::into_raw(toplevel);
-        (*window).set_impl(crate::window::WindowImpl::Toplevel(raw));
+        this.set_impl(crate::window::WindowImpl::Toplevel(raw));
 
         let base = ffi::river_wlr_xdg_toplevel_get_base(wlr_toplevel);
         let surface = ffi::river_wlr_xdg_surface_get_surface(base);
 
         (*raw).unmap.connect(ffi::river_wlr_surface_get_unmap_signal(surface), handle_unmap);
 
-        let surfaces_tree = (*window).surfaces.tree.raw();
-        let capture_tree = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree;
+        let surfaces_tree = this.surfaces.tree.raw();
+        let capture_tree = &mut (*this.capture_scene).tree as *mut ffi::wlr_scene_tree;
 
         let scene_xdg = ffi::wlr_scene_xdg_surface_create(surfaces_tree, base);
         if scene_xdg.is_null() {
-            (*window).impl_destroying();
+            this.impl_destroying();
             let _ = Box::from_raw(raw);
             return Err("wlr_scene_xdg_surface_create failed");
         }
         let capture_xdg = ffi::wlr_scene_xdg_surface_create(capture_tree, base);
         if capture_xdg.is_null() {
             // Dropping `raw` disconnects its unmap listener.
-            (*window).impl_destroying();
+            this.impl_destroying();
             let _ = Box::from_raw(raw);
             return Err("wlr_scene_xdg_surface_create for capture tree failed");
         }
 
         ffi::river_wlr_xdg_surface_set_data(base, raw as *mut _);
-        ffi::river_wlr_surface_set_data(surface, (*window).tree.node() as *mut _);
+        ffi::river_wlr_surface_set_data(surface, this.tree.node() as *mut _);
 
         (*raw).destroy.connect(ffi::river_wlr_xdg_toplevel_get_destroy_signal(wlr_toplevel), handle_destroy);
 

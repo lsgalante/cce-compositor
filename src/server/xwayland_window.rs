@@ -379,10 +379,11 @@ impl XwaylandWindow {
             if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") }
         );
 
-        let window = Window::create(wm, WindowImpl::Xwayland(std::ptr::null_mut()), server)?;
+        let id = Window::create(wm, WindowImpl::Xwayland(std::ptr::null_mut()), server)?;
+        let this = window_mut!(wm, id, Err("window gone at creation"));
 
         let xwindow = Box::new(XwaylandWindow {
-            window: (*window).id(),
+            window: id,
             xsurface,
             surface_tree: crate::scene_handle::SceneTree::none(),
             destroy: std::mem::zeroed(),
@@ -408,7 +409,7 @@ impl XwaylandWindow {
         });
 
         let raw = Box::into_raw(xwindow);
-        (*window).set_impl(WindowImpl::Xwayland(raw));
+        this.set_impl(WindowImpl::Xwayland(raw));
 
         (*xsurface).data = raw as *mut std::ffi::c_void;
 

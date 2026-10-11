@@ -844,7 +844,7 @@ impl Window {
 
 
 
-    pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, impl_type: WindowImpl, server: *mut Server) -> Result<*mut Self, &'static str> {
+    pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, impl_type: WindowImpl, server: *mut Server) -> Result<WindowId, &'static str> {
         // Every node below is a handle: an early return drops what was made
         // so far, which destroys it. Only the capture scene, a scene root
         // rather than a node, is cleaned up by hand.
@@ -1086,30 +1086,31 @@ impl Window {
         });
 
 
-        let raw = wm.windows.insert(window);
+        let id = wm.windows.insert(window);
+        let this = window_mut!(wm, id, Err("window gone at creation"));
 
-        (*raw).tree.set_enabled(false);
-        (*raw).popup_tree.set_enabled(false);
-        (*raw).fullscreen_background.set_enabled(false);
+        this.tree.set_enabled(false);
+        this.popup_tree.set_enabled(false);
+        this.fullscreen_background.set_enabled(false);
 
         crate::scene_node_data::SceneNodeData::attach(
-            (*raw).tree.node(),
-            crate::scene_node_data::SceneNodeDataVal::Window((*raw).id()),
+            this.tree.node(),
+            crate::scene_node_data::SceneNodeDataVal::Window(id),
         );
         crate::scene_node_data::SceneNodeData::attach(
-            (*raw).popup_tree.node(),
-            crate::scene_node_data::SceneNodeDataVal::Window((*raw).id()),
+            this.popup_tree.node(),
+            crate::scene_node_data::SceneNodeDataVal::Window(id),
         );
         // The border segments sit outside the window tree; without data of
         // their own a hit on a revealed segment would resolve to no window at
         // all, so tag them with the window they belong to.
         crate::scene_node_data::SceneNodeData::attach(
-            (*raw).border.tree.node(),
-            crate::scene_node_data::SceneNodeDataVal::Window((*raw).id()),
+            this.border.tree.node(),
+            crate::scene_node_data::SceneNodeDataVal::Window(id),
         );
-        (*raw).border.tree.set_enabled(false);
+        this.border.tree.set_enabled(false);
 
-        Ok(raw)
+        Ok(id)
     }
 
     /// # Safety
@@ -2959,8 +2960,11 @@ unsafe fn get_parent_position_relative_to(
 
 unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let window = crate::container_of!(listener, Window, commit);
-    (*window).stream_dirty = true;
-    let was_status = (*window).is_status_bar();
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let id = (*window).id();
+    let this = window_mut!(wm, id);
+    this.stream_dirty = true;
+    let was_status = this.is_status_bar();
     // An X11 client committing under a left/top-edge drag: anchor on the
     // size it just committed, ahead of the render_finish below that places
     // the tree at `rendering_requested`. (xdg toplevels do the same in their
@@ -2973,25 +2977,26 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
     // xsurface size back. Feeding it the raw buffer width put the origin a
     // whole window-width to the left and made it track the pointer at double
     // speed, every X11 left/top drag at scale 2.
-    if let WindowImpl::Xwayland(xwindow) = (*window).impl_type {
-        if !xwindow.is_null() && !(*xwindow).xsurface.is_null() && (*window).resize_edges.is_some() {
+    if let WindowImpl::Xwayland(xwindow) = this.impl_type {
+        if !xwindow.is_null() && !(*xwindow).xsurface.is_null() && this.resize_edges.is_some() {
             let surface = (*(*xwindow).xsurface).surface;
             if !surface.is_null() {
-                let s = crate::xwayland_window::x11_scale_for((*window).server, (*xwindow).xsurface);
+                let s = crate::xwayland_window::x11_scale_for(this.server, (*xwindow).xsurface);
                 let mut w = crate::xwayland_window::from_x11(
                     ffi::river_wlr_surface_get_width(surface), s);
                 let mut h = crate::xwayland_window::from_x11(
                     ffi::river_wlr_surface_get_height(surface), s);
                 let has_parent = !(*(*xwindow).xsurface).parent.is_null();
-                if (*window).is_wine() && !has_parent && !(*window).is_fullscreen() {
+                if this.is_wine() && !has_parent && !this.is_fullscreen() {
                     w = (w - crate::xwayland_window::WINE_MARGIN * 2).max(0);
                     h = (h - crate::xwayland_window::WINE_MARGIN * 2).max(0);
                 }
-                Window::anchor_resize_commit(&mut *crate::reentry::wm((*window).server), (*window).id(), w, h);
+                Window::anchor_resize_commit(wm, id, w, h);
             }
         }
     }
-    (*window).render_finish();
+    let this = window_mut!(wm, id);
+    this.render_finish();
     // The scene's own commit handler (registered before this one, so it has
     // already run) resets the committed buffer's dest size to natural. For
     // an X11 surface under xwayland_hidpi that is the physical size — twice
@@ -3000,8 +3005,8 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
     // client at HALF its coordinates. Houdini repaints on every hover
     // change, so hover flickered: each repaint opened the gap, the next
     // motion event landed elsewhere, the widget un-hovered, repeat.
-    if (*window).x11_buffer_scale() != 1.0 {
-        (*window).scale_only_render_finish();
+    if this.x11_buffer_scale() != 1.0 {
+        this.scale_only_render_finish();
     }
     // A status segment that changed size needs the bar re-arranged around
     // it. One that merely repainted (the clock, once a second; the cpu
@@ -3010,14 +3015,14 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
     // each of its ticks, all day. Compare the committed surface size against
     // the last commit's; the xdg commit handler tracks box_geom the same way.
     if was_status {
-        let surface = (*window).root_surface();
+        let surface = this.root_surface();
         if !surface.is_null() {
             let size = (
                 ffi::river_wlr_surface_get_width(surface),
                 ffi::river_wlr_surface_get_height(surface),
             );
-            if size != (*window).status_commit_size {
-                (*window).status_commit_size = size;
+            if size != this.status_commit_size {
+                this.status_commit_size = size;
                 crate::shared::pending().dirty_windowing();
             }
         } else {

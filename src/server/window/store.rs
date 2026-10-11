@@ -33,14 +33,14 @@ impl Windows {
         Self::default()
     }
 
-    /// Take ownership of `window`, give it its id (`ref_key`), and return
-    /// where it now lives. The address stays fixed until [`Self::remove`].
-    pub fn insert(&mut self, window: Box<Window>) -> *mut Window {
+    /// Take ownership of `window` and give it its id (`ref_key`). Its
+    /// address stays fixed until [`Self::remove`].
+    pub fn insert(&mut self, window: Box<Window>) -> WindowId {
         let ptr = NonNull::from(Box::leak(window));
         let key = self.map.put(ptr);
         // SAFETY: just leaked from a Box, and nothing else holds it yet.
         unsafe { (*ptr.as_ptr()).ref_key = key };
-        ptr.as_ptr()
+        WindowId(key)
     }
 
     /// Give up the window `id` names, if it lives. Its id goes stale: every
