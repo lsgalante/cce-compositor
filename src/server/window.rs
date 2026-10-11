@@ -1530,7 +1530,7 @@ impl Window {
             }
             let this = window_mut!(wm, id, Err("window gone"));
             let is_grid = this.is_grid();
-            let stores = crate::ctx::Stores::of(wm.server);
+            let stores = stores!(wm);
 
             // A WORLD window spawning during overview stays in overview:
             // the camera keeps its zoom and only pans, as little as it
@@ -1683,7 +1683,7 @@ impl Window {
             _ => unreachable!(),
         }
 
-        for seat in crate::ctx::Stores::of(wm.server).seats.ptrs() {
+        for seat in stores!(wm).seats.ptrs() {
             if (*seat).focused == crate::seat::Focus::Window(id) {
                 (*seat).focus(wm, crate::seat::Focus::None);
                 wm.focus_next_visible_window(seat);
@@ -1943,7 +1943,7 @@ impl Window {
 
                     let this = window_mut!(wm, id);
                     if this.foreign_toplevel_handle.is_null() {
-                        let list = (*wm.server).foreign_toplevel_list;
+                        let list = crate::shared::handles().foreign_toplevel_list.get();
                         let title = this.get_title();
                         let app_id = this.get_app_id();
                         let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
@@ -1958,7 +1958,7 @@ impl Window {
                     }
 
                     if this.wlr_toplevel_handle.is_null() {
-                        let manager = (*wm.server).wlr_foreign_toplevel_manager;
+                        let manager = crate::shared::handles().foreign_toplevel_manager.get();
                         let handle = ffi::wlr_foreign_toplevel_handle_v1_create(manager);
                         if !handle.is_null() {
                             this.wlr_toplevel_handle = handle;
@@ -2023,7 +2023,7 @@ impl Window {
         }
 
         let output = if this.is_fullscreen() {
-            crate::ctx::Stores::of(wm.server).outputs.first_enabled_ptr()
+            stores!(wm).outputs.first_enabled_ptr()
         } else {
             std::ptr::null_mut()
         };

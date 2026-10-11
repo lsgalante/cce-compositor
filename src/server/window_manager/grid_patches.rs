@@ -13,7 +13,7 @@ impl WindowManager {
     pub unsafe fn update_grid_patches(&mut self) {
         crate::wm_scope!(mut);
         let mut out_box: Option<(ffi::wlr_box, f64)> = None;
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 out_box = Some(((*output).sent.box_layout(), (*output).sent.scale.max(1.0) as f64));
                 break;
@@ -445,7 +445,7 @@ impl WindowManager {
     pub unsafe fn grid_patch_covers_viewport(&self) -> bool {
         crate::wm_scope!();
         let mut out_box: Option<ffi::wlr_box> = None;
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 out_box = Some((*output).sent.box_layout());
                 break;

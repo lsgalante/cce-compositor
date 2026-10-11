@@ -1489,7 +1489,7 @@ unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, da
         return;
     }
     let seat = (*device).seat;
-    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     (*seat).handle_activity(wm);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
@@ -1516,7 +1516,7 @@ unsafe extern "C" fn handle_tablet_tool_proximity(listener: *mut ffi::wl_listene
         return;
     }
     let seat = (*device).seat;
-    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     (*seat).handle_activity(wm);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
@@ -1540,7 +1540,7 @@ unsafe extern "C" fn handle_tablet_tool_tip(listener: *mut ffi::wl_listener, dat
         return;
     }
     let seat = (*device).seat;
-    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     (*seat).handle_activity(wm);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
@@ -1564,7 +1564,7 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
         return;
     }
     let seat = (*device).seat;
-    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     (*seat).handle_activity(wm);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;

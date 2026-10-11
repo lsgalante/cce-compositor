@@ -391,9 +391,9 @@ impl Output {
             present: std::mem::zeroed(),
         });
 
-        let id = (*server).om.outputs.insert(output);
-        crate::xwayland_window::note_output_scale(&(*server).om.outputs);
-        let raw = (*server).om.outputs.ptr(id).ok_or("output gone at creation")?;
+        let id = wm.outputs.insert(output);
+        crate::xwayland_window::note_output_scale(&wm.outputs);
+        let raw = wm.outputs.ptr(id).ok_or("output gone at creation")?;
         ffi::river_wlr_output_set_data(wlr_output, raw as *mut std::ffi::c_void);
 
         ffi::wl_list_init(&mut (*raw).link_sent);
@@ -1399,13 +1399,13 @@ unsafe extern "C" fn handle_present(listener: *mut ffi::wl_listener, data: *mut 
         }
         LockRenderState::PendingBlank => {
             output.lock_render_state = LockRenderState::Blanked;
-            if (*server).lock_manager.maybe_lock(&(*server).om.outputs) {
+            if (*server).lock_manager.maybe_lock(&(*crate::reentry::wm(server)).outputs) {
                 (*server).idle.on_locked();
             }
         }
         LockRenderState::PendingLockSurface => {
             output.lock_render_state = LockRenderState::LockSurface;
-            if (*server).lock_manager.maybe_lock(&(*server).om.outputs) {
+            if (*server).lock_manager.maybe_lock(&(*crate::reentry::wm(server)).outputs) {
                 (*server).idle.on_locked();
             }
         }

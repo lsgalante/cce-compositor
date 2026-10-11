@@ -97,7 +97,7 @@ unsafe extern "C" fn handle_new_surface(_listener: *mut ffi::wl_listener, data: 
 
     // A layer surface that names no output goes on the first one.
     if (*wlr_layer_surface).output.is_null() {
-        if let Some(&output) = (*crate::shared::server_ptr()).om.outputs.ptrs().first() {
+        if let Some(&output) = (*crate::reentry::wm(crate::shared::server_ptr())).outputs.ptrs().first() {
             log::info!("layer surface named no output, choosing the first");
             (*wlr_layer_surface).output = (*output).wlr_output;
         } else {
@@ -332,15 +332,15 @@ impl LayerSurface {
     }
 }
 
-unsafe fn update_scheduled_focus_and_dirty_windowing<F>(server: *mut Server, f: F)
+/// `seats` is the window manager's seat store, as a raw place: `f` reaches
+/// the window manager itself.
+unsafe fn update_scheduled_focus_and_dirty_windowing<F>(seats: *const crate::seat::Seats, f: F)
 where F: FnOnce() {
-    let old_focuses: Vec<_> = (*server).input_manager.seats.values().map(|seat| seat.layer_shell.scheduled_focus).collect();
+    let old_focuses: Vec<_> = (*seats).values().map(|seat| seat.layer_shell.scheduled_focus).collect();
 
     f();
 
-    let changed = (*server)
-        .input_manager
-        .seats
+    let changed = (*seats)
         .values()
         .zip(&old_focuses)
         .any(|(seat, old)| seat.layer_shell.scheduled_focus != *old);
@@ -374,9 +374,9 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
         (*layer_surface).start_fade(1.0, ms);
     }
 
-    update_scheduled_focus_and_dirty_windowing(server, || {
+    update_scheduled_focus_and_dirty_windowing(std::ptr::addr_of!((*crate::reentry::wm(server)).seats), || {
         if (*wlr_layer_surface).current.keyboard_interactive == ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND {
-            for seat in (*server).input_manager.seats.ptrs() {
+            for seat in (*crate::reentry::wm(server)).seats.ptrs() {
                 if !matches!((*seat).layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_)) {
                     (*seat).layer_shell.scheduled_focus = LayerShellSeatFocus::NonExclusive((*layer_surface).ref_key);
                 }
@@ -390,7 +390,7 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
                 (*output).layer_shell.arrange(output);
             }
         }
-        LayerShell::check_exclusive_focus(&mut (*server).input_manager.seats);
+        LayerShell::check_exclusive_focus(&mut (*crate::reentry::wm(server)).seats);
     });
 }
 
@@ -404,8 +404,8 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
 
     let server = crate::shared::server_ptr();
 
-    update_scheduled_focus_and_dirty_windowing(server, || {
-        for seat in (*server).input_manager.seats.ptrs() {
+    update_scheduled_focus_and_dirty_windowing(std::ptr::addr_of!((*crate::reentry::wm(server)).seats), || {
+        for seat in (*crate::reentry::wm(server)).seats.ptrs() {
             if let crate::seat::Focus::LayerSurface(surface) = (*seat).focused {
                 if surface == (*wlr_layer_surface).surface {
                     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
@@ -464,7 +464,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                 (*output).layer_shell.arrange(output);
             }
         }
-        LayerShell::check_exclusive_focus(&mut (*server).input_manager.seats);
+        LayerShell::check_exclusive_focus(&mut (*crate::reentry::wm(server)).seats);
     });
 }
 
@@ -571,7 +571,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                         let mut output_x = 0;
                         let mut output_y = 0;
                         let mut output_w = 0;
-                        for output in (*server).om.outputs.ptrs() {
+                        for output in (*crate::reentry::wm(server)).outputs.ptrs() {
                             if (*output).wlr_output == wlr_output {
                                 let wlr_box = (*output).sent.box_layout();
                                 output_x = wlr_box.x;
@@ -614,9 +614,9 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
     }
 
     if (*wlr_layer_surface).initial_commit || ((*wlr_layer_surface).current.committed != 0) {
-        update_scheduled_focus_and_dirty_windowing(server, || {
+        update_scheduled_focus_and_dirty_windowing(std::ptr::addr_of!((*crate::reentry::wm(server)).seats), || {
             (*output).layer_shell.arrange(output);
-            LayerShell::check_exclusive_focus(&mut (*server).input_manager.seats);
+            LayerShell::check_exclusive_focus(&mut (*crate::reentry::wm(server)).seats);
         });
     }
 }

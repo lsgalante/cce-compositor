@@ -413,7 +413,7 @@ impl WindowManager {
                 if let Ok(factor) = parse_finite(parts[1]) {
                     let new_zoom = factor.clamp(0.1, 10.0);
                     let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
-                    for output in (*self.server).om.outputs.ptrs() {
+                    for output in self.outputs.ptrs() {
                         if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                             let wlr_box = (*output).sent.box_layout();
                             viewport_w = wlr_box.width as f64;
@@ -840,7 +840,7 @@ impl WindowManager {
                 // Enabled output's origin + size (fall back to 1920x1080 @ 0,0).
                 let (mut vp_w, mut vp_h) = (1920.0_f64, 1080.0_f64);
                 let (mut phys_x, mut phys_y) = (0i32, 0i32);
-                for output in (*self.server).om.outputs.ptrs() {
+                for output in self.outputs.ptrs() {
                     if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                         let wlr_box = (*output).sent.box_layout();
                         vp_w = wlr_box.width as f64;
@@ -915,7 +915,7 @@ impl WindowManager {
 
                         // First enabled output (same walk as center-window).
                         let mut target_out: *mut crate::output::Output = std::ptr::null_mut();
-                        for output in (*self.server).om.outputs.ptrs() {
+                        for output in self.outputs.ptrs() {
                             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                                 target_out = output;
                                 break;
@@ -1007,13 +1007,7 @@ impl WindowManager {
             }
             "idle" => unsafe {
                 let server = self.server;
-                (*server).idle.ipc(
-                    self,
-                    &mut (*server).lock_manager,
-                    &mut (*server).om.outputs,
-                    &(*server).input_manager.seats,
-                    &parts[1..],
-                )
+                (*server).idle.ipc(self, &mut (*server).lock_manager, &parts[1..])
             },
             // Lock the session (`LockManager::lock_now`). The reply waits for
             // the lock to complete, which is what the lock-before-sleep
@@ -1022,7 +1016,7 @@ impl WindowManager {
             "lock" => unsafe {
                 let server = self.server;
                 let lock = &mut (*server).lock_manager;
-                if lock.lock_now(self, &(*server).om.outputs, &(*server).input_manager.seats) {
+                if lock.lock_now(self) {
                     (*server).idle.on_locked();
                 }
                 match self.pending_ipc_reply.take() {
@@ -1059,8 +1053,7 @@ impl WindowManager {
                 // number cce-ui resolves a `(mm)` length with.
                 let as_json = parts.get(1).copied() == Some("--json");
                 let mut out = String::new();
-                let om = &(*self.server).om;
-                for output in om.outputs.values() {
+                for output in self.outputs.values() {
                     let wlr_output = output.wlr_output;
                     if wlr_output.is_null() {
                         continue;
@@ -1116,7 +1109,7 @@ impl WindowManager {
                 // app_ids are then properly escaped, unlike the text format.
                 let as_json = parts.get(1).copied() == Some("--json");
                 let mut focused_id: Option<crate::window::WindowId> = None;
-                for seat in (*self.server).input_manager.seats.ptrs() {
+                for seat in self.seats.ptrs() {
                     if let crate::seat::Focus::Window(id) = (*seat).focused {
                         if self.windows.contains(id) {
                             focused_id = Some(id);
@@ -1235,7 +1228,7 @@ impl WindowManager {
                         crate::shared::update_layout(|l| l.background_g = ((parsed_color >> 8) & 0xFF) * 0x01010101);
                         crate::shared::update_layout(|l| l.background_b = (parsed_color & 0xFF) * 0x01010101);
                         unsafe {
-                            for output_ptr in (*self.server).om.outputs.ptrs() {
+                            for output_ptr in self.outputs.ptrs() {
                                 let output = &mut *output_ptr;
                                 output.update_background_color();
                             }
@@ -1593,7 +1586,7 @@ impl WindowManager {
             }
             "pointer-location" => {
                 let mut reply = "error: no seat\n".to_string();
-                if let Some(seat) = (*self.server).input_manager.seats.values().next() {
+                if let Some(seat) = self.seats.values().next() {
                     let cursor = &seat.cursor;
                     reply = format!("x={} y={}\n", cursor.x(), cursor.y());
                 }
@@ -1623,7 +1616,7 @@ impl WindowManager {
                         125 | 126 => Some(b"Mod4\0"),
                         _ => None,
                     };
-                    for seat in (*self.server).input_manager.seats.ptrs() {
+                    for seat in self.seats.ptrs() {
                         (*seat).ensure_synthetic_keyboard();
                         (*seat).handle_activity(self);
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, crate::util::msec_timestamp(), keycode, state);
@@ -1661,7 +1654,7 @@ impl WindowManager {
             "keypress" | "key-press" => {
                 if parts.len() < 2 { return "error: usage: keypress <keycode>\n".to_string(); }
                 if let Ok(keycode) = parts[1].parse::<u32>() {
-                    for seat in (*self.server).input_manager.seats.ptrs() {
+                    for seat in self.seats.ptrs() {
                         // A backend with no keyboard device leaves clients
                         // without a keymap, and a keymap-less client drops
                         // every key we notify. Attach one first.
@@ -1687,7 +1680,7 @@ impl WindowManager {
     /// like the pre-existing pointer-move-to loop did).
     pub(crate) unsafe fn for_each_cursor(&mut self, mut f: impl FnMut(&mut WindowManager, &mut crate::cursor::Cursor)) {
         crate::wm_scope!(mut);
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             f(self, &mut (*seat).cursor);
         }
     }
@@ -1696,7 +1689,7 @@ impl WindowManager {
     /// touch injected first, which offers clients the touch capability.
     pub(crate) unsafe fn for_each_seat_touch(&mut self, mut f: impl FnMut(&mut WindowManager, &mut crate::cursor::Cursor)) {
         crate::wm_scope!(mut);
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             if !(*seat).touch_injected {
                 (*seat).touch_injected = true;
                 (*seat).update_capabilities();

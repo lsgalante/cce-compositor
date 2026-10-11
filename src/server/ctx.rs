@@ -30,9 +30,10 @@ impl<'a> Stores<'a> {
     /// or taken out of its store while the borrow lasts — a destroy path
     /// runs from the manage pass, never under a drawing or effect pass.
     pub unsafe fn of(server: *mut Server) -> Stores<'a> {
+        let wm = crate::reentry::wm(server);
         Stores {
-            outputs: &*std::ptr::addr_of!((*server).om.outputs),
-            seats: &*std::ptr::addr_of!((*server).input_manager.seats),
+            outputs: &*std::ptr::addr_of!((*wm).outputs),
+            seats: &*std::ptr::addr_of!((*wm).seats),
         }
     }
 }

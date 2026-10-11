@@ -543,15 +543,13 @@ impl IdleManager {
         &mut self,
         wm: &mut crate::window_manager::WindowManager,
         lock: &mut crate::lock_manager::LockManager,
-        outputs: &crate::output::Outputs,
-        seats: &crate::seat::Seats,
     ) {
         if self.sleeping || self.sleep_after_lock {
             return;
         }
         // A lock that completes at once is seen just below; `on_locked` would
         // find nothing waiting for it.
-        let _ = lock.lock_now(wm, outputs, seats);
+        let _ = lock.lock_now(wm);
         if lock.state == crate::lock_manager::LockState::Locked {
             self.sleep_now();
             return;
@@ -645,26 +643,24 @@ impl IdleManager {
         &mut self,
         wm: &mut crate::window_manager::WindowManager,
         lock: &mut crate::lock_manager::LockManager,
-        outputs: &mut crate::output::Outputs,
-        seats: &crate::seat::Seats,
         args: &[&str],
     ) -> String {
         match args {
             [] | ["status"] => self.status(),
             ["wake"] => {
-                self.on_activity(outputs);
+                self.on_activity(&mut wm.outputs);
                 "ok\n".to_string()
             }
             ["display", "off"] => {
-                self.set_displays(outputs, false);
+                self.set_displays(&mut wm.outputs, false);
                 "ok\n".to_string()
             }
             ["display", "on"] => {
-                self.set_displays(outputs, true);
+                self.set_displays(&mut wm.outputs, true);
                 "ok\n".to_string()
             }
             ["sleep"] => {
-                self.lock_then_sleep(wm, lock, outputs, seats);
+                self.lock_then_sleep(wm, lock);
                 "ok\n".to_string()
             }
             ["inhibit", rest @ ..] => match parse_lease(rest, now_ms()) {
@@ -764,7 +760,7 @@ unsafe extern "C" fn handle_display_timeout(data: *mut std::ffi::c_void) -> std:
     let idle = &mut *(data as *mut IdleManager);
     if !idle.inhibited && !idle.displays_off {
         log::info!("idle: display timeout reached");
-        idle.set_displays(&mut (*crate::shared::server_ptr()).om.outputs, false);
+        idle.set_displays(&mut (*crate::reentry::wm(crate::shared::server_ptr())).outputs, false);
     }
     0
 }
@@ -774,12 +770,7 @@ unsafe extern "C" fn handle_sleep_timeout(data: *mut std::ffi::c_void) -> std::o
     if !idle.inhibited && !idle.sleeping {
         log::info!("idle: sleep timeout reached");
         let server = crate::shared::server_ptr();
-        idle.lock_then_sleep(
-            &mut *crate::reentry::wm(server),
-            &mut (*server).lock_manager,
-            &(*server).om.outputs,
-            &(*server).input_manager.seats,
-        );
+        idle.lock_then_sleep(&mut *crate::reentry::wm(server), &mut (*server).lock_manager);
     }
     0
 }
@@ -802,7 +793,7 @@ unsafe extern "C" fn handle_session_active(listener: *mut ffi::wl_listener, _dat
         return;
     }
     log::info!("idle: session active (resume / VT switch), waking");
-    idle.on_activity(&mut (*server).om.outputs);
+    idle.on_activity(&mut (*crate::reentry::wm(server)).outputs);
 }
 
 #[cfg(test)]

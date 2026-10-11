@@ -938,7 +938,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 let mut best_output: *mut crate::output::Output = std::ptr::null_mut();
                 let mut min_output_dist = f64::MAX;
                 
-                for output in (*server).om.outputs.ptrs() {
+                for output in wm.outputs.ptrs() {
                     if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                         let wlr_box = (*output).sent.box_layout();
                         let ox = wlr_box.x as f64;

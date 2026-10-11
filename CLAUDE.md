@@ -534,7 +534,7 @@ which is what the address-scan liveness checks these replaced
 (`wm.windows.iter().any(|&w| w == p)`) could not rule out. A new holder
 takes an id.
 
-**Outputs have a store too** (since 2026-10-11): `om.outputs` is
+**Outputs have a store too** (since 2026-10-11): `wm.outputs` is
 `crate::output::Outputs` (`output/store.rs`), owning every `Output` by
 `OutputId` the way `wm.windows` owns windows. It replaced the intrusive
 `om.outputs` list whose entries freed themselves (`Box::from_raw(self)`)
@@ -545,13 +545,23 @@ output: `first_enabled_ptr()`). `ptrs()` is a copied list of addresses
 for the walks not yet converted to borrows; `values()`, `get` and
 `get_mut` borrow. `PendingScreenshot` names its output by id. The
 applied-outputs list `crate::shared::sent().outputs` is still intrusive
-(`Output::link_sent`). **Seats likewise** (`input_manager.seats`,
+(`Output::link_sent`). **Seats likewise** (`wm.seats`,
 `crate::seat::Seats`, `seat/store.rs`, by `SeatId`, an index into slots
 that are never reused): a seat a client asked to destroy is taken out by
 the manage pass (`Seat::manage_start` returns true) and handed to
 `Seat::destroy`, which takes the box; the deinit takes each in turn.
 `sent().seats` (`Seat::link_sent`) is still intrusive. Test two outputs with a copy of `cce-shadow` whose
-`WLR_HEADLESS_OUTPUTS=1` reads 2.
+`WLR_HEADLESS_OUTPUTS=1` reads 2. Both stores live on the WINDOW MANAGER, beside `windows`
+(since 2026-10-11; they were `om.outputs` and `input_manager.seats`), for
+the reason the window store does: each holds raw pointers, so a `&mut
+WindowManager` borrows no output's or seat's memory, and the window manager
+walks them with no path to the server. The output manager's walks are
+`Outputs` methods (`enabled_output_boxes`, `auto_layout`,
+`max_overlap_output`); `commit_output_state` / `send_config` take the store.
+A function holding `&mut wm` reads the stores THROUGH it (`wm.outputs`,
+`wm.seats`) — `LockManager::lock_now(wm)`, `IdleManager::lock_then_sleep(wm,
+lock)` — never as a separate argument beside it, which would borrow the same
+memory twice.
 
 **Server back-pointers** (RFC step 4, 2026-10-11): only `WindowManager` still
 holds `server: *mut Server`. The wlroots objects created once at init — the
@@ -571,7 +581,7 @@ cannot take the window manager; it takes `crate::ctx::Stores` instead — the
 output and seat stores, `Copy`, borrowed to read (`stores.seats.focuses(id)`,
 `adjust_hovers`, `resizing`, `stores.outputs.first_enabled_box()`). Code
 holding `wm` gets one from `wm.stores()`, taken BEFORE a `window_mut!`
-borrow (or `Stores::of(wm.server)` inside one: that reads a single field);
+borrow, or `stores!(wm)` inside one (it borrows only the two store fields);
 an entry point uses `Stores::of(crate::shared::server_ptr())`. The others take what they
 need as parameters (`LockManager::maybe_lock(&Outputs)`,
 `IdleManager::set_displays(&mut Outputs, on)`,

@@ -37,6 +37,7 @@ impl InputDevice {
     /// manager, and a physical one with the libinput and xkb configs.
     pub unsafe fn new(
         server: *mut crate::server::Server,
+        outputs: &crate::output::Outputs,
         seat: *mut Seat,
         wlr_device: *mut ffi::wlr_input_device,
         virtual_device: bool,
@@ -122,7 +123,7 @@ impl InputDevice {
         };
 
         if let Some(name) = output_name {
-            for output in (*server).om.outputs.ptrs() {
+            for output in outputs.ptrs() {
                 let wlr_output = (*output).wlr_output;
                 if !wlr_output.is_null() {
                     let wlr_name = std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name(wlr_output));
@@ -353,7 +354,7 @@ unsafe extern "C" fn input_device_assign_to_seat(
     let server = crate::shared::server_ptr();
     let mut found = false;
     let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
-    for seat in (*server).input_manager.seats.ptrs() {
+    for seat in (*crate::reentry::wm(server)).seats.ptrs() {
         let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
         if seat_name == name_str {
             (*device).assign_to_seat(&mut *crate::reentry::wm(server), seat);

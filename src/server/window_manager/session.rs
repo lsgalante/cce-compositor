@@ -112,7 +112,7 @@ impl WindowManager {
             return None;
         }
         let (mut out_x, mut out_y) = (0.0, 0.0);
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 let wlr_box = (*output).sent.box_layout();
                 out_x = wlr_box.x as f64;
@@ -140,7 +140,7 @@ impl WindowManager {
             return;
         }
         let (mut out_x, mut out_y) = (0, 0);
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 let wlr_box = (*output).sent.box_layout();
                 out_x = wlr_box.x;

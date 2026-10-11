@@ -649,7 +649,7 @@ pub(crate) unsafe extern "C" fn handle_hold_begin(listener: *mut ffi::wl_listene
     let event = data as *mut ffi::wlr_pointer_hold_begin_event;
 
     let seat = &mut *cursor.seat;
-    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     seat.handle_activity(wm);
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.get();
@@ -668,7 +668,7 @@ pub(crate) unsafe extern "C" fn handle_hold_end(listener: *mut ffi::wl_listener,
     let event = data as *mut ffi::wlr_pointer_hold_end_event;
 
     let seat = &mut *cursor.seat;
-    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     seat.handle_activity(wm);
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.get();

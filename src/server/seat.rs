@@ -170,14 +170,14 @@ pub struct Seat {
 }
 
 impl Seat {
-    pub unsafe fn create(server: *mut Server, name: &str) -> Result<*mut Self, &'static str> {
+    pub unsafe fn create(server: *mut Server, seats: &mut Seats, name: &str) -> Result<*mut Self, &'static str> {
         let name_c = std::ffi::CString::new(name).unwrap();
         let wlr_seat = ffi::wlr_seat_create((*server).wl_server, name_c.as_ptr());
         if wlr_seat.is_null() {
             return Err("Failed to create wlr_seat");
         }
 
-        let id = (*server).input_manager.seats.insert(Box::new(Self {
+        let id = seats.insert(Box::new(Self {
             wlr_seat,
             cursor: Cursor::default(),
             focused: Focus::None,
@@ -209,7 +209,7 @@ impl Seat {
             destroying: false,
             focus_requested: false,
         }));
-        let seat = (*server).input_manager.seats.ptr(id).ok_or("seat gone at creation")?;
+        let seat = seats.ptr(id).ok_or("seat gone at creation")?;
 
         ffi::wl_list_init(&mut (*seat).link_sent);
         ffi::wl_list_init(&mut (*seat).keyboard_groups);
@@ -380,9 +380,9 @@ impl Seat {
     /// Input arrived on this seat: wake the idle manager (and the outputs
     /// it darkened) and tell idle-notify clients. Through `wm.server` until
     /// the window manager is handed a Ctx (RFC step 4).
-    pub unsafe fn handle_activity(&mut self, wm: &crate::window_manager::WindowManager) {
+    pub unsafe fn handle_activity(&mut self, wm: &mut crate::window_manager::WindowManager) {
         let server = wm.server;
-        (*server).idle.on_activity(&mut (*server).om.outputs);
+        (*server).idle.on_activity(&mut wm.outputs);
         let notifier = crate::shared::handles().idle_notifier.get();
         if !notifier.is_null() {
             ffi::wlr_idle_notifier_v1_notify_activity(notifier, self.wlr_seat);
@@ -1061,9 +1061,7 @@ impl Seat {
 
                             // Re-dock the bar to the edge the pointer is at as
                             // it goes, standing it up along a side.
-                            let outputs: Vec<(f64, f64, f64, f64)> = (*wm.server)
-                                .om
-                                .enabled_output_boxes();
+                            let outputs: Vec<(f64, f64, f64, f64)> = wm.outputs.enabled_output_boxes();
                             if let Some(edge) = crate::policy::drag::status_edge_at((x as f64, y as f64), &outputs) {
                                 let bar_h = crate::shared::layout().bar_height as u32;
                                 let original_length = std::cmp::max(this.box_geom.width, this.box_geom.height) as u32;

@@ -49,7 +49,6 @@ pub struct OutputManager {
     pub power_manager: *mut ffi::wlr_output_power_manager_v1,
     pub power_manager_set_mode: crate::listener::Listener,
     pub gamma_control_manager: *mut ffi::wlr_gamma_control_manager_v1,
-    pub outputs: crate::output::Outputs,
 }
 
 /// The output at (or nearest to) a layout point, through the shared
@@ -67,18 +66,6 @@ pub unsafe fn output_at(lx: f64, ly: f64) -> *mut ffi::wlr_output {
 }
 
 impl OutputManager {
-    /// The layout box `(x, y, w, h)` of every enabled output, as last sent.
-    pub unsafe fn enabled_output_boxes(&self) -> Vec<(f64, f64, f64, f64)> {
-        let mut boxes = Vec::new();
-        for output in self.outputs.values() {
-            if output.sent.state == crate::output::OutputStateValue::Enabled {
-                let b = output.sent.box_layout();
-                boxes.push((b.x as f64, b.y as f64, b.width as f64, b.height as f64));
-            }
-        }
-        boxes
-    }
-
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.first_modeset = true;
         
@@ -154,34 +141,7 @@ impl OutputManager {
         output_at(lx, ly)
     }
 
-    pub unsafe fn auto_layout(&mut self) {
-        let mut rightmost_edge: i32 = 0;
-        let mut row_y: i32 = 0;
-
-        for output_ptr in self.outputs.ptrs() {
-            let output = &mut *output_ptr;
-            if !output.scheduled.auto_layout {
-                let (w, _) = output.scheduled.dimensions();
-                let x = output.scheduled.x + w;
-                if x > rightmost_edge {
-                    rightmost_edge = x;
-                    row_y = output.scheduled.y;
-                }
-            }
-        }
-
-        for output_ptr in self.outputs.ptrs() {
-            let output = &mut *output_ptr;
-            if output.scheduled.auto_layout {
-                output.scheduled.x = rightmost_edge;
-                output.scheduled.y = row_y;
-                let (w, _) = output.scheduled.dimensions();
-                rightmost_edge += w;
-            }
-        }
-    }
-
-    pub unsafe fn commit_output_state(&mut self, server: *mut Server) {
+    pub unsafe fn commit_output_state(&mut self, server: *mut Server, outputs: &crate::output::Outputs) {
 
         let head = crate::shared::sent().outputs.head();
         let mut link = (*head).next;
@@ -427,9 +387,9 @@ impl OutputManager {
             output.current = output.sent;
             link = next_link;
         }
-        crate::xwayland_window::note_output_scale(&self.outputs);
+        crate::xwayland_window::note_output_scale(outputs);
 
-        let _ = self.send_config(server);
+        let _ = self.send_config(outputs);
     }
 
     pub unsafe fn modeset_failed(&mut self, server: *mut Server) {
@@ -457,13 +417,13 @@ impl OutputManager {
         crate::shared::pending().dirty_windowing();
     }
 
-    pub unsafe fn send_config(&mut self, _server: *mut Server) -> Result<(), &'static str> {
+    pub unsafe fn send_config(&mut self, outputs: &crate::output::Outputs) -> Result<(), &'static str> {
         let config = ffi::wlr_output_configuration_v1_create();
         if config.is_null() {
             return Err("Failed to create configuration v1");
         }
 
-        for output_ptr in self.outputs.ptrs() {
+        for output_ptr in outputs.ptrs() {
             let output = &mut *output_ptr;
             let wlr_output = output.wlr_output;
             if wlr_output.is_null() {
@@ -492,11 +452,55 @@ impl OutputManager {
         Ok(())
     }
 
-    pub unsafe fn max_overlap_output(&mut self, box_: *const ffi::wlr_box) -> *mut ffi::wlr_output {
+}
+
+/// The output manager's walks of the outputs, on the store the window
+/// manager owns (`wm.outputs`).
+impl crate::output::Outputs {
+    /// The layout box `(x, y, w, h)` of every enabled output, as last sent.
+    pub unsafe fn enabled_output_boxes(&self) -> Vec<(f64, f64, f64, f64)> {
+        let mut boxes = Vec::new();
+        for output in self.values() {
+            if output.sent.state == crate::output::OutputStateValue::Enabled {
+                let b = output.sent.box_layout();
+                boxes.push((b.x as f64, b.y as f64, b.width as f64, b.height as f64));
+            }
+        }
+        boxes
+    }
+
+    pub unsafe fn auto_layout(&self) {
+        let mut rightmost_edge: i32 = 0;
+        let mut row_y: i32 = 0;
+
+        for output_ptr in self.ptrs() {
+            let output = &mut *output_ptr;
+            if !output.scheduled.auto_layout {
+                let (w, _) = output.scheduled.dimensions();
+                let x = output.scheduled.x + w;
+                if x > rightmost_edge {
+                    rightmost_edge = x;
+                    row_y = output.scheduled.y;
+                }
+            }
+        }
+
+        for output_ptr in self.ptrs() {
+            let output = &mut *output_ptr;
+            if output.scheduled.auto_layout {
+                output.scheduled.x = rightmost_edge;
+                output.scheduled.y = row_y;
+                let (w, _) = output.scheduled.dimensions();
+                rightmost_edge += w;
+            }
+        }
+    }
+
+    pub unsafe fn max_overlap_output(&self, box_: *const ffi::wlr_box) -> *mut ffi::wlr_output {
         let mut max_overlap_area = 0;
         let mut max_overlap_output = std::ptr::null_mut();
 
-        for output_ptr in self.outputs.ptrs() {
+        for output_ptr in self.ptrs() {
             let output = &mut *output_ptr;
             let wlr_output = output.wlr_output;
             if wlr_output.is_null() {
@@ -504,7 +508,7 @@ impl OutputManager {
             }
 
             let mut overlap: ffi::wlr_box = std::mem::zeroed();
-            ffi::wlr_output_layout_get_box(self.output_layout, wlr_output, &mut overlap);
+            ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut overlap);
             
             if overlap.width <= 0 || overlap.height <= 0 {
                 continue;

@@ -68,10 +68,7 @@ impl WindowManager {
     pub unsafe fn max_output_scale(&self) -> f64 {
         crate::wm_scope!();
         let mut best = 1.0f64;
-        if self.server.is_null() {
-            return best;
-        }
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 best = best.max((*output).current.scale as f64);
             }
@@ -127,7 +124,7 @@ impl WindowManager {
     /// frame handler). A no-op for an output that already has one pending.
     pub unsafe fn schedule_frame_all_outputs(&mut self) {
         crate::wm_scope!(mut);
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 ffi::wlr_output_schedule_frame((*output).wlr_output);
             }
@@ -172,7 +169,7 @@ impl WindowManager {
             return;
         }
         self.op_frame_pending = false;
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             if let Some(ref op) = (*seat).op {
                 if let Some(id) = op.window.filter(|&id| self.windows.get(id).map_or(false, |w| !w.closed)) {
                     Window::manage_finish(self, id);

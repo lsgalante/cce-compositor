@@ -142,6 +142,13 @@ pub struct WindowManager {
     pub server_destroy: crate::listener::Listener,
     pub state: WindowManagerState,
     pub windows: crate::window::Windows,
+    /// Every output, by `OutputId`, and every seat, by `SeatId` — owned
+    /// here beside the windows for the reason the window store is: each
+    /// holds its entries as raw pointers, so a `&mut WindowManager`
+    /// borrows no output's or seat's memory, and the window manager needs
+    /// no path to the server to walk them (RFC step 4).
+    pub outputs: crate::output::Outputs,
+    pub seats: crate::seat::Seats,
     /// The overview drag-selection: the selected windows, the rubber band
     /// while one is being dragged out, and the nodes that draw both. See
     /// [`crate::selection`].
@@ -708,7 +715,7 @@ impl WindowManager {
     /// placeholders).
     pub unsafe fn pan_to_virtual_rect(&mut self, vx: f64, vy: f64, w: f64, h: f64) {
         crate::wm_scope!(mut);
-        let first = (*self.server).om.outputs.first_enabled_ptr();
+        let first = self.outputs.first_enabled_ptr();
         if first.is_null() {
             return;
         }
@@ -839,7 +846,7 @@ impl WindowManager {
         // First enabled output: the legacy viewport for zooms and View jumps.
         let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
         let (mut first_x, mut first_y) = (0.0, 0.0);
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 let wlr_box = (*output).sent.box_layout();
                 viewport_w = wlr_box.width as f64;
@@ -1143,7 +1150,7 @@ impl WindowManager {
 
     pub unsafe fn get_active_resize_dimensions(&self, win_ptr: &Window) -> Option<(u32, u32)> {
         crate::wm_scope!();
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             if let Some(ref op) = (*seat).op {
                 if op.window == Some(win_ptr.id()) {
                     if let crate::seat::PointerOpType::Resize { edges } = op.op_type {
@@ -1159,7 +1166,7 @@ impl WindowManager {
 
     pub unsafe fn is_window_being_moved(&self, id: crate::window::WindowId) -> bool {
         crate::wm_scope!();
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             if let Some(ref op) = (*seat).op {
                 if op.window == Some(id) {
                     if let crate::seat::PointerOpType::Move = op.op_type {
@@ -1215,8 +1222,7 @@ impl WindowManager {
             }
         }
 
-        let active_outputs: Vec<*mut crate::output::Output> = (*self.server)
-            .om
+        let active_outputs: Vec<*mut crate::output::Output> = self
             .outputs
             .ptrs()
             .into_iter()
@@ -1228,7 +1234,7 @@ impl WindowManager {
         }
 
         let mut focused_window: Option<crate::window::WindowId> = None;
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             if let crate::seat::Focus::Window(id) = (*seat).focused {
                 if self.windows.contains(id) {
                     focused_window = Some(id);
@@ -1535,7 +1541,7 @@ impl WindowManager {
         }
 
         // If the focused window is no longer visible, refocus
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             let focused_visible = match (*seat).focused {
                 crate::seat::Focus::Window(id) => self.windows.get(id).map_or(false, |w| {
                     !w.closed && !w.minimized && matches!(w.state, crate::window::WindowState::Mapped)
@@ -1728,7 +1734,7 @@ impl WindowManager {
         // the seams (stale slivers of the previous zoom level survive — an
         // idle window's old pixels are nobody's damage), so motion forces a
         // full repaint.
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 if moved && !(*output).scene_output.is_null() {
                     ffi::river_scene_output_damage_whole((*output).scene_output);
@@ -1739,7 +1745,7 @@ impl WindowManager {
         }
 
         // Re-evaluate cursor focus/hover since windows have moved relative to pointers
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             (*seat).cursor.update_hovered();
         }
     }
@@ -1783,7 +1789,7 @@ impl WindowManager {
         }
         // Settling re-enables blur and re-finishes every window; sweep any
         // remaining motion-frame slivers with one full repaint.
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 if !(*output).scene_output.is_null() {
                     ffi::river_scene_output_damage_whole((*output).scene_output);
@@ -1804,7 +1810,7 @@ impl WindowManager {
     /// restore.)
     pub unsafe fn focused_window(&self) -> Option<crate::window::WindowId> {
         crate::wm_scope!();
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             if let crate::seat::Focus::Window(id) = (*seat).focused {
                 if let Some(w) = self.windows.get(id) {
                     if !w.is_overlay_ui() {
@@ -1829,7 +1835,7 @@ impl WindowManager {
 
     pub unsafe fn focused_layer_surface(&self) -> *mut ffi::wlr_surface {
         crate::wm_scope!();
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             if let crate::seat::Focus::LayerSurface(s) = (*seat).focused {
                 return s;
             }
@@ -1883,9 +1889,9 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn first_seat(&self) -> Option<*mut crate::seat::Seat> {
+    pub fn first_seat(&self) -> Option<*mut crate::seat::Seat> {
         crate::wm_scope!();
-        (*self.server).input_manager.seats.ptrs().first().copied()
+        self.seats.ptrs().first().copied()
     }
 
     /// The output and seat stores, through the server pointer until the
@@ -1895,7 +1901,10 @@ impl WindowManager {
     /// # Safety
     /// As [`crate::ctx::Stores::of`].
     pub unsafe fn stores<'a>(&self) -> crate::ctx::Stores<'a> {
-        crate::ctx::Stores::of(self.server)
+        crate::ctx::Stores {
+            outputs: &*std::ptr::addr_of!(self.outputs),
+            seats: &*std::ptr::addr_of!(self.seats),
+        }
     }
 
     pub fn record_focus(&mut self, id: crate::window::WindowId) {
@@ -2938,7 +2947,7 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
 
     if moving {
         (*wm).border_fade_timer.arm(16);
-        for output in (*(*wm).server).om.outputs.ptrs() {
+        for output in (*wm).outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 ffi::wlr_output_schedule_frame((*output).wlr_output);
             }

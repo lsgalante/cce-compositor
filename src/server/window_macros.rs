@@ -19,6 +19,19 @@ macro_rules! window_mut {
     };
 }
 
+/// The window manager's output and seat stores as a `crate::ctx::Stores`,
+/// borrowed through their own field places — so it can be taken while a
+/// `window_mut!` borrow of `wm.windows` is live. Unsafe: the borrow is not
+/// tied to `wm` (see `WindowManager::stores`).
+macro_rules! stores {
+    ($wm:expr) => {
+        crate::ctx::Stores {
+            outputs: &*std::ptr::addr_of!($wm.outputs),
+            seats: &*std::ptr::addr_of!($wm.seats),
+        }
+    };
+}
+
 /// `window_mut!`'s shared twin: the window borrowed from `wm.windows`
 /// alongside a shared `wm`, for the `&self` methods that read the window
 /// manager too.

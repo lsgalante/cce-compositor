@@ -63,6 +63,8 @@ pub struct Handles {
     pub pointer_gestures: Cell<*mut ffi::wlr_pointer_gestures_v1>,
     pub tablet_manager: Cell<*mut ffi::wlr_tablet_manager_v2>,
     pub default_keymap: Cell<*mut ffi::xkb_keymap>,
+    pub foreign_toplevel_list: Cell<*mut ffi::wlr_ext_foreign_toplevel_list_v1>,
+    pub foreign_toplevel_manager: Cell<*mut ffi::wlr_foreign_toplevel_manager_v1>,
     /// The "default" seat, once `InputManager::init` has created it (null
     /// while it is being created, and after the deinit).
     pub default_seat: Cell<*mut crate::seat::Seat>,
@@ -88,6 +90,8 @@ thread_local! {
             pointer_gestures: Cell::new(std::ptr::null_mut()),
             tablet_manager: Cell::new(std::ptr::null_mut()),
             default_keymap: Cell::new(std::ptr::null_mut()),
+            foreign_toplevel_list: Cell::new(std::ptr::null_mut()),
+            foreign_toplevel_manager: Cell::new(std::ptr::null_mut()),
             default_seat: Cell::new(std::ptr::null_mut()),
         },
     });

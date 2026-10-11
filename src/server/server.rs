@@ -785,12 +785,14 @@ impl Server {
                 return Err("Failed to create foreign toplevel manager");
             }
             self.wlr_foreign_toplevel_manager = wlr_foreign_toplevel_manager;
+            crate::shared::handles().foreign_toplevel_manager.set(wlr_foreign_toplevel_manager);
 
             let foreign_toplevel_list = ffi::wlr_ext_foreign_toplevel_list_v1_create(wl_server, 1);
             if foreign_toplevel_list.is_null() {
                 return Err("Failed to create foreign toplevel list");
             }
             self.foreign_toplevel_list = foreign_toplevel_list;
+            crate::shared::handles().foreign_toplevel_list.set(foreign_toplevel_list);
 
             // let toplevel_capture_source_manager = ffi::wlr_ext_foreign_toplevel_image_capture_source_manager_v1_create(wl_server, 1);
             // if toplevel_capture_source_manager.is_null() {
@@ -859,7 +861,7 @@ impl Server {
             scene.init(self.linux_dmabuf, self.color_manager).map_err(|_| "Failed to init scene")?;
             crate::shared::shared().set_scene(scene);
             self.om.init(server_ptr).map_err(|_| "Failed to init om")?;
-            self.input_manager.init(server_ptr).map_err(|_| "Failed to init input_manager")?;
+            self.input_manager.init(server_ptr, &mut self.wm.seats).map_err(|_| "Failed to init input_manager")?;
             self.libinput_config.init(server_ptr).map_err(|_| "Failed to init libinput_config")?;
             self.xkb_config.init(server_ptr).map_err(|_| "Failed to init xkb_config")?;
             self.idle_inhibit_manager.init(server_ptr).map_err(|_| "Failed to init idle_inhibit_manager")?;
@@ -994,8 +996,8 @@ impl Default for Server {
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.proc_args_cache), std::collections::HashMap::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.min_sizes), crate::min_sizes::MinSizes::default());
             std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());
-            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).om.outputs), crate::output::Outputs::new());
-            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).input_manager.seats), crate::seat::Seats::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.outputs), crate::output::Outputs::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.seats), crate::seat::Seats::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).cce_window_management, crate::cce_window_management::CceWindowManagement::new());
             server.assume_init()

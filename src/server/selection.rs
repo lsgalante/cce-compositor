@@ -148,7 +148,7 @@ impl WindowManager {
     /// Layout box origin of the first enabled output, the one the camera is
     /// measured against (`Window::virtual_to_screen` uses the same).
     unsafe fn selection_output_origin(&self) -> (f64, f64) {
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 let b = (*output).sent.box_layout();
                 return (b.x as f64, b.y as f64);

@@ -213,7 +213,7 @@ unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *
         return;
     }
 
-    let wlr_output = (*server).om.max_overlap_output(&anchor);
+    let wlr_output = (*crate::reentry::wm(server)).outputs.max_overlap_output(&anchor);
     if wlr_output.is_null() {
         return;
     }

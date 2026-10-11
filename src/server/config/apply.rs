@@ -501,7 +501,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
 
     unsafe {
         if !state.server.is_null() {
-            for output_ptr in (*state.server).om.outputs.ptrs() {
+            for output_ptr in state.outputs.ptrs() {
                 let output = &mut *output_ptr;
                 output.update_background_color();
             }

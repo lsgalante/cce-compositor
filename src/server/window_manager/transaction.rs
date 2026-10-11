@@ -44,7 +44,7 @@ impl WindowManager {
     pub unsafe fn refresh_adjust_held(&mut self) {
         crate::wm_scope!(mut);
         let mut held = self.injected_super_held;
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             let kb = ffi::river_wlr_seat_get_keyboard((*seat).wlr_seat);
             if !kb.is_null() && (ffi::wlr_keyboard_get_modifiers(kb) & ffi::wlr_keyboard_modifier_WLR_MODIFIER_LOGO) != 0 {
                 held = true;
@@ -59,7 +59,7 @@ impl WindowManager {
         // handles in step with the windows'.
         self.update_status();
         let now = crate::util::msec_timestamp();
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             if (*seat).op.is_none() {
                 (*seat).cursor.passthrough(self, now);
             }
@@ -88,14 +88,14 @@ impl WindowManager {
 
         let mt0 = if manage_debug() { Some(std::time::Instant::now()) } else { None };
 
-        (*self.server).om.auto_layout();
+        self.outputs.auto_layout();
         let mt_auto = mt0.map(|s| s.elapsed().as_micros());
 
-        for id in (*self.server).om.outputs.ids() {
-            let Some(output) = (*self.server).om.outputs.ptr(id) else { continue };
+        for id in self.outputs.ids() {
+            let Some(output) = self.outputs.ptr(id) else { continue };
             if (*output).manage_start(self) {
-                drop((*self.server).om.outputs.remove(id));
-                crate::xwayland_window::note_output_scale(&(*self.server).om.outputs);
+                drop(self.outputs.remove(id));
+                crate::xwayland_window::note_output_scale(&self.outputs);
             }
         }
 
@@ -115,10 +115,10 @@ impl WindowManager {
         }
         let mt_windows = mt0.map(|s| s.elapsed().as_micros());
 
-        for id in (*self.server).input_manager.seats.ids() {
-            let Some(seat) = (*self.server).input_manager.seats.ptr(id) else { continue };
+        for id in self.seats.ids() {
+            let Some(seat) = self.seats.ptr(id) else { continue };
             if (*seat).manage_start() {
-                if let Some(seat) = (*self.server).input_manager.seats.take(id) {
+                if let Some(seat) = self.seats.take(id) {
                     crate::seat::Seat::destroy(seat);
                 }
             }
@@ -268,7 +268,7 @@ impl WindowManager {
         }
 
         let has_wallpaper = self.windows.values().any(|w| !w.closed && w.is_wallpaper());
-        for output in (*self.server).om.outputs.ptrs() {
+        for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 (*output).background_rect.set_enabled(!has_wallpaper);
             }
@@ -465,9 +465,9 @@ impl WindowManager {
             }
         }
 
-        (*self.server).om.commit_output_state(self.server);
+        (*self.server).om.commit_output_state(self.server, &self.outputs);
 
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in self.seats.ptrs() {
             (*seat).cursor.update_hovered();
         }
 

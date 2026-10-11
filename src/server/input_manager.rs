@@ -7,7 +7,6 @@ use crate::seat::Seat;
 
 pub struct InputManager {
     pub default_seat: *mut Seat,
-    pub seats: crate::seat::Seats,
     pub devices: ffi::wl_list, // list of InputDevice
     pub objects: ffi::wl_list, // list of InputManagerObject
     pub global: *mut ffi::wl_global,
@@ -42,19 +41,12 @@ pub struct InputManagerObject {
 
 impl Default for InputManager {
     fn default() -> Self {
-        let mut im = std::mem::MaybeUninit::<InputManager>::zeroed();
-        // SAFETY: every field but the seat store is a raw pointer, a C
-        // struct or a `Listener`, all valid zeroed; the store is written
-        // before the value is assumed initialised.
-        unsafe {
-            std::ptr::write(std::ptr::addr_of_mut!((*im.as_mut_ptr()).seats), crate::seat::Seats::new());
-            im.assume_init()
-        }
+        unsafe { std::mem::zeroed() }
     }
 }
 
 impl InputManager {
-    pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
+    pub unsafe fn init(&mut self, server: *mut Server, seats: &mut crate::seat::Seats) -> Result<(), &'static str> {
         let wl_server = (*server).wl_server;
 
         ffi::wl_list_init(&mut self.devices);
@@ -74,7 +66,7 @@ impl InputManager {
         crate::shared::handles().tablet_manager.set(self.tablet_manager);
 
         // Create default seat
-        self.default_seat = Seat::create(server, "default")?;
+        self.default_seat = Seat::create(server, seats, "default")?;
         crate::shared::handles().default_seat.set(self.default_seat);
 
         if !(*server).xwayland.is_null() {
@@ -179,8 +171,8 @@ impl InputManager {
 
         // Destroy all seats
         log::info!("[deinit] destroying seats");
-        for id in self.seats.ids() {
-            if let Some(seat) = self.seats.take(id) {
+        for id in wm.seats.ids() {
+            if let Some(seat) = wm.seats.take(id) {
                 log::info!("[deinit] calling Seat::destroy for {:?}", seat.wlr_seat);
                 Seat::destroy(seat);
             }
@@ -312,17 +304,16 @@ unsafe extern "C" fn input_manager_create_seat(
     if obj.is_null() || name.is_null() {
         return;
     }
-    let im = (*obj).manager;
     let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
 
     // Check if seat already exists
-    let exists = (*im).seats.values().any(|seat| {
+    let exists = (*crate::reentry::wm(crate::shared::server_ptr())).seats.values().any(|seat| {
         std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name(seat.wlr_seat)).to_string_lossy() == name_str
     });
 
     if !exists {
         let server = crate::shared::server_ptr();
-        if let Err(e) = Seat::create(server, &name_str) {
+        if let Err(e) = Seat::create(server, &mut (*crate::reentry::wm(server)).seats, &name_str) {
             log::error!("failed to create seat '{}': {}", name_str, e);
             ffi::wl_resource_post_no_memory(resource);
         }
@@ -338,7 +329,6 @@ unsafe extern "C" fn input_manager_destroy_seat(
     if obj.is_null() || name.is_null() {
         return;
     }
-    let im = (*obj).manager;
     let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
 
     if name_str == "default" {
@@ -346,7 +336,7 @@ unsafe extern "C" fn input_manager_destroy_seat(
     }
 
     // Skip default seat (which is the first seat in the list)
-    for seat in (*im).seats.ptrs().into_iter().skip(1) {
+    for seat in (*crate::reentry::wm(crate::shared::server_ptr())).seats.ptrs().into_iter().skip(1) {
         let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
         if seat_name == name_str {
             (*seat).destroying = true;
@@ -362,7 +352,7 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
 
     log::info!("new input device connected");
 
-    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), im.default_seat, wlr_device, false);
+    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), &(*crate::reentry::wm(crate::shared::server_ptr())).outputs, im.default_seat, wlr_device, false);
     
     let name_ptr = ffi::river_wlr_input_device_get_name(wlr_device);
     if !name_ptr.is_null() {
@@ -381,7 +371,7 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
     if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD {
         crate::keyboard::Keyboard::create(device);
     } else if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TABLET {
-        let _ = crate::tablet::Tablet::create(crate::shared::server_ptr(), im.default_seat, wlr_device, false);
+        let _ = crate::tablet::Tablet::create(crate::shared::server_ptr(), &(*crate::reentry::wm(crate::shared::server_ptr())).outputs, im.default_seat, wlr_device, false);
     }
 
     // Attach device to the default seat
@@ -420,7 +410,7 @@ unsafe extern "C" fn handle_new_virtual_pointer(listener: *mut ffi::wl_listener,
     let virtual_pointer = (*event).new_pointer;
     let wlr_device = &mut (*virtual_pointer).pointer.base as *mut ffi::wlr_input_device;
 
-    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), im.default_seat, wlr_device, true);
+    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), &(*crate::reentry::wm(crate::shared::server_ptr())).outputs, im.default_seat, wlr_device, true);
 
     // Attach device to the default seat
     (*im.default_seat).attach_device(device);
@@ -441,7 +431,7 @@ unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener
         seat = im.default_seat;
     }
 
-    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), seat, wlr_device, true);
+    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), &(*crate::reentry::wm(crate::shared::server_ptr())).outputs, seat, wlr_device, true);
     crate::keyboard::Keyboard::create(device);
 
     // Same path a hardware keyboard takes: attach_device puts the keyboard in
@@ -452,7 +442,8 @@ unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener
 unsafe extern "C" fn handle_pointer_refresh_idle(data: *mut std::ffi::c_void) {
     let manager = data as *mut InputManager;
     (*manager).pointer_refresh_idle = std::ptr::null_mut();
-    for seat in (*manager).seats.ptrs() {
-        (*seat).cursor.refresh_after_scene_change(&mut *crate::reentry::wm(crate::shared::server_ptr()));
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    for seat in wm.seats.ptrs() {
+        (*seat).cursor.refresh_after_scene_change(wm);
     }
 }
