@@ -389,7 +389,7 @@ impl Cursor {
 
         match route {
             TouchRoute::Client { origin, scale } => {
-                crate::cursor::press_dismissals(wm, server, lx, ly);
+                crate::cursor::press_dismissals(wm, lx, ly);
                 let Some(result) = crate::shared::scene().at(wm, lx, ly) else { return };
                 // Focus as a click would (`handle_button`).
                 let seat = &mut *self.seat;

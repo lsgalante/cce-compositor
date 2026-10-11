@@ -663,16 +663,13 @@ impl Cursor {
         // the press's `seat.focus` that used to raise a Floating one — so
         // the raise happens here for whatever the op grabbed. (A window
         // un-tiled by the drag is raised in `op_update` instead.)
-        let grabbed = match &(*self.seat).op {
-            Some(op) => op.window(wm),
-            None => std::ptr::null_mut(),
-        };
-        if !grabbed.is_null()
-            && !(*grabbed).closed
-            && !(*grabbed).is_status_bar()
-            && (*grabbed).tiling_mode == crate::tiling::TilingMode::Floating
-        {
-            wm.raise_window((*grabbed).id());
+        let grabbed = (*self.seat).op.as_ref().and_then(|op| op.window).filter(|&id| {
+            wm.windows.get(id).is_some_and(|w| {
+                !w.closed && !w.is_status_bar() && w.tiling_mode == crate::tiling::TilingMode::Floating
+            })
+        });
+        if let Some(id) = grabbed {
+            wm.raise_window(id);
             crate::shared::pending().dirty_windowing();
         }
     }
@@ -686,29 +683,28 @@ impl Cursor {
         }
     }
 
-    /// Move the border hover highlight to `target`'s `element` (null/None to
+    /// Move the border hover highlight to `target`'s `element` (None to
     /// clear): updates `hovered_border_element` on the old and new windows
     /// and repaints their borders. The stored id may name a closed window,
     /// which looks up as `None`.
-    pub unsafe fn set_border_hover(
+    pub fn set_border_hover(
         &mut self,
         wm: &mut crate::window_manager::WindowManager,
-        target: *mut crate::window::Window,
+        target_id: Option<crate::window::WindowId>,
         element: Option<crate::window::BorderElement>,
     ) {
-        let target_id = crate::window::id_of(target);
         if self.hovered_border_window == target_id && self.hovered_border_element == element {
             return;
         }
         if let Some(old_id) = self.hovered_border_window.filter(|&id| Some(id) != target_id) {
-            if let Some(old) = wm.window(old_id).filter(|&w| !(*w).closed) {
-                (*old).hovered_border_element = None;
+            if let Some(old) = wm.windows.get_mut(old_id).filter(|w| !w.closed) {
+                old.hovered_border_element = None;
             }
         }
         self.hovered_border_window = target_id;
         self.hovered_border_element = element;
-        if !target.is_null() {
-            (*target).hovered_border_element = element;
+        if let Some(target) = target_id.and_then(|id| wm.windows.get_mut(id)) {
+            target.hovered_border_element = element;
         }
         // Borders rest invisible and fade in, so the change in hover target is
         // the start of an animation rather than a repaint: the fade timer
@@ -792,14 +788,14 @@ impl Cursor {
             let lock_state = (*server).lock_manager.state;
             if lock_state != crate::lock_manager::LockState::Unlocked {
                 if !matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
-                    self.set_border_hover(wm, std::ptr::null_mut(), None);
+                    self.set_border_hover(wm, None, None);
                     self.set_adjust_hover(wm, None);
                     self.clear_focus();
                     return;
                 }
             } else {
                 if matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
-                    self.set_border_hover(wm, std::ptr::null_mut(), None);
+                    self.set_border_hover(wm, None, None);
                     self.set_adjust_hover(wm, None);
                     self.clear_focus();
                     return;
@@ -807,57 +803,59 @@ impl Cursor {
             }
 
             let mut is_window = false;
-            let mut hovered_toplevel: *mut crate::window::Window = std::ptr::null_mut();
+            let mut hovered: Option<crate::window::WindowId> = None;
             match result.data {
                 SceneNodeDataVal::Window(window_id) => {
-                    let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
+                    // A window that has gone reads as chrome: no hover, no ring.
+                    let (status, wallpaper, grid, mode) = wm.windows.get(window_id).map_or(
+                        (true, false, false, crate::tiling::TilingMode::Status),
+                        |w| (w.is_status_bar(), w.is_wallpaper(), w.is_grid(), w.tiling_mode),
+                    );
                     // The grid is not a toplevel for hover purposes: hitting it
                     // means the pointer is on a desktop item (its input region
                     // covers nothing else), and the item drag needs the
                     // enter/motion delivery below — in overview too, where the
                     // is_window branch would clear pointer focus and try to
                     // focus-follow onto a surface seat.focus refuses.
-                    if !(*window).is_status_bar()
-                        && !(*window).is_wallpaper()
-                        && !(*window).is_grid()
-                    {
+                    if !status && !wallpaper && !grid {
                         is_window = true;
-                        hovered_toplevel = window;
+                        hovered = Some(window_id);
                     }
                     // Adjust mode: the ring lands on the window under the
                     // pointer, focused or not. Set BEFORE the zone test
                     // below, so the band is live on the first hover. (Null
                     // for the status bar, wallpaper and grid.)
                     self.set_adjust_hover(wm, if crate::shared::window_adjust_active() {
-                        crate::window::id_of(hovered_toplevel)
+                        hovered
                     } else {
                         None
                     });
                     // No mode gate: the band scales with the window
                     // (get_border_zone is zoom-aware), so the resize/move
                     // controls reveal and work at any zoom, not just 1.
-                    if !(*window).is_status_bar()
-                        && !(*window).is_wallpaper()
-                        && (*window).tiling_mode != crate::tiling::TilingMode::Popup
-                        && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
-                        && (*window).tiling_mode != crate::tiling::TilingMode::Status
+                    if !status
+                        && !wallpaper
+                        && mode != crate::tiling::TilingMode::Popup
+                        && mode != crate::tiling::TilingMode::Fullscreen
+                        && mode != crate::tiling::TilingMode::Status
                     {
-                        match get_border_zone(&*window, lx, ly) {
+                        let zone = wm.windows.get(window_id).map_or(BorderZone::None, |w| get_border_zone(w, lx, ly));
+                        match zone {
                             BorderZone::Resize(edges) => {
-                                self.set_border_hover(wm, window, Some(border_element_for_edges(edges)));
+                                self.set_border_hover(wm, Some(window_id), Some(border_element_for_edges(edges)));
                                 ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
                                 let cursor_name = get_resize_cursor_name(edges);
                                 self.set_xcursor(cursor_name.as_ptr() as *const _);
                                 return;
                             }
                             BorderZone::Move => {
-                                self.set_border_hover(wm, window, Some(crate::window::BorderElement::Top));
+                                self.set_border_hover(wm, Some(window_id), Some(crate::window::BorderElement::Top));
                                 ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
                                 self.set_xcursor(b"grab\0".as_ptr() as *const _);
                                 return;
                             }
                             BorderZone::Button(elem) => {
-                                self.set_border_hover(wm, window, Some(elem));
+                                self.set_border_hover(wm, Some(window_id), Some(elem));
                                 ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
                                 self.set_xcursor(b"pointer\0".as_ptr() as *const _);
                                 return;
@@ -874,7 +872,7 @@ impl Cursor {
                     self.set_adjust_hover(wm, None);
                 }
             }
-            self.set_border_hover(wm, std::ptr::null_mut(), None);
+            self.set_border_hover(wm, None, None);
 
             // Chrome — a Popup (the cce-cloud launcher) or an Overlay dock —
             // is live UI during overview, not a spatial thumbnail: the button
@@ -882,11 +880,12 @@ impl Cursor {
             // to reach it the same way or its rows never highlight and a
             // press lands on a surface that never saw an enter. So it skips
             // the overview branch below and takes normal delivery.
-            let hovered_chrome = !hovered_toplevel.is_null()
-                && matches!(
-                    (*hovered_toplevel).tiling_mode,
+            let hovered_chrome = hovered.and_then(|id| wm.windows.get(id)).is_some_and(|w| {
+                matches!(
+                    w.tiling_mode,
                     crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
-                );
+                )
+            });
 
             if is_window
                 && !hovered_chrome
@@ -915,14 +914,13 @@ impl Cursor {
                 // had — the ring follows the pointer through `adjust_hover`
                 // instead (`Window::is_adjust_target`).
                 if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
-                    && !hovered_toplevel.is_null()
+                    && hovered.is_some()
                     && !(*self.seat).focus_is_chrome(wm)
-                    && (*self.seat).focused
-                        != crate::seat::Focus::window(hovered_toplevel)
+                    && hovered.map(crate::seat::Focus::Window) != Some((*self.seat).focused)
                 {
                     let prev = (*self.seat).suppress_focus_pan;
                     (*self.seat).suppress_focus_pan = true;
-                    (*self.seat).focus(wm, crate::seat::Focus::window(hovered_toplevel));
+                    (*self.seat).focus(wm, hovered.map_or(crate::seat::Focus::None, crate::seat::Focus::Window));
                     (*self.seat).suppress_focus_pan = prev;
                 }
                 self.clear_focus();
@@ -955,7 +953,7 @@ impl Cursor {
             }
         }
 
-        self.set_border_hover(wm, std::ptr::null_mut(), None);
+        self.set_border_hover(wm, None, None);
         self.set_adjust_hover(wm, None);
         self.clear_focus();
     }
@@ -1400,7 +1398,7 @@ pub(crate) unsafe fn layer_takes_click_focus(layer_surface: *mut crate::layer_sh
 /// lands outside of. Shared by a pointer press (`handle_button`) and a
 /// touch that goes to a client as touch (`handle_touch_down`); an
 /// emulated touch arrives as a pointer press and runs it there.
-pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowManager, server: *mut crate::server::Server, lx: f64, ly: f64) {
+pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowManager, lx: f64, ly: f64) {
     // Click-away-close for in-surface status menus: if any status
     // segment is expanded (menu open) and this press did not land on it,
     // push a one-shot dismiss over the status socket. The line carries
@@ -1408,22 +1406,20 @@ pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowMana
     // exempts that segment (it handles its own clicks) while still
     // dismissing any other open menu.
     {
-        let mut target_status: *mut crate::window::Window = std::ptr::null_mut();
+        let mut target_status: Option<crate::window::WindowId> = None;
         if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
             if let SceneNodeDataVal::Window(window_id) = result.data {
-                let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
-                if (*window).is_status_bar() {
-                    target_status = window;
+                if wm.windows.get(window_id).is_some_and(|w| w.is_status_bar()) {
+                    target_status = Some(window_id);
                 }
             }
         }
-        let any_other_expanded = wm.any_expanded_status_segment(crate::window::id_of(target_status));
+        let any_other_expanded = wm.any_expanded_status_segment(target_status);
         if any_other_expanded {
-            let except = if target_status.is_null() {
-                "-".to_string()
-            } else {
-                (*target_status).get_app_id_string().unwrap_or_else(|| "-".to_string())
-            };
+            let except = target_status
+                .and_then(|id| wm.windows.get(id))
+                .and_then(|w| w.get_app_id_string())
+                .unwrap_or_else(|| "-".to_string());
             if let Some(ref sender) = wm.status_sender {
                 sender.send_menu_dismiss(&except);
             }
@@ -1440,18 +1436,17 @@ pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowMana
     // the bridge closes the popup it opened. The tray bridge's own
     // containers have no scene tree, so they never count as showing.
     {
-        let or_showing = (*server)
-            .wm
+        let or_showing = wm
             .override_redirects
             .iter()
             .any(|&or| !or.is_null() && !(*or).surface_tree.is_null());
         if or_showing {
             let on_x11 = match crate::shared::scene().at(wm, lx, ly) {
                 Some(result) => match result.data {
-                    SceneNodeDataVal::Window(window_id) => {
-                        let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
-                        matches!((*window).impl_type(), crate::window::WindowImpl::Xwayland(_))
-                    }
+                    SceneNodeDataVal::Window(window_id) => wm
+                        .windows
+                        .get(window_id)
+                        .is_some_and(|w| matches!(w.impl_type(), crate::window::WindowImpl::Xwayland(_))),
                     SceneNodeDataVal::OverrideRedirect(_) => true,
                     _ => false,
                 },

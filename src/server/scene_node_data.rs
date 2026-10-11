@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::window_manager::{Window, XwaylandOverrideRedirect};
+use crate::window_manager::XwaylandOverrideRedirect;
 use crate::layer_shell::LayerSurface;
 use crate::lock_manager::LockSurface;
 

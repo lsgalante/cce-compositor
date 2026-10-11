@@ -80,7 +80,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             return;
         }
 
-        press_dismissals(wm, server, lx, ly);
+        press_dismissals(wm, lx, ly);
 
         // Status-bar segments are dragged either in adjust-position mode or
         // directly with super+left-drag (0x40 = WLR_MODIFIER_LOGO).

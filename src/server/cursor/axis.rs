@@ -82,13 +82,13 @@ pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager
         if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
             match result.data {
                 SceneNodeDataVal::Window(window_id) => {
-                    let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
                     over_interactive = true;
-                    over_chrome = !window.is_null()
-                        && matches!(
-                            (*window).tiling_mode,
+                    over_chrome = wm.windows.get(window_id).is_some_and(|w| {
+                        matches!(
+                            w.tiling_mode,
                             crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
-                        );
+                        )
+                    });
                 }
                 SceneNodeDataVal::LayerSurface(layer_surface) => {
                     over_interactive = true;
@@ -289,17 +289,17 @@ pub(crate) const VIEW_DRAG_PINCH_PX: f64 = 150.0;
 
 impl Cursor {
     /// The window under the pointer, if `touchpad_view_apps` names its app.
-    unsafe fn view_drag_target(&mut self, wm: &crate::window_manager::WindowManager) -> Option<(*mut crate::window::Window, *mut ffi::wlr_surface, f64, f64, f64)> {
+    unsafe fn view_drag_target(&mut self, wm: &crate::window_manager::WindowManager) -> Option<(crate::window::WindowId, *mut ffi::wlr_surface, f64, f64, f64)> {
         if crate::shared::layout().touchpad_view_apps.is_empty() {
             return None;
         }
         let result = crate::shared::scene().at(wm, self.x(), self.y())?;
         let SceneNodeDataVal::Window(window_id) = result.data else { return None };
-        let Some(window) = wm.windows.ptr(window_id) else { return None };
-        if window.is_null() || result.surface.is_null() || result.node.is_null() {
+        let window = wm.windows.get(window_id)?;
+        if result.surface.is_null() || result.node.is_null() {
             return None;
         }
-        let app_id = (*window).get_app_id_string().unwrap_or_default();
+        let app_id = window.get_app_id_string().unwrap_or_default();
         if !crate::shared::layout().touchpad_view_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
             return None;
         }
@@ -307,7 +307,7 @@ impl Cursor {
         // `touchpad-view-regions`); elsewhere the scroll passes through.
         // `result.sx`/`sy` are surface-local, the same pixels the client
         // measures its panes in.
-        if let Some(regions) = &(*window).view_regions {
+        if let Some(regions) = &window.view_regions {
             if !crate::window_manager::point_in_view_regions(regions, result.sx, result.sy) {
                 return None;
             }
@@ -318,7 +318,7 @@ impl Cursor {
         if dest_w > 0 && surf_w > 0 {
             ratio = surf_w as f64 / dest_w as f64;
         }
-        Some((window, result.surface, result.sx, result.sy, ratio))
+        Some((window_id, result.surface, result.sx, result.sy, ratio))
     }
 
     /// Whether the touchpad behind an axis event has natural scrolling on,
@@ -343,8 +343,8 @@ impl Cursor {
         let Some((window, surface, sx, sy, ratio)) = self.view_drag_target(wm) else { return false };
         let seat = &mut *self.seat;
         // Space must reach the window: give it keyboard focus as a click would.
-        if seat.focused != crate::seat::Focus::window(window) {
-            seat.focus(wm, crate::seat::Focus::window(window));
+        if seat.focused != crate::seat::Focus::Window(window) {
+            seat.focus(wm, crate::seat::Focus::Window(window));
         }
         seat.ensure_synthetic_keyboard();
         let time = crate::util::msec_timestamp();
@@ -753,11 +753,11 @@ impl Cursor {
         }
         let result = crate::shared::scene().at(wm, self.x(), self.y())?;
         let SceneNodeDataVal::Window(window_id) = result.data else { return None };
-        let Some(window) = wm.windows.ptr(window_id) else { return None };
-        if window.is_null() || result.surface.is_null() {
+        let window = wm.windows.get(window_id)?;
+        if result.surface.is_null() {
             return None;
         }
-        let app_id = (*window).get_app_id_string().unwrap_or_default();
+        let app_id = window.get_app_id_string().unwrap_or_default();
         if !crate::shared::layout().touchpad_hscroll_shift_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
             return None;
         }
