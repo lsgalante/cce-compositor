@@ -428,9 +428,12 @@ handle is zero bits, so `std::mem::zeroed()` structs need nothing. Use
 `release` to give one back.
 
 Converted: `Output`'s background rect, grid, backdrop, rims, labels and
-adjust overlay (`Output::destroy_scene_nodes` is their one teardown). The
-rest of the compositor still holds raw scene pointers; convert a struct at a
-time. A pool of child handles can be cleared after its parent tree was
+adjust overlay (`Output::destroy_scene_nodes` is their one teardown), and
+`Window`'s nodes — `tree`, `popup_tree`, the two background rects, shadow,
+bevel, droplet, every `BorderRects` node, and `SaveableSurfaces`' two trees
+(`Window::create`'s early returns drop what they made; only the capture
+scene, a scene root, is still cleaned by hand). The rest of the compositor
+still holds raw scene pointers; convert a struct at a time. A pool of child handles can be cleared after its parent tree was
 destroyed — its entries are already null — which is exactly what the raw
 pointers could not do: output_manager's DisabledHard path destroyed
 `grid_tree` and kept `grid_bevel_tree` / `cell_label_tree` naming its dead

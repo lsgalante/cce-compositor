@@ -159,9 +159,9 @@ impl WindowManager {
                     (*win).box_geom.x, (*win).box_geom.y, (*win).box_geom.width, (*win).box_geom.height,
                     (*win).scale,
                     (*win).surfaces.saved,
-                    ffi::river_scene_node_get_enabled((*win).tree as *mut ffi::wlr_scene_node),
-                    ffi::river_scene_node_get_enabled((*win).surfaces.tree as *mut ffi::wlr_scene_node),
-                    ffi::river_scene_node_get_enabled((*win).surfaces.saved_tree as *mut ffi::wlr_scene_node),
+                    ffi::river_scene_node_get_enabled((*win).tree.node()),
+                    ffi::river_scene_node_get_enabled((*win).surfaces.tree.node()),
+                    ffi::river_scene_node_get_enabled((*win).surfaces.saved_tree.node()),
                 );
                 unsafe extern "C" fn dump_iter(
                     buffer: *mut ffi::wlr_scene_buffer,
@@ -185,10 +185,10 @@ impl WindowManager {
                     ));
                 }
                 for (name, node) in [
-                    ("surfaces", (*win).surfaces.tree as *mut ffi::wlr_scene_node),
-                    ("saved", (*win).surfaces.saved_tree as *mut ffi::wlr_scene_node),
-                    ("popup", (*win).popup_tree as *mut ffi::wlr_scene_node),
-                    ("whole-tree", (*win).tree as *mut ffi::wlr_scene_node),
+                    ("surfaces", (*win).surfaces.tree.node()),
+                    ("saved", (*win).surfaces.saved_tree.node()),
+                    ("popup", (*win).popup_tree.node()),
+                    ("whole-tree", (*win).tree.node()),
                 ] {
                     out.push_str(&format!("[{}]\n", name));
                     ffi::wlr_scene_node_for_each_buffer(

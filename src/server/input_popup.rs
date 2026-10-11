@@ -92,7 +92,7 @@ impl InputPopup {
         let server = (*(*self.input_relay).seat).server;
 
         let popup_tree = match focused.data {
-            SceneNodeDataVal::Window(window) => (*window).popup_tree,
+            SceneNodeDataVal::Window(window) => (*window).popup_tree.raw(),
             SceneNodeDataVal::LockSurface(_) => (*server).scene.layers.popups,
             SceneNodeDataVal::LayerSurface(layer_surface) => (*layer_surface).popup_tree,
             SceneNodeDataVal::OverrideRedirect(_) => panic!("Xwayland doesn't use text-input protocol"),

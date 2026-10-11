@@ -385,7 +385,7 @@ impl WindowManager {
                 (*window).surfaces.drop_saved();
             }
             if matches!((*window).state, crate::window::WindowState::Init) {
-                ffi::wlr_scene_node_reparent((*window).tree as *mut ffi::wlr_scene_node, (*self.server).scene.hidden_tree);
+                ffi::wlr_scene_node_reparent((*window).tree.node(), (*self.server).scene.hidden_tree);
             }
             if let crate::window::WindowImpl::Destroying = (*window).impl_type {
                 Window::destroy(window);
@@ -512,14 +512,14 @@ impl WindowManager {
                         (*self.server).scene.layers.wm
                     };
 
-                    ffi::wlr_scene_node_reparent((*window).tree as *mut _, layer);
+                    ffi::wlr_scene_node_reparent((*window).tree.node(), layer);
                     if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
-                        ffi::wlr_scene_node_lower_to_bottom((*window).tree as *mut _);
+                        ffi::wlr_scene_node_lower_to_bottom((*window).tree.node());
                     } else {
-                        ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                        ffi::wlr_scene_node_raise_to_top((*window).tree.node());
                     }
-                    ffi::wlr_scene_node_reparent((*window).popup_tree as *mut _, layer);
-                    ffi::wlr_scene_node_place_above((*window).popup_tree as *mut _, (*window).tree as *mut _);
+                    ffi::wlr_scene_node_reparent((*window).popup_tree.node(), layer);
+                    ffi::wlr_scene_node_place_above((*window).popup_tree.node(), (*window).tree.node());
                 }
             }
             curr = next;
@@ -559,12 +559,12 @@ impl WindowManager {
                 );
                 let in_wm_layer = !(*window).tree.is_null()
                     && !wm_layer.is_null()
-                    && ffi::river_scene_node_get_parent((*window).tree as *mut _) == wm_layer;
+                    && ffi::river_scene_node_get_parent((*window).tree.node()) == wm_layer;
                 if floats && in_wm_layer {
-                    ffi::wlr_scene_node_raise_to_top((*window).tree as *mut _);
+                    ffi::wlr_scene_node_raise_to_top((*window).tree.node());
                     ffi::wlr_scene_node_place_above(
-                        (*window).popup_tree as *mut _,
-                        (*window).tree as *mut _,
+                        (*window).popup_tree.node(),
+                        (*window).tree.node(),
                     );
                 }
                 // Last, so an open menu clears the plane it was just
@@ -588,8 +588,8 @@ impl WindowManager {
                     && rendered_fullscreen(w)
                     && !fullscreen_on_top(w)
                 {
-                    ffi::wlr_scene_node_raise_to_top((*w).tree as *mut ffi::wlr_scene_node);
-                    ffi::wlr_scene_node_place_above((*w).popup_tree as *mut _, (*w).tree as *mut _);
+                    ffi::wlr_scene_node_raise_to_top((*w).tree.node());
+                    ffi::wlr_scene_node_place_above((*w).popup_tree.node(), (*w).tree.node());
                 }
             }
         }
@@ -606,8 +606,8 @@ impl WindowManager {
                     && matches!((*w).state, crate::window::WindowState::Mapped)
                     && (*w).get_app_id_string().map_or(false, |id| id.ends_with("light_source"))
                 {
-                    ffi::wlr_scene_node_raise_to_top((*w).tree as *mut ffi::wlr_scene_node);
-                    ffi::wlr_scene_node_place_above((*w).popup_tree as *mut _, (*w).tree as *mut _);
+                    ffi::wlr_scene_node_raise_to_top((*w).tree.node());
+                    ffi::wlr_scene_node_place_above((*w).popup_tree.node(), (*w).tree.node());
                 }
             }
         }

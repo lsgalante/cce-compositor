@@ -184,7 +184,7 @@ impl Scene {
                     // that owns it. The parameter stays for the callers that
                     // must never see the grid at all.
                     if !include_grid && (*window).is_grid() {
-                        let tree_node = (*window).tree as *mut ffi::wlr_scene_node;
+                        let tree_node = (*window).tree.node();
                         ffi::wlr_scene_node_set_enabled(tree_node, false);
                         disabled_nodes.push(tree_node);
                         continue;
@@ -200,7 +200,7 @@ impl Scene {
                         let dy = ly - cy;
                         if dx * dx + dy * dy > r * r {
                             // Outside the circle! Disable the window tree node temporarily and try again.
-                            let tree_node = (*window).tree as *mut ffi::wlr_scene_node;
+                            let tree_node = (*window).tree.node();
                             ffi::wlr_scene_node_set_enabled(tree_node, false);
                             disabled_nodes.push(tree_node);
                             continue;
@@ -294,14 +294,14 @@ pub struct AtResult {
 pub struct SaveableSurfaces {
     pub enabled: bool,
     pub saved: bool,
-    pub tree: *mut ffi::wlr_scene_tree,
-    pub saved_tree: *mut ffi::wlr_scene_tree,
+    pub tree: crate::scene_handle::SceneTree,
+    pub saved_tree: crate::scene_handle::SceneTree,
 }
 
 impl SaveableSurfaces {
     pub unsafe fn init(parent: *mut ffi::wlr_scene_tree) -> Result<Self, &'static str> {
-        let tree = ffi::wlr_scene_tree_create(parent);
-        let saved_tree = ffi::wlr_scene_tree_create(parent);
+        let tree = crate::scene_handle::SceneTree::create_in(parent);
+        let saved_tree = crate::scene_handle::SceneTree::create_in(parent);
         if tree.is_null() || saved_tree.is_null() {
             return Err("Failed to create saveable surfaces trees");
         }
@@ -316,8 +316,8 @@ impl SaveableSurfaces {
     }
 
     pub unsafe fn sync_enabled(&self) {
-        ffi::wlr_scene_node_set_enabled(self.tree as *mut ffi::wlr_scene_node, self.enabled && !self.saved);
-        ffi::wlr_scene_node_set_enabled(self.saved_tree as *mut ffi::wlr_scene_node, self.enabled && self.saved);
+        self.tree.set_enabled(self.enabled && !self.saved);
+        self.saved_tree.set_enabled(self.enabled && self.saved);
     }
 
     pub unsafe fn set_enabled(&mut self, enabled: bool) {
@@ -332,7 +332,10 @@ impl SaveableSurfaces {
         if self.saved {
             return;
         }
-        ffi::river_scene_tree_save_buffers(self.tree, self.saved_tree);
+        if self.tree.is_null() || self.saved_tree.is_null() {
+            return;
+        }
+        ffi::river_scene_tree_save_buffers(self.tree.raw(), self.saved_tree.raw());
         self.saved = true;
         self.sync_enabled();
     }
@@ -341,7 +344,9 @@ impl SaveableSurfaces {
         if !self.saved {
             return;
         }
-        ffi::river_scene_tree_clear_children(self.saved_tree);
+        if !self.saved_tree.is_null() {
+            ffi::river_scene_tree_clear_children(self.saved_tree.raw());
+        }
         self.saved = false;
         self.sync_enabled();
     }

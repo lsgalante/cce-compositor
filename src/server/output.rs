@@ -517,12 +517,12 @@ impl Output {
                     (*window).state,
                     (*window).rendering_requested.hidden,
                     (*window).surfaces.saved,
-                    ffi::river_scene_node_get_enabled((*window).tree as *mut ffi::wlr_scene_node),
+                    ffi::river_scene_node_get_enabled((*window).tree.node()),
                 );
                 if let Ok(tag) = std::ffi::CString::new(app) {
-                    ffi::river_scene_shadow_dbg((*window).shadow, tag.as_ptr());
+                    ffi::river_scene_shadow_dbg((*window).shadow.raw(), tag.as_ptr());
                     ffi::river_scene_ovdbg_dump(
-                        (*window).tree as *mut ffi::wlr_scene_node,
+                        (*window).tree.node(),
                         tag.as_ptr(),
                     );
                 }

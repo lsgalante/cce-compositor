@@ -1630,7 +1630,7 @@ impl WindowManager {
 
         for (&win_ptr, wp) in win_ptrs.iter().zip(plan.windows.iter()) {
             if let Some(enabled) = wp.scene_enabled {
-                ffi::wlr_scene_node_set_enabled((*win_ptr).tree as *mut ffi::wlr_scene_node, enabled);
+                ffi::wlr_scene_node_set_enabled((*win_ptr).tree.node(), enabled);
             }
             if let Some(hidden) = wp.hidden {
                 (*win_ptr).rendering_requested.hidden = hidden;
@@ -1713,8 +1713,8 @@ impl WindowManager {
                     let y = (*win_ptr).rendering_requested.y;
                     (*win_ptr).box_geom.x = x;
                     (*win_ptr).box_geom.y = y;
-                    ffi::river_scene_node_set_position_if_changed((*win_ptr).tree as *mut ffi::wlr_scene_node, x, y);
-                    ffi::river_scene_node_set_position_if_changed((*win_ptr).popup_tree as *mut ffi::wlr_scene_node, x, y);
+                    ffi::river_scene_node_set_position_if_changed((*win_ptr).tree.node(), x, y);
+                    ffi::river_scene_node_set_position_if_changed((*win_ptr).popup_tree.node(), x, y);
                 }
             }
         }
@@ -2290,11 +2290,11 @@ impl WindowManager {
         }
         let wm_layer = (*self.server).scene.layers.wm;
         if wm_layer.is_null()
-            || ffi::river_scene_node_get_parent((*window).popup_tree as *mut _) != wm_layer
+            || ffi::river_scene_node_get_parent((*window).popup_tree.node()) != wm_layer
         {
             return;
         }
-        ffi::wlr_scene_node_raise_to_top((*window).popup_tree as *mut _);
+        ffi::wlr_scene_node_raise_to_top((*window).popup_tree.node());
     }
 
     pub unsafe fn raise_window(&mut self, window: *mut Window) {

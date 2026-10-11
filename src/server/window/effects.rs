@@ -52,7 +52,7 @@ impl Window {
         if self.shadow.is_null() {
             return;
         }
-        let node = &mut (*self.shadow).node as *mut ffi::wlr_scene_node;
+        let node = self.shadow.node();
         let layout = &(*self.server).wm.layout;
         let enabled = want && layout.shadow_enabled && width > 0 && height > 0;
         ffi::wlr_scene_node_set_enabled(node, enabled);
@@ -64,13 +64,13 @@ impl Window {
         let ox = (layout.shadow_offset_x as f64 * self.scale) as i32;
         let oy = (layout.shadow_offset_y as f64 * self.scale) as i32;
         let radius_dev = (radius as f64 * self.scale) as i32;
-        ffi::wlr_scene_shadow_set_color(self.shadow, layout.shadow_color.as_ptr());
-        ffi::wlr_scene_shadow_set_blur_sigma(self.shadow, sigma);
-        ffi::wlr_scene_shadow_set_corner_radius(self.shadow, radius_dev);
-        ffi::wlr_scene_shadow_set_size(self.shadow, width + 2 * pad, height + 2 * pad);
+        ffi::wlr_scene_shadow_set_color(self.shadow.raw(), layout.shadow_color.as_ptr());
+        ffi::wlr_scene_shadow_set_blur_sigma(self.shadow.raw(), sigma);
+        ffi::wlr_scene_shadow_set_corner_radius(self.shadow.raw(), radius_dev);
+        ffi::wlr_scene_shadow_set_size(self.shadow.raw(), width + 2 * pad, height + 2 * pad);
         ffi::river_scene_node_set_position_if_changed(node, -pad + ox, -pad + oy);
         let r = radius_dev.clamp(0, u16::MAX as i32) as u16;
-        ffi::wlr_scene_shadow_set_clipped_region(self.shadow, ffi::clipped_region {
+        ffi::wlr_scene_shadow_set_clipped_region(self.shadow.raw(), ffi::clipped_region {
             area: ffi::wlr_box { x: pad - ox, y: pad - oy, width, height },
             corners: ffi::fx_corner_radii {
                 top_left: r, top_right: r, bottom_right: r, bottom_left: r,
@@ -134,7 +134,7 @@ impl Window {
         if self.bevel.is_null() {
             return;
         }
-        let node = &mut (*self.bevel).node as *mut ffi::wlr_scene_node;
+        let node = self.bevel.node();
         let layout = &(*self.server).wm.layout;
         // Focused-window treatment: the rim highlight wraps all four sides
         // in the accent (the DE focus glint). Focus is read off the seats —
@@ -167,20 +167,20 @@ impl Window {
         let len = (lx * lx + ly * ly).sqrt();
         let (lx, ly) = if len > 1e-6 { (lx / len, ly / len) } else { (-0.7071, -0.7071) };
 
-        ffi::wlr_scene_bevel_set_size(self.bevel, width, height);
-        ffi::wlr_scene_bevel_set_corner_radius(self.bevel, radius_dev);
-        ffi::wlr_scene_bevel_set_thickness(self.bevel, thickness.max(1.0));
+        ffi::wlr_scene_bevel_set_size(self.bevel.raw(), width, height);
+        ffi::wlr_scene_bevel_set_corner_radius(self.bevel.raw(), radius_dev);
+        ffi::wlr_scene_bevel_set_thickness(self.bevel.raw(), thickness.max(1.0));
         ffi::wlr_scene_bevel_set_light(
-            self.bevel,
+            self.bevel.raw(),
             lx,
             ly,
             layout.bevel_light_intensity,
             layout.bevel_shade_intensity,
         );
-        ffi::wlr_scene_bevel_set_shoulder(self.bevel, layout.bevel_shoulder);
-        ffi::wlr_scene_bevel_set_color(self.bevel, layout.bevel_color.as_ptr());
+        ffi::wlr_scene_bevel_set_shoulder(self.bevel.raw(), layout.bevel_shoulder);
+        ffi::wlr_scene_bevel_set_color(self.bevel.raw(), layout.bevel_color.as_ptr());
         ffi::wlr_scene_bevel_set_focus(
-            self.bevel,
+            self.bevel.raw(),
             if focused { 1.0 } else { 0.0 },
             layout.bevel_focus_sharpness,
             layout.bevel_focus_color.as_ptr(),
@@ -200,9 +200,9 @@ impl Window {
         } else {
             (0.0, 0.0, false)
         };
-        ffi::river_scene_node_set_blur_compress(self.tree as *mut ffi::wlr_scene_node, ceil, knee, invert);
+        ffi::river_scene_node_set_blur_compress(self.tree.node(), ceil, knee, invert);
         if !self.droplet.is_null() {
-            ffi::wlr_scene_droplet_set_compress(self.droplet, ceil, knee, invert);
+            ffi::wlr_scene_droplet_set_compress(self.droplet.raw(), ceil, knee, invert);
         }
     }
     /// Sync the droplet backdrop-refraction node for a droplet-styled status
@@ -212,7 +212,7 @@ impl Window {
         if self.droplet.is_null() {
             return;
         }
-        let node = &mut (*self.droplet).node as *mut ffi::wlr_scene_node;
+        let node = self.droplet.node();
         let layout = &(*self.server).wm.layout;
         let is_status = self.tiling_mode == crate::tiling::TilingMode::Status;
         // Only bar-strip segments: an expanded (menu) segment is taller than
@@ -245,16 +245,16 @@ impl Window {
         let k = (spec.blend.max(0.0) * h).max(1.0);
         let band = (spec.band.max(0.05) * h).max(1.0);
         let zs = self.scale as f32;
-        ffi::wlr_scene_droplet_set_size(self.droplet, width, height);
+        ffi::wlr_scene_droplet_set_size(self.droplet.raw(), width, height);
         ffi::wlr_scene_droplet_set_silhouette(
-            self.droplet,
+            self.droplet.raw(),
             ar * zs,
             sr * zs,
             bow * zs,
             k * zs,
             spec.curve.clamp(2.0, 6.0),
         );
-        ffi::wlr_scene_droplet_set_lens(self.droplet, band * zs, spec.refr * zs, spec.ghost.clamp(0.0, 1.0));
+        ffi::wlr_scene_droplet_set_lens(self.droplet.raw(), band * zs, spec.refr * zs, spec.ghost.clamp(0.0, 1.0));
         ffi::river_scene_node_set_position_if_changed(node, 0, 0);
     }
     /// True when this status segment's droplet backdrop node is live. The
@@ -304,7 +304,7 @@ impl Window {
         if ms == 0 || !self.wants_map_fade() {
             self.map_fade = self.map_fade_target;
             ffi::river_scene_node_set_opacity(
-                self.tree as *mut ffi::wlr_scene_node,
+                self.tree.node(),
                 self.effective_opacity(),
             );
             return;
@@ -314,7 +314,7 @@ impl Window {
         let ticks = ((ms as f32) / 16.0).max(1.0);
         self.map_fade_step = ((self.map_fade_target - self.map_fade).abs() / ticks).max(1.0e-4);
         ffi::river_scene_node_set_opacity(
-            self.tree as *mut ffi::wlr_scene_node,
+            self.tree.node(),
             self.effective_opacity(),
         );
         (*self.server).wm.arm_border_fade();
@@ -334,7 +334,7 @@ impl Window {
             self.map_fade += self.map_fade_step * delta.signum();
         }
         ffi::river_scene_node_set_opacity(
-            self.tree as *mut ffi::wlr_scene_node,
+            self.tree.node(),
             self.effective_opacity(),
         );
         true
@@ -406,7 +406,7 @@ impl Window {
             self.adjust_dim += delta * border_fade_step();
             moving = true;
         }
-        ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, self.effective_opacity());
+        ffi::river_scene_node_set_opacity(self.tree.node(), self.effective_opacity());
         moving
     }
 
@@ -457,7 +457,7 @@ impl Window {
     pub(crate) unsafe fn size_fullscreen_background(&mut self, width: i32, height: i32) {
         let s = if self.fs_on_desk { self.scale } else { 1.0 };
         ffi::wlr_scene_rect_set_size(
-            self.fullscreen_background,
+            self.fullscreen_background.raw(),
             (width as f64 * s).round() as i32,
             (height as f64 * s).round() as i32,
         );

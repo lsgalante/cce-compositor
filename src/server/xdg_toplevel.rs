@@ -96,7 +96,7 @@ impl XdgToplevel {
 
         (*raw).unmap.connect(ffi::river_wlr_surface_get_unmap_signal(surface), handle_unmap);
 
-        let surfaces_tree = (*window).surfaces.tree;
+        let surfaces_tree = (*window).surfaces.tree.raw();
         let capture_tree = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree;
 
         let scene_xdg = ffi::wlr_scene_xdg_surface_create(surfaces_tree, base);
@@ -112,7 +112,7 @@ impl XdgToplevel {
         }
 
         ffi::river_wlr_xdg_surface_set_data(base, raw as *mut _);
-        ffi::river_wlr_surface_set_data(surface, (*window).tree as *mut ffi::wlr_scene_node as *mut _);
+        ffi::river_wlr_surface_set_data(surface, (*window).tree.node() as *mut _);
 
         (*raw).destroy.connect(ffi::river_wlr_xdg_toplevel_get_destroy_signal(wlr_toplevel), handle_destroy);
 
@@ -486,9 +486,9 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
     let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree;
     if let Err(e) = crate::xdg_popup::XdgPopup::create(
         wlr_xdg_popup,
-        (*window).popup_tree,
+        (*window).popup_tree.raw(),
         capture_node,
-        (*window).popup_tree,
+        (*window).popup_tree.raw(),
     ) {
         log::error!("Failed to create popup: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_xdg_popup).resource);
@@ -701,7 +701,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     };
     let blur_enabled = (*window).rendering_requested.blur && ((*window).wm_requested.ssd || is_decorated || is_status);
     ffi::river_scene_node_enable_blur(
-        (*window).tree as *mut ffi::wlr_scene_node,
+        (*window).tree.node(),
         blur_enabled,
         use_optimized,
         ignore_transparent,
@@ -907,8 +907,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         // (which restores the new buffer and applies it together) and make
         // sure that pass runs promptly.
         if !(*window).surfaces.saved {
-            ffi::river_scene_node_set_position_if_changed((*window).tree as *mut ffi::wlr_scene_node, final_x, final_y);
-            ffi::river_scene_node_set_position_if_changed((*window).popup_tree as *mut ffi::wlr_scene_node, final_x, final_y);
+            ffi::river_scene_node_set_position_if_changed((*window).tree.node(), final_x, final_y);
+            ffi::river_scene_node_set_position_if_changed((*window).popup_tree.node(), final_x, final_y);
             (*window).box_geom.width = geometry.width;
             (*window).box_geom.height = geometry.height;
             (*window).draw_borders();

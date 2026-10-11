@@ -4,6 +4,7 @@
 use crate::ffi;
 use crate::server::{Server, WlList, wl_list_insert, wl_list_remove_and_reinit};
 use crate::wm_node::WmNode;
+use crate::scene_handle::{SceneBevel, SceneDroplet, SceneFrame, SceneRect, SceneShadow, SceneTree};
 use crate::xdg_toplevel::ConfigureState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -346,20 +347,20 @@ pub struct BorderRects {
     /// The old full-band hit catchers. Retired by the disc handles — the
     /// pointer between two discs must reach the app, not a catcher — and
     /// kept disabled.
-    pub left: *mut ffi::wlr_scene_rect,
-    pub right: *mut ffi::wlr_scene_rect,
-    pub top: *mut ffi::wlr_scene_rect,
-    pub bottom: *mut ffi::wlr_scene_rect,
+    pub left: SceneRect,
+    pub right: SceneRect,
+    pub top: SceneRect,
+    pub bottom: SceneRect,
     /// Invisible square catchers, one per handle disc, indexed by
     /// `BorderElement::index()`: they make a scene hit on a disc resolve to
     /// this window even where the client's input region does not cover it.
-    pub segments: [*mut ffi::wlr_scene_rect; HANDLE_COUNT],
+    pub segments: [SceneRect; HANDLE_COUNT],
     /// The handles: every disc, buttons included, in one shader-drawn node.
-    pub frame: *mut ffi::wlr_scene_frame,
+    pub frame: SceneFrame,
     /// Parent of `segments`, living in the global border overlay layer rather
     /// than in the window tree. Tracks the window tree's position so the
     /// segments keep their window-local coordinates.
-    pub tree: *mut ffi::wlr_scene_tree,
+    pub tree: SceneTree,
 }
 
 pub struct ShowWindowMenuRequest {
@@ -484,22 +485,22 @@ pub struct Window {
     /// viewports tumble.
     pub view_regions: Option<Vec<[f64; 4]>>,
 
-    pub tree: *mut ffi::wlr_scene_tree,
-    pub fullscreen_background: *mut ffi::wlr_scene_rect,
-    pub window_background: *mut ffi::wlr_scene_rect,
+    pub tree: SceneTree,
+    pub fullscreen_background: SceneRect,
+    pub window_background: SceneRect,
     /// scenefx drop shadow, first child of `tree` so it renders beneath
     /// everything else in the window; null if creation failed (shadow skipped).
-    pub shadow: *mut ffi::wlr_scene_shadow,
+    pub shadow: SceneShadow,
     /// scenefx bevel node: the lit chamfer around the inside of the window's
     /// edge. Created LAST in the window tree so it draws over the surface —
     /// the rim overlays the client's outermost pixels. Null if creation
     /// failed (the effect is then simply absent).
-    pub bevel: *mut ffi::wlr_scene_bevel,
+    pub bevel: SceneBevel,
     /// scenefx droplet node: for droplet-styled status segments, the
     /// backdrop refracted through the drop's lens. Created BEFORE the
     /// surfaces so it draws beneath the client's translucent drop. Null if
     /// creation failed (the effect is then simply absent).
-    pub droplet: *mut ffi::wlr_scene_droplet,
+    pub droplet: SceneDroplet,
     pub surfaces: crate::scene::SaveableSurfaces,
     pub border: BorderRects,
     /// The border zone the pointer is over (set by cursor.rs); that segment
@@ -540,7 +541,7 @@ pub struct Window {
     /// exponential approach: an exponential close fade never actually
     /// reaches zero, and the client is waiting on a deadline to exit.
     pub map_fade_step: f32,
-    pub popup_tree: *mut ffi::wlr_scene_tree,
+    pub popup_tree: SceneTree,
     pub capture_scene: *mut ffi::wlr_scene,
     pub capture_source: *mut ffi::wlr_ext_image_capture_source_v1,
     pub tiling_mode: crate::tiling::TilingMode,
@@ -844,69 +845,62 @@ impl Window {
 
 
     pub unsafe fn create(impl_type: WindowImpl, server: *mut Server) -> Result<*mut Self, &'static str> {
+        // Every node below is a handle: an early return drops what was made
+        // so far, which destroys it. Only the capture scene, a scene root
+        // rather than a node, is cleaned up by hand.
         let hidden_tree = (*server).scene.hidden_tree;
-        let tree = ffi::wlr_scene_tree_create(hidden_tree);
+        let tree = SceneTree::create_in(hidden_tree);
         if tree.is_null() {
             return Err("Failed to create tree");
         }
 
-        let popup_tree = ffi::wlr_scene_tree_create(hidden_tree);
+        let popup_tree = SceneTree::create_in(hidden_tree);
         if popup_tree.is_null() {
-            ffi::wlr_scene_node_destroy(tree as *mut ffi::wlr_scene_node);
             return Err("Failed to create popup_tree");
         }
 
         let capture_scene = ffi::wlr_scene_create();
         if capture_scene.is_null() {
-            ffi::wlr_scene_node_destroy(tree as *mut ffi::wlr_scene_node);
-            ffi::wlr_scene_node_destroy(popup_tree as *mut ffi::wlr_scene_node);
             return Err("Failed to create capture_scene");
         }
+        let destroy_capture_scene = || {
+            ffi::wlr_scene_node_destroy(&mut (*capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
+        };
         // SceneFX 0.4 does not support restack_xwayland_surfaces
         // (*capture_scene).restack_xwayland_surfaces = false;
 
         // Created first so it is the bottom-most child: the cast shadow must render
         // beneath the (translucent) window content and its backgrounds. Geometry and
-        // color are synced per-frame in update_shadow; a null pointer just disables
+        // color are synced per-frame in update_shadow; an empty handle just disables
         // the effect rather than failing window creation.
         let shadow_color = [0.0f32, 0.0f32, 0.0f32, 0.55f32];
-        let shadow = ffi::wlr_scene_shadow_create(tree, 0, 0, 0, 22.0, shadow_color.as_ptr());
-        if !shadow.is_null() {
-            ffi::wlr_scene_node_set_enabled(&mut (*shadow).node, false);
-        }
+        let shadow = SceneShadow::adopt(ffi::wlr_scene_shadow_create(tree.raw(), 0, 0, 0, 22.0, shadow_color.as_ptr()));
+        shadow.set_enabled(false);
 
         // Beneath the surfaces like the shadow: the refracted backdrop must
         // render under the client's translucent drop, not over it. Synced in
         // update_droplet; enabled only for droplet-styled status segments.
-        let droplet = ffi::wlr_scene_droplet_create(tree, 0, 0);
-        if !droplet.is_null() {
-            ffi::wlr_scene_node_set_enabled(&mut (*droplet).node, false);
-        }
+        let droplet = SceneDroplet::adopt(ffi::wlr_scene_droplet_create(tree.raw(), 0, 0));
+        droplet.set_enabled(false);
 
         let black_color = [0.0f32, 0.0f32, 0.0f32, 1.0f32];
-        let fullscreen_background = ffi::wlr_scene_rect_create(tree, 0, 0, black_color.as_ptr());
+        let fullscreen_background = SceneRect::create(&tree, 0, 0, &black_color);
         if fullscreen_background.is_null() {
-            ffi::wlr_scene_node_destroy(tree as *mut ffi::wlr_scene_node);
-            ffi::wlr_scene_node_destroy(popup_tree as *mut ffi::wlr_scene_node);
-            ffi::wlr_scene_node_destroy(&mut (*capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
+            destroy_capture_scene();
             return Err("Failed to create fullscreen rect");
         }
 
         let clear_color = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
-        let window_background = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
+        let window_background = SceneRect::create(&tree, 0, 0, &clear_color);
         if window_background.is_null() {
-            ffi::wlr_scene_node_destroy(tree as *mut ffi::wlr_scene_node);
-            ffi::wlr_scene_node_destroy(popup_tree as *mut ffi::wlr_scene_node);
-            ffi::wlr_scene_node_destroy(&mut (*capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
+            destroy_capture_scene();
             return Err("Failed to create window background rect");
         }
 
-        let surfaces = match crate::scene::SaveableSurfaces::init(tree) {
+        let surfaces = match crate::scene::SaveableSurfaces::init(tree.raw()) {
             Ok(s) => s,
             Err(e) => {
-                ffi::wlr_scene_node_destroy(tree as *mut ffi::wlr_scene_node);
-                ffi::wlr_scene_node_destroy(popup_tree as *mut ffi::wlr_scene_node);
-                ffi::wlr_scene_node_destroy(&mut (*capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
+                destroy_capture_scene();
                 return Err(e);
             }
         };
@@ -914,40 +908,34 @@ impl Window {
         // Created after the surfaces so it is ABOVE them in the window tree:
         // the bevel is an inner rim drawn over the client's outermost pixels,
         // not something tucked behind them. Geometry, light and colour are
-        // synced per frame in update_bevel; a null pointer disables the
+        // synced per frame in update_bevel; an empty handle disables the
         // effect rather than failing window creation.
         let bevel_color = [1.0f32, 1.0f32, 1.0f32, 1.0f32];
-        let bevel = ffi::wlr_scene_bevel_create(tree, 0, 0, 0, 0.0, bevel_color.as_ptr());
-        if !bevel.is_null() {
-            ffi::wlr_scene_node_set_enabled(&mut (*bevel).node, false);
-        }
+        let bevel = SceneBevel::create_in(tree.raw(), 0, 0, 0, 0.0, &bevel_color);
+        bevel.set_enabled(false);
 
         // The invisible hit catchers stay in the window tree so pointer
         // hit-testing and z-order are unchanged. The visible segments live in
         // a sibling tree parented to the global border overlay layer, so a
         // revealed edge draws over the neighbouring window it overhangs.
-        let border_left = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
-        let border_right = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
-        let border_top = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
-        let border_bottom = ffi::wlr_scene_rect_create(tree, 0, 0, clear_color.as_ptr());
+        let border_left = SceneRect::create(&tree, 0, 0, &clear_color);
+        let border_right = SceneRect::create(&tree, 0, 0, &clear_color);
+        let border_top = SceneRect::create(&tree, 0, 0, &clear_color);
+        let border_bottom = SceneRect::create(&tree, 0, 0, &clear_color);
 
-        let border_tree = ffi::wlr_scene_tree_create((*server).scene.layers.border_overlay);
+        let border_tree = SceneTree::create_in((*server).scene.layers.border_overlay);
         if border_tree.is_null() {
-            ffi::wlr_scene_node_destroy(tree as *mut ffi::wlr_scene_node);
-            ffi::wlr_scene_node_destroy(popup_tree as *mut ffi::wlr_scene_node);
-            ffi::wlr_scene_node_destroy(&mut (*capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
+            destroy_capture_scene();
             return Err("Failed to create window border tree");
         }
-        let mut border_segments = [std::ptr::null_mut(); HANDLE_COUNT];
-        for seg in border_segments.iter_mut() {
-            *seg = ffi::wlr_scene_rect_create(border_tree, 0, 0, clear_color.as_ptr());
-        }
+        let border_segments: [SceneRect; HANDLE_COUNT] =
+            std::array::from_fn(|_| SceneRect::create(&border_tree, 0, 0, &clear_color));
         // The handles: one node draws every disc, the window buttons
         // included (scenefx frame.frag). Not rounded scene rects, because a
         // scene rect takes the renderer's global corner shape — a squircle —
         // so a rect with radius half its size would not be a circle. The
         // rects above are the discs' invisible hit catchers.
-        let border_frame = ffi::wlr_scene_frame_create(border_tree, 0, 0, 0, clear_color.as_ptr());
+        let border_frame = SceneFrame::adopt(ffi::wlr_scene_frame_create(border_tree.raw(), 0, 0, 0, clear_color.as_ptr()));
 
         let window = Box::new(Window {
             view_regions: None,
@@ -1106,26 +1094,26 @@ impl Window {
         (*raw).ref_key = key;
         (*raw).node.init();
 
-        ffi::wlr_scene_node_set_enabled(tree as *mut ffi::wlr_scene_node, false);
-        ffi::wlr_scene_node_set_enabled(popup_tree as *mut ffi::wlr_scene_node, false);
-        ffi::wlr_scene_node_set_enabled(fullscreen_background as *mut ffi::wlr_scene_node, false);
+        (*raw).tree.set_enabled(false);
+        (*raw).popup_tree.set_enabled(false);
+        (*raw).fullscreen_background.set_enabled(false);
 
         crate::scene_node_data::SceneNodeData::attach(
-            tree as *mut ffi::wlr_scene_node,
+            (*raw).tree.node(),
             crate::scene_node_data::SceneNodeDataVal::Window(raw),
         );
         crate::scene_node_data::SceneNodeData::attach(
-            popup_tree as *mut ffi::wlr_scene_node,
+            (*raw).popup_tree.node(),
             crate::scene_node_data::SceneNodeDataVal::Window(raw),
         );
         // The border segments sit outside the window tree; without data of
         // their own a hit on a revealed segment would resolve to no window at
         // all, so tag them with the window they belong to.
         crate::scene_node_data::SceneNodeData::attach(
-            border_tree as *mut ffi::wlr_scene_node,
+            (*raw).border.tree.node(),
             crate::scene_node_data::SceneNodeDataVal::Window(raw),
         );
-        ffi::wlr_scene_node_set_enabled(border_tree as *mut ffi::wlr_scene_node, false);
+        (*raw).border.tree.set_enabled(false);
 
         Ok(raw)
     }
@@ -1699,13 +1687,13 @@ impl Window {
         }
 
         (*window).commit.disconnect();
-        ffi::wlr_scene_node_destroy((*window).tree as *mut ffi::wlr_scene_node);
-        ffi::wlr_scene_node_destroy((*window).popup_tree as *mut ffi::wlr_scene_node);
+        ffi::wlr_scene_node_destroy((*window).tree.node());
+        ffi::wlr_scene_node_destroy((*window).popup_tree.node());
         // The border segments hang off the global overlay layer, not off
         // `tree`, so destroying the window tree does not take them with it.
         // Left behind they would both leak and keep a SceneNodeData pointing
         // at this freed window for the next hit test to find.
-        ffi::wlr_scene_node_destroy((*window).border.tree as *mut ffi::wlr_scene_node);
+        ffi::wlr_scene_node_destroy((*window).border.tree.node());
         ffi::wlr_scene_node_destroy(&mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
 
         (*window).node.deinit();
@@ -2324,13 +2312,13 @@ impl Window {
         let requested = &self.rendering_requested;
         let enabled = !requested.hidden && (matches!(self.state, WindowState::Mapped) || matches!(self.state, WindowState::Closing));
 
-        ffi::wlr_scene_node_set_enabled(self.tree as *mut ffi::wlr_scene_node, enabled);
-        ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
+        ffi::wlr_scene_node_set_enabled(self.tree.node(), enabled);
+        ffi::wlr_scene_node_set_enabled(self.popup_tree.node(), enabled);
         if !enabled {
             // The segment tree is not a child of `tree`, so disabling the
             // window does not hide a revealed border with it.
             self.border_reveal = [0.0; HANDLE_COUNT];
-            ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.tree.node(), false);
         }
 
         if enabled {
@@ -2401,7 +2389,7 @@ impl Window {
             let width = (actual_w as f64 * scale_x).round() as i32;
             let height = (actual_h as f64 * scale_y).round() as i32;
             ffi::river_scene_node_enable_blur(
-                self.tree as *mut ffi::wlr_scene_node,
+                self.tree.node(),
                 blur_enabled,
                 use_optimized,
                 ignore_transparent,
@@ -2427,18 +2415,18 @@ impl Window {
                 self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
                 self.sync_backdrop_compress();
-            ffi::river_scene_node_set_opacity(self.tree as *mut ffi::wlr_scene_node, self.effective_opacity());
+            ffi::river_scene_node_set_opacity(self.tree.node(), self.effective_opacity());
 
             // Device px, like the blur radius above: the surface content is
             // scaled to its dest size, so an unscaled clip radius would keep
             // cutting zoom-1-sized corners into a zoomed-down window (the
             // clients' own drawn corners shrink with the buffer).
             ffi::river_scene_node_set_corner_radius(
-                self.surfaces.tree as *mut ffi::wlr_scene_node,
+                self.surfaces.tree.node(),
                 (radius as f64 * self.scale) as i32,
             );
             ffi::river_scene_rect_set_corner_radius(
-                self.window_background,
+                self.window_background.raw(),
                 (radius as f64 * self.scale) as i32,
             );
 
@@ -2503,25 +2491,25 @@ impl Window {
                 // leaves it briefly at the old zoom, which restore corrects.
             }
 
-            let scale_data_surfaces = ScaleData { scale_x, scale_y, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node, pin: self.is_grid() };
+            let scale_data_surfaces = ScaleData { scale_x, scale_y, ancestor: self.surfaces.tree.node(), pin: self.is_grid() };
             ffi::wlr_scene_node_for_each_buffer(
-                self.surfaces.tree as *mut ffi::wlr_scene_node,
+                self.surfaces.tree.node(),
                 Some(set_overview_scale_iterator),
                 &scale_data_surfaces as *const ScaleData as *mut std::ffi::c_void,
             );
 
             if self.surfaces.saved {
-                let scale_data_saved = ScaleData { scale_x, scale_y, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node, pin: self.is_grid() };
+                let scale_data_saved = ScaleData { scale_x, scale_y, ancestor: self.surfaces.saved_tree.node(), pin: self.is_grid() };
                 ffi::wlr_scene_node_for_each_buffer(
-                    self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
+                    self.surfaces.saved_tree.node(),
                     Some(set_overview_scale_iterator),
                     &scale_data_saved as *const ScaleData as *mut std::ffi::c_void,
                 );
             }
             
-            let scale_data_popup = ScaleData { scale_x, scale_y, ancestor: self.popup_tree as *mut ffi::wlr_scene_node, pin: self.is_grid() };
+            let scale_data_popup = ScaleData { scale_x, scale_y, ancestor: self.popup_tree.node(), pin: self.is_grid() };
             ffi::wlr_scene_node_for_each_buffer(
-                self.popup_tree as *mut ffi::wlr_scene_node,
+                self.popup_tree.node(),
                 Some(set_overview_scale_iterator),
                 &scale_data_popup as *const ScaleData as *mut std::ffi::c_void,
             );
@@ -2600,34 +2588,34 @@ impl Window {
                 (false, false)
             };
 
-            ffi::wlr_scene_node_set_enabled(self.fullscreen_background as *mut ffi::wlr_scene_node, !is_status_bar && !is_wallpaper);
+            ffi::wlr_scene_node_set_enabled(self.fullscreen_background.node(), !is_status_bar && !is_wallpaper);
             let (width, height) = (*output).sent.dimensions();
             self.size_fullscreen_background(width as i32, height as i32);
             clip = ffi::wlr_box { x: 0, y: 0, width: width as i32, height: height as i32 };
             content_clip = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
 
-            ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(self.border.bottom as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.left.node(), false);
+            ffi::wlr_scene_node_set_enabled(self.border.right.node(), false);
+            ffi::wlr_scene_node_set_enabled(self.border.top.node(), false);
+            ffi::wlr_scene_node_set_enabled(self.border.bottom.node(), false);
+            ffi::wlr_scene_node_set_enabled(self.window_background.node(), false);
             // Fullscreen skips draw_borders entirely, and the segment tree
             // lives outside this window's tree, so it has to be taken down
             // explicitly or a revealed edge would hang over the fullscreen
             // surface.
             self.border_reveal = [0.0; HANDLE_COUNT];
-            ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.tree.node(), false);
         } else {
             self.box_geom.x = requested.x;
             self.box_geom.y = requested.y;
-            ffi::wlr_scene_node_set_enabled(self.fullscreen_background as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.fullscreen_background.node(), false);
             if self.fs_anim.is_none() {
                 self.draw_borders();
             }
         }
 
-        ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
-        ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
+        ffi::river_scene_node_set_position_if_changed(self.tree.node(), self.box_geom.x, self.box_geom.y);
+        ffi::river_scene_node_set_position_if_changed(self.popup_tree.node(), self.box_geom.x, self.box_geom.y);
 
         // Mid fullscreen-toggle: draw at the animated rect regardless of which
         // branch above ran. The tree overrides its settled position, the black
@@ -2640,19 +2628,19 @@ impl Window {
             let ay = anim.y.round() as i32;
             let aw = (anim.w.round() as i32).max(1);
             let ah = (anim.h.round() as i32).max(1);
-            ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, ax, ay);
-            ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, ax, ay);
-            ffi::wlr_scene_node_set_enabled(self.fullscreen_background as *mut ffi::wlr_scene_node, true);
-            ffi::wlr_scene_rect_set_size(self.fullscreen_background, aw, ah);
+            ffi::river_scene_node_set_position_if_changed(self.tree.node(), ax, ay);
+            ffi::river_scene_node_set_position_if_changed(self.popup_tree.node(), ax, ay);
+            ffi::wlr_scene_node_set_enabled(self.fullscreen_background.node(), true);
+            ffi::wlr_scene_rect_set_size(self.fullscreen_background.raw(), aw, ah);
             clip = ffi::wlr_box { x: 0, y: 0, width: aw, height: ah };
             content_clip = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-            ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(self.border.bottom as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.left.node(), false);
+            ffi::wlr_scene_node_set_enabled(self.border.right.node(), false);
+            ffi::wlr_scene_node_set_enabled(self.border.top.node(), false);
+            ffi::wlr_scene_node_set_enabled(self.border.bottom.node(), false);
+            ffi::wlr_scene_node_set_enabled(self.window_background.node(), false);
             self.border_reveal = [0.0; HANDLE_COUNT];
-            ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.tree.node(), false);
         }
 
         // No geometry compensation here: wlr_scene_xdg_surface_create already
@@ -2660,7 +2648,7 @@ impl Window {
         // re-offsets by -geometry on every commit), so subtracting geometry.x/y
         // again shifted CSD windows with shadow margins (Electron/Chromium
         // floating) up-left by their shadow size, off the desktop grid.
-        ffi::river_scene_node_set_position_if_changed(self.surfaces.tree as *mut ffi::wlr_scene_node, 0, 0);
+        ffi::river_scene_node_set_position_if_changed(self.surfaces.tree.node(), 0, 0);
 
         self.apply_surface_clip(&clip, &content_clip);
 
@@ -2764,25 +2752,25 @@ impl Window {
             // leaves it briefly at the old zoom, which restore corrects.
         }
 
-        let scale_data_surfaces = ScaleData { scale: eff_scale, ancestor: self.surfaces.tree as *mut ffi::wlr_scene_node };
+        let scale_data_surfaces = ScaleData { scale: eff_scale, ancestor: self.surfaces.tree.node() };
         ffi::wlr_scene_node_for_each_buffer(
-            self.surfaces.tree as *mut ffi::wlr_scene_node,
+            self.surfaces.tree.node(),
             Some(set_overview_scale_iterator),
             &scale_data_surfaces as *const ScaleData as *mut std::ffi::c_void,
         );
 
         if self.surfaces.saved {
-            let scale_data_saved = ScaleData { scale: eff_scale, ancestor: self.surfaces.saved_tree as *mut ffi::wlr_scene_node };
+            let scale_data_saved = ScaleData { scale: eff_scale, ancestor: self.surfaces.saved_tree.node() };
             ffi::wlr_scene_node_for_each_buffer(
-                self.surfaces.saved_tree as *mut ffi::wlr_scene_node,
+                self.surfaces.saved_tree.node(),
                 Some(set_overview_scale_iterator),
                 &scale_data_saved as *const ScaleData as *mut std::ffi::c_void,
             );
         }
 
-        let scale_data_popup = ScaleData { scale: eff_scale, ancestor: self.popup_tree as *mut ffi::wlr_scene_node };
+        let scale_data_popup = ScaleData { scale: eff_scale, ancestor: self.popup_tree.node() };
         ffi::wlr_scene_node_for_each_buffer(
-            self.popup_tree as *mut ffi::wlr_scene_node,
+            self.popup_tree.node(),
             Some(set_overview_scale_iterator),
             &scale_data_popup as *const ScaleData as *mut std::ffi::c_void,
         );
@@ -2792,18 +2780,18 @@ impl Window {
         let requested = &self.rendering_requested;
         let enabled = !requested.hidden && (matches!(self.state, WindowState::Mapped) || matches!(self.state, WindowState::Closing));
 
-        ffi::wlr_scene_node_set_enabled(self.tree as *mut ffi::wlr_scene_node, enabled);
-        ffi::wlr_scene_node_set_enabled(self.popup_tree as *mut ffi::wlr_scene_node, enabled);
+        ffi::wlr_scene_node_set_enabled(self.tree.node(), enabled);
+        ffi::wlr_scene_node_set_enabled(self.popup_tree.node(), enabled);
         if !enabled {
             self.border_reveal = [0.0; HANDLE_COUNT];
-            ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.tree.node(), false);
         }
 
         if enabled {
             self.box_geom.x = requested.x;
             self.box_geom.y = requested.y;
-            ffi::river_scene_node_set_position_if_changed(self.tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
-            ffi::river_scene_node_set_position_if_changed(self.popup_tree as *mut ffi::wlr_scene_node, self.box_geom.x, self.box_geom.y);
+            ffi::river_scene_node_set_position_if_changed(self.tree.node(), self.box_geom.x, self.box_geom.y);
+            ffi::river_scene_node_set_position_if_changed(self.popup_tree.node(), self.box_geom.x, self.box_geom.y);
 
             // Blur stays on through a pan for every window. Non-cce windows
             // used to have their blur nodes DESTROYED on the first motion
@@ -2872,7 +2860,7 @@ impl Window {
                 let width = (actual_w as f64 * self.scale) as i32;
                 let height = (actual_h as f64 * self.scale) as i32;
                 ffi::river_scene_node_enable_blur(
-                    self.tree as *mut ffi::wlr_scene_node,
+                    self.tree.node(),
                     blur_enabled,
                     use_optimized,
                     ignore_transparent,

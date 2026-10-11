@@ -13,11 +13,11 @@ impl Window {
 
         let border = &requested.border;
         let border_color = border.color;
-        ffi::river_scene_node_set_position_if_changed(self.window_background as *mut ffi::wlr_scene_node, 0, 0);
+        ffi::river_scene_node_set_position_if_changed(self.window_background.node(), 0, 0);
         let bg_width = (self.box_geom.width as f64 * self.scale) as i32;
         let bg_height = (self.box_geom.height as f64 * self.scale) as i32;
-        ffi::river_scene_rect_set_size_if_changed(self.window_background, bg_width, bg_height);
-        ffi::wlr_scene_rect_set_color(self.window_background, border_color.as_ptr());
+        ffi::river_scene_rect_set_size_if_changed(self.window_background.raw(), bg_width, bg_height);
+        ffi::wlr_scene_rect_set_color(self.window_background.raw(), border_color.as_ptr());
         // The background plate sits directly under the client's plate, so it
         // takes the ROOT_PLATE radius and the same span widening as the
         // blur/clip radius — not the border ring's radius, which is a
@@ -27,8 +27,8 @@ impl Window {
             self.box_geom.width,
             self.box_geom.height,
         );
-        ffi::river_scene_rect_set_corner_radius(self.window_background, (bg_radius as f64 * self.scale) as i32);
-        ffi::wlr_scene_node_set_enabled(self.window_background as *mut ffi::wlr_scene_node, !requested.hidden && self.wm_requested.ssd);
+        ffi::river_scene_rect_set_corner_radius(self.window_background.raw(), (bg_radius as f64 * self.scale) as i32);
+        ffi::wlr_scene_node_set_enabled(self.window_background.node(), !requested.hidden && self.wm_requested.ssd);
 
         // The handles draw as eight discs in one frame node; the hovered
         // disc draws in hover_color. Under each disc a transparent square
@@ -46,21 +46,21 @@ impl Window {
             && !requested.circular
             && !is_virtual_border
             && self.border_reveal.iter().any(|&a| a > 0.0);
-        ffi::wlr_scene_node_set_enabled(self.border.tree as *mut ffi::wlr_scene_node, borders_visible);
+        ffi::wlr_scene_node_set_enabled(self.border.tree.node(), borders_visible);
         if borders_visible {
             ffi::river_scene_node_set_position_if_changed(
-                self.border.tree as *mut ffi::wlr_scene_node,
+                self.border.tree.node(),
                 self.box_geom.x,
                 self.box_geom.y,
             );
         }
         if requested.circular {
-            ffi::wlr_scene_node_set_enabled(self.border.left as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(self.border.right as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(self.border.top as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(self.border.bottom as *mut ffi::wlr_scene_node, false);
-            for &seg in self.border.segments.iter() {
-                ffi::wlr_scene_node_set_enabled(seg as *mut ffi::wlr_scene_node, false);
+            ffi::wlr_scene_node_set_enabled(self.border.left.node(), false);
+            ffi::wlr_scene_node_set_enabled(self.border.right.node(), false);
+            ffi::wlr_scene_node_set_enabled(self.border.top.node(), false);
+            ffi::wlr_scene_node_set_enabled(self.border.bottom.node(), false);
+            for seg in self.border.segments.iter() {
+                ffi::wlr_scene_node_set_enabled(seg.node(), false);
             }
             return;
         }
@@ -85,8 +85,8 @@ impl Window {
 
             // The rounded-frame path used to leave radius/clip state on the
             // top band rect; keep it reset.
-            ffi::river_scene_rect_set_corner_radius(self.border.top, 0);
-            ffi::wlr_scene_rect_set_clipped_region(self.border.top, ffi::clipped_region_get_default());
+            ffi::river_scene_rect_set_corner_radius(self.border.top.raw(), 0);
+            ffi::wlr_scene_rect_set_clipped_region(self.border.top.raw(), ffi::clipped_region_get_default());
 
             let apply = |rect: *mut ffi::wlr_scene_rect, bx: ffi::wlr_box, color: &[f32; 4], enabled: bool| {
                 let mut bx = bx;
@@ -150,14 +150,14 @@ impl Window {
                 // Nothing is drawn, so nothing is stale: without this the
                 // fade step would see a mismatch and repaint every tick.
                 self.border_hover_drawn = self.hovered_border_element;
-                for r in [self.border.left, self.border.right, self.border.top, self.border.bottom] {
-                    ffi::wlr_scene_node_set_enabled(r as *mut ffi::wlr_scene_node, false);
+                for r in [&self.border.left, &self.border.right, &self.border.top, &self.border.bottom] {
+                    ffi::wlr_scene_node_set_enabled(r.node(), false);
                 }
-                for &seg in self.border.segments.iter() {
-                    ffi::wlr_scene_node_set_enabled(seg as *mut ffi::wlr_scene_node, false);
+                for seg in self.border.segments.iter() {
+                    ffi::wlr_scene_node_set_enabled(seg.node(), false);
                 }
                 ffi::wlr_scene_node_set_enabled(
-                    &mut (*self.border.frame).node as *mut ffi::wlr_scene_node,
+                    self.border.frame.node(),
                     false,
                 );
                 return;
@@ -184,8 +184,8 @@ impl Window {
 
             // The band catchers are retired: between two discs the pointer
             // must reach the app, not a catcher.
-            for r in [self.border.left, self.border.right, self.border.top, self.border.bottom] {
-                ffi::wlr_scene_node_set_enabled(r as *mut ffi::wlr_scene_node, false);
+            for r in [&self.border.left, &self.border.right, &self.border.top, &self.border.bottom] {
+                ffi::wlr_scene_node_set_enabled(r.node(), false);
             }
 
             let layout = &(*self.server).wm.layout;
@@ -208,7 +208,7 @@ impl Window {
             );
             for (i, &(cx, cy)) in centres.iter().enumerate() {
                 if i >= live {
-                    ffi::wlr_scene_node_set_enabled(self.border.segments[i] as *mut ffi::wlr_scene_node, false);
+                    ffi::wlr_scene_node_set_enabled(self.border.segments[i].node(), false);
                     continue;
                 }
                 let b = ffi::wlr_box {
@@ -217,7 +217,7 @@ impl Window {
                     width: (2.0 * disc_r / sc).ceil() as i32,
                     height: (2.0 * disc_r / sc).ceil() as i32,
                 };
-                apply(self.border.segments[i], b, &transparent, handles_live);
+                apply(self.border.segments[i].raw(), b, &transparent, handles_live);
             }
             // corner_len and gap are retired by the wave profile (the
             // valleys place the seams now, a quarter along each side) and
@@ -233,12 +233,12 @@ impl Window {
             let a = self.border_reveal[BorderElement::Top.index()].clamp(0.0, 1.0);
             let premul = |c: &[f32; 4]| [c[0] * a, c[1] * a, c[2] * a, c[3] * a];
 
-            ffi::wlr_scene_frame_set_size(self.border.frame, px(cw), px(ch));
-            ffi::wlr_scene_frame_set_corner_radius(self.border.frame, px(r_in));
+            ffi::wlr_scene_frame_set_size(self.border.frame.raw(), px(cw), px(ch));
+            ffi::wlr_scene_frame_set_corner_radius(self.border.frame.raw(), px(r_in));
             // band is the disc diameter; the rest is retired by the discs and
             // ignored by the shader, still passed so the node API holds.
             ffi::wlr_scene_frame_set_shape(
-                self.border.frame,
+                self.border.frame.raw(),
                 band_screen as f32,
                 (band_screen as f32 * layout.border_taper.clamp(0.0, 1.0)).max(2.0),
                 (px(cl) as f64).max(band_screen) as f32,
@@ -258,8 +258,8 @@ impl Window {
                 ],
                 None => [0.0; 4],
             };
-            ffi::wlr_scene_frame_set_exclusion(self.border.frame, ex.as_ptr());
-            ffi::wlr_scene_frame_set_buttons(self.border.frame, buttons);
+            ffi::wlr_scene_frame_set_exclusion(self.border.frame.raw(), ex.as_ptr());
+            ffi::wlr_scene_frame_set_buttons(self.border.frame.raw(), buttons);
             // The ring exists only for the SEAT-focused window — `handles_on`
             // above says so, and so does step_border_fade's reveal — so it
             // paints in the focused color, taken from the layout rather than
@@ -280,7 +280,7 @@ impl Window {
             // `window_background` above keeps the plan color: that one is the
             // window's own plate, not this compositor-drawn handle.
             ffi::wlr_scene_frame_set_color(
-                self.border.frame,
+                self.border.frame.raw(),
                 premul(&layout.border_color_focused).as_ptr(),
             );
             let hovered = self
@@ -289,17 +289,17 @@ impl Window {
                 .unwrap_or(-1.0);
             self.border_hover_drawn = self.hovered_border_element;
             ffi::wlr_scene_frame_set_hover(
-                self.border.frame,
+                self.border.frame.raw(),
                 hovered,
                 premul(&border.hover_color).as_ptr(),
             );
             ffi::river_scene_node_set_position_if_changed(
-                &mut (*self.border.frame).node as *mut ffi::wlr_scene_node,
+                self.border.frame.node(),
                 0,
                 0,
             );
             ffi::wlr_scene_node_set_enabled(
-                &mut (*self.border.frame).node as *mut ffi::wlr_scene_node,
+                self.border.frame.node(),
                 a > 0.0,
             );
         }
@@ -389,9 +389,9 @@ impl Window {
         } else {
             std::ptr::null()
         };
-        let children_head = ffi::river_scene_tree_get_children(self.surfaces.tree) as *mut WlList;
+        let children_head = ffi::river_scene_tree_get_children(self.surfaces.tree.raw()) as *mut WlList;
         if (*children_head).next != children_head {
-            ffi::wlr_scene_subsurface_tree_set_clip(self.surfaces.tree as *mut ffi::wlr_scene_node, clip);
+            ffi::wlr_scene_subsurface_tree_set_clip(self.surfaces.tree.node(), clip);
         }
     }
 }

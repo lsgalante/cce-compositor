@@ -781,7 +781,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
 }
 
 unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
-    let surfaces_tree = (*(*xwindow).window).surfaces.tree;
+    let surfaces_tree = (*(*xwindow).window).surfaces.tree.raw();
     let surface = (*(*xwindow).xsurface).surface;
     let surface_tree = ffi::wlr_scene_subsurface_tree_create(surfaces_tree, surface);
     if surface_tree.is_null() {

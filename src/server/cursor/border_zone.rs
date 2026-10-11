@@ -57,7 +57,7 @@ pub unsafe fn grid_node_info(
         if surface.is_null() {
             continue;
         }
-        let node = (*w).surfaces.tree as *mut ffi::wlr_scene_node;
+        let node = (*w).surfaces.tree.node();
         let (mut nx, mut ny) = (0, 0);
         if !ffi::wlr_scene_node_coords(node, &mut nx, &mut ny) {
             continue;
