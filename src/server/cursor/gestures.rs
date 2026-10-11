@@ -229,15 +229,15 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
         if matched_action == crate::config::Action::Overview && crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview {
             let lx = cursor.x();
             let ly = cursor.y();
-            let mut hovered_win: *mut crate::window::Window = std::ptr::null_mut();
+            let mut hovered: Option<crate::window::WindowId> = None;
             if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                 if let SceneNodeDataVal::Window(window_id) = result.data {
-                    let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
-                    hovered_win = window;
+                    hovered = Some(window_id);
                 }
             }
-            if !hovered_win.is_null() && !(*hovered_win).is_status_bar() && !(*hovered_win).is_wallpaper() {
-                seat.focus(wm, Focus::window(hovered_win));
+            let hovered = hovered.filter(|&id| wm.windows.get(id).is_some_and(|w| !w.is_status_bar() && !w.is_wallpaper()));
+            if let Some(id) = hovered {
+                seat.focus(wm, Focus::Window(id));
             }
         }
 

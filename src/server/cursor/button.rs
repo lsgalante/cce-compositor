@@ -89,12 +89,11 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             !wlr_keyboard.is_null() && (ffi::wlr_keyboard_get_modifiers(wlr_keyboard) & 0x40) != 0
         };
         if (*event).button == 0x110 && (wm.adjust_position_mode || super_held) {
-            let mut clicked_status: *mut crate::window::Window = std::ptr::null_mut();
+            let mut clicked_status: Option<crate::window::WindowId> = None;
             if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                 if let SceneNodeDataVal::Window(window_id) = result.data {
-                    let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
-                    if (*window).is_status_bar() {
-                        clicked_status = window;
+                    if wm.windows.get(window_id).is_some_and(|w| w.is_status_bar()) {
+                        clicked_status = Some(window_id);
                     }
                 }
             }
@@ -102,7 +101,11 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             // clicked, and a grab here would swallow the press the "Done"
             // row needs to leave adjust mode — the one control that ends the
             // mode from the bar would be unreachable while it is on.
-            if !clicked_status.is_null() && !wm.is_expanded_status_segment(&*clicked_status) {
+            let grab = clicked_status
+                .and_then(|id| wm.windows.get(id))
+                .filter(|w| !wm.is_expanded_status_segment(w))
+                .map(|w| (w.id(), w.box_geom, w.virtual_x, w.virtual_y, w.tiling_mode, w.mode_locked));
+            if let Some((status_id, bg, vx, vy, mode, locked)) = grab {
                 wm.stop_panning_animation();
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
@@ -112,19 +115,19 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                     start_y: cursor_y as i32,
                     x: cursor_x as i32,
                     y: cursor_y as i32,
-                    window: crate::window::id_of(clicked_status),
+                    window: Some(status_id),
                     op_type: crate::seat::PointerOpType::Move,
-                    start_win_x: (*clicked_status).box_geom.x,
-                    start_win_y: (*clicked_status).box_geom.y,
-                    start_win_w: (*clicked_status).box_geom.width as u32,
-                    start_win_h: (*clicked_status).box_geom.height as u32,
-                    start_win_virtual_x: (*clicked_status).virtual_x,
-                    start_win_virtual_y: (*clicked_status).virtual_y,
+                    start_win_x: bg.x,
+                    start_win_y: bg.y,
+                    start_win_w: bg.width as u32,
+                    start_win_h: bg.height as u32,
+                    start_win_virtual_x: vx,
+                    start_win_virtual_y: vy,
                     start_was_tiled: false,
                     start_pan_x: wm.desk_pan_x,
                     start_pan_y: wm.desk_pan_y,
-                    start_tiling_mode: (*clicked_status).tiling_mode,
-                    start_mode_locked: (*clicked_status).mode_locked,
+                    start_tiling_mode: mode,
+                    start_mode_locked: locked,
                     started_in_overview: false,
                 });
                 cursor.op_start_pointer(wm);
@@ -141,11 +144,11 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
         // Super held at zoom 1 it falls through to the normal desktop press.
         let in_overview = crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview;
         if (*event).button == 0x110 && crate::shared::window_adjust_active() {
-            let mut clicked_win: *mut crate::window::Window = std::ptr::null_mut();
+            let mut clicked_id: Option<crate::window::WindowId> = None;
             let mut clicked_cloud_layer = false;
             if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                 match result.data {
-                    SceneNodeDataVal::Window(window_id) => clicked_win = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut()),
+                    SceneNodeDataVal::Window(window_id) => clicked_id = Some(window_id),
                     SceneNodeDataVal::LayerSurface(layer_surface) => {
                         clicked_cloud_layer = is_cloud_layer(layer_surface);
                     }
@@ -164,36 +167,35 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             // interactive UI during overview, so their presses fall
             // through to the normal path (focus + delivery to the app)
             // and overview stays up.
+            let clicked = clicked_id.and_then(|id| wm.windows.get(id));
             let overview_chrome = clicked_cloud_layer
-                || (!clicked_win.is_null()
-                    && matches!(
-                        (*clicked_win).tiling_mode,
+                || clicked.is_some_and(|w| {
+                    matches!(
+                        w.tiling_mode,
                         crate::tiling::TilingMode::Overlay | crate::tiling::TilingMode::Popup
-                    ));
+                    )
+                });
             // Hitting the grid means the press landed on a DESKTOP ITEM —
             // its input region covers the item rects and nothing else — so
             // it is chrome-like: fall through to normal delivery and the
             // grid client starts its item drag, in overview exactly as in
             // normal mode. Bare canvas misses the grid entirely (that is
             // the input region again) and still exits overview below.
-            let clicked_grid = !clicked_win.is_null() && (*clicked_win).is_grid();
+            let clicked_grid = clicked.is_some_and(|w| w.is_grid());
             // The bare canvas counts as background in overview: a press on
             // it must exit overview like any desktop press, never grab the
             // canvas itself as if it were a window.
-            let overview_win_valid = !clicked_win.is_null()
-                && !(*clicked_win).is_status_bar()
-                && !(*clicked_win).is_wallpaper()
+            let overview_win_valid = clicked.is_some_and(|w| !w.is_status_bar() && !w.is_wallpaper())
                 && !clicked_grid;
-            let overview_border_zone = if overview_win_valid {
-                get_border_zone(&*clicked_win, lx, ly)
-            } else {
-                BorderZone::None
+            let overview_border_zone = match clicked {
+                Some(w) if overview_win_valid => get_border_zone(w, lx, ly),
+                _ => BorderZone::None,
             };
             // A window button is a click: nothing is grabbed, the client
             // never sees the press, and the release decides
             // (`Cursor::button_press`, answered in the release path).
-            if let BorderZone::Button(elem) = overview_border_zone {
-                cursor.button_press = Some(((*clicked_win).id(), elem));
+            if let (BorderZone::Button(elem), Some(id)) = (overview_border_zone, clicked_id) {
+                cursor.button_press = Some((id, elem));
                 cursor.pressed.insert((*event).button);
                 return;
             }
@@ -211,21 +213,23 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                     seat.group_items.clear();
                     // The first Tiled window carried is the snap anchor.
                     let mut tiled_anchor: Option<(f64, f64)> = None;
-                    let carried: Vec<*mut crate::window::Window> = wm
+                    let carried: Vec<crate::window::WindowId> = wm
                         .selection
                         .windows
                         .iter()
-                        .filter_map(|&id| wm.window(id))
-                        .filter(|&w| wm.selectable(&*w))
+                        .copied()
+                        .filter(|&id| wm.windows.get(id).is_some_and(|w| wm.selectable(w)))
                         .collect();
-                    for w in carried {
-                        seat.group_move.push(((*w).id(), (*w).virtual_x, (*w).virtual_y));
-                        if (*w).tiling_mode == crate::tiling::TilingMode::Tiled {
+                    for id in carried {
+                        let Some(w) = wm.windows.get(id) else { continue };
+                        let (vx, vy, mode) = (w.virtual_x, w.virtual_y, w.tiling_mode);
+                        seat.group_move.push((id, vx, vy));
+                        if mode == crate::tiling::TilingMode::Tiled {
                             if tiled_anchor.is_none() {
-                                tiled_anchor = Some(((*w).virtual_x, (*w).virtual_y));
+                                tiled_anchor = Some((vx, vy));
                             }
-                        } else if (*w).tiling_mode == crate::tiling::TilingMode::Floating {
-                            wm.raise_window((*w).id());
+                        } else if mode == crate::tiling::TilingMode::Floating {
+                            wm.raise_window(id);
                         }
                     }
                     let ids: Vec<u64> = wm.selection.items.clone();
@@ -268,6 +272,8 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             if overview_chrome || clicked_grid {
                 // fall through
             } else if overview_win_valid && matches!(overview_border_zone, BorderZone::None) {
+                // `overview_win_valid` means the press hit a window.
+                let Some(clicked_id) = clicked_id else { return };
                 // The grab does NOT focus the window: moving a window is
                 // not choosing it, and the ring already sits on it through
                 // `adjust_hover`. A tap — press and release without motion
@@ -283,18 +289,20 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 // `op_start_pointer`.
                 seat.group_move.clear();
                 seat.group_items.clear();
-                if wm.is_selected((*clicked_win).id()) {
-                    let carried: Vec<*mut crate::window::Window> = wm
+                if wm.is_selected(clicked_id) {
+                    let carried: Vec<crate::window::WindowId> = wm
                         .selection
                         .windows
                         .iter()
-                        .filter_map(|&id| wm.window(id))
-                        .filter(|&w| w != clicked_win && wm.selectable(&*w))
+                        .copied()
+                        .filter(|&id| id != clicked_id && wm.windows.get(id).is_some_and(|w| wm.selectable(w)))
                         .collect();
-                    for w in carried {
-                        seat.group_move.push(((*w).id(), (*w).virtual_x, (*w).virtual_y));
-                        if (*w).tiling_mode == crate::tiling::TilingMode::Floating {
-                            wm.raise_window((*w).id());
+                    for id in carried {
+                        let Some(w) = wm.windows.get(id) else { continue };
+                        let floating = w.tiling_mode == crate::tiling::TilingMode::Floating;
+                        seat.group_move.push((id, w.virtual_x, w.virtual_y));
+                        if floating {
+                            wm.raise_window(id);
                         }
                     }
                     // And the selected desktop images, by the same offset.
@@ -309,25 +317,27 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 }
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
+                let Some(w) = wm.windows.get(clicked_id) else { return };
+                let (bg, vx, vy, mode, locked) = (w.box_geom, w.virtual_x, w.virtual_y, w.tiling_mode, w.mode_locked);
                 seat.op = Some(crate::seat::SeatOp {
                     input: crate::seat::SeatOpInput::Pointer,
                     start_x: cursor_x as i32,
                     start_y: cursor_y as i32,
                     x: cursor_x as i32,
                     y: cursor_y as i32,
-                    window: crate::window::id_of(clicked_win),
+                    window: Some(clicked_id),
                     op_type: crate::seat::PointerOpType::Move,
-                    start_win_x: (*clicked_win).box_geom.x,
-                    start_win_y: (*clicked_win).box_geom.y,
-                    start_win_w: (*clicked_win).box_geom.width as u32,
-                    start_win_h: (*clicked_win).box_geom.height as u32,
-                    start_win_virtual_x: (*clicked_win).virtual_x,
-                    start_win_virtual_y: (*clicked_win).virtual_y,
-                    start_was_tiled: (*clicked_win).tiling_mode == crate::tiling::TilingMode::Tiled,
+                    start_win_x: bg.x,
+                    start_win_y: bg.y,
+                    start_win_w: bg.width as u32,
+                    start_win_h: bg.height as u32,
+                    start_win_virtual_x: vx,
+                    start_win_virtual_y: vy,
+                    start_was_tiled: mode == crate::tiling::TilingMode::Tiled,
                     start_pan_x: wm.desk_pan_x,
                     start_pan_y: wm.desk_pan_y,
-                    start_tiling_mode: (*clicked_win).tiling_mode,
-                    start_mode_locked: (*clicked_win).mode_locked,
+                    start_tiling_mode: mode,
+                    start_mode_locked: locked,
                     started_in_overview: in_overview,
                 });
                 cursor.op_start_pointer(wm);
@@ -424,19 +434,22 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 // script asks `ccectl windows` nothing is focused. Hand it
                 // the window here instead. Only a window whose mode
                 // `set-mode` accepts is worth naming.
-                if let Some(w) = seat.focused.live_window(wm) {
-                    if !w.is_null()
-                        && matches!(
-                            (*w).tiling_mode,
+                let focused = match seat.focused {
+                    crate::seat::Focus::Window(id) => wm.windows.get(id),
+                    _ => None,
+                };
+                if let Some(w) = focused {
+                    if matches!(
+                            w.tiling_mode,
                             crate::tiling::TilingMode::Floating
                                 | crate::tiling::TilingMode::Tiled
                                 | crate::tiling::TilingMode::Fullscreen
                         )
                     {
-                        let app_id = (*w).get_app_id_string().unwrap_or_else(|| "unknown".to_string());
+                        let app_id = w.get_app_id_string().unwrap_or_else(|| "unknown".to_string());
                         cmd.push_str(&format!(
                             " -i {} -a '{}'",
-                            (*w).ref_key.index,
+                            w.ref_key.index,
                             app_id.replace('\'', "'\\''")
                         ));
                     }
@@ -462,32 +475,34 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
         if let Some(pb) = matched_pb {
             let lx = cursor.x();
             let ly = cursor.y();
-            let mut target_win: *mut crate::window::Window = std::ptr::null_mut();
+            let mut target_id: Option<crate::window::WindowId> = None;
             if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                 if let SceneNodeDataVal::Window(window_id) = result.data {
-                    let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
-                    target_win = window;
+                    target_id = Some(window_id);
                 }
             }
-            
-            if !target_win.is_null() && !(*target_win).is_status_bar() && !(*target_win).is_wallpaper() {
+
+            let target_id = target_id.filter(|&id| wm.windows.get(id).is_some_and(|w| !w.is_status_bar() && !w.is_wallpaper()));
+            if let Some(target_id) = target_id {
+                let id = target_id;
+                let this = window_mut!(wm, id);
                 // Before the un-tile below: a tiled window's drag snaps hard
                 // to whole squares, and by op_update the mode reads Floating.
                 let grabbed_tiled =
-                    (*target_win).tiling_mode == crate::tiling::TilingMode::Tiled;
-                if (*target_win).tiling_mode != crate::tiling::TilingMode::Floating
-                    && (*target_win).tiling_mode != crate::tiling::TilingMode::Popup
-                    && (*target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
-                    && (*target_win).tiling_mode != crate::tiling::TilingMode::Overlay
+                    this.tiling_mode == crate::tiling::TilingMode::Tiled;
+                if this.tiling_mode != crate::tiling::TilingMode::Floating
+                    && this.tiling_mode != crate::tiling::TilingMode::Popup
+                    && this.tiling_mode != crate::tiling::TilingMode::Fullscreen
+                    && this.tiling_mode != crate::tiling::TilingMode::Overlay
                     // A drag moves a Utility window; it must not re-class it.
-                    && (*target_win).tiling_mode != crate::tiling::TilingMode::Utility
+                    && this.tiling_mode != crate::tiling::TilingMode::Utility
                 {
                     // A tiled window un-tiles for the drag but keeps its
                     // cell-quantized geometry; landing grid-aligned re-tiles
                     // it (op_end geometric detection).
-                    (*target_win).was_tiled = false;
-                    (*target_win).tiling_mode = crate::tiling::TilingMode::Floating;
-                    (*target_win).mode_locked = true;
+                    this.was_tiled = false;
+                    this.tiling_mode = crate::tiling::TilingMode::Floating;
+                    this.mode_locked = true;
                 }
                 // No focus on the grab: a bound move/resize drag acts on
                 // the window under the pointer without choosing it (a tap
@@ -497,12 +512,12 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                     // The modifier binding is a resize path the border zones
                     // never see, so it carries its own Utility rejection.
                     crate::config::Action::Resize
-                        if (*target_win).tiling_mode == crate::tiling::TilingMode::Utility =>
+                        if this.tiling_mode == crate::tiling::TilingMode::Utility =>
                     {
                         None
                     }
                     crate::config::Action::Resize => {
-                        let edges = get_closest_edges(&*target_win, lx, ly);
+                        let edges = get_closest_edges(window_ref!(wm, id, ()), lx, ly);
                         Some(crate::seat::PointerOpType::Resize { edges })
                     }
                     _ => None,
@@ -512,23 +527,24 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                     wm.stop_panning_animation();
                     let cursor_x = (*cursor.wlr_cursor).x;
                     let cursor_y = (*cursor.wlr_cursor).y;
+                    let this = window_mut!(wm, id);
                     seat.op = Some(crate::seat::SeatOp {
                         input: crate::seat::SeatOpInput::Pointer,
                         start_x: cursor_x as i32,
                         start_y: cursor_y as i32,
                         x: cursor_x as i32,
                         y: cursor_y as i32,
-                        window: crate::window::id_of(target_win),
+                        window: Some(id),
                         op_type: ot,
-                        start_win_x: (*target_win).box_geom.x,
-                        start_win_y: (*target_win).box_geom.y,
-                        start_win_w: (*target_win).box_geom.width as u32,
-                        start_win_h: (*target_win).box_geom.height as u32,
-                        start_win_virtual_x: (*target_win).virtual_x,
-                        start_win_virtual_y: (*target_win).virtual_y,
-                        start_tiling_mode: (*target_win).tiling_mode,
+                        start_win_x: this.box_geom.x,
+                        start_win_y: this.box_geom.y,
+                        start_win_w: this.box_geom.width as u32,
+                        start_win_h: this.box_geom.height as u32,
+                        start_win_virtual_x: this.virtual_x,
+                        start_win_virtual_y: this.virtual_y,
+                        start_tiling_mode: this.tiling_mode,
                         start_was_tiled: grabbed_tiled,
-                        start_mode_locked: (*target_win).mode_locked,
+                        start_mode_locked: this.mode_locked,
                         start_pan_x: wm.desk_pan_x,
                         start_pan_y: wm.desk_pan_y,
                         started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
@@ -555,20 +571,27 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
 
         let lx = cursor.x();
         let ly = cursor.y();
-        let mut border_target_win: *mut crate::window::Window = std::ptr::null_mut();
+        let mut border_id: Option<crate::window::WindowId> = None;
         if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
             if let SceneNodeDataVal::Window(window_id) = result.data {
-                let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
-                border_target_win = window;
+                border_id = Some(window_id);
             }
         }
 
-        if !border_target_win.is_null() && !(*border_target_win).is_status_bar() && !(*border_target_win).is_wallpaper() && !(*border_target_win).is_grid() && (
-            (*border_target_win).tiling_mode != crate::tiling::TilingMode::Popup
-            && (*border_target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
-        ) {
-            let initial_mode = (*border_target_win).tiling_mode;
-            let zone = get_border_zone(&*border_target_win, lx, ly);
+        let border_id = border_id.filter(|&id| {
+            wm.windows.get(id).is_some_and(|w| {
+                !w.is_status_bar()
+                    && !w.is_wallpaper()
+                    && !w.is_grid()
+                    && w.tiling_mode != crate::tiling::TilingMode::Popup
+                    && w.tiling_mode != crate::tiling::TilingMode::Fullscreen
+            })
+        });
+        if let Some(border_id) = border_id {
+            let id = border_id;
+            let this = window_mut!(wm, id);
+            let initial_mode = this.tiling_mode;
+            let zone = get_border_zone(window_ref!(wm, id, ()), lx, ly);
             // The window context menu (`scripts/cce-app-menu`, a cce-cloud
             // popup like the desktop menu and cce-grid's item menu). A
             // right-click on a handle disc opens it in either adjust mode;
@@ -590,8 +613,9 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 cursor.right_click_on_border = true;
                 let x = cursor.x() as i32;
                 let y = cursor.y() as i32;
-                let index = (*border_target_win).ref_key.index;
-                let app_id = (*border_target_win).get_app_id_string().unwrap_or_else(|| "unknown".to_string());
+                let this = window_mut!(wm, id);
+                let index = this.ref_key.index;
+                let app_id = this.get_app_id_string().unwrap_or_else(|| "unknown".to_string());
                 // The command runs under `sh -c`: quote the app_id, which
                 // is client-chosen text.
                 let app_id = format!("'{}'", app_id.replace('\'', "'\\''"));
@@ -615,32 +639,34 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                             // A tiled window un-tiles for the drag but keeps its
                             // cell-quantized geometry; landing grid-aligned re-tiles
                             // it (op_end geometric detection).
-                            (*border_target_win).was_tiled = false;
-                            (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
-                            (*border_target_win).mode_locked = true;
+                            let this = window_mut!(wm, id);
+                            this.was_tiled = false;
+                            this.tiling_mode = crate::tiling::TilingMode::Floating;
+                            this.mode_locked = true;
                         }
 
                         // No focus on the grab (see the body grab above).
                         wm.stop_panning_animation();
                         let cursor_x = (*cursor.wlr_cursor).x;
                         let cursor_y = (*cursor.wlr_cursor).y;
+                        let this = window_mut!(wm, id);
                         seat.op = Some(crate::seat::SeatOp {
                             input: crate::seat::SeatOpInput::Pointer,
                             start_x: cursor_x as i32,
                             start_y: cursor_y as i32,
                             x: cursor_x as i32,
                             y: cursor_y as i32,
-                            window: crate::window::id_of(border_target_win),
+                            window: Some(id),
                             op_type: crate::seat::PointerOpType::Resize { edges },
-                            start_win_x: (*border_target_win).box_geom.x,
-                            start_win_y: (*border_target_win).box_geom.y,
-                            start_win_w: (*border_target_win).box_geom.width as u32,
-                            start_win_h: (*border_target_win).box_geom.height as u32,
-                            start_win_virtual_x: (*border_target_win).virtual_x,
-                            start_win_virtual_y: (*border_target_win).virtual_y,
-                            start_tiling_mode: (*border_target_win).tiling_mode,
+                            start_win_x: this.box_geom.x,
+                            start_win_y: this.box_geom.y,
+                            start_win_w: this.box_geom.width as u32,
+                            start_win_h: this.box_geom.height as u32,
+                            start_win_virtual_x: this.virtual_x,
+                            start_win_virtual_y: this.virtual_y,
+                            start_tiling_mode: this.tiling_mode,
                             start_was_tiled: initial_mode == crate::tiling::TilingMode::Tiled,
-                            start_mode_locked: (*border_target_win).mode_locked,
+                            start_mode_locked: this.mode_locked,
                             start_pan_x: wm.desk_pan_x,
                         start_pan_y: wm.desk_pan_y,
                         started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
@@ -656,25 +682,26 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 BorderZone::Move => {
                     if (*event).button == 0x110 { // BTN_LEFT
                         let current_time = (*event).time_msec;
-                        let is_titlebar = ly < (*border_target_win).box_geom.y as f64;
+                        let this = window_mut!(wm, id);
+                        let is_titlebar = ly < this.box_geom.y as f64;
                         let is_double_click = is_titlebar
-                            && Some((*border_target_win).id()) == cursor.last_click_window
+                            && Some(id) == cursor.last_click_window
                             && current_time.saturating_sub(cursor.last_click_time) < 300;
 
                         cursor.last_click_time = current_time;
-                        cursor.last_click_window = Some((*border_target_win).id());
+                        cursor.last_click_window = Some(id);
 
                         // A Utility window has no Tiled state to toggle;
                         // the double-click falls through to an ordinary move.
                         if is_double_click && initial_mode != crate::tiling::TilingMode::Utility {
                             if initial_mode == crate::tiling::TilingMode::Tiled {
-                                (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
-                                (*border_target_win).mode_locked = true;
+                                this.tiling_mode = crate::tiling::TilingMode::Floating;
+                                this.mode_locked = true;
                             } else {
-                                (*border_target_win).tiling_mode = crate::tiling::TilingMode::Tiled;
-                                (*border_target_win).mode_locked = true;
+                                this.tiling_mode = crate::tiling::TilingMode::Tiled;
+                                this.mode_locked = true;
                             }
-                            seat.focus(wm, Focus::window(border_target_win));
+                            seat.focus(wm, Focus::Window(id));
                             crate::shared::pending().dirty_windowing();
                             cursor.last_click_time = 0;
                             cursor.last_click_window = None;
@@ -690,32 +717,33 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                             // A tiled window un-tiles for the drag but keeps its
                             // cell-quantized geometry; landing grid-aligned re-tiles
                             // it (op_end geometric detection).
-                            (*border_target_win).was_tiled = false;
-                            (*border_target_win).tiling_mode = crate::tiling::TilingMode::Floating;
-                            (*border_target_win).mode_locked = true;
+                            this.was_tiled = false;
+                            this.tiling_mode = crate::tiling::TilingMode::Floating;
+                            this.mode_locked = true;
                         }
 
                         // No focus on the grab (see the body grab above).
                         wm.stop_panning_animation();
                         let cursor_x = (*cursor.wlr_cursor).x;
                         let cursor_y = (*cursor.wlr_cursor).y;
+                        let this = window_mut!(wm, id);
                         seat.op = Some(crate::seat::SeatOp {
                             input: crate::seat::SeatOpInput::Pointer,
                             start_x: cursor_x as i32,
                             start_y: cursor_y as i32,
                             x: cursor_x as i32,
                             y: cursor_y as i32,
-                            window: crate::window::id_of(border_target_win),
+                            window: Some(id),
                             op_type: crate::seat::PointerOpType::Move,
-                            start_win_x: (*border_target_win).box_geom.x,
-                            start_win_y: (*border_target_win).box_geom.y,
-                            start_win_w: (*border_target_win).box_geom.width as u32,
-                            start_win_h: (*border_target_win).box_geom.height as u32,
-                            start_win_virtual_x: (*border_target_win).virtual_x,
-                            start_win_virtual_y: (*border_target_win).virtual_y,
-                            start_tiling_mode: (*border_target_win).tiling_mode,
+                            start_win_x: this.box_geom.x,
+                            start_win_y: this.box_geom.y,
+                            start_win_w: this.box_geom.width as u32,
+                            start_win_h: this.box_geom.height as u32,
+                            start_win_virtual_x: this.virtual_x,
+                            start_win_virtual_y: this.virtual_y,
+                            start_tiling_mode: this.tiling_mode,
                             start_was_tiled: initial_mode == crate::tiling::TilingMode::Tiled,
-                            start_mode_locked: (*border_target_win).mode_locked,
+                            start_mode_locked: this.mode_locked,
                             start_pan_x: wm.desk_pan_x,
                         start_pan_y: wm.desk_pan_y,
                         started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
@@ -865,15 +893,15 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 return;
             }
 
-            let op_win = op.window(wm);
+            let status_id = op
+                .window
+                .filter(|&id| wm.windows.get(id).is_some_and(|w| w.is_status_bar()))
+                .filter(|_| op.op_type == crate::seat::PointerOpType::Move && (*event).button == 0x110);
             #[allow(unused_assignments)]
-            if !op_win.is_null()
-                && (*op_win).is_status_bar()
-                && op.op_type == crate::seat::PointerOpType::Move
-                && (*event).button == 0x110
-            {
-                let win = op_win;
-                let app_id = (*win).get_app_id_string().unwrap_or_default();
+            if let Some(status_id) = status_id {
+                let id = status_id;
+                let this = window_mut!(wm, id);
+                let app_id = this.get_app_id_string().unwrap_or_default();
 
                 // A press that never travelled is a CLICK, not a drag: end
                 // the grab without snapping — snapping classifies the
@@ -1031,7 +1059,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 }
                 
                 log::info!("[StatusRelease] Snapping app_id={} closest_edge={:?}, found_out={}", app_id, closest_edge, found_out);
-                (*win).status_edge = closest_edge;
+                this.status_edge = closest_edge;
                 
                 let name = if let Some(stripped) = app_id.strip_prefix("cce-status-interface-left-").or_else(|| app_id.strip_prefix("cce-status-left-")) {
                     stripped
@@ -1066,14 +1094,13 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             }
             if op.started_in_overview && (*event).button == 0x110 {
                 let moved = (cursor_x as i32 - op.start_x).abs() > 5 || (cursor_y as i32 - op.start_y).abs() > 5;
-                let op_win = op.window(wm);
-                if !moved && !op_win.is_null() {
-                    let win_ptr = op_win;
+                let op_win = op.window.and_then(|id| wm.windows.get_mut(id));
+                if let Some(win) = op_win.filter(|_| !moved) {
                     // Restore original tiling mode & lock status
-                    (*win_ptr).tiling_mode = op.start_tiling_mode;
-                    (*win_ptr).mode_locked = op.start_mode_locked;
+                    win.tiling_mode = op.start_tiling_mode;
+                    win.mode_locked = op.start_mode_locked;
 
-                    if !(*win_ptr).closed && !(*win_ptr).is_status_bar() && !(*win_ptr).is_wallpaper() {
+                    if !win.closed && !win.is_status_bar() && !win.is_wallpaper() {
                         // The Overview toggle's exit path: it centers on the
                         // HOVERED window (the cursor is on the clicked one),
                         // focuses it, and ANIMATES the camera home along the
@@ -1092,9 +1119,12 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
         if cursor.pressed.remove(&(*event).button) {
             if (*event).button == 0x110 {
                 if let Some((id, elem)) = cursor.button_press.take() {
-                    let win = wm.window(id).filter(|&w| !(*w).closed);
-                    if let Some(win) = win.filter(|&w| get_border_zone(&*w, lx, ly) == BorderZone::Button(elem)) {
-                        wm.press_window_button((*win).id(), elem);
+                    let still_on_it = wm
+                        .windows
+                        .get(id)
+                        .is_some_and(|w| !w.closed && get_border_zone(w, lx, ly) == BorderZone::Button(elem));
+                    if still_on_it {
+                        wm.press_window_button(id, elem);
                     }
                     return;
                 }
