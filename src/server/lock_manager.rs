@@ -223,8 +223,8 @@ impl LockManager {
         scene.locked_tree.set_enabled(true);
         scene.normal_tree.set_enabled(false);
 
-        for seat in wm.seats.ptrs() {
-            (*seat).focus(wm, Focus::None);
+        for seat in wm.seats.ids() {
+            crate::seat::Seat::focus(wm, seat, Focus::None);
         }
 
         // Each enabled output reports `Blanked` after its next frame, and the
@@ -373,13 +373,16 @@ impl LockSurface {
             curr = next;
         }
 
-        for seat in wm.seats.ptrs() {
-            if let Focus::LockSurface(focused_surf) = (*seat).focused {
+        for seat in wm.seats.ids() {
+            let focused = wm.seats.get(seat).map(|s| s.focused);
+            if let Some(Focus::LockSurface(focused_surf)) = focused {
                 if focused_surf == lock_surface {
-                    (*seat).focus(wm, new_focus);
+                    crate::seat::Seat::focus(wm, seat, new_focus);
                 }
             }
-            (*seat).cursor.update_state(wm);
+            if let Some(p) = wm.seats.ptr(seat) {
+                (*p).cursor.update_state(wm);
+            }
         }
 
         if !(*lock_surface).idle_update_focus.is_null() {
@@ -502,8 +505,8 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
 
         let server = crate::shared::server_ptr();
         let wm = &mut *crate::reentry::wm(server);
-        for seat in wm.seats.ptrs() {
-            (*seat).focus(wm, Focus::None);
+        for seat in wm.seats.ids() {
+            crate::seat::Seat::focus(wm, seat, Focus::None);
         }
     } else {
         if manager.state == LockState::Locked {
@@ -537,8 +540,8 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
 
     let server = crate::shared::server_ptr();
     let wm = &mut *crate::reentry::wm(server);
-    for seat in wm.seats.ptrs() {
-        (*seat).focus(wm, Focus::None);
+    for seat in wm.seats.ids() {
+        crate::seat::Seat::focus(wm, seat, Focus::None);
     }
 
     handle_destroy(manager.destroy.as_ptr(), std::ptr::null_mut());
@@ -594,11 +597,14 @@ unsafe extern "C" fn update_focus(data: *mut std::ffi::c_void) {
     let server = crate::shared::server_ptr();
     let wm = &mut *crate::reentry::wm(server);
 
-    for seat in wm.seats.ptrs() {
-        if !matches!((*seat).focused, Focus::LockSurface(s) if s == lock_surface) {
-            (*seat).focus(wm, Focus::LockSurface(lock_surface));
+    for seat in wm.seats.ids() {
+        let focused = wm.seats.get(seat).map(|s| s.focused);
+        if !matches!(focused, Some(Focus::LockSurface(s)) if s == lock_surface) {
+            crate::seat::Seat::focus(wm, seat, Focus::LockSurface(lock_surface));
         }
-        (*seat).cursor.update_state(wm);
+        if let Some(p) = wm.seats.ptr(seat) {
+            (*p).cursor.update_state(wm);
+        }
     }
 
     (*lock_surface).idle_update_focus = std::ptr::null_mut();

@@ -368,7 +368,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
     // exactly as pointer events are; before 2026-09-16 only tablet, touch
     // and gestures counted, so idle-notify clients never saw a key.
     if !group.seat.is_null() {
-        (*group.seat).handle_activity(wm, sys);
+        crate::seat::Seat::handle_activity(wm, (*group.seat).id, sys);
     }
 
     // A real key press ends an emulated view drag (see `cursor::ViewDrag`):

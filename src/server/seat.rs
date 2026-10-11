@@ -347,18 +347,20 @@ impl Seat {
         self.update_capabilities();
     }
 
-    pub unsafe fn detach_device(&mut self, wm: &mut crate::window_manager::WindowManager, device: *mut crate::input_device::InputDevice, sys: &mut crate::ctx::Sys) {
-        ffi::wlr_cursor_detach_input_device(self.cursor.wlr_cursor.ptr(), (*device).wlr_device);
+    pub unsafe fn detach_device(wm: &mut crate::window_manager::WindowManager, sid: SeatId, device: *mut crate::input_device::InputDevice, sys: &mut crate::ctx::Sys) {
+        let Some(ptr) = wm.seats.ptr(sid) else { return };
+        let this = seat_mut!(wm, sid, ());
+        ffi::wlr_cursor_detach_input_device(this.cursor.wlr_cursor.ptr(), (*device).wlr_device);
 
         let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device);
         if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH {
-            self.touch_devices = self.touch_devices.saturating_sub(1);
+            this.touch_devices = this.touch_devices.saturating_sub(1);
             // An unplugged touchscreen sends no up for the fingers it had
             // down; one driving the pointer would leave the button held.
-            if self.touch_devices == 0 && !self.touch_injected {
-                let ids: Vec<i32> = self.cursor.touch_points.keys().copied().collect();
+            if this.touch_devices == 0 && !this.touch_injected {
+                let ids: Vec<i32> = this.cursor.touch_points.keys().copied().collect();
                 for id in ids {
-                    self.cursor.touch_cancel(wm, id, sys);
+                    (*ptr).cursor.touch_cancel(wm, id, sys);
                 }
             }
         }
@@ -373,15 +375,17 @@ impl Seat {
                 }
             }
         }
-        self.update_capabilities();
+        let this = seat_mut!(wm, sid, ());
+        this.update_capabilities();
     }
 
     /// Input arrived on this seat: wake the idle manager (and the outputs
     /// it darkened) and tell idle-notify clients. Through `wm.server` until
     /// the window manager is handed a Ctx (RFC step 4).
-    pub fn handle_activity(&mut self, wm: &mut crate::window_manager::WindowManager, sys: &mut crate::ctx::Sys) {
+    pub fn handle_activity(wm: &mut crate::window_manager::WindowManager, sid: SeatId, sys: &mut crate::ctx::Sys) {
+        let this = seat_mut!(wm, sid, ());
         sys.idle.on_activity(&mut wm.outputs);
-        self.wlr_seat.notify_idle_activity();
+        this.wlr_seat.notify_idle_activity();
     }
 
     pub fn update_capabilities(&mut self) {
@@ -393,7 +397,8 @@ impl Seat {
         self.wlr_seat.set_capabilities(caps);
     }
 
-    pub unsafe fn focus(&mut self, wm: &mut crate::window_manager::WindowManager, new_focus: Focus) {
+    pub unsafe fn focus(wm: &mut crate::window_manager::WindowManager, sid: SeatId, new_focus: Focus) {
+        let Some(ptr) = wm.seats.ptr(sid) else { return };
         // A window that has closed is nothing to focus.
         let wid = match new_focus {
             Focus::Window(id) => wm.windows.get(id).map(|_| id),
@@ -430,28 +435,29 @@ impl Seat {
             }
         }
 
-        if self.focused == new_focus {
+        let this = seat_mut!(wm, sid, ());
+        if this.focused == new_focus {
             // Re-focusing the already-focused window is still intent: a
             // click on the sliver of a mostly-hidden focused window (or on
             // a clipped one) should bring it over — its popups/menus open
             // relative to the window and land off-viewport otherwise. The
             // pan no-ops once the window is fully visible.
             if let Some(id) = wid {
-                self.focus_follow_pan(wm, id);
+                Seat::focus_follow_pan(wm, sid, id);
             }
             return;
         }
 
         if log::log_enabled!(log::Level::Debug) {
             let bt = std::backtrace::Backtrace::capture();
-            log::debug!("[FocusDebug] Seat::focus changing from {:?} to {:?}. Backtrace:\n{}", self.focused, new_focus, bt);
+            log::debug!("[FocusDebug] Seat::focus changing from {:?} to {:?}. Backtrace:\n{}", this.focused, new_focus, bt);
         }
 
         // If an exclusive layer surface is active and scheduled for focus,
         // block any window manager or other client focus requests (via focus_requested)
         // from stealing focus back to a regular window or shell surface.
-        if self.focus_requested {
-            if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) = self.layer_shell.scheduled_focus {
+        if this.focus_requested {
+            if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) = this.layer_shell.scheduled_focus {
                 if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
                     let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
                     if new_focus != Focus::LayerSurface(wlr_surf) {
@@ -478,23 +484,23 @@ impl Seat {
             Focus::OverrideRedirect(or) => log::info!("[FocusDebug] Seat::focus set to OverrideRedirect {:?}", or),
         }
 
-        match self.focused {
+        match this.focused {
             Focus::None => {}
             Focus::LayerSurface(_) | Focus::Window(_) | Focus::LockSurface(_) | Focus::OverrideRedirect(_) => {
-                self.wlr_seat.keyboard_notify_clear_focus();
-                let focused_client = self.wlr_seat.pointer_focused_client();
+                this.wlr_seat.keyboard_notify_clear_focus();
+                let focused_client = this.wlr_seat.pointer_focused_client();
                 // Keep pointer focus through an active implicit grab (held
                 // client-notified button): clicking a window changes focus,
                 // and dropping pointer focus here orphans the grab until the
                 // next in-surface motion re-enters — a press-then-leave drag
                 // (cursor straight out of the window) lost its target.
-                if !focused_client.is_null() && self.cursor.notified_pressed.is_empty() {
-                    self.wlr_seat.pointer_notify_clear_focus();
+                if !focused_client.is_null() && this.cursor.notified_pressed.is_empty() {
+                    this.wlr_seat.pointer_notify_clear_focus();
                 }
             }
         }
 
-        self.focused = new_focus;
+        this.focused = new_focus;
         // The overview resize ring is drawn on the focused window only and
         // eases in and out through the border fade — a focus change has to
         // arm that timer or the old ring lingers and the new one waits for an
@@ -517,11 +523,12 @@ impl Seat {
             Focus::None => {}
             Focus::LayerSurface(surface) => {
                 if !surface.is_null() {
-                    let kbd = self.wlr_seat.keyboard();
+                    let this = seat_mut!(wm, sid, ());
+                    let kbd = this.wlr_seat.keyboard();
                     if !kbd.is_null() {
                         let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
                         ffi::wlr_seat_keyboard_notify_enter(
-                            self.wlr_seat.ptr(),
+                            this.wlr_seat.ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -529,7 +536,7 @@ impl Seat {
                         );
                     } else {
                         ffi::wlr_seat_keyboard_notify_enter(
-                            self.wlr_seat.ptr(),
+                            this.wlr_seat.ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -538,11 +545,13 @@ impl Seat {
                     }
                 }
 
-                let lx = self.cursor.x();
-                let ly = self.cursor.y();
+                let this = seat_mut!(wm, sid, ());
+                let lx = this.cursor.x();
+                let ly = this.cursor.y();
                 if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                     if result.surface == surface {
-                        ffi::wlr_seat_pointer_notify_enter(self.wlr_seat.ptr(), surface, result.sx, result.sy);
+                        let this = seat_mut!(wm, sid, ());
+                        ffi::wlr_seat_pointer_notify_enter(this.wlr_seat.ptr(), surface, result.sx, result.sy);
                     }
                 }
             }
@@ -573,7 +582,7 @@ impl Seat {
                     // open at their control and must not yank the camera).
                     let user_focus = wm.startup_input_seen && !hint_placed;
                     if !is_new || spawn_pan || user_focus {
-                        self.focus_follow_pan(wm, id);
+                        Seat::focus_follow_pan(wm, sid, id);
                     }
                 }
 
@@ -583,11 +592,12 @@ impl Seat {
                     .and_then(|id| wm.windows.get(id))
                     .map_or(std::ptr::null_mut(), |w| w.root_surface());
                 if !surface.is_null() {
-                    let kbd = self.wlr_seat.keyboard();
+                    let this = seat_mut!(wm, sid, ());
+                    let kbd = this.wlr_seat.keyboard();
                     if !kbd.is_null() {
                         let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
                         ffi::wlr_seat_keyboard_notify_enter(
-                            self.wlr_seat.ptr(),
+                            this.wlr_seat.ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -595,7 +605,7 @@ impl Seat {
                         );
                     } else {
                         ffi::wlr_seat_keyboard_notify_enter(
-                            self.wlr_seat.ptr(),
+                            this.wlr_seat.ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -603,11 +613,12 @@ impl Seat {
                         );
                     }
 
-                    let lx = self.cursor.x();
-                    let ly = self.cursor.y();
+                    let lx = this.cursor.x();
+                    let ly = this.cursor.y();
                     if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                         if result.surface == surface {
-                            ffi::wlr_seat_pointer_notify_enter(self.wlr_seat.ptr(), surface, result.sx, result.sy);
+                            let this = seat_mut!(wm, sid, ());
+                            ffi::wlr_seat_pointer_notify_enter(this.wlr_seat.ptr(), surface, result.sx, result.sy);
                         }
                     }
                 }
@@ -615,11 +626,12 @@ impl Seat {
             Focus::LockSurface(lock_surface) => {
                 let surface = (*(*lock_surface).wlr_lock_surface).surface;
                 if !surface.is_null() {
-                    let kbd = self.wlr_seat.keyboard();
+                    let this = seat_mut!(wm, sid, ());
+                    let kbd = this.wlr_seat.keyboard();
                     if !kbd.is_null() {
                         let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
                         ffi::wlr_seat_keyboard_notify_enter(
-                            self.wlr_seat.ptr(),
+                            this.wlr_seat.ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -627,7 +639,7 @@ impl Seat {
                         );
                     } else {
                         ffi::wlr_seat_keyboard_notify_enter(
-                            self.wlr_seat.ptr(),
+                            this.wlr_seat.ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -635,11 +647,12 @@ impl Seat {
                         );
                     }
 
-                    let lx = self.cursor.x();
-                    let ly = self.cursor.y();
+                    let lx = this.cursor.x();
+                    let ly = this.cursor.y();
                     if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                         if result.surface == surface {
-                            ffi::wlr_seat_pointer_notify_enter(self.wlr_seat.ptr(), surface, result.sx, result.sy);
+                            let this = seat_mut!(wm, sid, ());
+                            ffi::wlr_seat_pointer_notify_enter(this.wlr_seat.ptr(), surface, result.sx, result.sy);
                         }
                     }
                 }
@@ -647,11 +660,12 @@ impl Seat {
             Focus::OverrideRedirect(or) => {
                 let surface = (*(*or).xsurface).surface;
                 if !surface.is_null() {
-                    let kbd = self.wlr_seat.keyboard();
+                    let this = seat_mut!(wm, sid, ());
+                    let kbd = this.wlr_seat.keyboard();
                     if !kbd.is_null() {
                         let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
                         ffi::wlr_seat_keyboard_notify_enter(
-                            self.wlr_seat.ptr(),
+                            this.wlr_seat.ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -659,7 +673,7 @@ impl Seat {
                         );
                     } else {
                         ffi::wlr_seat_keyboard_notify_enter(
-                            self.wlr_seat.ptr(),
+                            this.wlr_seat.ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -670,7 +684,7 @@ impl Seat {
             }
         }
         let target_surface = new_focus.surface(wm);
-        self.relay.focus(wm, target_surface);
+        (*ptr).relay.focus(wm, target_surface);
     }
 
     /// Give this seat a keyboard if the backend never supplied one, so that
@@ -775,13 +789,15 @@ impl Seat {
         );
     }
 
-    pub unsafe fn keyboard_enter_or_leave(&mut self, wm: &mut crate::window_manager::WindowManager, target_surface: *mut ffi::wlr_surface) {
+    pub unsafe fn keyboard_enter_or_leave(wm: &mut crate::window_manager::WindowManager, sid: SeatId, target_surface: *mut ffi::wlr_surface) {
+        let Some(ptr) = wm.seats.ptr(sid) else { return };
+        let this = seat_mut!(wm, sid, ());
         if !target_surface.is_null() {
-            self.keyboard_notify_enter(target_surface);
+            this.keyboard_notify_enter(target_surface);
         } else {
-            self.wlr_seat.keyboard_notify_clear_focus();
+            this.wlr_seat.keyboard_notify_clear_focus();
         }
-        self.relay.focus(wm, target_surface);
+        (*ptr).relay.focus(wm, target_surface);
     }
 
     /// Returns true when the seat is to be destroyed (a client asked for
@@ -800,27 +816,28 @@ impl Seat {
         false
     }
 
-    pub unsafe fn manage_finish(&mut self, wm: &mut crate::window_manager::WindowManager) {
+    pub unsafe fn manage_finish(wm: &mut crate::window_manager::WindowManager, sid: SeatId) {
+        let this = seat_mut!(wm, sid, ());
 
         if crate::shared::lock_state() != crate::lock_manager::LockState::Unlocked {
             return;
         }
 
-        match self.layer_shell.sent_focus {
+        match this.layer_shell.sent_focus {
             crate::layer_shell::LayerShellSeatFocus::Exclusive(key) => {
                 if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
                     let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
-                    self.focus(wm, Focus::LayerSurface(wlr_surf));
+                    Seat::focus(wm, sid, Focus::LayerSurface(wlr_surf));
                 }
             }
             crate::layer_shell::LayerShellSeatFocus::NonExclusive(key) => {
-                if !self.focus_requested {
+                if !this.focus_requested {
                     if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
                         let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
-                        self.focus(wm, Focus::LayerSurface(wlr_surf));
+                        Seat::focus(wm, sid, Focus::LayerSurface(wlr_surf));
                     }
                 } else {
-                    self.layer_shell.scheduled_focus = crate::layer_shell::LayerShellSeatFocus::None;
+                    this.layer_shell.scheduled_focus = crate::layer_shell::LayerShellSeatFocus::None;
                     crate::shared::pending().dirty_windowing();
                 }
             }
@@ -860,8 +877,9 @@ impl Seat {
     /// otherwise. Fullscreen pans back onto the desk spot it covers (see
     /// below); popups/overlays are not desk citizens, so other modes no-op,
     /// as do cce-cloud and windows already fully visible.
-    pub unsafe fn focus_follow_pan(&mut self, wm: &mut crate::window_manager::WindowManager, id: crate::window::WindowId) {
-        if self.suppress_focus_pan {
+    pub unsafe fn focus_follow_pan(wm: &mut crate::window_manager::WindowManager, sid: SeatId, id: crate::window::WindowId) {
+        let this = seat_mut!(wm, sid, ());
+        if this.suppress_focus_pan {
             return;
         }
         // While a camera ramp owns the camera (an overview enter/exit
@@ -972,16 +990,20 @@ impl Seat {
     }
 
     /// Snap parameters for interactive ops, from the current layout config.
-    fn snap_params(&self, wm: &crate::window_manager::WindowManager) -> crate::policy::snap::SnapParams {
+    fn snap_params(wm: &crate::window_manager::WindowManager) -> crate::policy::snap::SnapParams {
         // Zoom-aware: the felt grab distance stays constant in screen px.
         crate::shared::layout().snap_params().for_zoom(wm.desk_zoom)
     }
 
-    pub unsafe fn op_update(&mut self, wm: &mut crate::window_manager::WindowManager, x: i32, y: i32) {
-        let sp = self.snap_params(wm);
-        if let Some(ref mut op) = self.op {
+    pub unsafe fn op_update(wm: &mut crate::window_manager::WindowManager, sid: SeatId, x: i32, y: i32) {
+        let sp = Self::snap_params(wm);
+        let this = seat_mut!(wm, sid, ());
+        if let Some(op) = this.op.as_mut() {
             op.x = x;
             op.y = y;
+            // A copy, so the seat is free for the calls below that need `wm`.
+            let op_now = *op;
+            let op = &op_now;
             let dx = op.x - op.start_x;
             let dy = op.y - op.start_y;
 
@@ -997,7 +1019,7 @@ impl Seat {
                     || dy.abs() > crate::selection::DRAG_THRESHOLD;
                 wm.selection_motion(x as f64, y as f64, travelled);
                 wm.queue_op_frame();
-                self.update_edge_pan(wm, x as f64, y as f64);
+                Seat::update_edge_pan(wm, sid, x as f64, y as f64);
                 return;
             }
 
@@ -1014,10 +1036,18 @@ impl Seat {
                     &sp,
                 );
                 wm.arm_border_fade();
-                carry_group_windows(wm, &self.group_move, None, gdx, gdy);
-                carry_group_items(wm, &self.group_items, gdx, gdy);
+                // Out of the seat for the calls, which need `wm`; they
+                // read no seat.
+                let seat = seat_mut!(wm, sid, ());
+                let group_move = std::mem::take(&mut seat.group_move);
+                let group_items = std::mem::take(&mut seat.group_items);
+                carry_group_windows(wm, &group_move, None, gdx, gdy);
+                carry_group_items(wm, &group_items, gdx, gdy);
+                let seat = seat_mut!(wm, sid, ());
+                seat.group_move = group_move;
+                seat.group_items = group_items;
                 wm.queue_op_frame();
-                self.update_edge_pan(wm, x as f64, y as f64);
+                Seat::update_edge_pan(wm, sid, x as f64, y as f64);
                 return;
             }
 
@@ -1088,15 +1118,23 @@ impl Seat {
                             if crate::shared::mode()
                                 == crate::window_manager::WindowManagerMode::Overview
                             {
+                                // Out of the seat for the call, which needs
+                                // `wm`; it reads no seat.
+                                let seat = seat_mut!(wm, sid);
+                                let mut displaced = std::mem::take(&mut seat.overview_displaced);
+                                let group_move = std::mem::take(&mut seat.group_move);
                                 displace_covered(
                                     wm,
                                     id,
                                     op.start_was_tiled,
                                     (virtual_dx, virtual_dy),
                                     &sp,
-                                    &mut self.overview_displaced,
-                                    &self.group_move,
+                                    &mut displaced,
+                                    &group_move,
                                 );
+                                let seat = seat_mut!(wm, sid);
+                                seat.overview_displaced = displaced;
+                                seat.group_move = group_move;
                             }
 
                             // A group move: the rest of the selection
@@ -1107,8 +1145,14 @@ impl Seat {
                             // through here too, and must not un-tile them.
                             let gdx = vx - op.start_win_virtual_x;
                             let gdy = vy - op.start_win_virtual_y;
-                            carry_group_windows(wm, &self.group_move, Some(id), gdx, gdy);
-                            carry_group_items(wm, &self.group_items, gdx, gdy);
+                            let seat = seat_mut!(wm, sid);
+                            let group_move = std::mem::take(&mut seat.group_move);
+                            let group_items = std::mem::take(&mut seat.group_items);
+                            carry_group_windows(wm, &group_move, Some(id), gdx, gdy);
+                            carry_group_items(wm, &group_items, gdx, gdy);
+                            let seat = seat_mut!(wm, sid);
+                            seat.group_move = group_move;
+                            seat.group_items = group_items;
 
                             let (final_x, final_y) = window_ref!(wm, id, ()).virtual_to_screen(wm, vx, vy);
                             let this = window_mut!(wm, id);
@@ -1186,7 +1230,7 @@ impl Seat {
             // step_op_frame), not once per motion event.
             wm.queue_op_frame();
         }
-        self.update_edge_pan(wm, x as f64, y as f64);
+        Seat::update_edge_pan(wm, sid, x as f64, y as f64);
     }
 
     /// Edge auto-pan eligibility + velocity for the current op: while an
@@ -1195,11 +1239,12 @@ impl Seat {
     /// rim to full speed at the screen edge. Called on every op motion AND
     /// from the edge-pan tick's op_update, which is what re-arms the timer —
     /// so the scroll continues while the cursor rests pinned at the edge.
-    unsafe fn update_edge_pan(&mut self, wm: &mut crate::window_manager::WindowManager, lx: f64, ly: f64) {
+    unsafe fn update_edge_pan(wm: &mut crate::window_manager::WindowManager, sid: SeatId, lx: f64, ly: f64) {
+        let this = seat_mut!(wm, sid, ());
         let mut vx = 0.0;
         let mut vy = 0.0;
         let eligible = crate::shared::layout().desktop_edge_pan
-            && match self.op {
+            && match this.op {
                 // The drag-selection has no window, and scrolls the desk
                 // only once the band is up — a press held still near the
                 // screen edge is a click.
@@ -1237,7 +1282,7 @@ impl Seat {
     /// reports the maximized state to its client); landing off-grid makes
     /// it Floating, in place. Only windows resolving Floating/Tiled
     /// participate — Popup/Overlay/Status/Fullscreen are untouched.
-    fn settle_tiling(&mut self, wm: &mut crate::window_manager::WindowManager, id: crate::window::WindowId) {
+    fn settle_tiling(wm: &mut crate::window_manager::WindowManager, id: crate::window::WindowId) {
         let Some(win) = wm.windows.get(id) else { return };
         let resolved = wm.get_mode_for_window(win);
         if !matches!(
@@ -1278,10 +1323,12 @@ impl Seat {
         }
     }
 
-    pub unsafe fn op_end(&mut self, wm: &mut crate::window_manager::WindowManager) {
+    pub unsafe fn op_end(wm: &mut crate::window_manager::WindowManager, sid: SeatId) {
+        let Some(ptr) = wm.seats.ptr(sid) else { return };
+        let this = seat_mut!(wm, sid, ());
         // Wherever everything sits now is final.
-        self.overview_displaced.clear();
-        if let Some(op) = self.op.take() {
+        this.overview_displaced.clear();
+        if let Some(op) = this.op.take() {
             log::debug!("end seat op");
             wm.edge_pan_vx = 0.0;
             wm.edge_pan_vy = 0.0;
@@ -1299,7 +1346,7 @@ impl Seat {
                         crate::shared::pending().dirty_windowing();
                     }
                 }
-                self.settle_tiling(wm, id);
+                Seat::settle_tiling(wm, id);
                 // A TAP — press+release without meaningful motion — is a
                 // click, not a drag. A drag never focuses the window it
                 // moves or resizes (the press grabs without focusing), but
@@ -1317,14 +1364,15 @@ impl Seat {
                 let dx = (op.x - op.start_x).abs();
                 let dy = (op.y - op.start_y).abs();
                 if dx < 4 && dy < 4 && !op.started_in_overview && !wm.windows.get(id).is_some_and(|w| w.is_status_bar()) {
-                    self.focus(wm, Focus::Window(id));
-                    self.focus_follow_pan(wm, id);
+                    Seat::focus(wm, sid, Focus::Window(id));
+                    Seat::focus_follow_pan(wm, sid, id);
                 }
             }
             // The windows a group move carried land by the same rule as
             // the grabbed one, each on its own geometry — whether the grab
             // was a window or an image (then `live` is None).
-            let group = std::mem::take(&mut self.group_move);
+            let this = seat_mut!(wm, sid, ());
+            let group = std::mem::take(&mut this.group_move);
             for &(id, start_vx, start_vy) in group.iter() {
                 if Some(id) == live {
                     continue;
@@ -1336,12 +1384,13 @@ impl Seat {
                 if w.virtual_x == start_vx && w.virtual_y == start_vy {
                     continue;
                 }
-                self.settle_tiling(wm, id);
+                Seat::settle_tiling(wm, id);
                 crate::shared::pending().dirty_windowing();
             }
             // The images it carried are the grid's to keep: `drop` is its
             // cue to save them, if any actually moved.
-            let items = std::mem::take(&mut self.group_items);
+            let this = seat_mut!(wm, sid, ());
+            let items = std::mem::take(&mut this.group_items);
             let moved = items.iter().any(|&(id, sx, sy)| {
                 wm.desktop_item(id)
                     .map_or(false, |i| i.x != sx || i.y != sy)
@@ -1353,12 +1402,13 @@ impl Seat {
             }
             match op.input {
                 SeatOpInput::Pointer => {
-                    self.cursor.op_end_pointer(wm);
+                    (*ptr).cursor.op_end_pointer(wm);
                 }
             }
         }
-        self.group_move.clear();
-        self.group_items.clear();
+        let this = seat_mut!(wm, sid, ());
+        this.group_move.clear();
+        this.group_items.clear();
     }
 }
 

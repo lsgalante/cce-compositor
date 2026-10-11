@@ -165,7 +165,7 @@ impl InputManager {
         for device in self.devices.ptrs() {
             if !(*device).seat.is_null() {
                 log::info!("[deinit] detaching device from seat");
-                (*(*device).seat).detach_device(wm, device, sys);
+                crate::seat::Seat::detach_device(wm, (*(*device).seat).id, device, sys);
                 (*device).seat = std::ptr::null_mut();
             }
         }

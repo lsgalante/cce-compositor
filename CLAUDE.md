@@ -658,6 +658,22 @@ borrow checker now refuses a window borrow held across a window-manager
 call. A new method that both writes the window and takes `&mut wm` follows
 the same shape; one that only reads takes `&self` and `&WindowManager`.
 
+**Seats follow the same rule** (since 2026-10-11): `Seat::focus`,
+`keyboard_enter_or_leave`, `manage_finish`, `focus_follow_pan`,
+`op_update`, `update_edge_pan`, `op_end`, `detach_device` and
+`handle_activity` take `(wm, sid: SeatId)`, and borrow with
+`let this = seat_mut!(wm, sid);`. Call them as
+`crate::seat::Seat::focus(wm, seat.id, ..)`, and walk seats that need `wm`
+as `for sid in wm.seats.ids()`. A seat field a `wm`-taking helper needs
+beside the window manager is moved out for the call and put back
+(`group_move` / `group_items` / `overview_displaced` around
+`carry_group_windows` and `displace_covered`, which read no seat).
+`op_update` works on a copy of the `Copy` `SeatOp` once it has stored the
+new position. The calls that hand `wm` to a seat's PART still go through
+the seat pointer: `cursor.touch_cancel`, `cursor.op_end_pointer`,
+`relay.focus`, and the cursor's own `wm`-taking methods. The cursor and
+relay inside the seat are the next step.
+
 **The render list is a `Vec<WindowId>`** (`wm.rendering_requested.list`,
 bottom of the stack first; since 2026-10-11). It was an intrusive `wl_list`
 threaded through each window (`WmNode`), and the `[LinkDbg]` tracing and the

@@ -19,6 +19,21 @@ macro_rules! window_mut {
     };
 }
 
+/// `window_mut!` for seats: the seat `$id` borrowed from `$wm.seats`,
+/// returning `$ret` (default `()`) when it has gone. For the `(wm, SeatId)`
+/// seat functions, which re-take it after each call that needs `wm`.
+macro_rules! seat_mut {
+    ($wm:expr, $id:expr) => {
+        seat_mut!($wm, $id, ())
+    };
+    ($wm:expr, $id:expr, $ret:expr) => {
+        match $wm.seats.get_mut($id) {
+            Some(s) => s,
+            None => return $ret,
+        }
+    };
+}
+
 /// The window manager's output and seat stores as a `crate::ctx::Stores`,
 /// borrowed through their own field places — so it can be taken while a
 /// `window_mut!` borrow of `wm.windows` is live. Unsafe: the borrow is not

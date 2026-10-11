@@ -1561,8 +1561,8 @@ impl Window {
             // would be unreachable-by-click and unswitchable-away for
             // keyboard input).
             if should_focus && !is_grid {
-                for seat in stores.seats.ptrs() {
-                    (*seat).focus(wm, crate::seat::Focus::Window(id));
+                for seat in stores.seats.ids() {
+                    crate::seat::Seat::focus(wm, seat, crate::seat::Focus::Window(id));
                 }
             }
         }
@@ -1685,7 +1685,7 @@ impl Window {
 
         for seat in stores!(wm).seats.ptrs() {
             if (*seat).focused == crate::seat::Focus::Window(id) {
-                (*seat).focus(wm, crate::seat::Focus::None);
+                crate::seat::Seat::focus(wm, (*seat).id, crate::seat::Focus::None);
                 wm.focus_next_visible_window(seat);
             }
             if let Some(ref op) = (*seat).op {

@@ -905,7 +905,7 @@ impl Cursor {
                 {
                     let prev = (*self.seat).suppress_focus_pan;
                     (*self.seat).suppress_focus_pan = true;
-                    (*self.seat).focus(wm, hovered.map_or(crate::seat::Focus::None, crate::seat::Focus::Window));
+                    crate::seat::Seat::focus(wm, (*self.seat).id, hovered.map_or(crate::seat::Focus::None, crate::seat::Focus::Window));
                     (*self.seat).suppress_focus_pan = prev;
                 }
                 self.clear_focus();
@@ -996,7 +996,7 @@ impl Cursor {
     /// `inject_motion_to` without bringing a touch-hidden cursor back: the
     /// emulated pointer of a touch (`TouchRoute::Pointer`) moves this way.
     pub(crate) unsafe fn warp_to(&mut self, wm: &mut crate::window_manager::WindowManager, x: f64, y: f64, sys: &mut crate::ctx::Sys) {
-        (*self.seat).handle_activity(wm, sys);
+        crate::seat::Seat::handle_activity(wm, (*self.seat).id, sys);
         self.wlr_cursor.warp(x, y);
         self.update_hovered();
         self.update_drag_icons();
@@ -1004,7 +1004,7 @@ impl Cursor {
         if seat.op.is_some() {
             let lx = self.wlr_cursor.x() as i32;
             let ly = self.wlr_cursor.y() as i32;
-            seat.op_update(wm, lx, ly);
+            crate::seat::Seat::op_update(wm, seat.id, lx, ly);
             return;
         }
         self.passthrough(wm, crate::util::msec_timestamp());
@@ -1255,7 +1255,7 @@ pub(crate) unsafe fn on_motion(cursor: &mut Cursor, wm: &mut crate::window_manag
     // Pointer input is activity for the idle timeouts and the idle-notify
     // clients. Injected events (`ccectl pointer-*`) arrive here too, and
     // count: a script driving the pointer is someone using the desk.
-    (*cursor.seat).handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, (*cursor.seat).id, sys);
     // Real pointer motion ends an emulated view drag: the client must not
     // see the synthetic drag position and the true one interleaved.
     if cursor.view_drag.is_some() {
@@ -1296,7 +1296,7 @@ pub(crate) unsafe fn on_motion(cursor: &mut Cursor, wm: &mut crate::window_manag
     if (*seat).op.is_some() {
         let lx = cursor.wlr_cursor.x() as i32;
         let ly = cursor.wlr_cursor.y() as i32;
-        (*seat).op_update(wm, lx, ly);
+        crate::seat::Seat::op_update(wm, (*seat).id, lx, ly);
         if let (Some(s), Some(m), Some(h), Some(d)) = (t_start, t_move, t_hovered, t_drag) {
             log::info!(
                 "[cce-frame] t={} motion(op) total={}us move={}us hovered={}us drag={}us",
@@ -1329,7 +1329,7 @@ unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, dat
 /// `handle_motion_absolute` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
 pub(crate) unsafe fn on_motion_absolute(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
     let event = data as *mut ffi::wlr_pointer_motion_absolute_event;
-    (*cursor.seat).handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, (*cursor.seat).id, sys);
     cursor.unhide_after_touch();
     
     let wlr_device = if (*event).pointer.is_null() {
@@ -1345,7 +1345,7 @@ pub(crate) unsafe fn on_motion_absolute(cursor: &mut Cursor, wm: &mut crate::win
     if (*seat).op.is_some() {
         let lx = cursor.wlr_cursor.x() as i32;
         let ly = cursor.wlr_cursor.y() as i32;
-        (*seat).op_update(wm, lx, ly);
+        crate::seat::Seat::op_update(wm, (*seat).id, lx, ly);
         return;
     }
 
@@ -1478,7 +1478,7 @@ unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, da
     }
     let seat = (*device).seat;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    (*seat).handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, (*seat).id, sys);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
     if tablet.is_null() {
@@ -1506,7 +1506,7 @@ unsafe extern "C" fn handle_tablet_tool_proximity(listener: *mut ffi::wl_listene
     }
     let seat = (*device).seat;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    (*seat).handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, (*seat).id, sys);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
     if tablet.is_null() {
@@ -1531,7 +1531,7 @@ unsafe extern "C" fn handle_tablet_tool_tip(listener: *mut ffi::wl_listener, dat
     }
     let seat = (*device).seat;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    (*seat).handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, (*seat).id, sys);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
     if tablet.is_null() {
@@ -1556,7 +1556,7 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
     }
     let seat = (*device).seat;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    (*seat).handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, (*seat).id, sys);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
     if tablet.is_null() {

@@ -299,7 +299,7 @@ impl Cursor {
     }
 
     pub unsafe fn touch_down(&mut self, wm: &mut crate::window_manager::WindowManager, id: i32, lx: f64, ly: f64, time_msec: u32, sys: &mut crate::ctx::Sys) {
-        (*self.seat).handle_activity(wm, sys);
+        crate::seat::Seat::handle_activity(wm, (*self.seat).id, sys);
         // A touch is deliberate input, like a press (see `Seat::focus`).
         wm.startup_input_seen = true;
         self.hide_for_touch();
@@ -395,14 +395,14 @@ impl Cursor {
                     SceneNodeDataVal::Window(window_id) => {
                         if let Some(window) = wm.windows.get(window_id) {
                             if !window.is_status_bar() && !window.is_wallpaper() {
-                                seat.focus(wm, Focus::Window(window_id));
+                                crate::seat::Seat::focus(wm, seat.id, Focus::Window(window_id));
                                 seat.relay.osk.note_touch();
                             }
                         }
                     }
                     SceneNodeDataVal::LayerSurface(layer_surface) => {
                         if crate::cursor::layer_takes_click_focus(layer_surface) {
-                            seat.focus(wm, Focus::LayerSurface(result.surface));
+                            crate::seat::Seat::focus(wm, seat.id, Focus::LayerSurface(result.surface));
                         }
                     }
                     _ => {}
@@ -423,7 +423,7 @@ impl Cursor {
     }
 
     pub unsafe fn touch_motion(&mut self, wm: &mut crate::window_manager::WindowManager, id: i32, lx: f64, ly: f64, time_msec: u32, sys: &mut crate::ctx::Sys) {
-        (*self.seat).handle_activity(wm, sys);
+        crate::seat::Seat::handle_activity(wm, (*self.seat).id, sys);
         let Some(point) = self.touch_points.get_mut(&id) else { return };
         point.lx = lx;
         point.ly = ly;
@@ -469,7 +469,7 @@ impl Cursor {
     }
 
     pub unsafe fn touch_up(&mut self, wm: &mut crate::window_manager::WindowManager, id: i32, time_msec: u32, sys: &mut crate::ctx::Sys) {
-        (*self.seat).handle_activity(wm, sys);
+        crate::seat::Seat::handle_activity(wm, (*self.seat).id, sys);
         let Some(point) = self.touch_points.remove(&id) else { return };
         match point.route {
             TouchRoute::Claimed => self.claim_lift(wm, id, point, time_msec, false, sys),
@@ -497,7 +497,7 @@ impl Cursor {
     /// still drops where it was, but a held button must never be left
     /// behind — and one that never pressed clicks nothing.
     pub unsafe fn touch_cancel(&mut self, wm: &mut crate::window_manager::WindowManager, id: i32, sys: &mut crate::ctx::Sys) {
-        (*self.seat).handle_activity(wm, sys);
+        crate::seat::Seat::handle_activity(wm, (*self.seat).id, sys);
         let Some(point) = self.touch_points.remove(&id) else { return };
         match point.route {
             TouchRoute::Claimed => self.claim_lift(wm, id, point, crate::util::msec_timestamp(), true, sys),

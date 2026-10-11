@@ -175,7 +175,7 @@ impl WindowManager {
 
         for id in crate::shared::sent().seats.ids() {
             let Some(seat) = self.seats.ptr(id) else { continue };
-            (*seat).manage_finish(self);
+            crate::seat::Seat::manage_finish(self, (*seat).id);
         }
 
         self.state = WindowManagerState::InflightConfigures(0);

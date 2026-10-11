@@ -140,7 +140,7 @@ impl InputDevice {
             return;
         }
         if !old_seat.is_null() {
-            (*old_seat).detach_device(wm, self, sys);
+            crate::seat::Seat::detach_device(wm, (*old_seat).id, self, sys);
         }
         self.seat = new_seat;
         if !new_seat.is_null() {
@@ -253,7 +253,7 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
 
     // Detach from seat if attached
     if !device.seat.is_null() {
-        (*device.seat).detach_device(&mut *crate::reentry::wm(crate::shared::server_ptr()), device, sys);
+        crate::seat::Seat::detach_device(&mut *crate::reentry::wm(crate::shared::server_ptr()), (*device.seat).id, device, sys);
         (*device.seat).update_capabilities();
     }
 

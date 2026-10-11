@@ -424,7 +424,7 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
             if let Some(win) = wm.windows.get_mut(id) {
                 win.minimized = false;
             }
-            (*seat).focus(wm, crate::seat::Focus::Window(id));
+            crate::seat::Seat::focus(wm, (*seat).id, crate::seat::Focus::Window(id));
             wm.raise_window(id);
             crate::shared::pending().dirty_windowing();
             log::info!("xdg activation focused and raised '{}' ({})", title, app_id);

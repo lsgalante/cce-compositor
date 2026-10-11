@@ -2012,9 +2012,9 @@ impl WindowManager {
         };
         (*seat).suppress_focus_pan = behavior != crate::config::OnAppExit::FocusPrevious;
         if let Some(next) = next {
-            (*seat).focus(self, crate::seat::Focus::Window(next));
+            crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::Window(next));
         } else {
-            (*seat).focus(self, crate::seat::Focus::None);
+            crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::None);
         }
         (*seat).suppress_focus_pan = false;
         if behavior == crate::config::OnAppExit::Overview
@@ -2250,7 +2250,7 @@ impl WindowManager {
         match elem {
             BorderElement::Minimize | BorderElement::Maximize => {
                 if let Some(seat) = self.first_seat() {
-                    (*seat).focus(self, crate::seat::Focus::Window(id));
+                    crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::Window(id));
                 }
                 let action = if elem == BorderElement::Minimize {
                     crate::config::Action::Minimize
@@ -2790,7 +2790,7 @@ impl crate::policy::api::Compositor for WindowManager {
                 Command::Focus(id) => {
                     if self.windows.get(id).is_some_and(|w| !w.closed) {
                         if let Some(seat) = self.first_seat() {
-                            (*seat).focus(self, crate::seat::Focus::Window(id));
+                            crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::Window(id));
                         }
                     }
                 }
@@ -2877,7 +2877,7 @@ pub(crate) unsafe extern "C" fn handle_edge_pan_tick(data: *mut std::ffi::c_void
     let zoom = (*wm).desk_zoom.max(0.01);
     (*wm).desk_pan_x += vx * dt / zoom;
     (*wm).desk_pan_y += vy * dt / zoom;
-    (*seat).op_update(&mut *wm, ox, oy);
+    crate::seat::Seat::op_update(&mut *wm, (*seat).id, ox, oy);
     0
 }
 

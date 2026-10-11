@@ -168,7 +168,7 @@ impl XwaylandOverrideRedirect {
                     _ => false,
                 };
                 if same_client {
-                    (*seat).keyboard_enter_or_leave(wm, (*self.xsurface).surface);
+                    crate::seat::Seat::keyboard_enter_or_leave(wm, (*seat).id, (*self.xsurface).surface);
                     return;
                 }
                 log::debug!("override redirect (pid {pid}) mapped unfocused: another client holds the keyboard");
@@ -181,7 +181,7 @@ impl XwaylandOverrideRedirect {
                 return;
             }
         }
-        (*seat).focus(wm, crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
+        crate::seat::Seat::focus(wm, (*seat).id, crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
     }
 }
 
@@ -312,7 +312,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
                 && (*(*xwindow).xsurface).pid == (*(*or).xsurface).pid
                 && (*default_seat).wlr_seat.keyboard_focused_surface() == surface
             {
-                (*default_seat).keyboard_enter_or_leave(wm, root_surface);
+                crate::seat::Seat::keyboard_enter_or_leave(wm, (*default_seat).id, root_surface);
             }
         }
     }

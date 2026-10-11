@@ -47,7 +47,7 @@ pub(crate) unsafe fn on_swipe_begin(cursor: &mut Cursor, wm: &mut crate::window_
     if !swipe_enabled {
         return;
     }
-    seat.handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, seat.id, sys);
     // A swipe or pinch is deliberate input, like a click or a key: it ends
     // the session-restore settling phase (`WindowManager::startup_input_seen`),
     // so the first focus of a restored window pans to it. Until 2026-09-26
@@ -94,7 +94,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
     if !swipe_enabled {
         return;
     }
-    seat.handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, seat.id, sys);
 
     // A step does not end the gesture: the travel restarts from zero at
     // the fire (below), so the fingers can keep going and step focus
@@ -238,7 +238,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
             }
             let hovered = hovered.filter(|&id| wm.windows.get(id).is_some_and(|w| !w.is_status_bar() && !w.is_wallpaper()));
             if let Some(id) = hovered {
-                seat.focus(wm, Focus::Window(id));
+                crate::seat::Seat::focus(wm, seat.id, Focus::Window(id));
             }
         }
 
@@ -361,7 +361,7 @@ pub(crate) unsafe fn on_swipe_end(cursor: &mut Cursor, wm: &mut crate::window_ma
     if !swipe_enabled {
         return;
     }
-    seat.handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, seat.id, sys);
 
     log::info!("handle_swipe_end: cancelled={}", (*event).cancelled);
 
@@ -462,7 +462,7 @@ pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_
     if !pinch_enabled {
         return;
     }
-    seat.handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, seat.id, sys);
     // A swipe or pinch is deliberate input, like a click or a key: it ends
     // the session-restore settling phase (`WindowManager::startup_input_seen`),
     // so the first focus of a restored window pans to it. Until 2026-09-26
@@ -534,7 +534,7 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
     if !pinch_enabled {
         return;
     }
-    seat.handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, seat.id, sys);
 
     if cursor.view_drag_pinch_update((*event).scale) {
         return;
@@ -616,7 +616,7 @@ pub(crate) unsafe fn on_pinch_end(cursor: &mut Cursor, wm: &mut crate::window_ma
     if !pinch_enabled {
         return;
     }
-    seat.handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, seat.id, sys);
 
     if cursor.view_drag_pinch_end(wm) {
         return;
@@ -652,7 +652,7 @@ pub(crate) unsafe extern "C" fn handle_hold_begin(listener: *mut ffi::wl_listene
 
     let seat = &mut *cursor.seat;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    seat.handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, seat.id, sys);
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
@@ -672,7 +672,7 @@ pub(crate) unsafe extern "C" fn handle_hold_end(listener: *mut ffi::wl_listener,
 
     let seat = &mut *cursor.seat;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    seat.handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, seat.id, sys);
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {

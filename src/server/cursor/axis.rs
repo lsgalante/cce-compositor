@@ -14,7 +14,7 @@ pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, dat
 /// `handle_axis` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
 pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
     let event = data as *mut ffi::wlr_pointer_axis_event;
-    (*cursor.seat).handle_activity(wm, sys);
+    crate::seat::Seat::handle_activity(wm, (*cursor.seat).id, sys);
     
     let seat = &mut *cursor.seat;
     
@@ -337,7 +337,7 @@ impl Cursor {
         let seat = &mut *self.seat;
         // Space must reach the window: give it keyboard focus as a click would.
         if seat.focused != crate::seat::Focus::Window(window) {
-            seat.focus(wm, crate::seat::Focus::Window(window));
+            crate::seat::Seat::focus(wm, seat.id, crate::seat::Focus::Window(window));
         }
         seat.ensure_synthetic_keyboard();
         let time = crate::util::msec_timestamp();

@@ -1028,7 +1028,7 @@ unsafe extern "C" fn handle_request_move(
             this.mode_locked = true;
         }
         let id = (*toplevel).window;
-        (*seat).focus(wm, crate::seat::Focus::Window(id));
+        crate::seat::Seat::focus(wm, (*seat).id, crate::seat::Focus::Window(id));
         wm.stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = cursor.wlr_cursor.x();
@@ -1100,7 +1100,7 @@ unsafe extern "C" fn handle_request_resize(
             this.mode_locked = true;
         }
         let id = (*toplevel).window;
-        (*seat).focus(wm, crate::seat::Focus::Window(id));
+        crate::seat::Seat::focus(wm, (*seat).id, crate::seat::Focus::Window(id));
         wm.stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = cursor.wlr_cursor.x();

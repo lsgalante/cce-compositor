@@ -701,7 +701,7 @@ impl WindowManager {
                         if let Some(w) = self.windows.get_mut(id) {
                             w.minimized = false;
                         }
-                        (*seat).focus(self, crate::seat::Focus::Window(id));
+                        crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::Window(id));
                         self.raise_window(id);
                         crate::shared::pending().dirty_windowing();
                         if wait {
@@ -945,7 +945,7 @@ impl WindowManager {
                 self.desk_pan_y = center_y - (vp_h / 2.0) / self.desk_zoom;
 
                 if let Some(seat) = self.first_seat() {
-                    (*seat).focus(self, crate::seat::Focus::Window(target_id));
+                    crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::Window(target_id));
                 }
                 self.raise_window(target_id);
                 crate::shared::pending().dirty_windowing();
@@ -1614,7 +1614,7 @@ impl WindowManager {
                     };
                     for seat in self.seats.ptrs() {
                         (*seat).ensure_synthetic_keyboard();
-                        (*seat).handle_activity(self, sys);
+                        crate::seat::Seat::handle_activity(self, (*seat).id, sys);
                         (*seat).wlr_seat.keyboard_notify_key(crate::util::msec_timestamp(), keycode, state);
                         if let Some(name) = mod_name {
                             let kb = (*seat).wlr_seat.keyboard();
@@ -1655,7 +1655,7 @@ impl WindowManager {
                         // without a keymap, and a keymap-less client drops
                         // every key we notify. Attach one first.
                         (*seat).ensure_synthetic_keyboard();
-                        (*seat).handle_activity(self, sys);
+                        crate::seat::Seat::handle_activity(self, (*seat).id, sys);
                         let time = crate::util::msec_timestamp();
                         (*seat).wlr_seat.keyboard_notify_key(time, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
                         (*seat).wlr_seat.keyboard_notify_key(time + 1, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);
