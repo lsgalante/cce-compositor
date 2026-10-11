@@ -387,7 +387,7 @@ impl Seat {
         ffi::wlr_seat_set_capabilities(self.wlr_seat, caps);
     }
 
-    pub unsafe fn focus(&mut self, new_focus: Focus) {
+    pub unsafe fn focus(&mut self, wm: &mut crate::window_manager::WindowManager, new_focus: Focus) {
         if let Focus::Window(window) = new_focus {
             // The grid is the canvas, not a window: it must never take focus.
             // It became clickable when it started advertising an input region
@@ -412,7 +412,7 @@ impl Seat {
 
         if let Focus::Window(window) = new_focus {
             if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
-                (*crate::reentry::wm(self.server)).raise_window(window);
+                wm.raise_window(window);
                 crate::shared::pending().dirty_windowing();
             }
         }
@@ -424,7 +424,7 @@ impl Seat {
             // relative to the window and land off-viewport otherwise. The
             // pan no-ops once the window is fully visible.
             if let Focus::Window(window) = new_focus {
-                self.focus_follow_pan(window);
+                self.focus_follow_pan(wm, window);
             }
             return;
         }
@@ -485,19 +485,19 @@ impl Seat {
         // eases in and out through the border fade — a focus change has to
         // arm that timer or the old ring lingers and the new one waits for an
         // unrelated redraw (the same reason WindowManager::set_mode arms it).
-        (*crate::reentry::wm(self.server)).arm_border_fade();
+        wm.arm_border_fade();
         if let Focus::Window(window) = new_focus {
             if !window.is_null() {
-                (*crate::reentry::wm(self.server)).record_focus(window);
+                wm.record_focus(window);
                 // Focus decides whether a fullscreen window stays on top
                 // (`Window::fullscreen_yields`); restack whenever one is up,
                 // since not every path to here dirties on its own.
-                if (*crate::reentry::wm(self.server)).windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
+                if wm.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
                     crate::shared::pending().dirty_windowing();
                 }
             }
         }
-        (*crate::reentry::wm(self.server)).update_status();
+        wm.update_status();
 
         match new_focus {
             Focus::None => {}
@@ -559,9 +559,9 @@ impl Seat {
                     // is over: a first focus is user intent and pans like any
                     // other, except for placement-hinted spawns (pickers that
                     // open at their control and must not yank the camera).
-                    let user_focus = (*crate::reentry::wm(self.server)).startup_input_seen && !(*window).hint_placed;
+                    let user_focus = wm.startup_input_seen && !(*window).hint_placed;
                     if !is_new || spawn_pan || user_focus {
-                        self.focus_follow_pan(window);
+                        self.focus_follow_pan(wm, window);
                     }
                 }
 
@@ -782,7 +782,7 @@ impl Seat {
         crate::shared::sent().seats.move_to_back(&mut self.link_sent);
     }
 
-    pub unsafe fn manage_finish(&mut self) {
+    pub unsafe fn manage_finish(&mut self, wm: &mut crate::window_manager::WindowManager) {
 
         if (*self.server).lock_manager.state != crate::lock_manager::LockState::Unlocked {
             return;
@@ -793,7 +793,7 @@ impl Seat {
                 let server = self.server;
                 if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
                     let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
-                    self.focus(Focus::LayerSurface(wlr_surf));
+                    self.focus(wm, Focus::LayerSurface(wlr_surf));
                 }
             }
             crate::layer_shell::LayerShellSeatFocus::NonExclusive(key) => {
@@ -801,7 +801,7 @@ impl Seat {
                     let server = self.server;
                     if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
                         let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
-                        self.focus(Focus::LayerSurface(wlr_surf));
+                        self.focus(wm, Focus::LayerSurface(wlr_surf));
                     }
                 } else {
                     self.layer_shell.scheduled_focus = crate::layer_shell::LayerShellSeatFocus::None;
@@ -844,7 +844,7 @@ impl Seat {
     /// otherwise. Fullscreen pans back onto the desk spot it covers (see
     /// below); popups/overlays are not desk citizens, so other modes no-op,
     /// as do cce-cloud and windows already fully visible.
-    pub unsafe fn focus_follow_pan(&mut self, window: *mut crate::window::Window) {
+    pub unsafe fn focus_follow_pan(&mut self, wm: &mut crate::window_manager::WindowManager, window: *mut crate::window::Window) {
         if self.suppress_focus_pan {
             return;
         }
@@ -852,7 +852,7 @@ impl Seat {
         // flight), the current camera is a mid-flight sample — any pan
         // target computed from it is stale by construction. Never retarget
         // out from under the ramp.
-        if (*crate::reentry::wm(self.server)).camera_ramp_anim.is_some() {
+        if wm.camera_ramp_anim.is_some() {
             return;
         }
         // A fullscreen window that stepped aside was left on the desk
@@ -861,7 +861,6 @@ impl Seat {
         // and lands on its output. Not in overview, where the desk is the
         // point and the camera stays put.
         if !window.is_null() && (*window).is_fullscreen() {
-            let wm = &mut (*crate::reentry::wm(self.server));
             if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview {
                 return;
             }
@@ -932,7 +931,6 @@ impl Seat {
                 600.0
             };
 
-            let wm = &mut (*crate::reentry::wm(self.server));
             let cam = wm.camera();
             // box_geom is already virtual units (its screen footprint is
             // box_geom * zoom) — dividing by zoom here inflated the window
@@ -1273,7 +1271,7 @@ impl Seat {
             if !win.is_null() && !(*win).closed {
                 if let PointerOpType::Resize { .. } = op.op_type {
                     (*win).wm_requested.resizing = false;
-                    (*win).manage_finish();
+                    (*win).manage_finish(wm);
                     crate::shared::pending().dirty_windowing();
                 }
                 if let PointerOpType::Move = op.op_type {
@@ -1299,8 +1297,8 @@ impl Seat {
                 let dx = (op.x - op.start_x).abs();
                 let dy = (op.y - op.start_y).abs();
                 if dx < 4 && dy < 4 && !op.started_in_overview && !(*win).is_status_bar() {
-                    self.focus(Focus::Window(win));
-                    self.focus_follow_pan(win);
+                    self.focus(wm, Focus::Window(win));
+                    self.focus_follow_pan(wm, win);
                 }
             }
             // The windows a group move carried land by the same rule as
@@ -1308,7 +1306,7 @@ impl Seat {
             // was a window or an image (then `win` is null).
             let group = std::mem::take(&mut self.group_move);
             for &(w, start_vx, start_vy) in group.iter() {
-                if w == win || !(*crate::reentry::wm(self.server)).selectable_in_drag(w) {
+                if w == win || !wm.selectable_in_drag(w) {
                     continue;
                 }
                 if (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {

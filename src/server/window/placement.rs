@@ -461,8 +461,7 @@ impl Window {
     /// SCREEN origin, but the arrange pass places a floating window from its
     /// VIRTUAL one, so a screen origin written on its own survives exactly
     /// until the next transaction and is then recomputed away.
-    pub unsafe fn screen_to_virtual(&self, sx: i32, sy: i32) -> (f64, f64) {
-        let wm = &(*crate::reentry::wm(self.server));
+    pub unsafe fn screen_to_virtual(&self, wm: &crate::window_manager::WindowManager, sx: i32, sy: i32) -> (f64, f64) {
         let (cam, _, _) = wm.layout_camera();
         let zoom = cam.zoom.max(0.01);
         let (out_x, out_y, _, _) = self.first_enabled_output_box();

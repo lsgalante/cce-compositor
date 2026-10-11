@@ -726,9 +726,9 @@ impl Window {
     /// (`virtual_x/y`, kept in step with the camera while it is on top), so
     /// the camera pans away from it like any other window rather than
     /// leaving it fixed behind the screen.
-    pub unsafe fn fullscreen_yields(&self) -> bool {
+    pub unsafe fn fullscreen_yields(&self, wm: &crate::window_manager::WindowManager) -> bool {
         let me = self as *const Window as *mut Window;
-        for &w in (*crate::reentry::wm(self.server)).focus_history.iter() {
+        for &w in wm.focus_history.iter() {
             if w == me {
                 return false;
             }
@@ -786,11 +786,10 @@ impl Window {
     /// that focus pans (`Seat::focus_follow_pan`). Not in overview or under
     /// a camera flight, where the window is a slab on the desk anyway and
     /// the camera is not the enter's to move.
-    unsafe fn pan_to_restored_fullscreen_spot(&self) {
-        let wm = &mut (*crate::reentry::wm(self.server));
+    unsafe fn pan_to_restored_fullscreen_spot(&self, wm: &mut crate::window_manager::WindowManager) {
         if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
             || wm.camera_ramp_anim.is_some()
-            || self.fullscreen_yields()
+            || self.fullscreen_yields(wm)
         {
             return;
         }
@@ -1560,7 +1559,7 @@ impl Window {
                 while curr != seats {
                     let next = (*curr).next;
                     let seat = crate::container_of!(curr, crate::seat::Seat, link);
-                    (*seat).focus(crate::seat::Focus::Window(self as *mut Window));
+                    (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::Window(self as *mut Window));
                     curr = next;
                 }
             }
@@ -1659,7 +1658,7 @@ impl Window {
         }
     }
 
-    pub unsafe fn destroy(window: *mut Window) {
+    pub unsafe fn destroy(window: *mut Window, wm: &mut crate::window_manager::WindowManager) {
         assert!(matches!((*window).impl_type, WindowImpl::Destroying));
         match (*window).state {
             WindowState::Init => {}
@@ -1677,8 +1676,8 @@ impl Window {
             let seat = crate::container_of!(curr, crate::seat::Seat, link);
             if let crate::seat::Focus::Window(w) = (*seat).focused {
                 if w == window {
-                    (*seat).focus(crate::seat::Focus::None);
-                    (*crate::reentry::wm((*window).server)).focus_next_visible_window(seat);
+                    (*seat).focus(wm, crate::seat::Focus::None);
+                    wm.focus_next_visible_window(seat);
                 }
             }
             if let Some(ref op) = (*seat).op {
@@ -1701,8 +1700,8 @@ impl Window {
 
         (*window).node.deinit();
 
-        (*crate::reentry::wm((*window).server)).remove_from_history(window);
-        (*crate::reentry::wm((*window).server)).selection_forget(window);
+        wm.remove_from_history(window);
+        wm.selection_forget(window);
         // A seat cursor may still name this window as its adjust target.
         // The next hover evaluation would replace it, but a window allocated
         // at the same address in the meantime must not inherit the ring.
@@ -1718,8 +1717,8 @@ impl Window {
                 curr = (*curr).next;
             }
         }
-        (*crate::reentry::wm((*window).server)).windows.remove((*window).ref_key);
-        (*crate::reentry::wm((*window).server)).check_clean_exit_progress();
+        wm.windows.remove((*window).ref_key);
+        wm.check_clean_exit_progress();
 
         let _ = Box::from_raw(window);
     }
@@ -1890,7 +1889,7 @@ impl Window {
         }
     }
 
-    pub unsafe fn manage_start(&mut self) {
+    pub unsafe fn manage_start(&mut self, wm: &mut crate::window_manager::WindowManager) {
         match self.state {
             WindowState::Init => {}
             WindowState::Closing => {
@@ -1947,7 +1946,7 @@ impl Window {
                     if !self.node.link.prev.is_null() && !self.node.link.next.is_null() {
                         wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
                     }
-                    let rendering_list = &mut (*crate::reentry::wm(self.server)).rendering_requested.list as *mut ffi::wl_list as *mut WlList;
+                    let rendering_list = &mut wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
                     // The tail is the top of the stack. A shy helper
                     // window (`is_shy`) links at the head instead — beneath
                     // the app's own windows, where its app keeps it.
@@ -1989,7 +1988,7 @@ impl Window {
         }
     }
 
-    pub unsafe fn manage_finish(&mut self) -> bool {
+    pub unsafe fn manage_finish(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
         if matches!(self.impl_type, WindowImpl::Destroying) {
             assert_eq!(self.state, WindowState::Closing);
             return false;
@@ -2057,7 +2056,7 @@ impl Window {
         let new_fullscreen = !output.is_null();
         if new_fullscreen && !self.was_fullscreen {
             if self.box_geom.width > 0 && self.box_geom.height > 0 {
-                self.start_fs_anim();
+                self.start_fs_anim(wm);
                 self.saved_width = self.box_geom.width;
                 self.saved_height = self.box_geom.height;
                 self.saved_virtual_x = self.virtual_x;
@@ -2075,11 +2074,11 @@ impl Window {
                 // took the view and only the pre-fullscreen spot was saved.
                 let restored_spot = self.restore_fullscreen_at.take();
                 let (vx, vy) = restored_spot
-                    .unwrap_or_else(|| self.screen_to_virtual((*output).sent.x, (*output).sent.y));
+                    .unwrap_or_else(|| self.screen_to_virtual(wm, (*output).sent.x, (*output).sent.y));
                 self.virtual_x = vx;
                 self.virtual_y = vy;
                 if restored_spot.is_some() {
-                    self.pan_to_restored_fullscreen_spot();
+                    self.pan_to_restored_fullscreen_spot(wm);
                 }
                 log::info!("[Fullscreen] Saved window {:?} geometry: {}x{} at ({}, {})", self.get_title_string().as_deref().unwrap_or(""), self.saved_width, self.saved_height, self.saved_virtual_x, self.saved_virtual_y);
             }
@@ -2087,7 +2086,7 @@ impl Window {
             if self.saved_width > 0 && self.saved_height > 0 {
                 // Captures the on-screen fullscreen rect before the restore
                 // below rewrites box_geom.
-                self.start_fs_anim();
+                self.start_fs_anim(wm);
                 self.last_fullscreen_at = Some((self.virtual_x, self.virtual_y));
                 self.box_geom.width = self.saved_width;
                 self.box_geom.height = self.saved_height;

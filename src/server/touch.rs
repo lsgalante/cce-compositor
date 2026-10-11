@@ -394,13 +394,13 @@ impl Cursor {
                 match result.data {
                     SceneNodeDataVal::Window(window) => {
                         if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                            seat.focus(Focus::Window(window));
+                            seat.focus(&mut *crate::reentry::wm(seat.server), Focus::Window(window));
                             seat.relay.osk.note_touch();
                         }
                     }
                     SceneNodeDataVal::LayerSurface(layer_surface) => {
                         if crate::cursor::layer_takes_click_focus(layer_surface) {
-                            seat.focus(Focus::LayerSurface(result.surface));
+                            seat.focus(&mut *crate::reentry::wm(seat.server), Focus::LayerSurface(result.surface));
                         }
                     }
                     _ => {}

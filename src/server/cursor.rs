@@ -920,7 +920,7 @@ impl Cursor {
                 {
                     let prev = (*self.seat).suppress_focus_pan;
                     (*self.seat).suppress_focus_pan = true;
-                    (*self.seat).focus(crate::seat::Focus::Window(hovered_toplevel));
+                    (*self.seat).focus(&mut *crate::reentry::wm((*self.seat).server), crate::seat::Focus::Window(hovered_toplevel));
                     (*self.seat).suppress_focus_pan = prev;
                 }
                 self.clear_focus();

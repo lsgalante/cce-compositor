@@ -422,7 +422,7 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
                     if (*win_ptr).minimized {
                         (*win_ptr).minimized = false;
                     }
-                    (*seat).focus(crate::seat::Focus::Window(win_ptr));
+                    (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::Window(win_ptr));
                     (*crate::reentry::wm(server)).raise_window(win_ptr);
                     crate::shared::pending().dirty_windowing();
                     log::info!("xdg activation focused and raised '{}' ({})", title, app_id);

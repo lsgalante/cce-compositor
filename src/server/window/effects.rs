@@ -454,7 +454,7 @@ impl Window {
     /// last_applied_scale (the scale actually drawn) because self.scale has
     /// already been rewritten to the destination state's scale by the arrange
     /// pass in this same cycle.
-    pub(crate) unsafe fn start_fs_anim(&mut self) {
+    pub(crate) unsafe fn start_fs_anim(&mut self, wm: &mut crate::window_manager::WindowManager) {
         // Animations off: the window is simply drawn at its new rect.
         if !cce_core::motion::enabled() {
             self.fs_anim = None;
@@ -479,7 +479,7 @@ impl Window {
             )
         };
         self.fs_anim = Some(FsAnim { x, y, w, h, moved: false, ticks: 0 });
-        (*crate::reentry::wm(self.server)).arm_border_fade();
+        wm.arm_border_fade();
     }
 
     /// One tick of the fullscreen-toggle animation. Returns true while the

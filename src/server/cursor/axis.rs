@@ -339,7 +339,7 @@ impl Cursor {
         let seat = &mut *self.seat;
         // Space must reach the window: give it keyboard focus as a click would.
         if seat.focused != crate::seat::Focus::Window(window) {
-            seat.focus(crate::seat::Focus::Window(window));
+            seat.focus(&mut *crate::reentry::wm(seat.server), crate::seat::Focus::Window(window));
         }
         seat.ensure_synthetic_keyboard();
         let time = crate::util::msec_timestamp();

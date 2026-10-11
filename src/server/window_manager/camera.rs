@@ -200,7 +200,7 @@ impl WindowManager {
             if let Some(ref op) = (*seat).op {
                 let win = op.window_ptr;
                 if !win.is_null() && !(*win).closed {
-                    (*win).manage_finish();
+                    (*win).manage_finish(self);
                 }
             }
             curr = (*curr).next;

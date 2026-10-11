@@ -870,7 +870,7 @@ unsafe fn place_transient_where_it_asked(xwindow: *mut XwaylandWindow) {
     let s = x11_scale_for((*window).server, xsurface);
     let log_x = from_x11(asked.x as i32, s);
     let log_y = from_x11(asked.y as i32, s);
-    let (vx, vy) = (*window).screen_to_virtual(log_x, log_y);
+    let (vx, vy) = (*window).screen_to_virtual(&*crate::reentry::wm((*window).server), log_x, log_y);
     (*window).virtual_x = vx;
     (*window).virtual_y = vy;
     // Placed by the client, like a picker placed by its hint: the camera
@@ -897,7 +897,7 @@ unsafe fn place_shy_where_it_is(xwindow: *mut XwaylandWindow) {
     let s = x11_scale_for((*window).server, xsurface);
     let log_x = from_x11((*xsurface).x as i32, s);
     let log_y = from_x11((*xsurface).y as i32, s);
-    let (vx, vy) = (*window).screen_to_virtual(log_x, log_y);
+    let (vx, vy) = (*window).screen_to_virtual(&*crate::reentry::wm((*window).server), log_x, log_y);
     (*window).virtual_x = vx;
     (*window).virtual_y = vy;
     (*window).box_geom.x = log_x;
@@ -1051,7 +1051,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         // is a runaway: Houdini's Edit Theme dialog walked 270px left across
         // one tab switch, re-requesting 15 times in a second and never
         // converging on a size either.
-        let (vx, vy) = (*window).screen_to_virtual(log_x, log_y);
+        let (vx, vy) = (*window).screen_to_virtual(&*crate::reentry::wm((*window).server), log_x, log_y);
         (*window).virtual_x = vx;
         (*window).virtual_y = vy;
         if exempt_self_placed || shy_self_placed {

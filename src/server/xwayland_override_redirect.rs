@@ -172,7 +172,7 @@ impl XwaylandOverrideRedirect {
                 return;
             }
         }
-        (*seat).focus(crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
+        (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
     }
 }
 

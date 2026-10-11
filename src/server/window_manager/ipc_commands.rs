@@ -624,7 +624,7 @@ impl WindowManager {
                         if (*best_target).minimized {
                             (*best_target).minimized = false;
                         }
-                        (*seat).focus(crate::seat::Focus::Window(best_target));
+                        (*seat).focus(self, crate::seat::Focus::Window(best_target));
                         self.raise_window(best_target);
                         crate::shared::pending().dirty_windowing();
                         if wait {
@@ -892,7 +892,7 @@ impl WindowManager {
                 self.desk_pan_y = center_y - (vp_h / 2.0) / self.desk_zoom;
 
                 if let Some(seat) = self.first_seat() {
-                    (*seat).focus(crate::seat::Focus::Window(target));
+                    (*seat).focus(self, crate::seat::Focus::Window(target));
                 }
                 self.raise_window(target);
                 crate::shared::pending().dirty_windowing();

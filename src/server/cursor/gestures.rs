@@ -225,7 +225,7 @@ pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_liste
                 }
             }
             if !hovered_win.is_null() && !(*hovered_win).is_status_bar() && !(*hovered_win).is_wallpaper() {
-                seat.focus(Focus::Window(hovered_win));
+                seat.focus(&mut *crate::reentry::wm(seat.server), Focus::Window(hovered_win));
             }
         }
 

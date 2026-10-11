@@ -1005,7 +1005,7 @@ unsafe extern "C" fn handle_request_move(
             (*window).mode_locked = true;
         }
 
-        (*seat).focus(crate::seat::Focus::Window(window));
+        (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::Window(window));
         (*crate::reentry::wm((*window).server)).stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = (*cursor.wlr_cursor).x;
@@ -1073,7 +1073,7 @@ unsafe extern "C" fn handle_request_resize(
             (*window).mode_locked = true;
         }
 
-        (*seat).focus(crate::seat::Focus::Window(window));
+        (*seat).focus(&mut *crate::reentry::wm((*seat).server), crate::seat::Focus::Window(window));
         (*crate::reentry::wm((*window).server)).stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = (*cursor.wlr_cursor).x;

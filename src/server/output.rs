@@ -233,7 +233,7 @@ pub struct Output {
 }
 
 impl Output {
-    pub unsafe fn manage_start(&mut self) {
+    pub unsafe fn manage_start(&mut self, wm: &mut crate::window_manager::WindowManager) {
         match self.scheduled.state {
             OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
                 assert!(!self.scheduled.mode_none());
@@ -255,7 +255,7 @@ impl Output {
                     self.destroy_scene_nodes();
 
                     // remove output from windows fullscreen hint
-                    for &window in (*crate::reentry::wm(self.server)).windows.iter() {
+                    for &window in wm.windows.iter() {
                         if let crate::window::FullscreenRequest::Fullscreen(out) = (*window).wm_scheduled.fullscreen_requested {
                             if out == self as *mut Output {
                                 (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());

@@ -521,6 +521,33 @@ method. The other 31 are calls that genuinely mutate from inside
 `arm_border_fade`, `update_status`, the window destroy path's history,
 selection and `windows.remove` — which is the context-passing scope.
 
+After the first context-passing slice (below; same workload, same day):
+**111 re-entries at 36 sites, none in the manage or render pass** — all
+inside `process_ipc_command`, i.e. the seat and cursor code `ccectl`'s
+pointer injection runs under it.
+
+### Context passing: the window manager is a parameter (since 2026-10-10)
+
+Code that needs the window manager takes it as `wm: &mut WindowManager`
+(or `&WindowManager` to read) instead of reaching back through its
+server pointer. A `WindowManager` method passes `self`; code outside one
+gets it from `crate::reentry::wm(server)` as close to its wlroots entry
+point as it can, and hands it down. Then the only live `&mut` is the one
+passed, and the borrow checker sees the rest.
+
+Converted so far, the transaction pass and what it calls:
+`Output::manage_start`, `Window::manage_start` / `manage_finish`,
+`Seat::manage_finish`, `Window::destroy`, `Seat::focus` (all 35 callers),
+`Seat::focus_follow_pan`, `Window::fullscreen_yields`,
+`Window::screen_to_virtual`, `start_fs_anim`, the free
+`fullscreen_on_top`. A pass that hands `self` to the windows it loops over
+loops over `self.window_snapshot()` (the pointers copied out), not
+`self.windows.iter()`: the iterator would borrow `self.windows` across the
+call, and `render_finish` used to remove windows from it mid-iteration
+(through `Window::destroy`'s back-pointer). New code in this closure
+takes `wm`; it does not add a `reentry::wm` call. The tracer is how to
+find the next slice.
+
 ### Scene nodes are owned handles (`scene_handle.rs`, since 2026-10-10)
 
 `SceneTree`, `SceneRect`, `SceneBuffer`, `SceneBevel` (and the other scenefx

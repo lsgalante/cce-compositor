@@ -103,7 +103,7 @@ impl WindowManager {
         while curr != outputs {
             let next = (*curr).next;
             let output = crate::container_of!(curr, crate::output::Output, link);
-            (*output).manage_start();
+            (*output).manage_start(self);
             curr = next;
         }
 
@@ -118,8 +118,8 @@ impl WindowManager {
         crate::shared::sent().set_output_config(self.scheduled.output_config);
         self.scheduled.output_config = std::ptr::null_mut();
 
-        for &win_ptr in self.windows.iter() {
-            (*win_ptr).manage_start();
+        for win_ptr in self.window_snapshot() {
+            (*win_ptr).manage_start(self);
         }
         let mt_windows = mt0.map(|s| s.elapsed().as_micros());
 
@@ -148,6 +148,14 @@ impl WindowManager {
         }
 
         self.manage_finish();
+    }
+
+    /// The windows, copied out, for a loop whose body is handed the window
+    /// manager (`&mut self`): iterating `self.windows` itself would hold a
+    /// borrow of it across that call, and a body that removes a window
+    /// (`Window::destroy`) would change it mid-iteration.
+    pub(crate) fn window_snapshot(&self) -> Vec<*mut Window> {
+        self.windows.iter().copied().collect()
     }
 
     /// Wedge tracer: a Mapped status window outside the render list is
@@ -235,7 +243,7 @@ impl WindowManager {
         while curr != seats {
             let next = (*curr).next;
             let seat = crate::container_of!(curr, crate::seat::Seat, link_sent);
-            (*seat).manage_finish();
+            (*seat).manage_finish(self);
             curr = next;
         }
 
@@ -247,7 +255,7 @@ impl WindowManager {
             let next = (*curr).next;
             let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
             let window = (*node).window();
-            if (*window).manage_finish() {
+            if (*window).manage_finish(self) {
                 if !(*window).wm_requested.resizing {
                     if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
                         *count += 1;
@@ -325,7 +333,7 @@ impl WindowManager {
 
         log::debug!("render sequence finish");
 
-        for &window in self.windows.iter() {
+        for window in self.window_snapshot() {
             if !matches!((*window).state, crate::window::WindowState::Closing) {
                 (*window).surfaces.drop_saved();
             }
@@ -333,7 +341,7 @@ impl WindowManager {
                 (*window).tree.reparent(&crate::shared::scene().hidden_tree);
             }
             if let crate::window::WindowImpl::Destroying = (*window).impl_type {
-                Window::destroy(window);
+                Window::destroy(window, self);
             }
         }
 
@@ -361,7 +369,7 @@ impl WindowManager {
             let window = (*node).window();
             (*window).ref_key.hash(&mut hasher);
             rendered_fullscreen(window).hash(&mut hasher);
-            fullscreen_on_top(window).hash(&mut hasher);
+            fullscreen_on_top(self, window).hash(&mut hasher);
             (*window).rendering_requested.circular.hash(&mut hasher);
             (*window).rendering_requested.hidden.hash(&mut hasher);
             (*window).tiling_mode.hash(&mut hasher);
@@ -415,7 +423,7 @@ impl WindowManager {
                         // render-list order, burying whichever windows
                         // happened to map before it.
                         crate::shared::scene().layers.bottom.raw()
-                    } else if fullscreen_on_top(window) {
+                    } else if fullscreen_on_top(self, window) {
                         crate::shared::scene().layers.fullscreen.raw()
                     } else if rendered_fullscreen(window) {
                         // Stepped aside for a focused window (alt-tab
@@ -528,7 +536,7 @@ impl WindowManager {
                     && !(*w).closed
                     && matches!((*w).state, crate::window::WindowState::Mapped)
                     && rendered_fullscreen(w)
-                    && !fullscreen_on_top(w)
+                    && !fullscreen_on_top(self, w)
                 {
                     (*w).tree.raise_to_top();
                     (*w).popup_tree.place_above(&(*w).tree);

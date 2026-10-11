@@ -1584,10 +1584,10 @@ impl WindowManager {
         // correct one. The arrange pass is the authority on segment slots,
         // so make every pass re-slot every segment except one the user is
         // dragging (the seat op owns its position until release).
-        for &win_ptr in self.windows.iter() {
+        for win_ptr in self.window_snapshot() {
             if !win_ptr.is_null() && !(*win_ptr).closed && (*win_ptr).is_status_bar() {
                 if (*win_ptr).wm_requested.dimensions.is_some() {
-                    (*win_ptr).manage_finish();
+                    (*win_ptr).manage_finish(self);
                 }
                 if matches!((*win_ptr).state, crate::window::WindowState::Mapped)
                     && !self.is_window_being_moved(win_ptr)
@@ -1683,7 +1683,7 @@ impl WindowManager {
             let on_desk = returning
                 || flying
                 || crate::shared::mode() == WindowManagerMode::Overview
-                || (*w).fullscreen_yields();
+                || (*w).fullscreen_yields(self);
             if on_desk {
                 let (sx, sy) = (*w).virtual_to_screen((*w).virtual_x, (*w).virtual_y);
                 (*w).rendering_requested.x = sx;
@@ -1692,7 +1692,7 @@ impl WindowManager {
             } else {
                 let output = (*w).fullscreen_output();
                 if !output.is_null() {
-                    let (vx, vy) = (*w).screen_to_virtual((*output).sent.x, (*output).sent.y);
+                    let (vx, vy) = (*w).screen_to_virtual(self, (*output).sent.x, (*output).sent.y);
                     // The spot is saved (`fullscreen_at`), and a camera
                     // pan relays out without a transaction, which is
                     // what normally schedules the save — so a game closed
@@ -2109,9 +2109,9 @@ impl WindowManager {
         };
         (*seat).suppress_focus_pan = behavior != crate::config::OnAppExit::FocusPrevious;
         if !next.is_null() {
-            (*seat).focus(crate::seat::Focus::Window(next));
+            (*seat).focus(self, crate::seat::Focus::Window(next));
         } else {
-            (*seat).focus(crate::seat::Focus::None);
+            (*seat).focus(self, crate::seat::Focus::None);
         }
         (*seat).suppress_focus_pan = false;
         if behavior == crate::config::OnAppExit::Overview
@@ -2351,7 +2351,7 @@ impl WindowManager {
         match elem {
             BorderElement::Minimize | BorderElement::Maximize => {
                 if let Some(seat) = self.first_seat() {
-                    (*seat).focus(crate::seat::Focus::Window(window));
+                    (*seat).focus(self, crate::seat::Focus::Window(window));
                 }
                 let action = if elem == BorderElement::Minimize {
                     crate::config::Action::Minimize
@@ -2663,10 +2663,10 @@ unsafe fn rendered_fullscreen(window: *mut Window) -> bool {
 /// not in overview — where it is a slab on the desk like a stepped-aside
 /// one (`place_fullscreen_windows`) and stacks behind every window with
 /// it, so it never hides the windows overview is there to show.
-unsafe fn fullscreen_on_top(window: *mut Window) -> bool {
+unsafe fn fullscreen_on_top(wm: &WindowManager, window: *mut Window) -> bool {
     rendered_fullscreen(window)
         && crate::shared::mode() != WindowManagerMode::Overview
-        && !(*window).fullscreen_yields()
+        && !(*window).fullscreen_yields(wm)
 }
 
 unsafe extern "C" fn handle_clean_exit_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
@@ -2901,7 +2901,7 @@ impl crate::policy::api::Compositor for WindowManager {
                     if let Some(&win) = self.windows.get(id.0) {
                         if !win.is_null() && !(*win).closed {
                             if let Some(seat) = self.first_seat() {
-                                (*seat).focus(crate::seat::Focus::Window(win));
+                                (*seat).focus(self, crate::seat::Focus::Window(win));
                             }
                         }
                     }

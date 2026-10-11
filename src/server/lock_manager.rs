@@ -226,7 +226,7 @@ impl LockManager {
         while curr != seats_head {
             let next = (*curr).next;
             let seat = crate::container_of!(curr, crate::seat::Seat, link);
-            (*seat).focus(Focus::None);
+            (*seat).focus(&mut *crate::reentry::wm((*seat).server), Focus::None);
             curr = next;
         }
 
@@ -392,7 +392,7 @@ impl LockSurface {
             let seat = crate::container_of!(curr, crate::seat::Seat, link);
             if let Focus::LockSurface(focused_surf) = (*seat).focused {
                 if focused_surf == lock_surface {
-                    (*seat).focus(new_focus);
+                    (*seat).focus(&mut *crate::reentry::wm((*seat).server), new_focus);
                 }
             }
             (*seat).cursor.update_state();
@@ -519,7 +519,7 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
         while curr != seats_head {
             let next = (*curr).next;
             let seat = crate::container_of!(curr, crate::seat::Seat, link);
-            (*seat).focus(Focus::None);
+            (*seat).focus(&mut *crate::reentry::wm((*seat).server), Focus::None);
             curr = next;
         }
     } else {
@@ -557,7 +557,7 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
     while curr != seats_head {
         let next = (*curr).next;
         let seat = crate::container_of!(curr, crate::seat::Seat, link);
-        (*seat).focus(Focus::None);
+        (*seat).focus(&mut *crate::reentry::wm((*seat).server), Focus::None);
         curr = next;
     }
 
@@ -619,7 +619,7 @@ unsafe extern "C" fn update_focus(data: *mut std::ffi::c_void) {
         let next = (*curr).next;
         let seat = crate::container_of!(curr, crate::seat::Seat, link);
         if !matches!((*seat).focused, Focus::LockSurface(s) if s == lock_surface) {
-            (*seat).focus(Focus::LockSurface(lock_surface));
+            (*seat).focus(&mut *crate::reentry::wm((*seat).server), Focus::LockSurface(lock_surface));
         }
         (*seat).cursor.update_state();
         curr = next;

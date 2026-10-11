@@ -339,7 +339,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 {
                     if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
                         if is_cloud_layer(layer_surface) {
-                            seat.focus(Focus::None);
+                            seat.focus(&mut *crate::reentry::wm(seat.server), Focus::None);
                             cursor.pressed.insert((*event).button);
                             return;
                         }
@@ -434,7 +434,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 }
                 (*crate::reentry::wm(server)).execute_action(&crate::config::Action::Spawn, Some(&cmd));
 
-                seat.focus(Focus::None);
+                seat.focus(&mut *crate::reentry::wm(seat.server), Focus::None);
                 crate::shared::pending().dirty_windowing();
 
                 cursor.pressed.insert((*event).button);
@@ -665,7 +665,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                                 (*border_target_win).tiling_mode = crate::tiling::TilingMode::Tiled;
                                 (*border_target_win).mode_locked = true;
                             }
-                            seat.focus(Focus::Window(border_target_win));
+                            seat.focus(&mut *crate::reentry::wm(seat.server), Focus::Window(border_target_win));
                             crate::shared::pending().dirty_windowing();
                             cursor.last_click_time = 0;
                             cursor.last_click_window = std::ptr::null_mut();
@@ -784,13 +784,13 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 SceneNodeDataVal::Window(window) => {
                     clicked_something = true;
                     if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                        seat.focus(Focus::Window(window));
+                        seat.focus(&mut *crate::reentry::wm(seat.server), Focus::Window(window));
                     }
                 }
                 SceneNodeDataVal::LayerSurface(layer_surface) => {
                     clicked_something = true;
                     if layer_takes_click_focus(layer_surface) {
-                        seat.focus(Focus::LayerSurface(result.surface));
+                        seat.focus(&mut *crate::reentry::wm(seat.server), Focus::LayerSurface(result.surface));
                     }
                 }
                 SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
@@ -807,7 +807,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
             if let Some((pvx, pvy, pw, ph)) = wm.placeholder_at(lx, ly) {
                 wm.pan_to_virtual_rect(pvx, pvy, pw, ph);
             } else {
-                seat.focus(Focus::None);
+                seat.focus(&mut *crate::reentry::wm(seat.server), Focus::None);
                 crate::shared::pending().dirty_windowing();
             }
         }
