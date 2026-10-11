@@ -851,7 +851,7 @@ impl Server {
             // Setup subcomponents stubs
             let server_ptr = self as *mut Server;
             self.wm.init_with_server(server_ptr).map_err(|_| "Failed to init wm")?;
-            self.layer_shell.init(server_ptr, self.wl_server).map_err(|_| "Failed to init layer_shell")?;
+            self.layer_shell.init(self.wl_server).map_err(|_| "Failed to init layer_shell")?;
             let mut scene = Scene::new();
             scene.init(self.linux_dmabuf, self.color_manager).map_err(|_| "Failed to init scene")?;
             crate::shared::shared().set_scene(scene);

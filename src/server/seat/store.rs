@@ -77,6 +77,14 @@ impl Seats {
         self.seats.iter().flatten().map(|p| p.as_ptr()).collect()
     }
 
+    /// Every live seat, mutably, oldest first. Each seat is its own
+    /// allocation, so the references are disjoint.
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Seat> + '_ {
+        // SAFETY: the iterator borrows the store mutably, and every slot is
+        // a distinct allocation yielded once.
+        self.seats.iter().flatten().map(|p| unsafe { &mut *p.as_ptr() })
+    }
+
     /// Every live seat, oldest first.
     pub fn values(&self) -> impl Iterator<Item = &Seat> + '_ {
         // SAFETY: live while in the store, which this borrows.

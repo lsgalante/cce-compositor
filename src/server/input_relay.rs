@@ -37,7 +37,7 @@ impl InputRelay {
         self.input_method_new_popup = std::mem::zeroed();
         self.grab_keyboard_destroy = std::mem::zeroed();
         // The relay starts as zeroed memory: write, don't assign over it.
-        std::ptr::write(&mut self.osk, crate::osk::Osk::new((*seat).server));
+        std::ptr::write(&mut self.osk, crate::osk::Osk::new());
     }
 
     pub unsafe fn new_input_method(&mut self, wm: &crate::window_manager::WindowManager, input_method: *mut ffi::wlr_input_method_v2) {

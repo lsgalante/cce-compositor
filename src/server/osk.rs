@@ -23,7 +23,6 @@
 use std::time::{Duration, Instant};
 
 use crate::ffi;
-use crate::server::Server;
 
 /// How long after a touch on a window an activation still counts as the
 /// touch's. A tap that the client sees as a button press (no wl_touch) is
@@ -38,7 +37,6 @@ const SHOW_CMD: &str = "cce-keyboard show";
 const HIDE_CMD: &str = "cce-keyboard hide";
 
 pub struct Osk {
-    server: *mut Server,
     /// The last touch on a window, until an activation spends it.
     armed_at: Option<Instant>,
     /// This module put the board up, so it may take it down.
@@ -47,12 +45,12 @@ pub struct Osk {
 }
 
 impl Osk {
-    pub fn new(server: *mut Server) -> Self {
-        Osk { server, armed_at: None, shown_by_us: false, hide_timer: crate::event_source::Timer::new() }
+    pub fn new() -> Self {
+        Osk { armed_at: None, shown_by_us: false, hide_timer: crate::event_source::Timer::new() }
     }
 
     fn enabled(&self) -> bool {
-        !self.server.is_null() && crate::shared::layout().osk_on_touch
+        crate::shared::layout().osk_on_touch
     }
 
     /// A finger landed on (or, for a tap, lifted from) a window.
@@ -84,11 +82,12 @@ impl Osk {
 
     /// The seat's text input went away (disabled, destroyed, or focus left).
     pub unsafe fn field_gone(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        if !self.shown_by_us || self.server.is_null() {
+        let display = crate::shared::shared().display();
+        if !self.shown_by_us || display.is_null() {
             return;
         }
         if !self.hide_timer.is_set() {
-            let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+            let event_loop = ffi::wl_display_get_event_loop(display);
             self.hide_timer = crate::event_source::Timer::add(event_loop, handle_hide_timer, self as *mut Osk as *mut _);
             if !self.hide_timer.is_set() {
                 log::error!("osk: failed to create the hide timer; hiding now");
@@ -115,7 +114,7 @@ impl Osk {
 
 unsafe extern "C" fn handle_hide_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let osk = &mut *(data as *mut Osk);
-    osk.hide_now(&mut *crate::reentry::wm(osk.server));
+    osk.hide_now(&mut *crate::reentry::wm(crate::shared::server_ptr()));
     0
 }
 
@@ -125,7 +124,7 @@ mod tests {
 
     #[test]
     fn a_touch_is_spent_by_one_activation() {
-        let mut osk = Osk::new(std::ptr::null_mut());
+        let mut osk = Osk::new();
         osk.note_touch();
         let now = Instant::now();
         assert!(osk.spend_touch(now));
@@ -134,7 +133,7 @@ mod tests {
 
     #[test]
     fn a_stale_touch_does_not_count() {
-        let mut osk = Osk::new(std::ptr::null_mut());
+        let mut osk = Osk::new();
         osk.note_touch();
         assert!(!osk.spend_touch(Instant::now() + TOUCH_WINDOW + Duration::from_millis(1)));
         assert!(osk.armed_at.is_none());
@@ -142,7 +141,7 @@ mod tests {
 
     #[test]
     fn without_a_touch_nothing_shows() {
-        let mut osk = Osk::new(std::ptr::null_mut());
+        let mut osk = Osk::new();
         assert!(!osk.spend_touch(Instant::now()));
     }
 }

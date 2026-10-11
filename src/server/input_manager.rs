@@ -6,7 +6,6 @@ use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
 use crate::seat::Seat;
 
 pub struct InputManager {
-    pub server: *mut Server,
     pub default_seat: *mut Seat,
     pub seats: crate::seat::Seats,
     pub devices: ffi::wl_list, // list of InputDevice
@@ -56,7 +55,6 @@ impl Default for InputManager {
 
 impl InputManager {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        self.server = server;
         let wl_server = (*server).wl_server;
 
         ffi::wl_list_init(&mut self.devices);
@@ -121,7 +119,11 @@ impl InputManager {
         if !self.pointer_refresh_idle.is_null() {
             return;
         }
-        let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
+        let display = crate::shared::shared().display();
+        if display.is_null() {
+            return;
+        }
+        let event_loop = ffi::wl_display_get_event_loop(display);
         let idle = ffi::wl_event_loop_add_idle(
             event_loop,
             Some(handle_pointer_refresh_idle),
@@ -314,7 +316,7 @@ unsafe extern "C" fn input_manager_create_seat(
     });
 
     if !exists {
-        let server = (*im).server;
+        let server = crate::shared::server_ptr();
         if let Err(e) = Seat::create(server, &name_str) {
             log::error!("failed to create seat '{}': {}", name_str, e);
             ffi::wl_resource_post_no_memory(resource);
@@ -360,7 +362,7 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
     let name_ptr = ffi::river_wlr_input_device_get_name(wlr_device);
     if !name_ptr.is_null() {
         let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
-        let wm = &mut (*crate::reentry::wm(im.server));
+        let wm = &mut (*crate::reentry::wm(crate::shared::server_ptr()));
         for rule in &wm.input_rules {
             if rule.name == "*" || name.contains(&rule.name) {
                 if let Some(factor) = rule.scroll_factor {

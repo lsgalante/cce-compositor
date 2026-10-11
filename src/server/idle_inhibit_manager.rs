@@ -9,12 +9,10 @@ pub struct IdleInhibitManager {
     pub wlr_manager: *mut ffi::wlr_idle_inhibit_manager_v1,
     pub new_idle_inhibitor: crate::listener::Listener,
     pub inhibitors: ffi::wl_list,
-    pub server: *mut Server,
 }
 
 impl IdleInhibitManager {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        self.server = server;
         ffi::wl_list_init(&mut self.inhibitors);
 
         let wlr_manager = ffi::wlr_idle_inhibit_v1_create((*server).wl_server);
@@ -37,15 +35,14 @@ impl IdleInhibitManager {
             let next = (*curr).next;
             let inhibitor = crate::container_of!(curr, IdleInhibitor, link);
             // At shutdown: nothing is left to keep awake, so no recount.
-            IdleInhibitor::destroy(inhibitor, None);
+            IdleInhibitor::destroy(inhibitor);
             curr = next;
         }
     }
 
-    /// Recount the live inhibitors and hand the idle manager the list of who
-    /// holds one, so `ccectl idle status` can name them. Every inhibitor is
+    /// Who holds a live inhibitor, for [`publish`]. Every inhibitor is
     /// visited (no early exit): two apps holding one are both reported.
-    pub unsafe fn check_active(&self, wm: &crate::window_manager::WindowManager) {
+    pub unsafe fn holders(&self, wm: &crate::window_manager::WindowManager) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
 
         let inhibitors_head = &self.inhibitors as *const ffi::wl_list as *mut crate::server::WlList;
@@ -78,13 +75,28 @@ impl IdleInhibitManager {
             curr = next;
         }
 
-        let inhibited = !names.is_empty();
-        let notifier = (*self.server).input_manager.idle_notifier;
-        if !notifier.is_null() {
-            ffi::wlr_idle_notifier_v1_set_inhibited(notifier, inhibited);
-        }
-        (*self.server).idle.set_inhibitors(names);
+        names
     }
+}
+
+/// Hand a recount ([`IdleInhibitManager::holders`]) to the idle notifier,
+/// whose inhibited flag clients see, and to the idle manager, which holds
+/// its timers while anyone inhibits and names them in `ccectl idle status`.
+pub unsafe fn publish(
+    names: Vec<String>,
+    notifier: *mut ffi::wlr_idle_notifier_v1,
+    idle: &mut crate::idle::IdleManager,
+) {
+    if !notifier.is_null() {
+        ffi::wlr_idle_notifier_v1_set_inhibited(notifier, !names.is_empty());
+    }
+    idle.set_inhibitors(names);
+}
+
+/// Recount and publish, from an entry point.
+unsafe fn recount(server: *mut Server, wm: &crate::window_manager::WindowManager) {
+    let names = (*server).idle_inhibit_manager.holders(wm);
+    publish(names, (*server).input_manager.idle_notifier, &mut (*server).idle);
 }
 
 /// What the status line calls one inhibitor: a window's app id, its title
@@ -130,7 +142,6 @@ pub struct IdleInhibitor {
 
 impl IdleInhibitor {
     pub unsafe fn create(
-        wm: &crate::window_manager::WindowManager,
         wlr_inhibitor: *mut ffi::wlr_idle_inhibitor_v1,
         inhibit_manager: *mut IdleInhibitManager,
     ) -> Result<*mut Self, &'static str> {
@@ -146,22 +157,15 @@ impl IdleInhibitor {
         let list_head = &mut (*inhibit_manager).inhibitors as *mut ffi::wl_list as *mut crate::server::WlList;
         crate::server::wl_list_insert((*list_head).prev, &mut (*inhibitor).link as *mut ffi::wl_list as *mut crate::server::WlList);
 
-        (*inhibit_manager).check_active(wm);
-
         Ok(inhibitor)
     }
 
-    /// `wm` is `None` at shutdown, which skips the recount.
-    pub unsafe fn destroy(inhibitor: *mut Self, wm: Option<&crate::window_manager::WindowManager>) {
+    /// The caller recounts after (not at shutdown, where nothing is left
+    /// to keep awake).
+    pub unsafe fn destroy(inhibitor: *mut Self) {
         (*inhibitor).listen_destroy.disconnect();
         crate::server::wl_list_remove(&mut (*inhibitor).link as *mut ffi::wl_list as *mut crate::server::WlList);
-        
-        let manager = (*inhibitor).inhibit_manager;
         let _boxed = Box::from_raw(inhibitor);
-        
-        if let Some(wm) = wm {
-            (*manager).check_active(wm);
-        }
     }
 }
 
@@ -172,10 +176,11 @@ unsafe extern "C" fn handle_new_idle_inhibitor(
     let manager = &mut *crate::container_of!(listener, IdleInhibitManager, new_idle_inhibitor);
     let inhibitor = data as *mut ffi::wlr_idle_inhibitor_v1;
 
-    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
-    if IdleInhibitor::create(wm, inhibitor, manager).is_err() {
+    if IdleInhibitor::create(inhibitor, manager).is_err() {
         log::error!("failed to create idle inhibitor");
     }
+    let server = crate::shared::server_ptr();
+    recount(server, &*crate::reentry::wm(server));
 }
 
 unsafe extern "C" fn handle_inhibitor_destroy(
@@ -183,5 +188,7 @@ unsafe extern "C" fn handle_inhibitor_destroy(
     _data: *mut std::ffi::c_void,
 ) {
     let inhibitor = crate::container_of!(listener, IdleInhibitor, listen_destroy);
-    IdleInhibitor::destroy(inhibitor, Some(&*crate::reentry::wm(crate::shared::server_ptr())));
+    IdleInhibitor::destroy(inhibitor);
+    let server = crate::shared::server_ptr();
+    recount(server, &*crate::reentry::wm(server));
 }

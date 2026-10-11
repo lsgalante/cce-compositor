@@ -17,15 +17,13 @@ pub enum LayerShellSeatFocus {
 }
 
 pub struct LayerShell {
-    pub server: *mut Server,
     pub wlr_shell: *mut ffi::wlr_layer_shell_v1,
     pub surfaces: SlotMap<*mut LayerSurface>,
     pub new_surface: crate::listener::Listener,
 }
 
 impl LayerShell {
-    pub unsafe fn init(&mut self, server: *mut Server, wl_display: *mut ffi::wl_display) -> Result<(), ()> {
-        self.server = server;
+    pub unsafe fn init(&mut self, wl_display: *mut ffi::wl_display) -> Result<(), ()> {
         self.wlr_shell = ffi::wlr_layer_shell_v1_create(wl_display, 4);
         if self.wlr_shell.is_null() {
             return Err(());
@@ -40,7 +38,9 @@ impl LayerShell {
         self.new_surface.disconnect();
     }
 
-    pub unsafe fn check_exclusive_focus(&mut self) {
+    /// Schedule keyboard focus for the topmost mapped exclusive layer
+    /// surface on every seat, or clear an exclusive focus none claims.
+    pub unsafe fn check_exclusive_focus(seats: &mut crate::seat::Seats) {
         let layers = [
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_TOP,
@@ -68,11 +68,11 @@ impl LayerShell {
             }
         }
 
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in seats.values_mut() {
             if !to_focus.is_null() {
-                (*seat).layer_shell.scheduled_focus = LayerShellSeatFocus::Exclusive((*to_focus).ref_key);
-            } else if matches!((*seat).layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_)) {
-                (*seat).layer_shell.scheduled_focus = LayerShellSeatFocus::None;
+                seat.layer_shell.scheduled_focus = LayerShellSeatFocus::Exclusive((*to_focus).ref_key);
+            } else if matches!(seat.layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_)) {
+                seat.layer_shell.scheduled_focus = LayerShellSeatFocus::None;
             }
         }
     }
@@ -98,7 +98,7 @@ unsafe extern "C" fn handle_new_surface(listener: *mut ffi::wl_listener, data: *
 
     // A layer surface that names no output goes on the first one.
     if (*wlr_layer_surface).output.is_null() {
-        if let Some(&output) = (*(*layer_shell).server).om.outputs.ptrs().first() {
+        if let Some(&output) = (*crate::shared::server_ptr()).om.outputs.ptrs().first() {
             log::info!("layer surface named no output, choosing the first");
             (*wlr_layer_surface).output = (*output).wlr_output;
         } else {
@@ -108,7 +108,7 @@ unsafe extern "C" fn handle_new_surface(listener: *mut ffi::wl_listener, data: *
         }
     }
 
-    if let Err(e) = LayerSurface::create(wlr_layer_surface, (*layer_shell).server) {
+    if let Err(e) = LayerSurface::create(wlr_layer_surface, crate::shared::server_ptr()) {
         log::error!("Failed to create layer surface: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_layer_surface).resource);
     }
@@ -116,7 +116,6 @@ unsafe extern "C" fn handle_new_surface(listener: *mut ffi::wl_listener, data: *
 
 pub struct LayerSurface {
     pub ref_key: Key,
-    pub server: *mut Server,
     pub wlr_layer_surface: *mut ffi::wlr_layer_surface_v1,
     pub scene_layer_surface: *mut ffi::wlr_scene_layer_surface_v1,
     pub popup_tree: crate::scene_handle::SceneTree,
@@ -160,7 +159,6 @@ impl LayerSurface {
 
         let layer_surface = Box::into_raw(Box::new(LayerSurface {
             ref_key: Key { generation: 0, index: 0 },
-            server,
             wlr_layer_surface,
             scene_layer_surface,
             popup_tree: crate::scene_handle::SceneTree::adopt(popup_tree),
@@ -228,7 +226,7 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
 
     ffi::river_wlr_surface_set_data((*(*layer_surface).wlr_layer_surface).surface, std::ptr::null_mut());
 
-    let server = (*layer_surface).server;
+    let server = crate::shared::server_ptr();
     (*server).layer_shell.surfaces.remove((*layer_surface).ref_key);
     let _ = Box::from_raw(layer_surface);
 }
@@ -289,12 +287,16 @@ impl LayerSurface {
             self.opacity,
         );
 
-        let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-        let timer = crate::event_source::Timer::add(
-            event_loop,
-            handle_animation_tick,
-            self as *mut LayerSurface as *mut _,
-        );
+        let display = crate::shared::shared().display();
+        let timer = if display.is_null() {
+            crate::event_source::Timer::new()
+        } else {
+            crate::event_source::Timer::add(
+                ffi::wl_display_get_event_loop(display),
+                handle_animation_tick,
+                self as *mut LayerSurface as *mut _,
+            )
+        };
         if !timer.is_set() {
             log::error!("Failed to create layer surface animation timer");
             // No timer means no ramp; land on the target rather than leave
@@ -358,7 +360,7 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
 
     log::debug!("layer surface {:?} mapped", CStr::from_ptr((*wlr_layer_surface).namespace));
 
-    let server = (*layer_surface).server;
+    let server = crate::shared::server_ptr();
 
     // Overlay layer only: these are the transient surfaces the user opens
     // (the launcher, the notifier), so a dissolve reads as the thing
@@ -389,7 +391,7 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
                 (*output).layer_shell.arrange(output);
             }
         }
-        (*server).layer_shell.check_exclusive_focus();
+        LayerShell::check_exclusive_focus(&mut (*server).input_manager.seats);
     });
 }
 
@@ -401,7 +403,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
 
     (*layer_surface).animation_timer.remove();
 
-    let server = (*layer_surface).server;
+    let server = crate::shared::server_ptr();
 
     update_scheduled_focus_and_dirty_windowing(server, || {
         for seat in (*server).input_manager.seats.ptrs() {
@@ -463,7 +465,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                 (*output).layer_shell.arrange(output);
             }
         }
-        (*server).layer_shell.check_exclusive_focus();
+        LayerShell::check_exclusive_focus(&mut (*server).input_manager.seats);
     });
 }
 
@@ -538,7 +540,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
         return;
     }
 
-    let server = (*layer_surface).server;
+    let server = crate::shared::server_ptr();
 
     // Position offset for cce-cloud sub-modules
     if !(*layer_surface).parent_offset_applied {
@@ -615,7 +617,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
     if (*wlr_layer_surface).initial_commit || ((*wlr_layer_surface).current.committed != 0) {
         update_scheduled_focus_and_dirty_windowing(server, || {
             (*output).layer_shell.arrange(output);
-            (*server).layer_shell.check_exclusive_focus();
+            LayerShell::check_exclusive_focus(&mut (*server).input_manager.seats);
         });
     }
 }

@@ -427,7 +427,7 @@ impl IdleManager {
         self.rearm(changed);
     }
 
-    /// From `IdleInhibitManager::check_active`: the set of clients holding
+    /// From `idle_inhibit_manager::publish`: the set of clients holding
     /// an inhibitor changed. The names are what `ccectl idle status` and the
     /// log report, so a display that never darkens can be traced to the app
     /// keeping it on rather than to a bare `inhibited=true`.
