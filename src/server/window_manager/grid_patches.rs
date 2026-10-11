@@ -215,11 +215,12 @@ impl WindowManager {
                 }),
             );
         };
-        for w in self.windows.iter() {
-            if w.is_null() || (*w).closed || !(*w).is_grid() {
+        for id in self.windows.ids() {
+            let Some(w) = self.windows.get(id) else { continue };
+            if w.closed || !w.is_grid() {
                 continue;
             }
-            if !matches!((*w).state, crate::window::WindowState::Mapped) {
+            if !matches!(w.state, crate::window::WindowState::Mapped) {
                 continue;
             }
             // A flight patch is sized for its destination, not for pan
@@ -229,28 +230,28 @@ impl WindowManager {
             // fraction of a viewport, and a pan has no fallback lattice to
             // cover what it outruns. Rendered at rest behind a patch that
             // already displays correctly, so the swap is invisible.
-            let upgrade = (*w).grid_patch_flight
+            let upgrade = w.grid_patch_flight
                 && !zoom_flight
-                && (*w).grid_patch_pending.is_none()
-                && (*w).grid_patch_acked.is_none();
+                && w.grid_patch_pending.is_none()
+                && w.grid_patch_acked.is_none();
             // A stale patch (style changed since it was rendered) is
             // re-issued regardless of coverage; a covering patch already in
             // flight is left to latch first, and the flag then re-sends
             // once it has become current.
-            let stale = (*w).grid_patch_stale;
-            if !stale && !upgrade && (*w).grid_patch_current.as_ref().map_or(false, &covers) {
+            let stale = w.grid_patch_stale;
+            if !stale && !upgrade && w.grid_patch_current.as_ref().map_or(false, &covers) {
                 continue;
             }
-            if let Some(cur) = &(*w).grid_patch_current {
+            if let Some(cur) = &w.grid_patch_current {
                 explain(if stale { "stale" } else { "current" }, cur);
             }
-            if let Some((_, pending)) = &(*w).grid_patch_pending {
+            if let Some((_, pending)) = &w.grid_patch_pending {
                 if covers(pending) {
                     continue;
                 }
                 explain("pending", pending);
             }
-            if let Some((serial, acked)) = &(*w).grid_patch_acked {
+            if let Some((serial, acked)) = &w.grid_patch_acked {
                 // Rendered but not yet committed: give it a frame.
                 let _ = (serial, acked);
                 continue;
@@ -289,7 +290,7 @@ impl WindowManager {
                 let (y0, ph) = span(ty - 0.25 * th, ty + 1.25 * th, ty + th * 0.5, period_y);
                 let patch = crate::policy::api::GridPatch { x: x0, y: y0, w: pw, h: ph, scale: q };
                 let reason = if stale { PatchReason::StyleReload } else { PatchReason::Flight };
-                self.send_grid_patch_to(w, patch, reason, true);
+                self.send_grid_patch_to(id, patch, reason, true);
                 continue;
             }
             // Coverage: the current viewport, unioned with a predicted
@@ -356,7 +357,7 @@ impl WindowManager {
             } else {
                 PatchReason::Coverage
             };
-            self.send_grid_patch_to(w, patch, reason, false);
+            self.send_grid_patch_to(id, patch, reason, false);
         }
     }
 
@@ -365,13 +366,14 @@ impl WindowManager {
     /// `update_grid_patches` upgrades to the roomy resting rect once the
     /// camera has landed and the client has latched it.
     pub(crate) unsafe fn send_grid_patch_to(
-        &self,
-        w: *mut crate::window::Window,
+        &mut self,
+        id: crate::policy::api::WindowId,
         patch: crate::policy::api::GridPatch,
         reason: PatchReason,
         flight: bool,
     ) {
-        crate::wm_scope!();
+        crate::wm_scope!(mut);
+        let w = window_mut!(self, id);
         // Re-sending the patch the client already has renders the same
         // pixels again and latches to the same anchor — nothing changes, so
         // the next arrange asks for it again: a silent re-render loop for as
@@ -382,26 +384,26 @@ impl WindowManager {
         // MEANS the same rect — the pixels are what changed.
         if reason != PatchReason::StyleReload {
             let same = |p: &crate::policy::api::GridPatch| *p == patch;
-            if (*w).grid_patch_pending.as_ref().map_or(false, |(_, p)| same(p))
-                || (*w).grid_patch_acked.as_ref().map_or(false, |(_, p)| same(p))
-                || (*w).grid_patch_current.as_ref().map_or(false, same)
+            if w.grid_patch_pending.as_ref().map_or(false, |(_, p)| same(p))
+                || w.grid_patch_acked.as_ref().map_or(false, |(_, p)| same(p))
+                || w.grid_patch_current.as_ref().map_or(false, same)
             {
                 // The upgrade would otherwise ask again on every arrange.
-                (*w).grid_patch_flight = flight;
+                w.grid_patch_flight = flight;
                 return;
             }
         }
-        (*w).grid_patch_serial = (*w).grid_patch_serial.wrapping_add(1);
-        let serial = (*w).grid_patch_serial;
+        w.grid_patch_serial = w.grid_patch_serial.wrapping_add(1);
+        let serial = w.grid_patch_serial;
         if (*self.server)
             .cce_window_management
-            .send_grid_patch((*w).ref_key, serial, patch)
+            .send_grid_patch(w.ref_key, serial, patch)
         {
             log::info!("[Grid] sent patch #{serial}: {:.0},{:.0} {:.0}x{:.0} @{:.3} ({})",
                 patch.x, patch.y, patch.w, patch.h, patch.scale, reason.tag());
-            (*w).grid_patch_pending = Some((serial, patch));
-            (*w).grid_patch_stale = false;
-            (*w).grid_patch_flight = flight;
+            w.grid_patch_pending = Some((serial, patch));
+            w.grid_patch_stale = false;
+            w.grid_patch_flight = flight;
         } else {
             log::info!("[Grid] patch #{serial} not sent (no toplevel resource yet)");
         }
@@ -428,14 +430,13 @@ impl WindowManager {
     /// Whether any mapped grid client has a patch issued but not yet
     /// latched — sent and unacked, or acked and awaiting the commit that
     /// carries its buffer.
-    pub unsafe fn grid_patch_in_air(&self) -> bool {
+    pub fn grid_patch_in_air(&self) -> bool {
         crate::wm_scope!();
-        self.windows.iter().any(|w| {
-            !w.is_null()
-                && !(*w).closed
-                && (*w).is_grid()
-                && matches!((*w).state, crate::window::WindowState::Mapped)
-                && ((*w).grid_patch_pending.is_some() || (*w).grid_patch_acked.is_some())
+        self.windows.values().any(|w| {
+            !w.closed
+                && w.is_grid()
+                && matches!(w.state, crate::window::WindowState::Mapped)
+                && (w.grid_patch_pending.is_some() || w.grid_patch_acked.is_some())
         })
     }
 
