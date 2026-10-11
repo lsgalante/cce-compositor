@@ -462,7 +462,7 @@ unsafe extern "C" fn handle_pointer_refresh_idle(data: *mut std::ffi::c_void) {
     while curr != seats_head {
         let next = (*curr).next;
         let seat = crate::container_of!(curr, Seat, link);
-        (*seat).cursor.refresh_after_scene_change();
+        (*seat).cursor.refresh_after_scene_change(&mut *crate::reentry::wm((*seat).server));
         curr = next;
     }
 }

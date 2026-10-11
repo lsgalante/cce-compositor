@@ -1685,7 +1685,7 @@ impl WindowManager {
                 || crate::shared::mode() == WindowManagerMode::Overview
                 || (*w).fullscreen_yields(self);
             if on_desk {
-                let (sx, sy) = (*w).virtual_to_screen((*w).virtual_x, (*w).virtual_y);
+                let (sx, sy) = (*w).virtual_to_screen(self, (*w).virtual_x, (*w).virtual_y);
                 (*w).rendering_requested.x = sx;
                 (*w).rendering_requested.y = sy;
                 (*w).scale = zoom;
@@ -2991,7 +2991,7 @@ pub(crate) unsafe extern "C" fn handle_edge_pan_tick(data: *mut std::ffi::c_void
     let zoom = (*wm).desk_zoom.max(0.01);
     (*wm).desk_pan_x += vx * dt / zoom;
     (*wm).desk_pan_y += vy * dt / zoom;
-    (*seat).op_update(ox, oy);
+    (*seat).op_update(&mut *wm, ox, oy);
     0
 }
 

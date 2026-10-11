@@ -6,6 +6,12 @@ use super::*;
 
 pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, axis_listener);
+    let wm = &mut *crate::reentry::wm((*cursor.seat).server);
+    on_axis(cursor, wm, data);
+}
+
+/// `handle_axis` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
+pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void) {
     let event = data as *mut ffi::wlr_pointer_axis_event;
     (*cursor.seat).handle_activity();
     
@@ -31,12 +37,11 @@ pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, dat
         ffi::wlr_keyboard_get_modifiers(wlr_keyboard)
     } else {
         0
-    } | (*crate::reentry::wm(seat.server)).injected_key_mods;
+    } | wm.injected_key_mods;
 
     if (modifiers & 0x44) == 0x44 {
         if (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL {
             if delta != 0.0 {
-                let wm = &mut (*crate::reentry::wm(seat.server));
                 // Each notch advances the zoom TARGET (successive notches
                 // accumulate into one glide); the animation tick eases the
                 // zoom there in log space, pivoting about the cursor every
@@ -115,7 +120,6 @@ pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, dat
     }
 
     if (modifiers & 0x40) != 0 || is_on_background || is_overview || was_panning {
-        let wm = &mut (*crate::reentry::wm(seat.server));
         let step = delta / wm.desk_zoom;
         let vertical =
             (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
@@ -186,10 +190,10 @@ pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, dat
     // A two-finger scroll over an app in `touchpad_view_apps` becomes a
     // view drag instead of a scroll (see `ViewDrag`), and one over that
     // app's own popup becomes a wheel (see `PopupWheel`).
-    if is_finger && cursor.view_drag_axis(event, delta, modifiers) {
+    if is_finger && cursor.view_drag_axis(wm, event, delta, modifiers) {
         return;
     }
-    if is_finger && cursor.popup_wheel_axis(event, delta, modifiers) {
+    if is_finger && cursor.popup_wheel_axis(wm, event, delta, modifiers) {
         return;
     }
     // A horizontal one over an app in `touchpad_hscroll_shift_apps` is
@@ -334,12 +338,12 @@ impl Cursor {
             && ffi::libinput_device_config_scroll_get_natural_scroll_enabled(handle) != 0
     }
 
-    unsafe fn begin_view_drag(&mut self, button: u32, from_pinch: bool) -> bool {
+    unsafe fn begin_view_drag(&mut self, wm: &mut crate::window_manager::WindowManager, button: u32, from_pinch: bool) -> bool {
         let Some((window, surface, sx, sy, ratio)) = self.view_drag_target() else { return false };
         let seat = &mut *self.seat;
         // Space must reach the window: give it keyboard focus as a click would.
         if seat.focused != crate::seat::Focus::Window(window) {
-            seat.focus(&mut *crate::reentry::wm(seat.server), crate::seat::Focus::Window(window));
+            seat.focus(wm, crate::seat::Focus::Window(window));
         }
         seat.ensure_synthetic_keyboard();
         let time = crate::util::msec_timestamp();
@@ -385,7 +389,7 @@ impl Cursor {
     /// `reason` names what ended it — "lift", "idle", "motion", "button",
     /// "key", "ctrl" or "pinch" — so a stall reported later is diagnosable
     /// from the session log alone.
-    pub unsafe fn end_view_drag(&mut self, reason: &str) {
+    pub unsafe fn end_view_drag(&mut self, wm: &mut crate::window_manager::WindowManager, reason: &str) {
         let Some(d) = self.view_drag.take() else { return };
         log::info!("[ViewDrag] end reason={} button={:#x} from_pinch={} at surface ({:.0}, {:.0})", reason, d.button, d.from_pinch, d.sx, d.sy);
         if !self.view_drag_timer.is_null() {
@@ -405,13 +409,13 @@ impl Cursor {
             }
         }
         // Put the client's idea of the pointer back where the cursor is.
-        self.passthrough(time);
+        self.passthrough(wm, time);
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
     }
 
     /// A finger-source axis event over a `touchpad_view_apps` window.
     /// Returns true when it was consumed by the emulation.
-    pub unsafe fn view_drag_axis(&mut self, event: *const ffi::wlr_pointer_axis_event, delta: f64, modifiers: u32) -> bool {
+    pub unsafe fn view_drag_axis(&mut self, wm: &mut crate::window_manager::WindowManager, event: *const ffi::wlr_pointer_axis_event, delta: f64, modifiers: u32) -> bool {
         const SHIFT: u32 = 0x1;
         const CTRL: u32 = 0x4;
         if matches!(&self.view_drag, Some(d) if d.from_pinch) {
@@ -420,7 +424,7 @@ impl Cursor {
         if delta == 0.0 {
             // The fingers lifted.
             if self.view_drag.is_some() {
-                self.end_view_drag("lift");
+                self.end_view_drag(wm, "lift");
                 return true;
             }
             return false;
@@ -428,14 +432,14 @@ impl Cursor {
         if modifiers & CTRL != 0 {
             // Houdini's own wheel modifier: a plain scroll.
             if self.view_drag.is_some() {
-                self.end_view_drag("ctrl");
+                self.end_view_drag(wm, "ctrl");
             }
             return false;
         }
         if self.view_drag.is_none() {
             let tumble = crate::shared::layout().touchpad_view_swipe_tumble != (modifiers & SHIFT != 0);
             let button = if tumble { BTN_LEFT } else { BTN_MIDDLE };
-            if !self.begin_view_drag(button, false) {
+            if !self.begin_view_drag(wm, button, false) {
                 return false;
             }
         }
@@ -454,11 +458,11 @@ impl Cursor {
         true
     }
 
-    pub unsafe fn view_drag_pinch_begin(&mut self) -> bool {
+    pub unsafe fn view_drag_pinch_begin(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
         if self.view_drag.is_some() {
-            self.end_view_drag("pinch");
+            self.end_view_drag(wm, "pinch");
         }
-        self.begin_view_drag(BTN_RIGHT, true)
+        self.begin_view_drag(wm, BTN_RIGHT, true)
     }
 
     pub unsafe fn view_drag_pinch_update(&mut self, scale: f64) -> bool {
@@ -474,9 +478,9 @@ impl Cursor {
         true
     }
 
-    pub unsafe fn view_drag_pinch_end(&mut self) -> bool {
+    pub unsafe fn view_drag_pinch_end(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
         if matches!(&self.view_drag, Some(d) if d.from_pinch) {
-            self.end_view_drag("lift");
+            self.end_view_drag(wm, "lift");
             return true;
         }
         false
@@ -537,9 +541,7 @@ impl Cursor {
     /// check is what keeps a synthetic Ctrl from landing in some other
     /// client: the popup takes focus itself when it wants it, otherwise
     /// focus stays on the window it belongs to.
-    unsafe fn popup_wheel_target(&mut self) -> Option<*mut ffi::wlr_surface> {
-        let server = (*self.seat).server;
-        let wm = &(*crate::reentry::wm(server));
+    unsafe fn popup_wheel_target(&mut self, wm: &mut crate::window_manager::WindowManager) -> Option<*mut ffi::wlr_surface> {
         if crate::shared::layout().touchpad_view_apps.is_empty() {
             return None;
         }
@@ -641,7 +643,7 @@ impl Cursor {
 
     /// A finger-source axis event over such a popup, emitted to it as whole
     /// wheel notches under a held Ctrl. Returns true when consumed.
-    pub unsafe fn popup_wheel_axis(&mut self, event: *const ffi::wlr_pointer_axis_event, delta: f64, modifiers: u32) -> bool {
+    pub unsafe fn popup_wheel_axis(&mut self, wm: &mut crate::window_manager::WindowManager, event: *const ffi::wlr_pointer_axis_event, delta: f64, modifiers: u32) -> bool {
         const CTRL: u32 = 0x4;
         if delta == 0.0 {
             // The fingers lifted.
@@ -660,7 +662,7 @@ impl Cursor {
             return false;
         }
         if self.popup_wheel.is_none() {
-            let Some(surface) = self.popup_wheel_target() else { return false };
+            let Some(surface) = self.popup_wheel_target(wm) else { return false };
             let seat = &mut *self.seat;
             seat.ensure_synthetic_keyboard();
             let mut repeat = None;
@@ -713,7 +715,7 @@ impl Cursor {
 
 pub(crate) unsafe extern "C" fn handle_view_drag_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let cursor = &mut *(data as *mut Cursor);
-    cursor.end_view_drag("idle");
+    cursor.end_view_drag(&mut *crate::reentry::wm((*cursor.seat).server), "idle");
     cursor.end_popup_wheel("idle");
     cursor.end_hscroll_shift("idle");
     0

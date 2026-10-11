@@ -432,12 +432,12 @@ impl Cursor {
         // It is only changed on mapping, click, touch, or shortcut focus transitions.
     }
 
-    pub unsafe fn update_state(&mut self) {
+    pub unsafe fn update_state(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if !self.constraint.is_null() {
             (*self.constraint).update_state();
         }
         self.update_hovered();
-        self.passthrough(crate::util::msec_timestamp());
+        self.passthrough(wm, crate::util::msec_timestamp());
     }
 
     /// Re-evaluate pointer focus at the current position after the scene
@@ -450,11 +450,11 @@ impl Cursor {
     /// owns the pointer during a drag/resize op and `op_end_pointer` restores
     /// focus itself; an implicit client grab is already handled inside
     /// `passthrough`.
-    pub unsafe fn refresh_after_scene_change(&mut self) {
+    pub unsafe fn refresh_after_scene_change(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if (*self.seat).op.is_some() {
             return;
         }
-        self.update_state();
+        self.update_state(wm);
     }
 
     pub unsafe fn update_drag_icons(&mut self) {
@@ -647,7 +647,7 @@ impl Cursor {
         self.arm_next_frame(idx);
     }
 
-    pub unsafe fn op_start_pointer(&mut self) {
+    pub unsafe fn op_start_pointer(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if !self.constraint.is_null() {
             if let crate::pointer_constraint::PointerConstraintState::Active { .. } = (*self.constraint).state {
                 (*self.constraint).deactivate();
@@ -670,15 +670,15 @@ impl Cursor {
             && !(*grabbed).is_status_bar()
             && (*grabbed).tiling_mode == crate::tiling::TilingMode::Floating
         {
-            (*crate::reentry::wm((*self.seat).server)).raise_window(grabbed);
+            wm.raise_window(grabbed);
             crate::shared::pending().dirty_windowing();
         }
     }
 
-    pub unsafe fn op_end_pointer(&mut self) {
+    pub unsafe fn op_end_pointer(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if self.pressed.is_empty() {
             log::debug!("entering cursor mode passthrough");
-            self.update_state();
+            self.update_state(wm);
         } else {
             log::debug!("entering cursor mode ignore");
         }
@@ -691,6 +691,7 @@ impl Cursor {
     /// `wm.windows`.
     pub unsafe fn set_border_hover(
         &mut self,
+        wm: &mut crate::window_manager::WindowManager,
         target: *mut crate::window::Window,
         element: Option<crate::window::BorderElement>,
     ) {
@@ -699,7 +700,6 @@ impl Cursor {
         }
         let old = self.hovered_border_window;
         if !old.is_null() && old != target {
-            let wm = &(*crate::reentry::wm((*self.seat).server));
             if wm.windows.iter().any(|&w| w == old) && !(*old).closed {
                 (*old).hovered_border_element = None;
             }
@@ -712,21 +712,21 @@ impl Cursor {
         // Borders rest invisible and fade in, so the change in hover target is
         // the start of an animation rather than a repaint: the fade timer
         // repaints every affected window as it steps.
-        (*crate::reentry::wm((*self.seat).server)).arm_border_fade();
+        wm.arm_border_fade();
     }
 
     /// Move the Super-held adjust target to `target` (null to clear). The
     /// ring eases off the old window and onto the new one through the same
     /// border fade a hover swap uses, so a change arms that timer.
-    pub unsafe fn set_adjust_hover(&mut self, target: *mut crate::window::Window) {
+    pub unsafe fn set_adjust_hover(&mut self, wm: &mut crate::window_manager::WindowManager, target: *mut crate::window::Window) {
         if self.adjust_hover == target {
             return;
         }
         self.adjust_hover = target;
-        (*crate::reentry::wm((*self.seat).server)).arm_border_fade();
+        wm.arm_border_fade();
     }
 
-    pub unsafe fn passthrough(&mut self, time_msec: u32) {
+    pub unsafe fn passthrough(&mut self, wm: &mut crate::window_manager::WindowManager, time_msec: u32) {
         let lx = self.x();
         let ly = self.y();
         let server = (*self.seat).server;
@@ -765,7 +765,7 @@ impl Cursor {
                     // Still guarded on the grid owning the focus: if the
                     // grid remapped mid-grab (client restart), the frozen
                     // values must not map points for its replacement.
-                    if let Some((gsurf, ..)) = grid_node_info(server) {
+                    if let Some((gsurf, ..)) = grid_node_info(wm) {
                         if gsurf == focused {
                             ffi::wlr_seat_pointer_notify_motion(
                                 (*self.seat).wlr_seat,
@@ -791,15 +791,15 @@ impl Cursor {
             let lock_state = (*server).lock_manager.state;
             if lock_state != crate::lock_manager::LockState::Unlocked {
                 if !matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
-                    self.set_border_hover(std::ptr::null_mut(), None);
-                    self.set_adjust_hover(std::ptr::null_mut());
+                    self.set_border_hover(wm, std::ptr::null_mut(), None);
+                    self.set_adjust_hover(wm, std::ptr::null_mut());
                     self.clear_focus();
                     return;
                 }
             } else {
                 if matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
-                    self.set_border_hover(std::ptr::null_mut(), None);
-                    self.set_adjust_hover(std::ptr::null_mut());
+                    self.set_border_hover(wm, std::ptr::null_mut(), None);
+                    self.set_adjust_hover(wm, std::ptr::null_mut());
                     self.clear_focus();
                     return;
                 }
@@ -826,7 +826,7 @@ impl Cursor {
                     // pointer, focused or not. Set BEFORE the zone test
                     // below, so the band is live on the first hover. (Null
                     // for the status bar, wallpaper and grid.)
-                    self.set_adjust_hover(if crate::shared::window_adjust_active() {
+                    self.set_adjust_hover(wm, if crate::shared::window_adjust_active() {
                         hovered_toplevel
                     } else {
                         std::ptr::null_mut()
@@ -842,20 +842,20 @@ impl Cursor {
                     {
                         match get_border_zone(window, lx, ly) {
                             BorderZone::Resize(edges) => {
-                                self.set_border_hover(window, Some(border_element_for_edges(edges)));
+                                self.set_border_hover(wm, window, Some(border_element_for_edges(edges)));
                                 ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
                                 let cursor_name = get_resize_cursor_name(edges);
                                 self.set_xcursor(cursor_name.as_ptr() as *const _);
                                 return;
                             }
                             BorderZone::Move => {
-                                self.set_border_hover(window, Some(crate::window::BorderElement::Top));
+                                self.set_border_hover(wm, window, Some(crate::window::BorderElement::Top));
                                 ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
                                 self.set_xcursor(b"grab\0".as_ptr() as *const _);
                                 return;
                             }
                             BorderZone::Button(elem) => {
-                                self.set_border_hover(window, Some(elem));
+                                self.set_border_hover(wm, window, Some(elem));
                                 ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
                                 self.set_xcursor(b"pointer\0".as_ptr() as *const _);
                                 return;
@@ -866,13 +866,13 @@ impl Cursor {
                 }
                 SceneNodeDataVal::OverrideRedirect(_) => {
                     is_window = true;
-                    self.set_adjust_hover(std::ptr::null_mut());
+                    self.set_adjust_hover(wm, std::ptr::null_mut());
                 }
                 _ => {
-                    self.set_adjust_hover(std::ptr::null_mut());
+                    self.set_adjust_hover(wm, std::ptr::null_mut());
                 }
             }
-            self.set_border_hover(std::ptr::null_mut(), None);
+            self.set_border_hover(wm, std::ptr::null_mut(), None);
 
             // Chrome — a Popup (the cce-cloud launcher) or an Overlay dock —
             // is live UI during overview, not a spatial thumbnail: the button
@@ -920,7 +920,7 @@ impl Cursor {
                 {
                     let prev = (*self.seat).suppress_focus_pan;
                     (*self.seat).suppress_focus_pan = true;
-                    (*self.seat).focus(&mut *crate::reentry::wm((*self.seat).server), crate::seat::Focus::Window(hovered_toplevel));
+                    (*self.seat).focus(wm, crate::seat::Focus::Window(hovered_toplevel));
                     (*self.seat).suppress_focus_pan = prev;
                 }
                 self.clear_focus();
@@ -945,7 +945,7 @@ impl Cursor {
         // it, and only while the pointer is over the background, so clicks,
         // hover and the overview background-exit are untouched.
         if (*self.seat).drag != crate::seat::DragState::None {
-            if let Some((surface, sx, sy)) = grid_surface_at(server, lx, ly) {
+            if let Some((surface, sx, sy)) = grid_surface_at(wm, lx, ly) {
                 log::debug!("[drag] focus -> grid at ({lx:.0}, {ly:.0})");
                 ffi::wlr_seat_pointer_notify_enter((*self.seat).wlr_seat, surface, sx, sy);
                 ffi::wlr_seat_pointer_notify_motion((*self.seat).wlr_seat, time_msec, sx, sy);
@@ -953,8 +953,8 @@ impl Cursor {
             }
         }
 
-        self.set_border_hover(std::ptr::null_mut(), None);
-        self.set_adjust_hover(std::ptr::null_mut());
+        self.set_border_hover(wm, std::ptr::null_mut(), None);
+        self.set_adjust_hover(wm, std::ptr::null_mut());
         self.clear_focus();
     }
 
@@ -1003,14 +1003,14 @@ impl Cursor {
     /// op-update-or-passthrough, mirroring `handle_motion`). `wlr_cursor_warp` takes
     /// layout pixels — `wlr_cursor_warp_absolute` is 0..1-normalized, which is the
     /// bug the old `pointer-move-to` had.
-    pub unsafe fn inject_motion_to(&mut self, x: f64, y: f64) {
+    pub unsafe fn inject_motion_to(&mut self, wm: &mut crate::window_manager::WindowManager, x: f64, y: f64) {
         self.unhide_after_touch();
-        self.warp_to(x, y);
+        self.warp_to(wm, x, y);
     }
 
     /// `inject_motion_to` without bringing a touch-hidden cursor back: the
     /// emulated pointer of a touch (`TouchRoute::Pointer`) moves this way.
-    pub(crate) unsafe fn warp_to(&mut self, x: f64, y: f64) {
+    pub(crate) unsafe fn warp_to(&mut self, wm: &mut crate::window_manager::WindowManager, x: f64, y: f64) {
         (*self.seat).handle_activity();
         ffi::wlr_cursor_warp(self.wlr_cursor, std::ptr::null_mut(), x, y);
         self.update_hovered();
@@ -1019,16 +1019,16 @@ impl Cursor {
         if seat.op.is_some() {
             let lx = (*self.wlr_cursor).x as i32;
             let ly = (*self.wlr_cursor).y as i32;
-            seat.op_update(lx, ly);
+            seat.op_update(wm, lx, ly);
             return;
         }
-        self.passthrough(crate::util::msec_timestamp());
+        self.passthrough(wm, crate::util::msec_timestamp());
         // Real devices terminate every motion batch with a frame; sctk-based clients
         // queue pointer events until they see one.
         handle_frame(self.frame_listener.as_ptr(), std::ptr::null_mut());
     }
 
-    pub unsafe fn inject_motion_by(&mut self, dx: f64, dy: f64) {
+    pub unsafe fn inject_motion_by(&mut self, wm: &mut crate::window_manager::WindowManager, dx: f64, dy: f64) {
         let mut ev = ffi::wlr_pointer_motion_event {
             pointer: std::ptr::null_mut(),
             time_msec: crate::util::msec_timestamp(),
@@ -1037,14 +1037,13 @@ impl Cursor {
             unaccel_dx: dx,
             unaccel_dy: dy,
         };
-        handle_motion(
-            self.motion_listener.as_ptr(),
+        on_motion(self, wm,
             &mut ev as *mut ffi::wlr_pointer_motion_event as *mut std::ffi::c_void,
         );
         handle_frame(self.frame_listener.as_ptr(), std::ptr::null_mut());
     }
 
-    pub unsafe fn inject_button(&mut self, button: u32, pressed: bool) {
+    pub unsafe fn inject_button(&mut self, wm: &mut crate::window_manager::WindowManager, button: u32, pressed: bool) {
         let state = if pressed {
             ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED
         } else {
@@ -1056,8 +1055,7 @@ impl Cursor {
             button,
             state,
         };
-        handle_button(
-            self.button_listener.as_ptr(),
+        on_button(self, wm,
             &mut ev as *mut ffi::wlr_pointer_button_event as *mut std::ffi::c_void,
         );
         handle_frame(self.frame_listener.as_ptr(), std::ptr::null_mut());
@@ -1070,7 +1068,7 @@ impl Cursor {
     /// exercise the trackpad paths — the compositor's own desk pan and what
     /// X11/Wayland clients receive. A finger scroll ends with a zero-delta
     /// event, which `finger_stop` sends.
-    pub unsafe fn inject_scroll(&mut self, dy: f64, dx: f64, finger: bool) {
+    pub unsafe fn inject_scroll(&mut self, wm: &mut crate::window_manager::WindowManager, dy: f64, dx: f64, finger: bool) {
         let time = crate::util::msec_timestamp();
         for (delta, orientation) in [
             (dy, ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL),
@@ -1092,8 +1090,7 @@ impl Cursor {
                 delta,
                 delta_discrete: if finger { 0 } else { ((delta / 15.0) * 120.0) as i32 },
             };
-            handle_axis(
-                self.axis_listener.as_ptr(),
+            on_axis(self, wm,
                 &mut ev as *mut ffi::wlr_pointer_axis_event as *mut std::ffi::c_void,
             );
         }
@@ -1106,7 +1103,7 @@ impl Cursor {
 
     /// The zero-delta event that ends a finger scroll (libinput sends one
     /// when the fingers lift); see `inject_scroll`.
-    pub unsafe fn inject_finger_stop(&mut self) {
+    pub unsafe fn inject_finger_stop(&mut self, wm: &mut crate::window_manager::WindowManager) {
         let time = crate::util::msec_timestamp();
         for orientation in [
             ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL,
@@ -1121,8 +1118,7 @@ impl Cursor {
                 delta: 0.0,
                 delta_discrete: 0,
             };
-            handle_axis(
-                self.axis_listener.as_ptr(),
+            on_axis(self, wm,
                 &mut ev as *mut ffi::wlr_pointer_axis_event as *mut std::ffi::c_void,
             );
         }
@@ -1138,20 +1134,20 @@ impl Cursor {
     /// pointer-gestures forward to clients headlessly.
     /// One stage of a pinch, for a test that paces the updates itself:
     /// `stage` is "begin", "update" (with `scale`/`rotation`) or "end".
-    pub unsafe fn inject_pinch_stage(&mut self, stage: &str, scale: f64, rotation: f64) {
+    pub unsafe fn inject_pinch_stage(&mut self, wm: &mut crate::window_manager::WindowManager, stage: &str, scale: f64, rotation: f64) {
         let time = crate::util::msec_timestamp();
         match stage {
             "begin" => {
                 let mut ev = ffi::wlr_pointer_pinch_begin_event { pointer: std::ptr::null_mut(), time_msec: time, fingers: 2 };
-                handle_pinch_begin(self.pinch_begin_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
+                on_pinch_begin(self, wm, &mut ev as *mut _ as *mut std::ffi::c_void);
             }
             "update" => {
                 let mut ev = ffi::wlr_pointer_pinch_update_event { pointer: std::ptr::null_mut(), time_msec: time, fingers: 2, dx: 0.0, dy: 0.0, scale, rotation };
-                handle_pinch_update(self.pinch_update_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
+                on_pinch_update(self, wm, &mut ev as *mut _ as *mut std::ffi::c_void);
             }
             _ => {
                 let mut ev = ffi::wlr_pointer_pinch_end_event { pointer: std::ptr::null_mut(), time_msec: time, cancelled: false };
-                handle_pinch_end(self.pinch_end_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
+                on_pinch_end(self, wm, &mut ev as *mut _ as *mut std::ffi::c_void);
             }
         }
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1160,22 +1156,22 @@ impl Cursor {
     /// One stage of a touchpad swipe, paced by the caller (`pointer-swipe
     /// begin <fingers> | update <dx> <dy> | end`): what lets a shadow hold
     /// a swipe short of its threshold and read the camera's peek back.
-    pub unsafe fn inject_swipe_stage(&mut self, stage: &str, fingers: u32, dx: f64, dy: f64) {
+    pub unsafe fn inject_swipe_stage(&mut self, wm: &mut crate::window_manager::WindowManager, stage: &str, fingers: u32, dx: f64, dy: f64) {
         let time = crate::util::msec_timestamp();
         match stage {
             "begin" => {
                 self.inject_swipe_fingers = fingers;
                 let mut ev = ffi::wlr_pointer_swipe_begin_event { pointer: std::ptr::null_mut(), time_msec: time, fingers };
-                handle_swipe_begin(self.swipe_begin_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
+                on_swipe_begin(self, wm, &mut ev as *mut _ as *mut std::ffi::c_void);
             }
             "update" => {
                 let fingers = self.inject_swipe_fingers;
                 let mut ev = ffi::wlr_pointer_swipe_update_event { pointer: std::ptr::null_mut(), time_msec: time, fingers, dx, dy };
-                handle_swipe_update(self.swipe_update_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
+                on_swipe_update(self, wm, &mut ev as *mut _ as *mut std::ffi::c_void);
             }
             _ => {
                 let mut ev = ffi::wlr_pointer_swipe_end_event { pointer: std::ptr::null_mut(), time_msec: time, cancelled: false };
-                handle_swipe_end(self.swipe_end_listener.as_ptr(), &mut ev as *mut _ as *mut std::ffi::c_void);
+                on_swipe_end(self, wm, &mut ev as *mut _ as *mut std::ffi::c_void);
             }
         }
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1185,15 +1181,14 @@ impl Cursor {
     /// that together move the gesture centre by (`dx`, `dy`), end. Drives
     /// the gesture-bind table (`swipe3_left` in input.kdl) headlessly;
     /// the pointer-gestures forward to clients runs too.
-    pub unsafe fn inject_swipe(&mut self, fingers: u32, dx: f64, dy: f64, steps: u32) {
+    pub unsafe fn inject_swipe(&mut self, wm: &mut crate::window_manager::WindowManager, fingers: u32, dx: f64, dy: f64, steps: u32) {
         let time = crate::util::msec_timestamp();
         let mut begin = ffi::wlr_pointer_swipe_begin_event {
             pointer: std::ptr::null_mut(),
             time_msec: time,
             fingers,
         };
-        handle_swipe_begin(
-            self.swipe_begin_listener.as_ptr(),
+        on_swipe_begin(self, wm,
             &mut begin as *mut ffi::wlr_pointer_swipe_begin_event as *mut std::ffi::c_void,
         );
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1206,8 +1201,7 @@ impl Cursor {
                 dx: dx / steps as f64,
                 dy: dy / steps as f64,
             };
-            handle_swipe_update(
-                self.swipe_update_listener.as_ptr(),
+            on_swipe_update(self, wm,
                 &mut update as *mut ffi::wlr_pointer_swipe_update_event as *mut std::ffi::c_void,
             );
             ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1217,22 +1211,20 @@ impl Cursor {
             time_msec: time + steps + 1,
             cancelled: false,
         };
-        handle_swipe_end(
-            self.swipe_end_listener.as_ptr(),
+        on_swipe_end(self, wm,
             &mut end as *mut ffi::wlr_pointer_swipe_end_event as *mut std::ffi::c_void,
         );
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
     }
 
-    pub unsafe fn inject_pinch(&mut self, scale: f64, rotation: f64, steps: u32) {
+    pub unsafe fn inject_pinch(&mut self, wm: &mut crate::window_manager::WindowManager, scale: f64, rotation: f64, steps: u32) {
         let time = crate::util::msec_timestamp();
         let mut begin = ffi::wlr_pointer_pinch_begin_event {
             pointer: std::ptr::null_mut(),
             time_msec: time,
             fingers: 2,
         };
-        handle_pinch_begin(
-            self.pinch_begin_listener.as_ptr(),
+        on_pinch_begin(self, wm,
             &mut begin as *mut ffi::wlr_pointer_pinch_begin_event as *mut std::ffi::c_void,
         );
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1248,8 +1240,7 @@ impl Cursor {
                 scale: 1.0 + (scale - 1.0) * t,
                 rotation: rotation * t,
             };
-            handle_pinch_update(
-                self.pinch_update_listener.as_ptr(),
+            on_pinch_update(self, wm,
                 &mut update as *mut ffi::wlr_pointer_pinch_update_event as *mut std::ffi::c_void,
             );
             ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1259,8 +1250,7 @@ impl Cursor {
             time_msec: time + steps + 1,
             cancelled: false,
         };
-        handle_pinch_end(
-            self.pinch_end_listener.as_ptr(),
+        on_pinch_end(self, wm,
             &mut end as *mut ffi::wlr_pointer_pinch_end_event as *mut std::ffi::c_void,
         );
         ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
@@ -1269,6 +1259,12 @@ impl Cursor {
 
 unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, motion_listener);
+    let wm = &mut *crate::reentry::wm((*cursor.seat).server);
+    on_motion(cursor, wm, data);
+}
+
+/// `handle_motion` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
+pub(crate) unsafe fn on_motion(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void) {
     let event = data as *mut ffi::wlr_pointer_motion_event;
     // Pointer input is activity for the idle timeouts and the idle-notify
     // clients. Injected events (`ccectl pointer-*`) arrive here too, and
@@ -1277,7 +1273,7 @@ unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut s
     // Real pointer motion ends an emulated view drag: the client must not
     // see the synthetic drag position and the true one interleaved.
     if cursor.view_drag.is_some() {
-        cursor.end_view_drag("motion");
+        cursor.end_view_drag(wm, "motion");
     }
     // Likewise the held Shift must not ride along to wherever the pointer
     // goes next.
@@ -1314,7 +1310,7 @@ unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut s
     if (*seat).op.is_some() {
         let lx = (*cursor.wlr_cursor).x as i32;
         let ly = (*cursor.wlr_cursor).y as i32;
-        (*seat).op_update(lx, ly);
+        (*seat).op_update(wm, lx, ly);
         if let (Some(s), Some(m), Some(h), Some(d)) = (t_start, t_move, t_hovered, t_drag) {
             log::info!(
                 "[cce-frame] t={} motion(op) total={}us move={}us hovered={}us drag={}us",
@@ -1325,7 +1321,7 @@ unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut s
         return;
     }
 
-    cursor.passthrough((*event).time_msec);
+    cursor.passthrough(wm, (*event).time_msec);
 
     if let (Some(s), Some(m), Some(h), Some(d)) = (t_start, t_move, t_hovered, t_drag) {
         let total = s.elapsed().as_micros();
@@ -1339,6 +1335,12 @@ unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut s
 
 unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let cursor = &mut *crate::container_of!(listener, Cursor, motion_absolute_listener);
+    let wm = &mut *crate::reentry::wm((*cursor.seat).server);
+    on_motion_absolute(cursor, wm, data);
+}
+
+/// `handle_motion_absolute` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
+pub(crate) unsafe fn on_motion_absolute(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void) {
     let event = data as *mut ffi::wlr_pointer_motion_absolute_event;
     (*cursor.seat).handle_activity();
     cursor.unhide_after_touch();
@@ -1356,11 +1358,11 @@ unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, dat
     if (*seat).op.is_some() {
         let lx = (*cursor.wlr_cursor).x as i32;
         let ly = (*cursor.wlr_cursor).y as i32;
-        (*seat).op_update(lx, ly);
+        (*seat).op_update(wm, lx, ly);
         return;
     }
 
-    cursor.passthrough((*event).time_msec);
+    cursor.passthrough(wm, (*event).time_msec);
 }
 
 /// True when the layer surface's namespace marks it as cce-cloud chrome —
@@ -1396,7 +1398,7 @@ pub(crate) unsafe fn layer_takes_click_focus(layer_surface: *mut crate::layer_sh
 /// lands outside of. Shared by a pointer press (`handle_button`) and a
 /// touch that goes to a client as touch (`handle_touch_down`); an
 /// emulated touch arrives as a pointer press and runs it there.
-pub(crate) unsafe fn press_dismissals(server: *mut crate::server::Server, lx: f64, ly: f64) {
+pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowManager, server: *mut crate::server::Server, lx: f64, ly: f64) {
     // Click-away-close for in-surface status menus: if any status
     // segment is expanded (menu open) and this press did not land on it,
     // push a one-shot dismiss over the status socket. The line carries
@@ -1412,14 +1414,14 @@ pub(crate) unsafe fn press_dismissals(server: *mut crate::server::Server, lx: f6
                 }
             }
         }
-        let any_other_expanded = (*crate::reentry::wm(server)).any_expanded_status_segment(target_status);
+        let any_other_expanded = wm.any_expanded_status_segment(target_status);
         if any_other_expanded {
             let except = if target_status.is_null() {
                 "-".to_string()
             } else {
                 (*target_status).get_app_id_string().unwrap_or_else(|| "-".to_string())
             };
-            if let Some(ref sender) = (*crate::reentry::wm(server)).status_sender {
+            if let Some(ref sender) = wm.status_sender {
                 sender.send_menu_dismiss(&except);
             }
         }
@@ -1452,7 +1454,7 @@ pub(crate) unsafe fn press_dismissals(server: *mut crate::server::Server, lx: f6
                 None => false,
             };
             if !on_x11 {
-                if let Some(ref sender) = (*crate::reentry::wm(server)).status_sender {
+                if let Some(ref sender) = wm.status_sender {
                     sender.send_click_away();
                 }
             }

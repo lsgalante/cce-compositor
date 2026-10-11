@@ -381,7 +381,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         && !group.seat.is_null()
         && (*group.seat).cursor.view_drag.is_some()
     {
-        (*group.seat).cursor.end_view_drag("key");
+        (*group.seat).cursor.end_view_drag(&mut *crate::reentry::wm((*group.seat).server), "key");
     }
     if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
         && !group.seat.is_null()

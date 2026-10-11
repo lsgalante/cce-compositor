@@ -1576,7 +1576,7 @@ impl Window {
         if self.wants_map_fade() && fade_ms > 0 {
             self.map_fade = 0.0;
         }
-        self.start_map_fade(1.0, fade_ms);
+        self.start_map_fade(&mut *crate::reentry::wm(self.server), 1.0, fade_ms);
 
         crate::shared::pending().dirty_windowing();
         Ok(())
@@ -1801,7 +1801,7 @@ impl Window {
             self.virtual_y = self.resize_start_vy + (self.resize_start_h as f64 - committed_h as f64);
         }
 
-        let (final_x, final_y) = self.virtual_to_screen(self.virtual_x, self.virtual_y);
+        let (final_x, final_y) = self.virtual_to_screen(&*crate::reentry::wm(self.server), self.virtual_x, self.virtual_y);
         self.rendering_requested.x = final_x;
         self.rendering_requested.y = final_y;
         self.box_geom.x = final_x;

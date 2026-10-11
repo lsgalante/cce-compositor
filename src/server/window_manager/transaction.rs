@@ -67,7 +67,7 @@ impl WindowManager {
         while curr_seat != seats_list {
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
             if (*seat).op.is_none() {
-                (*seat).cursor.passthrough(now);
+                (*seat).cursor.passthrough(self, now);
             }
             curr_seat = (*curr_seat).next;
         }

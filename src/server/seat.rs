@@ -352,7 +352,7 @@ impl Seat {
             if self.touch_devices == 0 && !self.touch_injected {
                 let ids: Vec<i32> = self.cursor.touch_points.keys().copied().collect();
                 for id in ids {
-                    self.cursor.touch_cancel(id);
+                    self.cursor.touch_cancel(&mut *crate::reentry::wm(self.server), id);
                 }
             }
         }
@@ -960,13 +960,13 @@ impl Seat {
     }
 
     /// Snap parameters for interactive ops, from the current layout config.
-    unsafe fn snap_params(&self) -> crate::policy::snap::SnapParams {
+    unsafe fn snap_params(&self, wm: &crate::window_manager::WindowManager) -> crate::policy::snap::SnapParams {
         // Zoom-aware: the felt grab distance stays constant in screen px.
-        crate::shared::layout().snap_params().for_zoom((*crate::reentry::wm(self.server)).desk_zoom)
+        crate::shared::layout().snap_params().for_zoom(wm.desk_zoom)
     }
 
-    pub unsafe fn op_update(&mut self, x: i32, y: i32) {
-        let sp = self.snap_params();
+    pub unsafe fn op_update(&mut self, wm: &mut crate::window_manager::WindowManager, x: i32, y: i32) {
+        let sp = self.snap_params(wm);
         if let Some(ref mut op) = self.op {
             op.x = x;
             op.y = y;
@@ -983,9 +983,9 @@ impl Seat {
                 // the grid scrolls away beneath them.
                 let travelled = dx.abs() > crate::selection::DRAG_THRESHOLD
                     || dy.abs() > crate::selection::DRAG_THRESHOLD;
-                (*crate::reentry::wm(self.server)).selection_motion(x as f64, y as f64, travelled);
-                (*crate::reentry::wm(self.server)).queue_op_frame();
-                self.update_edge_pan(x as f64, y as f64);
+                wm.selection_motion(x as f64, y as f64, travelled);
+                wm.queue_op_frame();
+                self.update_edge_pan(wm, x as f64, y as f64);
                 return;
             }
 
@@ -994,18 +994,18 @@ impl Seat {
                 // group's, snapped to whole cells when a Tiled window is
                 // along (measured on that window, so it lands on cells).
                 let op = *op;
-                let delta = (*crate::reentry::wm(self.server)).op_virtual_delta(&op);
+                let delta = wm.op_virtual_delta(&op);
                 let (gdx, gdy) = crate::policy::drag::group_offset(
                     (op.start_win_virtual_x, op.start_win_virtual_y),
                     delta,
                     op.start_was_tiled,
                     &sp,
                 );
-                (*crate::reentry::wm(self.server)).arm_border_fade();
-                carry_group_windows(self.server, &self.group_move, std::ptr::null_mut(), gdx, gdy);
-                carry_group_items(self.server, &self.group_items, gdx, gdy);
-                (*crate::reentry::wm(self.server)).queue_op_frame();
-                self.update_edge_pan(x as f64, y as f64);
+                wm.arm_border_fade();
+                carry_group_windows(wm, &self.group_move, std::ptr::null_mut(), gdx, gdy);
+                carry_group_items(wm, &self.group_items, gdx, gdy);
+                wm.queue_op_frame();
+                self.update_edge_pan(wm, x as f64, y as f64);
                 return;
             }
 
@@ -1013,7 +1013,7 @@ impl Seat {
             if !win.is_null() && !(*win).closed {
                 // Every drag step can bring a Floating window over the
                 // adjust target or take it off: re-evaluate the overlap dim.
-                (*crate::reentry::wm(self.server)).arm_border_fade();
+                wm.arm_border_fade();
                 if (*win).tiling_mode != crate::tiling::TilingMode::Floating
                     && (*win).tiling_mode != crate::tiling::TilingMode::Overlay
                     // A drag moves a Utility window; it must not re-class it.
@@ -1025,7 +1025,7 @@ impl Seat {
                     (*win).was_tiled = false;
                     (*win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*win).mode_locked = true;
-                    (*crate::reentry::wm(self.server)).raise_window(win);
+                    wm.raise_window(win);
                 }
                 
                 match op.op_type {
@@ -1055,7 +1055,7 @@ impl Seat {
                                 }
                             }
                         } else {
-                            let (virtual_dx, virtual_dy) = (*crate::reentry::wm(self.server)).op_virtual_delta(op);
+                            let (virtual_dx, virtual_dy) = wm.op_virtual_delta(op);
                             // Hard snap for a window grabbed Tiled, the
                             // magnetic pull for a Floating one
                             // (`policy::drag::move_to`).
@@ -1076,7 +1076,7 @@ impl Seat {
                                 == crate::window_manager::WindowManagerMode::Overview
                             {
                                 displace_covered(
-                                    self.server,
+                                    wm,
                                     win,
                                     op.start_was_tiled,
                                     (virtual_dx, virtual_dy),
@@ -1094,10 +1094,10 @@ impl Seat {
                             // through here too, and must not un-tile them.
                             let gdx = vx - op.start_win_virtual_x;
                             let gdy = vy - op.start_win_virtual_y;
-                            carry_group_windows(self.server, &self.group_move, win, gdx, gdy);
-                            carry_group_items(self.server, &self.group_items, gdx, gdy);
+                            carry_group_windows(wm, &self.group_move, win, gdx, gdy);
+                            carry_group_items(wm, &self.group_items, gdx, gdy);
 
-                            let (final_x, final_y) = (*win).virtual_to_screen(vx, vy);
+                            let (final_x, final_y) = (*win).virtual_to_screen(wm, vx, vy);
                             (*win).rendering_requested.x = final_x;
                             (*win).rendering_requested.y = final_y;
                             (*win).box_geom.x = final_x;
@@ -1125,7 +1125,7 @@ impl Seat {
 
                         // Shared with the arrange snapshot's
                         // `get_active_resize_dimensions`.
-                        let (new_w, new_h) = (*crate::reentry::wm(self.server)).op_resize_size(op, edges);
+                        let (new_w, new_h) = wm.op_resize_size(op, edges);
                         // The client's xdg min/max size is a contract, not a
                         // suggestion: a configure below it is applied by
                         // cce-ui as-is, and a layout with less room than its
@@ -1135,7 +1135,7 @@ impl Seat {
                         (*win).virtual_x = vx;
                         (*win).virtual_y = vy;
 
-                        let (final_x, final_y) = (*win).virtual_to_screen(vx, vy);
+                        let (final_x, final_y) = (*win).virtual_to_screen(wm, vx, vy);
 
                         (*win).rendering_requested.x = final_x;
                         (*win).rendering_requested.y = final_y;
@@ -1165,9 +1165,9 @@ impl Seat {
             // The configure and the relayout go out once per output frame,
             // for wherever the pointer is by then (WindowManager::
             // step_op_frame), not once per motion event.
-            (*crate::reentry::wm(self.server)).queue_op_frame();
+            wm.queue_op_frame();
         }
-        self.update_edge_pan(x as f64, y as f64);
+        self.update_edge_pan(wm, x as f64, y as f64);
     }
 
     /// Edge auto-pan eligibility + velocity for the current op: while an
@@ -1176,8 +1176,7 @@ impl Seat {
     /// rim to full speed at the screen edge. Called on every op motion AND
     /// from the edge-pan tick's op_update, which is what re-arms the timer —
     /// so the scroll continues while the cursor rests pinned at the edge.
-    unsafe fn update_edge_pan(&mut self, lx: f64, ly: f64) {
-        let wm = &mut (*crate::reentry::wm(self.server));
+    unsafe fn update_edge_pan(&mut self, wm: &mut crate::window_manager::WindowManager, lx: f64, ly: f64) {
         let mut vx = 0.0;
         let mut vy = 0.0;
         let eligible = crate::shared::layout().desktop_edge_pan
@@ -1220,8 +1219,8 @@ impl Seat {
     /// reports the maximized state to its client); landing off-grid makes
     /// it Floating, in place. Only windows resolving Floating/Tiled
     /// participate — Popup/Overlay/Status/Fullscreen are untouched.
-    unsafe fn settle_tiling(&mut self, win: *mut crate::window::Window) {
-        let resolved = (*crate::reentry::wm(self.server)).get_mode_for_window(win);
+    unsafe fn settle_tiling(&mut self, wm: &mut crate::window_manager::WindowManager, win: *mut crate::window::Window) {
+        let resolved = wm.get_mode_for_window(win);
         if !matches!(
             resolved,
             crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Tiled
@@ -1259,12 +1258,11 @@ impl Seat {
         }
     }
 
-    pub unsafe fn op_end(&mut self) {
+    pub unsafe fn op_end(&mut self, wm: &mut crate::window_manager::WindowManager) {
         // Wherever everything sits now is final.
         self.overview_displaced.clear();
         if let Some(op) = self.op.take() {
             log::debug!("end seat op");
-            let wm = &mut (*crate::reentry::wm(self.server));
             wm.edge_pan_vx = 0.0;
             wm.edge_pan_vy = 0.0;
             let win = op.window_ptr;
@@ -1279,7 +1277,7 @@ impl Seat {
                         crate::shared::pending().dirty_windowing();
                     }
                 }
-                self.settle_tiling(win);
+                self.settle_tiling(wm, win);
                 // A TAP — press+release without meaningful motion — is a
                 // click, not a drag. A drag never focuses the window it
                 // moves or resizes (the press grabs without focusing), but
@@ -1312,7 +1310,7 @@ impl Seat {
                 if (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
                     continue;
                 }
-                self.settle_tiling(w);
+                self.settle_tiling(wm, w);
                 crate::shared::pending().dirty_windowing();
             }
             // The images it carried are the grid's to keep: `drop` is its
@@ -1325,13 +1323,13 @@ impl Seat {
                     .map_or(false, |i| i.x != sx || i.y != sy)
             });
             if moved {
-                if let Some(ref sender) = (*crate::reentry::wm(self.server)).status_sender {
+                if let Some(ref sender) = wm.status_sender {
                     sender.send_selection_line(&cce_core::ipc::ctl::SelectionEvent::Drop.to_string());
                 }
             }
             match op.input {
                 SeatOpInput::Pointer => {
-                    self.cursor.op_end_pointer();
+                    self.cursor.op_end_pointer(wm);
                 }
             }
         }
@@ -1347,14 +1345,14 @@ impl Seat {
 /// until that offset is something: the release of a tap runs through here
 /// too, and must not un-tile them.
 unsafe fn carry_group_windows(
-    server: *mut crate::server::Server,
+    wm: &mut crate::window_manager::WindowManager,
     group: &[(*mut crate::window::Window, f64, f64)],
     grabbed: *mut crate::window::Window,
     gdx: f64,
     gdy: f64,
 ) {
     for &(w, start_vx, start_vy) in group.iter() {
-        if w == grabbed || !(*crate::reentry::wm(server)).selectable_in_drag(w) {
+        if w == grabbed || !wm.selectable_in_drag(w) {
             continue;
         }
         if gdx == 0.0 && gdy == 0.0 && (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
@@ -1366,11 +1364,11 @@ unsafe fn carry_group_windows(
             (*w).was_tiled = false;
             (*w).tiling_mode = crate::tiling::TilingMode::Floating;
             (*w).mode_locked = true;
-            (*crate::reentry::wm(server)).raise_window(w);
+            wm.raise_window(w);
         }
         (*w).virtual_x = start_vx + gdx;
         (*w).virtual_y = start_vy + gdy;
-        let (fx, fy) = (*w).virtual_to_screen((*w).virtual_x, (*w).virtual_y);
+        let (fx, fy) = (*w).virtual_to_screen(wm, (*w).virtual_x, (*w).virtual_y);
         (*w).rendering_requested.x = fx;
         (*w).rendering_requested.y = fy;
         (*w).box_geom.x = fx;
@@ -1382,11 +1380,10 @@ unsafe fn carry_group_windows(
 /// compositor holds move (so the highlight follows this frame), and the
 /// grid is told where they are now over the `selection` status topic.
 /// Nothing is sent for a step that moved nothing.
-unsafe fn carry_group_items(server: *mut crate::server::Server, items: &[(u64, f64, f64)], gdx: f64, gdy: f64) {
+unsafe fn carry_group_items(wm: &mut crate::window_manager::WindowManager, items: &[(u64, f64, f64)], gdx: f64, gdy: f64) {
     if items.is_empty() {
         return;
     }
-    let wm = &mut (*crate::reentry::wm(server));
     let mut moves = Vec::with_capacity(items.len());
     let mut changed = false;
     for &(id, start_x, start_y) in items.iter() {
@@ -1425,7 +1422,7 @@ unsafe fn carry_group_items(server: *mut crate::server::Server, items: &[(u64, f
 /// un-tiles it on the first motion event, so its live mode reads Floating
 /// however it started. The policy skips candidates of the other kind.
 unsafe fn displace_covered(
-    server: *mut Server,
+    wm: &mut crate::window_manager::WindowManager,
     win: *mut crate::window::Window,
     moved_tiled: bool,
     drag_delta: (f64, f64),
@@ -1433,7 +1430,6 @@ unsafe fn displace_covered(
     ledger: &mut Vec<(*mut crate::window::Window, f64, f64)>,
     group: &[(*mut crate::window::Window, f64, f64)],
 ) {
-    let wm = &mut (*crate::reentry::wm(server));
     // A window can close mid-drag; drop its entry before any deref.
     ledger.retain(|&(w, _, _)| wm.windows.iter().any(|&p| p == w));
     let moved = (
@@ -1694,7 +1690,7 @@ unsafe extern "C" fn handle_drag_destroy(
     match seat.drag {
         DragState::None => unreachable!(),
         DragState::Pointer => {
-            seat.cursor.update_state();
+            seat.cursor.update_state(&mut *crate::reentry::wm(seat.server));
         }
         DragState::Touch => {}
     }

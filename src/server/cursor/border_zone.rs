@@ -24,11 +24,11 @@ pub use crate::window::HOVER_BAND_MIN;
 /// the surface node's own layout origin and the window's display scale, which
 /// is the same pair the renderer draws with.
 pub unsafe fn grid_surface_at(
-    server: *mut crate::server::Server,
+    wm: &crate::window_manager::WindowManager,
     lx: f64,
     ly: f64,
 ) -> Option<(*mut ffi::wlr_surface, f64, f64)> {
-    let (surface, nx, ny, scale, bw, bh) = grid_node_info(server)?;
+    let (surface, nx, ny, scale, bw, bh) = grid_node_info(wm)?;
     let (sx, sy) = ((lx - nx) / scale, (ly - ny) / scale);
     // Only claim points that actually fall on the grid's patch. box_geom
     // is the surface's own logical size, which is the space sx/sy are in.
@@ -44,9 +44,9 @@ pub unsafe fn grid_surface_at(
 /// captures it at press time), which is why it is exposed separately from
 /// the point mapping above.
 pub unsafe fn grid_node_info(
-    server: *mut crate::server::Server,
+    wm: &crate::window_manager::WindowManager,
 ) -> Option<(*mut ffi::wlr_surface, f64, f64, f64, f64, f64)> {
-    for &w in (*crate::reentry::wm(server)).windows.iter() {
+    for &w in wm.windows.iter() {
         if w.is_null() || (*w).closed || !(*w).is_grid() {
             continue;
         }

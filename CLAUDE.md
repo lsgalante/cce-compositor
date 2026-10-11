@@ -526,6 +526,9 @@ After the first context-passing slice (below; same workload, same day):
 inside `process_ipc_command`, i.e. the seat and cursor code `ccectl`'s
 pointer injection runs under it.
 
+After the seat and cursor slice (same workload, same day): **0
+re-entries.**
+
 ### Context passing: the window manager is a parameter (since 2026-10-10)
 
 Code that needs the window manager takes it as `wm: &mut WindowManager`
@@ -547,6 +550,25 @@ call, and `render_finish` used to remove windows from it mid-iteration
 (through `Window::destroy`'s back-pointer). New code in this closure
 takes `wm`; it does not add a `reentry::wm` call. The tracer is how to
 find the next slice.
+
+The seat and cursor slice (same day) did the input side. Each pointer
+listener is a thin `extern "C"` entry that recovers the cursor, takes the
+window manager once with `reentry::wm`, and calls an `on_*` function that
+takes it: `on_motion`, `on_motion_absolute`, `on_button`, `on_axis`,
+`on_swipe_begin/update/end`, `on_pinch_begin/update/end`. The `ccectl`
+injectors (`Cursor::inject_*`, and `touch_down/motion/up/cancel` for
+`ccectl touch`) take `wm` and call the `on_*` functions directly; the IPC
+handler's `for_each_cursor` / `for_each_seat_touch` hand the closure `self`
+as `|wm, cursor|`. Seat ops (`op_update`, `op_end`, `update_edge_pan`,
+`settle_tiling`, `snap_params`, the group carry and displace helpers), the
+cursor's hover and op paths (`passthrough`, `set_border_hover`,
+`set_adjust_hover`, `op_start_pointer`, `op_end_pointer`, `update_state`,
+`warp_to`, `refresh_after_scene_change`, the view-drag and popup-wheel
+helpers, `press_dismissals`, `grid_node_info` / `grid_surface_at`), the
+touch claim paths, `Window::virtual_to_screen`, `start_map_fade` and
+`LockManager::lock_now` take it too. Timers, the keyboard and lock-surface
+teardown still fetch it at their call with `reentry::wm`; those are entry
+points, outside any window-manager method.
 
 ### Scene nodes are owned handles (`scene_handle.rs`, since 2026-10-10)
 

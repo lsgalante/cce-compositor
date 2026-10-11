@@ -278,7 +278,7 @@ impl Window {
     /// Begin a fade toward `target` (0.0 out, 1.0 in) over `ms`, and arm the
     /// timer that steps it. A `ms` of 0 (or fading disabled) snaps instead,
     /// so every caller can treat this as "put the window at `target`".
-    pub unsafe fn start_map_fade(&mut self, target: f32, ms: u32) {
+    pub unsafe fn start_map_fade(&mut self, wm: &mut crate::window_manager::WindowManager, target: f32, ms: u32) {
         self.map_fade_target = target.clamp(0.0, 1.0);
         if ms == 0 || !self.wants_map_fade() {
             self.map_fade = self.map_fade_target;
@@ -290,7 +290,7 @@ impl Window {
         let ticks = ((ms as f32) / 16.0).max(1.0);
         self.map_fade_step = ((self.map_fade_target - self.map_fade).abs() / ticks).max(1.0e-4);
         self.tree.set_opacity(self.effective_opacity());
-        (*crate::reentry::wm(self.server)).arm_border_fade();
+        wm.arm_border_fade();
     }
 
     /// Advance the map/close fade one tick toward `map_fade_target`, applying

@@ -211,7 +211,7 @@ impl LockManager {
     /// leaves the session locked, not open.
     ///
     /// No-op when the session is already locked or locking.
-    pub unsafe fn lock_now(&mut self) {
+    pub unsafe fn lock_now(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if self.state != LockState::Unlocked {
             return;
         }
@@ -226,7 +226,7 @@ impl LockManager {
         while curr != seats_head {
             let next = (*curr).next;
             let seat = crate::container_of!(curr, crate::seat::Seat, link);
-            (*seat).focus(&mut *crate::reentry::wm((*seat).server), Focus::None);
+            (*seat).focus(wm, Focus::None);
             curr = next;
         }
 
@@ -395,7 +395,7 @@ impl LockSurface {
                     (*seat).focus(&mut *crate::reentry::wm((*seat).server), new_focus);
                 }
             }
-            (*seat).cursor.update_state();
+            (*seat).cursor.update_state(&mut *crate::reentry::wm((*seat).server));
             curr = next;
         }
 
@@ -621,7 +621,7 @@ unsafe extern "C" fn update_focus(data: *mut std::ffi::c_void) {
         if !matches!((*seat).focused, Focus::LockSurface(s) if s == lock_surface) {
             (*seat).focus(&mut *crate::reentry::wm((*seat).server), Focus::LockSurface(lock_surface));
         }
-        (*seat).cursor.update_state();
+        (*seat).cursor.update_state(&mut *crate::reentry::wm((*seat).server));
         curr = next;
     }
 

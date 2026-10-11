@@ -446,8 +446,7 @@ impl Window {
     /// more the window stepped a pixel back and forth between a commit and
     /// the next arrange — a twitch on every resize step at overview zoom,
     /// and a one-pixel hop on grab and release.
-    pub unsafe fn virtual_to_screen(&self, vx: f64, vy: f64) -> (i32, i32) {
-        let wm = &(*crate::reentry::wm(self.server));
+    pub unsafe fn virtual_to_screen(&self, wm: &crate::window_manager::WindowManager, vx: f64, vy: f64) -> (i32, i32) {
         let (cam, _, _) = wm.layout_camera();
         let (out_x, out_y, _, _) = self.first_enabled_output_box();
         (

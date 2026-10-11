@@ -1032,7 +1032,7 @@ unsafe extern "C" fn handle_request_move(
             start_pan_y: (*crate::reentry::wm((*window).server)).desk_pan_y,
             started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
         });
-        cursor.op_start_pointer();
+        cursor.op_start_pointer(&mut *crate::reentry::wm((*window).server));
         cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
 
         (*window).wm_scheduled.pointer_move_requested = seat;
@@ -1103,7 +1103,7 @@ unsafe extern "C" fn handle_request_resize(
             start_pan_y: (*crate::reentry::wm((*window).server)).desk_pan_y,
             started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
         });
-        cursor.op_start_pointer();
+        cursor.op_start_pointer(&mut *crate::reentry::wm((*window).server));
         let cursor_name = crate::cursor::get_resize_cursor_name(edges);
         cursor.set_xcursor(cursor_name.as_ptr() as *const _);
 

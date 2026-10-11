@@ -52,7 +52,7 @@ impl WindowManager {
                         continue;
                     }
                     if (*window).unreliable_pid() == pid && (*window).wants_map_fade() {
-                        (*window).start_map_fade(0.0, ms);
+                        (*window).start_map_fade(self, 0.0, ms);
                         faded = true;
                     }
                 }
@@ -1049,7 +1049,7 @@ impl WindowManager {
             // once every output shows the locked scene.
             "lock" => unsafe {
                 let lock = &mut (*self.server).lock_manager;
-                lock.lock_now();
+                lock.lock_now(self);
                 match self.pending_ipc_reply.take() {
                     Some(tx) => {
                         lock.reply_when_locked(tx);
@@ -1406,7 +1406,7 @@ impl WindowManager {
             "pointer-move-to" => {
                 if parts.len() < 3 { return "error: usage: pointer-move-to <x> <y>\n".to_string(); }
                 if let (Ok(x), Ok(y)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
-                    self.for_each_cursor(|cursor| cursor.inject_motion_to(x, y));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_motion_to(wm, x, y));
                     "ok\n".to_string()
                 } else {
                     "error: invalid x or y\n".to_string()
@@ -1426,11 +1426,11 @@ impl WindowManager {
                 let ok = match stage {
                     "down" | "motion" => match (id(2), num(3), num(4)) {
                         (Some(id), Some(x), Some(y)) => {
-                            self.for_each_seat_touch(|cursor| {
+                            self.for_each_seat_touch(|wm, cursor| {
                                 if stage == "down" {
-                                    cursor.touch_down(id, x, y, time);
+                                    cursor.touch_down(wm, id, x, y, time);
                                 } else {
-                                    cursor.touch_motion(id, x, y, time);
+                                    cursor.touch_motion(wm, id, x, y, time);
                                 }
                                 cursor.touch_frame();
                             });
@@ -1440,11 +1440,11 @@ impl WindowManager {
                     },
                     "up" | "cancel" => match id(2) {
                         Some(id) => {
-                            self.for_each_seat_touch(|cursor| {
+                            self.for_each_seat_touch(|wm, cursor| {
                                 if stage == "up" {
-                                    cursor.touch_up(id, time);
+                                    cursor.touch_up(wm, id, time);
                                 } else {
-                                    cursor.touch_cancel(id);
+                                    cursor.touch_cancel(wm, id);
                                 }
                                 cursor.touch_frame();
                             });
@@ -1454,10 +1454,10 @@ impl WindowManager {
                     },
                     "tap" => match (num(2), num(3)) {
                         (Some(x), Some(y)) => {
-                            self.for_each_seat_touch(|cursor| {
-                                cursor.touch_down(0, x, y, time);
+                            self.for_each_seat_touch(|wm, cursor| {
+                                cursor.touch_down(wm, 0, x, y, time);
                                 cursor.touch_frame();
-                                cursor.touch_up(0, time);
+                                cursor.touch_up(wm, 0, time);
                                 cursor.touch_frame();
                             });
                             true
@@ -1471,7 +1471,7 @@ impl WindowManager {
             "pointer-move-by" => {
                 if parts.len() < 3 { return "error: usage: pointer-move-by <dx> <dy>\n".to_string(); }
                 if let (Ok(dx), Ok(dy)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
-                    self.for_each_cursor(|cursor| cursor.inject_motion_by(dx, dy));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_motion_by(wm, dx, dy));
                     "ok\n".to_string()
                 } else {
                     "error: invalid dx or dy\n".to_string()
@@ -1483,11 +1483,11 @@ impl WindowManager {
                     None => return "error: unknown button (left|right|middle|back|forward or an evdev code)\n".to_string(),
                 };
                 match action {
-                    "pointer-press" => self.for_each_cursor(|cursor| cursor.inject_button(button, true)),
-                    "pointer-release" => self.for_each_cursor(|cursor| cursor.inject_button(button, false)),
-                    _ => self.for_each_cursor(|cursor| {
-                        cursor.inject_button(button, true);
-                        cursor.inject_button(button, false);
+                    "pointer-press" => self.for_each_cursor(|wm, cursor| cursor.inject_button(wm, button, true)),
+                    "pointer-release" => self.for_each_cursor(|wm, cursor| cursor.inject_button(wm, button, false)),
+                    _ => self.for_each_cursor(|wm, cursor| {
+                        cursor.inject_button(wm, button, true);
+                        cursor.inject_button(wm, button, false);
                     }),
                 }
                 "ok\n".to_string()
@@ -1495,7 +1495,7 @@ impl WindowManager {
             "pointer-scroll" => {
                 if parts.len() < 2 { return "error: usage: pointer-scroll <dy> [dx] [finger|finger-stop]\n".to_string(); }
                 if parts[1] == "finger-stop" {
-                    self.for_each_cursor(|cursor| cursor.inject_finger_stop());
+                    self.for_each_cursor(|wm, cursor| cursor.inject_finger_stop(wm));
                     return "ok\n".to_string();
                 }
                 // `natural` marks the swipe as coming from a natural-scrolling
@@ -1506,9 +1506,9 @@ impl WindowManager {
                 let dy = parse_finite(parts[1]);
                 let dx = parts.get(2).filter(|p| **p != "finger" && **p != "natural").map(|v| parse_finite(v)).unwrap_or(Ok(0.0));
                 if let (Ok(dy), Ok(dx)) = (dy, dx) {
-                    self.for_each_cursor(|cursor| {
+                    self.for_each_cursor(|wm, cursor| {
                         cursor.inject_natural = natural;
-                        cursor.inject_scroll(dy, dx, finger);
+                        cursor.inject_scroll(wm, dy, dx, finger);
                         cursor.inject_natural = false;
                     });
                     "ok\n".to_string()
@@ -1532,7 +1532,7 @@ impl WindowManager {
                         _ => (3, 0.0, 0.0),
                     };
                     // The begin fixes the finger count; updates reuse it.
-                    self.for_each_cursor(|cursor| cursor.inject_swipe_stage(&stage, fingers, dx, dy));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_swipe_stage(wm, &stage, fingers, dx, dy));
                     return "ok\n".to_string();
                 }
                 if parts.len() < 4 { return usage.to_string(); }
@@ -1541,7 +1541,7 @@ impl WindowManager {
                 let dy = parse_finite(parts[3]);
                 let steps = parts.get(4).map(|v| v.parse::<u32>()).unwrap_or(Ok(10)).map(|n| n.clamp(1, MAX_INJECTED_STEPS));
                 if let (Ok(fingers), Ok(dx), Ok(dy), Ok(steps)) = (fingers, dx, dy, steps) {
-                    self.for_each_cursor(|cursor| cursor.inject_swipe(fingers, dx, dy, steps));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_swipe(wm, fingers, dx, dy, steps));
                     "ok\n".to_string()
                 } else {
                     "error: invalid swipe arguments\n".to_string()
@@ -1555,14 +1555,14 @@ impl WindowManager {
                     let scale = parts.get(2).and_then(|v| parse_finite(v).ok()).unwrap_or(1.0);
                     let rotation = parts.get(3).and_then(|v| parse_finite(v).ok()).unwrap_or(0.0);
                     let stage = parts[1].to_string();
-                    self.for_each_cursor(|cursor| cursor.inject_pinch_stage(&stage, scale, rotation));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_pinch_stage(wm, &stage, scale, rotation));
                     return "ok\n".to_string();
                 }
                 let scale = parse_finite(parts[1]);
                 let rotation = parts.get(2).map(|v| parse_finite(v)).unwrap_or(Ok(0.0));
                 let steps = parts.get(3).map(|v| v.parse::<u32>()).unwrap_or(Ok(10)).map(|n| n.clamp(1, MAX_INJECTED_STEPS));
                 if let (Ok(scale), Ok(rotation), Ok(steps)) = (scale, rotation, steps) {
-                    self.for_each_cursor(|cursor| cursor.inject_pinch(scale, rotation, steps));
+                    self.for_each_cursor(|wm, cursor| cursor.inject_pinch(wm, scale, rotation, steps));
                     "ok\n".to_string()
                 } else {
                     "error: invalid pinch arguments\n".to_string()
@@ -1739,21 +1739,21 @@ impl WindowManager {
 
     /// Run `f` on every seat's cursor (the synthetic-input commands act on all seats,
     /// like the pre-existing pointer-move-to loop did).
-    pub(crate) unsafe fn for_each_cursor(&mut self, mut f: impl FnMut(&mut crate::cursor::Cursor)) {
+    pub(crate) unsafe fn for_each_cursor(&mut self, mut f: impl FnMut(&mut WindowManager, &mut crate::cursor::Cursor)) {
         crate::wm_scope!(mut);
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
             let next_seat = (*curr_seat).next;
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
-            f(&mut (*seat).cursor);
+            f(self, &mut (*seat).cursor);
             curr_seat = next_seat;
         }
     }
 
     /// `for_each_cursor` for `ccectl touch`: marks each seat as having had
     /// touch injected first, which offers clients the touch capability.
-    pub(crate) unsafe fn for_each_seat_touch(&mut self, mut f: impl FnMut(&mut crate::cursor::Cursor)) {
+    pub(crate) unsafe fn for_each_seat_touch(&mut self, mut f: impl FnMut(&mut WindowManager, &mut crate::cursor::Cursor)) {
         crate::wm_scope!(mut);
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr_seat = (*seats_list).next;
@@ -1764,7 +1764,7 @@ impl WindowManager {
                 (*seat).touch_injected = true;
                 (*seat).update_capabilities();
             }
-            f(&mut (*seat).cursor);
+            f(self, &mut (*seat).cursor);
             curr_seat = next_seat;
         }
     }

@@ -598,7 +598,7 @@ impl IdleManager {
             return;
         }
         let lock = &mut (*self.server).lock_manager;
-        lock.lock_now();
+        lock.lock_now(&mut *crate::reentry::wm(self.server));
         if lock.state == crate::lock_manager::LockState::Locked {
             self.sleep_now();
             return;
