@@ -11,6 +11,7 @@ impl WindowManager {
     /// window; a failed send (no toplevel resource yet, old client) simply
     /// retries on a later pass.
     pub unsafe fn update_grid_patches(&mut self) {
+        crate::wm_scope!(mut);
         let mut out_box: Option<(ffi::wlr_box, f64)> = None;
         let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
         let mut curr_out = (*outputs_list).next;
@@ -370,6 +371,7 @@ impl WindowManager {
         reason: PatchReason,
         flight: bool,
     ) {
+        crate::wm_scope!();
         // Re-sending the patch the client already has renders the same
         // pixels again and latches to the same anchor — nothing changes, so
         // the next arrange asks for it again: a silent re-render loop for as
@@ -409,6 +411,7 @@ impl WindowManager {
     /// rendered yet, whether or not the scene thinks its surface is visible
     /// — see the call site in the output frame handler.
     pub unsafe fn send_frame_done_to_grid_clients_awaiting_patch(&self) {
+        crate::wm_scope!();
         for &w in self.windows.iter() {
             if w.is_null() || (*w).closed || !(*w).is_grid() {
                 continue;
@@ -426,6 +429,7 @@ impl WindowManager {
     /// latched — sent and unacked, or acked and awaiting the commit that
     /// carries its buffer.
     pub unsafe fn grid_patch_in_air(&self) -> bool {
+        crate::wm_scope!();
         self.windows.iter().any(|&w| {
             !w.is_null()
                 && !(*w).closed
@@ -442,6 +446,7 @@ impl WindowManager {
     /// (a union that did not fit the buffer cap). True with no grid client
     /// at all: that case is the arrange plan's `grid_cells_enabled`.
     pub unsafe fn grid_patch_covers_viewport(&self) -> bool {
+        crate::wm_scope!();
         let mut out_box: Option<ffi::wlr_box> = None;
         let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
         let mut curr_out = (*outputs_list).next;
@@ -487,6 +492,7 @@ impl WindowManager {
     /// the OLD cell size and colors until the camera happened to travel far
     /// enough to need a fresh patch.
     pub unsafe fn invalidate_grid_patches(&mut self) {
+        crate::wm_scope!(mut);
         for &w in self.windows.iter() {
             if !w.is_null() && !(*w).closed && (*w).is_grid() {
                 (*w).grid_patch_stale = true;

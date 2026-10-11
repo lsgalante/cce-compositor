@@ -398,7 +398,7 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
     // furniture — wallpaper, status bar — and map once at login, where a
     // fade reads as the desktop failing to draw.
     if (*wlr_layer_surface).current.layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY {
-        let ms = if cce_core::motion::enabled() { (*server).wm.layout.fade_in_ms } else { 0 };
+        let ms = if cce_core::motion::enabled() { (*crate::reentry::wm(server)).layout.fade_in_ms } else { 0 };
         if ms > 0 {
             (*layer_surface).opacity = 0.0;
         }
@@ -473,7 +473,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                         // never a keyboard-focus target, so those keep the old
                         // leave-it-unfocused behavior.
                         if !parent_app_id.starts_with("cce-status") {
-                            for &win_ptr in (*server).wm.windows.iter() {
+                            for &win_ptr in (*crate::reentry::wm(server)).windows.iter() {
                                 if win_ptr.is_null()
                                     || (*win_ptr).closed
                                     || (*win_ptr).minimized
@@ -492,7 +492,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                             }
                         }
                     } else if !is_cce_cloud {
-                        (*server).wm.focus_next_visible_window(seat);
+                        (*crate::reentry::wm(server)).focus_next_visible_window(seat);
                     }
                 }
             }
@@ -521,14 +521,14 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
 
     if (*wlr_layer_surface).current.layer != ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND {
         let server = (*layer_surface).server;
-        let mut blur_enabled = (*server).wm.layout.window_blur;
-        let mut ignore_transparent = (*server).wm.layout.window_backdrop_blur_ignore_transparent;
+        let mut blur_enabled = (*crate::reentry::wm(server)).layout.window_blur;
+        let mut ignore_transparent = (*crate::reentry::wm(server)).layout.window_backdrop_blur_ignore_transparent;
         let mut is_status = false;
         if !(*wlr_layer_surface).namespace.is_null() {
             let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
             if ns == "cce-status" || ns == "cce-status-interface" {
-                blur_enabled = (*server).wm.layout.status_background_blur > 0.001;
-                ignore_transparent = (*server).wm.layout.status_backdrop_blur_ignore_transparent;
+                blur_enabled = (*crate::reentry::wm(server)).layout.status_background_blur > 0.001;
+                ignore_transparent = (*crate::reentry::wm(server)).layout.status_backdrop_blur_ignore_transparent;
                 is_status = true;
             }
         }
@@ -543,7 +543,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
         let layer = (*wlr_layer_surface).current.layer;
         let above_windows = layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_TOP
             || layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY;
-        let use_optimized = if is_status || above_windows { false } else { (*server).wm.layout.scenefx_optimized_blur };
+        let use_optimized = if is_status || above_windows { false } else { (*crate::reentry::wm(server)).layout.scenefx_optimized_blur };
         let wlr_surface = (*wlr_layer_surface).surface;
         let geom_w = if !wlr_surface.is_null() {
             ffi::river_wlr_surface_get_width(wlr_surface)
@@ -599,7 +599,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                 let mut parent_y = None;
                 let mut parent_w = 0;
 
-                for &win_ptr in (*server).wm.windows.iter() {
+                for &win_ptr in (*crate::reentry::wm(server)).windows.iter() {
                     if win_ptr.is_null() || (*win_ptr).closed {
                         continue;
                     }

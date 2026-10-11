@@ -114,7 +114,7 @@ pub const WINE_MARGIN: i32 = 16;
 /// window four times too big. So the last scale an output reported is
 /// remembered and stands in while there is none.
 pub unsafe fn x11_scale(server: *mut crate::server::Server) -> f32 {
-    if server.is_null() || !(*server).wm.xwayland_hidpi {
+    if server.is_null() || !(*crate::reentry::wm(server)).xwayland_hidpi {
         return 1.0;
     }
     let mut current = None;
@@ -194,10 +194,10 @@ pub unsafe fn x11_scale_for(
     server: *mut crate::server::Server,
     xsurface: *const ffi::wlr_xwayland_surface,
 ) -> f32 {
-    if server.is_null() || !(*server).wm.xwayland_hidpi {
+    if server.is_null() || !(*crate::reentry::wm(server)).xwayland_hidpi {
         return 1.0;
     }
-    if !xsurface.is_null() && !(*server).wm.xwayland_hidpi_except.is_empty() {
+    if !xsurface.is_null() && !(*crate::reentry::wm(server)).xwayland_hidpi_except.is_empty() {
         // Borrowed (no copy for valid UTF-8): this runs every frame for
         // every X11 window, and allocated all three fields each time.
         let text = |p: *const libc::c_char| -> std::borrow::Cow<'_, str> {
@@ -206,7 +206,7 @@ pub unsafe fn x11_scale_for(
         let class = text((*xsurface).class);
         let instance = text((*xsurface).instance);
         let title = text((*xsurface).title);
-        if hidpi_exempt(&(*server).wm.xwayland_hidpi_except, &class, &instance, &title) {
+        if hidpi_exempt(&(*crate::reentry::wm(server)).xwayland_hidpi_except, &class, &instance, &title) {
             return 1.0;
         }
     }
@@ -267,7 +267,7 @@ pub unsafe fn window_is_hidpi_exempt(window: *const crate::window::Window) -> bo
         return false;
     }
     let server = (*window).server;
-    if server.is_null() || !(*server).wm.xwayland_hidpi || (*server).wm.xwayland_hidpi_except.is_empty() {
+    if server.is_null() || !(*crate::reentry::wm(server)).xwayland_hidpi || (*crate::reentry::wm(server)).xwayland_hidpi_except.is_empty() {
         return false;
     }
     let xsurface = (*xwindow).xsurface;
@@ -275,7 +275,7 @@ pub unsafe fn window_is_hidpi_exempt(window: *const crate::window::Window) -> bo
         if p.is_null() { String::new() } else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() }
     };
     hidpi_exempt(
-        &(*server).wm.xwayland_hidpi_except,
+        &(*crate::reentry::wm(server)).xwayland_hidpi_except,
         &text((*xsurface).class),
         &text((*xsurface).instance),
         &text((*xsurface).title),
@@ -559,7 +559,7 @@ impl XwaylandWindow {
     unsafe fn store_min_size(&self, width: u32, height: u32, s: f32) {
         let Some((app_id, program, title)) = self.min_size_key() else { return };
         let (w, h) = (to_x11(width as i32, s) as u32, to_x11(height as i32, s) as u32);
-        (*(*self.window).server).wm.min_sizes.set(&app_id, &program, &title, w, h);
+        (*crate::reentry::wm((*self.window).server)).min_sizes.set(&app_id, &program, &title, w, h);
     }
 
     /// Drop this window's stored minimum and the one it is held to now, and
@@ -568,7 +568,7 @@ impl XwaylandWindow {
     /// goes to 0. Returns what was stored, X11 pixels.
     pub unsafe fn forget_min_size(&mut self) -> Option<(u32, u32)> {
         let stored = self.min_size_key().and_then(|(app_id, program, title)| {
-            let min_sizes = &mut (*(*self.window).server).wm.min_sizes;
+            let min_sizes = &mut (*crate::reentry::wm((*self.window).server)).min_sizes;
             let stored = min_sizes.get(&app_id, &program, &title);
             min_sizes.set(&app_id, &program, &title, 0, 0);
             stored
@@ -587,7 +587,7 @@ impl XwaylandWindow {
     /// arrange, so the first drag past it already stops there.
     unsafe fn apply_stored_min_size(&self) {
         let Some((app_id, program, title)) = self.min_size_key() else { return };
-        let Some((stored_w, stored_h)) = (*(*self.window).server).wm.min_sizes.get(&app_id, &program, &title) else { return };
+        let Some((stored_w, stored_h)) = (*crate::reentry::wm((*self.window).server)).min_sizes.get(&app_id, &program, &title) else { return };
         // Mapping at a size below the stored minimum proves the app takes
         // it: the minimum was learned too high, or the app lowered it. Kept
         // unchecked, a stale minimum outlives every restart.
@@ -597,7 +597,7 @@ impl XwaylandWindow {
         );
         if (w, h) != (stored_w, stored_h) {
             log::info!("XWayland map: '{}' maps below its stored minimum; lowered to {}x{} (X11 px)", title, w, h);
-            (*(*self.window).server).wm.min_sizes.set(&app_id, &program, &title, w, h);
+            (*crate::reentry::wm((*self.window).server)).min_sizes.set(&app_id, &program, &title, w, h);
         }
         let s = x11_scale_for((*self.window).server, self.xsurface);
         let hint = crate::window::DimensionsHint {
@@ -1349,7 +1349,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
         crate::window::FullscreenRequest::Exit
     };
     crate::shared::pending().dirty_windowing();
-    (*(*(*xwindow).window).server).wm.apply_client_fullscreen((*xwindow).window, fullscreen);
+    (*crate::reentry::wm((*(*xwindow).window).server)).apply_client_fullscreen((*xwindow).window, fullscreen);
 }
 
 unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

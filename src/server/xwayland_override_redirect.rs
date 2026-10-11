@@ -56,7 +56,7 @@ impl XwaylandOverrideRedirect {
         });
 
         let raw = Box::into_raw(override_redirect);
-        (*server).wm.override_redirects.push(raw);
+        (*crate::reentry::wm(server)).override_redirects.push(raw);
 
         (*raw).request_configure.connect(&mut (*xsurface).events.request_configure, handle_request_configure);
         (*raw).destroy.connect(&mut (*xsurface).events.destroy, handle_destroy);
@@ -183,7 +183,7 @@ unsafe extern "C" fn handle_request_configure(_listener: *mut ffi::wl_listener, 
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, destroy);
-    (*(*or).server).wm.override_redirects.retain(|&p| p != or);
+    (*crate::reentry::wm((*or).server)).override_redirects.retain(|&p| p != or);
 
     (*or).request_configure.disconnect();
     (*or).destroy.disconnect();
@@ -340,7 +340,7 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     // compositor on its next frame (2026-09-26, a Wine tray icon handed
     // back by the XEmbed bridge and remapped as a managed window;
     // `verify/clients` `or-flip` reproduces it).
-    (*server).wm.override_redirects.retain(|&p| p != or);
+    (*crate::reentry::wm(server)).override_redirects.retain(|&p| p != or);
     (*or).request_configure.disconnect();
     (*or).destroy.disconnect();
     (*or).associate.disconnect();

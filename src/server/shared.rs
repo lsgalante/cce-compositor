@@ -222,7 +222,7 @@ unsafe extern "C" fn handle_idle(_data: *mut std::ffi::c_void) {
     if server.is_null() {
         return;
     }
-    let wm = &mut (*server).wm;
+    let wm = &mut (*crate::reentry::wm(server));
     if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
         if pending.windowing() {
             wm.manage_start();

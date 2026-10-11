@@ -9,6 +9,7 @@ impl WindowManager {
     /// non-closed, and not one of the desktop-shell surfaces (status bar,
     /// wallpaper, or the switcher's own cce-cloud overlay).
     pub(crate) unsafe fn is_switchable_window(&self, w: *mut Window) -> bool {
+        crate::wm_scope!();
         if w.is_null() || (*w).closed {
             return false;
         }
@@ -38,6 +39,7 @@ impl WindowManager {
     /// the other way, and opening with it lands on the least-recently-used
     /// window instead of the previously focused one.
     pub unsafe fn launch_window_switcher(&mut self, backwards: bool) {
+        crate::wm_scope!(mut);
         let cycle_line: &[u8] = if backwards {
             b"__cce_switcher_prev__\n"
         } else {

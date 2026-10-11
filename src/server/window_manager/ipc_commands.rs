@@ -7,6 +7,7 @@ use super::*;
 
 impl WindowManager {
     pub unsafe fn process_ipc_command(&mut self, cmd: &str) -> String {
+        crate::wm_scope!(mut);
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
             return "error: empty command\n".to_string();
@@ -203,6 +204,16 @@ impl WindowManager {
             // arrange pass keys on (state, render-list linkage, status edge,
             // seat-op move, requested vs applied position, configure state).
             // Found the tray segment mis-slot wedge; kept as a debugging tool.
+            // Re-entrancy tally (`reentry.rs`): where code outside the window
+            // manager reached it while one of its methods was running.
+            // `debug-reentry reset` clears it.
+            "debug-reentry" => {
+                if parts.get(1) == Some(&"reset") {
+                    crate::reentry::reset();
+                    return "ok\n".to_string();
+                }
+                return crate::reentry::report();
+            }
             "debug-windows" => {
                 let mut out = format!(
                     "wm state={:?} dirty={} rendering_dirty={} dirty_idle_armed={}\n",
@@ -1729,6 +1740,7 @@ impl WindowManager {
     /// Run `f` on every seat's cursor (the synthetic-input commands act on all seats,
     /// like the pre-existing pointer-move-to loop did).
     pub(crate) unsafe fn for_each_cursor(&mut self, mut f: impl FnMut(&mut crate::cursor::Cursor)) {
+        crate::wm_scope!(mut);
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
@@ -1742,6 +1754,7 @@ impl WindowManager {
     /// `for_each_cursor` for `ccectl touch`: marks each seat as having had
     /// touch injected first, which offers clients the touch capability.
     pub(crate) unsafe fn for_each_seat_touch(&mut self, mut f: impl FnMut(&mut crate::cursor::Cursor)) {
+        crate::wm_scope!(mut);
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {

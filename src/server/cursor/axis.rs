@@ -31,12 +31,12 @@ pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, dat
         ffi::wlr_keyboard_get_modifiers(wlr_keyboard)
     } else {
         0
-    } | (*seat.server).wm.injected_key_mods;
+    } | (*crate::reentry::wm(seat.server)).injected_key_mods;
 
     if (modifiers & 0x44) == 0x44 {
         if (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL {
             if delta != 0.0 {
-                let wm = &mut (*seat.server).wm;
+                let wm = &mut (*crate::reentry::wm(seat.server));
                 // Each notch advances the zoom TARGET (successive notches
                 // accumulate into one glide); the animation tick eases the
                 // zoom there in log space, pivoting about the cursor every
@@ -97,7 +97,7 @@ pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, dat
     };
     // Overview pans on any scroll — except over chrome, which takes the
     // event itself.
-    let is_overview = (*(*seat).server).wm.mode == crate::window_manager::WindowManagerMode::Overview
+    let is_overview = (*crate::reentry::wm((*seat).server)).mode == crate::window_manager::WindowManagerMode::Overview
         && !over_chrome;
 
     let is_finger = (*event).source == ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_FINGER
@@ -115,7 +115,7 @@ pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, dat
     }
 
     if (modifiers & 0x40) != 0 || is_on_background || is_overview || was_panning {
-        let wm = &mut (*seat.server).wm;
+        let wm = &mut (*crate::reentry::wm(seat.server));
         let step = delta / wm.desk_zoom;
         let vertical =
             (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
@@ -287,7 +287,7 @@ impl Cursor {
     /// The window under the pointer, if `touchpad_view_apps` names its app.
     unsafe fn view_drag_target(&mut self) -> Option<(*mut crate::window::Window, *mut ffi::wlr_surface, f64, f64, f64)> {
         let server = (*self.seat).server;
-        let wm = &(*server).wm;
+        let wm = &(*crate::reentry::wm(server));
         if wm.touchpad_view_apps.is_empty() {
             return None;
         }
@@ -435,14 +435,14 @@ impl Cursor {
             return false;
         }
         if self.view_drag.is_none() {
-            let wm = &(*(*self.seat).server).wm;
+            let wm = &(*crate::reentry::wm((*self.seat).server));
             let tumble = wm.touchpad_view_swipe_tumble != (modifiers & SHIFT != 0);
             let button = if tumble { BTN_LEFT } else { BTN_MIDDLE };
             if !self.begin_view_drag(button, false) {
                 return false;
             }
         }
-        let wm = &(*(*self.seat).server).wm;
+        let wm = &(*crate::reentry::wm((*self.seat).server));
         let mut step = delta * wm.touchpad_view_sensitivity;
         if self.axis_event_is_natural(event) {
             step = -step;
@@ -470,7 +470,7 @@ impl Cursor {
         if !d.from_pinch {
             return false;
         }
-        let wm = &(*(*self.seat).server).wm;
+        let wm = &(*crate::reentry::wm((*self.seat).server));
         // Pinch out (scale > 1) dollies in: an upward drag.
         let px = -scale.max(0.05).ln() * VIEW_DRAG_PINCH_PX * wm.touchpad_view_sensitivity;
         let target_sy = d.origin_sy + px * d.ratio;
@@ -544,7 +544,7 @@ impl Cursor {
     /// focus stays on the window it belongs to.
     unsafe fn popup_wheel_target(&mut self) -> Option<*mut ffi::wlr_surface> {
         let server = (*self.seat).server;
-        let wm = &(*server).wm;
+        let wm = &(*crate::reentry::wm(server));
         if wm.touchpad_view_apps.is_empty() {
             return None;
         }
@@ -762,7 +762,7 @@ impl Cursor {
     /// in `touchpad_hscroll_shift_apps`.
     unsafe fn hscroll_shift_target(&mut self) -> Option<*mut ffi::wlr_surface> {
         let server = (*self.seat).server;
-        let wm = &(*server).wm;
+        let wm = &(*crate::reentry::wm(server));
         if wm.touchpad_hscroll_shift_apps.is_empty() {
             return None;
         }

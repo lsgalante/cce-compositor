@@ -436,6 +436,31 @@ mutable state with structure does not (that is the planned context-passing
 step). `Pending::shutdown` runs in `Server::deinit` before the display is
 destroyed, so nothing arms an idle on a dead event loop.
 
+### Re-entrancy tracer (`reentry.rs`, since 2026-10-10)
+
+Code outside the window manager reaches it as `(*crate::reentry::wm(server))`
+— the same raw place `(*server).wm` was, built with `addr_of_mut!`, no
+reference made — and every `WindowManager` method opens with
+`crate::wm_scope!(mut)` (or `wm_scope!()` for `&self`), a per-thread depth
+count. With `CCE_REENTRY_TRACE=1` in the compositor's environment, an access
+made while a window-manager method is running is tallied (outer method, its
+borrow, the access site) and logged at info the first time;
+`ccectl debug-reentry` prints the tally, `debug-reentry reset` clears it. Off,
+it costs two `Cell` writes per method. A new `WindowManager` method gets a
+`wm_scope!`; new code outside reaches the window manager through
+`reentry::wm`, so it is counted.
+
+First measurement (2026-10-10, a shadow session: map/close, focus, tile,
+fullscreen, overview drag, resize, marquee, swipes, popup, layer surface,
+output off/on, lock): 5,679 re-entries at 201 sites, about 95% READS — `layout`
+alone 3,437, then `is_decorated_app` / `is_beveled_app` /
+`window_adjust_active` (config queries), `sent`, `mode`, gesture binds — and
+under 3% calls that mutate (`arm_border_fade`, `raise_window`,
+`queue_op_frame`, `update_status`, `record_focus`, selection, the window
+destroy path's history and selection cleanup, camera pan writes). By outer
+method: `step_camera_frame` (two thirds: every animation frame re-lays the
+windows, which read the layout), `manage_start`, `step_op_frame`.
+
 ### Scene nodes are owned handles (`scene_handle.rs`, since 2026-10-10)
 
 `SceneTree`, `SceneRect`, `SceneBuffer`, `SceneBevel` (and the other scenefx

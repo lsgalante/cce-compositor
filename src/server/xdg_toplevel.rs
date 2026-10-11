@@ -449,7 +449,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
             (*window).box_geom.width = new_geometry.width;
             (*window).box_geom.height = new_geometry.height;
         }
-        (*(*window).server).wm.apply_client_fullscreen(window, true);
+        (*crate::reentry::wm((*window).server)).apply_client_fullscreen(window, true);
     }
     // Status segments and Utility windows are SELF-sizing: their bounds
     // track their own box, so the committed geometry is adopted as the box.
@@ -498,7 +498,7 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
     // so it schedules no transaction: without this raise a tiled window's
     // menu would stay under the floating plane until some unrelated restack
     // came along. The pass re-applies it from then on.
-    (*(*window).server).wm.raise_focused_popups(window);
+    (*crate::reentry::wm((*window).server)).raise_focused_popups(window);
 }
 
 unsafe extern "C" fn handle_ack_configure(
@@ -578,7 +578,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         // exactly (virtual_to_screen's truncating cast included); the next
         // arrange re-affirms the same values.
         {
-            let wm = &(*(*window).server).wm;
+            let wm = &(*crate::reentry::wm((*window).server));
             let zoom = crate::policy::background::sanitized_zoom(wm.desk_zoom);
             let (mut ox, mut oy) = (0i32, 0i32);
             let outputs_list = &(*(*window).server).om.outputs as *const ffi::wl_list
@@ -653,14 +653,14 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
 
     // Borrowed: this runs on every commit of every client.
     let app_id = (*window).app_id_str().unwrap_or_default();
-    let mut ignore_transparent = (*(*window).server).wm.layout.window_backdrop_blur_ignore_transparent;
+    let mut ignore_transparent = (*crate::reentry::wm((*window).server)).layout.window_backdrop_blur_ignore_transparent;
     if app_id.starts_with("cce-status") {
-        ignore_transparent = (*(*window).server).wm.layout.status_backdrop_blur_ignore_transparent;
+        ignore_transparent = (*crate::reentry::wm((*window).server)).layout.status_backdrop_blur_ignore_transparent;
     }
     let scale = (*window).scale;
     let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status ||
                     app_id.starts_with("cce-status");
-    let is_decorated = (*(*window).server).wm.is_decorated_app(&app_id);
+    let is_decorated = (*crate::reentry::wm((*window).server)).is_decorated_app(&app_id);
     // Status segments are SELF-sizing (their bounds track their own box), so
     // the geometry of the commit being handled is the truth. `rendering_sent`
     // is a render-start snapshot that lags a contract commit by a render pass
@@ -697,7 +697,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let use_optimized = if is_status {
         false
     } else {
-        (*(*window).server).wm.layout.scenefx_optimized_blur
+        (*crate::reentry::wm((*window).server)).layout.scenefx_optimized_blur
     };
     let blur_enabled = (*window).rendering_requested.blur && ((*window).wm_requested.ssd || is_decorated || is_status);
     (*window).tree.enable_blur(blur_enabled, use_optimized, ignore_transparent, 0, 0, geom_w, geom_h, // geom_w/h are already scaled to device px; the radius must match.
@@ -870,7 +870,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             match (*toplevel).configure_state {
                 ConfigureState::Acked => {
                     (*toplevel).configure_state = ConfigureState::Committed;
-                    (*(*window).server).wm.notify_configured();
+                    (*crate::reentry::wm((*window).server)).notify_configured();
                 }
                 ConfigureState::TimedOutAcked => {
                     (*toplevel).configure_state = ConfigureState::Idle;
@@ -939,7 +939,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
     }
     crate::shared::pending().dirty_windowing();
     let enter = ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel);
-    (*(*window).server).wm.apply_client_fullscreen(window, enter);
+    (*crate::reentry::wm((*window).server)).apply_client_fullscreen(window, enter);
 }
 
 unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -1006,7 +1006,7 @@ unsafe extern "C" fn handle_request_move(
         }
 
         (*seat).focus(crate::seat::Focus::Window(window));
-        (*(*window).server).wm.stop_panning_animation();
+        (*crate::reentry::wm((*window).server)).stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = (*cursor.wlr_cursor).x;
         let cursor_y = (*cursor.wlr_cursor).y;
@@ -1028,9 +1028,9 @@ unsafe extern "C" fn handle_request_move(
             start_tiling_mode: (*window).tiling_mode,
             start_was_tiled: grabbed_tiled,
             start_mode_locked: (*window).mode_locked,
-            start_pan_x: (*(*window).server).wm.desk_pan_x,
-            start_pan_y: (*(*window).server).wm.desk_pan_y,
-            started_in_overview: (*(*window).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
+            start_pan_x: (*crate::reentry::wm((*window).server)).desk_pan_x,
+            start_pan_y: (*crate::reentry::wm((*window).server)).desk_pan_y,
+            started_in_overview: (*crate::reentry::wm((*window).server)).mode == crate::window_manager::WindowManagerMode::Overview,
         });
         cursor.op_start_pointer();
         cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
@@ -1074,7 +1074,7 @@ unsafe extern "C" fn handle_request_resize(
         }
 
         (*seat).focus(crate::seat::Focus::Window(window));
-        (*(*window).server).wm.stop_panning_animation();
+        (*crate::reentry::wm((*window).server)).stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = (*cursor.wlr_cursor).x;
         let cursor_y = (*cursor.wlr_cursor).y;
@@ -1099,9 +1099,9 @@ unsafe extern "C" fn handle_request_resize(
             start_tiling_mode: (*window).tiling_mode,
             start_was_tiled: grabbed_tiled,
             start_mode_locked: (*window).mode_locked,
-            start_pan_x: (*(*window).server).wm.desk_pan_x,
-            start_pan_y: (*(*window).server).wm.desk_pan_y,
-            started_in_overview: (*(*window).server).wm.mode == crate::window_manager::WindowManagerMode::Overview,
+            start_pan_x: (*crate::reentry::wm((*window).server)).desk_pan_x,
+            start_pan_y: (*crate::reentry::wm((*window).server)).desk_pan_y,
+            started_in_overview: (*crate::reentry::wm((*window).server)).mode == crate::window_manager::WindowManagerMode::Overview,
         });
         cursor.op_start_pointer();
         let cursor_name = crate::cursor::get_resize_cursor_name(edges);
@@ -1161,7 +1161,7 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
         let mut mode = (*(*decoration).wlr_decoration).requested_mode;
         if mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_NONE {
             let server = (*window).server;
-            let rule_ssd = (*server).wm.get_rule_for_window(window).and_then(|r| r.ssd);
+            let rule_ssd = (*crate::reentry::wm(server)).get_rule_for_window(window).and_then(|r| r.ssd);
             if let Some(true) = rule_ssd {
                 mode = ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
             } else {

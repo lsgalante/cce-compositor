@@ -379,7 +379,7 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
         }
     }
 
-    for &win_ptr in (*server).wm.windows.iter() {
+    for &win_ptr in (*crate::reentry::wm(server)).windows.iter() {
         if !win_ptr.is_null() && (*win_ptr).root_surface() == surface {
             let title_ptr = (*win_ptr).get_title();
             let title = if title_ptr.is_null() {
@@ -418,12 +418,12 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
             // often lands between app_id and map) is left to the map path,
             // which focuses new windows under its own settle rules.
             if matches!((*win_ptr).state, crate::window::WindowState::Mapped) && !(*win_ptr).is_shy() {
-                if let Some(seat) = (*server).wm.first_seat() {
+                if let Some(seat) = (*crate::reentry::wm(server)).first_seat() {
                     if (*win_ptr).minimized {
                         (*win_ptr).minimized = false;
                     }
                     (*seat).focus(crate::seat::Focus::Window(win_ptr));
-                    (*server).wm.raise_window(win_ptr);
+                    (*crate::reentry::wm(server)).raise_window(win_ptr);
                     crate::shared::pending().dirty_windowing();
                     log::info!("xdg activation focused and raised '{}' ({})", title, app_id);
                 }
@@ -526,7 +526,7 @@ unsafe extern "C" fn xwayland_global_filter(
     data: *mut std::ffi::c_void,
 ) -> bool {
     let server = data as *mut Server;
-    if server.is_null() || (*server).xwayland.is_null() || !(*server).wm.xwayland_hidpi {
+    if server.is_null() || (*server).xwayland.is_null() || !(*crate::reentry::wm(server)).xwayland_hidpi {
         return true;
     }
     let xserver = (*((*server).xwayland as *mut WlrXwayland)).server as *mut ffi::wlr_xwayland_server;
@@ -969,27 +969,27 @@ impl Default for Server {
             // Zero-initialize the memory (C structures and primitive fields)
             std::ptr::write_bytes(server.as_mut_ptr(), 0, 1);
             // Overwrite collections and SlotMap with valid instances to avoid UB/segfaults from null pointers
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.windows, crate::slotmap::SlotMap::new());
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.focus_history, Vec::new());
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.mode_rules, Vec::new());
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.keybinds, Vec::new());
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.pointer_binds, Vec::new());
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.gesture_binds, Vec::new());
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.ipc_rx, None);
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).windows, crate::slotmap::SlotMap::new());
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).focus_history, Vec::new());
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).mode_rules, Vec::new());
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).keybinds, Vec::new());
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).pointer_binds, Vec::new());
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).gesture_binds, Vec::new());
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).ipc_rx, None);
             // Same reason as ipc_rx above, and not optional: an mpsc endpoint
             // has no null niche, so `Option` tags it out of band and zeroed
             // bytes decode as `Some(<null channel>)` — dropping that segfaults.
             // pending_screenshot holds one too (its deferred IPC reply), which
             // is what makes zeroed bytes decode as a live `Some` there as well.
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.pending_ipc_reply, None);
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.pending_screenshot, None);
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.settle_waiters, Vec::new());
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.startup, Vec::new());
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.startup_pids, Vec::new());
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.status_sender, None);
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.last_saved_state_json, None);
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.proc_args_cache, std::collections::HashMap::new());
-            std::ptr::write(&mut (*server.as_mut_ptr()).wm.min_sizes, crate::min_sizes::MinSizes::default());
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).pending_ipc_reply, None);
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).pending_screenshot, None);
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).settle_waiters, Vec::new());
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).startup, Vec::new());
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).startup_pids, Vec::new());
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).status_sender, None);
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).last_saved_state_json, None);
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).proc_args_cache, std::collections::HashMap::new());
+            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).min_sizes, crate::min_sizes::MinSizes::default());
             std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).cce_window_management, crate::cce_window_management::CceWindowManagement::new());

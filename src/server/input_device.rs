@@ -88,7 +88,7 @@ impl InputDevice {
             };
             if !handle.is_null() {
                 let libinput_dev = crate::libinput_device::LibinputDevice::init(device, handle);
-                let wm = &(*(*seat).server).wm;
+                let wm = &(*crate::reentry::wm((*seat).server));
                 libinput_dev.apply_config(&wm.input_config);
                 (*device).libinput = Some(libinput_dev);
             }

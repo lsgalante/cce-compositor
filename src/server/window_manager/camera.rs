@@ -6,6 +6,7 @@ use super::*;
 
 impl WindowManager {
     pub fn stop_panning_animation(&mut self) {
+        crate::wm_scope!(mut);
         self.target_desk_pan_x = None;
         self.target_desk_pan_y = None;
         self.target_desk_zoom = None;
@@ -19,6 +20,7 @@ impl WindowManager {
 
     /// Wheel-glide rate for the desktop camera, 1/s (`input { scroll_ease }`).
     pub fn scroll_ease_rate(&self) -> f64 {
+        crate::wm_scope!();
         self.input_config
             .scroll_ease
             .filter(|v| v.is_finite() && *v > 0.0)
@@ -27,11 +29,13 @@ impl WindowManager {
 
     /// Whether a trackpad flick coasts the desktop (`input { kinetic_scroll }`).
     pub fn kinetic_scroll(&self) -> bool {
+        crate::wm_scope!();
         self.input_config.kinetic_scroll.unwrap_or(true)
     }
 
     /// Coast decay, 1/s (`input { scroll_friction }`).
     pub fn scroll_friction(&self) -> f64 {
+        crate::wm_scope!();
         self.input_config
             .scroll_friction
             .filter(|v| v.is_finite() && *v > 0.0)
@@ -47,6 +51,7 @@ impl WindowManager {
     /// scale 2 that is what lets a slow pan move one device pixel per
     /// frame instead of two, the visible judder of HiDPI panning.
     pub fn layout_camera(&self) -> (crate::policy::camera::Camera, f64, f64) {
+        crate::wm_scope!();
         let zoom = self.desk_zoom.max(1e-6);
         let split = |pan: f64| {
             let s = pan * zoom;
@@ -61,6 +66,7 @@ impl WindowManager {
     /// The largest enabled output scale: the device-pixel resolution a
     /// camera move is quantized at (see `update_viewport_local`).
     pub unsafe fn max_output_scale(&self) -> f64 {
+        crate::wm_scope!();
         let mut best = 1.0f64;
         if self.server.is_null() {
             return best;
@@ -78,6 +84,7 @@ impl WindowManager {
     }
 
     pub fn camera(&self) -> crate::policy::camera::Camera {
+        crate::wm_scope!();
         crate::policy::camera::Camera {
             pan_x: self.desk_pan_x,
             pan_y: self.desk_pan_y,
@@ -89,6 +96,7 @@ impl WindowManager {
     /// when nonzero. A zero velocity just parks: the armed tick sees it and
     /// stops itself without re-arming.
     pub unsafe fn set_edge_pan_velocity(&mut self, vx: f64, vy: f64) {
+        crate::wm_scope!(mut);
         self.edge_pan_vx = vx;
         self.edge_pan_vy = vy;
         if vx == 0.0 && vy == 0.0 {
@@ -112,6 +120,7 @@ impl WindowManager {
     /// and arms the watchdog timer that keeps frames flowing while the
     /// animation is live. Callers set the targets first.
     pub unsafe fn start_panning_animation(&mut self) {
+        crate::wm_scope!(mut);
         self.camera_anim_active = true;
         if self.anim_last_tick.is_none() {
             self.anim_last_tick = Some(crate::util::timestamp_ns());
@@ -133,6 +142,7 @@ impl WindowManager {
     /// Ask every enabled output for a frame (the camera step runs in the
     /// frame handler). A no-op for an output that already has one pending.
     pub unsafe fn schedule_frame_all_outputs(&mut self) {
+        crate::wm_scope!(mut);
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*outputs_list).next;
         while curr != outputs_list {
@@ -147,6 +157,7 @@ impl WindowManager {
 
     /// Queue finger-pan motion for the next output frame (see `pan_pending`).
     pub unsafe fn queue_pan(&mut self, dx: f64, dy: f64) {
+        crate::wm_scope!(mut);
         self.pan_pending[0] += dx;
         self.pan_pending[1] += dy;
         self.schedule_frame_all_outputs();
@@ -155,6 +166,7 @@ impl WindowManager {
     /// Queue a pinch zoom about an output-local anchor for the next output
     /// frame (see `pinch_pending`).
     pub unsafe fn queue_pinch(&mut self, zoom: f64, ax: f64, ay: f64) {
+        crate::wm_scope!(mut);
         self.pinch_pending = Some((zoom, ax, ay));
         self.schedule_frame_all_outputs();
     }
@@ -162,6 +174,7 @@ impl WindowManager {
     /// Queue the interactive move/resize's configure and relayout for the
     /// next output frame (see `op_frame_pending`).
     pub unsafe fn queue_op_frame(&mut self) {
+        crate::wm_scope!(mut);
         if !self.op_frame_pending {
             self.op_frame_pending = true;
             self.schedule_frame_all_outputs();
@@ -175,6 +188,7 @@ impl WindowManager {
     /// this frame draws the result; with a pass already in flight the dirty
     /// flag queues it, as before.
     pub unsafe fn step_op_frame(&mut self) {
+        crate::wm_scope!(mut);
         if !self.op_frame_pending {
             return;
         }
@@ -208,6 +222,7 @@ impl WindowManager {
     /// be presented (`Output::predicted_present_ns`); the animation
     /// advances to that instant.
     pub unsafe fn step_camera_frame(&mut self, frame_target_ns: u64) {
+        crate::wm_scope!(mut);
         let has_pending = self.pan_pending != [0.0, 0.0] || self.pinch_pending.is_some();
         if !self.camera_anim_active && !has_pending {
             return;
@@ -251,6 +266,7 @@ impl WindowManager {
     /// Advance the camera animation by `dt` seconds. Returns true when
     /// nothing is left to animate.
     pub(crate) fn advance_camera_animation(&mut self, dt: f64, frame_target_ns: u64) -> bool {
+        crate::wm_scope!(mut);
         let mut done = true;
         // Animations off (`cce_core::motion`): every ease below covers its
         // whole distance in this step, the ramp lands, and a flick does not

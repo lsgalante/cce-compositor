@@ -100,7 +100,7 @@ pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
 
     // Find the Window corresponding to the surface
     let mut target_window = std::ptr::null_mut();
-    for &window in (*server).wm.windows.iter() {
+    for &window in (*crate::reentry::wm(server)).windows.iter() {
         if !window.is_null() && (*window).root_surface() == surface {
             target_window = window;
             break;
@@ -176,9 +176,9 @@ unsafe extern "C" fn toplevel_set_floating(
     if let Some(window) = resolve_window(server, window_key) {
         (*window).tiling_mode = crate::tiling::TilingMode::Floating;
         (*window).mode_locked = true;
-        if let Some(seat) = (*server).wm.first_seat() {
+        if let Some(seat) = (*crate::reentry::wm(server)).first_seat() {
             if (*seat).focused == crate::seat::Focus::Window(window) {
-                (*server).wm.raise_window(window);
+                (*crate::reentry::wm(server)).raise_window(window);
             }
         }
         crate::shared::pending().dirty_windowing();
@@ -255,7 +255,7 @@ unsafe extern "C" fn toplevel_set_fullscreen(
     if let Some(window) = resolve_window(server, window_key) {
         (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());
         crate::shared::pending().dirty_windowing();
-        (*server).wm.apply_client_fullscreen(window, true);
+        (*crate::reentry::wm(server)).apply_client_fullscreen(window, true);
     }
 }
 
@@ -272,7 +272,7 @@ unsafe extern "C" fn toplevel_unset_fullscreen(
     if let Some(window) = resolve_window(server, window_key) {
         (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Exit;
         crate::shared::pending().dirty_windowing();
-        (*server).wm.apply_client_fullscreen(window, false);
+        (*crate::reentry::wm(server)).apply_client_fullscreen(window, false);
     }
 }
 
@@ -457,6 +457,6 @@ unsafe fn resolve_window(server: *mut Server, key: SlotMapKey) -> Option<*mut Wi
     if server.is_null() {
         return None;
     }
-    let windows_map = &(*server).wm.windows;
+    let windows_map = &(*crate::reentry::wm(server)).windows;
     windows_map.get(key).copied().filter(|&w| !w.is_null())
 }

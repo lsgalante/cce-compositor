@@ -266,7 +266,7 @@ impl Cursor {
             let lock_ok = !locked || matches!(result.data, SceneNodeDataVal::LockSurface(_));
             if lock_ok
                 && !result.surface.is_null()
-                && !(*server).wm.window_adjust_active()
+                && !(*crate::reentry::wm(server)).window_adjust_active()
                 && ffi::wlr_surface_accepts_touch(result.surface, seat.wlr_seat)
             {
                 // The implicit grab's frame (see the button path): the
@@ -302,7 +302,7 @@ impl Cursor {
     pub unsafe fn touch_down(&mut self, id: i32, lx: f64, ly: f64, time_msec: u32) {
         (*self.seat).handle_activity();
         // A touch is deliberate input, like a press (see `Seat::focus`).
-        (*(*self.seat).server).wm.startup_input_seen = true;
+        (*crate::reentry::wm((*self.seat).server)).startup_input_seen = true;
         self.hide_for_touch();
         // A device that reuses a live id without lifting it first has lost
         // the up; finish the old point so its button or client is released.
@@ -443,7 +443,7 @@ impl Cursor {
                 if (lx - start.0).hypot(ly - start.1) < TAP_SLOP {
                     return;
                 }
-                let normal = (*(*self.seat).server).wm.mode == crate::window_manager::WindowManagerMode::Normal;
+                let normal = (*crate::reentry::wm((*self.seat).server)).mode == crate::window_manager::WindowManagerMode::Normal;
                 if on_desk && normal && self.touch_points.len() == 1 {
                     // A drag on the bare desk pans it. The track starts at
                     // the down point, so the desk catches up with the
@@ -453,11 +453,11 @@ impl Cursor {
                     track.fingers = 1;
                     self.touch_claim = Claim::Desk {
                         track,
-                        start_zoom: (*(*self.seat).server).wm.desk_zoom,
+                        start_zoom: (*crate::reentry::wm((*self.seat).server)).desk_zoom,
                         vel: [0.0, 0.0],
                         last_ms: 0,
                     };
-                    (*(*self.seat).server).wm.stop_panning_animation();
+                    (*crate::reentry::wm((*self.seat).server)).stop_panning_animation();
                     self.claim_motion(time_msec);
                     return;
                 }
@@ -559,7 +559,7 @@ impl Cursor {
     }
 
     unsafe fn start_desk(&mut self) {
-        let wm = &mut (*(*self.seat).server).wm;
+        let wm = &mut (*crate::reentry::wm((*self.seat).server));
         wm.stop_panning_animation();
         self.touch_claim = Claim::Desk {
             track: Track::new(self.claimed_shape()),
@@ -586,7 +586,7 @@ impl Cursor {
                     EdgeProgress::Fire => {
                         self.touch_claim = Claim::Edge { id, edge, start, fired: true };
                         let mods = gesture_mods(&*self.seat);
-                        let wm = &mut (*server).wm;
+                        let wm = &mut (*crate::reentry::wm(server));
                         if let Some((action, command)) = gesture_bind(wm, "edge", 1, mods, |d| d == edge.name()) {
                             log::info!("touch: edge_{} fired {action:?}", edge.name());
                             run_gesture_action(wm, action, command.as_deref());
@@ -596,7 +596,7 @@ impl Cursor {
             }
             Claim::Desk { mut track, start_zoom, mut vel, mut last_ms } => {
                 let d = track.step(s);
-                let wm = &mut (*server).wm;
+                let wm = &mut (*crate::reentry::wm(server));
                 if d != (0.0, 0.0) {
                     // The desk follows the fingers: the camera goes the
                     // other way, in virtual units.
@@ -672,7 +672,7 @@ impl Cursor {
                     return;
                 }
                 self.touch_claim = Claim::None;
-                let wm = &mut (*(*self.seat).server).wm;
+                let wm = &mut (*crate::reentry::wm((*self.seat).server));
                 wm.pan_finger_v = [0.0, 0.0];
                 // Fling on the last velocity unless the fingers had come to
                 // rest first, as a trackpad pan's lift does (`handle_axis`).
@@ -711,7 +711,7 @@ impl Cursor {
     /// where no other output continues past it.
     unsafe fn bound_edge_at(&self, lx: f64, ly: f64) -> Option<Edge> {
         let server = (*self.seat).server;
-        let wm = &(*server).wm;
+        let wm = &(*crate::reentry::wm(server));
         if !wm.gesture_binds.iter().any(|b| b.gesture_type == "edge") {
             return None;
         }
@@ -749,7 +749,7 @@ impl Cursor {
     /// Fire a pinch bind if the spread has gone far enough; once per gesture.
     unsafe fn touch_pinch(&mut self, fingers: u32, scale: f64) -> MultiKind {
         let mods = gesture_mods(&*self.seat);
-        let wm = &mut (*(*self.seat).server).wm;
+        let wm = &mut (*crate::reentry::wm((*self.seat).server));
         match gesture_bind(wm, "pinch", fingers, mods, |d| pinch_hits(d, scale)) {
             Some((action, command)) => {
                 log::info!("touch: pinch fired {action:?}");

@@ -30,9 +30,9 @@ impl Window {
         if is_status {
             return 0;
         }
-        let is_decorated = (*self.server).wm.is_decorated_app(&app_id);
+        let is_decorated = (*crate::reentry::wm(self.server)).is_decorated_app(&app_id);
         if self.wm_requested.ssd || is_decorated {
-            (*self.server).wm.layout.root_plate_corner_radius
+            (*crate::reentry::wm(self.server)).layout.root_plate_corner_radius
         } else {
             0
         }
@@ -52,7 +52,7 @@ impl Window {
         if self.shadow.is_null() {
             return;
         }
-        let layout = &(*self.server).wm.layout;
+        let layout = &(*crate::reentry::wm(self.server)).layout;
         let enabled = want && layout.shadow_enabled && width > 0 && height > 0;
         self.shadow.set_enabled(enabled);
         if !enabled {
@@ -133,7 +133,7 @@ impl Window {
         if self.bevel.is_null() {
             return;
         }
-        let layout = &(*self.server).wm.layout;
+        let layout = &(*crate::reentry::wm(self.server)).layout;
         // Focused-window treatment: the rim highlight wraps all four sides
         // in the accent (the DE focus glint). Focus is read off the seats —
         // the window's `activated` field is a configure-time snapshot, not
@@ -183,7 +183,7 @@ impl Window {
     pub unsafe fn sync_backdrop_compress(&self) {
         let is_status = self.tiling_mode == crate::tiling::TilingMode::Status;
         let (ceil, knee, invert) = if is_status {
-            (*self.server).wm.layout.status_backdrop_compress.unwrap_or((0.0, 0.0, false))
+            (*crate::reentry::wm(self.server)).layout.status_backdrop_compress.unwrap_or((0.0, 0.0, false))
         } else {
             (0.0, 0.0, false)
         };
@@ -199,7 +199,7 @@ impl Window {
         if self.droplet.is_null() {
             return;
         }
-        let layout = &(*self.server).wm.layout;
+        let layout = &(*crate::reentry::wm(self.server)).layout;
         let is_status = self.tiling_mode == crate::tiling::TilingMode::Status;
         // Only bar-strip segments: an expanded (menu) segment is taller than
         // the bar and draws its own grown drop client-side — refracting the
@@ -243,7 +243,7 @@ impl Window {
         if self.droplet.is_null() || self.tiling_mode != crate::tiling::TilingMode::Status {
             return false;
         }
-        match (*self.server).wm.layout.status_droplet.as_deref() {
+        match (*crate::reentry::wm(self.server)).layout.status_droplet.as_deref() {
             Some(raw) => {
                 let spec = cce_core::droplet::DropletSpec::parse(raw);
                 spec.refr > 0.0 || spec.ghost > 0.0
@@ -259,7 +259,7 @@ impl Window {
     /// `border.overlap_opacity`, and again by the map/close fade
     /// (`map_fade`), which rests at 1.0 whenever no fade is in flight.
     pub unsafe fn effective_opacity(&self) -> f32 {
-        let floor = (*self.server).wm.layout.border_overlap_opacity;
+        let floor = (*crate::reentry::wm(self.server)).layout.border_overlap_opacity;
         self.rendering_requested.opacity
             * (1.0 - self.adjust_dim.clamp(0.0, 1.0) * (1.0 - floor))
             * self.map_fade.clamp(0.0, 1.0)
@@ -290,7 +290,7 @@ impl Window {
         let ticks = ((ms as f32) / 16.0).max(1.0);
         self.map_fade_step = ((self.map_fade_target - self.map_fade).abs() / ticks).max(1.0e-4);
         self.tree.set_opacity(self.effective_opacity());
-        (*self.server).wm.arm_border_fade();
+        (*crate::reentry::wm(self.server)).arm_border_fade();
     }
 
     /// Advance the map/close fade one tick toward `map_fade_target`, applying
@@ -316,7 +316,7 @@ impl Window {
     /// the target's handles. Windows under the target are left alone; they
     /// hide nothing.
     pub unsafe fn adjust_dim_wanted(&self) -> bool {
-        let wm = &(*self.server).wm;
+        let wm = &(*crate::reentry::wm(self.server));
         if !wm.window_adjust_active()
             || self.closed
             || self.tiling_mode != crate::tiling::TilingMode::Floating
@@ -392,7 +392,7 @@ impl Window {
         // easing through this same fade. Hover still reads through on the revealed ring, as
         // `color_for` paints the hovered zone in hover_color over the full
         // reveal.
-        let all_on = (*self.server).wm.window_adjust_active()
+        let all_on = (*crate::reentry::wm(self.server)).window_adjust_active()
             && window_takes_handles(self as *mut Window)
             && self.is_adjust_target();
         for elem in BorderElement::ALL {
@@ -479,7 +479,7 @@ impl Window {
             )
         };
         self.fs_anim = Some(FsAnim { x, y, w, h, moved: false, ticks: 0 });
-        (*self.server).wm.arm_border_fade();
+        (*crate::reentry::wm(self.server)).arm_border_fade();
     }
 
     /// One tick of the fullscreen-toggle animation. Returns true while the
@@ -570,7 +570,7 @@ impl Window {
         let mut ext = [band; 4]; // left, right, top, bottom (layout px)
 
         let self_ptr = self as *const Window as *mut Window;
-        for &other in (*self.server).wm.windows.iter() {
+        for &other in (*crate::reentry::wm(self.server)).windows.iter() {
             if other.is_null() || other == self_ptr {
                 continue;
             }

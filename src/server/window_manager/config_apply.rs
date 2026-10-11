@@ -6,6 +6,7 @@ use super::*;
 
 impl WindowManager {
     pub unsafe fn apply_input_rules(&mut self) {
+        crate::wm_scope!(mut);
         if self.server.is_null() {
             return;
         }
@@ -30,6 +31,7 @@ impl WindowManager {
     }
 
     pub unsafe fn apply_input_config(&mut self) {
+        crate::wm_scope!(mut);
         if self.server.is_null() {
             return;
         }
@@ -50,6 +52,7 @@ impl WindowManager {
     /// return how many there are. A keyboard regroups on a change (groups are
     /// keyed by repeat info), so one already matching is left alone.
     pub unsafe fn apply_key_repeat(&mut self) -> usize {
+        crate::wm_scope!(mut);
         if self.server.is_null() {
             return 0;
         }
@@ -77,6 +80,7 @@ impl WindowManager {
     }
 
     pub unsafe fn spawn_startup_program(&mut self, prog: crate::config::StartupConfig) {
+        crate::wm_scope!(mut);
         log::info!("spawning startup program: {}", prog.exec);
         let cmd = prog.exec.clone();
         match nix::unistd::fork() {
@@ -120,6 +124,7 @@ impl WindowManager {
     /// reopened under another restores misaligned pixels, touches extra
     /// cells, and the tiled snap grows it by a cell.
     pub fn remap_saved_entries(&mut self, old: &crate::policy::snap::SnapParams) {
+        crate::wm_scope!(mut);
         let new = self.layout.snap_params();
         for entry in self
             .restore_queue
@@ -155,6 +160,7 @@ impl WindowManager {
     /// alone — the op owns its geometry until release. No-op when the
     /// geometry is unchanged.
     pub unsafe fn retile_for_grid_change(&mut self, old: crate::policy::snap::SnapParams) {
+        crate::wm_scope!(mut);
         let new = self.layout.snap_params();
         if old.cell_w == new.cell_w
             && old.cell_h == new.cell_h
@@ -199,6 +205,7 @@ impl WindowManager {
     }
 
     pub unsafe fn reload_config(&mut self) -> Result<(), String> {
+        crate::wm_scope!(mut);
         if let Some(path) = crate::config::default_config_path() {
             let old_sp = self.layout.snap_params();
             let old_pids = std::mem::take(&mut self.startup_pids);

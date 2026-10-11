@@ -46,7 +46,7 @@ pub unsafe fn grid_surface_at(
 pub unsafe fn grid_node_info(
     server: *mut crate::server::Server,
 ) -> Option<(*mut ffi::wlr_surface, f64, f64, f64, f64, f64)> {
-    for &w in (*server).wm.windows.iter() {
+    for &w in (*crate::reentry::wm(server)).windows.iter() {
         if w.is_null() || (*w).closed || !(*w).is_grid() {
             continue;
         }
@@ -96,7 +96,7 @@ pub unsafe fn grid_node_info(
 /// drawing, so the zones and the visuals cannot drift.
 pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
     // Overview, or Super held (window-adjust mode): the same ring either way.
-    if !(*(*window).server).wm.window_adjust_active() {
+    if !(*crate::reentry::wm((*window).server)).window_adjust_active() {
         return BorderZone::None;
     }
     if !crate::window::window_takes_handles(window) {
@@ -129,7 +129,7 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     let content_w = geom.width as f64 * scale;
     let content_h = geom.height as f64 * scale;
 
-    let bw = ((*(*window).server).wm.layout.border_handle_width as f64)
+    let bw = ((*crate::reentry::wm((*window).server)).layout.border_handle_width as f64)
         .max(crate::window::HOVER_BAND_MIN)
         // The same fifth-of-the-short-side cap draw_borders applies, so the
         // grab zone never outgrows the disc the user can see.

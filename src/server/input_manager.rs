@@ -373,7 +373,7 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
     let name_ptr = ffi::river_wlr_input_device_get_name(wlr_device);
     if !name_ptr.is_null() {
         let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
-        let wm = &mut (*im.server).wm;
+        let wm = &mut (*crate::reentry::wm(im.server));
         for rule in &wm.input_rules {
             if rule.name == "*" || name.contains(&rule.name) {
                 if let Some(factor) = rule.scroll_factor {

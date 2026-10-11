@@ -7,6 +7,7 @@ use super::*;
 
 impl WindowManager {
     pub unsafe fn load_state(&mut self, path: &str) {
+        crate::wm_scope!(mut);
         log::info!("Loading state from {}", path);
         if let Ok(content) = std::fs::read_to_string(path) {
             if let Ok(state) = serde_json::from_str::<SavedState>(&content) {
@@ -49,6 +50,7 @@ impl WindowManager {
     /// has something to be pointed at. Purely visual — placeholders are
     /// scene rects, not windows; focus logic never sees them.
     pub unsafe fn create_restore_placeholders(&mut self) {
+        crate::wm_scope!(mut);
         let parent = crate::shared::scene().layers.wm.raw();
         if parent.is_null() {
             return;
@@ -111,6 +113,7 @@ impl WindowManager {
     /// The restore placeholder under a layout-space point, as its virtual
     /// rect `(vx, vy, w, h)`. Topmost (latest-created) wins on overlap.
     pub unsafe fn placeholder_at(&self, lx: f64, ly: f64) -> Option<(f64, f64, f64, f64)> {
+        crate::wm_scope!();
         if self.restore_placeholders.is_empty() {
             return None;
         }
@@ -142,6 +145,7 @@ impl WindowManager {
 
     /// Keep placeholders tracking the camera, same transform as windows.
     pub unsafe fn update_restore_placeholders(&mut self) {
+        crate::wm_scope!(mut);
         if self.restore_placeholders.is_empty() {
             return;
         }
@@ -177,6 +181,7 @@ impl WindowManager {
 
     /// Drop the placeholder claimed by a matched restore entry.
     pub(crate) unsafe fn remove_placeholder_for(&mut self, entry: &SavedWindowState) {
+        crate::wm_scope!(mut);
         if let Some(pos) = self
             .restore_placeholders
             .iter()
@@ -192,6 +197,7 @@ impl WindowManager {
     }
 
     pub unsafe fn clear_restore_placeholders(&mut self) {
+        crate::wm_scope!(mut);
         self.restore_placeholders.clear();
         if !self.restore_placeholder_timer.is_null() {
             ffi::wl_event_source_remove(self.restore_placeholder_timer);
@@ -200,6 +206,7 @@ impl WindowManager {
     }
 
     pub unsafe fn save_state(&mut self) {
+        crate::wm_scope!(mut);
         if self.shutting_down {
             return;
         }
@@ -423,6 +430,7 @@ impl WindowManager {
     }
 
     pub unsafe fn start_clean_exit(&mut self) {
+        crate::wm_scope!(mut);
         if self.clean_exit_in_progress {
             return;
         }
@@ -480,6 +488,7 @@ impl WindowManager {
     /// next state snapshot (`save_state` runs every transaction), and with
     /// them from the next login: they are remembered as `exit_orphans`.
     pub unsafe fn cancel_clean_exit(&mut self) {
+        crate::wm_scope!(mut);
         if !self.clean_exit_in_progress {
             return;
         }
@@ -540,6 +549,7 @@ impl WindowManager {
     }
 
     pub unsafe fn check_clean_exit_progress(&mut self) {
+        crate::wm_scope!(mut);
         if !self.clean_exit_in_progress {
             return;
         }
@@ -575,6 +585,7 @@ impl WindowManager {
         title: &str,
         program: Option<&str>,
     ) -> Option<SavedWindowState> {
+        crate::wm_scope!(mut);
         if app_id.is_empty() {
             return None;
         }
@@ -605,6 +616,7 @@ impl WindowManager {
     /// title the first two matcher passes would accept — as opposed to one
     /// the app_id-only pass would merely lend it.
     pub fn has_titled_saved_entry(&self, app_id: &str, title: &str) -> bool {
+        crate::wm_scope!();
         self.restore_queue
             .iter()
             .chain(self.last_window_states.iter())
@@ -618,6 +630,7 @@ impl WindowManager {
         title: &str,
         program: Option<&str>,
     ) -> Option<SavedWindowState> {
+        crate::wm_scope!();
         if app_id.is_empty() {
             return None;
         }
@@ -638,6 +651,7 @@ impl WindowManager {
     }
 
     pub fn spawn_restored_windows(&mut self) {
+        crate::wm_scope!(mut);
         log::info!("Spawning restored windows. Total: {}", self.restore_queue.len());
         let restored = self.restore_queue.clone();
         std::thread::spawn(move || {

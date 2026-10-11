@@ -52,7 +52,7 @@ impl Osk {
     }
 
     unsafe fn enabled(&self) -> bool {
-        !self.server.is_null() && (*self.server).wm.osk_on_touch
+        !self.server.is_null() && (*crate::reentry::wm(self.server)).osk_on_touch
     }
 
     /// A finger landed on (or, for a tap, lifted from) a window.
@@ -78,7 +78,7 @@ impl Osk {
             return;
         }
         log::debug!("osk: a touched field activated; showing the board");
-        (*self.server).wm.execute_action(&crate::config::Action::Spawn, Some(SHOW_CMD));
+        (*crate::reentry::wm(self.server)).execute_action(&crate::config::Action::Spawn, Some(SHOW_CMD));
         self.shown_by_us = true;
     }
 
@@ -111,7 +111,7 @@ impl Osk {
         }
         self.shown_by_us = false;
         log::debug!("osk: the field let go; hiding the board");
-        (*self.server).wm.execute_action(&crate::config::Action::Spawn, Some(HIDE_CMD));
+        (*crate::reentry::wm(self.server)).execute_action(&crate::config::Action::Spawn, Some(HIDE_CMD));
     }
 }
 

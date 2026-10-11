@@ -14,6 +14,7 @@ impl WindowManager {
     /// redraw instead of easing — and the zoom paths that set the mode do it
     /// every frame, hence the equality guard.
     pub unsafe fn set_mode(&mut self, mode: WindowManagerMode) {
+        crate::wm_scope!(mut);
         if self.mode == mode {
             return;
         }
@@ -39,6 +40,7 @@ impl WindowManager {
     /// test, the reveal, the catcher rects, hover-to-focus, the body
     /// grab — asks this, so the two ways in cannot drift apart.
     pub fn window_adjust_active(&self) -> bool {
+        crate::wm_scope!();
         self.mode == WindowManagerMode::Overview || self.adjust_held
     }
 
@@ -49,6 +51,7 @@ impl WindowManager {
     /// moment the key goes down and the app gets its hover back when it
     /// comes up. A drag in progress is left alone — it ends on release.
     pub unsafe fn refresh_adjust_held(&mut self) {
+        crate::wm_scope!(mut);
         let mut held = self.injected_super_held;
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr_seat = (*seats_list).next;
@@ -82,6 +85,7 @@ impl WindowManager {
     /// Start the border hover fade if it isn't already running. Idempotent —
     /// re-arming mid-fade would restart the timer and step it twice as fast.
     pub unsafe fn arm_border_fade(&mut self) {
+        crate::wm_scope!(mut);
         if self.border_fade_running || self.border_fade_timer.is_null() {
             return;
         }
@@ -90,6 +94,7 @@ impl WindowManager {
     }
 
     pub unsafe fn manage_start(&mut self) {
+        crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Idle));
         assert!(crate::shared::pending().windowing());
         crate::shared::pending().clean_windowing();
@@ -158,6 +163,7 @@ impl WindowManager {
     /// invisible to configures and render_finish — exactly the tray
     /// mis-slot wedge. Silent unless one exists.
     pub(crate) unsafe fn debug_check_unlinked_status(&self, phase: &str) {
+        crate::wm_scope!();
         for &w in self.windows.iter() {
             if w.is_null() || (*w).closed {
                 continue;
@@ -186,6 +192,7 @@ impl WindowManager {
     /// pointers must agree, and every Mapped status window must be reachable
     /// from the head. Silent when consistent.
     pub(crate) unsafe fn debug_check_render_list(&self, phase: &str) {
+        crate::wm_scope!();
         let head = &self.rendering_requested.list as *const ffi::wl_list as *mut WlList;
         let mut members: Vec<*mut WlList> = Vec::new();
         let mut curr = (*head).next;
@@ -226,6 +233,7 @@ impl WindowManager {
     }
 
     pub unsafe fn manage_finish(&mut self) {
+        crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Manage));
         self.cancel_timeout_timer();
 
@@ -270,18 +278,21 @@ impl WindowManager {
     }
 
     pub(crate) unsafe fn start_timeout_timer(&mut self, ms: u32) {
+        crate::wm_scope!(mut);
         if !self.timeout.is_null() {
             ffi::wl_event_source_timer_update(self.timeout, ms as i32);
         }
     }
 
     pub(crate) unsafe fn cancel_timeout_timer(&mut self) {
+        crate::wm_scope!(mut);
         if !self.timeout.is_null() {
             ffi::wl_event_source_timer_update(self.timeout, 0);
         }
     }
 
     pub unsafe fn notify_configured(&mut self) {
+        crate::wm_scope!(mut);
         if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
             *count -= 1;
             if *count == 0 {
@@ -292,6 +303,7 @@ impl WindowManager {
     }
 
     pub unsafe fn render_start(&mut self) {
+        crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::InflightConfigures(0)) ||
                 (matches!(self.state, WindowManagerState::Idle) && crate::shared::pending().rendering()));
         self.state = WindowManagerState::Render;
@@ -313,6 +325,7 @@ impl WindowManager {
     }
 
     pub unsafe fn render_finish(&mut self) {
+        crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Render));
         self.state = WindowManagerState::Idle;
         self.cancel_timeout_timer();

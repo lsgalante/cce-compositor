@@ -326,11 +326,11 @@ unsafe fn handle_builtin_binding(seat: *mut Seat, keysym: u32, modifiers: u32) -
         // fires at all.
         ffi::XKB_KEY_Escape if modifiers == 0 => {
             let server = (*seat).server;
-            if !(*server).wm.any_expanded_status_segment(std::ptr::null_mut()) {
+            if !(*crate::reentry::wm(server)).any_expanded_status_segment(std::ptr::null_mut()) {
                 return false;
             }
             log::debug!("Escape dismisses the open status menu");
-            if let Some(ref sender) = (*server).wm.status_sender {
+            if let Some(ref sender) = (*crate::reentry::wm(server)).status_sender {
                 sender.send_menu_dismiss("-");
             }
             true
@@ -430,13 +430,13 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
 
         if matched_builtin {
             KeyConsumer::Builtin
-        } else if let Some(kb) = match_cce_keybind(&(*(*group.seat).server).wm, xkb_keycode, modifiers, xkb_state)
+        } else if let Some(kb) = match_cce_keybind(&(*crate::reentry::wm((*group.seat).server)), xkb_keycode, modifiers, xkb_state)
             .filter(|kb| !locked || allowed_while_locked(kb.keysym))
         {
             log::debug!("matched CCE monolithic keybind: {:?}", kb);
             KeyConsumer::CceBinding(kb)
         } else if let Some((session, id)) = (!locked)
-            .then(|| match_portal_shortcut(&(*(*group.seat).server).wm, xkb_keycode, modifiers, xkb_state))
+            .then(|| match_portal_shortcut(&(*crate::reentry::wm((*group.seat).server)), xkb_keycode, modifiers, xkb_state))
             .flatten()
         {
             log::debug!("matched portal shortcut {} {}", session, id);
@@ -463,7 +463,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         KeyConsumer::Builtin => {}
         KeyConsumer::CceBinding(kb) => {
             if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED {
-                let wm = &mut (*(*group.seat).server).wm;
+                let wm = &mut (*crate::reentry::wm((*group.seat).server));
                 // A key carries no pointer position: the overview toggle's
                 // exit must land on the focused window, not on whatever the
                 // pointer was left hovering (or the empty desktop under it).
@@ -482,7 +482,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             // the release comes back here through the consumer map with the
             // same variant the press recorded.
             let pressed = (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED;
-            if let Some(ref sender) = (*(*group.seat).server).wm.status_sender {
+            if let Some(ref sender) = (*crate::reentry::wm((*group.seat).server)).status_sender {
                 sender.send_shortcut_event(
                     &cce_core::ipc::ctl::ShortcutEvent {
                         activated: pressed,
@@ -507,7 +507,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             // windows (spatial thumbnails) have their presses eaten.
             let is_overlay_mode = (*group.seat).focus_is_chrome();
 
-            if (*(*group.seat).server).wm.mode != crate::window_manager::WindowManagerMode::Overview
+            if (*crate::reentry::wm((*group.seat).server)).mode != crate::window_manager::WindowManagerMode::Overview
                 || is_overlay_mode
                 || (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
             {
@@ -616,7 +616,7 @@ unsafe extern "C" fn handle_group_modifiers(listener: *mut ffi::wl_listener, _da
     // is this group's — the DEVICE keyboard has no keymap on the DRM
     // backend (see keyboard::should_set_keymap), so its own modifiers
     // signal never fires there; this one does for every real key.
-    (*(*group.seat).server).wm.refresh_adjust_held();
+    (*crate::reentry::wm((*group.seat).server)).refresh_adjust_held();
 
     group.send_state();
 }

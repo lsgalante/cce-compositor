@@ -170,7 +170,7 @@ unsafe extern "C" fn inspector_get_inspected_surfaces(
         return;
     }
     let server = (*inspector).server;
-    let windows = &(*server).wm.windows;
+    let windows = &(*crate::reentry::wm(server)).windows;
 
     for &window in windows.iter() {
         if window.is_null() {

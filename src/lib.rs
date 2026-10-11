@@ -16,6 +16,9 @@ pub mod listener;
 pub mod scene_handle;
 #[path = "server/shared.rs"]
 pub mod shared;
+#[path = "server/reentry.rs"]
+#[macro_use]
+pub mod reentry;
 #[path = "server/process.rs"]
 pub mod process;
 #[path = "server/util.rs"]

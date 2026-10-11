@@ -699,7 +699,7 @@ impl Window {
     /// Floating, popup and every other mode are unaffected. Evaluated on both
     /// render paths, so a float/tile toggle restyles on the next arrange.
     pub unsafe fn wants_tiled_shadow(&self) -> bool {
-        (*self.server).wm.layout.shadow_tiled
+        (*crate::reentry::wm(self.server)).layout.shadow_tiled
             || self.tiling_mode != crate::tiling::TilingMode::Tiled
     }
 
@@ -728,7 +728,7 @@ impl Window {
     /// leaving it fixed behind the screen.
     pub unsafe fn fullscreen_yields(&self) -> bool {
         let me = self as *const Window as *mut Window;
-        for &w in (*self.server).wm.focus_history.iter() {
+        for &w in (*crate::reentry::wm(self.server)).focus_history.iter() {
             if w == me {
                 return false;
             }
@@ -770,7 +770,7 @@ impl Window {
         if output.is_null() {
             return None;
         }
-        let zoom = (*self.server).wm.desk_zoom.max(0.01);
+        let zoom = (*crate::reentry::wm(self.server)).desk_zoom.max(0.01);
         let (first_x, first_y, _, _) = self.first_enabled_output_box();
         Some((
             self.virtual_x - ((*output).sent.x as f64 - first_x) / zoom,
@@ -787,7 +787,7 @@ impl Window {
     /// a camera flight, where the window is a slab on the desk anyway and
     /// the camera is not the enter's to move.
     unsafe fn pan_to_restored_fullscreen_spot(&self) {
-        let wm = &mut (*self.server).wm;
+        let wm = &mut (*crate::reentry::wm(self.server));
         if wm.mode == crate::window_manager::WindowManagerMode::Overview
             || wm.camera_ramp_anim.is_some()
             || self.fullscreen_yields()
@@ -993,8 +993,8 @@ impl Window {
             scale: 1.0,
             last_applied_scale: 1.0,
             buffers_scaled: false,
-            virtual_x: unsafe { (*server).wm.desk_pan_x + 100.0 },
-            virtual_y: unsafe { (*server).wm.desk_pan_y + 100.0 },
+            virtual_x: unsafe { (*crate::reentry::wm(server)).desk_pan_x + 100.0 },
+            virtual_y: unsafe { (*crate::reentry::wm(server)).desk_pan_y + 100.0 },
             resize_start_vx: 0.0,
             resize_start_vy: 0.0,
             resize_start_w: 0,
@@ -1090,7 +1090,7 @@ impl Window {
 
 
         let raw = Box::into_raw(window);
-        let key = (*(*raw).server).wm.windows.put(raw);
+        let key = (*crate::reentry::wm((*raw).server)).windows.put(raw);
         (*raw).ref_key = key;
         (*raw).node.init();
 
@@ -1462,8 +1462,8 @@ impl Window {
         } else {
             let mut should_focus = true;
             if self.session_restored && self.restored_focused {
-                (*self.server).wm.restored_focused_window_mapped = true;
-                if (*self.server).wm.startup_input_seen {
+                (*crate::reentry::wm(self.server)).restored_focused_window_mapped = true;
+                if (*crate::reentry::wm(self.server)).startup_input_seen {
                     // The user already typed/clicked somewhere (e.g. into
                     // the keepassxc unlock dialog) while this window was
                     // still loading — mapping now must not yank focus out
@@ -1473,9 +1473,9 @@ impl Window {
                 } else {
                     log::info!("[FocusRestore] Restored focused window mapped: {:?}", self.get_title());
                 }
-            } else if (*self.server).wm.has_restored_focused_window
-                && !(*self.server).wm.restored_focused_window_mapped
-                && !(*self.server).wm.startup_input_seen
+            } else if (*crate::reentry::wm(self.server)).has_restored_focused_window
+                && !(*crate::reentry::wm(self.server)).restored_focused_window_mapped
+                && !(*crate::reentry::wm(self.server)).startup_input_seen
             {
                 // Strict settle phase: until the session's focused window
                 // maps (or the user intervenes), NOTHING else auto-focuses —
@@ -1485,8 +1485,8 @@ impl Window {
                 // fastest.
                 log::info!("[FocusRestore] Holding focus for the session's focused window; {:?} maps unfocused", self.get_title());
                 should_focus = false;
-            } else if (*self.server).wm.has_restored_focused_window
-                && (*self.server).wm.restored_focused_window_mapped
+            } else if (*crate::reentry::wm(self.server)).has_restored_focused_window
+                && (*crate::reentry::wm(self.server)).restored_focused_window_mapped
             {
                 if self.session_restored {
                     // A restored sibling mapping after the session's focused
@@ -1497,7 +1497,7 @@ impl Window {
                     // its remembered off-viewport spot for the whole session.
                     log::info!("[FocusRestore] Blocking focus to non-focused restored window {:?} because restored focused window is already mapped", self.get_title());
                     should_focus = false;
-                } else if !(*self.server).wm.startup_input_seen {
+                } else if !(*crate::reentry::wm(self.server)).startup_input_seen {
                     // A window mapping unbidden while the session is still
                     // settling (no key/button pressed yet) — an autostart
                     // like keepassxc popping up after the restored windows.
@@ -1519,7 +1519,7 @@ impl Window {
             if should_focus {
                 if let Some(app_id) = self.get_app_id_string() {
                     let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
-                    if (*self.server).wm.take_recent_vanish(&app_id, program.as_deref()) {
+                    if (*crate::reentry::wm(self.server)).take_recent_vanish(&app_id, program.as_deref()) {
                         log::info!("[FocusRestore] Blocking focus steal by reconnecting client {:?} ({})", self.get_title(), app_id);
                         should_focus = false;
                     }
@@ -1536,17 +1536,17 @@ impl Window {
             // a first focus unless `center_on_spawn` allows it — the exit
             // this replaced always moved the camera.
             if should_focus
-                && (*self.server).wm.mode == crate::window_manager::WindowManagerMode::Overview
+                && (*crate::reentry::wm(self.server)).mode == crate::window_manager::WindowManagerMode::Overview
                 && !self.is_grid()
                 && !self.is_status_bar()
                 && !self.is_wallpaper()
             {
-                let resolved = (*self.server).wm.get_mode_for_window(self as *mut Window);
+                let resolved = (*crate::reentry::wm(self.server)).get_mode_for_window(self as *mut Window);
                 if !matches!(
                     resolved,
                     crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
                 ) {
-                    (*self.server).wm.pan_overview_to_window(self as *mut Window);
+                    (*crate::reentry::wm(self.server)).pan_overview_to_window(self as *mut Window);
                 }
             }
 
@@ -1573,7 +1573,7 @@ impl Window {
         // segments, wallpaper), so there is no second branch here.
         // Animations off (`cce_core::motion`) is a zero-length fade, the
         // same as `surface { fade in_ms=0 }`.
-        let fade_ms = if cce_core::motion::enabled() { (*self.server).wm.layout.fade_in_ms } else { 0 };
+        let fade_ms = if cce_core::motion::enabled() { (*crate::reentry::wm(self.server)).layout.fade_in_ms } else { 0 };
         if self.wants_map_fade() && fade_ms > 0 {
             self.map_fade = 0.0;
         }
@@ -1621,7 +1621,7 @@ impl Window {
         {
             if let Some(app_id) = self.get_app_id_string() {
                 let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
-                (*self.server).wm.note_vanished(app_id, program);
+                (*crate::reentry::wm(self.server)).note_vanished(app_id, program);
             }
         }
         self.commit.disconnect();
@@ -1678,7 +1678,7 @@ impl Window {
             if let crate::seat::Focus::Window(w) = (*seat).focused {
                 if w == window {
                     (*seat).focus(crate::seat::Focus::None);
-                    (*(*window).server).wm.focus_next_visible_window(seat);
+                    (*crate::reentry::wm((*window).server)).focus_next_visible_window(seat);
                 }
             }
             if let Some(ref op) = (*seat).op {
@@ -1701,8 +1701,8 @@ impl Window {
 
         (*window).node.deinit();
 
-        (*(*window).server).wm.remove_from_history(window);
-        (*(*window).server).wm.selection_forget(window);
+        (*crate::reentry::wm((*window).server)).remove_from_history(window);
+        (*crate::reentry::wm((*window).server)).selection_forget(window);
         // A seat cursor may still name this window as its adjust target.
         // The next hover evaluation would replace it, but a window allocated
         // at the same address in the meantime must not inherit the ring.
@@ -1718,8 +1718,8 @@ impl Window {
                 curr = (*curr).next;
             }
         }
-        (*(*window).server).wm.windows.remove((*window).ref_key);
-        (*(*window).server).wm.check_clean_exit_progress();
+        (*crate::reentry::wm((*window).server)).windows.remove((*window).ref_key);
+        (*crate::reentry::wm((*window).server)).check_clean_exit_progress();
 
         let _ = Box::from_raw(window);
     }
@@ -1947,7 +1947,7 @@ impl Window {
                     if !self.node.link.prev.is_null() && !self.node.link.next.is_null() {
                         wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
                     }
-                    let rendering_list = &mut (*self.server).wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
+                    let rendering_list = &mut (*crate::reentry::wm(self.server)).rendering_requested.list as *mut ffi::wl_list as *mut WlList;
                     // The tail is the top of the stack. A shy helper
                     // window (`is_shy`) links at the head instead — beneath
                     // the app's own windows, where its app keeps it.
@@ -2017,7 +2017,7 @@ impl Window {
         }
 
         let mut activated = false;
-        let seats = &mut (*self.server).wm.sent.seats as *mut ffi::wl_list as *mut WlList;
+        let seats = &mut (*crate::reentry::wm(self.server)).sent.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*seats).next;
         while curr != seats {
             let next = (*curr).next;
@@ -2258,7 +2258,7 @@ impl Window {
         // and each retitle used to cost a full manage/arrange/render pass.
         // Without a title rule the title's other consumers are the status
         // bar's `title` topic and the saved-state file, so feed those directly.
-        let wm = &mut (*self.server).wm;
+        let wm = &mut (*crate::reentry::wm(self.server));
         if wm.mode_rules.iter().any(|r| r.title_pattern.is_some()) {
             crate::shared::pending().dirty_windowing();
         } else {
@@ -2328,11 +2328,11 @@ impl Window {
             let app_id = self.get_app_id_string().unwrap_or_default();
             let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                             app_id.starts_with("cce-status");
-            let is_decorated = (*self.server).wm.is_decorated_app(&app_id);
+            let is_decorated = (*crate::reentry::wm(self.server)).is_decorated_app(&app_id);
             let blur_enabled = requested.blur && (self.wm_requested.ssd || is_decorated || is_status) && !self.droplet_backdrop_on();
-            let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
+            let mut ignore_transparent = (*crate::reentry::wm(self.server)).layout.window_backdrop_blur_ignore_transparent;
             if is_status {
-                ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
+                ignore_transparent = (*crate::reentry::wm(self.server)).layout.status_backdrop_blur_ignore_transparent;
             }
             // Hoisted above the blur setup: the blur node needs this radius, and whether
             // the window wants rounded corners at all decides the optimized-blur question
@@ -2351,7 +2351,7 @@ impl Window {
             let use_optimized = if is_status {
                 false
             } else {
-                (*self.server).wm.layout.scenefx_optimized_blur
+                (*crate::reentry::wm(self.server)).layout.scenefx_optimized_blur
             };
             let toplevel_w = match self.impl_type {
                 WindowImpl::Toplevel(toplevel) => {
@@ -2412,7 +2412,7 @@ impl Window {
                 // would sit on top of it.
                 let want_bevel = !is_status
                     && !self.is_fullscreen()
-                    && (*self.server).wm.is_beveled_app(&app_id);
+                    && (*crate::reentry::wm(self.server)).is_beveled_app(&app_id);
             self.update_shadow(width, height, radius, want_shadow);
                 self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
@@ -2808,11 +2808,11 @@ impl Window {
             {
                 let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                                 app_id.starts_with("cce-status");
-                let is_decorated = (*self.server).wm.is_decorated_app(&app_id);
+                let is_decorated = (*crate::reentry::wm(self.server)).is_decorated_app(&app_id);
                 let blur_enabled = requested.blur && (self.wm_requested.ssd || is_decorated || is_status) && !self.droplet_backdrop_on();
-                let mut ignore_transparent = (*self.server).wm.layout.window_backdrop_blur_ignore_transparent;
+                let mut ignore_transparent = (*crate::reentry::wm(self.server)).layout.window_backdrop_blur_ignore_transparent;
                 if is_status {
-                    ignore_transparent = (*self.server).wm.layout.status_backdrop_blur_ignore_transparent;
+                    ignore_transparent = (*crate::reentry::wm(self.server)).layout.status_backdrop_blur_ignore_transparent;
                 }
                 // Same radius/optimized reasoning as set_rendering_state — the
                 // one `root_plate_radius_base`, so the two paths, which drive
@@ -2830,7 +2830,7 @@ impl Window {
                 let use_optimized = if is_status {
                     false
                 } else {
-                    (*self.server).wm.layout.scenefx_optimized_blur
+                    (*crate::reentry::wm(self.server)).layout.scenefx_optimized_blur
                 };
                 let toplevel_w = match self.impl_type {
                     WindowImpl::Toplevel(toplevel) => {
@@ -2874,7 +2874,7 @@ impl Window {
                 // would sit on top of it.
                 let want_bevel = !is_status
                     && !self.is_fullscreen()
-                    && (*self.server).wm.is_beveled_app(&app_id);
+                    && (*crate::reentry::wm(self.server)).is_beveled_app(&app_id);
                 self.update_shadow(width, height, radius, want_shadow);
                 self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);

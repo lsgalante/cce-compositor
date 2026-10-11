@@ -412,7 +412,7 @@ impl Seat {
 
         if let Focus::Window(window) = new_focus {
             if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
-                (*self.server).wm.raise_window(window);
+                (*crate::reentry::wm(self.server)).raise_window(window);
                 crate::shared::pending().dirty_windowing();
             }
         }
@@ -485,19 +485,19 @@ impl Seat {
         // eases in and out through the border fade — a focus change has to
         // arm that timer or the old ring lingers and the new one waits for an
         // unrelated redraw (the same reason WindowManager::set_mode arms it).
-        (*self.server).wm.arm_border_fade();
+        (*crate::reentry::wm(self.server)).arm_border_fade();
         if let Focus::Window(window) = new_focus {
             if !window.is_null() {
-                (*self.server).wm.record_focus(window);
+                (*crate::reentry::wm(self.server)).record_focus(window);
                 // Focus decides whether a fullscreen window stays on top
                 // (`Window::fullscreen_yields`); restack whenever one is up,
                 // since not every path to here dirties on its own.
-                if (*self.server).wm.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
+                if (*crate::reentry::wm(self.server)).windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
                     crate::shared::pending().dirty_windowing();
                 }
             }
         }
-        (*self.server).wm.update_status();
+        (*crate::reentry::wm(self.server)).update_status();
 
         match new_focus {
             Focus::None => {}
@@ -550,7 +550,7 @@ impl Seat {
                 if !window.is_null() {
                     let spawn_pan = !(*window).session_restored
                         && !(*window).hint_placed
-                        && (*self.server).wm.center_on_spawn;
+                        && (*crate::reentry::wm(self.server)).center_on_spawn;
                     // A restored window maps unfocused and keeps is_new until
                     // its first focus — which, after a session restart, is
                     // the user's first CLICK on it. Suppressing that pan made
@@ -559,7 +559,7 @@ impl Seat {
                     // is over: a first focus is user intent and pans like any
                     // other, except for placement-hinted spawns (pickers that
                     // open at their control and must not yank the camera).
-                    let user_focus = (*self.server).wm.startup_input_seen && !(*window).hint_placed;
+                    let user_focus = (*crate::reentry::wm(self.server)).startup_input_seen && !(*window).hint_placed;
                     if !is_new || spawn_pan || user_focus {
                         self.focus_follow_pan(window);
                     }
@@ -780,7 +780,7 @@ impl Seat {
         self.layer_shell.manage_start();
 
         crate::server::wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
-        let sent_seats = &mut (*self.server).wm.sent.seats as *mut ffi::wl_list as *mut crate::server::WlList;
+        let sent_seats = &mut (*crate::reentry::wm(self.server)).sent.seats as *mut ffi::wl_list as *mut crate::server::WlList;
         crate::server::wl_list_insert((*sent_seats).prev, &mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
     }
 
@@ -854,7 +854,7 @@ impl Seat {
         // flight), the current camera is a mid-flight sample — any pan
         // target computed from it is stale by construction. Never retarget
         // out from under the ramp.
-        if (*self.server).wm.camera_ramp_anim.is_some() {
+        if (*crate::reentry::wm(self.server)).camera_ramp_anim.is_some() {
             return;
         }
         // A fullscreen window that stepped aside was left on the desk
@@ -863,7 +863,7 @@ impl Seat {
         // and lands on its output. Not in overview, where the desk is the
         // point and the camera stays put.
         if !window.is_null() && (*window).is_fullscreen() {
-            let wm = &mut (*self.server).wm;
+            let wm = &mut (*crate::reentry::wm(self.server));
             if wm.mode == crate::window_manager::WindowManagerMode::Overview {
                 return;
             }
@@ -934,7 +934,7 @@ impl Seat {
                 600.0
             };
 
-            let wm = &mut (*self.server).wm;
+            let wm = &mut (*crate::reentry::wm(self.server));
             let cam = wm.camera();
             // box_geom is already virtual units (its screen footprint is
             // box_geom * zoom) — dividing by zoom here inflated the window
@@ -966,7 +966,7 @@ impl Seat {
     /// Snap parameters for interactive ops, from the current layout config.
     unsafe fn snap_params(&self) -> crate::policy::snap::SnapParams {
         // Zoom-aware: the felt grab distance stays constant in screen px.
-        (*self.server).wm.layout.snap_params().for_zoom((*self.server).wm.desk_zoom)
+        (*crate::reentry::wm(self.server)).layout.snap_params().for_zoom((*crate::reentry::wm(self.server)).desk_zoom)
     }
 
     pub unsafe fn op_update(&mut self, x: i32, y: i32) {
@@ -987,8 +987,8 @@ impl Seat {
                 // the grid scrolls away beneath them.
                 let travelled = dx.abs() > crate::selection::DRAG_THRESHOLD
                     || dy.abs() > crate::selection::DRAG_THRESHOLD;
-                (*self.server).wm.selection_motion(x as f64, y as f64, travelled);
-                (*self.server).wm.queue_op_frame();
+                (*crate::reentry::wm(self.server)).selection_motion(x as f64, y as f64, travelled);
+                (*crate::reentry::wm(self.server)).queue_op_frame();
                 self.update_edge_pan(x as f64, y as f64);
                 return;
             }
@@ -998,17 +998,17 @@ impl Seat {
                 // group's, snapped to whole cells when a Tiled window is
                 // along (measured on that window, so it lands on cells).
                 let op = *op;
-                let delta = (*self.server).wm.op_virtual_delta(&op);
+                let delta = (*crate::reentry::wm(self.server)).op_virtual_delta(&op);
                 let (gdx, gdy) = crate::policy::drag::group_offset(
                     (op.start_win_virtual_x, op.start_win_virtual_y),
                     delta,
                     op.start_was_tiled,
                     &sp,
                 );
-                (*self.server).wm.arm_border_fade();
+                (*crate::reentry::wm(self.server)).arm_border_fade();
                 carry_group_windows(self.server, &self.group_move, std::ptr::null_mut(), gdx, gdy);
                 carry_group_items(self.server, &self.group_items, gdx, gdy);
-                (*self.server).wm.queue_op_frame();
+                (*crate::reentry::wm(self.server)).queue_op_frame();
                 self.update_edge_pan(x as f64, y as f64);
                 return;
             }
@@ -1017,7 +1017,7 @@ impl Seat {
             if !win.is_null() && !(*win).closed {
                 // Every drag step can bring a Floating window over the
                 // adjust target or take it off: re-evaluate the overlap dim.
-                (*self.server).wm.arm_border_fade();
+                (*crate::reentry::wm(self.server)).arm_border_fade();
                 if (*win).tiling_mode != crate::tiling::TilingMode::Floating
                     && (*win).tiling_mode != crate::tiling::TilingMode::Overlay
                     // A drag moves a Utility window; it must not re-class it.
@@ -1029,7 +1029,7 @@ impl Seat {
                     (*win).was_tiled = false;
                     (*win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*win).mode_locked = true;
-                    (*self.server).wm.raise_window(win);
+                    (*crate::reentry::wm(self.server)).raise_window(win);
                 }
                 
                 match op.op_type {
@@ -1048,7 +1048,7 @@ impl Seat {
                                 .om
                                 .enabled_output_boxes();
                             if let Some(edge) = crate::policy::drag::status_edge_at((x as f64, y as f64), &outputs) {
-                                let bar_h = (*self.server).wm.layout.bar_height as u32;
+                                let bar_h = (*crate::reentry::wm(self.server)).layout.bar_height as u32;
                                 let original_length = std::cmp::max((*win).box_geom.width, (*win).box_geom.height) as u32;
                                 let (target_w, target_h) = crate::policy::drag::status_bar_size(edge, bar_h, original_length);
 
@@ -1059,7 +1059,7 @@ impl Seat {
                                 }
                             }
                         } else {
-                            let (virtual_dx, virtual_dy) = (*self.server).wm.op_virtual_delta(op);
+                            let (virtual_dx, virtual_dy) = (*crate::reentry::wm(self.server)).op_virtual_delta(op);
                             // Hard snap for a window grabbed Tiled, the
                             // magnetic pull for a Floating one
                             // (`policy::drag::move_to`).
@@ -1076,7 +1076,7 @@ impl Seat {
                             // Overview moves displace what they cover: any
                             // window the drag covers past the threshold
                             // scoots to the side the drag vacated.
-                            if (*self.server).wm.mode
+                            if (*crate::reentry::wm(self.server)).mode
                                 == crate::window_manager::WindowManagerMode::Overview
                             {
                                 displace_covered(
@@ -1129,7 +1129,7 @@ impl Seat {
 
                         // Shared with the arrange snapshot's
                         // `get_active_resize_dimensions`.
-                        let (new_w, new_h) = (*self.server).wm.op_resize_size(op, edges);
+                        let (new_w, new_h) = (*crate::reentry::wm(self.server)).op_resize_size(op, edges);
                         // The client's xdg min/max size is a contract, not a
                         // suggestion: a configure below it is applied by
                         // cce-ui as-is, and a layout with less room than its
@@ -1169,7 +1169,7 @@ impl Seat {
             // The configure and the relayout go out once per output frame,
             // for wherever the pointer is by then (WindowManager::
             // step_op_frame), not once per motion event.
-            (*self.server).wm.queue_op_frame();
+            (*crate::reentry::wm(self.server)).queue_op_frame();
         }
         self.update_edge_pan(x as f64, y as f64);
     }
@@ -1181,7 +1181,7 @@ impl Seat {
     /// from the edge-pan tick's op_update, which is what re-arms the timer —
     /// so the scroll continues while the cursor rests pinned at the edge.
     unsafe fn update_edge_pan(&mut self, lx: f64, ly: f64) {
-        let wm = &mut (*self.server).wm;
+        let wm = &mut (*crate::reentry::wm(self.server));
         let mut vx = 0.0;
         let mut vy = 0.0;
         let eligible = wm.layout.desktop_edge_pan
@@ -1225,7 +1225,7 @@ impl Seat {
     /// it Floating, in place. Only windows resolving Floating/Tiled
     /// participate — Popup/Overlay/Status/Fullscreen are untouched.
     unsafe fn settle_tiling(&mut self, win: *mut crate::window::Window) {
-        let resolved = (*self.server).wm.get_mode_for_window(win);
+        let resolved = (*crate::reentry::wm(self.server)).get_mode_for_window(win);
         if !matches!(
             resolved,
             crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Tiled
@@ -1234,7 +1234,7 @@ impl Seat {
         }
         // Unscaled params: alignment classifies the resting geometry, the
         // zoom-aware grab distance is irrelevant.
-        let sp = (*self.server).wm.layout.snap_params();
+        let sp = (*crate::reentry::wm(self.server)).layout.snap_params();
         let (w, h) = match (*win).wm_requested.dimensions {
             // A just-finished resize may not be acked into box_geom yet;
             // the requested size is what the window is about to become.
@@ -1268,7 +1268,7 @@ impl Seat {
         self.overview_displaced.clear();
         if let Some(op) = self.op.take() {
             log::debug!("end seat op");
-            let wm = &mut (*self.server).wm;
+            let wm = &mut (*crate::reentry::wm(self.server));
             wm.edge_pan_vx = 0.0;
             wm.edge_pan_vy = 0.0;
             let win = op.window_ptr;
@@ -1310,7 +1310,7 @@ impl Seat {
             // was a window or an image (then `win` is null).
             let group = std::mem::take(&mut self.group_move);
             for &(w, start_vx, start_vy) in group.iter() {
-                if w == win || !(*self.server).wm.selectable_in_drag(w) {
+                if w == win || !(*crate::reentry::wm(self.server)).selectable_in_drag(w) {
                     continue;
                 }
                 if (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
@@ -1329,7 +1329,7 @@ impl Seat {
                     .map_or(false, |i| i.x != sx || i.y != sy)
             });
             if moved {
-                if let Some(ref sender) = (*self.server).wm.status_sender {
+                if let Some(ref sender) = (*crate::reentry::wm(self.server)).status_sender {
                     sender.send_selection_line(&cce_core::ipc::ctl::SelectionEvent::Drop.to_string());
                 }
             }
@@ -1358,7 +1358,7 @@ unsafe fn carry_group_windows(
     gdy: f64,
 ) {
     for &(w, start_vx, start_vy) in group.iter() {
-        if w == grabbed || !(*server).wm.selectable_in_drag(w) {
+        if w == grabbed || !(*crate::reentry::wm(server)).selectable_in_drag(w) {
             continue;
         }
         if gdx == 0.0 && gdy == 0.0 && (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
@@ -1370,7 +1370,7 @@ unsafe fn carry_group_windows(
             (*w).was_tiled = false;
             (*w).tiling_mode = crate::tiling::TilingMode::Floating;
             (*w).mode_locked = true;
-            (*server).wm.raise_window(w);
+            (*crate::reentry::wm(server)).raise_window(w);
         }
         (*w).virtual_x = start_vx + gdx;
         (*w).virtual_y = start_vy + gdy;
@@ -1390,7 +1390,7 @@ unsafe fn carry_group_items(server: *mut crate::server::Server, items: &[(u64, f
     if items.is_empty() {
         return;
     }
-    let wm = &mut (*server).wm;
+    let wm = &mut (*crate::reentry::wm(server));
     let mut moves = Vec::with_capacity(items.len());
     let mut changed = false;
     for &(id, start_x, start_y) in items.iter() {
@@ -1437,7 +1437,7 @@ unsafe fn displace_covered(
     ledger: &mut Vec<(*mut crate::window::Window, f64, f64)>,
     group: &[(*mut crate::window::Window, f64, f64)],
 ) {
-    let wm = &mut (*server).wm;
+    let wm = &mut (*crate::reentry::wm(server));
     // A window can close mid-drag; drop its entry before any deref.
     ledger.retain(|&(w, _, _)| wm.windows.iter().any(|&p| p == w));
     let moved = (

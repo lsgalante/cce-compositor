@@ -556,6 +556,7 @@ pub fn app_id_matches(pattern: &str, app_id: &str) -> bool {
 
 impl WindowManager {
     pub unsafe fn init(&mut self) -> Result<(), ()> {
+        crate::wm_scope!(mut);
         // This is a stub for the 0-arg struct instantiation.
         // We will call the real initialization with the server parameter.
         ffi::wl_list_init(&mut self.sent.outputs);
@@ -583,6 +584,7 @@ impl WindowManager {
     }
 
     pub unsafe fn init_with_server(&mut self, server: *mut Server) -> Result<(), &'static str> {
+        crate::wm_scope!(mut);
         self.server = server;
         self.global = std::ptr::null_mut();
         self.state = WindowManagerState::Idle;
@@ -768,6 +770,7 @@ impl WindowManager {
     /// Minimized entries are skipped — a minimized window is nowhere on the
     /// desk to be beside.
     pub unsafe fn tiled_desk_bounds(&self) -> Option<(f64, f64, f64, f64)> {
+        crate::wm_scope!();
         let mut bounds: Option<(f64, f64, f64, f64)> = None;
         let mut extend = |x: f64, y: f64, w: f64, h: f64| {
             if w <= 0.0 || h <= 0.0 {
@@ -808,6 +811,7 @@ impl WindowManager {
     /// pan-into-view windows get, for things that are not windows (restore
     /// placeholders).
     pub unsafe fn pan_to_virtual_rect(&mut self, vx: f64, vy: f64, w: f64, h: f64) {
+        crate::wm_scope!(mut);
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr_out = (*outputs_list).next;
         let mut viewport: Option<ffi::wlr_box> = None;
@@ -835,6 +839,7 @@ impl WindowManager {
     /// predicate behind every radius/blur/shadow decision — the mirrored
     /// render sites must all agree or the effects visibly disagree per pass.
     pub fn is_decorated_app(&self, app_id: &str) -> bool {
+        crate::wm_scope!();
         app_id.starts_with("cce-") || self.rounded_apps.iter().any(|a| app_id_matches(a, app_id))
     }
 
@@ -844,6 +849,7 @@ impl WindowManager {
     /// the rim. Only apps named in `bevel_apps` (defaulting to `rounded_apps`)
     /// get one.
     pub fn is_beveled_app(&self, app_id: &str) -> bool {
+        crate::wm_scope!();
         self.bevel_apps.iter().any(|a| app_id_matches(a, app_id))
     }
 
@@ -858,6 +864,7 @@ impl WindowManager {
     /// always. An exact pass first keeps a specific hint from being stolen by
     /// a loosely-matching one.
     pub fn take_pending_placement(&mut self, app_id: &str) -> Option<(f64, f64, bool)> {
+        crate::wm_scope!(mut);
         const HINT_TTL: std::time::Duration = std::time::Duration::from_secs(10);
         self.pending_placements.retain(|(_, _, _, _, at)| at.elapsed() < HINT_TTL);
         let lower = app_id.to_lowercase();
@@ -876,6 +883,7 @@ impl WindowManager {
     }
 
     pub unsafe fn start_ipc(&mut self, display_socket: Option<String>) {
+        crate::wm_scope!(mut);
         if self.ipc_rx.is_none() {
             // Lock before logind's sleeps (lid, power key) — a real seat only.
             if !(*self.server).session.is_null() {
@@ -900,6 +908,7 @@ impl WindowManager {
 
     /// Own the window-stream hub and wake on its subscriber eventfd.
     pub unsafe fn start_stream(&mut self, hub: crate::stream_server::StreamHub) {
+        crate::wm_scope!(mut);
         let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
         self.stream_source = ffi::wl_event_loop_add_fd(
             event_loop,
@@ -915,6 +924,7 @@ impl WindowManager {
     }
 
     pub unsafe fn deinit(&mut self) {
+        crate::wm_scope!(mut);
         if !self.global.is_null() {
             ffi::wl_global_destroy(self.global);
             self.global = std::ptr::null_mut();
@@ -984,6 +994,7 @@ impl WindowManager {
     /// (cursor output, hovered window, focus) resolved up front, the
     /// arrange-pass convention.
     unsafe fn build_action_ctx(&mut self) -> crate::policy::api::ActionCtx {
+        crate::wm_scope!(mut);
         use crate::policy::api::{ActionCtx, ActionWindow, Rect, WindowId};
 
         // First enabled output: the legacy viewport for zooms and View jumps.
@@ -1125,6 +1136,7 @@ impl WindowManager {
 
     /// Poll the held `focus-window --wait` replies in [`SETTLE_POLL_MS`].
     unsafe fn arm_settle_timer(&mut self) {
+        crate::wm_scope!(mut);
         if self.settle_timer.is_null() {
             let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
             self.settle_timer = ffi::wl_event_loop_add_timer(
@@ -1146,6 +1158,7 @@ impl WindowManager {
     /// Answer each `focus-window --wait` whose window has stopped moving
     /// on screen, or has waited [`SETTLE_TIMEOUT_MS`], or has closed.
     unsafe fn poll_settle_waiters(&mut self) {
+        crate::wm_scope!(mut);
         let moving = self.camera_anim_active
             || self.pan_pending != [0.0, 0.0]
             || self.pinch_pending.is_some()
@@ -1179,6 +1192,7 @@ impl WindowManager {
     /// calls before it fires are absorbed, so a burst of transactions costs
     /// one save at most `SAVE_STATE_DELAY_MS` behind the last change.
     pub unsafe fn schedule_save_state(&mut self) {
+        crate::wm_scope!(mut);
         if self.shutting_down || self.save_state_pending {
             return;
         }
@@ -1221,9 +1235,11 @@ pub fn mode_rule_matches(rule: &crate::config::ModeRule, app_id: Option<&str>, t
 
 impl WindowManager {
     // Add legacy fields so structural offsets are preserved if layout-based code is compiled
-    pub fn sent_outputs_compat(&self) {}
+    pub fn sent_outputs_compat(&self) {
+        crate::wm_scope!();}
 
     pub unsafe fn get_rule_for_window(&self, win: *mut Window) -> Option<&crate::config::ModeRule> {
+        crate::wm_scope!();
         self.rule_for((*win).app_id_str(), (*win).title_str())
     }
 
@@ -1231,10 +1247,12 @@ impl WindowManager {
     /// arrange snapshot asks once per window per transaction — once a vblank
     /// during a drag — and used to allocate both strings, twice.
     fn rule_for(&self, app_id: Option<&str>, title: Option<&str>) -> Option<&crate::config::ModeRule> {
+        crate::wm_scope!();
         self.mode_rules.iter().find(|rule| mode_rule_matches(rule, app_id, title))
     }
 
     pub unsafe fn get_mode_for_window(&self, win: *mut Window) -> crate::tiling::TilingMode {
+        crate::wm_scope!();
         self.mode_for_window(win, (*win).app_id_str(), || self.get_rule_for_window(win))
     }
 
@@ -1246,6 +1264,7 @@ impl WindowManager {
         app_id: Option<&str>,
         rule: impl FnOnce() -> Option<&'a crate::config::ModeRule>,
     ) -> crate::tiling::TilingMode {
+        crate::wm_scope!();
         if (*win).is_status_bar() {
             return crate::tiling::TilingMode::Status;
         }
@@ -1284,6 +1303,7 @@ impl WindowManager {
     /// (`policy::drag::virtual_delta`): its travel over the zoom, plus the
     /// camera's pan since the grab.
     pub(crate) fn op_virtual_delta(&self, op: &crate::seat::SeatOp) -> (f64, f64) {
+        crate::wm_scope!();
         crate::policy::drag::virtual_delta(
             op.x - op.start_x,
             op.y - op.start_y,
@@ -1298,6 +1318,7 @@ impl WindowManager {
     /// and `get_active_resize_dimensions` both ask this, so the arrange
     /// snapshot cannot disagree with the drag.
     pub(crate) fn op_resize_size(&self, op: &crate::seat::SeatOp, edges: crate::window::Edges) -> (u32, u32) {
+        crate::wm_scope!();
         // Zoom-aware: the felt grab distance stays constant in screen px.
         let sp = self.layout.snap_params().for_zoom(self.desk_zoom);
         crate::policy::drag::resize_to(
@@ -1311,6 +1332,7 @@ impl WindowManager {
     }
 
     pub unsafe fn get_active_resize_dimensions(&self, win_ptr: *mut Window) -> Option<(u32, u32)> {
+        crate::wm_scope!();
         let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
@@ -1330,6 +1352,7 @@ impl WindowManager {
     }
 
     pub unsafe fn is_window_being_moved(&self, win_ptr: *mut Window) -> bool {
+        crate::wm_scope!();
         let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
@@ -1366,6 +1389,7 @@ impl WindowManager {
     /// sample would give a stale target, so the window is left to land
     /// wherever the flight shows it.
     pub unsafe fn pan_overview_to_window(&mut self, win: *mut Window) {
+        crate::wm_scope!(mut);
         if win.is_null() || self.camera_ramp_anim.is_some() {
             return;
         }
@@ -1375,6 +1399,7 @@ impl WindowManager {
     }
 
     pub unsafe fn arrange_views(&mut self) {
+        crate::wm_scope!(mut);
         self.update_grid_patches();
         self.update_restore_placeholders();
         if arrange_debug() {
@@ -1763,6 +1788,7 @@ impl WindowManager {
     /// entering transition (and sets the first desk spot there), which
     /// this would overwrite.
     unsafe fn place_fullscreen_windows(&mut self) {
+        crate::wm_scope!(mut);
         let zoom = self.desk_zoom;
         let mut spot_moved = false;
         for &w in self.windows.iter() {
@@ -1816,6 +1842,7 @@ impl WindowManager {
     }
 
     pub unsafe fn update_viewport_local(&mut self) {
+        crate::wm_scope!(mut);
         let zoom_changed = self.desk_zoom != self.last_viewport_zoom;
         // A pan counts as motion only once it moves a DEVICE pixel: the
         // desk renders on integer layout px plus a device-px sub-pixel
@@ -1929,6 +1956,7 @@ impl WindowManager {
     /// stops. Called on every motion frame, so continuous panning keeps pushing
     /// the settle out; it only fires `VIEWPORT_SETTLE_MS` after the last motion.
     unsafe fn arm_viewport_settle_timer(&mut self) {
+        crate::wm_scope!(mut);
         if self.viewport_settle_timer.is_null() {
             let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
             self.viewport_settle_timer = ffi::wl_event_loop_add_timer(
@@ -1947,6 +1975,7 @@ impl WindowManager {
     /// positions are already final from the last motion frame's arrange pass, so
     /// this only flips each window back to its finished (blur-on) render.
     unsafe fn finish_viewport_settle(&mut self) {
+        crate::wm_scope!(mut);
         if !self.viewport_is_active {
             return;
         }
@@ -1992,6 +2021,7 @@ impl WindowManager {
     /// to save the MENU as the session's focused window, poisoning the next
     /// restore.)
     pub unsafe fn focused_window(&self) -> *mut crate::window::Window {
+        crate::wm_scope!();
         let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
@@ -2021,6 +2051,7 @@ impl WindowManager {
     }
 
     pub unsafe fn window_is_valid(&self, win: *mut Window) -> bool {
+        crate::wm_scope!();
         if win.is_null() {
             return false;
         }
@@ -2028,6 +2059,7 @@ impl WindowManager {
     }
 
     pub unsafe fn focused_layer_surface(&self) -> *mut ffi::wlr_surface {
+        crate::wm_scope!();
         let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
@@ -2050,6 +2082,7 @@ impl WindowManager {
     /// dismiss (cursor.rs) and the Escape dismiss (keyboard_group.rs) so the
     /// two triggers can never disagree about what counts as open.
     pub unsafe fn any_expanded_status_segment(&self, except: *mut crate::window::Window) -> bool {
+        crate::wm_scope!();
         self.windows.iter().any(|&w| w != except && self.is_expanded_status_segment(w))
     }
 
@@ -2057,6 +2090,7 @@ impl WindowManager {
     /// menu is open. The thickness IS the signal: the bar grows its own
     /// surface into the menu and shrinks it back on close.
     pub unsafe fn is_expanded_status_segment(&self, w: *mut crate::window::Window) -> bool {
+        crate::wm_scope!();
         let bar_h = self.layout.bar_height;
         !w.is_null()
             && !(*w).closed
@@ -2074,6 +2108,7 @@ impl WindowManager {
     }
 
     pub unsafe fn update_status(&self) {
+        crate::wm_scope!();
         if let Some(ref sender) = self.status_sender {
             let update = crate::status_server::build_status_update(self);
             let mut last = self.last_status_update.borrow_mut();
@@ -2085,6 +2120,7 @@ impl WindowManager {
     }
 
     pub unsafe fn first_seat(&self) -> Option<*mut crate::seat::Seat> {
+        crate::wm_scope!();
         let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let curr_seat = (*seats_list).next;
         if curr_seat != seats_list {
@@ -2095,6 +2131,7 @@ impl WindowManager {
     }
 
     pub unsafe fn record_focus(&mut self, window: *mut Window) {
+        crate::wm_scope!(mut);
         if window.is_null() {
             return;
         }
@@ -2108,12 +2145,14 @@ impl WindowManager {
     }
 
     pub unsafe fn remove_from_history(&mut self, window: *mut Window) {
+        crate::wm_scope!(mut);
         self.focus_history.retain(|&w| w != window);
     }
 
     /// Record that this app_id's window disappeared unbidden, and which
     /// program owned it (`None` once the process is gone).
     pub fn note_vanished(&mut self, app_id: String, program: Option<String>) {
+        crate::wm_scope!(mut);
         let now = std::time::Instant::now();
         self.vanished_windows
             .retain(|(_, _, at)| now.duration_since(*at) < RECONNECT_FOCUS_GRACE);
@@ -2125,6 +2164,7 @@ impl WindowManager {
     /// so one disappearance excuses exactly one re-map: a client that
     /// crashes twice does not get a standing exemption.
     pub fn take_recent_vanish(&mut self, app_id: &str, program: Option<&str>) -> bool {
+        crate::wm_scope!(mut);
         let now = std::time::Instant::now();
         self.vanished_windows
             .retain(|(_, _, at)| now.duration_since(*at) < RECONNECT_FOCUS_GRACE);
@@ -2146,6 +2186,7 @@ impl WindowManager {
     /// eligible window in window order, else clear focus). This side owns
     /// eligibility (mapped, not minimized, not status/background).
     pub unsafe fn focus_next_visible_window(&mut self, seat: *mut crate::seat::Seat) {
+        crate::wm_scope!(mut);
         let eligible = |w: *mut Window| -> bool {
             if (*w).closed || (*w).minimized || !matches!((*w).state, crate::window::WindowState::Mapped) {
                 return false;
@@ -2213,6 +2254,7 @@ impl WindowManager {
     }
 
     pub unsafe fn keep_status_bar_on_top(&mut self) {
+        crate::wm_scope!(mut);
         let mut status_bar_windows = Vec::new();
         for &win_ptr in self.windows.iter() {
             if win_ptr.is_null() || (*win_ptr).closed {
@@ -2271,6 +2313,7 @@ impl WindowManager {
     /// and popup creation (opening a menu changes nothing the order hash can
     /// see, so it schedules no transaction at all).
     pub unsafe fn raise_focused_popups(&mut self, window: *mut Window) {
+        crate::wm_scope!(mut);
         if window.is_null() || (*window).popup_tree.is_null() {
             return;
         }
@@ -2287,6 +2330,7 @@ impl WindowManager {
     }
 
     pub unsafe fn raise_window(&mut self, window: *mut Window) {
+        crate::wm_scope!(mut);
         if window.is_null() {
             return;
         }
@@ -2326,6 +2370,7 @@ impl WindowManager {
     /// for the ones that are not, where the pointer is wherever it was
     /// last left. See the "overview" arm of the control handler.
     pub fn overview_action_pointerless(&self) -> crate::config::Action {
+        crate::wm_scope!();
         if self.mode == WindowManagerMode::Overview {
             crate::config::Action::OverviewExit
         } else {
@@ -2340,6 +2385,7 @@ impl WindowManager {
     /// anything: the focused window is what the user was working in, so
     /// the keyed exit takes over. Enter is the toggle's own.
     pub unsafe fn overview_action_for_gesture(&mut self) -> crate::config::Action {
+        crate::wm_scope!(mut);
         if self.mode != WindowManagerMode::Overview {
             return crate::config::Action::OverviewEnter;
         }
@@ -2360,6 +2406,7 @@ impl WindowManager {
     /// until this, that event was the request's only consumer, and nothing in the
     /// session listens for it, so client fullscreen was silently dropped.
     pub unsafe fn apply_client_fullscreen(&mut self, win: *mut Window, enter: bool) {
+        crate::wm_scope!(mut);
         if win.is_null() || (*win).closed || (*win).state != crate::window::WindowState::Mapped {
             return;
         }
@@ -2384,6 +2431,7 @@ impl WindowManager {
     /// (the four-way action the swipe was bound to) runs instead, for its
     /// entry rule.
     pub unsafe fn focus_toward(&mut self, v: (f64, f64), fallback: &crate::config::Action) {
+        crate::wm_scope!(mut);
         use crate::policy::api::Compositor;
         self.stop_panning_animation();
         let ctx = self.build_action_ctx();
@@ -2407,6 +2455,7 @@ impl WindowManager {
     /// directional focus with nowhere to go is an empty command list on
     /// both paths, and the legacy arms do nothing with it either.
     pub unsafe fn focus_toward_lands(&mut self, v: Option<(f64, f64)>, action: &crate::config::Action) -> bool {
+        crate::wm_scope!(mut);
         use crate::policy::api::Policy;
         let ctx = self.build_action_ctx();
         let has_ray = ctx.windows.iter().any(|w| w.focus_cyclable && Some(w.id) == ctx.focused);
@@ -2425,6 +2474,7 @@ impl WindowManager {
     /// reports xdg maximized here, so the step up from it is fullscreen —
     /// and the toggle flips Floating and Tiled exactly as `set-mode` does.
     pub unsafe fn press_window_button(&mut self, window: *mut Window, elem: crate::window::BorderElement) {
+        crate::wm_scope!(mut);
         use crate::policy::api::{Command, Compositor, WindowId};
         use crate::window::BorderElement;
         if !crate::window::window_takes_buttons(window) {
@@ -2457,6 +2507,7 @@ impl WindowManager {
     }
 
     pub unsafe fn execute_action(&mut self, action: &crate::config::Action, command: Option<&str>) {
+        crate::wm_scope!(mut);
         use crate::config::Action;
         self.stop_panning_animation();
 
@@ -2551,6 +2602,7 @@ impl WindowManager {
     /// exact-beats-substring). Returns null if nothing mapped matches.
     /// Shared by focus-window / center-window / window-stream.
     pub unsafe fn find_window_by_query(&self, query: &str) -> *mut Window {
+        crate::wm_scope!();
         let mut candidates = Vec::new();
         let mut ptrs: Vec<*mut Window> = Vec::new();
         for &w in self.windows.iter() {
@@ -2745,7 +2797,7 @@ unsafe fn rendered_fullscreen(window: *mut Window) -> bool {
 /// it, so it never hides the windows overview is there to show.
 unsafe fn fullscreen_on_top(window: *mut Window) -> bool {
     rendered_fullscreen(window)
-        && (*(*window).server).wm.mode != WindowManagerMode::Overview
+        && (*crate::reentry::wm((*window).server)).mode != WindowManagerMode::Overview
         && !(*window).fullscreen_yields()
 }
 
@@ -2859,6 +2911,7 @@ pub(crate) unsafe extern "C" fn handle_viewport_settle_tick(data: *mut std::ffi:
 /// flat sequence, mirroring the arrange-plan convention.
 impl crate::policy::api::Compositor for WindowManager {
     fn apply(&mut self, cmd: &crate::policy::api::Command) {
+        crate::wm_scope!(mut);
         use crate::policy::api::Command;
         unsafe {
             match *cmd {

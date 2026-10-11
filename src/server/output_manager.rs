@@ -187,7 +187,7 @@ impl OutputManager {
     }
 
     pub unsafe fn commit_output_state(&mut self, server: *mut Server) {
-        let wm = &mut (*server).wm;
+        let wm = &mut (*crate::reentry::wm(server));
 
         let mut link = wm.sent.outputs.next;
         while link != &mut wm.sent.outputs as *mut ffi::wl_list {
@@ -207,10 +207,10 @@ impl OutputManager {
 
                         let (width, height) = output.sent.dimensions();
                         let color: [f32; 4] = [
-                            ((*server).wm.layout.background_r as f64 / u32::MAX as f64) as f32,
-                            ((*server).wm.layout.background_g as f64 / u32::MAX as f64) as f32,
-                            ((*server).wm.layout.background_b as f64 / u32::MAX as f64) as f32,
-                            ((*server).wm.layout.background_a as f64 / u32::MAX as f64) as f32,
+                            ((*crate::reentry::wm(server)).layout.background_r as f64 / u32::MAX as f64) as f32,
+                            ((*crate::reentry::wm(server)).layout.background_g as f64 / u32::MAX as f64) as f32,
+                            ((*crate::reentry::wm(server)).layout.background_b as f64 / u32::MAX as f64) as f32,
+                            ((*crate::reentry::wm(server)).layout.background_a as f64 / u32::MAX as f64) as f32,
                         ];
                         if output.background_rect.is_null() {
                             output.background_rect = SceneRect::create_in(
@@ -434,7 +434,7 @@ impl OutputManager {
     }
 
     pub unsafe fn modeset_failed(&mut self, server: *mut Server) {
-        let wm = &mut (*server).wm;
+        let wm = &mut (*crate::reentry::wm(server));
 
         if self.first_modeset {
             log::error!("initial modeset failed, exiting river");
@@ -644,11 +644,11 @@ unsafe extern "C" fn handle_manager_apply(listener: *mut ffi::wl_listener, data:
         head_link = (*head_link).next;
     }
 
-    if !(*server).wm.scheduled.output_config.is_null() {
-        ffi::wlr_output_configuration_v1_send_failed((*server).wm.scheduled.output_config);
-        ffi::wlr_output_configuration_v1_destroy((*server).wm.scheduled.output_config);
+    if !(*crate::reentry::wm(server)).scheduled.output_config.is_null() {
+        ffi::wlr_output_configuration_v1_send_failed((*crate::reentry::wm(server)).scheduled.output_config);
+        ffi::wlr_output_configuration_v1_destroy((*crate::reentry::wm(server)).scheduled.output_config);
     }
-    (*server).wm.scheduled.output_config = config;
+    (*crate::reentry::wm(server)).scheduled.output_config = config;
 
     crate::shared::pending().dirty_windowing();
 }

@@ -44,7 +44,7 @@ impl Keyboard {
         let (repeat_rate, repeat_delay) = if virtual_device {
             (DEFAULT_REPEAT_RATE, DEFAULT_REPEAT_DELAY)
         } else {
-            (*(*(*device).seat).server).wm.input_config.repeat_info()
+            (*crate::reentry::wm((*(*device).seat).server)).input_config.repeat_info()
         };
         let mut keymap = std::ptr::null_mut();
         if virtual_device {
@@ -266,7 +266,7 @@ unsafe extern "C" fn handle_key(listener: *mut ffi::wl_listener, data: *mut std:
         // First deliberate input ends the session-restore settling phase
         // (see the focus gate in Window::map).
         if !keyboard.group.is_null() && !(*keyboard.group).seat.is_null() {
-            (*(*(*keyboard.group).seat).server).wm.startup_input_seen = true;
+            (*crate::reentry::wm((*(*keyboard.group).seat).server)).startup_input_seen = true;
         }
     }
 
@@ -316,8 +316,8 @@ unsafe extern "C" fn handle_modifiers(listener: *mut ffi::wl_listener, _data: *m
         
         let seat = (*keyboard.group).seat;
         if !seat.is_null() && !(*seat).server.is_null() {
-            (*(*seat).server).wm.update_status();
-            (*(*seat).server).wm.refresh_adjust_held();
+            (*crate::reentry::wm((*seat).server)).update_status();
+            (*crate::reentry::wm((*seat).server)).refresh_adjust_held();
         }
     }
 }

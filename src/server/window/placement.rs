@@ -56,7 +56,7 @@ impl Window {
             let app_id = self.get_app_id_string().unwrap_or_default();
             let title = self.get_title_string().unwrap_or_default();
             let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
-            let wm = &mut (*self.server).wm;
+            let wm = &mut (*crate::reentry::wm(self.server));
             let saved = wm
                 .match_and_remove_restore_state(&app_id, &title, program.as_deref())
                 .or_else(|| wm.match_last_window_state(&app_id, &title, program.as_deref()));
@@ -97,7 +97,7 @@ impl Window {
         // it could match. So an untitled window of an app some title rule
         // names waits for its title; `map` calls back in here regardless.
         if title_str.is_empty() && self.state != WindowState::Mapped {
-            let wm = &(*self.server).wm;
+            let wm = &(*crate::reentry::wm(self.server));
             if wm.mode_rules.iter().any(|r| {
                 r.title_pattern.is_some()
                     && (r.app_id_pattern == "*" || app_id_str.contains(&r.app_id_pattern))
@@ -111,7 +111,7 @@ impl Window {
         // own entry too while a sibling is up — the window goes where the
         // sibling is, at the size it asks for.
         {
-            let wm = &(*self.server).wm;
+            let wm = &(*crate::reentry::wm(self.server));
             let rule = wm
                 .get_rule_for_window(self as *mut Window)
                 .filter(|r| r.title_pattern.is_some())
@@ -137,10 +137,10 @@ impl Window {
         // `window_manager::same_program`.
         let program = crate::window_manager::proc_args(self.unreliable_pid()).into_iter().next();
         let program = program.as_deref();
-        let mut saved_opt = (*self.server).wm.match_and_remove_restore_state(&app_id_str, &title_str, program);
+        let mut saved_opt = (*crate::reentry::wm(self.server)).match_and_remove_restore_state(&app_id_str, &title_str, program);
         let from_session = saved_opt.is_some();
         if saved_opt.is_none() {
-            saved_opt = (*self.server).wm.match_last_window_state(&app_id_str, &title_str, program);
+            saved_opt = (*crate::reentry::wm(self.server)).match_last_window_state(&app_id_str, &title_str, program);
         }
         if let Some(saved) = saved_opt {
             log::info!("Restoring saved state for window: app_id={}, title={}. Position: ({}, {}), Size: {}x{}", app_id_str, title_str, saved.virtual_x, saved.virtual_y, saved.width, saved.height);
@@ -228,7 +228,7 @@ impl Window {
             // Tiled window off the current grid is re-snapped by the Tiled
             // arrange arm instead.
             if self.tiling_mode == crate::tiling::TilingMode::Floating {
-                let sp = (*self.server).wm.layout.snap_params();
+                let sp = (*crate::reentry::wm(self.server)).layout.snap_params();
                 if crate::policy::snap::is_cell_aligned(
                     self.virtual_x,
                     self.virtual_y,
@@ -259,7 +259,7 @@ impl Window {
             // left of the first column came back mid-view every login.
             if self.tiling_mode == crate::tiling::TilingMode::Floating && !self.minimized {
                 let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
-                let wm = &(*self.server).wm;
+                let wm = &(*crate::reentry::wm(self.server));
                 let cam = crate::policy::camera::Camera {
                     pan_x: wm.desk_pan_x,
                     pan_y: wm.desk_pan_y,
@@ -321,7 +321,7 @@ impl Window {
     /// qualifies, since that is where the user asked for the settings.
     pub(crate) unsafe fn find_sibling(&self, app_id: &str) -> *mut Window {
         let me = self as *const Window;
-        let wm = &(*self.server).wm;
+        let wm = &(*crate::reentry::wm(self.server));
         let qualifies = |w: *mut Window| {
             !w.is_null()
                 && w as *const Window != me
@@ -357,7 +357,7 @@ impl Window {
             return;
         }
         let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
-        let wm = &(*self.server).wm;
+        let wm = &(*crate::reentry::wm(self.server));
         let zoom = wm.desk_zoom.max(0.01);
         let (w, h) = self.mapped_size_hint();
         let (sw, sh) = (*sibling).mapped_size_hint();
@@ -447,7 +447,7 @@ impl Window {
     /// the next arrange — a twitch on every resize step at overview zoom,
     /// and a one-pixel hop on grab and release.
     pub unsafe fn virtual_to_screen(&self, vx: f64, vy: f64) -> (i32, i32) {
-        let wm = &(*self.server).wm;
+        let wm = &(*crate::reentry::wm(self.server));
         let (cam, _, _) = wm.layout_camera();
         let (out_x, out_y, _, _) = self.first_enabled_output_box();
         (
@@ -462,7 +462,7 @@ impl Window {
     /// VIRTUAL one, so a screen origin written on its own survives exactly
     /// until the next transaction and is then recomputed away.
     pub unsafe fn screen_to_virtual(&self, sx: i32, sy: i32) -> (f64, f64) {
-        let wm = &(*self.server).wm;
+        let wm = &(*crate::reentry::wm(self.server));
         let (cam, _, _) = wm.layout_camera();
         let zoom = cam.zoom.max(0.01);
         let (out_x, out_y, _, _) = self.first_enabled_output_box();
@@ -498,7 +498,7 @@ impl Window {
         }
         // Claimed before the mode is judged, so a hint aimed at this window
         // does not linger and land on the next one to open.
-        let Some((hx, hy, cell_anchored)) = (*self.server).wm.take_pending_placement(&app_id)
+        let Some((hx, hy, cell_anchored)) = (*crate::reentry::wm(self.server)).take_pending_placement(&app_id)
         else {
             return;
         };
@@ -530,7 +530,7 @@ impl Window {
 
         let (phys_x, phys_y, vp_w, vp_h) = self.first_enabled_output_box();
 
-        let wm = &(*self.server).wm;
+        let wm = &(*crate::reentry::wm(self.server));
         let zoom = wm.desk_zoom.max(0.01);
         let (vw, vh) = self.mapped_size_hint();
         let (w, h) = (vw * zoom, vh * zoom);
@@ -574,7 +574,7 @@ impl Window {
         if self.session_restored || self.tiling_mode != crate::tiling::TilingMode::Tiled {
             return;
         }
-        let wm = &(*self.server).wm;
+        let wm = &(*crate::reentry::wm(self.server));
         let sp = wm.layout.snap_params();
         if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
             return;
@@ -642,7 +642,7 @@ impl Window {
     /// opens filling four squares, at the corner of the invocation square that
     /// leaves it clear of its neighbours.
     pub(crate) unsafe fn place_on_invocation_cell(&mut self, app_id: &str, hx: f64, hy: f64) {
-        let wm = &(*self.server).wm;
+        let wm = &(*crate::reentry::wm(self.server));
         let sp = wm.layout.snap_params();
         if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
             return;
@@ -766,7 +766,7 @@ impl Window {
         if Self::is_view_centered_modal(&app_id) {
             return true;
         }
-        (*self.server).wm.get_rule_for_window(self as *mut Window).map_or(false, |r| r.center)
+        (*crate::reentry::wm(self.server)).get_rule_for_window(self as *mut Window).map_or(false, |r| r.center)
     }
 
     pub(crate) unsafe fn try_center_on_view(&mut self) {
@@ -820,7 +820,7 @@ impl Window {
             return;
         }
         let (_, _, vp_w, vp_h) = self.first_enabled_output_box();
-        let wm = &(*self.server).wm;
+        let wm = &(*crate::reentry::wm(self.server));
         let zoom = wm.desk_zoom.max(0.01);
         let (w, h) = self.mapped_size_hint();
 

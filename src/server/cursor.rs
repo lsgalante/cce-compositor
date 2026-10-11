@@ -670,7 +670,7 @@ impl Cursor {
             && !(*grabbed).is_status_bar()
             && (*grabbed).tiling_mode == crate::tiling::TilingMode::Floating
         {
-            (*(*self.seat).server).wm.raise_window(grabbed);
+            (*crate::reentry::wm((*self.seat).server)).raise_window(grabbed);
             crate::shared::pending().dirty_windowing();
         }
     }
@@ -699,7 +699,7 @@ impl Cursor {
         }
         let old = self.hovered_border_window;
         if !old.is_null() && old != target {
-            let wm = &(*(*self.seat).server).wm;
+            let wm = &(*crate::reentry::wm((*self.seat).server));
             if wm.windows.iter().any(|&w| w == old) && !(*old).closed {
                 (*old).hovered_border_element = None;
             }
@@ -712,7 +712,7 @@ impl Cursor {
         // Borders rest invisible and fade in, so the change in hover target is
         // the start of an animation rather than a repaint: the fade timer
         // repaints every affected window as it steps.
-        (*(*self.seat).server).wm.arm_border_fade();
+        (*crate::reentry::wm((*self.seat).server)).arm_border_fade();
     }
 
     /// Move the Super-held adjust target to `target` (null to clear). The
@@ -723,7 +723,7 @@ impl Cursor {
             return;
         }
         self.adjust_hover = target;
-        (*(*self.seat).server).wm.arm_border_fade();
+        (*crate::reentry::wm((*self.seat).server)).arm_border_fade();
     }
 
     pub unsafe fn passthrough(&mut self, time_msec: u32) {
@@ -826,7 +826,7 @@ impl Cursor {
                     // pointer, focused or not. Set BEFORE the zone test
                     // below, so the band is live on the first hover. (Null
                     // for the status bar, wallpaper and grid.)
-                    self.set_adjust_hover(if (*server).wm.window_adjust_active() {
+                    self.set_adjust_hover(if (*crate::reentry::wm(server)).window_adjust_active() {
                         hovered_toplevel
                     } else {
                         std::ptr::null_mut()
@@ -888,7 +888,7 @@ impl Cursor {
 
             if is_window
                 && !hovered_chrome
-                && (*server).wm.window_adjust_active()
+                && (*crate::reentry::wm(server)).window_adjust_active()
             {
                 // Focus follows the pointer in overview, so a click-less
                 // hover chooses the window a focus chord or the exit lands
@@ -912,7 +912,7 @@ impl Cursor {
                 // so a focus chord pressed next acts on the window the user
                 // had — the ring follows the pointer through `adjust_hover`
                 // instead (`Window::is_adjust_target`).
-                if (*server).wm.mode == crate::window_manager::WindowManagerMode::Overview
+                if (*crate::reentry::wm(server)).mode == crate::window_manager::WindowManagerMode::Overview
                     && !hovered_toplevel.is_null()
                     && !(*self.seat).focus_is_chrome()
                     && (*self.seat).focused
@@ -1412,14 +1412,14 @@ pub(crate) unsafe fn press_dismissals(server: *mut crate::server::Server, lx: f6
                 }
             }
         }
-        let any_other_expanded = (*server).wm.any_expanded_status_segment(target_status);
+        let any_other_expanded = (*crate::reentry::wm(server)).any_expanded_status_segment(target_status);
         if any_other_expanded {
             let except = if target_status.is_null() {
                 "-".to_string()
             } else {
                 (*target_status).get_app_id_string().unwrap_or_else(|| "-".to_string())
             };
-            if let Some(ref sender) = (*server).wm.status_sender {
+            if let Some(ref sender) = (*crate::reentry::wm(server)).status_sender {
                 sender.send_menu_dismiss(&except);
             }
         }
@@ -1452,7 +1452,7 @@ pub(crate) unsafe fn press_dismissals(server: *mut crate::server::Server, lx: f6
                 None => false,
             };
             if !on_x11 {
-                if let Some(ref sender) = (*server).wm.status_sender {
+                if let Some(ref sender) = (*crate::reentry::wm(server)).status_sender {
                     sender.send_click_away();
                 }
             }
