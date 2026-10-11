@@ -863,7 +863,7 @@ impl Server {
             self.idle.init(server_ptr).map_err(|_| "Failed to init idle")?;
             self.lock_manager.init(server_ptr).map_err(|_| "Failed to init lock_manager")?;
             self.inspector.init(server_ptr).map_err(|_| "Failed to init inspector")?;
-            self.cce_window_management.init(server_ptr).map_err(|_| "Failed to init cce_window_management")?;
+            self.cce_window_management.init().map_err(|_| "Failed to init cce_window_management")?;
 
             // Setup listeners
             let xdg_shell_cast = self.xdg_shell as *mut WlrXdgShell;

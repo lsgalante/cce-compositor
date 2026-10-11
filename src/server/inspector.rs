@@ -3,7 +3,6 @@ use crate::server::Server;
 use std::collections::HashMap;
 
 pub struct Inspector {
-    pub server: *mut Server,
     pub global: *mut ffi::wl_global,
     pub client_states: HashMap<*mut ffi::wlr_surface, String>,
     pub resources: Vec<*mut ffi::wl_resource>,
@@ -12,7 +11,6 @@ pub struct Inspector {
 impl Inspector {
     pub fn new() -> Self {
         Self {
-            server: std::ptr::null_mut(),
             global: std::ptr::null_mut(),
             client_states: HashMap::new(),
             resources: Vec::new(),
@@ -20,7 +18,6 @@ impl Inspector {
     }
 
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        self.server = server;
         self.client_states = HashMap::new();
         self.resources = Vec::new();
 
@@ -169,7 +166,10 @@ unsafe extern "C" fn inspector_get_inspected_surfaces(
     if inspector.is_null() {
         return;
     }
-    let server = (*inspector).server;
+    let server = crate::shared::server_ptr();
+    if server.is_null() {
+        return;
+    }
     let windows = &(*crate::reentry::wm(server)).windows;
 
     for window in windows.values() {

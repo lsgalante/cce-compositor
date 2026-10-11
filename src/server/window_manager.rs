@@ -1536,20 +1536,12 @@ impl WindowManager {
 
         // If the focused window is no longer visible, refocus
         for seat in (*self.server).input_manager.seats.ptrs() {
-            let mut focused_visible = false;
-            match (*seat).focused {
-                crate::seat::Focus::Window(id) => {
-                    focused_visible = self.windows.get(id).map_or(false, |w| {
-                        !w.closed && !w.minimized && matches!(w.state, crate::window::WindowState::Mapped)
-                    });
-                }
-                crate::seat::Focus::None => {
-                    focused_visible = true;
-                }
-                _ => {
-                    focused_visible = true;
-                }
-            }
+            let focused_visible = match (*seat).focused {
+                crate::seat::Focus::Window(id) => self.windows.get(id).map_or(false, |w| {
+                    !w.closed && !w.minimized && matches!(w.state, crate::window::WindowState::Mapped)
+                }),
+                _ => true,
+            };
             if !focused_visible {
                 self.focus_next_visible_window(seat);
             }

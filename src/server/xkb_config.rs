@@ -5,7 +5,6 @@ use crate::ffi;
 use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
 
 pub struct XkbConfig {
-    pub server: *mut Server,
     pub global: *mut ffi::wl_global,
     pub context: *mut ffi::xkb_context,
     pub default_keymap: *mut ffi::xkb_keymap,
@@ -27,7 +26,6 @@ impl Default for XkbConfig {
 
 impl XkbConfig {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        self.server = server;
         ffi::wl_list_init(&mut self.objects);
         ffi::wl_list_init(&mut self.keyboards);
 

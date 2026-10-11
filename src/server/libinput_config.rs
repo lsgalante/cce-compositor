@@ -5,7 +5,6 @@ use crate::ffi;
 use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
 
 pub struct LibinputConfig {
-    pub server: *mut Server,
     pub global: *mut ffi::wl_global,
     pub objects: ffi::wl_list,
     pub devices: ffi::wl_list,
@@ -25,7 +24,6 @@ impl Default for LibinputConfig {
 
 impl LibinputConfig {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        self.server = server;
         ffi::wl_list_init(&mut self.objects);
         ffi::wl_list_init(&mut self.devices);
 

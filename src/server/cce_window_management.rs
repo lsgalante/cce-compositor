@@ -3,20 +3,17 @@ use crate::server::Server;
 use crate::slotmap::Key as SlotMapKey;
 
 pub struct CceWindowManagement {
-    pub server: *mut Server,
     pub toplevels: Vec<*mut ffi::wl_resource>,
 }
 
 impl CceWindowManagement {
     pub fn new() -> Self {
         Self {
-            server: std::ptr::null_mut(),
             toplevels: Vec::new(),
         }
     }
 
-    pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        self.server = server;
+    pub fn init(&mut self) -> Result<(), &'static str> {
         self.toplevels = Vec::new();
         log::info!("CceWindowManagement initialized successfully");
         Ok(())
@@ -70,7 +67,6 @@ impl CceWindowManagement {
 }
 
 struct CceToplevelData {
-    server: *mut Server,
     window_key: SlotMapKey,
     _resource: *mut ffi::wl_resource,
 }
@@ -113,7 +109,6 @@ pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
     }
 
     let data = Box::into_raw(Box::new(CceToplevelData {
-        server,
         window_key,
         _resource: toplevel_res,
     }));
@@ -141,7 +136,7 @@ unsafe extern "C" fn handle_destroy_toplevel_resource(resource: *mut ffi::wl_res
         // is a use-after-free on the next patch send — this crashed the
         // session the first time the grid client was RESTARTED (the old
         // entry lingered, the new instance's first patch dereferenced it).
-        let server = (*data_ptr).server;
+        let server = crate::shared::server_ptr();
         if !server.is_null() {
             (*server)
                 .cce_window_management
@@ -161,10 +156,11 @@ unsafe extern "C" fn toplevel_destroy(_client: *mut ffi::wl_client, resource: *m
 /// it up in the store and stand down when it has.
 unsafe fn toplevel_target(resource: *mut ffi::wl_resource) -> Option<(*mut Server, crate::window::WindowId)> {
     let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() || (*data).server.is_null() {
+    let server = crate::shared::server_ptr();
+    if data.is_null() || server.is_null() {
         return None;
     }
-    Some(((*data).server, crate::window::WindowId((*data).window_key)))
+    Some((server, crate::window::WindowId((*data).window_key)))
 }
 
 unsafe extern "C" fn toplevel_set_floating(

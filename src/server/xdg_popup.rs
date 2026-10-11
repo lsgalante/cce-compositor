@@ -16,11 +16,11 @@ pub struct XdgPopup {
     /// toplevel surface's coordinates, not the immediate parent's.
     /// Watched: the root window's (or layer surface's) tree, not ours.
     pub root_tree: crate::scene_handle::SceneTree,
-    /// The server, found once at creation through the root's scene node —
-    /// a destroyed popup's own tree may already be gone when its destroy
-    /// signal runs, so nothing can be looked up then. Null for a root that
-    /// is neither a window nor a shell surface.
-    pub server: *mut crate::server::Server,
+    /// Whether the root is a window, found once at creation through the
+    /// root's scene node — a destroyed popup's own tree may already be gone
+    /// when its destroy signal runs, so nothing can be looked up then. Only
+    /// a window's popup asks for a pointer refresh.
+    pub under_window: bool,
     /// Where the popup stood and how big it was at its last commit, layout
     /// coordinates: to tell a map, a move or a resize.
     pub last_box: (i32, i32, i32, i32),
@@ -61,7 +61,7 @@ impl XdgPopup {
             tree: crate::scene_handle::SceneTree::watch(tree),
             capture_tree: crate::scene_handle::SceneTree::watch(capture_tree),
             root_tree: crate::scene_handle::SceneTree::watch(root),
-            server: tree_server(root),
+            under_window: tree_is_window(root),
             last_box: (0, 0, 0, 0),
             destroy: std::mem::zeroed(),
             commit: std::mem::zeroed(),
@@ -92,8 +92,8 @@ impl XdgPopup {
 /// mapping moves (`InputManager::schedule_pointer_refresh`), coalesced and
 /// run once the scene has caught up.
 unsafe fn refresh_pointer_under(popup: *mut XdgPopup) {
-    let server = (*popup).server;
-    if !server.is_null() {
+    let server = crate::shared::server_ptr();
+    if (*popup).under_window && !server.is_null() {
         (*server).input_manager.schedule_pointer_refresh();
     }
 }
@@ -131,19 +131,15 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     }
 }
 
-/// The server a scene tree belongs to, through its node data — a window's.
-/// Null for any other tree.
-unsafe fn tree_server(tree: *mut ffi::wlr_scene_tree) -> *mut crate::server::Server {
+/// Whether a scene tree is a window's, through its node data.
+unsafe fn tree_is_window(tree: *mut ffi::wlr_scene_tree) -> bool {
     if tree.is_null() {
-        return std::ptr::null_mut();
+        return false;
     }
-    match crate::scene_node_data::SceneNodeData::from_node(tree as *mut ffi::wlr_scene_node) {
-        Some(node_data) => match node_data.data {
-            crate::scene_node_data::SceneNodeDataVal::Window(_) => crate::shared::server_ptr(),
-            _ => std::ptr::null_mut(),
-        },
-        None => std::ptr::null_mut(),
-    }
+    matches!(
+        crate::scene_node_data::SceneNodeData::from_node(tree as *mut ffi::wlr_scene_node).map(|d| &d.data),
+        Some(crate::scene_node_data::SceneNodeDataVal::Window(_))
+    )
 }
 
 /// Blur behind the popup as behind a window: a translucent menu is frosted
