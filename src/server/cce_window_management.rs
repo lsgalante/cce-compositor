@@ -1,6 +1,5 @@
 use crate::ffi;
 use crate::server::Server;
-use crate::window::Window;
 use crate::slotmap::Key as SlotMapKey;
 
 pub struct CceWindowManagement {
@@ -90,7 +89,7 @@ pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
     if server.is_null() {
         return;
     }
-    let cce_wm = &mut (*server).cce_window_management as *mut CceWindowManagement;
+    let wm = &mut *crate::reentry::wm(server);
 
     let surface = ffi::wlr_surface_from_resource(surface_resource);
     if surface.is_null() {
@@ -99,18 +98,12 @@ pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
     }
 
     // Find the Window corresponding to the surface
-    let mut target_window = std::ptr::null_mut();
-    for window in (*crate::reentry::wm(server)).windows.values_mut() {
-        if window.root_surface() == surface {
-            target_window = window;
-            break;
-        }
-    }
-
-    if target_window.is_null() {
+    let Some(target) = wm.windows.values().find(|w| w.root_surface() == surface) else {
         log::error!("cce_wm_get_cce_toplevel: no Window structure found for surface");
         return;
-    }
+    };
+    let window_key = target.ref_key;
+    let floating = target.tiling_mode == crate::tiling::TilingMode::Floating;
 
     let version = ffi::wl_resource_get_version(resource);
     let toplevel_res = ffi::wl_resource_create(client, &ffi::zcce_toplevel_v1_interface, version, id);
@@ -121,7 +114,7 @@ pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
 
     let data = Box::into_raw(Box::new(CceToplevelData {
         server,
-        window_key: (*target_window).ref_key,
+        window_key,
         _resource: toplevel_res,
     }));
 
@@ -132,10 +125,10 @@ pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
         Some(handle_destroy_toplevel_resource),
     );
 
-    (*cce_wm).toplevels.push(toplevel_res);
+    (*server).cce_window_management.toplevels.push(toplevel_res);
 
     // Initial event: send current floating state
-    let state = if (*target_window).tiling_mode == crate::tiling::TilingMode::Floating { 1 } else { 0 };
+    let state = if floating { 1 } else { 0 };
     // Event floating_state has index 0
     ffi::wl_resource_post_event(toplevel_res, 0, state as u32);
 }
@@ -163,100 +156,85 @@ unsafe extern "C" fn toplevel_destroy(_client: *mut ffi::wl_client, resource: *m
     ffi::wl_resource_destroy(resource);
 }
 
+/// The server and the window a `zcce_toplevel_v1` request is about, from
+/// its resource's data. The window may have gone since; the handlers look
+/// it up in the store and stand down when it has.
+unsafe fn toplevel_target(resource: *mut ffi::wl_resource) -> Option<(*mut Server, crate::window::WindowId)> {
+    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
+    if data.is_null() || (*data).server.is_null() {
+        return None;
+    }
+    Some(((*data).server, crate::window::WindowId((*data).window_key)))
+}
+
 unsafe extern "C" fn toplevel_set_floating(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
+    let Some((server, id)) = toplevel_target(resource) else { return };
     let wm = &mut *crate::reentry::wm(server);
-    if let Some(window) = resolve_window(wm, server, window_key) {
-        (*window).tiling_mode = crate::tiling::TilingMode::Floating;
-        (*window).mode_locked = true;
-        if let Some(seat) = wm.first_seat() {
-            if (*seat).focused == crate::seat::Focus::window(window) {
-                wm.raise_window((*window).id());
-            }
+    let window = window_mut!(wm, id);
+    window.tiling_mode = crate::tiling::TilingMode::Floating;
+    window.mode_locked = true;
+    if let Some(seat) = wm.first_seat() {
+        if (*seat).focused == crate::seat::Focus::Window(id) {
+            wm.raise_window(id);
         }
-        crate::shared::pending().dirty_windowing();
-
-        // Send floating_state(1)
-        ffi::wl_resource_post_event(resource, 0, 1u32);
     }
+    crate::shared::pending().dirty_windowing();
+
+    // Send floating_state(1)
+    ffi::wl_resource_post_event(resource, 0, 1u32);
 }
 
 unsafe extern "C" fn toplevel_unset_floating(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
-        (*window).mode_locked = false;
-        crate::shared::pending().dirty_windowing();
+    let Some((server, id)) = toplevel_target(resource) else { return };
+    let wm = &mut *crate::reentry::wm(server);
+    let window = window_mut!(wm, id);
+    window.mode_locked = false;
+    crate::shared::pending().dirty_windowing();
 
-        // Send floating_state(0)
-        ffi::wl_resource_post_event(resource, 0, 0u32);
-    }
+    // Send floating_state(0)
+    ffi::wl_resource_post_event(resource, 0, 0u32);
 }
 
 unsafe extern "C" fn toplevel_set_maximized(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
-        (*window).tiling_mode = crate::tiling::TilingMode::Tiled;
-        (*window).mode_locked = true;
-        (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Maximize;
-        crate::shared::pending().dirty_windowing();
-    }
+    let Some((server, id)) = toplevel_target(resource) else { return };
+    let wm = &mut *crate::reentry::wm(server);
+    let window = window_mut!(wm, id);
+    window.tiling_mode = crate::tiling::TilingMode::Tiled;
+    window.mode_locked = true;
+    window.wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Maximize;
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn toplevel_unset_maximized(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
-        (*window).mode_locked = false;
-        (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Unmaximize;
-        crate::shared::pending().dirty_windowing();
-    }
+    let Some((server, id)) = toplevel_target(resource) else { return };
+    let wm = &mut *crate::reentry::wm(server);
+    let window = window_mut!(wm, id);
+    window.mode_locked = false;
+    window.wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Unmaximize;
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn toplevel_set_fullscreen(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
+    let Some((server, id)) = toplevel_target(resource) else { return };
     let wm = &mut *crate::reentry::wm(server);
-    if let Some(window) = resolve_window(wm, server, window_key) {
+    if wm.windows.contains(id) {
         crate::shared::pending().dirty_windowing();
-        wm.apply_client_fullscreen((*window).id(), true);
+        wm.apply_client_fullscreen(id, true);
     }
 }
 
@@ -264,16 +242,11 @@ unsafe extern "C" fn toplevel_unset_fullscreen(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
+    let Some((server, id)) = toplevel_target(resource) else { return };
     let wm = &mut *crate::reentry::wm(server);
-    if let Some(window) = resolve_window(wm, server, window_key) {
+    if wm.windows.contains(id) {
         crate::shared::pending().dirty_windowing();
-        wm.apply_client_fullscreen((*window).id(), false);
+        wm.apply_client_fullscreen(id, false);
     }
 }
 
@@ -281,107 +254,77 @@ unsafe extern "C" fn toplevel_set_minimized(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
-        (*window).wm_scheduled.minimize_requested = true;
-        crate::shared::pending().dirty_windowing();
-    }
+    let Some((server, id)) = toplevel_target(resource) else { return };
+    let wm = &mut *crate::reentry::wm(server);
+    let window = window_mut!(wm, id);
+    window.wm_scheduled.minimize_requested = true;
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn toplevel_set_popup(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
-        (*window).tiling_mode = crate::tiling::TilingMode::Popup;
-        (*window).mode_locked = true;
-        crate::shared::pending().dirty_windowing();
-    }
+    let Some((server, id)) = toplevel_target(resource) else { return };
+    let wm = &mut *crate::reentry::wm(server);
+    let window = window_mut!(wm, id);
+    window.tiling_mode = crate::tiling::TilingMode::Popup;
+    window.mode_locked = true;
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn toplevel_unset_popup(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
-        (*window).mode_locked = false;
-        crate::shared::pending().dirty_windowing();
-    }
+    let Some((server, id)) = toplevel_target(resource) else { return };
+    let wm = &mut *crate::reentry::wm(server);
+    let window = window_mut!(wm, id);
+    window.mode_locked = false;
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn toplevel_set_utility(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
-        // mode_locked is the "explicit beats heuristic" latch (same as
-        // set_popup): get_mode_for_window's app_id guessing stands down.
-        (*window).tiling_mode = crate::tiling::TilingMode::Utility;
-        (*window).mode_locked = true;
-        crate::shared::pending().dirty_windowing();
-    }
+    let Some((server, id)) = toplevel_target(resource) else { return };
+    let wm = &mut *crate::reentry::wm(server);
+    let window = window_mut!(wm, id);
+    // mode_locked is the "explicit beats heuristic" latch (same as
+    // set_popup): get_mode_for_window's app_id guessing stands down.
+    window.tiling_mode = crate::tiling::TilingMode::Utility;
+    window.mode_locked = true;
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn toplevel_unset_utility(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
-        // Unlike unset_popup, the raw field must be reset too: every Utility
-        // gate (resize rejection, save exclusion, the un-tile exemptions)
-        // reads `tiling_mode` directly, so leaving it at Utility with the
-        // lock cleared would keep the window un-resizable and unsaved while
-        // resolving Floating.
-        (*window).tiling_mode = crate::tiling::TilingMode::Floating;
-        (*window).mode_locked = false;
-        crate::shared::pending().dirty_windowing();
-    }
+    let Some((server, id)) = toplevel_target(resource) else { return };
+    let wm = &mut *crate::reentry::wm(server);
+    let window = window_mut!(wm, id);
+    // Unlike unset_popup, the raw field must be reset too: every Utility
+    // gate (resize rejection, save exclusion, the un-tile exemptions)
+    // reads `tiling_mode` directly, so leaving it at Utility with the
+    // lock cleared would keep the window un-resizable and unsaved while
+    // resolving Floating.
+    window.tiling_mode = crate::tiling::TilingMode::Floating;
+    window.mode_locked = false;
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn toplevel_set_grid(
     _client: *mut ffi::wl_client,
     resource: *mut ffi::wl_resource,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
-        log::info!("[Grid] set_grid declared");
-        (*window).grid_declared = true;
-        crate::shared::pending().dirty_windowing();
-    }
+    let Some((server, id)) = toplevel_target(resource) else { return };
+    let wm = &mut *crate::reentry::wm(server);
+    let window = window_mut!(wm, id);
+    log::info!("[Grid] set_grid declared");
+    window.grid_declared = true;
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn toplevel_ack_grid_patch(
@@ -389,22 +332,17 @@ unsafe extern "C" fn toplevel_ack_grid_patch(
     resource: *mut ffi::wl_resource,
     serial: u32,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
-        // Only the latest outstanding patch can be acked; a stale serial
-        // (superseded patch) is ignored — the client should already be
-        // rendering the newer one.
-        if let Some((pending_serial, patch)) = (*window).grid_patch_pending {
-            log::info!("[Grid] ack #{serial} (pending #{pending_serial})");
-            if pending_serial == serial {
-                (*window).grid_patch_pending = None;
-                (*window).grid_patch_acked = Some((serial, patch));
-            }
+    let Some((server, id)) = toplevel_target(resource) else { return };
+    let wm = &mut *crate::reentry::wm(server);
+    let window = window_mut!(wm, id);
+    // Only the latest outstanding patch can be acked; a stale serial
+    // (superseded patch) is ignored — the client should already be
+    // rendering the newer one.
+    if let Some((pending_serial, patch)) = window.grid_patch_pending {
+        log::info!("[Grid] ack #{serial} (pending #{pending_serial})");
+        if pending_serial == serial {
+            window.grid_patch_pending = None;
+            window.grid_patch_acked = Some((serial, patch));
         }
     }
 }
@@ -417,23 +355,18 @@ unsafe extern "C" fn toplevel_set_popover_region(
     width: i32,
     height: i32,
 ) {
-    let data = ffi::wl_resource_get_user_data(resource) as *mut CceToplevelData;
-    if data.is_null() {
-        return;
-    }
-    let server = (*data).server;
-    let window_key = (*data).window_key;
-    if let Some(window) = resolve_window(&mut *crate::reentry::wm(server), server, window_key) {
-        // Surface-local LOGICAL px; the consumers scale it themselves. No
-        // dirty_windowing: this changes no geometry, and the commit that
-        // drew the popover already schedules the frame that will redraw
-        // the ring through draw_borders.
-        (*window).popover_region = if width > 0 && height > 0 {
-            Some(ffi::wlr_box { x, y, width, height })
-        } else {
-            None
-        };
-    }
+    let Some((server, id)) = toplevel_target(resource) else { return };
+    let wm = &mut *crate::reentry::wm(server);
+    let window = window_mut!(wm, id);
+    // Surface-local LOGICAL px; the consumers scale it themselves. No
+    // dirty_windowing: this changes no geometry, and the commit that
+    // drew the popover already schedules the frame that will redraw
+    // the ring through draw_borders.
+    window.popover_region = if width > 0 && height > 0 {
+        Some(ffi::wlr_box { x, y, width, height })
+    } else {
+        None
+    };
 }
 
 static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_toplevel_v1_interface {
@@ -453,10 +386,3 @@ static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_tople
     ack_grid_patch: Some(toplevel_ack_grid_patch),
     set_popover_region: Some(toplevel_set_popover_region),
 };
-
-fn resolve_window(wm: &crate::window_manager::WindowManager, server: *mut Server, key: SlotMapKey) -> Option<*mut Window> {
-    if server.is_null() {
-        return None;
-    }
-    wm.windows.ptr(crate::window::WindowId(key))
-}
