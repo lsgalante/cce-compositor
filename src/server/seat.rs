@@ -1412,7 +1412,7 @@ unsafe fn carry_group_windows(
 /// compositor holds move (so the highlight follows this frame), and the
 /// grid is told where they are now over the `selection` status topic.
 /// Nothing is sent for a step that moved nothing.
-unsafe fn carry_group_items(wm: &mut crate::window_manager::WindowManager, items: &[(u64, f64, f64)], gdx: f64, gdy: f64) {
+fn carry_group_items(wm: &mut crate::window_manager::WindowManager, items: &[(u64, f64, f64)], gdx: f64, gdy: f64) {
     if items.is_empty() {
         return;
     }

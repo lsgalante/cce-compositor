@@ -338,9 +338,7 @@ impl Window {
                         && w.get_app_id_string().as_deref() == Some(app_id)
                 })
         };
-        // SAFETY: walks the seats through the server pointer, as every
-        // reader of seat focus does.
-        let focused = unsafe { wm.focused_window() };
+        let focused = wm.focused_window();
         focused.filter(|&id| qualifies(id)).or_else(|| wm.windows.ids().into_iter().find(|&id| qualifies(id)))
     }
 

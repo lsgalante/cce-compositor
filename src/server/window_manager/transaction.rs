@@ -44,8 +44,8 @@ impl WindowManager {
     pub unsafe fn refresh_adjust_held(&mut self) {
         crate::wm_scope!(mut);
         let mut held = self.injected_super_held;
-        for seat in self.seats.ptrs() {
-            let kb = (*seat).wlr_seat.keyboard();
+        for seat in self.seats.values() {
+            let kb = seat.wlr_seat.keyboard();
             if !kb.is_null() && (ffi::wlr_keyboard_get_modifiers(kb) & ffi::wlr_keyboard_modifier_WLR_MODIFIER_LOGO) != 0 {
                 held = true;
             }
@@ -264,9 +264,9 @@ impl WindowManager {
         }
 
         let has_wallpaper = self.windows.values().any(|w| !w.closed && w.is_wallpaper());
-        for output in self.outputs.ptrs() {
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                (*output).background_rect.set_enabled(!has_wallpaper);
+        for output in self.outputs.values() {
+            if output.sent.state == crate::output::OutputStateValue::Enabled {
+                output.background_rect.set_enabled(!has_wallpaper);
             }
         }
 
@@ -463,8 +463,8 @@ impl WindowManager {
 
         sys.om.commit_output_state(sys.lock, &self.outputs);
 
-        for seat in self.seats.ptrs() {
-            (*seat).cursor.update_hovered();
+        for seat in self.seats.values_mut() {
+            seat.cursor.update_hovered();
         }
 
         let holders = sys.inhibit.holders(self);

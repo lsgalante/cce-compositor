@@ -186,8 +186,7 @@ impl WindowManager {
             match crate::config::parse_config(&path, self, Some((sys, input))) {
                 Ok(()) => {
                     // Update scales of existing outputs from the newly loaded config
-                    for output_ptr in self.outputs.ptrs() {
-                        let output = &mut *output_ptr;
+                    for output in self.outputs.values_mut() {
                         let wlr_output = output.wlr_output.ptr();
                         if !wlr_output.is_null() {
                             let name = output.wlr_output.name();

@@ -853,9 +853,9 @@ impl WindowManager {
         // First enabled output: the legacy viewport for zooms and View jumps.
         let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
         let (mut first_x, mut first_y) = (0.0, 0.0);
-        for output in self.outputs.ptrs() {
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                let wlr_box = (*output).sent.box_layout();
+        for output in self.outputs.values() {
+            if output.sent.state == crate::output::OutputStateValue::Enabled {
+                let wlr_box = output.sent.box_layout();
                 viewport_w = wlr_box.width as f64;
                 viewport_h = wlr_box.height as f64;
                 first_x = wlr_box.x as f64;
@@ -1155,10 +1155,10 @@ impl WindowManager {
         )
     }
 
-    pub unsafe fn get_active_resize_dimensions(&self, win_ptr: &Window) -> Option<(u32, u32)> {
+    pub fn get_active_resize_dimensions(&self, win_ptr: &Window) -> Option<(u32, u32)> {
         crate::wm_scope!();
-        for seat in self.seats.ptrs() {
-            if let Some(ref op) = (*seat).op {
+        for seat in self.seats.values() {
+            if let Some(ref op) = seat.op {
                 if op.window == Some(win_ptr.id()) {
                     if let crate::seat::PointerOpType::Resize { edges } = op.op_type {
                         let (new_w, new_h) = self.op_resize_size(op, edges);
@@ -1171,10 +1171,10 @@ impl WindowManager {
         None
     }
 
-    pub unsafe fn is_window_being_moved(&self, id: crate::window::WindowId) -> bool {
+    pub fn is_window_being_moved(&self, id: crate::window::WindowId) -> bool {
         crate::wm_scope!();
-        for seat in self.seats.ptrs() {
-            if let Some(ref op) = (*seat).op {
+        for seat in self.seats.values() {
+            if let Some(ref op) = seat.op {
                 if op.window == Some(id) {
                     if let crate::seat::PointerOpType::Move = op.op_type {
                         return true;
@@ -1187,7 +1187,7 @@ impl WindowManager {
                     op.op_type,
                     crate::seat::PointerOpType::Move | crate::seat::PointerOpType::GroupMove
                 ) {
-                    if (*seat).group_move.iter().any(|&(w, _, _)| w == id) {
+                    if seat.group_move.iter().any(|&(w, _, _)| w == id) {
                         return true;
                     }
                 }
@@ -1241,8 +1241,8 @@ impl WindowManager {
         }
 
         let mut focused_window: Option<crate::window::WindowId> = None;
-        for seat in self.seats.ptrs() {
-            if let crate::seat::Focus::Window(id) = (*seat).focused {
+        for seat in self.seats.values() {
+            if let crate::seat::Focus::Window(id) = seat.focused {
                 if self.windows.contains(id) {
                     focused_window = Some(id);
                     break;
@@ -1741,19 +1741,19 @@ impl WindowManager {
         // the seams (stale slivers of the previous zoom level survive — an
         // idle window's old pixels are nobody's damage), so motion forces a
         // full repaint.
-        for output in self.outputs.ptrs() {
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                if moved && !(*output).scene_output.is_null() {
-                    ffi::river_scene_output_damage_whole((*output).scene_output);
+        for output in self.outputs.values() {
+            if output.sent.state == crate::output::OutputStateValue::Enabled {
+                if moved && !output.scene_output.is_null() {
+                    ffi::river_scene_output_damage_whole(output.scene_output);
                 } else {
-                    (*output).wlr_output.schedule_frame();
+                    output.wlr_output.schedule_frame();
                 }
             }
         }
 
         // Re-evaluate cursor focus/hover since windows have moved relative to pointers
-        for seat in self.seats.ptrs() {
-            (*seat).cursor.update_hovered();
+        for seat in self.seats.values_mut() {
+            seat.cursor.update_hovered();
         }
     }
 
@@ -1796,12 +1796,12 @@ impl WindowManager {
         }
         // Settling re-enables blur and re-finishes every window; sweep any
         // remaining motion-frame slivers with one full repaint.
-        for output in self.outputs.ptrs() {
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                if !(*output).scene_output.is_null() {
-                    ffi::river_scene_output_damage_whole((*output).scene_output);
+        for output in self.outputs.values() {
+            if output.sent.state == crate::output::OutputStateValue::Enabled {
+                if !output.scene_output.is_null() {
+                    ffi::river_scene_output_damage_whole(output.scene_output);
                 } else {
-                    (*output).wlr_output.schedule_frame();
+                    output.wlr_output.schedule_frame();
                 }
             }
         }
@@ -1815,10 +1815,10 @@ impl WindowManager {
     /// the stream's `focused` query. (Logging out via the desktop menu used
     /// to save the MENU as the session's focused window, poisoning the next
     /// restore.)
-    pub unsafe fn focused_window(&self) -> Option<crate::window::WindowId> {
+    pub fn focused_window(&self) -> Option<crate::window::WindowId> {
         crate::wm_scope!();
-        for seat in self.seats.ptrs() {
-            if let crate::seat::Focus::Window(id) = (*seat).focused {
+        for seat in self.seats.values() {
+            if let crate::seat::Focus::Window(id) = seat.focused {
                 if let Some(w) = self.windows.get(id) {
                     if !w.is_overlay_ui() {
                         return Some(id);
@@ -1840,10 +1840,10 @@ impl WindowManager {
         })
     }
 
-    pub unsafe fn focused_layer_surface(&self) -> *mut ffi::wlr_surface {
+    pub fn focused_layer_surface(&self) -> *mut ffi::wlr_surface {
         crate::wm_scope!();
-        for seat in self.seats.ptrs() {
-            if let crate::seat::Focus::LayerSurface(s) = (*seat).focused {
+        for seat in self.seats.values() {
+            if let crate::seat::Focus::LayerSurface(s) = seat.focused {
                 return s;
             }
         }
@@ -2950,9 +2950,9 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
 
     if moving {
         (*wm).border_fade_timer.arm(16);
-        for output in (*wm).outputs.ptrs() {
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                (*output).wlr_output.schedule_frame();
+        for output in (*wm).outputs.values() {
+            if output.sent.state == crate::output::OutputStateValue::Enabled {
+                output.wlr_output.schedule_frame();
             }
         }
     } else {

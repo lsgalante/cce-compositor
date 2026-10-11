@@ -496,9 +496,9 @@ impl WindowManager {
                 if let Ok(factor) = parse_finite(parts[1]) {
                     let new_zoom = factor.clamp(0.1, 10.0);
                     let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
-                    for output in self.outputs.ptrs() {
-                        if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                            let wlr_box = (*output).sent.box_layout();
+                    for output in self.outputs.values() {
+                        if output.sent.state == crate::output::OutputStateValue::Enabled {
+                            let wlr_box = output.sent.box_layout();
                             viewport_w = wlr_box.width as f64;
                             viewport_h = wlr_box.height as f64;
                             break;
@@ -923,9 +923,9 @@ impl WindowManager {
                 // Enabled output's origin + size (fall back to 1920x1080 @ 0,0).
                 let (mut vp_w, mut vp_h) = (1920.0_f64, 1080.0_f64);
                 let (mut phys_x, mut phys_y) = (0i32, 0i32);
-                for output in self.outputs.ptrs() {
-                    if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                        let wlr_box = (*output).sent.box_layout();
+                for output in self.outputs.values() {
+                    if output.sent.state == crate::output::OutputStateValue::Enabled {
+                        let wlr_box = output.sent.box_layout();
                         vp_w = wlr_box.width as f64;
                         vp_h = wlr_box.height as f64;
                         phys_x = wlr_box.x;
@@ -1113,8 +1113,8 @@ impl WindowManager {
                 // app_ids are then properly escaped, unlike the text format.
                 let as_json = parts.get(1).copied() == Some("--json");
                 let mut focused_id: Option<crate::window::WindowId> = None;
-                for seat in self.seats.ptrs() {
-                    if let crate::seat::Focus::Window(id) = (*seat).focused {
+                for seat in self.seats.values() {
+                    if let crate::seat::Focus::Window(id) = seat.focused {
                         if self.windows.contains(id) {
                             focused_id = Some(id);
                             break;
@@ -1231,11 +1231,8 @@ impl WindowManager {
                         crate::shared::update_layout(|l| l.background_r = ((parsed_color >> 16) & 0xFF) * 0x01010101);
                         crate::shared::update_layout(|l| l.background_g = ((parsed_color >> 8) & 0xFF) * 0x01010101);
                         crate::shared::update_layout(|l| l.background_b = (parsed_color & 0xFF) * 0x01010101);
-                        unsafe {
-                            for output_ptr in self.outputs.ptrs() {
-                                let output = &mut *output_ptr;
-                                output.update_background_color();
-                            }
+                        for output in self.outputs.values_mut() {
+                            output.update_background_color();
                         }
                     }
                     "desktop_cell_color" => {

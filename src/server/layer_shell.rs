@@ -376,9 +376,9 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
 
     update_scheduled_focus_and_dirty_windowing(std::ptr::addr_of!((*crate::reentry::wm(server)).seats), || {
         if (*wlr_layer_surface).current.keyboard_interactive == ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND {
-            for seat in (*crate::reentry::wm(server)).seats.ptrs() {
-                if !matches!((*seat).layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_)) {
-                    (*seat).layer_shell.scheduled_focus = LayerShellSeatFocus::NonExclusive((*layer_surface).ref_key);
+            for seat in (*crate::reentry::wm(server)).seats.values_mut() {
+                if !matches!(seat.layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_)) {
+                    seat.layer_shell.scheduled_focus = LayerShellSeatFocus::NonExclusive((*layer_surface).ref_key);
                 }
             }
         }
@@ -571,9 +571,9 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                         let mut output_x = 0;
                         let mut output_y = 0;
                         let mut output_w = 0;
-                        for output in (*crate::reentry::wm(server)).outputs.ptrs() {
-                            if (*output).wlr_output.ptr() == wlr_output {
-                                let wlr_box = (*output).sent.box_layout();
+                        for output in (*crate::reentry::wm(server)).outputs.values() {
+                            if output.wlr_output.ptr() == wlr_output {
+                                let wlr_box = output.sent.box_layout();
                                 output_x = wlr_box.x;
                                 output_y = wlr_box.y;
                                 output_w = wlr_box.width;

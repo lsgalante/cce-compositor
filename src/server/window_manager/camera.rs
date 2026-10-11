@@ -65,12 +65,12 @@ impl WindowManager {
 
     /// The largest enabled output scale: the device-pixel resolution a
     /// camera move is quantized at (see `update_viewport_local`).
-    pub unsafe fn max_output_scale(&self) -> f64 {
+    pub fn max_output_scale(&self) -> f64 {
         crate::wm_scope!();
         let mut best = 1.0f64;
-        for output in self.outputs.ptrs() {
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                best = best.max((*output).current.scale as f64);
+        for output in self.outputs.values() {
+            if output.sent.state == crate::output::OutputStateValue::Enabled {
+                best = best.max(output.current.scale as f64);
             }
         }
         best
@@ -122,17 +122,17 @@ impl WindowManager {
 
     /// Ask every enabled output for a frame (the camera step runs in the
     /// frame handler). A no-op for an output that already has one pending.
-    pub unsafe fn schedule_frame_all_outputs(&mut self) {
+    pub fn schedule_frame_all_outputs(&mut self) {
         crate::wm_scope!(mut);
-        for output in self.outputs.ptrs() {
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                (*output).wlr_output.schedule_frame();
+        for output in self.outputs.values() {
+            if output.sent.state == crate::output::OutputStateValue::Enabled {
+                output.wlr_output.schedule_frame();
             }
         }
     }
 
     /// Queue finger-pan motion for the next output frame (see `pan_pending`).
-    pub unsafe fn queue_pan(&mut self, dx: f64, dy: f64) {
+    pub fn queue_pan(&mut self, dx: f64, dy: f64) {
         crate::wm_scope!(mut);
         self.pan_pending[0] += dx;
         self.pan_pending[1] += dy;
@@ -141,7 +141,7 @@ impl WindowManager {
 
     /// Queue a pinch zoom about an output-local anchor for the next output
     /// frame (see `pinch_pending`).
-    pub unsafe fn queue_pinch(&mut self, zoom: f64, ax: f64, ay: f64) {
+    pub fn queue_pinch(&mut self, zoom: f64, ax: f64, ay: f64) {
         crate::wm_scope!(mut);
         self.pinch_pending = Some((zoom, ax, ay));
         self.schedule_frame_all_outputs();
@@ -149,7 +149,7 @@ impl WindowManager {
 
     /// Queue the interactive move/resize's configure and relayout for the
     /// next output frame (see `op_frame_pending`).
-    pub unsafe fn queue_op_frame(&mut self) {
+    pub fn queue_op_frame(&mut self) {
         crate::wm_scope!(mut);
         if !self.op_frame_pending {
             self.op_frame_pending = true;

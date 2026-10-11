@@ -148,9 +148,9 @@ impl WindowManager {
     /// Layout box origin of the first enabled output, the one the camera is
     /// measured against (`Window::virtual_to_screen` uses the same).
     unsafe fn selection_output_origin(&self) -> (f64, f64) {
-        for output in self.outputs.ptrs() {
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                let b = (*output).sent.box_layout();
+        for output in self.outputs.values() {
+            if output.sent.state == crate::output::OutputStateValue::Enabled {
+                let b = output.sent.box_layout();
                 return (b.x as f64, b.y as f64);
             }
         }
@@ -201,7 +201,7 @@ impl WindowManager {
     /// The grid reported its images (`grid-items`). The list is replaced
     /// wholesale; a selected id that is no longer in it was removed or
     /// belongs to a restarted grid, and is dropped.
-    pub unsafe fn set_desktop_items(&mut self, items: Vec<DesktopItem>) {
+    pub fn set_desktop_items(&mut self, items: Vec<DesktopItem>) {
         self.selection.items.retain(|id| items.iter().any(|i| i.id == *id));
         self.selection.desktop_items = items;
         self.schedule_frame_all_outputs();
@@ -261,7 +261,7 @@ impl WindowManager {
     /// The press ended. Returns whether it was a drag: a press that never
     /// travelled is a click on the background, which the caller answers by
     /// leaving overview.
-    pub unsafe fn selection_release(&mut self) -> bool {
+    pub fn selection_release(&mut self) -> bool {
         let dragged = self.selection.marquee.is_some();
         self.selection.anchor = None;
         self.selection.marquee = None;
@@ -269,7 +269,7 @@ impl WindowManager {
         dragged
     }
 
-    pub unsafe fn selection_clear(&mut self) {
+    pub fn selection_clear(&mut self) {
         if !self.has_selection() && self.selection.marquee.is_none() {
             return;
         }
@@ -282,7 +282,7 @@ impl WindowManager {
     /// `window` is being destroyed: drop it from the list, so the
     /// `selection` query and the highlight stop counting it. The grid going
     /// away takes its images with it.
-    pub unsafe fn selection_forget(&mut self, id: crate::window::WindowId) {
+    pub fn selection_forget(&mut self, id: crate::window::WindowId) {
         let before = self.selection.windows.len();
         self.selection.windows.retain(|&w| w != id);
         let mut changed = self.selection.windows.len() != before;

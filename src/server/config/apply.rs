@@ -508,11 +508,8 @@ pub fn parse_config(
 
     crate::shared::set_layout(next_layout);
 
-    unsafe {
-        for output_ptr in state.outputs.ptrs() {
-            let output = &mut *output_ptr;
-            output.update_background_color();
-        }
+    for output in state.outputs.values_mut() {
+        output.update_background_color();
     }
 
     Ok(())
