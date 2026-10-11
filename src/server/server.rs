@@ -380,7 +380,7 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
     }
 
     let wm = &mut *crate::reentry::wm(server);
-    for &win_ptr in wm.windows.iter() {
+    for win_ptr in wm.windows.iter() {
         if !win_ptr.is_null() && (*win_ptr).root_surface() == surface {
             let title_ptr = (*win_ptr).get_title();
             let title = if title_ptr.is_null() {
@@ -971,7 +971,7 @@ impl Default for Server {
             // Zero-initialize the memory (C structures and primitive fields)
             std::ptr::write_bytes(server.as_mut_ptr(), 0, 1);
             // Overwrite collections and SlotMap with valid instances to avoid UB/segfaults from null pointers
-            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.windows), crate::slotmap::SlotMap::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.windows), crate::window::Windows::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.focus_history), Vec::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.rendering_requested.list), Vec::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.mode_rules), Vec::new());

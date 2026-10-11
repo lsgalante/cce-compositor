@@ -74,7 +74,7 @@ impl WindowManager {
                 ordered.push(w);
             }
         }
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if self.is_switchable_window(w) && !ordered.contains(&w) {
                 ordered.push(w);
             }

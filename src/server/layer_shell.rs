@@ -460,7 +460,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                         // never a keyboard-focus target, so those keep the old
                         // leave-it-unfocused behavior.
                         if !parent_app_id.starts_with("cce-status") {
-                            for &win_ptr in wm.windows.iter() {
+                            for win_ptr in wm.windows.iter() {
                                 if win_ptr.is_null()
                                     || (*win_ptr).closed
                                     || (*win_ptr).minimized
@@ -585,7 +585,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                 let mut parent_y = None;
                 let mut parent_w = 0;
 
-                for &win_ptr in (*crate::reentry::wm(server)).windows.iter() {
+                for win_ptr in (*crate::reentry::wm(server)).windows.iter() {
                     if win_ptr.is_null() || (*win_ptr).closed {
                         continue;
                     }

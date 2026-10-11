@@ -173,7 +173,7 @@ impl WindowManager {
             .first_seat()
             .and_then(|s| (*s).op.as_ref().map(|op| op.window(self)))
             .unwrap_or(std::ptr::null_mut());
-        let wins: Vec<*mut crate::window::Window> = self.windows.iter().copied().collect();
+        let wins: Vec<*mut crate::window::Window> = self.windows.iter().collect();
         for w in wins {
             if w.is_null() || (*w).closed || w == op_win {
                 continue;

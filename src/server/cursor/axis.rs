@@ -550,7 +550,7 @@ impl Cursor {
         if focused.is_null() {
             return None;
         }
-        for &window in wm.windows.iter() {
+        for window in wm.windows.iter() {
             if window.is_null() {
                 continue;
             }

@@ -215,7 +215,7 @@ impl WindowManager {
         let mut shy: Vec<(String, String, String)> = Vec::new();
         let mut live_pids: Vec<i32> = Vec::new();
 
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                 continue;
             }
@@ -432,7 +432,7 @@ impl WindowManager {
 
         // Get list of windows we need to wait for to close cleanly
         let mut normal_windows = Vec::new();
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                 continue;
             }
@@ -485,7 +485,7 @@ impl WindowManager {
         self.clean_exit_timer.arm(0);
 
         let mut remaining: Vec<String> = Vec::new();
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                 continue;
             }
@@ -541,7 +541,7 @@ impl WindowManager {
         }
 
         let mut normal_windows_count = 0;
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                 continue;
             }

@@ -455,6 +455,9 @@ mod placement;
 mod effects;
 #[path = "window/borders.rs"]
 mod borders;
+#[path = "window/store.rs"]
+mod store;
+pub use store::Windows;
 pub use borders::*;
 
 /// What everything but the window manager's map holds to name a window:
@@ -1082,9 +1085,7 @@ impl Window {
         });
 
 
-        let raw = Box::into_raw(window);
-        let key = wm.windows.put(raw);
-        (*raw).ref_key = key;
+        let raw = wm.windows.insert(window);
 
         (*raw).tree.set_enabled(false);
         (*raw).popup_tree.set_enabled(false);
@@ -1702,10 +1703,9 @@ impl Window {
         // Seats and cursors that still name this window (the adjust target,
         // a group move, the border hover) hold its id, which goes stale with
         // the remove below: nothing there to clear.
-        wm.windows.remove((*window).ref_key);
+        let freed = wm.windows.remove((*window).id());
         wm.check_clean_exit_progress();
-
-        let _ = Box::from_raw(window);
+        drop(freed);
     }
 
     pub fn set_dimensions_hint(&mut self, hint: DimensionsHint) {

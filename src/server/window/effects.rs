@@ -559,7 +559,7 @@ impl Window {
         let mut ext = [band; 4]; // left, right, top, bottom (layout px)
 
         let self_ptr = self as *const Window as *mut Window;
-        for &other in wm.windows.iter() {
+        for other in wm.windows.iter() {
             if other.is_null() || other == self_ptr {
                 continue;
             }

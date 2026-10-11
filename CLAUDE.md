@@ -504,7 +504,17 @@ walked from `head()` — and the output configuration being applied
 
 ### Windows are named by id (since 2026-10-11)
 
-Only `wm.windows` (the `SlotMap`) holds a window's address. Everything else
+**`wm.windows` is the owner** (`crate::window::Windows`, `window/store.rs`):
+`Window::create` hands it the box (`insert`, which sets `ref_key`) and
+`Window::destroy` takes it back out (`remove`, which returns the box to
+drop); nothing else allocates or frees a window. `get` / `get_mut` give
+safe references by id, `ptr` and `iter` raw pointers for code not yet
+converted, `ids()` a copy for a loop that needs the window manager
+mutably. The store holds the allocations as raw pointers, not `Box`es,
+because a `Box` asserts uniqueness that the remaining `*mut Window` users
+would violate.
+
+Only `wm.windows` holds a window's address. Everything else
 that refers to a window holds its `WindowId` (`crate::window::WindowId`, the
 policy crate's wrapper of the slot key; `Window::id()`, or
 `window::id_of(ptr)` for a maybe-null pointer) and looks it up with

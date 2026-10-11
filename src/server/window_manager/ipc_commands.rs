@@ -46,7 +46,7 @@ impl WindowManager {
                 }
                 let mut faded = false;
                 let windows: Vec<*mut crate::window::Window> =
-                    self.windows.iter().copied().collect();
+                    self.windows.iter().collect();
                 for window in windows {
                     if window.is_null() || (*window).closed {
                         continue;
@@ -222,7 +222,7 @@ impl WindowManager {
                     crate::shared::pending().rendering(),
                     crate::shared::pending().armed(),
                 );
-                for &w in self.windows.iter() {
+                for w in self.windows.iter() {
                     if w.is_null() {
                         continue;
                     }
@@ -306,7 +306,7 @@ impl WindowManager {
                     .selection
                     .windows
                     .iter()
-                    .map(|&w| w.0.index.to_string())
+                    .map(|w| w.0.index.to_string())
                     .collect();
                 let items: Vec<String> =
                     self.selection.items.iter().map(|id| id.to_string()).collect();
@@ -460,7 +460,7 @@ impl WindowManager {
                 let app_id_query = parts[1];
                 if let (Ok(x), Ok(y)) = (parse_finite(parts[2]), parse_finite(parts[3])) {
                     let mut found = false;
-                    for &w in self.windows.iter() {
+                    for w in self.windows.iter() {
                         if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                             if let Some(aid) = (*w).get_app_id_string() {
                                 if aid.to_lowercase() == app_id_query.to_lowercase() {
@@ -653,7 +653,7 @@ impl WindowManager {
                 let title_filter = parts[2..].join(" ").to_lowercase();
                 let mut target: *mut Window = std::ptr::null_mut();
                 let mut best_score = 0;
-                for &w in self.windows.iter() {
+                for w in self.windows.iter() {
                     if w.is_null() || (*w).closed
                         || !matches!((*w).state, crate::window::WindowState::Mapped)
                     {
@@ -1166,7 +1166,7 @@ impl WindowManager {
                 }
                 let mut out = String::new();
                 let sp = crate::shared::layout().snap_params();
-                for &w in self.windows.iter() {
+                for w in self.windows.iter() {
                     if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                         let stack = stack_of.get(&w).copied().unwrap_or(-1);
                         let app_id = (*w).get_app_id_string().unwrap_or_default();
@@ -1573,7 +1573,7 @@ impl WindowManager {
                 if parts.len() < 3 {
                     return "error: usage: touchpad-view-regions <x11:ID|id|app_id> clear|<x,y,w,h> ...\n".to_string();
                 }
-                let Some(w) = window_by_query(self.windows.iter().copied(), parts[1]) else {
+                let Some(w) = window_by_query(self.windows.iter(), parts[1]) else {
                     return format!("error: no mapped window matches {}\n", parts[1]);
                 };
                 if parts[2] == "clear" {

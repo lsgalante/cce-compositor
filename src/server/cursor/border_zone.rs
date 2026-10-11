@@ -46,7 +46,7 @@ pub unsafe fn grid_surface_at(
 pub unsafe fn grid_node_info(
     wm: &crate::window_manager::WindowManager,
 ) -> Option<(*mut ffi::wlr_surface, f64, f64, f64, f64, f64)> {
-    for &w in wm.windows.iter() {
+    for w in wm.windows.iter() {
         if w.is_null() || (*w).closed || !(*w).is_grid() {
             continue;
         }

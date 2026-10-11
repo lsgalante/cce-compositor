@@ -142,7 +142,7 @@ pub struct WindowManager {
     pub global: *mut ffi::wl_global,
     pub server_destroy: crate::listener::Listener,
     pub state: WindowManagerState,
-    pub windows: SlotMap<*mut Window>,
+    pub windows: crate::window::Windows,
     /// The overview drag-selection: the selected windows, the rubber band
     /// while one is being dragged out, and the nodes that draw both. See
     /// [`crate::selection`].
@@ -516,7 +516,7 @@ impl WindowManager {
         self.server = server;
         self.global = std::ptr::null_mut();
         self.state = WindowManagerState::Idle;
-        self.windows = SlotMap::new();
+        self.windows = crate::window::Windows::new();
         std::ptr::write(&mut self.selection, crate::selection::Selection::default());
         self.focus_history = Vec::new();
         self.scheduled = WindowManagerScheduled {
@@ -683,7 +683,7 @@ impl WindowManager {
                 extend(e.virtual_x, e.virtual_y, e.width as f64, e.height as f64);
             }
         }
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if w.is_null()
                 || (*w).closed
                 || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init)
@@ -911,7 +911,7 @@ impl WindowManager {
             self.render_list().into_iter().map(|w| w as usize).collect();
 
         let mut windows = Vec::new();
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if w.is_null() || (*w).closed {
                 continue;
             }
@@ -1002,7 +1002,7 @@ impl WindowManager {
         let mut waiters = std::mem::take(&mut self.settle_waiters);
         let mut kept = Vec::new();
         for mut w in waiters.drain(..) {
-            let win = self.windows.get(w.window).copied().filter(|&p| !p.is_null() && !(*p).closed);
+            let win = self.windows.ptr(crate::window::WindowId(w.window)).filter(|&p| !p.is_null() && !(*p).closed);
             let Some(win) = win else {
                 let _ = w.tx.send("error: window closed before it settled\n".to_string());
                 continue;
@@ -1228,7 +1228,7 @@ impl WindowManager {
         self.update_restore_placeholders();
         if arrange_debug() {
             log::debug!("Monolithic arrange_views triggered. Windows: {}", self.windows.count());
-            for (idx, &win_ptr) in self.windows.iter().enumerate() {
+            for (idx, win_ptr) in self.windows.iter().enumerate() {
                 if win_ptr.is_null() { continue; }
                 let title = (*win_ptr).get_title_string().unwrap_or_else(|| "None".to_string());
                 let aid = (*win_ptr).get_app_id_string().unwrap_or_else(|| "None".to_string());
@@ -1290,7 +1290,7 @@ impl WindowManager {
 
         let mut win_ptrs: Vec<*mut Window> = Vec::new();
         let mut window_snaps: Vec<crate::policy::arrange::WindowSnapshot> = Vec::new();
-        for &win_ptr in self.windows.iter() {
+        for win_ptr in self.windows.iter() {
             if win_ptr.is_null() || (*win_ptr).closed {
                 continue;
             }
@@ -1616,7 +1616,7 @@ impl WindowManager {
         crate::wm_scope!(mut);
         let zoom = self.desk_zoom;
         let mut spot_moved = false;
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if w.is_null() || (*w).closed {
                 continue;
             }
@@ -1721,7 +1721,7 @@ impl WindowManager {
             // and `finish_viewport_settle` re-bakes once if the zoom moved.
             let scene = crate::shared::scene().wlr_scene;
             ffi::river_scene_set_blur_frozen(scene, true);
-            for &window in self.windows.iter() {
+            for window in self.windows.iter() {
                 if !window.is_null() {
                     (*window).render_viewport_update();
                 }
@@ -1732,14 +1732,14 @@ impl WindowManager {
         } else if self.viewport_is_active {
             // A gap between motion updates within an ongoing gesture: keep blur
             // suppressed and let the settle timer decide when the gesture ended.
-            for &window in self.windows.iter() {
+            for window in self.windows.iter() {
                 if !window.is_null() {
                     (*window).render_viewport_update();
                 }
             }
         } else {
             // Stationary viewport: hold the finished, blurred state.
-            for &window in self.windows.iter() {
+            for window in self.windows.iter() {
                 if !window.is_null() {
                     (*window).render_finish();
                 }
@@ -1808,7 +1808,7 @@ impl WindowManager {
         if self.desk_zoom != self.viewport_freeze_zoom {
             ffi::river_scene_mark_optimized_blur_dirty(scene);
         }
-        for &window in self.windows.iter() {
+        for window in self.windows.iter() {
             if !window.is_null() {
                 (*window).render_finish();
             }
@@ -1872,7 +1872,7 @@ impl WindowManager {
     /// stale forever (the slot's generation moves on), so a holder that
     /// missed the close reads `None` here rather than a reused address.
     pub fn window(&self, id: crate::window::WindowId) -> Option<*mut Window> {
-        self.windows.get(id.0).copied().filter(|w| !w.is_null())
+        self.windows.ptr(id)
     }
 
     pub unsafe fn focused_layer_surface(&self) -> *mut ffi::wlr_surface {
@@ -1900,7 +1900,7 @@ impl WindowManager {
     /// two triggers can never disagree about what counts as open.
     pub unsafe fn any_expanded_status_segment(&self, except: *mut crate::window::Window) -> bool {
         crate::wm_scope!();
-        self.windows.iter().any(|&w| w != except && self.is_expanded_status_segment(w))
+        self.windows.iter().any(|w| w != except && self.is_expanded_status_segment(w))
     }
 
     /// A mapped status segment thicker than the bar — one whose in-surface
@@ -2030,11 +2030,11 @@ impl WindowManager {
         let windows: Vec<_> = self
             .windows
             .iter()
-            .filter(|&&w| !w.is_null())
-            .map(|&w| candidate(w))
+            .filter(|w| !w.is_null())
+            .map(candidate)
             .collect();
         let next = crate::policy::focus::next_visible_focus(&history, &windows)
-            .and_then(|id| self.windows.get(id.0).copied())
+            .and_then(|id| self.windows.ptr(id))
             .unwrap_or(std::ptr::null_mut());
         // The window the user was looking at went away. The fallback focus
         // always transfers (keyboard input needs a live target); what the
@@ -2075,7 +2075,7 @@ impl WindowManager {
     pub unsafe fn keep_status_bar_on_top(&mut self) {
         crate::wm_scope!(mut);
         let mut status_bar_windows = Vec::new();
-        for &win_ptr in self.windows.iter() {
+        for win_ptr in self.windows.iter() {
             if win_ptr.is_null() || (*win_ptr).closed {
                 continue;
             }
@@ -2423,7 +2423,7 @@ impl WindowManager {
         crate::wm_scope!();
         let mut candidates = Vec::new();
         let mut ptrs: Vec<*mut Window> = Vec::new();
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if !w.is_null() && !(*w).closed
                 && matches!((*w).state, crate::window::WindowState::Mapped)
             {
@@ -2788,28 +2788,28 @@ impl crate::policy::api::Compositor for WindowManager {
                     }
                 }
                 Command::Raise(id) => {
-                    if let Some(&win) = self.windows.get(id.0) {
+                    if let Some(win) = self.windows.ptr(id) {
                         if !win.is_null() && !(*win).closed {
                             self.raise_window(win);
                         }
                     }
                 }
                 Command::CloseWindow(id) => {
-                    if let Some(&win) = self.windows.get(id.0) {
+                    if let Some(win) = self.windows.ptr(id) {
                         if !win.is_null() && !(*win).closed {
                             (*win).close();
                         }
                     }
                 }
                 Command::SetMinimized { id, minimized } => {
-                    if let Some(&win) = self.windows.get(id.0) {
+                    if let Some(win) = self.windows.ptr(id) {
                         if !win.is_null() && !(*win).closed {
                             (*win).minimized = minimized;
                         }
                     }
                 }
                 Command::SetWindowMode { id, mode, locked } => {
-                    if let Some(&win) = self.windows.get(id.0) {
+                    if let Some(win) = self.windows.ptr(id) {
                         if !win.is_null() && !(*win).closed {
                             // Remember what Fullscreen replaced, so the
                             // toggle's exit can put it back (policy
@@ -2844,7 +2844,7 @@ impl crate::policy::api::Compositor for WindowManager {
                     }
                 }
                 Command::Focus(id) => {
-                    if let Some(&win) = self.windows.get(id.0) {
+                    if let Some(win) = self.windows.ptr(id) {
                         if !win.is_null() && !(*win).closed {
                             if let Some(seat) = self.first_seat() {
                                 (*seat).focus(self, crate::seat::Focus::window(win));
@@ -2853,7 +2853,7 @@ impl crate::policy::api::Compositor for WindowManager {
                     }
                 }
                 Command::MoveWindow { id, x, y } => {
-                    if let Some(&win) = self.windows.get(id.0) {
+                    if let Some(win) = self.windows.ptr(id) {
                         if !win.is_null() && !(*win).closed {
                             (*win).virtual_x = x;
                             (*win).virtual_y = y;
@@ -2989,7 +2989,7 @@ unsafe extern "C" fn handle_settle_tick(data: *mut std::ffi::c_void) -> std::os:
 unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let wm = data as *mut WindowManager;
     let mut moving = false;
-    let windows: Vec<*mut crate::window::Window> = (*wm).windows.iter().copied().collect();
+    let windows: Vec<*mut crate::window::Window> = (*wm).windows.iter().collect();
     for window in windows {
         if window.is_null() || (*window).closed {
             continue;

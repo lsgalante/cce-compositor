@@ -532,7 +532,7 @@ impl Seat {
                 // Focus decides whether a fullscreen window stays on top
                 // (`Window::fullscreen_yields`); restack whenever one is up,
                 // since not every path to here dirties on its own.
-                if wm.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
+                if wm.windows.iter().any(|w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
                     crate::shared::pending().dirty_windowing();
                 }
             }
@@ -1480,7 +1480,7 @@ unsafe fn displace_covered(
     );
     let mut ptrs: Vec<*mut crate::window::Window> = Vec::new();
     let mut cands: Vec<crate::policy::overview::DisplaceCandidate> = Vec::new();
-    for &w in wm.windows.iter() {
+    for w in wm.windows.iter() {
         if w.is_null() || w == win || (*w).closed || (*w).minimized {
             continue;
         }

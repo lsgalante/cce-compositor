@@ -232,7 +232,7 @@ impl WindowManager {
         self.selection.marquee = Some(marquee);
         let rect = marquee.rect();
         let mut picked: Vec<crate::window::WindowId> = Vec::new();
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if !self.selectable(w) {
                 continue;
             }

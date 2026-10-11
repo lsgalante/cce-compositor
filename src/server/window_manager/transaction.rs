@@ -22,7 +22,7 @@ impl WindowManager {
         // Overview decides whether a fullscreen window owns the top of the
         // stack (`fullscreen_on_top`), and the stacking pass runs only on a
         // transaction.
-        if self.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
+        if self.windows.iter().any(|w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
             crate::shared::pending().dirty_windowing();
         }
         // The selection belongs to overview: it is made there, and the
@@ -155,7 +155,7 @@ impl WindowManager {
     /// borrow of it across that call, and a body that removes a window
     /// (`Window::destroy`) would change it mid-iteration.
     pub(crate) fn window_snapshot(&self) -> Vec<*mut Window> {
-        self.windows.iter().copied().collect()
+        self.windows.iter().collect()
     }
 
     /// Wedge tracer: a Mapped status window outside the render list is
@@ -163,7 +163,7 @@ impl WindowManager {
     /// mis-slot wedge. Silent unless one exists.
     pub(crate) unsafe fn debug_check_unlinked_status(&self, phase: &str) {
         crate::wm_scope!();
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if w.is_null() || (*w).closed {
                 continue;
             }
@@ -280,7 +280,7 @@ impl WindowManager {
             }
         }
 
-        let has_wallpaper = self.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_wallpaper());
+        let has_wallpaper = self.windows.iter().any(|w| !w.is_null() && !(*w).closed && (*w).is_wallpaper());
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr_out = (*outputs_list).next;
         while curr_out != outputs_list {
@@ -450,7 +450,7 @@ impl WindowManager {
         // grid, which the loop raises in render-list order; keep the window
         // over it — the grid is the desk, and the window sits on the desk.
         if reorder {
-            for &w in self.windows.iter() {
+            for w in self.windows.iter() {
                 if !w.is_null()
                     && !(*w).closed
                     && matches!((*w).state, crate::window::WindowState::Mapped)
@@ -469,7 +469,7 @@ impl WindowManager {
         // every reorder pass — a rule in the stacking authority, not a
         // one-shot raise.
         if reorder {
-            for &w in self.windows.iter() {
+            for w in self.windows.iter() {
                 if !w.is_null()
                     && !(*w).closed
                     && matches!((*w).state, crate::window::WindowState::Mapped)

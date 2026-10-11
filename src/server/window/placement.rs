@@ -291,7 +291,7 @@ impl Window {
             // offsets a new window from the last. Session entries are
             // exempt: a restored layout is where the user left it.
             if !from_session && self.tiling_mode == crate::tiling::TilingMode::Floating {
-                let (nx, ny) = self.cascade_off_siblings(&app_id_str, self.virtual_x, self.virtual_y);
+                let (nx, ny) = self.cascade_off_siblings(wm, &app_id_str, self.virtual_x, self.virtual_y);
                 if (nx, ny) != (self.virtual_x, self.virtual_y) {
                     log::info!(
                         "Cascading new {} window off a sibling at ({:.0},{:.0}) -> ({:.0},{:.0})",
@@ -330,7 +330,7 @@ impl Window {
         if qualifies(focused) {
             return focused;
         }
-        wm.windows.iter().copied().find(|&w| qualifies(w)).unwrap_or(std::ptr::null_mut())
+        wm.windows.iter().find(|&w| qualifies(w)).unwrap_or(std::ptr::null_mut())
     }
 
     /// Centre a satellite over its sibling. Like `try_center_on_view` this
@@ -378,17 +378,15 @@ impl Window {
     /// window but this one) has its top-left within a few pixels of it.
     /// Bounded, so a pathological pile of siblings cannot walk a window off
     /// the desk: after `MAX_STEPS` the last candidate is taken as is.
-    pub(crate) unsafe fn cascade_off_siblings(&self, app_id: &str, x: f64, y: f64) -> (f64, f64) {
+    pub(crate) unsafe fn cascade_off_siblings(&self, wm: &crate::window_manager::WindowManager, app_id: &str, x: f64, y: f64) -> (f64, f64) {
         const STEP: f64 = 40.0;
         const NEAR: f64 = 4.0;
         const MAX_STEPS: usize = 8;
         let me = self as *const Window;
-        let origins: Vec<(f64, f64)> = (*self.server)
-            .wm
+        let origins: Vec<(f64, f64)> = wm
             .windows
             .iter()
-            .copied()
-            .filter(|&w| !w.is_null() && w as *const Window != me && !(*w).closed)
+            .filter(|&w| w as *const Window != me && !(*w).closed)
             .filter(|&w| matches!((*w).state, WindowState::Mapped))
             .filter(|&w| (*w).get_app_id_string().as_deref() == Some(app_id))
             .map(|w| ((*w).virtual_x, (*w).virtual_y))
@@ -579,7 +577,7 @@ impl Window {
         let want = crate::policy::spawn::CellBlock::new(c0, r0, c1, r1);
 
         let mut occupied = Vec::new();
-        for &w in wm.windows.iter() {
+        for w in wm.windows.iter() {
             if w.is_null() || w == (self as *mut Window) || (*w).closed || (*w).minimized {
                 continue;
             }
@@ -654,7 +652,7 @@ impl Window {
         // Everything else already on the desktop, in squares. Chrome and the
         // canvas itself are not obstacles.
         let mut occupied = Vec::new();
-        for &w in wm.windows.iter() {
+        for w in wm.windows.iter() {
             if w.is_null() || w == (self as *mut Window) || (*w).closed || (*w).minimized {
                 continue;
             }

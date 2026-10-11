@@ -215,7 +215,7 @@ impl WindowManager {
                 }),
             );
         };
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if w.is_null() || (*w).closed || !(*w).is_grid() {
                 continue;
             }
@@ -412,7 +412,7 @@ impl WindowManager {
     /// — see the call site in the output frame handler.
     pub unsafe fn send_frame_done_to_grid_clients_awaiting_patch(&self) {
         crate::wm_scope!();
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if w.is_null() || (*w).closed || !(*w).is_grid() {
                 continue;
             }
@@ -430,7 +430,7 @@ impl WindowManager {
     /// carries its buffer.
     pub unsafe fn grid_patch_in_air(&self) -> bool {
         crate::wm_scope!();
-        self.windows.iter().any(|&w| {
+        self.windows.iter().any(|w| {
             !w.is_null()
                 && !(*w).closed
                 && (*w).is_grid()
@@ -462,7 +462,7 @@ impl WindowManager {
         let zoom = crate::policy::background::sanitized_zoom(self.desk_zoom);
         let (vx, vy) = (self.desk_pan_x, self.desk_pan_y);
         let (vw, vh) = (out.width as f64 / zoom, out.height as f64 / zoom);
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if w.is_null() || (*w).closed || !(*w).is_grid() {
                 continue;
             }
@@ -493,7 +493,7 @@ impl WindowManager {
     /// enough to need a fresh patch.
     pub unsafe fn invalidate_grid_patches(&mut self) {
         crate::wm_scope!(mut);
-        for &w in self.windows.iter() {
+        for w in self.windows.iter() {
             if !w.is_null() && !(*w).closed && (*w).is_grid() {
                 (*w).grid_patch_stale = true;
             }
