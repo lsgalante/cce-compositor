@@ -462,9 +462,9 @@ impl Output {
         // Re-apply scale to all windows whose scale is not 1.0 right before
         // rendering — and to any whose buffers are still shrunk from a
         // scale that has just returned to 1.0, which this pass resets.
-        for window in wm.windows.iter() {
-            if !window.is_null() && ((*window).scale != 1.0 || (*window).x11_buffer_scale() != 1.0 || (*window).buffers_scaled) {
-                (*window).scale_only_render_finish();
+        for window in wm.windows.values_mut() {
+            if (window.scale != 1.0 || window.x11_buffer_scale() != 1.0 || window.buffers_scaled) {
+                window.scale_only_render_finish();
             }
         }
         for &or in wm.override_redirects.iter() {

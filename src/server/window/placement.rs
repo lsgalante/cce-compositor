@@ -595,22 +595,22 @@ impl Window {
         let want = crate::policy::spawn::CellBlock::new(c0, r0, c1, r1);
 
         let mut occupied = Vec::new();
-        for w in wm.windows.iter() {
-            if w.is_null() || w == ptr || (*w).closed || (*w).minimized {
+        for w in wm.windows.values() {
+            if std::ptr::eq(w, ptr) || w.closed || w.minimized {
                 continue;
             }
-            if !matches!((*w).state, WindowState::Mapped) {
+            if !matches!(w.state, WindowState::Mapped) {
                 continue;
             }
-            if (*w).tiling_mode != crate::tiling::TilingMode::Tiled {
+            if w.tiling_mode != crate::tiling::TilingMode::Tiled {
                 continue;
             }
-            let (ow, oh) = ((*w).box_geom.width as f64, (*w).box_geom.height as f64);
+            let (ow, oh) = (w.box_geom.width as f64, w.box_geom.height as f64);
             if ow <= 0.0 || oh <= 0.0 {
                 continue;
             }
             let (oc0, or0, oc1, or1) = crate::policy::cells::window_span(
-                (*w).virtual_x, (*w).virtual_y, ow, oh, sp.cell_w, sp.cell_h, sp.gap_width,
+                w.virtual_x, w.virtual_y, ow, oh, sp.cell_w, sp.cell_h, sp.gap_width,
             );
             occupied.push(crate::policy::spawn::CellBlock::new(oc0, or0, oc1, or1));
         }
@@ -674,22 +674,22 @@ impl Window {
         // Everything else already on the desktop, in squares. Chrome and the
         // canvas itself are not obstacles.
         let mut occupied = Vec::new();
-        for w in wm.windows.iter() {
-            if w.is_null() || w == ptr || (*w).closed || (*w).minimized {
+        for w in wm.windows.values() {
+            if std::ptr::eq(w, ptr) || w.closed || w.minimized {
                 continue;
             }
-            if !matches!((*w).state, WindowState::Mapped) {
+            if !matches!(w.state, WindowState::Mapped) {
                 continue;
             }
-            if (*w).is_status_bar() || (*w).is_wallpaper() || (*w).is_grid() {
+            if w.is_status_bar() || w.is_wallpaper() || w.is_grid() {
                 continue;
             }
-            let (ow, oh) = ((*w).box_geom.width as f64, (*w).box_geom.height as f64);
+            let (ow, oh) = (w.box_geom.width as f64, w.box_geom.height as f64);
             if ow <= 0.0 || oh <= 0.0 {
                 continue;
             }
             let (oc0, or0, oc1, or1) = crate::policy::cells::window_span(
-                (*w).virtual_x, (*w).virtual_y, ow, oh, sp.cell_w, sp.cell_h, sp.gap_width,
+                w.virtual_x, w.virtual_y, ow, oh, sp.cell_w, sp.cell_h, sp.gap_width,
             );
             occupied.push(crate::policy::spawn::CellBlock::new(oc0, or0, oc1, or1));
         }

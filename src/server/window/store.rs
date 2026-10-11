@@ -86,6 +86,12 @@ impl Windows {
         Values(self.map.iter())
     }
 
+    /// Every window, mutably, in slot order. Each window is its own
+    /// allocation, so the references are disjoint.
+    pub fn values_mut(&mut self) -> ValuesMut<'_> {
+        ValuesMut(self.map.iter(), std::marker::PhantomData)
+    }
+
     /// Every window's id, in slot order, copied out: for a loop whose body
     /// needs the store (or the window manager around it) mutably.
     pub fn ids(&self) -> Vec<WindowId> {
@@ -113,5 +119,19 @@ impl<'a> Iterator for Values<'a> {
     fn next(&mut self) -> Option<&'a Window> {
         // SAFETY: live while in the map, which this borrows.
         self.0.next().map(|p| unsafe { p.as_ref() })
+    }
+}
+
+pub struct ValuesMut<'a>(
+    crate::slotmap::Iter<'a, NonNull<Window>>,
+    std::marker::PhantomData<&'a mut Window>,
+);
+
+impl<'a> Iterator for ValuesMut<'a> {
+    type Item = &'a mut Window;
+    fn next(&mut self) -> Option<&'a mut Window> {
+        // SAFETY: the iterator borrows the store mutably, and every slot is
+        // a distinct allocation yielded once.
+        self.0.next().map(|p| unsafe { &mut *p.as_ptr() })
     }
 }

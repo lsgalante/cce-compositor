@@ -491,11 +491,11 @@ impl WindowManager {
     /// `layout` change to a desktop key — an unmoved viewport kept showing
     /// the OLD cell size and colors until the camera happened to travel far
     /// enough to need a fresh patch.
-    pub unsafe fn invalidate_grid_patches(&mut self) {
+    pub fn invalidate_grid_patches(&mut self) {
         crate::wm_scope!(mut);
-        for w in self.windows.iter() {
-            if !w.is_null() && !(*w).closed && (*w).is_grid() {
-                (*w).grid_patch_stale = true;
+        for w in self.windows.values_mut() {
+            if !w.closed && w.is_grid() {
+                w.grid_patch_stale = true;
             }
         }
     }

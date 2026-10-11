@@ -100,8 +100,8 @@ pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
 
     // Find the Window corresponding to the surface
     let mut target_window = std::ptr::null_mut();
-    for window in (*crate::reentry::wm(server)).windows.iter() {
-        if !window.is_null() && (*window).root_surface() == surface {
+    for window in (*crate::reentry::wm(server)).windows.values_mut() {
+        if window.root_surface() == surface {
             target_window = window;
             break;
         }

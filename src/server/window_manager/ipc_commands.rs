@@ -457,12 +457,12 @@ impl WindowManager {
                 let app_id_query = parts[1];
                 if let (Ok(x), Ok(y)) = (parse_finite(parts[2]), parse_finite(parts[3])) {
                     let mut found = false;
-                    for w in self.windows.iter() {
-                        if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
-                            if let Some(aid) = (*w).get_app_id_string() {
+                    for w in self.windows.values_mut() {
+                        if !w.closed && !w.minimized && matches!(w.state, crate::window::WindowState::Mapped) {
+                            if let Some(aid) = w.get_app_id_string() {
                                 if aid.to_lowercase() == app_id_query.to_lowercase() {
-                                    (*w).virtual_x = x;
-                                    (*w).virtual_y = y;
+                                    w.virtual_x = x;
+                                    w.virtual_y = y;
                                     found = true;
                                 }
                             }
@@ -650,20 +650,20 @@ impl WindowManager {
                 let title_filter = parts[2..].join(" ").to_lowercase();
                 let mut target: *mut Window = std::ptr::null_mut();
                 let mut best_score = 0;
-                for w in self.windows.iter() {
-                    if w.is_null() || (*w).closed
-                        || !matches!((*w).state, crate::window::WindowState::Mapped)
+                for w in self.windows.values_mut() {
+                    if w.closed
+                        || !matches!(w.state, crate::window::WindowState::Mapped)
                     {
                         continue;
                     }
                     if !title_filter.is_empty() {
-                        let title = (*w).get_title_string().unwrap_or_default().to_lowercase();
+                        let title = w.get_title_string().unwrap_or_default().to_lowercase();
                         if !title.contains(&title_filter) {
                             continue;
                         }
                     }
-                    let id_match = query.parse::<u32>().map_or(false, |id| (*w).ref_key.index == id);
-                    let aid = (*w).get_app_id_string().unwrap_or_default().to_lowercase();
+                    let id_match = query.parse::<u32>().map_or(false, |id| w.ref_key.index == id);
+                    let aid = w.get_app_id_string().unwrap_or_default().to_lowercase();
                     let score = if id_match || aid == query {
                         100
                     } else if !query.is_empty() && aid.contains(&query) {

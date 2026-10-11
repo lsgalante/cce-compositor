@@ -552,7 +552,7 @@ impl Window {
     /// Stacked windows (content rects overlapping) do not clip each other,
     /// mirroring the rings' degenerate-distance guard. Per-side, not
     /// per-span: one near neighbor claims the whole facing side.
-    pub unsafe fn border_side_extents(&self, wm: &crate::window_manager::WindowManager, band_unscaled: f64) -> [f64; 4] {
+    pub fn border_side_extents(&self, wm: &crate::window_manager::WindowManager, band_unscaled: f64) -> [f64; 4] {
         let scale = if self.scale > 0.0 { self.scale } else { 1.0 };
         let band = band_unscaled * scale;
         let ax0 = self.box_geom.x as f64;
@@ -562,8 +562,8 @@ impl Window {
         let mut ext = [band; 4]; // left, right, top, bottom (layout px)
 
         let self_ptr = self as *const Window as *mut Window;
-        for other in wm.windows.iter() {
-            if other.is_null() || other == self_ptr {
+        for other in wm.windows.values() {
+            if std::ptr::eq(other, self_ptr) {
                 continue;
             }
             let o = &*other;

@@ -215,32 +215,32 @@ impl WindowManager {
         let mut shy: Vec<(String, String, String)> = Vec::new();
         let mut live_pids: Vec<i32> = Vec::new();
 
-        for w in self.windows.iter() {
-            if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
+        for w in self.windows.values() {
+            if w.closed || matches!(w.state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                 continue;
             }
             // The grid layer is owned by its systemd unit and anchored by
             // live patches — saving/restoring it would spawn a duplicate
             // and dictate a stale geometry.
-            if (*w).is_status_bar() || (*w).is_wallpaper() || (*w).is_grid() {
+            if w.is_status_bar() || w.is_wallpaper() || w.is_grid() {
                 continue;
             }
             // A Utility window owns its geometry entirely; saving it would
             // let a later session restore a size over the client's request —
             // the exact bug the mode deletes. (The clean-exit loops below do
             // NOT skip it: it is a real window and must still be closed.)
-            if (*w).tiling_mode == crate::tiling::TilingMode::Utility {
+            if w.tiling_mode == crate::tiling::TilingMode::Utility {
                 continue;
             }
             // A transient (dialog) belongs to its parent's process: saved, it
             // would carry that process's cmdline and a session restore would
             // spawn the whole app a second time just to place a dialog that
             // no longer exists. `try_restore` skips transients to match.
-            if !(*w).get_parent().is_null() {
+            if !w.get_parent().is_null() {
                 continue;
             }
 
-            let app_id = (*w).get_app_id_string().unwrap_or_default();
+            let app_id = w.get_app_id_string().unwrap_or_default();
             if app_id.is_empty() {
                 continue;
             }
@@ -250,9 +250,9 @@ impl WindowManager {
             if app_id == "cce-cloud" {
                 continue;
             }
-            let title = (*w).get_title_string().unwrap_or_default();
+            let title = w.get_title_string().unwrap_or_default();
             
-            let pid = (*w).unreliable_pid();
+            let pid = w.unreliable_pid();
             live_pids.push(pid);
             let mut args = match self.proc_args_cache.get(&pid) {
                 Some(args) if pid > 0 => args.clone(),
@@ -278,7 +278,7 @@ impl WindowManager {
             // and saved it would take the app's one `last_window_states`
             // slot — the main window then reopens at a settings window's
             // size.
-            if (*w).is_shy() || (*w).satellite {
+            if w.is_shy() || w.satellite {
                 if let Some(program) = args.first() {
                     shy.push((app_id.clone(), title.clone(), program.clone()));
                 }
@@ -311,27 +311,27 @@ impl WindowManager {
                 cmdline = app_id.clone();
             }
 
-            let is_focused = w == focused_win;
+            let is_focused = std::ptr::eq(w, focused_win);
 
             let win_state = SavedWindowState {
                 app_id: app_id.clone(),
                 title: title.clone(),
-                tiling_mode: (*w).tiling_mode,
-                minimized: (*w).minimized,
+                tiling_mode: w.tiling_mode,
+                minimized: w.minimized,
                 // Fullscreen, virtual_x/y is the desk spot the window
                 // covers (`place_fullscreen_windows`), not where it lives.
-                virtual_x: if (*w).was_fullscreen { (*w).saved_virtual_x } else { (*w).virtual_x },
-                virtual_y: if (*w).was_fullscreen { (*w).saved_virtual_y } else { (*w).virtual_y },
-                scale: (*w).scale,
-                width: (*w).box_geom.width as u32,
-                height: (*w).box_geom.height as u32,
+                virtual_x: if w.was_fullscreen { w.saved_virtual_x } else { w.virtual_x },
+                virtual_y: if w.was_fullscreen { w.saved_virtual_y } else { w.virtual_y },
+                scale: w.scale,
+                width: w.box_geom.width as u32,
+                height: w.box_geom.height as u32,
                 cmdline,
                 focused: is_focused,
                 argv: (!args.is_empty()).then(|| args.clone()),
-                fullscreen_at: if (*w).was_fullscreen {
-                    Some(((*w).virtual_x, (*w).virtual_y))
+                fullscreen_at: if w.was_fullscreen {
+                    Some((w.virtual_x, w.virtual_y))
                 } else {
-                    (*w).last_fullscreen_at.or((*w).restore_fullscreen_at)
+                    w.last_fullscreen_at.or(w.restore_fullscreen_at)
                 },
             };
 
@@ -486,18 +486,18 @@ impl WindowManager {
         self.clean_exit_timer.arm(0);
 
         let mut remaining: Vec<String> = Vec::new();
-        for w in self.windows.iter() {
-            if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
+        for w in self.windows.values_mut() {
+            if w.closed || matches!(w.state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                 continue;
             }
-            if (*w).is_status_bar() || (*w).is_wallpaper() {
+            if w.is_status_bar() || w.is_wallpaper() {
                 continue;
             }
             // A later self-initiated close must not read as a crash.
-            (*w).close_requested = false;
-            let app_id = (*w).get_app_id_string().unwrap_or_default();
-            if (*w).get_parent().is_null() && !app_id.is_empty() {
-                let title = (*w).get_title_string().unwrap_or_default();
+            w.close_requested = false;
+            let app_id = w.get_app_id_string().unwrap_or_default();
+            if w.get_parent().is_null() && !app_id.is_empty() {
+                let title = w.get_title_string().unwrap_or_default();
                 remaining.push(if title.is_empty() { app_id.clone() } else { title });
             }
         }

@@ -1721,9 +1721,9 @@ impl WindowManager {
             // and `finish_viewport_settle` re-bakes once if the zoom moved.
             let scene = crate::shared::scene().wlr_scene;
             ffi::river_scene_set_blur_frozen(scene, true);
-            for window in self.windows.iter() {
-                if !window.is_null() {
-                    (*window).render_viewport_update();
+            for window in self.windows.values_mut() {
+                {
+                    window.render_viewport_update();
                 }
             }
             // (Re)arm the settle debounce: while motion keeps arriving this pushes
@@ -1732,16 +1732,16 @@ impl WindowManager {
         } else if self.viewport_is_active {
             // A gap between motion updates within an ongoing gesture: keep blur
             // suppressed and let the settle timer decide when the gesture ended.
-            for window in self.windows.iter() {
-                if !window.is_null() {
-                    (*window).render_viewport_update();
+            for window in self.windows.values_mut() {
+                {
+                    window.render_viewport_update();
                 }
             }
         } else {
             // Stationary viewport: hold the finished, blurred state.
-            for window in self.windows.iter() {
-                if !window.is_null() {
-                    (*window).render_finish();
+            for window in self.windows.values_mut() {
+                {
+                    window.render_finish();
                 }
             }
         }
@@ -1808,9 +1808,9 @@ impl WindowManager {
         if self.desk_zoom != self.viewport_freeze_zoom {
             ffi::river_scene_mark_optimized_blur_dirty(scene);
         }
-        for window in self.windows.iter() {
-            if !window.is_null() {
-                (*window).render_finish();
+        for window in self.windows.values_mut() {
+            {
+                window.render_finish();
             }
         }
         // Settling re-enables blur and re-finishes every window; sweep any
