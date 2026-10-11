@@ -565,7 +565,7 @@ unsafe extern "C" fn handle_xwayland_ready(listener: *mut ffi::wl_listener, _dat
         // `handle_request_set_cursor`), so 24 logical pixels is 24*scale of
         // them. Sent even at scale 1, because otherwise libXcursor guesses
         // from the screen height and lands somewhere else entirely.
-        let s = crate::xwayland_window::x11_scale(server);
+        let s = crate::xwayland_window::x11_scale();
         let dpi = (96.0 * s).round() as i32;
         let cursor = (24.0 * s).round() as i32;
         let mut resources = format!("Xcursor.size: {}\n", cursor);

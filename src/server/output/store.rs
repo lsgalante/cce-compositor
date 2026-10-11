@@ -97,6 +97,15 @@ impl Outputs {
             .map_or(std::ptr::null_mut(), |o| o as *const Output as *mut Output)
     }
 
+    /// Every output, mutably, oldest first. Each output is its own
+    /// allocation, so the references are disjoint.
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Output> + '_ {
+        // SAFETY: the iterator borrows the store mutably, and every key in
+        // `order` names a distinct allocation, yielded once.
+        let map = &self.map;
+        self.order.iter().filter_map(move |&k| map.get(k)).map(|p| unsafe { &mut *p.as_ptr() })
+    }
+
     /// Every output, oldest first.
     pub fn values(&self) -> impl Iterator<Item = &Output> + '_ {
         // SAFETY: live while in the map, which this borrows.

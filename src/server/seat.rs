@@ -380,7 +380,7 @@ impl Seat {
     }
 
     pub unsafe fn handle_activity(&mut self) {
-        (*self.server).idle.on_activity();
+        (*self.server).idle.on_activity(&mut (*self.server).om.outputs);
         let notifier = (*self.server).input_manager.idle_notifier;
         if !notifier.is_null() {
             ffi::wlr_idle_notifier_v1_notify_activity(notifier, self.wlr_seat);
@@ -1583,10 +1583,7 @@ unsafe extern "C" fn handle_request_set_cursor(
         // at 1/scale, the way the window's own buffer already is
         // (`Window::x11_buffer_scale`), and put the hotspot in the same units.
         let scale = if is_xwayland_client(seat.server, event_client) {
-            crate::xwayland_window::x11_scale_for_surface(
-                seat.server,
-                ffi::river_wlr_seat_get_pointer_focused_surface(seat.wlr_seat),
-            )
+            crate::xwayland_window::x11_scale_for_surface(ffi::river_wlr_seat_get_pointer_focused_surface(seat.wlr_seat))
         } else {
             1.0
         };

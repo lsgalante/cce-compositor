@@ -44,7 +44,6 @@ pub struct LockManager {
     /// struct is zero-initialised: `None` is the null niche, an empty `Vec`
     /// is not.
     pub lock_waiters: Option<Vec<std::sync::mpsc::Sender<String>>>,
-    pub server: *mut Server,
 
     pub new_lock: crate::listener::Listener,
     pub unlock: crate::listener::Listener,
@@ -68,7 +67,6 @@ impl Default for LockManager {
 
 impl LockManager {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        self.server = server;
         self.state = LockState::Unlocked;
         std::ptr::write(&mut self.lock_waiters, None);
 
@@ -133,14 +131,18 @@ impl LockManager {
         None
     }
 
-    pub unsafe fn maybe_lock(&mut self) {
+    /// Complete a pending lock once every enabled output shows what the
+    /// state waits for. Returns true when this call completed it: the
+    /// caller then tells the idle manager (`IdleManager::on_locked`).
+    #[must_use]
+    pub unsafe fn maybe_lock(&mut self, outputs: &crate::output::Outputs) -> bool {
         let mut all_outputs_blanked = true;
         let mut all_outputs_rendered_lock_surface = true;
 
-        for output in (*self.server).om.outputs.ptrs() {
-            let wlr_output = (*output).wlr_output;
+        for output in outputs.values() {
+            let wlr_output = output.wlr_output;
             if !wlr_output.is_null() && ffi::river_wlr_output_get_enabled(wlr_output) {
-                match (*output).lock_render_state {
+                match output.lock_render_state {
                     crate::output::LockRenderState::PendingUnlock
                     | crate::output::LockRenderState::Unlocked
                     | crate::output::LockRenderState::PendingBlank
@@ -162,15 +164,18 @@ impl LockManager {
                     self.send_locked();
                     crate::shared::scene().normal_tree.set_enabled(false);
                     self.lock_surfaces_timer.arm(0);
+                    return true;
                 }
             }
             LockState::WaitingForBlank => {
                 if all_outputs_blanked {
                     self.send_locked();
+                    return true;
                 }
             }
             _ => {}
         }
+        false
     }
 
     pub unsafe fn send_locked(&mut self) {
@@ -182,7 +187,6 @@ impl LockManager {
         for tx in self.lock_waiters.take().unwrap_or_default() {
             let _ = tx.send("ok locked\n".to_string());
         }
-        (*self.server).idle.on_locked();
         crate::shared::pending().dirty_windowing();
     }
 
@@ -199,10 +203,18 @@ impl LockManager {
     /// same backoff and the same fail-closed end: a locker that never comes
     /// leaves the session locked, not open.
     ///
-    /// No-op when the session is already locked or locking.
-    pub unsafe fn lock_now(&mut self, wm: &mut crate::window_manager::WindowManager) {
+    /// No-op when the session is already locked or locking. Returns true
+    /// when the lock completed at once (no output to wait for), as
+    /// [`Self::maybe_lock`] does.
+    #[must_use]
+    pub unsafe fn lock_now(
+        &mut self,
+        wm: &mut crate::window_manager::WindowManager,
+        outputs: &crate::output::Outputs,
+        seats: &crate::seat::Seats,
+    ) -> bool {
         if self.state != LockState::Unlocked {
-            return;
+            return false;
         }
         log::info!("locking the session (compositor-initiated)");
         self.state = LockState::WaitingForBlank;
@@ -210,7 +222,7 @@ impl LockManager {
         scene.locked_tree.set_enabled(true);
         scene.normal_tree.set_enabled(false);
 
-        for seat in (*self.server).input_manager.seats.ptrs() {
+        for seat in seats.ptrs() {
             (*seat).focus(wm, Focus::None);
         }
 
@@ -218,16 +230,17 @@ impl LockManager {
         // last of them completes the lock in `maybe_lock`. With none enabled
         // (the idle timeout darkened them all) there is nothing to wait for,
         // and this call completes it now.
-        for output in (*self.server).om.outputs.ptrs() {
-            if !(*output).wlr_output.is_null() && ffi::river_wlr_output_get_enabled((*output).wlr_output) {
-                ffi::wlr_output_schedule_frame((*output).wlr_output);
+        for output in outputs.values() {
+            if !output.wlr_output.is_null() && ffi::river_wlr_output_get_enabled(output.wlr_output) {
+                ffi::wlr_output_schedule_frame(output.wlr_output);
             }
         }
         crate::shared::pending().dirty_windowing();
-        self.maybe_lock();
+        let locked = self.maybe_lock(outputs);
 
         self.respawn_attempts = 0;
         self.respawn_timer.arm(1);
+        locked
     }
 
     /// Answer `tx` once the session is locked: now if it is, else from
@@ -342,7 +355,7 @@ impl LockSurface {
         Ok(lock_surface)
     }
 
-    pub unsafe fn destroy(wm: &mut crate::window_manager::WindowManager, lock_surface: *mut Self) {
+    pub unsafe fn destroy(wm: &mut crate::window_manager::WindowManager, seats: &crate::seat::Seats, lock_surface: *mut Self) {
         let mut new_focus = Focus::None;
         let surfaces_head = &mut (*(*lock_surface).lock).surfaces as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*surfaces_head).next;
@@ -359,8 +372,7 @@ impl LockSurface {
             curr = next;
         }
 
-        let server = (*(*lock_surface).manager).server;
-        for seat in (*server).input_manager.seats.ptrs() {
+        for seat in seats.ptrs() {
             if let Focus::LockSurface(focused_surf) = (*seat).focused {
                 if focused_surf == lock_surface {
                     (*seat).focus(wm, new_focus);
@@ -402,7 +414,10 @@ unsafe extern "C" fn handle_lock_surfaces_timeout(data: *mut std::ffi::c_void) -
 
     crate::shared::scene().normal_tree.set_enabled(false);
 
-    manager.maybe_lock();
+    let server = crate::shared::server_ptr();
+    if manager.maybe_lock(&(*server).om.outputs) {
+        (*server).idle.on_locked();
+    }
 
     0
 }
@@ -484,8 +499,10 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
 
         manager.lock_surfaces_timer.arm(200);
 
-        for seat in (*manager.server).input_manager.seats.ptrs() {
-            (*seat).focus(&mut *crate::reentry::wm((*seat).server), Focus::None);
+        let server = crate::shared::server_ptr();
+        let wm = &mut *crate::reentry::wm(server);
+        for seat in (*server).input_manager.seats.ptrs() {
+            (*seat).focus(wm, Focus::None);
         }
     } else {
         if manager.state == LockState::Locked {
@@ -517,8 +534,10 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
     crate::shared::scene().normal_tree.set_enabled(true);
     crate::shared::scene().locked_tree.set_enabled(false);
 
-    for seat in (*manager.server).input_manager.seats.ptrs() {
-        (*seat).focus(&mut *crate::reentry::wm((*seat).server), Focus::None);
+    let server = crate::shared::server_ptr();
+    let wm = &mut *crate::reentry::wm(server);
+    for seat in (*server).input_manager.seats.ptrs() {
+        (*seat).focus(wm, Focus::None);
     }
 
     handle_destroy(manager.destroy.as_ptr(), std::ptr::null_mut());
@@ -571,10 +590,10 @@ unsafe extern "C" fn handle_surface(listener: *mut ffi::wl_listener, data: *mut 
 
 unsafe extern "C" fn update_focus(data: *mut std::ffi::c_void) {
     let lock_surface = data as *mut LockSurface;
-    let manager = (*lock_surface).manager;
-    let wm = &mut *crate::reentry::wm((*manager).server);
+    let server = crate::shared::server_ptr();
+    let wm = &mut *crate::reentry::wm(server);
 
-    for seat in (*(*manager).server).input_manager.seats.ptrs() {
+    for seat in (*server).input_manager.seats.ptrs() {
         if !matches!((*seat).focused, Focus::LockSurface(s) if s == lock_surface) {
             (*seat).focus(wm, Focus::LockSurface(lock_surface));
         }
@@ -592,8 +611,7 @@ unsafe extern "C" fn handle_lock_surface_map(listener: *mut ffi::wl_listener, _d
     let y = (*output).sent.y;
     (*lock_surface).tree.set_position(x, y);
 
-    let server = (*(*lock_surface).manager).server;
-    let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
+    let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
     assert!((*lock_surface).idle_update_focus.is_null());
 
     let idle = ffi::wl_event_loop_add_idle(
@@ -610,5 +628,6 @@ unsafe extern "C" fn handle_lock_surface_map(listener: *mut ffi::wl_listener, _d
 
 unsafe extern "C" fn handle_lock_surface_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let lock_surface = crate::container_of!(listener, LockSurface, surface_destroy);
-    LockSurface::destroy(&mut *crate::reentry::wm((*(*lock_surface).manager).server), lock_surface);
+    let server = crate::shared::server_ptr();
+    LockSurface::destroy(&mut *crate::reentry::wm(server), &(*server).input_manager.seats, lock_surface);
 }

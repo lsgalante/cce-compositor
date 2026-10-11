@@ -109,7 +109,6 @@ fn read_plan_ms(path: &str) -> Option<i64> {
 }
 
 pub struct IdleManager {
-    pub server: *mut Server,
     display_timer: crate::event_source::Timer,
     sleep_timer: crate::event_source::Timer,
     /// The timeouts in force, in ms; 0 = disabled. The plan's when it has
@@ -216,7 +215,6 @@ fn now_ms() -> u64 {
 
 impl IdleManager {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        self.server = server;
         let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
         self.display_timer = crate::event_source::Timer::add(event_loop, handle_display_timeout, self as *mut IdleManager as *mut _);
         if !self.display_timer.is_set() {
@@ -409,12 +407,12 @@ impl IdleManager {
 
     /// Input arrived (or the session came back). Wakes darkened outputs
     /// and restarts both countdowns.
-    pub unsafe fn on_activity(&mut self) {
+    pub fn on_activity(&mut self, outputs: &mut crate::output::Outputs) {
         let now = now_ms();
         self.last_activity_ms = now;
         let changed = self.displays_off || self.sleeping;
         if self.displays_off {
-            self.set_displays(true);
+            self.set_displays(outputs, true);
         }
         self.sleeping = false;
         // Someone is here: a sleep still waiting for its lock is called off.
@@ -484,11 +482,9 @@ impl IdleManager {
     /// Darken (`on == false`) every enabled output, or wake the ones this
     /// module darkened. Goes through the same scheduled-state path as the
     /// output-power protocol; the next transaction commits it.
-    pub unsafe fn set_displays(&mut self, on: bool) {
-        let server = &mut *self.server;
+    pub fn set_displays(&mut self, outputs: &mut crate::output::Outputs, on: bool) {
         let mut touched = 0;
-        for output_ptr in server.om.outputs.ptrs() {
-            let output = &mut *output_ptr;
+        for output in outputs.values_mut() {
             if output.wlr_output.is_null() {
                 continue;
             }
@@ -543,12 +539,19 @@ impl IdleManager {
     /// `ccectl idle sleep`): a sleep used to run with the session unlocked,
     /// so the desktop was there for whoever woke the machine. A lid close is
     /// logind's sleep, not ours, and is covered by `sleep_lock`.
-    pub unsafe fn lock_then_sleep(&mut self, wm: &mut crate::window_manager::WindowManager) {
+    pub unsafe fn lock_then_sleep(
+        &mut self,
+        wm: &mut crate::window_manager::WindowManager,
+        lock: &mut crate::lock_manager::LockManager,
+        outputs: &crate::output::Outputs,
+        seats: &crate::seat::Seats,
+    ) {
         if self.sleeping || self.sleep_after_lock {
             return;
         }
-        let lock = &mut (*self.server).lock_manager;
-        lock.lock_now(wm);
+        // A lock that completes at once is seen just below; `on_locked` would
+        // find nothing waiting for it.
+        let _ = lock.lock_now(wm, outputs, seats);
         if lock.state == crate::lock_manager::LockState::Locked {
             self.sleep_now();
             return;
@@ -638,23 +641,30 @@ impl IdleManager {
     }
 
     /// `ccectl idle …` — see `cce_ctl.rs` for the surface.
-    pub unsafe fn ipc(&mut self, wm: &mut crate::window_manager::WindowManager, args: &[&str]) -> String {
+    pub unsafe fn ipc(
+        &mut self,
+        wm: &mut crate::window_manager::WindowManager,
+        lock: &mut crate::lock_manager::LockManager,
+        outputs: &mut crate::output::Outputs,
+        seats: &crate::seat::Seats,
+        args: &[&str],
+    ) -> String {
         match args {
             [] | ["status"] => self.status(),
             ["wake"] => {
-                self.on_activity();
+                self.on_activity(outputs);
                 "ok\n".to_string()
             }
             ["display", "off"] => {
-                self.set_displays(false);
+                self.set_displays(outputs, false);
                 "ok\n".to_string()
             }
             ["display", "on"] => {
-                self.set_displays(true);
+                self.set_displays(outputs, true);
                 "ok\n".to_string()
             }
             ["sleep"] => {
-                self.lock_then_sleep(wm);
+                self.lock_then_sleep(wm, lock, outputs, seats);
                 "ok\n".to_string()
             }
             ["inhibit", rest @ ..] => match parse_lease(rest, now_ms()) {
@@ -733,7 +743,7 @@ unsafe extern "C" fn handle_plan_poll(data: *mut std::ffi::c_void) -> std::os::r
     let idle = &mut *(data as *mut IdleManager);
     idle.poll_plan();
     // The directory may exist now: watch it, and stop polling.
-    let event_loop = ffi::wl_display_get_event_loop((*idle.server).wl_server);
+    let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
     if idle.watch_plan_dir(event_loop) {
         log::info!("idle: watching the power-plan directory");
         idle.poll_plan();
@@ -754,7 +764,7 @@ unsafe extern "C" fn handle_display_timeout(data: *mut std::ffi::c_void) -> std:
     let idle = &mut *(data as *mut IdleManager);
     if !idle.inhibited && !idle.displays_off {
         log::info!("idle: display timeout reached");
-        idle.set_displays(false);
+        idle.set_displays(&mut (*crate::shared::server_ptr()).om.outputs, false);
     }
     0
 }
@@ -763,7 +773,13 @@ unsafe extern "C" fn handle_sleep_timeout(data: *mut std::ffi::c_void) -> std::o
     let idle = &mut *(data as *mut IdleManager);
     if !idle.inhibited && !idle.sleeping {
         log::info!("idle: sleep timeout reached");
-        idle.lock_then_sleep(&mut *crate::reentry::wm(idle.server));
+        let server = crate::shared::server_ptr();
+        idle.lock_then_sleep(
+            &mut *crate::reentry::wm(server),
+            &mut (*server).lock_manager,
+            &(*server).om.outputs,
+            &(*server).input_manager.seats,
+        );
     }
     0
 }
@@ -780,12 +796,13 @@ unsafe extern "C" fn handle_lock_fallback(data: *mut std::ffi::c_void) -> std::o
 
 unsafe extern "C" fn handle_session_active(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let idle = &mut *crate::container_of!(listener, IdleManager, session_active);
-    let session = (*idle.server).session;
+    let server = crate::shared::server_ptr();
+    let session = (*server).session;
     if session.is_null() || !ffi::river_wlr_session_get_active(session) {
         return;
     }
     log::info!("idle: session active (resume / VT switch), waking");
-    idle.on_activity();
+    idle.on_activity(&mut (*server).om.outputs);
 }
 
 #[cfg(test)]

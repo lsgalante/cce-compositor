@@ -1005,14 +1005,26 @@ impl WindowManager {
                 crate::shared::pending().dirty_windowing();
                 "ok\n".to_string()
             }
-            "idle" => unsafe { (*self.server).idle.ipc(self, &parts[1..]) },
+            "idle" => unsafe {
+                let server = self.server;
+                (*server).idle.ipc(
+                    self,
+                    &mut (*server).lock_manager,
+                    &mut (*server).om.outputs,
+                    &(*server).input_manager.seats,
+                    &parts[1..],
+                )
+            },
             // Lock the session (`LockManager::lock_now`). The reply waits for
             // the lock to complete, which is what the lock-before-sleep
             // thread (`sleep_lock`) holds logind's sleep for: `ok locked`
             // once every output shows the locked scene.
             "lock" => unsafe {
-                let lock = &mut (*self.server).lock_manager;
-                lock.lock_now(self);
+                let server = self.server;
+                let lock = &mut (*server).lock_manager;
+                if lock.lock_now(self, &(*server).om.outputs, &(*server).input_manager.seats) {
+                    (*server).idle.on_locked();
+                }
                 match self.pending_ipc_reply.take() {
                     Some(tx) => {
                         lock.reply_when_locked(tx);

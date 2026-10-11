@@ -553,6 +553,18 @@ the manage pass (`Seat::manage_start` returns true) and handed to
 `sent().seats` (`Seat::link_sent`) is still intrusive. Test two outputs with a copy of `cce-shadow` whose
 `WLR_HEADLESS_OUTPUTS=1` reads 2.
 
+**Server back-pointers** (RFC step 4, 2026-10-11): only `Seat`, `Window` and
+`WindowManager` still hold `server: *mut Server`. The others take what they
+need as parameters (`LockManager::maybe_lock(&Outputs)`,
+`IdleManager::set_displays(&mut Outputs, on)`,
+`Output::render_and_commit(wm, renderer)` + `note_lock_state(&LockManager)`, …)
+or, in their own wlroots callbacks, take the server from
+`crate::shared::server_ptr()` and an event loop from the shared display. The
+X11 scale (`xwayland_window::x11_scale`, read every frame per X11 window) is
+published by `note_output_scale` wherever the first output's applied scale
+can change — an output created or removed, a committed configuration — so it
+needs no server. A new struct does not get a `server` field.
+
 **A window function that hands the window manager on takes `(wm, id)`,
 not `&mut self`** (since 2026-10-11): `Window::map`, `unmap`,
 `set_closing`, `manage_start`, `manage_finish`, `notify_title`,
@@ -1228,8 +1240,8 @@ windows both in view leaned out and back on every swipe). A shadow drives it sta
 **Idle timeouts** — `idle { display_off <s>; sleep <s>; sleep_command "…" }`,
 both 0 (off) by default — are `src/server/idle.rs`, a `Server` subcomponent
 rather than window-manager state: two `wl_event_loop` timers re-armed from
-`Seat::handle_activity`, held disarmed while `IdleInhibitManager::check_active`
-reports an inhibitor. "Display off" reuses the wlr-output-power-management
+`Seat::handle_activity`, held disarmed while an inhibitor is held
+(`IdleInhibitManager::holders`, handed over by `idle_inhibit_manager::publish`). "Display off" reuses the wlr-output-power-management
 path (`OutputStateValue::DisabledSoft` + `dirty_windowing`): the output stays
 in the layout, nothing re-arranges, and no frame events fire while it is dark.
 Only outputs the timeout darkened (`Output::idle_off`) are woken by the next
@@ -1263,7 +1275,11 @@ respawn timer, which binds via `handle_new_lock`'s already-locked branch; a
 locker that never comes leaves the session locked, the crash path's guarantee.
 The idle sleep and `ccectl idle sleep` go through `IdleManager::lock_then_sleep`
 (sleep on `on_locked`, or after `LOCK_BEFORE_SLEEP_MS` regardless; activity in
-between calls the sleep off and keeps the lock). logind's own sleeps — lid,
+between calls the sleep off and keeps the lock). `LockManager::maybe_lock` /
+`lock_now` return whether they just completed the lock, and their CALLERS call
+`IdleManager::on_locked` — the lock manager no longer reaches the idle
+manager itself, which made a second `&mut IdleManager` while
+`lock_then_sleep` held the first (since 2026-10-11). logind's own sleeps — lid,
 power key, `systemctl suspend` — are `sleep_lock.rs`: a thread holding a
 `delay` sleep inhibitor that answers `PrepareForSleep(true)` with `ccectl
 lock` (whose reply waits for `send_locked`) and then lets logind go. Real seats

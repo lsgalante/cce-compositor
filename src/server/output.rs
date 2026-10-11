@@ -147,7 +147,6 @@ pub struct RenderingState {
 }
 
 pub struct Output {
-    pub server: *mut Server,
     pub wlr_output: *mut ffi::wlr_output,
     pub scene_output: *mut ffi::wlr_scene_output,
     pub background_rect: SceneRect,
@@ -345,7 +344,6 @@ impl Output {
         };
 
         let output = Box::new(Output {
-            server,
             wlr_output,
             scene_output,
             background_rect: SceneRect::none(),
@@ -394,6 +392,7 @@ impl Output {
         });
 
         let id = (*server).om.outputs.insert(output);
+        crate::xwayland_window::note_output_scale(&(*server).om.outputs);
         let raw = (*server).om.outputs.ptr(id).ok_or("output gone at creation")?;
         ffi::river_wlr_output_set_data(wlr_output, raw as *mut std::ffi::c_void);
 
@@ -420,7 +419,14 @@ impl Output {
         Ok(())
     }
 
-    pub unsafe fn render_and_commit(&mut self, wm: &mut crate::window_manager::WindowManager) -> Result<(), &'static str> {
+    /// Draw and commit a frame. Ok(true) when a frame was committed — the
+    /// caller then advances the lock-render state ([`Self::note_lock_state`]);
+    /// Ok(false) when nothing needed drawing.
+    pub unsafe fn render_and_commit(
+        &mut self,
+        wm: &mut crate::window_manager::WindowManager,
+        renderer: *mut ffi::wlr_renderer,
+    ) -> Result<bool, &'static str> {
         // Update grid node positions and parameters first, which marks the scene output as damaged if changed
         self.draw_grid(wm);
         self.draw_adjust_overlay(wm);
@@ -465,7 +471,7 @@ impl Output {
         }
 
         if pending_shot.is_none() && !ffi::wlr_scene_output_needs_frame(self.scene_output) {
-            return Ok(());
+            return Ok(false);
         }
 
         // Re-apply scale to all windows whose scale is not 1.0 right before
@@ -572,7 +578,7 @@ impl Output {
                 shot.reply_err("screenshot: output state has no buffer");
             } else {
                 crate::screenshot::capture_state_buffer(
-                    (*self.server).renderer,
+                    renderer,
                     state.buffer,
                     ffi::river_wlr_output_get_width(self.wlr_output),
                     ffi::river_wlr_output_get_height(self.wlr_output),
@@ -583,7 +589,14 @@ impl Output {
 
         ffi::wlr_output_state_finish(&mut state);
 
-        match (*self.server).lock_manager.state {
+        Ok(true)
+    }
+
+    /// After a committed frame: what the lock screen should show on this
+    /// output next, from the lock manager's state. The present handler
+    /// completes each pending state and lets the lock manager re-check.
+    pub unsafe fn note_lock_state(&mut self, lock: &crate::lock_manager::LockManager) {
+        match lock.state {
             LockState::Unlocked => {
                 if self.lock_render_state != LockRenderState::Unlocked {
                     self.lock_render_state = LockRenderState::PendingUnlock;
@@ -598,7 +611,7 @@ impl Output {
                 }
             }
             LockState::WaitingForLockSurfaces => {
-                if let Some(_lock_surf) = (*self.server).lock_manager.lock_surface_from_output(self) {
+                if let Some(_lock_surf) = lock.lock_surface_from_output(self) {
                     if self.lock_render_state != LockRenderState::LockSurface {
                         self.lock_render_state = LockRenderState::PendingLockSurface;
                     }
@@ -609,8 +622,6 @@ impl Output {
                 }
             }
         }
-
-        Ok(())
     }
 
     /// Destroy this output's scene nodes: the base rect, the grid (whose
@@ -1293,7 +1304,8 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
     // The camera steps here, on the vblank, to where it should be at the
     // instant THIS frame is presented (see WindowManager::step_camera_frame).
     let frame_target_ns = output.predicted_present_ns();
-    let wm = &mut *crate::reentry::wm(output.server);
+    let server = crate::shared::server_ptr();
+    let wm = &mut *crate::reentry::wm(server);
     wm.step_camera_frame(frame_target_ns);
     // Likewise the interactive move/resize: one configure + relayout per
     // vblank, for the pointer's latest position.
@@ -1303,8 +1315,10 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
     } else {
         None
     };
-    if let Err(e) = output.render_and_commit(wm) {
-        log_render_error(e);
+    match output.render_and_commit(wm, (*server).renderer) {
+        Ok(true) => output.note_lock_state(&(*server).lock_manager),
+        Ok(false) => {}
+        Err(e) => log_render_error(e),
     }
     if let Some(start) = render_start {
         // Epoch ms mod 100000 — the shared tracer time base (see cce-ui's
@@ -1339,6 +1353,7 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
 
 unsafe extern "C" fn handle_present(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let output = &mut *crate::container_of!(listener, Output, present);
+    let server = crate::shared::server_ptr();
     let event = data as *mut ffi::wlr_output_event_present;
     if !(*event).presented {
         return;
@@ -1358,7 +1373,7 @@ unsafe extern "C" fn handle_present(listener: *mut ffi::wl_listener, data: *mut 
         let mut dropped = 0u64;
         if seq != 0 && output.present_seq != 0 && seq > output.present_seq + 1 {
             dropped = (seq - output.present_seq - 1) as u64;
-        } else if seq == 0 && output.present_when_ns != 0 && (*crate::reentry::wm(output.server)).camera_anim_active {
+        } else if seq == 0 && output.present_when_ns != 0 && (*crate::reentry::wm(server)).camera_anim_active {
             let gap = when_ns.saturating_sub(output.present_when_ns);
             let periods = (gap + period / 2) / period;
             dropped = periods.saturating_sub(1);
@@ -1384,11 +1399,15 @@ unsafe extern "C" fn handle_present(listener: *mut ffi::wl_listener, data: *mut 
         }
         LockRenderState::PendingBlank => {
             output.lock_render_state = LockRenderState::Blanked;
-            (*output.server).lock_manager.maybe_lock();
+            if (*server).lock_manager.maybe_lock(&(*server).om.outputs) {
+                (*server).idle.on_locked();
+            }
         }
         LockRenderState::PendingLockSurface => {
             output.lock_render_state = LockRenderState::LockSurface;
-            (*output.server).lock_manager.maybe_lock();
+            if (*server).lock_manager.maybe_lock(&(*server).om.outputs) {
+                (*server).idle.on_locked();
+            }
         }
         _ => {}
     }

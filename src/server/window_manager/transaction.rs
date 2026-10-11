@@ -95,6 +95,7 @@ impl WindowManager {
             let Some(output) = (*self.server).om.outputs.ptr(id) else { continue };
             if (*output).manage_start(self) {
                 drop((*self.server).om.outputs.remove(id));
+                crate::xwayland_window::note_output_scale(&(*self.server).om.outputs);
             }
         }
 

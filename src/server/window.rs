@@ -1204,7 +1204,7 @@ impl Window {
     pub unsafe fn x11_buffer_scale(&self) -> f64 {
         if let WindowImpl::Xwayland(xwindow) = self.impl_type {
             let xsurface = if xwindow.is_null() { std::ptr::null() } else { (*xwindow).xsurface as *const _ };
-            1.0 / crate::xwayland_window::x11_scale_for(self.server, xsurface) as f64
+            1.0 / crate::xwayland_window::x11_scale_for(xsurface) as f64
         } else {
             1.0
         }
@@ -2198,7 +2198,7 @@ impl Window {
             }
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
-                    let s = crate::xwayland_window::x11_scale_for(self.server, (*xwindow).xsurface);
+                    let s = crate::xwayland_window::x11_scale_for((*xwindow).xsurface);
                     let mut w = crate::xwayland_window::from_x11((*(*xwindow).xsurface).width as i32, s) as u32;
                     let mut h = crate::xwayland_window::from_x11((*(*xwindow).xsurface).height as i32, s) as u32;
                     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
@@ -2937,7 +2937,7 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
         if !xwindow.is_null() && !(*xwindow).xsurface.is_null() && this.resize_edges.is_some() {
             let surface = (*(*xwindow).xsurface).surface;
             if !surface.is_null() {
-                let s = crate::xwayland_window::x11_scale_for(this.server, (*xwindow).xsurface);
+                let s = crate::xwayland_window::x11_scale_for((*xwindow).xsurface);
                 let mut w = crate::xwayland_window::from_x11(
                     ffi::river_wlr_surface_get_width(surface), s);
                 let mut h = crate::xwayland_window::from_x11(

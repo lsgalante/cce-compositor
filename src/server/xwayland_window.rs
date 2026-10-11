@@ -114,18 +114,27 @@ pub const WINE_MARGIN: i32 = 16;
 /// after resume then multiplies by the real scale again, handing X a
 /// window four times too big. So the last scale an output reported is
 /// remembered and stands in while there is none.
-pub unsafe fn x11_scale(server: *mut crate::server::Server) -> f32 {
-    if server.is_null() || !crate::shared::layout().xwayland_hidpi {
+pub fn x11_scale() -> f32 {
+    if !crate::shared::layout().xwayland_hidpi {
         return 1.0;
     }
-    let mut current = None;
-    if let Some(&output) = (*server).om.outputs.ptrs().first() {
-        let scale = (*output).current.scale;
-        if scale > 0.0 {
-            current = Some(scale);
-        }
-    }
+    let bits = FIRST_OUTPUT_SCALE.load(std::sync::atomic::Ordering::Relaxed);
+    let current = (bits != 0).then(|| f32::from_bits(bits));
     resolve_x11_scale(current, &LAST_X11_SCALE)
+}
+
+/// The first output's applied scale, as `f32` bits; 0 while there is no
+/// output (or it reports none). Published by [`note_output_scale`], so
+/// that `x11_scale` — read every frame for every X11 window, from code
+/// with no output store at hand — needs no path to the server.
+static FIRST_OUTPUT_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Publish the first output's applied scale for [`x11_scale`]. Called
+/// wherever it can change: an output created or removed (which may make
+/// another the first), and a committed configuration.
+pub fn note_output_scale(outputs: &crate::output::Outputs) {
+    let scale = outputs.values().next().map(|o| o.current.scale).filter(|s| *s > 0.0);
+    FIRST_OUTPUT_SCALE.store(scale.map_or(0, f32::to_bits), std::sync::atomic::Ordering::Relaxed);
 }
 
 /// The scale of the last output `x11_scale` saw, as `f32` bits; 0 until an
@@ -189,11 +198,8 @@ pub fn in_output_change_grace() -> bool {
 /// not scale² as many. Matched by WM_CLASS class, WM_CLASS instance or
 /// title (`hidpi_exempt`), re-evaluated on every use so a title that
 /// arrives after the first configure still takes effect.
-pub unsafe fn x11_scale_for(
-    server: *mut crate::server::Server,
-    xsurface: *const ffi::wlr_xwayland_surface,
-) -> f32 {
-    if server.is_null() || !crate::shared::layout().xwayland_hidpi {
+pub unsafe fn x11_scale_for(xsurface: *const ffi::wlr_xwayland_surface) -> f32 {
+    if !crate::shared::layout().xwayland_hidpi {
         return 1.0;
     }
     if !xsurface.is_null() && !crate::shared::layout().xwayland_hidpi_except.is_empty() {
@@ -209,7 +215,7 @@ pub unsafe fn x11_scale_for(
             return 1.0;
         }
     }
-    x11_scale(server)
+    x11_scale()
 }
 
 /// The factor an X11 client's CURSOR is drawn at: the screen's X11 factor
@@ -224,10 +230,7 @@ pub unsafe fn x11_scale_for(
 /// drawn in the logical world with the window it was twice the desktop's
 /// cursor. Every X11 cursor is a physical-pixel bitmap, exempt window or
 /// not.
-pub unsafe fn x11_scale_for_surface(
-    server: *mut crate::server::Server,
-    surface: *mut ffi::wlr_surface,
-) -> f32 {
+pub unsafe fn x11_scale_for_surface(surface: *mut ffi::wlr_surface) -> f32 {
     if surface.is_null() {
         return 1.0;
     }
@@ -239,7 +242,7 @@ pub unsafe fn x11_scale_for_surface(
     if xsurface.is_null() {
         return 1.0;
     }
-    x11_scale(server)
+    x11_scale()
 }
 
 /// Whether any of `patterns` names this window: each is tried against the
@@ -262,8 +265,7 @@ pub unsafe fn window_is_hidpi_exempt(window: &crate::window::Window) -> bool {
     if xwindow.is_null() || (*xwindow).xsurface.is_null() {
         return false;
     }
-    let server = window.server;
-    if server.is_null() || !crate::shared::layout().xwayland_hidpi || crate::shared::layout().xwayland_hidpi_except.is_empty() {
+    if !crate::shared::layout().xwayland_hidpi || crate::shared::layout().xwayland_hidpi_except.is_empty() {
         return false;
     }
     let xsurface = (*xwindow).xsurface;
@@ -443,7 +445,7 @@ impl XwaylandWindow {
         let wine_unframed = window.is_wine() && !has_parent && !window.is_fullscreen();
         let scheduled = &mut window.configure_scheduled;
         let sent = &mut window.configure_sent;
-        let s = x11_scale_for(window.server, self.xsurface);
+        let s = x11_scale_for(self.xsurface);
 
         if scheduled.width == Some(0) {
             scheduled.width = Some(from_x11((*self.xsurface).width as i32, s) as u32);
@@ -604,7 +606,7 @@ impl XwaylandWindow {
             wm.min_sizes.set(&app_id, &program, &title, w, h);
         }
         let Some(window) = wm.windows.get_mut(self.window) else { return };
-        let s = x11_scale_for(window.server, self.xsurface);
+        let s = x11_scale_for(self.xsurface);
         let hint = crate::window::DimensionsHint {
             min_width: if w > 0 { from_x11(w as i32, s) as u32 } else { 0 },
             min_height: if h > 0 { from_x11(h as i32, s) as u32 } else { 0 },
@@ -876,8 +878,7 @@ unsafe fn place_transient_where_it_asked(wm: &mut crate::window_manager::WindowM
         return;
     }
     let id = (*xwindow).window;
-    let this = window_mut!(wm, id);
-    let s = x11_scale_for(this.server, xsurface);
+    let s = x11_scale_for(xsurface);
     let log_x = from_x11(asked.x as i32, s);
     let log_y = from_x11(asked.y as i32, s);
     let (vx, vy) = window_ref!(wm, id, ()).screen_to_virtual(wm, log_x, log_y);
@@ -906,7 +907,7 @@ unsafe fn place_shy_where_it_is(wm: &mut crate::window_manager::WindowManager, x
         return;
     }
     let xsurface = (*xwindow).xsurface;
-    let s = x11_scale_for(this.server, xsurface);
+    let s = x11_scale_for(xsurface);
     let log_x = from_x11((*xsurface).x as i32, s);
     let log_y = from_x11((*xsurface).y as i32, s);
     let (vx, vy) = window_ref!(wm, id, ()).screen_to_virtual(wm, log_x, log_y);
@@ -968,7 +969,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     let is_wine = this.is_wine();
 
     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
-    let s = x11_scale_for(this.server, (*xwindow).xsurface);
+    let s = x11_scale_for((*xwindow).xsurface);
     log::info!(
         "XWayland configure request: title='{}' class='{}' has_parent={} is_wine={} event=({}, {}, {}, {}) xsurface=({}, {}, {}, {})",
         title,

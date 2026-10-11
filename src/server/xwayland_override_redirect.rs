@@ -7,7 +7,6 @@ use crate::xwayland_window::XwaylandWindow;
 
 #[repr(C)]
 pub struct XwaylandOverrideRedirect {
-    pub server: *mut Server,
     pub xsurface: *mut ffi::wlr_xwayland_surface,
     pub surface_tree: crate::scene_handle::SceneTree,
 
@@ -42,7 +41,6 @@ impl XwaylandOverrideRedirect {
         );
 
         let override_redirect = Box::new(XwaylandOverrideRedirect {
-            server,
             xsurface,
             surface_tree: crate::scene_handle::SceneTree::none(),
             request_configure: std::mem::zeroed(),
@@ -68,7 +66,7 @@ impl XwaylandOverrideRedirect {
         if !(*xsurface).surface.is_null() {
             handle_associate_impl(raw);
             if ffi::river_wlr_surface_is_mapped((*xsurface).surface) {
-                handle_map_impl(wm, raw);
+                handle_map_impl(wm, server, raw);
             }
         }
 
@@ -81,7 +79,7 @@ impl XwaylandOverrideRedirect {
         if self.surface_tree.is_null() {
             return;
         }
-        let s = crate::xwayland_window::x11_scale_for(self.server, self.xsurface);
+        let s = crate::xwayland_window::x11_scale_for(self.xsurface);
         self.surface_tree.set_position(crate::xwayland_window::from_x11((*self.xsurface).x as i32, s), crate::xwayland_window::from_x11((*self.xsurface).y as i32, s));
     }
 
@@ -92,7 +90,7 @@ impl XwaylandOverrideRedirect {
         if self.surface_tree.is_null() {
             return;
         }
-        let s = crate::xwayland_window::x11_scale_for(self.server, self.xsurface) as f64;
+        let s = crate::xwayland_window::x11_scale_for(self.xsurface) as f64;
         if s == 1.0 {
             return;
         }
@@ -140,8 +138,15 @@ impl XwaylandOverrideRedirect {
     /// all; the cost of holding back here is keyboard navigation in a menu
     /// whose app has no focused window, e.g. a tray menu, which the pointer
     /// still drives.
-    pub unsafe fn focus_if_desired(&self, wm: &mut crate::window_manager::WindowManager) {
-        if (*self.server).lock_manager.state != crate::lock_manager::LockState::Unlocked {
+    ///
+    /// `unlocked` is the lock manager's state; `seat` the default seat.
+    pub unsafe fn focus_if_desired(
+        &self,
+        wm: &mut crate::window_manager::WindowManager,
+        unlocked: bool,
+        seat: *mut crate::seat::Seat,
+    ) {
+        if !unlocked {
             return;
         }
         if !ffi::wlr_xwayland_surface_override_redirect_wants_focus(self.xsurface)
@@ -150,7 +155,6 @@ impl XwaylandOverrideRedirect {
         {
             return;
         }
-        let seat = (*self.server).input_manager.default_seat;
         if seat.is_null() {
             return;
         }
@@ -188,7 +192,7 @@ unsafe extern "C" fn handle_request_configure(_listener: *mut ffi::wl_listener, 
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, destroy);
-    (*crate::reentry::wm((*or).server)).override_redirects.retain(|&p| p != or);
+    (*crate::reentry::wm(crate::shared::server_ptr())).override_redirects.retain(|&p| p != or);
 
     (*or).request_configure.disconnect();
     (*or).destroy.disconnect();
@@ -220,7 +224,8 @@ unsafe extern "C" fn handle_dissociate(listener: *mut ffi::wl_listener, _data: *
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, map);
-    handle_map_impl(&mut *crate::reentry::wm((*or).server), or);
+    let server = crate::shared::server_ptr();
+    handle_map_impl(&mut *crate::reentry::wm(server), server, or);
 }
 
 /// WM_CLASS of the XEmbed tray bridge's container windows
@@ -238,7 +243,9 @@ unsafe fn is_xembed_tray_container(xsurface: *mut ffi::wlr_xwayland_surface) -> 
     !class.is_null() && std::ffi::CStr::from_ptr(class).to_bytes() == XEMBED_TRAY_CLASS.as_bytes()
 }
 
-unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, or: *mut XwaylandOverrideRedirect) {
+/// `server` for the two values the focus decision reads: whether the session
+/// is unlocked, and the default seat.
+unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, server: *mut Server, or: *mut XwaylandOverrideRedirect) {
     // No scene node at all: nothing to draw, hit-test or focus. Unmap
     // copes with the missing tree and the unconnected listeners.
     if is_xembed_tray_container((*or).xsurface) {
@@ -272,7 +279,11 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, or: *mu
     // After the scene's subsurface tree, so this runs after its reset.
     (*or).commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_commit);
 
-    (*or).focus_if_desired(wm);
+    (*or).focus_if_desired(
+        wm,
+        (*server).lock_manager.state == crate::lock_manager::LockState::Unlocked,
+        (*server).input_manager.default_seat,
+    );
 }
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -288,9 +299,10 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
 
     (*or).surface_tree.destroy();
 
-    let default_seat = (*(*or).server).input_manager.default_seat;
+    let server = crate::shared::server_ptr();
+    let default_seat = (*server).input_manager.default_seat;
     if !default_seat.is_null() {
-        let wm = &mut *crate::reentry::wm((*default_seat).server);
+        let wm = &mut *crate::reentry::wm(server);
         let parent = match (*default_seat).focused {
             crate::seat::Focus::Window(id) => wm.windows.get(id).map(|w| (w.impl_type(), w.root_surface())),
             _ => None,
@@ -337,7 +349,7 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
         (*or).unmap.disconnect();
     }
 
-    let server = (*or).server;
+    let server = crate::shared::server_ptr();
 
     // Destroy this OR instance. Drop it from the list first, as
     // `handle_destroy` does: the per-frame `apply_x11_scale` pass walks

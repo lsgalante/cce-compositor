@@ -1192,7 +1192,6 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
     if ffi::river_wlr_xdg_surface_get_initialized(base) {
         let mut mode = (*(*decoration).wlr_decoration).requested_mode;
         if mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_NONE {
-            let server = this.server;
             let rule_ssd = wm.get_rule_for_window(window_ref!(wm, id, ())).and_then(|r| r.ssd);
             if let Some(true) = rule_ssd {
                 mode = ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;

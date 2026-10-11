@@ -78,8 +78,7 @@ impl LayerShell {
     }
 }
 
-unsafe extern "C" fn handle_new_surface(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let layer_shell = crate::container_of!(listener, LayerShell, new_surface);
+unsafe extern "C" fn handle_new_surface(_listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let wlr_layer_surface = data as *mut ffi::wlr_layer_surface_v1;
 
     log::debug!(

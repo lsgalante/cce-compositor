@@ -422,6 +422,7 @@ impl OutputManager {
             output.current = output.sent;
             link = next_link;
         }
+        crate::xwayland_window::note_output_scale(&self.outputs);
 
         let _ = self.send_config(server);
     }
