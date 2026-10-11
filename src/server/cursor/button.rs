@@ -26,7 +26,6 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
     let seat = &mut *cursor.seat;
     let lx = cursor.x();
     let ly = cursor.y();
-    let server = wm.server;
 
     // First deliberate input ends the session-restore settling phase (see
     // the focus gate in Window::map).
@@ -355,7 +354,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) =
                     seat.layer_shell.scheduled_focus
                 {
-                    if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
+                    if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
                         if is_cloud_layer(layer_surface) {
                             seat.focus(wm, Focus::None);
                             cursor.pressed.insert((*event).button);

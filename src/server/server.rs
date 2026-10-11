@@ -310,7 +310,6 @@ pub struct Server {
     pub idle: IdleManager,
     pub lock_manager: LockManager,
     pub inspector: crate::inspector::Inspector,
-    pub cce_window_management: crate::cce_window_management::CceWindowManagement,
 
     // Event listeners
     pub renderer_lost: crate::listener::Listener,
@@ -868,7 +867,7 @@ impl Server {
             self.idle.init(server_ptr).map_err(|_| "Failed to init idle")?;
             self.lock_manager.init(server_ptr).map_err(|_| "Failed to init lock_manager")?;
             self.inspector.init(server_ptr).map_err(|_| "Failed to init inspector")?;
-            self.cce_window_management.init().map_err(|_| "Failed to init cce_window_management")?;
+            self.wm.cce_window_management.init().map_err(|_| "Failed to init cce_window_management")?;
 
             // Setup listeners
             let xdg_shell_cast = self.xdg_shell as *mut WlrXdgShell;
@@ -995,11 +994,11 @@ impl Default for Server {
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.last_saved_state_json), None);
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.proc_args_cache), std::collections::HashMap::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.min_sizes), crate::min_sizes::MinSizes::default());
-            std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.layer_surfaces), crate::slotmap::SlotMap::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.outputs), crate::output::Outputs::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.seats), crate::seat::Seats::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());
-            std::ptr::write(&mut (*server.as_mut_ptr()).cce_window_management, crate::cce_window_management::CceWindowManagement::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.cce_window_management), crate::cce_window_management::CceWindowManagement::new());
             server.assume_init()
         }
     }

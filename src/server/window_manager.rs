@@ -149,6 +149,12 @@ pub struct WindowManager {
     /// no path to the server to walk them (RFC step 4).
     pub outputs: crate::output::Outputs,
     pub seats: crate::seat::Seats,
+    /// Every layer surface, by key: the stores' reason again — raw
+    /// pointers, so borrowing the window manager borrows none of them.
+    pub layer_surfaces: crate::slotmap::SlotMap<*mut crate::layer_shell::LayerSurface>,
+    /// The `zcce_toplevel_v1` resources (this window manager's protocol):
+    /// where grid patches are sent.
+    pub cce_window_management: crate::cce_window_management::CceWindowManagement,
     /// The overview drag-selection: the selected windows, the rubber band
     /// while one is being dragged out, and the nodes that draw both. See
     /// [`crate::selection`].

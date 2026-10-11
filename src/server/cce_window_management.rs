@@ -77,12 +77,8 @@ pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
     id: u32,
     surface_resource: *mut ffi::wl_resource,
 ) {
-    let wm = ffi::wl_resource_get_user_data(resource) as *mut crate::window_manager::WindowManager;
-    if wm.is_null() {
-        return;
-    }
-    let server = (*wm).server;
-    if server.is_null() {
+    let server = crate::shared::server_ptr();
+    if ffi::wl_resource_get_user_data(resource).is_null() || server.is_null() {
         return;
     }
     let wm = &mut *crate::reentry::wm(server);
@@ -120,7 +116,7 @@ pub unsafe extern "C" fn cce_wm_get_cce_toplevel(
         Some(handle_destroy_toplevel_resource),
     );
 
-    (*server).cce_window_management.toplevels.push(toplevel_res);
+    wm.cce_window_management.toplevels.push(toplevel_res);
 
     // Initial event: send current floating state
     let state = if floating { 1 } else { 0 };
@@ -138,7 +134,7 @@ unsafe extern "C" fn handle_destroy_toplevel_resource(resource: *mut ffi::wl_res
         // entry lingered, the new instance's first patch dereferenced it).
         let server = crate::shared::server_ptr();
         if !server.is_null() {
-            (*server)
+            (*crate::reentry::wm(server))
                 .cce_window_management
                 .toplevels
                 .retain(|&r| r != resource);

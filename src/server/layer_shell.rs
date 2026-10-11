@@ -3,7 +3,7 @@
 
 use std::ffi::CStr;
 use crate::ffi;
-use crate::server::{Server, WlList};
+use crate::server::WlList;
 use crate::slotmap::{SlotMap, Key};
 use crate::output::Output;
 use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
@@ -18,7 +18,6 @@ pub enum LayerShellSeatFocus {
 
 pub struct LayerShell {
     pub wlr_shell: *mut ffi::wlr_layer_shell_v1,
-    pub surfaces: SlotMap<*mut LayerSurface>,
     pub new_surface: crate::listener::Listener,
 }
 
@@ -107,7 +106,7 @@ unsafe extern "C" fn handle_new_surface(_listener: *mut ffi::wl_listener, data: 
         }
     }
 
-    if let Err(e) = LayerSurface::create(wlr_layer_surface, crate::shared::server_ptr()) {
+    if let Err(e) = LayerSurface::create(wlr_layer_surface, &mut (*crate::reentry::wm(crate::shared::server_ptr())).layer_surfaces) {
         log::error!("Failed to create layer surface: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_layer_surface).resource);
     }
@@ -140,9 +139,10 @@ pub struct LayerSurface {
 }
 
 impl LayerSurface {
+    /// `surfaces` is the window manager's layer-surface store.
     pub unsafe fn create(
         wlr_layer_surface: *mut ffi::wlr_layer_surface_v1,
-        server: *mut Server,
+        surfaces: &mut SlotMap<*mut LayerSurface>,
     ) -> Result<*mut Self, &'static str> {
         let layer_tree = crate::shared::scene().layer_surface_tree((*wlr_layer_surface).current.layer);
         let scene_layer_surface = ffi::wlr_scene_layer_surface_v1_create(layer_tree, wlr_layer_surface);
@@ -173,7 +173,7 @@ impl LayerSurface {
             parent_offset_applied: false,
         }));
 
-        let key = (*server).layer_shell.surfaces.put(layer_surface);
+        let key = surfaces.put(layer_surface);
         (*layer_surface).ref_key = key;
 
         SceneNodeData::attach((*scene_layer_surface).tree as *mut _, SceneNodeDataVal::LayerSurface(layer_surface));
@@ -226,7 +226,7 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
     ffi::river_wlr_surface_set_data((*(*layer_surface).wlr_layer_surface).surface, std::ptr::null_mut());
 
     let server = crate::shared::server_ptr();
-    (*server).layer_shell.surfaces.remove((*layer_surface).ref_key);
+    (*crate::reentry::wm(server)).layer_surfaces.remove((*layer_surface).ref_key);
     let _ = Box::from_raw(layer_surface);
 }
 

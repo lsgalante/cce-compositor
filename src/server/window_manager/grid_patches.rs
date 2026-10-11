@@ -391,7 +391,7 @@ impl WindowManager {
         }
         w.grid_patch_serial = w.grid_patch_serial.wrapping_add(1);
         let serial = w.grid_patch_serial;
-        if (*self.server)
+        if self
             .cce_window_management
             .send_grid_patch(w.ref_key, serial, patch)
         {

@@ -457,8 +457,7 @@ impl Seat {
         // from stealing focus back to a regular window or shell surface.
         if self.focus_requested {
             if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) = self.layer_shell.scheduled_focus {
-                let server = wm.server;
-                if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
+                if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
                     let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
                     if new_focus != Focus::LayerSurface(wlr_surf) {
                         if let Focus::Window(_) | Focus::OverrideRedirect(_) | Focus::None = new_focus {
@@ -808,21 +807,20 @@ impl Seat {
 
     pub unsafe fn manage_finish(&mut self, wm: &mut crate::window_manager::WindowManager) {
 
-        let server = wm.server;
         if crate::shared::lock_state() != crate::lock_manager::LockState::Unlocked {
             return;
         }
 
         match self.layer_shell.sent_focus {
             crate::layer_shell::LayerShellSeatFocus::Exclusive(key) => {
-                if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
+                if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
                     let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
                     self.focus(wm, Focus::LayerSurface(wlr_surf));
                 }
             }
             crate::layer_shell::LayerShellSeatFocus::NonExclusive(key) => {
                 if !self.focus_requested {
-                    if let Some(&layer_surface) = (*server).layer_shell.surfaces.get(key) {
+                    if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
                         let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
                         self.focus(wm, Focus::LayerSurface(wlr_surf));
                     }
