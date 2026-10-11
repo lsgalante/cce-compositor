@@ -458,7 +458,7 @@ impl Cursor {
     }
 
     pub unsafe fn update_drag_icons(&mut self) {
-        let drag_icons_tree = (*(*self.seat).server).scene.drag_icons.raw();
+        let drag_icons_tree = crate::shared::scene().drag_icons.raw();
         let children_head = ffi::river_scene_tree_get_children(drag_icons_tree) as *mut WlList;
         let mut curr = (*children_head).next;
         while curr != children_head {
@@ -671,7 +671,7 @@ impl Cursor {
             && (*grabbed).tiling_mode == crate::tiling::TilingMode::Floating
         {
             (*(*self.seat).server).wm.raise_window(grabbed);
-            (*(*self.seat).server).wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         }
     }
 
@@ -787,7 +787,7 @@ impl Cursor {
             }
         }
 
-        if let Some(result) = (*server).scene.at(lx, ly) {
+        if let Some(result) = crate::shared::scene().at(lx, ly) {
             let lock_state = (*server).lock_manager.state;
             if lock_state != crate::lock_manager::LockState::Unlocked {
                 if !matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
@@ -1405,7 +1405,7 @@ pub(crate) unsafe fn press_dismissals(server: *mut crate::server::Server, lx: f6
     // dismissing any other open menu.
     {
         let mut target_status: *mut crate::window::Window = std::ptr::null_mut();
-        if let Some(result) = (*server).scene.at(lx, ly) {
+        if let Some(result) = crate::shared::scene().at(lx, ly) {
             if let SceneNodeDataVal::Window(window) = result.data {
                 if (*window).is_status_bar() {
                     target_status = window;
@@ -1441,7 +1441,7 @@ pub(crate) unsafe fn press_dismissals(server: *mut crate::server::Server, lx: f6
             .iter()
             .any(|&or| !or.is_null() && !(*or).surface_tree.is_null());
         if or_showing {
-            let on_x11 = match (*server).scene.at(lx, ly) {
+            let on_x11 = match crate::shared::scene().at(lx, ly) {
                 Some(result) => match result.data {
                     SceneNodeDataVal::Window(window) => {
                         matches!((*window).impl_type, crate::window::WindowImpl::Xwayland(_))

@@ -69,8 +69,7 @@ impl PointerConstraint {
         let cx = (*seat).cursor.x();
         let cy = (*seat).cursor.y();
 
-        let server = (*seat).server;
-        if let Some(result) = (*server).scene.at(cx, cy) {
+        if let Some(result) = crate::shared::scene().at(cx, cy) {
             if result.surface != (*self.wlr_constraint).surface {
                 return;
             }

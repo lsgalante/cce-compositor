@@ -232,7 +232,7 @@ impl WindowManager {
                     // The grid client reads the same desktop keys and only
                     // repaints when handed a patch: hand it one.
                     self.invalidate_grid_patches();
-                    self.dirty_windowing();
+                    crate::shared::pending().dirty_windowing();
 
                     // Process old PIDs
                     for (old_prog, old_pid) in old_pids {

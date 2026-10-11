@@ -826,7 +826,7 @@ unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
         let client = ffi::wl_resource_get_client(surface_resource);
         ffi::wl_client_post_no_memory(client);
     }
-    (*(*(*xwindow).window).server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }
 
 /// A transient that asked for a position before mapping maps there.
@@ -1064,7 +1064,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         // granted spot. A request that changes nothing renders nothing: a
         // self-placed game re-asks for the same box many times a second.
         if applied != (log_x, log_y, log_width, log_height) {
-            (*(*window).server).wm.dirty_rendering();
+            crate::shared::pending().dirty_rendering();
         }
         return;
     }
@@ -1231,9 +1231,8 @@ unsafe extern "C" fn handle_set_class(listener: *mut ffi::wl_listener, _data: *m
     (*(*xwindow).window).notify_app_id();
 }
 
-unsafe extern "C" fn handle_set_parent(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, set_parent);
-    (*(*(*xwindow).window).server).wm.dirty_windowing();
+unsafe extern "C" fn handle_set_parent(_listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn handle_set_decorations(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -1295,7 +1294,7 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
     } else {
         crate::window::MaximizeRequest::Unmaximize
     };
-    (*(*window).server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -1341,7 +1340,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
         (*window).tiling_mode = crate::tiling::TilingMode::Tiled;
         (*window).mode_locked = true;
         (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Maximize;
-        (*(*window).server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
         return;
     }
     (*(*xwindow).window).wm_scheduled.fullscreen_requested = if fullscreen {
@@ -1349,7 +1348,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
     } else {
         crate::window::FullscreenRequest::Exit
     };
-    (*(*(*xwindow).window).server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
     (*(*(*xwindow).window).server).wm.apply_client_fullscreen((*xwindow).window, fullscreen);
 }
 
@@ -1358,7 +1357,7 @@ unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, da
     let event = data as *mut ffi::wlr_xwayland_minimize_event;
     ffi::wlr_xwayland_surface_set_minimized((*xwindow).xsurface, (*event).minimize);
     (*(*xwindow).window).wm_scheduled.minimize_requested = true;
-    (*(*(*xwindow).window).server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }
 
 #[cfg(test)]

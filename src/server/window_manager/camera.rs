@@ -192,11 +192,10 @@ impl WindowManager {
             curr = (*curr).next;
         }
         if matches!(self.state, WindowManagerState::Idle) {
-            self.scheduled.dirty = true;
-            self.scheduled.dirty_lazy = false;
+            crate::shared::pending().mark_windowing();
             self.manage_start();
         } else {
-            self.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         }
     }
 
@@ -245,7 +244,7 @@ impl WindowManager {
         if matches!(self.state, WindowManagerState::Idle) {
             self.update_viewport_local();
         } else {
-            self.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         }
     }
 

@@ -257,10 +257,9 @@ impl TabletTool {
             }
             ffi::wlr_send_tablet_v2_tablet_tool_down(self.wp_tool);
 
-            let server = (*(*(*tablet).device).seat).server;
             let lx = self.cursor_x();
             let ly = self.cursor_y();
-            if let Some(result) = (*server).scene.at(lx, ly) {
+            if let Some(result) = crate::shared::scene().at(lx, ly) {
                 if !result.surface.is_null() {
                     self.mode = TabletToolMode::Down {
                         lx,
@@ -307,7 +306,7 @@ impl TabletTool {
         let lx = self.cursor_x();
         let ly = self.cursor_y();
 
-        if let Some(result) = (*server).scene.at(lx, ly) {
+        if let Some(result) = crate::shared::scene().at(lx, ly) {
             if matches!(result.data, crate::scene_node_data::SceneNodeDataVal::LockSurface(_)) {
                 assert!((*server).lock_manager.state != crate::lock_manager::LockState::Unlocked);
             } else {

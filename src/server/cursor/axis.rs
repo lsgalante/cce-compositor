@@ -68,14 +68,13 @@ pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, dat
     let (is_on_background, over_chrome) = {
         let lx = cursor.x();
         let ly = cursor.y();
-        let server = seat.server;
         let mut over_interactive = false;
         // Chrome under the pointer — a Popup (the cce-cloud launcher) or an
         // Overlay dock, or a cce-cloud layer surface (context menu). Live UI
         // during overview, same as in the button and motion paths: a wheel
         // over the launcher's list scrolls the list, not the desktop.
         let mut over_chrome = false;
-        if let Some(result) = (*server).scene.at(lx, ly) {
+        if let Some(result) = crate::shared::scene().at(lx, ly) {
             match result.data {
                 SceneNodeDataVal::Window(window) => {
                     over_interactive = true;
@@ -292,7 +291,7 @@ impl Cursor {
         if wm.touchpad_view_apps.is_empty() {
             return None;
         }
-        let result = (*server).scene.at(self.x(), self.y())?;
+        let result = crate::shared::scene().at(self.x(), self.y())?;
         let SceneNodeDataVal::Window(window) = result.data else { return None };
         if window.is_null() || result.surface.is_null() || result.node.is_null() {
             return None;
@@ -549,7 +548,7 @@ impl Cursor {
         if wm.touchpad_view_apps.is_empty() {
             return None;
         }
-        let result = (*server).scene.at(self.x(), self.y())?;
+        let result = crate::shared::scene().at(self.x(), self.y())?;
         let SceneNodeDataVal::OverrideRedirect(or) = result.data else { return None };
         if or.is_null() || result.surface.is_null() || (*or).xsurface.is_null() {
             return None;
@@ -767,7 +766,7 @@ impl Cursor {
         if wm.touchpad_hscroll_shift_apps.is_empty() {
             return None;
         }
-        let result = (*server).scene.at(self.x(), self.y())?;
+        let result = crate::shared::scene().at(self.x(), self.y())?;
         let SceneNodeDataVal::Window(window) = result.data else { return None };
         if window.is_null() || result.surface.is_null() {
             return None;

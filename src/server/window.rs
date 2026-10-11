@@ -848,7 +848,7 @@ impl Window {
         // Every node below is a handle: an early return drops what was made
         // so far, which destroys it. Only the capture scene, a scene root
         // rather than a node, is cleaned up by hand.
-        let hidden_tree = (*server).scene.hidden_tree.raw();
+        let hidden_tree = crate::shared::scene().hidden_tree.raw();
         let tree = SceneTree::create_in(hidden_tree);
         if tree.is_null() {
             return Err("Failed to create tree");
@@ -923,7 +923,7 @@ impl Window {
         let border_top = SceneRect::create(&tree, 0, 0, &clear_color);
         let border_bottom = SceneRect::create(&tree, 0, 0, &clear_color);
 
-        let border_tree = SceneTree::create_in((*server).scene.layers.border_overlay.raw());
+        let border_tree = SceneTree::create_in(crate::shared::scene().layers.border_overlay.raw());
         if border_tree.is_null() {
             destroy_capture_scene();
             return Err("Failed to create window border tree");
@@ -1579,7 +1579,7 @@ impl Window {
         }
         self.start_map_fade(1.0, fade_ms);
 
-        (*self.server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
         Ok(())
     }
 
@@ -1628,7 +1628,7 @@ impl Window {
         self.surfaces.save();
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
         self.set_closing();
-        (*self.server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
 
         if !self.foreign_toplevel_handle.is_null() {
             ffi::wlr_ext_foreign_toplevel_handle_v1_destroy(self.foreign_toplevel_handle);
@@ -1664,7 +1664,7 @@ impl Window {
         match (*window).state {
             WindowState::Init => {}
             WindowState::Closing => {
-                (*(*window).server).wm.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
                 return;
             }
             _ => unreachable!(),
@@ -1724,14 +1724,14 @@ impl Window {
         let _ = Box::from_raw(window);
     }
 
-    pub unsafe fn set_dimensions_hint(&mut self, hint: DimensionsHint) {
+    pub fn set_dimensions_hint(&mut self, hint: DimensionsHint) {
         self.wm_scheduled.dimensions_hint = hint;
         if self.wm_sent.dimensions_hint != hint {
             // Overlay included: a self-sizing overlay (cce-cloud) changes its hint
             // on every resize, and skipping it meant no arrange pass was scheduled.
             // Utility for the same reason: it is self-sizing by definition.
             if matches!(self.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Overlay | crate::tiling::TilingMode::Utility) {
-                (*self.server).wm.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
             }
             self.wm_sent.dimensions_hint = hint;
         }
@@ -1747,13 +1747,13 @@ impl Window {
     /// every resize-drag motion that left the size alone cost a render pass.)
     /// `#[track_caller]` so `CCE_DIRTY_TRACE` names the caller.
     #[track_caller]
-    pub unsafe fn set_dimensions(&mut self, width: u32, height: u32) {
+    pub fn set_dimensions(&mut self, width: u32, height: u32) {
         self.rendering_scheduled.width = width;
         self.rendering_scheduled.height = height;
 
         if self.rendering_scheduled.width != self.rendering_sent.width ||
            self.rendering_scheduled.height != self.rendering_sent.height {
-            (*self.server).wm.dirty_rendering();
+            crate::shared::pending().dirty_rendering();
         }
     }
 
@@ -1814,10 +1814,10 @@ impl Window {
         Some((final_x, final_y))
     }
 
-    pub unsafe fn set_decoration_hint(&mut self, hint: ffi::zcce_window_v1_decoration_hint) {
+    pub fn set_decoration_hint(&mut self, hint: ffi::zcce_window_v1_decoration_hint) {
         self.wm_scheduled.decoration_hint = hint;
         if hint != self.wm_sent.decoration_hint {
-            (*self.server).wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
             self.wm_sent.decoration_hint = hint;
         }
     }
@@ -2104,7 +2104,7 @@ impl Window {
                     height: self.saved_height as u32,
                 };
 
-                (*self.server).wm.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
                 log::info!("[Fullscreen] Restored window {:?} geometry: {}x{} at ({}, {})", self.get_title_string().as_deref().unwrap_or(""), self.saved_width, self.saved_height, self.saved_virtual_x, self.saved_virtual_y);
             }
         }
@@ -2260,7 +2260,7 @@ impl Window {
         // bar's `title` topic and the saved-state file, so feed those directly.
         let wm = &mut (*self.server).wm;
         if wm.mode_rules.iter().any(|r| r.title_pattern.is_some()) {
-            wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         } else {
             wm.update_status();
             wm.schedule_save_state();
@@ -2291,7 +2291,7 @@ impl Window {
             self.tiling_mode = crate::tiling::TilingMode::Status;
         }
         self.try_restore();
-        (*self.server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
 
         if !self.foreign_toplevel_handle.is_null() {
             let title = self.get_title();
@@ -2996,10 +2996,10 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
             );
             if size != (*window).status_commit_size {
                 (*window).status_commit_size = size;
-                (*(*window).server).wm.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
             }
         } else {
-            (*(*window).server).wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         }
     }
 }

@@ -292,7 +292,7 @@ impl Output {
             return Err("Failed to initialize renderer for output");
         }
 
-        let scene_output = ffi::wlr_scene_output_create((*server).scene.wlr_scene, wlr_output);
+        let scene_output = ffi::wlr_scene_output_create(crate::shared::scene().wlr_scene, wlr_output);
         if scene_output.is_null() {
             return Err("Failed to create wlr_scene_output");
         }
@@ -414,7 +414,7 @@ impl Output {
             (*raw).scheduled.mode = OutputMode::Custom { width: 1280, height: 720, refresh: 0 };
         }
         
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
         Ok(())
     }
 
@@ -739,7 +739,7 @@ impl Output {
         // layer-shell Background surface or a wallpaper window replaces the flat
         // colour and keeps the cell lattice.
         if self.grid_backdrop_tree.is_null() {
-            self.grid_backdrop_tree = SceneTree::create_in((*self.server).scene.layers.background.raw());
+            self.grid_backdrop_tree = SceneTree::create_in(crate::shared::scene().layers.background.raw());
             if self.grid_backdrop_tree.is_null() {
                 return;
             }
@@ -791,7 +791,7 @@ impl Output {
             // holds the bakes frozen: the zoom restructures the grid every
             // frame, and the settle re-bakes once at the end.
             if !wm.viewport_is_active {
-                ffi::river_scene_mark_optimized_blur_dirty((*self.server).scene.wlr_scene);
+                ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene);
             }
         }
         let force = self.grid_force_redraw_frames > 0;
@@ -1184,7 +1184,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     (*output).current.mode = OutputMode::None;
     (*output).scheduled.state = OutputStateValue::Destroying;
 
-    (*(*output).server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn handle_request_state(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -1205,7 +1205,7 @@ unsafe extern "C" fn handle_request_state(listener: *mut ffi::wl_listener, data:
         }
     }
 
-    (*output.server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }
 
 /// `CCE_FRAME_DEBUG` (any value) also ticks every output frame, so a client's

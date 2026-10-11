@@ -112,7 +112,7 @@ impl WindowManager {
                         ffi::river_scene_node_get_enabled(node),
                     ));
                 }
-                let scene = &(*self.server).scene;
+                let scene = crate::shared::scene();
                 let mut out = String::new();
                 let layers: [(&str, *mut ffi::wlr_scene_tree); 12] = [
                     ("background", scene.layers.background.raw()),
@@ -205,12 +205,11 @@ impl WindowManager {
             // Found the tray segment mis-slot wedge; kept as a debugging tool.
             "debug-windows" => {
                 let mut out = format!(
-                    "wm state={:?} dirty={} dirty_lazy={} rendering_dirty={} dirty_idle_armed={}\n",
+                    "wm state={:?} dirty={} rendering_dirty={} dirty_idle_armed={}\n",
                     self.state,
-                    self.scheduled.dirty,
-                    self.scheduled.dirty_lazy,
-                    self.rendering_scheduled.dirty,
-                    !self.dirty_idle.is_null(),
+                    crate::shared::pending().windowing(),
+                    crate::shared::pending().rendering(),
+                    crate::shared::pending().armed(),
                 );
                 for &w in self.windows.iter() {
                     if w.is_null() {
@@ -255,7 +254,7 @@ impl WindowManager {
                     !self.status_hide_mode
                 };
                 self.status_hide_mode = enable;
-                self.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
                 return format!("ok {}\n", enable);
             }
             "adjust-position-mode" => {
@@ -275,7 +274,7 @@ impl WindowManager {
                 // topic. A fixed-name flag file in shared /tmp was also
                 // written here until 2026-10-02; nothing read it.
                 self.adjust_position_mode = enable;
-                self.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
                 return format!("ok {}\n", enable);
             }
             // The desktop grid reporting its images: `grid-items
@@ -346,7 +345,7 @@ impl WindowManager {
                     if matches!(self.state, WindowManagerState::Idle) {
                         self.update_viewport_local();
                     } else {
-                        self.dirty_windowing();
+                        crate::shared::pending().dirty_windowing();
                     }
                     return "ok\n".to_string();
                 }
@@ -360,7 +359,7 @@ impl WindowManager {
                     if matches!(self.state, WindowManagerState::Idle) {
                         self.update_viewport_local();
                     } else {
-                        self.dirty_windowing();
+                        crate::shared::pending().dirty_windowing();
                     }
                     return "ok\n".to_string();
                 }
@@ -425,7 +424,7 @@ impl WindowManager {
                     self.desk_pan_y = cy - (viewport_h / 2.0) / new_zoom;
                     self.desk_zoom = new_zoom;
                     self.set_mode(if (new_zoom - 1.0).abs() > 0.001 { WindowManagerMode::Overview } else { WindowManagerMode::Normal });
-                    self.dirty_windowing();
+                    crate::shared::pending().dirty_windowing();
                     return "ok\n".to_string();
                 }
                 "error: invalid zoom factor\n".to_string()
@@ -437,7 +436,7 @@ impl WindowManager {
                         if let crate::seat::Focus::Window(fw) = (*seat).focused {
                             (*fw).virtual_x = x;
                             (*fw).virtual_y = y;
-                            self.dirty_windowing();
+                            crate::shared::pending().dirty_windowing();
                             return "ok\n".to_string();
                         }
                     }
@@ -462,7 +461,7 @@ impl WindowManager {
                         }
                     }
                     if found {
-                        self.dirty_windowing();
+                        crate::shared::pending().dirty_windowing();
                         return "ok\n".to_string();
                     } else {
                         return "error: window not found\n".to_string();
@@ -616,7 +615,7 @@ impl WindowManager {
                         }
                         (*seat).focus(crate::seat::Focus::Window(best_target));
                         self.raise_window(best_target);
-                        self.dirty_windowing();
+                        crate::shared::pending().dirty_windowing();
                         if wait {
                             if let Some(tx) = self.pending_ipc_reply.take() {
                                 let started = crate::util::timestamp_ns();
@@ -725,7 +724,7 @@ impl WindowManager {
                 // rather than yanking it back to where it used to live.
                 (*target).saved_floating_virtual_x = x;
                 (*target).saved_floating_virtual_y = y;
-                self.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
 
                 let cell = crate::policy::cells::window_span_label(
                     x,
@@ -778,7 +777,7 @@ impl WindowManager {
                 let (w, h) = (*target).wm_scheduled.dimensions_hint.clamp(w, h);
                 (*target).box_geom.width = w as i32;
                 (*target).box_geom.height = h as i32;
-                self.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
                 format!("ok w={} h={}\n", w, h)
             }
             "min-size" => {
@@ -885,7 +884,7 @@ impl WindowManager {
                     (*seat).focus(crate::seat::Focus::Window(target));
                 }
                 self.raise_window(target);
-                self.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
 
                 // screen = output_origin + (virtual - desk_pan) * zoom
                 let screen_x = phys_x as f64 + ((*target).virtual_x - self.desk_pan_x) * self.desk_zoom;
@@ -1029,7 +1028,7 @@ impl WindowManager {
                 }
             }
             "retile" => {
-                self.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
                 "ok\n".to_string()
             }
             "idle" => unsafe { (*self.server).idle.ipc(&parts[1..]) },
@@ -1330,7 +1329,7 @@ impl WindowManager {
                 if key.starts_with("desktop_") || key.starts_with("grid_cell") {
                     self.invalidate_grid_patches();
                 }
-                self.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
                 "ok\n".to_string()
             }
             "mode" => {
@@ -1349,7 +1348,7 @@ impl WindowManager {
                     over_sibling: false,
                     center: false,
                 });
-                self.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
                 "ok\n".to_string()
             }
             "input" => {

@@ -25,8 +25,7 @@ impl InputPopup {
         wlr_popup: *mut ffi::wlr_input_popup_surface_v2,
         input_relay: *mut InputRelay,
     ) -> Result<(), &'static str> {
-        let server = (*(*input_relay).seat).server;
-        let hidden_tree = (*server).scene.hidden_tree.raw();
+        let hidden_tree = crate::shared::scene().hidden_tree.raw();
 
         let surface_tree = ffi::wlr_scene_subsurface_tree_create(hidden_tree, (*wlr_popup).surface);
         if surface_tree.is_null() {
@@ -65,8 +64,7 @@ impl InputPopup {
     pub unsafe fn update(&mut self) {
         let text_input = (*self.input_relay).text_input;
         if text_input.is_null() {
-            let server = (*(*self.input_relay).seat).server;
-            let hidden_tree = (*server).scene.hidden_tree.raw();
+            let hidden_tree = crate::shared::scene().hidden_tree.raw();
             ffi::wlr_scene_node_reparent(
                 self.surface_tree.node(),
                 hidden_tree,
@@ -94,7 +92,7 @@ impl InputPopup {
 
         let popup_tree = match focused.data {
             SceneNodeDataVal::Window(window) => (*window).popup_tree.raw(),
-            SceneNodeDataVal::LockSurface(_) => (*server).scene.layers.popups.raw(),
+            SceneNodeDataVal::LockSurface(_) => crate::shared::scene().layers.popups.raw(),
             SceneNodeDataVal::LayerSurface(layer_surface) => (*layer_surface).popup_tree.raw(),
             SceneNodeDataVal::OverrideRedirect(_) => panic!("Xwayland doesn't use text-input protocol"),
         };
@@ -177,8 +175,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let input_popup = crate::container_of!(listener, InputPopup, unmap);
-    let server = (*(*(*input_popup).input_relay).seat).server;
-    let hidden_tree = (*server).scene.hidden_tree.raw();
+    let hidden_tree = crate::shared::scene().hidden_tree.raw();
 
     ffi::wlr_scene_node_reparent(
         (*input_popup).surface_tree.node(),

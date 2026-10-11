@@ -29,7 +29,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
 
     let mut is_app_surface = false;
     let mut is_overlay_window = false;
-    if let Some(result) = (*server).scene.at(lx, ly) {
+    if let Some(result) = crate::shared::scene().at(lx, ly) {
         match result.data {
             SceneNodeDataVal::Window(window) => {
                 // The grid does not block: hitting it means the press is on a
@@ -82,7 +82,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
         };
         if (*event).button == 0x110 && ((*(*seat).server).wm.adjust_position_mode || super_held) {
             let mut clicked_status: *mut crate::window::Window = std::ptr::null_mut();
-            if let Some(result) = (*server).scene.at(lx, ly) {
+            if let Some(result) = crate::shared::scene().at(lx, ly) {
                 if let SceneNodeDataVal::Window(window) = result.data {
                     if (*window).is_status_bar() {
                         clicked_status = window;
@@ -134,7 +134,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
         if (*event).button == 0x110 && (*(*seat).server).wm.window_adjust_active() {
             let mut clicked_win: *mut crate::window::Window = std::ptr::null_mut();
             let mut clicked_cloud_layer = false;
-            if let Some(result) = (*server).scene.at(lx, ly) {
+            if let Some(result) = crate::shared::scene().at(lx, ly) {
                 match result.data {
                     SceneNodeDataVal::Window(window) => clicked_win = window,
                     SceneNodeDataVal::LayerSurface(layer_surface) => {
@@ -391,7 +391,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
 
         if (*event).button == 0x111 && modifiers == 0 {
             let mut clicked_interactive = false;
-            if let Some(result) = (*server).scene.at(lx, ly) {
+            if let Some(result) = crate::shared::scene().at(lx, ly) {
                 match result.data {
                     SceneNodeDataVal::Window(window) => {
                         if !(*window).is_wallpaper() {
@@ -435,7 +435,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 (*server).wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
 
                 seat.focus(Focus::None);
-                (*(*seat).server).wm.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
 
                 cursor.pressed.insert((*event).button);
                 return;
@@ -455,7 +455,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
             let ly = cursor.y();
             let server = seat.server;
             let mut target_win: *mut crate::window::Window = std::ptr::null_mut();
-            if let Some(result) = (*server).scene.at(lx, ly) {
+            if let Some(result) = crate::shared::scene().at(lx, ly) {
                 if let SceneNodeDataVal::Window(window) = result.data {
                     target_win = window;
                 }
@@ -548,7 +548,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
         let ly = cursor.y();
         let server = seat.server;
         let mut border_target_win: *mut crate::window::Window = std::ptr::null_mut();
-        if let Some(result) = (*server).scene.at(lx, ly) {
+        if let Some(result) = crate::shared::scene().at(lx, ly) {
             if let SceneNodeDataVal::Window(window) = result.data {
                 border_target_win = window;
             }
@@ -666,7 +666,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                                 (*border_target_win).mode_locked = true;
                             }
                             seat.focus(Focus::Window(border_target_win));
-                            (*server).wm.dirty_windowing();
+                            crate::shared::pending().dirty_windowing();
                             cursor.last_click_time = 0;
                             cursor.last_click_window = std::ptr::null_mut();
                             return;
@@ -743,7 +743,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
             if first_grab_button {
                 let glx = cursor.x();
                 let gly = cursor.y();
-                if let Some(result) = (*seat.server).scene.at(glx, gly) {
+                if let Some(result) = crate::shared::scene().at(glx, gly) {
                     // A surface node's scene buffer begins with its node.
                     let mut ratio = 1.0;
                     if !result.surface.is_null() && !result.node.is_null() {
@@ -779,7 +779,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
         let ly = cursor.y();
         let server = seat.server;
         let mut clicked_something = false;
-        if let Some(result) = (*server).scene.at(lx, ly) {
+        if let Some(result) = crate::shared::scene().at(lx, ly) {
             match result.data {
                 SceneNodeDataVal::Window(window) => {
                     clicked_something = true;
@@ -808,7 +808,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 wm.pan_to_virtual_rect(pvx, pvy, pw, ph);
             } else {
                 seat.focus(Focus::None);
-                (*(*seat).server).wm.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
             }
         }
     } else {
@@ -888,7 +888,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                     ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
                     ffi::wlr_seat_pointer_notify_button(seat.wlr_seat, time, (*event).button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED);
                     ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
-                    (*server).wm.dirty_windowing();
+                    crate::shared::pending().dirty_windowing();
                     return;
                 }
 
@@ -1051,7 +1051,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
 
                 seat.op_end();
                 cursor.pressed.remove(&(*event).button);
-                (*server).wm.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
                 return;
             }
             if op.started_in_overview && (*event).button == 0x110 {
@@ -1094,7 +1094,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
                 cursor.right_click_on_bg = false;
                 cursor.right_click_on_border = false;
                 if cursor.pressed.is_empty() && seat.op.is_some() {
-                    (*(*seat).server).wm.dirty_windowing();
+                    crate::shared::pending().dirty_windowing();
                 }
                 return;
             }
@@ -1102,7 +1102,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
             // The client-facing release (when the press was forwarded) is
             // already paired at the top of the release path.
             if cursor.pressed.is_empty() && seat.op.is_some() {
-                (*(*seat).server).wm.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
             }
         } else {
             log::error!("ignoring duplicate pointer button {} release", (*event).button);

@@ -181,7 +181,7 @@ unsafe extern "C" fn toplevel_set_floating(
                 (*server).wm.raise_window(window);
             }
         }
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
 
         // Send floating_state(1)
         ffi::wl_resource_post_event(resource, 0, 1u32);
@@ -200,7 +200,7 @@ unsafe extern "C" fn toplevel_unset_floating(
     let window_key = (*data).window_key;
     if let Some(window) = resolve_window(server, window_key) {
         (*window).mode_locked = false;
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
 
         // Send floating_state(0)
         ffi::wl_resource_post_event(resource, 0, 0u32);
@@ -221,7 +221,7 @@ unsafe extern "C" fn toplevel_set_maximized(
         (*window).tiling_mode = crate::tiling::TilingMode::Tiled;
         (*window).mode_locked = true;
         (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Maximize;
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 
@@ -238,7 +238,7 @@ unsafe extern "C" fn toplevel_unset_maximized(
     if let Some(window) = resolve_window(server, window_key) {
         (*window).mode_locked = false;
         (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Unmaximize;
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 
@@ -254,7 +254,7 @@ unsafe extern "C" fn toplevel_set_fullscreen(
     let window_key = (*data).window_key;
     if let Some(window) = resolve_window(server, window_key) {
         (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
         (*server).wm.apply_client_fullscreen(window, true);
     }
 }
@@ -271,7 +271,7 @@ unsafe extern "C" fn toplevel_unset_fullscreen(
     let window_key = (*data).window_key;
     if let Some(window) = resolve_window(server, window_key) {
         (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Exit;
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
         (*server).wm.apply_client_fullscreen(window, false);
     }
 }
@@ -288,7 +288,7 @@ unsafe extern "C" fn toplevel_set_minimized(
     let window_key = (*data).window_key;
     if let Some(window) = resolve_window(server, window_key) {
         (*window).wm_scheduled.minimize_requested = true;
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 
@@ -305,7 +305,7 @@ unsafe extern "C" fn toplevel_set_popup(
     if let Some(window) = resolve_window(server, window_key) {
         (*window).tiling_mode = crate::tiling::TilingMode::Popup;
         (*window).mode_locked = true;
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 
@@ -321,7 +321,7 @@ unsafe extern "C" fn toplevel_unset_popup(
     let window_key = (*data).window_key;
     if let Some(window) = resolve_window(server, window_key) {
         (*window).mode_locked = false;
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 
@@ -340,7 +340,7 @@ unsafe extern "C" fn toplevel_set_utility(
         // set_popup): get_mode_for_window's app_id guessing stands down.
         (*window).tiling_mode = crate::tiling::TilingMode::Utility;
         (*window).mode_locked = true;
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 
@@ -362,7 +362,7 @@ unsafe extern "C" fn toplevel_unset_utility(
         // resolving Floating.
         (*window).tiling_mode = crate::tiling::TilingMode::Floating;
         (*window).mode_locked = false;
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 
@@ -379,7 +379,7 @@ unsafe extern "C" fn toplevel_set_grid(
     if let Some(window) = resolve_window(server, window_key) {
         log::info!("[Grid] set_grid declared");
         (*window).grid_declared = true;
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 

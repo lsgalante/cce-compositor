@@ -84,7 +84,7 @@ impl OutputManager {
             return Err("Failed to create wlr_gamma_control_manager_v1");
         }
         self.gamma_control_manager = gamma_control_manager;
-        ffi::wlr_scene_set_gamma_control_manager_v1((*server).scene.wlr_scene, gamma_control_manager);
+        ffi::wlr_scene_set_gamma_control_manager_v1(crate::shared::scene().wlr_scene, gamma_control_manager);
 
         let presentation = ffi::wlr_presentation_create((*server).wl_server, (*server).backend, 2);
         if presentation.is_null() {
@@ -214,7 +214,7 @@ impl OutputManager {
                         ];
                         if output.background_rect.is_null() {
                             output.background_rect = SceneRect::create_in(
-                                (*server).scene.layers.background.raw(),
+                                crate::shared::scene().layers.background.raw(),
                                 width,
                                 height,
                                 &color,
@@ -225,13 +225,13 @@ impl OutputManager {
                         }
                         output.background_rect.set_position(output.sent.x, output.sent.y);
                         if output.grid_tree.is_null() {
-                            output.grid_tree = SceneTree::create_in((*server).scene.layers.background.raw());
+                            output.grid_tree = SceneTree::create_in(crate::shared::scene().layers.background.raw());
                         }
                         output.grid_tree.set_position(output.sent.x, output.sent.y);
                         output.grid_backdrop_tree.set_position(output.sent.x, output.sent.y);
 
                         if output.adjust_tree.is_null() {
-                            output.adjust_tree = SceneTree::create_in((*server).scene.layers.top.raw());
+                            output.adjust_tree = SceneTree::create_in(crate::shared::scene().layers.top.raw());
                         }
                         output.adjust_tree.set_position(output.sent.x, output.sent.y);
                     }
@@ -455,7 +455,7 @@ impl OutputManager {
             output.sent = output.current;
             link = (*link).next;
         }
-        wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 
     pub unsafe fn send_config(&mut self, _server: *mut Server) -> Result<(), &'static str> {
@@ -650,12 +650,10 @@ unsafe extern "C" fn handle_manager_apply(listener: *mut ffi::wl_listener, data:
     }
     (*server).wm.scheduled.output_config = config;
 
-    (*server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }
 
-unsafe extern "C" fn handle_power_manager_set_mode(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let om = &mut *crate::container_of!(listener, OutputManager, power_manager_set_mode);
-    let server = crate::container_of!(om as *mut OutputManager, Server, om);
+unsafe extern "C" fn handle_power_manager_set_mode(_listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let event = data as *mut ffi::wlr_output_power_v1_set_mode_event;
 
     let output_data = ffi::river_wlr_output_get_data((*event).output);
@@ -684,5 +682,5 @@ unsafe extern "C" fn handle_power_manager_set_mode(listener: *mut ffi::wl_listen
         OutputStateValue::DisabledHard | OutputStateValue::Destroying => return,
     }
 
-    (*server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }

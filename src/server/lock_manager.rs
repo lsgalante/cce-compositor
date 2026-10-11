@@ -171,7 +171,7 @@ impl LockManager {
             LockState::WaitingForLockSurfaces => {
                 if all_outputs_rendered_lock_surface {
                     self.send_locked();
-                    (*self.server).scene.normal_tree.set_enabled(false);
+                    crate::shared::scene().normal_tree.set_enabled(false);
                     ffi::wl_event_source_timer_update(self.lock_surfaces_timer, 0);
                 }
             }
@@ -194,7 +194,7 @@ impl LockManager {
             let _ = tx.send("ok locked\n".to_string());
         }
         (*self.server).idle.on_locked();
-        (*self.server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 
     /// Lock the session from the compositor's side, with no lock client yet.
@@ -217,7 +217,7 @@ impl LockManager {
         }
         log::info!("locking the session (compositor-initiated)");
         self.state = LockState::WaitingForBlank;
-        let scene = &(*self.server).scene;
+        let scene = crate::shared::scene();
         scene.locked_tree.set_enabled(true);
         scene.normal_tree.set_enabled(false);
 
@@ -244,7 +244,7 @@ impl LockManager {
             }
             curr = next;
         }
-        (*self.server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
         self.maybe_lock();
 
         self.respawn_attempts = 0;
@@ -336,7 +336,7 @@ impl LockSurface {
         manager: *mut LockManager,
     ) -> Result<*mut Self, &'static str> {
         let tree = ffi::wlr_scene_subsurface_tree_create(
-            (*(*manager).server).scene.locked_tree.raw(),
+            crate::shared::scene().locked_tree.raw(),
             (*wlr_lock_surface).surface,
         );
         if tree.is_null() {
@@ -430,7 +430,7 @@ unsafe extern "C" fn handle_lock_surfaces_timeout(data: *mut std::ffi::c_void) -
     assert!(manager.state == LockState::WaitingForLockSurfaces);
     manager.state = LockState::WaitingForBlank;
 
-    (*manager.server).scene.normal_tree.set_enabled(false);
+    crate::shared::scene().normal_tree.set_enabled(false);
 
     manager.maybe_lock();
 
@@ -510,7 +510,7 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
     if manager.state == LockState::Unlocked {
         manager.state = LockState::WaitingForLockSurfaces;
 
-        (*manager.server).scene.locked_tree.set_enabled(true);
+        crate::shared::scene().locked_tree.set_enabled(true);
 
         ffi::wl_event_source_timer_update(manager.lock_surfaces_timer, 200);
 
@@ -549,8 +549,8 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
     manager.cancel_locker_respawn();
     manager.respawn_attempts = 0;
 
-    (*manager.server).scene.normal_tree.set_enabled(true);
-    (*manager.server).scene.locked_tree.set_enabled(false);
+    crate::shared::scene().normal_tree.set_enabled(true);
+    crate::shared::scene().locked_tree.set_enabled(false);
 
     let seats_head = &mut (*manager.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
     let mut curr = (*seats_head).next;
@@ -563,7 +563,7 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
 
     handle_destroy(manager.destroy.as_ptr(), std::ptr::null_mut());
 
-    (*manager.server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

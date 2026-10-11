@@ -49,7 +49,7 @@ impl LayerShell {
         let mut to_focus: *mut LayerSurface = std::ptr::null_mut();
 
         'outer: for &layer in &layers {
-            let tree = (*self.server).scene.layer_surface_tree(layer);
+            let tree = crate::shared::scene().layer_surface_tree(layer);
             let children_head = ffi::river_scene_tree_get_children(tree) as *mut WlList;
             let mut curr = (*children_head).prev;
             while curr != children_head {
@@ -155,13 +155,13 @@ impl LayerSurface {
         wlr_layer_surface: *mut ffi::wlr_layer_surface_v1,
         server: *mut Server,
     ) -> Result<*mut Self, &'static str> {
-        let layer_tree = (*server).scene.layer_surface_tree((*wlr_layer_surface).current.layer);
+        let layer_tree = crate::shared::scene().layer_surface_tree((*wlr_layer_surface).current.layer);
         let scene_layer_surface = ffi::wlr_scene_layer_surface_v1_create(layer_tree, wlr_layer_surface);
         if scene_layer_surface.is_null() {
             return Err("Failed to create wlr_scene_layer_surface_v1");
         }
 
-        let popup_tree = ffi::wlr_scene_tree_create((*server).scene.layers.popups.raw());
+        let popup_tree = ffi::wlr_scene_tree_create(crate::shared::scene().layers.popups.raw());
         if popup_tree.is_null() {
             ffi::wlr_scene_node_destroy((*scene_layer_surface).tree as *mut ffi::wlr_scene_node);
             return Err("Failed to create popup_tree");
@@ -377,9 +377,9 @@ where F: FnOnce() {
     }
 
     if changed {
-        (*server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     } else {
-        (*server).wm.dirty_rendering();
+        crate::shared::pending().dirty_rendering();
     }
 }
 
@@ -658,7 +658,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
 
     // Check if layer was changed
     if (*wlr_layer_surface).current.committed & ffi::wlr_layer_surface_v1_state_field_WLR_LAYER_SURFACE_V1_STATE_LAYER != 0 {
-        let tree = (*server).scene.layer_surface_tree((*wlr_layer_surface).current.layer);
+        let tree = crate::shared::scene().layer_surface_tree((*wlr_layer_surface).current.layer);
         ffi::wlr_scene_node_reparent(
             (*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node,
             tree,
@@ -740,7 +740,7 @@ impl LayerShellOutput {
         };
 
         if area_changed {
-            (*(*output).server).wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         }
     }
 
@@ -761,7 +761,7 @@ impl LayerShellOutput {
         ];
 
         for &layer in &layers {
-            let tree = (*(*output).server).scene.layer_surface_tree(layer);
+            let tree = crate::shared::scene().layer_surface_tree(layer);
             let children_head = ffi::river_scene_tree_get_children(tree) as *mut WlList;
             let mut curr = (*children_head).next;
             while curr != children_head {

@@ -49,7 +49,7 @@ impl WindowManager {
     /// has something to be pointed at. Purely visual — placeholders are
     /// scene rects, not windows; focus logic never sees them.
     pub unsafe fn create_restore_placeholders(&mut self) {
-        let parent = (*self.server).scene.layers.wm.raw();
+        let parent = crate::shared::scene().layers.wm.raw();
         if parent.is_null() {
             return;
         }
@@ -536,7 +536,7 @@ impl WindowManager {
                 held_by
             ))
             .spawn();
-        self.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 
     pub unsafe fn check_clean_exit_progress(&mut self) {

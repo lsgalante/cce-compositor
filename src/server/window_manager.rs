@@ -52,8 +52,6 @@ impl PatchReason {
 }
 
 pub struct WindowManagerScheduled {
-    pub dirty: bool,
-    pub dirty_lazy: bool,
     pub output_config: *mut ffi::wlr_output_configuration_v1,
 }
 
@@ -61,10 +59,6 @@ pub struct WindowManagerSent {
     pub outputs: ffi::wl_list,
     pub output_config: *mut ffi::wlr_output_configuration_v1,
     pub seats: ffi::wl_list,
-}
-
-pub struct WindowManagerRenderingScheduled {
-    pub dirty: bool,
 }
 
 pub struct WindowManagerRenderingRequested {
@@ -157,9 +151,7 @@ pub struct WindowManager {
     pub focus_history: Vec<*mut Window>,
     pub scheduled: WindowManagerScheduled,
     pub sent: WindowManagerSent,
-    pub rendering_scheduled: WindowManagerRenderingScheduled,
     pub rendering_requested: WindowManagerRenderingRequested,
-    pub dirty_idle: *mut ffi::wl_event_source,
     pub timeout: *mut ffi::wl_event_source,
     pub desk_pan_x: f64,
     pub desk_pan_y: f64,
@@ -429,7 +421,7 @@ pub struct WindowManager {
 
 /// `CCE_DIRTY_BACKTRACE=1` — who called `dirty_windowing`. Separate from the
 /// log level because the capture is expensive enough to distort what it measures.
-fn dirty_backtrace_debug() -> bool {
+pub(crate) fn dirty_backtrace_debug() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FLAG.get_or_init(|| std::env::var_os("CCE_DIRTY_BACKTRACE").is_some())
 }
@@ -438,7 +430,7 @@ fn dirty_backtrace_debug() -> bool {
 /// `dirty_rendering` call naming the call site (`#[track_caller]`, so it
 /// costs nothing when off). The cheap way to answer "what keeps the window
 /// manager running transactions on an idle desktop".
-fn dirty_trace() -> bool {
+pub(crate) fn dirty_trace() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FLAG.get_or_init(|| std::env::var_os("CCE_DIRTY_TRACE").is_some())
 }
@@ -598,8 +590,6 @@ impl WindowManager {
         std::ptr::write(&mut self.selection, crate::selection::Selection::default());
         self.focus_history = Vec::new();
         self.scheduled = WindowManagerScheduled {
-            dirty: false,
-            dirty_lazy: false,
             output_config: std::ptr::null_mut(),
         };
         self.sent = WindowManagerSent {
@@ -607,14 +597,10 @@ impl WindowManager {
             output_config: std::ptr::null_mut(),
             seats: std::mem::zeroed(),
         };
-        self.rendering_scheduled = WindowManagerRenderingScheduled {
-            dirty: false,
-        };
         self.rendering_requested = WindowManagerRenderingRequested {
             list: std::mem::zeroed(),
             order_hash: 0,
         };
-        self.dirty_idle = std::ptr::null_mut();
         self.desk_pan_x = 0.0;
         self.desk_pan_y = 0.0;
         self.target_desk_pan_x = None;
@@ -1043,7 +1029,7 @@ impl WindowManager {
                     height: output_box.height,
                 };
             }
-            if let Some(result) = (*self.server).scene.at(cursor_x, cursor_y) {
+            if let Some(result) = crate::shared::scene().at(cursor_x, cursor_y) {
                 if let crate::scene_node_data::SceneNodeDataVal::Window(w) = result.data {
                     if !(*w).is_status_bar() && !(*w).is_wallpaper() {
                         hovered = Some(WindowId((*w).ref_key));
@@ -1163,7 +1149,7 @@ impl WindowManager {
         let moving = self.camera_anim_active
             || self.pan_pending != [0.0, 0.0]
             || self.pinch_pending.is_some()
-            || layout_in_flight(self.state, self.scheduled.dirty);
+            || layout_in_flight(self.state, crate::shared::pending().windowing());
         let now = crate::util::timestamp_ns();
         let mut waiters = std::mem::take(&mut self.settle_waiters);
         let mut kept = Vec::new();
@@ -1525,7 +1511,7 @@ impl WindowManager {
         // Placement sees the pan floored to a layout pixel; the remainder
         // shifts the desk trees at render time (`layout_camera`).
         let (layout_cam, sub_x, sub_y) = self.layout_camera();
-        ffi::river_scene_set_desk_subpixel((*self.server).scene.wlr_scene, sub_x, sub_y);
+        ffi::river_scene_set_desk_subpixel(crate::shared::scene().wlr_scene, sub_x, sub_y);
         let params = crate::policy::arrange::ArrangeParams {
             bar_height: self.layout.bar_height,
             status_hide_mode: self.status_hide_mode,
@@ -1629,7 +1615,7 @@ impl WindowManager {
             // The swap changes backdrop content under the optimized-blur
             // capture set without any blur-node resize — re-bake or
             // translucent windows keep blurring the pre-swap grid.
-            ffi::river_scene_mark_optimized_blur_dirty((*self.server).scene.wlr_scene);
+            ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene);
         }
 
         for (&win_ptr, wp) in win_ptrs.iter().zip(plan.windows.iter()) {
@@ -1750,7 +1736,7 @@ impl WindowManager {
         }
 
         self.update_status();
-        self.rendering_scheduled.dirty = true;
+        crate::shared::pending().mark_rendering();
         // A window that just moved, resized or restacked may now cover the
         // adjust target, or no longer: let the overlap dim re-evaluate.
         if self.window_adjust_active() {
@@ -1857,8 +1843,7 @@ impl WindowManager {
             );
         }
         // Clear rendering dirty flag so we don't trigger the idle callback's IPC handshake
-        self.rendering_scheduled.dirty = false;
-        self.remove_dirty_idle();
+        crate::shared::pending().clean_rendering();
 
         // Blur is toggled at most twice per gesture: off the moment real motion
         // starts, on once the debounce timer confirms motion has stopped. During
@@ -1882,7 +1867,7 @@ impl WindowManager {
             // mismatch is a low-frequency blur under a window in flight for
             // a few hundred ms. So the bakes stay frozen through zooms too,
             // and `finish_viewport_settle` re-bakes once if the zoom moved.
-            let scene = (*self.server).scene.wlr_scene;
+            let scene = crate::shared::scene().wlr_scene;
             ffi::river_scene_set_blur_frozen(scene, true);
             for &window in self.windows.iter() {
                 if !window.is_null() {
@@ -1970,7 +1955,7 @@ impl WindowManager {
         // final backdrop — every bake, if the gesture changed the zoom
         // (they were sampled at the old scale in flight); otherwise only
         // the ones the thaw itself distrusts.
-        let scene = (*self.server).scene.wlr_scene;
+        let scene = crate::shared::scene().wlr_scene;
         ffi::river_scene_set_blur_frozen(scene, false);
         if self.desk_zoom != self.viewport_freeze_zoom {
             ffi::river_scene_mark_optimized_blur_dirty(scene);
@@ -2292,7 +2277,7 @@ impl WindowManager {
         if !(*window).is_seat_focused() {
             return;
         }
-        let wm_layer = (*self.server).scene.layers.wm.raw();
+        let wm_layer = crate::shared::scene().layers.wm.raw();
         if wm_layer.is_null()
             || ffi::river_scene_node_get_parent((*window).popup_tree.node()) != wm_layer
         {
@@ -2607,7 +2592,7 @@ unsafe extern "C" fn handle_sun_timer(data: *mut std::ffi::c_void) -> std::os::r
     if wm.is_null() {
         return 0;
     }
-    (*wm).dirty_windowing();
+    crate::shared::pending().dirty_windowing();
     ffi::wl_event_source_timer_update((*wm).sun_timer, 60_000);
     0
 }
@@ -3014,12 +2999,12 @@ impl crate::policy::api::Compositor for WindowManager {
                         crate::policy::api::OverlaySide::Right => "right".to_string(),
                     };
                 }
-                Command::Relayout => self.dirty_windowing(),
+                Command::Relayout => crate::shared::pending().dirty_windowing(),
                 Command::RefreshCamera => {
                     if matches!(self.state, WindowManagerState::Idle) {
                         self.update_viewport_local();
                     } else {
-                        self.dirty_windowing();
+                        crate::shared::pending().dirty_windowing();
                     }
                 }
             }

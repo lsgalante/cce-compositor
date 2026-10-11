@@ -391,7 +391,7 @@ impl WindowManager {
         }
 
         if self.selection.tree.is_null() {
-            let scene = &(*self.server).scene;
+            let scene = crate::shared::scene();
             let tree = crate::scene_handle::SceneTree::create_in(&mut (*scene.wlr_scene).tree);
             if tree.is_null() {
                 return;

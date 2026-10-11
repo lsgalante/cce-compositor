@@ -221,7 +221,7 @@ pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_liste
             let lx = cursor.x();
             let ly = cursor.y();
             let mut hovered_win: *mut crate::window::Window = std::ptr::null_mut();
-            if let Some(result) = (*seat.server).scene.at(lx, ly) {
+            if let Some(result) = crate::shared::scene().at(lx, ly) {
                 if let SceneNodeDataVal::Window(window) = result.data {
                     hovered_win = window;
                 }
@@ -469,7 +469,7 @@ pub(crate) unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listen
     // for the whole gesture. Clients never see a begin, so update/end stay
     // ours too.
     let mut on_background = true;
-    if let Some(result) = (*server).scene.at(cursor.x(), cursor.y()) {
+    if let Some(result) = crate::shared::scene().at(cursor.x(), cursor.y()) {
         match result.data {
             SceneNodeDataVal::Window(window) => {
                 if !(*window).is_wallpaper() {

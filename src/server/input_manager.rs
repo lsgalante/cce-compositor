@@ -355,7 +355,7 @@ unsafe extern "C" fn input_manager_destroy_seat(
         let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
         if seat_name == name_str {
             (*seat).destroying = true;
-            (*(*im).server).wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
             break;
         }
         curr = next;

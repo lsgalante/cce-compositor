@@ -302,7 +302,6 @@ pub struct Server {
     // Subcomponents
     pub wm: WindowManager,
     pub layer_shell: LayerShell,
-    pub scene: Scene,
     pub om: OutputManager,
     pub input_manager: InputManager,
     pub libinput_config: LibinputConfig,
@@ -425,7 +424,7 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
                     }
                     (*seat).focus(crate::seat::Focus::Window(win_ptr));
                     (*server).wm.raise_window(win_ptr);
-                    (*server).wm.dirty_windowing();
+                    crate::shared::pending().dirty_windowing();
                     log::info!("xdg activation focused and raised '{}' ({})", title, app_id);
                 }
             } else {
@@ -602,6 +601,8 @@ impl Server {
                 return Err("Failed to create wayland server");
             }
             self.wl_server = wl_server;
+            // Registered first so marking work pending works from here on.
+            crate::shared::shared().set_server(wl_server, self as *mut Server);
 
             let loop_ = ffi::wl_display_get_event_loop(wl_server);
             if loop_.is_null() {
@@ -850,7 +851,9 @@ impl Server {
             let server_ptr = self as *mut Server;
             self.wm.init_with_server(server_ptr).map_err(|_| "Failed to init wm")?;
             self.layer_shell.init(server_ptr, self.wl_server).map_err(|_| "Failed to init layer_shell")?;
-            self.scene.init(self.linux_dmabuf, self.color_manager).map_err(|_| "Failed to init scene")?;
+            let mut scene = Scene::new();
+            scene.init(self.linux_dmabuf, self.color_manager).map_err(|_| "Failed to init scene")?;
+            crate::shared::shared().set_scene(scene);
             self.om.init(server_ptr).map_err(|_| "Failed to init om")?;
             self.input_manager.init(server_ptr).map_err(|_| "Failed to init input_manager")?;
             self.libinput_config.init(server_ptr).map_err(|_| "Failed to init libinput_config")?;
@@ -947,6 +950,9 @@ impl Server {
             ffi::wlr_renderer_destroy(self.renderer);
             log::info!("[deinit] destroying allocator");
             ffi::wlr_allocator_destroy(self.allocator);
+
+            // Nothing may arm an idle on the event loop once it is gone.
+            crate::shared::pending().shutdown();
 
             // 6. Finally, destroy the display
             log::info!("[deinit] destroying display");

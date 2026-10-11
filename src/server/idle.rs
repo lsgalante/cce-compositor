@@ -559,7 +559,7 @@ impl IdleManager {
         self.displays_off = !on;
         log::info!("idle: displays {} ({} output(s))", if on { "on" } else { "off" }, touched);
         if touched > 0 {
-            server.wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         }
     }
 

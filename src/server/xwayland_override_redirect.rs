@@ -241,7 +241,7 @@ unsafe fn handle_map_impl(or: *mut XwaylandOverrideRedirect) {
         return;
     }
     let surface = (*(*or).xsurface).surface;
-    let override_redirect_tree = (*(*or).server).scene.layers.override_redirect.raw();
+    let override_redirect_tree = crate::shared::scene().layers.override_redirect.raw();
 
     let surface_tree = ffi::wlr_scene_subsurface_tree_create(override_redirect_tree, surface);
     if surface_tree.is_null() {
@@ -300,7 +300,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
         }
     }
 
-    (*(*or).server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {

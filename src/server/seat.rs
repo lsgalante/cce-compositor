@@ -413,7 +413,7 @@ impl Seat {
         if let Focus::Window(window) = new_focus {
             if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
                 (*self.server).wm.raise_window(window);
-                (*self.server).wm.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
             }
         }
 
@@ -493,7 +493,7 @@ impl Seat {
                 // (`Window::fullscreen_yields`); restack whenever one is up,
                 // since not every path to here dirties on its own.
                 if (*self.server).wm.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
-                    (*self.server).wm.dirty_windowing();
+                    crate::shared::pending().dirty_windowing();
                 }
             }
         }
@@ -526,8 +526,7 @@ impl Seat {
 
                 let lx = self.cursor.x();
                 let ly = self.cursor.y();
-                let server = self.server;
-                if let Some(result) = (*server).scene.at(lx, ly) {
+                if let Some(result) = crate::shared::scene().at(lx, ly) {
                     if result.surface == surface {
                         ffi::wlr_seat_pointer_notify_enter(self.wlr_seat, surface, result.sx, result.sy);
                     }
@@ -592,8 +591,7 @@ impl Seat {
 
                     let lx = self.cursor.x();
                     let ly = self.cursor.y();
-                    let server = self.server;
-                    if let Some(result) = (*server).scene.at(lx, ly) {
+                    if let Some(result) = crate::shared::scene().at(lx, ly) {
                         if result.surface == surface {
                             ffi::wlr_seat_pointer_notify_enter(self.wlr_seat, surface, result.sx, result.sy);
                         }
@@ -625,8 +623,7 @@ impl Seat {
 
                     let lx = self.cursor.x();
                     let ly = self.cursor.y();
-                    let server = self.server;
-                    if let Some(result) = (*server).scene.at(lx, ly) {
+                    if let Some(result) = crate::shared::scene().at(lx, ly) {
                         if result.surface == surface {
                             ffi::wlr_seat_pointer_notify_enter(self.wlr_seat, surface, result.sx, result.sy);
                         }
@@ -810,7 +807,7 @@ impl Seat {
                     }
                 } else {
                     self.layer_shell.scheduled_focus = crate::layer_shell::LayerShellSeatFocus::None;
-                    (*self.server).wm.dirty_windowing();
+                    crate::shared::pending().dirty_windowing();
                 }
             }
             crate::layer_shell::LayerShellSeatFocus::None => {}
@@ -1058,7 +1055,7 @@ impl Seat {
                                 if (*win).box_geom.width as u32 != target_w || (*win).box_geom.height as u32 != target_h {
                                     (*win).wm_requested.dimensions = Some(crate::window::Dimensions { width: target_w, height: target_h });
                                     (*win).wm_requested.bounds = crate::window::Dimensions { width: target_w, height: target_h };
-                                    (*self.server).wm.dirty_windowing();
+                                    crate::shared::pending().dirty_windowing();
                                 }
                             }
                         } else {
@@ -1255,14 +1252,14 @@ impl Seat {
         if aligned && resolved != crate::tiling::TilingMode::Tiled {
             (*win).tiling_mode = crate::tiling::TilingMode::Tiled;
             (*win).mode_locked = true;
-            (*self.server).wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         } else if !aligned && resolved == crate::tiling::TilingMode::Tiled {
             // Un-tile in place: clearing was_tiled keeps the arrange Exit
             // transition from restoring the old floating geometry.
             (*win).was_tiled = false;
             (*win).tiling_mode = crate::tiling::TilingMode::Floating;
             (*win).mode_locked = true;
-            (*self.server).wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         }
     }
 
@@ -1279,11 +1276,11 @@ impl Seat {
                 if let PointerOpType::Resize { .. } = op.op_type {
                     (*win).wm_requested.resizing = false;
                     (*win).manage_finish();
-                    (*self.server).wm.dirty_windowing();
+                    crate::shared::pending().dirty_windowing();
                 }
                 if let PointerOpType::Move = op.op_type {
                     if (*win).tiling_mode == crate::tiling::TilingMode::Overlay {
-                        (*self.server).wm.dirty_windowing();
+                        crate::shared::pending().dirty_windowing();
                     }
                 }
                 self.settle_tiling(win);
@@ -1320,7 +1317,7 @@ impl Seat {
                     continue;
                 }
                 self.settle_tiling(w);
-                (*self.server).wm.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
             }
             // The images it carried are the grid's to keep: `drop` is its
             // cue to save them, if any actually moved.
@@ -1518,7 +1515,7 @@ unsafe fn displace_covered(
         false
     });
     if changed {
-        wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 

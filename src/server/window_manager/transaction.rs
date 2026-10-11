@@ -22,7 +22,7 @@ impl WindowManager {
         // stack (`fullscreen_on_top`), and the stacking pass runs only on a
         // transaction.
         if self.windows.iter().any(|&w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
-            self.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         }
         // The selection belongs to overview: it is made there, and the
         // group move it exists for is an overview drag.
@@ -89,69 +89,10 @@ impl WindowManager {
         ffi::wl_event_source_timer_update(self.border_fade_timer, 16);
     }
 
-    #[track_caller]
-    pub unsafe fn dirty_windowing(&mut self) {
-        // Capturing and symbolizing a backtrace costs far more than the event it
-        // annotates, and this fires on routine commits — the session runs at
-        // --log-level debug, so keying it on Debug meant ~160 log lines/second
-        // and most of a 19MB session log. Behind its own switch now.
-        if dirty_backtrace_debug() {
-            let bt = std::backtrace::Backtrace::force_capture();
-            log::debug!("dirty_windowing called from backtrace:\n{}", bt);
-        }
-        if dirty_trace() {
-            log::debug!("dirty_windowing from {}", std::panic::Location::caller());
-        }
-        self.scheduled.dirty = true;
-        self.add_dirty_idle();
-    }
- 
-    pub unsafe fn clean_windowing(&mut self) {
-        self.scheduled.dirty = false;
-        self.scheduled.dirty_lazy = false;
-        self.remove_dirty_idle();
-    }
- 
-    #[track_caller]
-    pub unsafe fn dirty_rendering(&mut self) {
-        if dirty_trace() {
-            log::debug!("dirty_rendering from {}", std::panic::Location::caller());
-        }
-        self.rendering_scheduled.dirty = true;
-        self.add_dirty_idle();
-    }
-
-    pub unsafe fn clean_rendering(&mut self) {
-        self.rendering_scheduled.dirty = false;
-        self.remove_dirty_idle();
-    }
-
-    pub(crate) unsafe fn add_dirty_idle(&mut self) {
-        if self.scheduled.dirty || self.scheduled.dirty_lazy || self.rendering_scheduled.dirty {
-            if self.dirty_idle.is_null() {
-                let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-                self.dirty_idle = ffi::wl_event_loop_add_idle(
-                    event_loop,
-                    Some(dirty_idle_callback),
-                    self as *mut WindowManager as *mut _,
-                );
-            }
-        }
-    }
-
-    pub(crate) unsafe fn remove_dirty_idle(&mut self) {
-        if !self.scheduled.dirty && !self.scheduled.dirty_lazy && !self.rendering_scheduled.dirty {
-            if !self.dirty_idle.is_null() {
-                ffi::wl_event_source_remove(self.dirty_idle);
-                self.dirty_idle = std::ptr::null_mut();
-            }
-        }
-    }
-
     pub unsafe fn manage_start(&mut self) {
         assert!(matches!(self.state, WindowManagerState::Idle));
-        assert!(self.scheduled.dirty);
-        self.clean_windowing();
+        assert!(crate::shared::pending().windowing());
+        crate::shared::pending().clean_windowing();
         self.state = WindowManagerState::Manage;
 
         log::debug!("manage sequence start");
@@ -352,9 +293,9 @@ impl WindowManager {
 
     pub unsafe fn render_start(&mut self) {
         assert!(matches!(self.state, WindowManagerState::InflightConfigures(0)) ||
-                (matches!(self.state, WindowManagerState::Idle) && self.rendering_scheduled.dirty));
+                (matches!(self.state, WindowManagerState::Idle) && crate::shared::pending().rendering()));
         self.state = WindowManagerState::Render;
-        self.clean_rendering();
+        crate::shared::pending().clean_rendering();
 
         log::debug!("render sequence start");
 
@@ -385,7 +326,7 @@ impl WindowManager {
                 (*window).surfaces.drop_saved();
             }
             if matches!((*window).state, crate::window::WindowState::Init) {
-                (*window).tree.reparent(&(*self.server).scene.hidden_tree);
+                (*window).tree.reparent(&crate::shared::scene().hidden_tree);
             }
             if let crate::window::WindowImpl::Destroying = (*window).impl_type {
                 Window::destroy(window);
@@ -461,7 +402,7 @@ impl WindowManager {
                     let layer = if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
                         // Between the native backdrop and the fallback
                         // cells, like a layer-shell Background surface.
-                        (*self.server).scene.layers.background_clients.raw()
+                        crate::shared::scene().layers.background_clients.raw()
                     } else if (*window).is_grid() {
                         // The grid client is a desktop fixture: above
                         // the native backdrop and fallback cells
@@ -469,9 +410,9 @@ impl WindowManager {
                         // Left to the generic wm arm it stacks by
                         // render-list order, burying whichever windows
                         // happened to map before it.
-                        (*self.server).scene.layers.bottom.raw()
+                        crate::shared::scene().layers.bottom.raw()
                     } else if fullscreen_on_top(window) {
-                        (*self.server).scene.layers.fullscreen.raw()
+                        crate::shared::scene().layers.fullscreen.raw()
                     } else if rendered_fullscreen(window) {
                         // Stepped aside for a focused window (alt-tab
                         // out), or in overview: behind every window
@@ -480,9 +421,9 @@ impl WindowManager {
                         // sits on the desk there
                         // (`place_fullscreen_windows`), like the grid
                         // beneath it.
-                        (*self.server).scene.layers.bottom.raw()
+                        crate::shared::scene().layers.bottom.raw()
                     } else if (*window).tiling_mode == crate::tiling::TilingMode::Popup {
-                        (*self.server).scene.layers.popups.raw()
+                        crate::shared::scene().layers.popups.raw()
                     } else if (*window).tiling_mode == crate::tiling::TilingMode::Status {
                         // An EXPANDED segment (in-surface menu open;
                         // thicker than the bar) stacks like a popup:
@@ -500,16 +441,16 @@ impl WindowManager {
                             _ => bg.height,
                         };
                         if thickness > self.layout.bar_height {
-                            (*self.server).scene.layers.popups.raw()
+                            crate::shared::scene().layers.popups.raw()
                         } else {
-                            (*self.server).scene.layers.top.raw()
+                            crate::shared::scene().layers.top.raw()
                         }
                     } else if (*window).rendering_requested.circular {
-                        (*self.server).scene.layers.top.raw()
+                        crate::shared::scene().layers.top.raw()
                     } else if (*window).tiling_mode == crate::tiling::TilingMode::Overlay && self.layout.overlay_behavior == "above" {
-                        (*self.server).scene.layers.top.raw()
+                        crate::shared::scene().layers.top.raw()
                     } else {
-                        (*self.server).scene.layers.wm.raw()
+                        crate::shared::scene().layers.wm.raw()
                     };
 
                     ffi::wlr_scene_node_reparent((*window).tree.node(), layer);
@@ -546,7 +487,7 @@ impl WindowManager {
         // and moves like any other), so it rides in the same plane; `Overlay`
         // keeps its own `overlay_behavior` rule and stays out of this.
         if reorder {
-            let wm_layer = (*self.server).scene.layers.wm.raw();
+            let wm_layer = crate::shared::scene().layers.wm.raw();
             let mut focused_popups: *mut Window = std::ptr::null_mut();
             curr = (*render_list).next;
             while curr != render_list {
@@ -625,9 +566,7 @@ impl WindowManager {
         log::debug!("finished committing transaction");
         self.debug_check_unlinked_status("render_finish end");
 
-        if self.scheduled.dirty || self.scheduled.dirty_lazy || self.rendering_scheduled.dirty {
-            self.add_dirty_idle();
-        }
+        crate::shared::pending().arm();
         self.schedule_save_state();
         if let Some(r) = rf0 {
             log::info!("[manage] render_finish total={}us", r.elapsed().as_micros());
@@ -635,21 +574,3 @@ impl WindowManager {
     }
 }
 
-/// The idle callback a dirty mark arms: runs the pass that was waiting.
-unsafe extern "C" fn dirty_idle_callback(data: *mut std::ffi::c_void) {
-    let wm = data as *mut WindowManager;
-    if wm.is_null() {
-        return;
-    }
-    (*wm).dirty_idle = std::ptr::null_mut();
-    
-    if matches!((*wm).state, WindowManagerState::Idle) {
-        if (*wm).scheduled.dirty || (*wm).scheduled.dirty_lazy {
-            (*wm).scheduled.dirty = true;
-            (*wm).scheduled.dirty_lazy = false;
-            (*wm).manage_start();
-        } else if (*wm).rendering_scheduled.dirty {
-            (*wm).render_start();
-        }
-    }
-}

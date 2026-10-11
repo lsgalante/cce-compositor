@@ -410,7 +410,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
         crate::window::WindowState::Init | crate::window::WindowState::Closing => {}
         crate::window::WindowState::Ready | crate::window::WindowState::Initialized | crate::window::WindowState::Mapped => {
             (*window).set_closing();
-            (*(*window).server).wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         }
     }
 
@@ -463,7 +463,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
         // A view-centered modal that is ALSO self-sizing was centered at map
         // against a size it had not committed yet; redo it now that it has.
         (*(*toplevel).window).take_pending_view_center();
-        (*(*(*toplevel).window).server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     } else if (*(*toplevel).window).pending_view_center
         && new_geometry.width > 0
         && new_geometry.height > 0
@@ -474,7 +474,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
         (*(*toplevel).window).box_geom.width = new_geometry.width;
         (*(*toplevel).window).box_geom.height = new_geometry.height;
         (*(*toplevel).window).take_pending_view_center();
-        (*(*(*toplevel).window).server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 
@@ -545,7 +545,7 @@ unsafe extern "C" fn handle_ack_configure(
         // A view-centered modal that is ALSO self-sizing was centered at map
         // against a size it had not committed yet; redo it now that it has.
         (*(*toplevel).window).take_pending_view_center();
-        (*(*(*toplevel).window).server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     } else if (*(*toplevel).window).pending_view_center
         && new_geometry.width > 0
         && new_geometry.height > 0
@@ -556,7 +556,7 @@ unsafe extern "C" fn handle_ack_configure(
         (*(*toplevel).window).box_geom.width = new_geometry.width;
         (*(*toplevel).window).box_geom.height = new_geometry.height;
         (*(*toplevel).window).take_pending_view_center();
-        (*(*(*toplevel).window).server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 
@@ -615,8 +615,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         // which nothing else re-bakes when the latch lands after the
         // viewport has settled — translucent windows keep showing a blur of
         // the pre-latch desktop.
-        ffi::river_scene_mark_optimized_blur_dirty((*(*window).server).scene.wlr_scene);
-        (*(*window).server).wm.dirty_windowing();
+        ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene);
+        crate::shared::pending().dirty_windowing();
     }
     let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
     let old_geometry = (*toplevel).geometry;
@@ -742,7 +742,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             (*window).box_geom.height = new_geometry.height;
         }
 
-        (*(*window).server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
         return;
     }
 
@@ -782,7 +782,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             (*window).self_resized = true;
             (*window).draw_borders();
             (*window).set_dimensions(live.width as u32, live.height as u32);
-            (*(*window).server).wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         }
     }
 
@@ -803,7 +803,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             (*window).box_geom.width = live.width;
             (*window).box_geom.height = live.height;
             (*window).self_resized = true;
-            (*(*window).server).wm.dirty_windowing();
+            crate::shared::pending().dirty_windowing();
         }
     }
 
@@ -845,7 +845,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
                     if w != (*window).box_geom.width || h != (*window).box_geom.height {
                         (*window).box_geom.width = w;
                         (*window).box_geom.height = h;
-                        (*(*window).server).wm.dirty_windowing();
+                        crate::shared::pending().dirty_windowing();
                     }
                 }
             }
@@ -854,7 +854,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             if dec_w != (*window).last_decor_w || dec_h != (*window).last_decor_h {
                 (*window).last_decor_w = dec_w;
                 (*window).last_decor_h = dec_h;
-                (*(*window).server).wm.dirty_windowing();
+                crate::shared::pending().dirty_windowing();
             }
 
             if let Some(sent_w) = (*window).configure_sent.width {
@@ -862,7 +862,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
                     if !(*window).csd_buffer_size_bug {
                         (*window).csd_buffer_size_bug = true;
                         log::info!("Detected CSD buffer size bug for window '{}'. Activating workaround.", (*window).get_title_string().unwrap_or_default());
-                        (*(*window).server).wm.dirty_windowing();
+                        crate::shared::pending().dirty_windowing();
                     }
                 }
             }
@@ -874,7 +874,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
                 }
                 ConfigureState::TimedOutAcked => {
                     (*toplevel).configure_state = ConfigureState::Idle;
-                    (*(*window).server).wm.dirty_rendering();
+                    crate::shared::pending().dirty_rendering();
                 }
                 _ => unreachable!(),
             }
@@ -886,7 +886,6 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     // handle_window_commit.
     let geometry = (*toplevel).geometry;
     if let Some((final_x, final_y)) = (*window).anchor_resize_commit(geometry.width, geometry.height) {
-        let server = (*window).server;
         // Keep the displayed buffer and the compensating position atomic.
         // Live buffer (no configure in flight): the commit is already on
         // screen, so move the scene tree in the same commit — waiting for
@@ -903,7 +902,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             (*window).box_geom.height = geometry.height;
             (*window).draw_borders();
         } else {
-            (*server).wm.dirty_rendering();
+            crate::shared::pending().dirty_rendering();
         }
     }
 }
@@ -920,7 +919,7 @@ unsafe extern "C" fn handle_request_show_window_menu(
         x: (*event).x - (*toplevel).geometry.x,
         y: (*event).y - (*toplevel).geometry.y,
     });
-    (*(*window).server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -938,7 +937,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
     } else {
         (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Exit;
     }
-    (*(*window).server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
     let enter = ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel);
     (*(*window).server).wm.apply_client_fullscreen(window, enter);
 }
@@ -963,7 +962,7 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
         (*window).mode_locked = true;
         (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Unmaximize;
     }
-    (*(*window).server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -971,7 +970,7 @@ unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, _d
     let window = (*toplevel).window;
 
     (*window).wm_scheduled.minimize_requested = true;
-    (*(*window).server).wm.dirty_windowing();
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn handle_request_move(
@@ -1037,7 +1036,7 @@ unsafe extern "C" fn handle_request_move(
         cursor.set_xcursor(b"grab\0".as_ptr() as *const _);
 
         (*window).wm_scheduled.pointer_move_requested = seat;
-        (*(*window).server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 
@@ -1112,14 +1111,12 @@ unsafe extern "C" fn handle_request_resize(
             seat,
             edges: (*event).edges,
         });
-        (*(*window).server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 
-unsafe extern "C" fn handle_set_parent(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, set_parent);
-    let window = (*toplevel).window;
-    (*(*window).server).wm.dirty_windowing();
+unsafe extern "C" fn handle_set_parent(_listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn handle_set_title(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -1173,7 +1170,7 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
         }
         ffi::wlr_xdg_toplevel_decoration_v1_set_mode((*decoration).wlr_decoration, mode);
         (*window).wm_requested.ssd = mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
-        (*(*window).server).wm.dirty_windowing();
+        crate::shared::pending().dirty_windowing();
     }
 }
 

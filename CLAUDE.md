@@ -415,6 +415,27 @@ The `Server` is `std::mem::forget`ten after `deinit` (`run_server.rs`): by
 then the display and every wlroots object are gone, and its subsystems'
 listeners must not unlink into them on drop.
 
+### Shared state: `crate::shared` (since 2026-10-10)
+
+`shared.rs` holds what every subsystem may reach through a SHARED reference:
+`shared()` is a safe `&'static Shared`, one per thread, leaked on first use,
+and nothing ever takes `&mut` to it — every field is a `Cell` or `OnceCell`.
+It holds the scene (`crate::shared::scene()`, set once by `Server::init`;
+`Server` has no `scene` field any more), the display, and the pending work
+(`crate::shared::pending()`): whether a manage pass and a render pass are
+wanted and the idle callback that runs them. `dirty_windowing()`,
+`dirty_rendering()`, `mark_*` (set without arming, for a caller about to run
+the pass itself) and `clean_*` live there.
+
+Why: marking work pending used to be `(*self.server).wm.dirty_windowing()`,
+a `&mut WindowManager` made from inside a window, seat or output method —
+often while a manage pass already held one further up the stack, two live
+`&mut` to one place. Through `pending()` it is a `Cell` write. A new piece of
+cross-subsystem state that is fixed after init, or is a flag, belongs here;
+mutable state with structure does not (that is the planned context-passing
+step). `Pending::shutdown` runs in `Server::deinit` before the display is
+destroyed, so nothing arms an idle on a dead event loop.
+
 ### Scene nodes are owned handles (`scene_handle.rs`, since 2026-10-10)
 
 `SceneTree`, `SceneRect`, `SceneBuffer`, `SceneBevel` (and the other scenefx
@@ -1246,7 +1267,8 @@ headless seat has no keyboard and Chromium crashes in
   outside itself. The bridge's hidden icon containers have no scene tree, so
   they never count as showing.
 
-  **What may start a transaction.** `dirty_windowing()` schedules a full
+  **What may start a transaction.** `crate::shared::pending().dirty_windowing()`
+  (it was a `WindowManager` method until 2026-10-10) schedules a full
   manage/arrange/render pass, and on an idle desktop the answer to "why is the
   window manager busy" is always some call site that dirties on a routine
   commit. Two were found on 2026-09-10 and gated: a status segment's *every*

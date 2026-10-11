@@ -258,7 +258,7 @@ impl Cursor {
     unsafe fn touch_route_at(&self, lx: f64, ly: f64) -> TouchRoute {
         let seat = &*self.seat;
         let server = seat.server;
-        let result = (*server).scene.at(lx, ly);
+        let result = crate::shared::scene().at(lx, ly);
         if let Some(ref result) = result {
             // Locked, only the lock surface may hear a finger, as only it
             // may hear the pointer (`passthrough`).
@@ -370,8 +370,7 @@ impl Cursor {
     /// Arm the on-screen keyboard (`osk.rs`) when the finger is on an
     /// app's window — not the board itself, a layer surface, nor the bar.
     unsafe fn note_touch_for_osk(&mut self, lx: f64, ly: f64) {
-        let server = (*self.seat).server;
-        let Some(result) = (*server).scene.at(lx, ly) else { return };
+        let Some(result) = crate::shared::scene().at(lx, ly) else { return };
         if let SceneNodeDataVal::Window(window) = result.data {
             if !(*window).is_status_bar() && !(*window).is_wallpaper() {
                 (*self.seat).relay.osk.note_touch();
@@ -389,7 +388,7 @@ impl Cursor {
         match route {
             TouchRoute::Client { origin, scale } => {
                 crate::cursor::press_dismissals(server, lx, ly);
-                let Some(result) = (*server).scene.at(lx, ly) else { return };
+                let Some(result) = crate::shared::scene().at(lx, ly) else { return };
                 // Focus as a click would (`handle_button`).
                 let seat = &mut *self.seat;
                 match result.data {

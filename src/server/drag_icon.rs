@@ -17,9 +17,8 @@ impl DragIcon {
         wlr_drag_icon: *mut ffi::wlr_drag_icon,
         cursor: *mut Cursor,
     ) -> Result<(), &'static str> {
-        let server = (*(*cursor).seat).server;
         
-        let scene_drag_icon = ffi::wlr_scene_drag_icon_create((*server).scene.drag_icons.raw(), wlr_drag_icon);
+        let scene_drag_icon = ffi::wlr_scene_drag_icon_create(crate::shared::scene().drag_icons.raw(), wlr_drag_icon);
         if scene_drag_icon.is_null() {
             return Err("Failed to create scene drag icon");
         }
