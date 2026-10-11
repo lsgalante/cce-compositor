@@ -187,10 +187,10 @@ impl OutputManager {
     }
 
     pub unsafe fn commit_output_state(&mut self, server: *mut Server) {
-        let wm = &mut (*crate::reentry::wm(server));
 
-        let mut link = wm.sent.outputs.next;
-        while link != &mut wm.sent.outputs as *mut ffi::wl_list {
+        let head = crate::shared::sent().outputs.head();
+        let mut link = (*head).next;
+        while link != head {
             let output = &mut *crate::container_of!(link, Output, link_sent);
             assert!(output.sent.state != OutputStateValue::Destroying);
             output.rendering_current = output.rendering_requested;
@@ -253,8 +253,9 @@ impl OutputManager {
         }
 
         let mut need_modeset = false;
-        let mut link = wm.sent.outputs.next;
-        while link != &mut wm.sent.outputs as *mut ffi::wl_list {
+        let head = crate::shared::sent().outputs.head();
+        let mut link = (*head).next;
+        while link != head {
             let output = &mut *crate::container_of!(link, Output, link_sent);
             let wlr_output = output.wlr_output;
             if wlr_output.is_null() {
@@ -323,8 +324,9 @@ impl OutputManager {
             log::debug!("committing output state requires modeset");
 
             let mut states_vec = Vec::new();
-            let mut link = wm.sent.outputs.next;
-            while link != &mut wm.sent.outputs as *mut ffi::wl_list {
+            let head = crate::shared::sent().outputs.head();
+            let mut link = (*head).next;
+            while link != head {
                 let output = &mut *crate::container_of!(link, Output, link_sent);
                 let wlr_output = output.wlr_output;
                 if wlr_output.is_null() {
@@ -394,14 +396,15 @@ impl OutputManager {
             ffi::wlr_output_swapchain_manager_finish(&mut swapchain_manager);
         }
 
-        if !wm.sent.output_config.is_null() {
-            ffi::wlr_output_configuration_v1_send_succeeded(wm.sent.output_config);
-            ffi::wlr_output_configuration_v1_destroy(wm.sent.output_config);
-            wm.sent.output_config = std::ptr::null_mut();
+        let config = crate::shared::sent().take_output_config();
+        if !config.is_null() {
+            ffi::wlr_output_configuration_v1_send_succeeded(config);
+            ffi::wlr_output_configuration_v1_destroy(config);
         }
 
-        let mut link = wm.sent.outputs.next;
-        while link != &mut wm.sent.outputs as *mut ffi::wl_list {
+        let head = crate::shared::sent().outputs.head();
+        let mut link = (*head).next;
+        while link != head {
             let next_link = (*link).next;
             let output = &mut *crate::container_of!(link, Output, link_sent);
             let wlr_output = output.wlr_output;
@@ -434,7 +437,6 @@ impl OutputManager {
     }
 
     pub unsafe fn modeset_failed(&mut self, server: *mut Server) {
-        let wm = &mut (*crate::reentry::wm(server));
 
         if self.first_modeset {
             log::error!("initial modeset failed, exiting river");
@@ -442,14 +444,15 @@ impl OutputManager {
             return;
         }
 
-        if !wm.sent.output_config.is_null() {
-            ffi::wlr_output_configuration_v1_send_failed(wm.sent.output_config);
-            ffi::wlr_output_configuration_v1_destroy(wm.sent.output_config);
-            wm.sent.output_config = std::ptr::null_mut();
+        let config = crate::shared::sent().take_output_config();
+        if !config.is_null() {
+            ffi::wlr_output_configuration_v1_send_failed(config);
+            ffi::wlr_output_configuration_v1_destroy(config);
         }
 
-        let mut link = wm.sent.outputs.next;
-        while link != &mut wm.sent.outputs as *mut ffi::wl_list {
+        let head = crate::shared::sent().outputs.head();
+        let mut link = (*head).next;
+        while link != head {
             let output = &mut *crate::container_of!(link, Output, link_sent);
             output.scheduled = output.current;
             output.sent = output.current;

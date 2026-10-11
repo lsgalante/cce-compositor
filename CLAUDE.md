@@ -423,8 +423,9 @@ and nothing ever takes `&mut` to it — every field is a `Cell` or `OnceCell`.
 It holds the scene (`crate::shared::scene()`, set once by `Server::init`;
 `Server` has no `scene` field any more), the configuration
 (`crate::shared::layout()`, below), the window manager's `mode()` and
-`adjust_held()` (and so `window_adjust_active()`, below), the display, and
-the pending work
+`adjust_held()` (and so `window_adjust_active()`, below), what the last
+manage pass applied (`crate::shared::sent()`, below), the display, and the
+pending work
 (`crate::shared::pending()`): whether a manage pass and a render pass are
 wanted and the idle callback that runs them. `dirty_windowing()`,
 `dirty_rendering()`, `mark_*` (set without arming, for a caller about to run
@@ -460,6 +461,15 @@ the handles and dirties windowing) and `refresh_adjust_held` (which re-runs
 the pointer passthrough) — through `store_mode` / `store_adjust_held`, which
 nothing else calls. Read them from anywhere; change them through the
 methods.
+
+**What a manage pass applied is shared** (`crate::shared::sent()`, since
+2026-10-10): the `outputs` and `seats` lists — intrusive `wl_list` heads
+(`ListHead`) that the leaked `Shared` gives a fixed address, holding
+`Output::link_sent` / `Seat::link_sent`, each appended by its
+`manage_start` (`sent().outputs.move_to_back(&mut self.link_sent)`) and
+walked from `head()` — and the output configuration being applied
+(`output_config()` / `take_output_config()` / `set_output_config()`).
+`WindowManager` has no `sent` field.
 
 ### Re-entrancy tracer (`reentry.rs`, since 2026-10-10)
 
@@ -500,6 +510,16 @@ day): **363 re-entries at 68 sites**. The largest group left is `sent`
 applied-state lists `sent.seats` / `sent.outputs`), then the `let wm = &mut
 …` bindings in the output manager and the gesture handlers, then the
 mutating calls.
+
+After `sent` became shared (same workload, same day): **180 re-entries at
+58 sites**, and none inside `step_op_frame` or `render_start` any more.
+149 of them are inside `process_ipc_command`, because the workload drives
+the pointer through `ccectl` and so every seat and gesture handler runs
+under it; live input comes from libinput, outside any window-manager
+method. The other 31 are calls that genuinely mutate from inside
+`manage_start` / `notify_configured` — `raise_window`, `record_focus`,
+`arm_border_fade`, `update_status`, the window destroy path's history,
+selection and `windows.remove` — which is the context-passing scope.
 
 ### Scene nodes are owned handles (`scene_handle.rs`, since 2026-10-10)
 

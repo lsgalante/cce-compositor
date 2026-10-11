@@ -2017,7 +2017,7 @@ impl Window {
         }
 
         let mut activated = false;
-        let seats = &mut (*crate::reentry::wm(self.server)).sent.seats as *mut ffi::wl_list as *mut WlList;
+        let seats = crate::shared::sent().seats.head() as *mut WlList;
         let mut curr = (*seats).next;
         while curr != seats {
             let next = (*curr).next;

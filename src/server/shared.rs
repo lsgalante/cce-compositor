@@ -18,6 +18,8 @@
 //! - the configuration, as an `Rc` snapshot ([`layout`]);
 //! - the window manager's mode and whether Super is held, and so whether
 //!   window adjusting is active ([`window_adjust_active`]);
+//! - what the last manage pass applied: the outputs and seats in it, in
+//!   order, and the output configuration it carries ([`sent`]);
 //! - the display and its event loop;
 //! - the pending work: whether a manage pass and a render pass are wanted,
 //!   and the idle callback that runs them ([`pending`]).
@@ -30,7 +32,7 @@ use crate::ffi;
 use crate::scene::Scene;
 use crate::config::Layout;
 use crate::window_manager::WindowManagerMode;
-use std::cell::{Cell, OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell, UnsafeCell};
 use std::rc::Rc;
 
 pub struct Shared {
@@ -40,19 +42,21 @@ pub struct Shared {
     server: Cell<*mut crate::server::Server>,
     mode: Cell<WindowManagerMode>,
     adjust_held: Cell<bool>,
+    sent: Sent,
     pending: Pending,
 }
 
 thread_local! {
-    static SHARED: &'static Shared = Box::leak(Box::new(Shared {
+    static SHARED: &'static Shared = Shared::leak(Shared {
         scene: OnceCell::new(),
         layout: RefCell::new(Rc::new(Layout::default())),
         display: Cell::new(std::ptr::null_mut()),
         server: Cell::new(std::ptr::null_mut()),
         mode: Cell::new(WindowManagerMode::Normal),
         adjust_held: Cell::new(false),
+        sent: Sent::new(),
         pending: Pending::new(),
-    }));
+    });
 }
 
 /// This thread's `Shared`.
@@ -107,12 +111,26 @@ pub fn window_adjust_active() -> bool {
     mode() == WindowManagerMode::Overview || adjust_held()
 }
 
+/// What the last manage pass applied.
+pub fn sent() -> &'static Sent {
+    &shared().sent
+}
+
 /// The pending manage and render work.
 pub fn pending() -> &'static Pending {
     &shared().pending
 }
 
 impl Shared {
+    /// Leak `shared` and initialise its list heads, which must not move
+    /// once a link points at them.
+    fn leak(shared: Shared) -> &'static Shared {
+        let shared: &'static Shared = Box::leak(Box::new(shared));
+        shared.sent.outputs.init();
+        shared.sent.seats.init();
+        shared
+    }
+
     /// The display; null before `Server::init`.
     pub fn display(&self) -> *mut ffi::wl_display {
         self.display.get()
@@ -147,6 +165,77 @@ impl Shared {
         if self.scene.set(scene).is_err() {
             panic!("the scene is set once");
         }
+    }
+}
+
+/// An intrusive `wl_list` head that lives in `Shared`, so its address is
+/// fixed for the life of the thread. The links in it are fields of the
+/// structs on the list (`Output::link_sent`, `Seat::link_sent`), recovered
+/// with `container_of!`.
+pub struct ListHead(UnsafeCell<ffi::wl_list>);
+
+impl ListHead {
+    const fn new() -> Self {
+        ListHead(UnsafeCell::new(ffi::wl_list { prev: std::ptr::null_mut(), next: std::ptr::null_mut() }))
+    }
+
+    fn init(&self) {
+        // SAFETY: called once, from `Shared::leak`, before anything can link
+        // into it.
+        unsafe { ffi::wl_list_init(self.0.get()) };
+    }
+
+    /// The head, for a walk: `(*head).next` until it comes back to `head`.
+    pub fn head(&self) -> *mut ffi::wl_list {
+        self.0.get()
+    }
+
+    /// Move `link` to the back of this list, unlinking it from wherever it
+    /// was.
+    ///
+    /// # Safety
+    /// `link` must be an initialised `wl_list` (linked or self-looped) in a
+    /// struct that unlinks it before it is freed.
+    pub unsafe fn move_to_back(&self, link: *mut ffi::wl_list) {
+        use crate::server::{wl_list_insert, wl_list_remove, WlList};
+        wl_list_remove(link as *mut WlList);
+        wl_list_insert((*self.head()).prev as *mut WlList, link as *mut WlList);
+    }
+}
+
+/// What the last manage pass applied: the outputs and seats in it, each
+/// appended as its `manage_start` ran, and the output configuration a
+/// client asked for, answered when the outputs commit (or fail to). It was
+/// `WindowManager::sent`, reached through the server pointer by every
+/// output and seat — and by every window, to find the seats focusing it —
+/// from inside the manage pass that held the window manager.
+pub struct Sent {
+    pub outputs: ListHead,
+    pub seats: ListHead,
+    output_config: Cell<*mut ffi::wlr_output_configuration_v1>,
+}
+
+impl Sent {
+    const fn new() -> Self {
+        Sent {
+            outputs: ListHead::new(),
+            seats: ListHead::new(),
+            output_config: Cell::new(std::ptr::null_mut()),
+        }
+    }
+
+    /// The output configuration being applied, or null.
+    pub fn output_config(&self) -> *mut ffi::wlr_output_configuration_v1 {
+        self.output_config.get()
+    }
+
+    /// Take the output configuration being applied, leaving null.
+    pub fn take_output_config(&self) -> *mut ffi::wlr_output_configuration_v1 {
+        self.output_config.replace(std::ptr::null_mut())
+    }
+
+    pub fn set_output_config(&self, config: *mut ffi::wlr_output_configuration_v1) {
+        self.output_config.set(config);
     }
 }
 
@@ -295,5 +384,51 @@ unsafe extern "C" fn handle_idle(_data: *mut std::ffi::c_void) {
         } else if pending.rendering() {
             wm.render_start();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn order(head: &ListHead, links: &[*mut ffi::wl_list]) -> Vec<usize> {
+        let mut out = Vec::new();
+        unsafe {
+            let mut cur = (*head.head()).next;
+            while cur != head.head() {
+                out.push(links.iter().position(|&l| l == cur).unwrap());
+                cur = (*cur).next;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn move_to_back_appends_and_moves_without_duplicating() {
+        let head = Box::new(ListHead::new());
+        head.init();
+        let mut a: Box<ffi::wl_list> = Box::new(unsafe { std::mem::zeroed() });
+        let mut b: Box<ffi::wl_list> = Box::new(unsafe { std::mem::zeroed() });
+        let links = [&mut *a as *mut ffi::wl_list, &mut *b as *mut ffi::wl_list];
+        unsafe {
+            ffi::wl_list_init(links[0]);
+            ffi::wl_list_init(links[1]);
+            head.move_to_back(links[0]);
+            head.move_to_back(links[1]);
+            assert_eq!(order(&head, &links), [0, 1]);
+            // The next manage pass appends them again, in its own order.
+            head.move_to_back(links[0]);
+            assert_eq!(order(&head, &links), [1, 0]);
+            crate::server::wl_list_remove(links[0] as *mut crate::server::WlList);
+            crate::server::wl_list_remove(links[1] as *mut crate::server::WlList);
+        }
+        assert_eq!(order(&head, &links), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn the_shared_lists_start_empty_and_initialised() {
+        let head = sent().outputs.head();
+        assert_eq!(unsafe { (*head).next }, head);
+        assert!(sent().output_config().is_null());
     }
 }

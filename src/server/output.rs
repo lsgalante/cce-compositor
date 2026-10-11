@@ -244,9 +244,7 @@ impl Output {
 
                 self.sent = self.scheduled;
 
-                wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut WlList);
-                let sent_outputs = &mut (*crate::reentry::wm(self.server)).sent.outputs as *mut ffi::wl_list as *mut WlList;
-                wl_list_insert((*sent_outputs).prev, &mut self.link_sent as *mut ffi::wl_list as *mut WlList);
+                crate::shared::sent().outputs.move_to_back(&mut self.link_sent);
             }
             OutputStateValue::DisabledHard | OutputStateValue::Destroying => {
                 self.sent = self.scheduled;

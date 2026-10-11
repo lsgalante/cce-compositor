@@ -55,12 +55,6 @@ pub struct WindowManagerScheduled {
     pub output_config: *mut ffi::wlr_output_configuration_v1,
 }
 
-pub struct WindowManagerSent {
-    pub outputs: ffi::wl_list,
-    pub output_config: *mut ffi::wlr_output_configuration_v1,
-    pub seats: ffi::wl_list,
-}
-
 pub struct WindowManagerRenderingRequested {
     pub list: ffi::wl_list,
     pub order_hash: u64,
@@ -150,7 +144,6 @@ pub struct WindowManager {
     pub selection: crate::selection::Selection,
     pub focus_history: Vec<*mut Window>,
     pub scheduled: WindowManagerScheduled,
-    pub sent: WindowManagerSent,
     pub rendering_requested: WindowManagerRenderingRequested,
     pub timeout: *mut ffi::wl_event_source,
     pub desk_pan_x: f64,
@@ -505,9 +498,7 @@ impl WindowManager {
         crate::wm_scope!(mut);
         // This is a stub for the 0-arg struct instantiation.
         // We will call the real initialization with the server parameter.
-        ffi::wl_list_init(&mut self.sent.outputs);
         self.scheduled.output_config = std::ptr::null_mut();
-        self.sent.output_config = std::ptr::null_mut();
         self.output_scale = 1.0;
         self.display = std::collections::HashMap::new();
         self.input_rules = Vec::new();
@@ -525,11 +516,6 @@ impl WindowManager {
         self.focus_history = Vec::new();
         self.scheduled = WindowManagerScheduled {
             output_config: std::ptr::null_mut(),
-        };
-        self.sent = WindowManagerSent {
-            outputs: std::mem::zeroed(),
-            output_config: std::ptr::null_mut(),
-            seats: std::mem::zeroed(),
         };
         self.rendering_requested = WindowManagerRenderingRequested {
             list: std::mem::zeroed(),
@@ -604,8 +590,6 @@ impl WindowManager {
         self.injected_super_held = false;
         self.injected_key_mods = 0;
 
-        ffi::wl_list_init(&mut self.sent.outputs);
-        ffi::wl_list_init(&mut self.sent.seats);
         ffi::wl_list_init(&mut self.rendering_requested.list);
 
         let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
@@ -1106,13 +1090,6 @@ impl WindowManager {
 }
 
 // Deprecated sent_outputs that is part of structural layout compatibility
-pub struct WindowManagerScheduledCompat {
-    pub output_config: *mut ffi::wlr_output_configuration_v1,
-}
-pub struct WindowManagerSentCompat {
-    pub outputs: ffi::wl_list,
-    pub output_config: *mut ffi::wlr_output_configuration_v1,
-}
 /// Whether `rule` names a window with this app_id and title. Both match
 /// as substrings. A window that never set a title matches as the empty
 /// string, so `title=""` (which every title contains) reaches an untitled

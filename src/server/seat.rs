@@ -779,9 +779,7 @@ impl Seat {
         self.focus_requested = false;
         self.layer_shell.manage_start();
 
-        crate::server::wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
-        let sent_seats = &mut (*crate::reentry::wm(self.server)).sent.seats as *mut ffi::wl_list as *mut crate::server::WlList;
-        crate::server::wl_list_insert((*sent_seats).prev, &mut self.link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
+        crate::shared::sent().seats.move_to_back(&mut self.link_sent);
     }
 
     pub unsafe fn manage_finish(&mut self) {

@@ -109,13 +109,13 @@ impl WindowManager {
 
         let mt_outputs = mt0.map(|s| s.elapsed().as_micros());
 
-        if !self.sent.output_config.is_null() {
+        let stale = crate::shared::sent().take_output_config();
+        if !stale.is_null() {
             log::warn!("sent.output_config was not null in manage_start, destroying old configuration");
-            ffi::wlr_output_configuration_v1_send_failed(self.sent.output_config);
-            ffi::wlr_output_configuration_v1_destroy(self.sent.output_config);
-            self.sent.output_config = std::ptr::null_mut();
+            ffi::wlr_output_configuration_v1_send_failed(stale);
+            ffi::wlr_output_configuration_v1_destroy(stale);
         }
-        self.sent.output_config = self.scheduled.output_config;
+        crate::shared::sent().set_output_config(self.scheduled.output_config);
         self.scheduled.output_config = std::ptr::null_mut();
 
         for &win_ptr in self.windows.iter() {
@@ -230,7 +230,7 @@ impl WindowManager {
 
         log::debug!("manage sequence finish");
 
-        let seats = &mut self.sent.seats as *mut ffi::wl_list as *mut WlList;
+        let seats = crate::shared::sent().seats.head() as *mut WlList;
         let mut curr = (*seats).next;
         while curr != seats {
             let next = (*curr).next;
