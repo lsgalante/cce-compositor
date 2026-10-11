@@ -232,18 +232,18 @@ impl WindowManager {
         self.selection.marquee = Some(marquee);
         let rect = marquee.rect();
         let mut picked: Vec<crate::window::WindowId> = Vec::new();
-        for w in self.windows.iter() {
+        for w in self.windows.values() {
             if !self.selectable(&*w) {
                 continue;
             }
             let win = (
-                (*w).virtual_x,
-                (*w).virtual_y,
-                (*w).box_geom.width as f64,
-                (*w).box_geom.height as f64,
+                w.virtual_x,
+                w.virtual_y,
+                w.box_geom.width as f64,
+                w.box_geom.height as f64,
             );
             if touches(rect, win) {
-                picked.push((*w).id());
+                picked.push(w.id());
             }
         }
         if picked != self.selection.windows {

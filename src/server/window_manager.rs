@@ -666,7 +666,7 @@ impl WindowManager {
     /// the tiled columns is not recalled into the view like a lost one.
     /// Minimized entries are skipped — a minimized window is nowhere on the
     /// desk to be beside.
-    pub unsafe fn tiled_desk_bounds(&self) -> Option<(f64, f64, f64, f64)> {
+    pub fn tiled_desk_bounds(&self) -> Option<(f64, f64, f64, f64)> {
         crate::wm_scope!();
         let mut bounds: Option<(f64, f64, f64, f64)> = None;
         let mut extend = |x: f64, y: f64, w: f64, h: f64| {
@@ -682,23 +682,22 @@ impl WindowManager {
                 extend(e.virtual_x, e.virtual_y, e.width as f64, e.height as f64);
             }
         }
-        for w in self.windows.iter() {
-            if w.is_null()
-                || (*w).closed
-                || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init)
-                || (*w).tiling_mode != crate::tiling::TilingMode::Tiled
-                || (*w).minimized
-                || (*w).is_status_bar()
-                || (*w).is_wallpaper()
-                || (*w).is_grid()
+        for w in self.windows.values() {
+            if w.closed
+                || matches!(w.state, crate::window::WindowState::Closing | crate::window::WindowState::Init)
+                || w.tiling_mode != crate::tiling::TilingMode::Tiled
+                || w.minimized
+                || w.is_status_bar()
+                || w.is_wallpaper()
+                || w.is_grid()
             {
                 continue;
             }
             extend(
-                (*w).virtual_x,
-                (*w).virtual_y,
-                (*w).box_geom.width as f64,
-                (*w).box_geom.height as f64,
+                w.virtual_x,
+                w.virtual_y,
+                w.box_geom.width as f64,
+                w.box_geom.height as f64,
             );
         }
         bounds

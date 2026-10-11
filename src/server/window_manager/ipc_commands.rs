@@ -222,11 +222,8 @@ impl WindowManager {
                     crate::shared::pending().rendering(),
                     crate::shared::pending().armed(),
                 );
-                for w in self.windows.iter() {
-                    if w.is_null() {
-                        continue;
-                    }
-                    let cfg = match (*w).impl_type() {
+                for w in self.windows.values() {
+                    let cfg = match w.impl_type() {
                         crate::window::WindowImpl::Toplevel(t) if !t.is_null() => {
                             format!("{:?}", (*t).configure_state)
                         }
@@ -234,21 +231,21 @@ impl WindowManager {
                     };
                     out.push_str(&format!(
                         "window id={} app_id={:?} state={:?} closed={} linked={} mode={:?} edge={:?} moved={} req_pos=({},{}) box=({},{},{}x{}) collapsed_len={} cfg={}\n",
-                        (*w).ref_key.index,
-                        (*w).get_app_id_string().unwrap_or_default(),
-                        (*w).state,
-                        (*w).closed,
-                        self.in_render_list((*w).id()),
-                        (*w).tiling_mode,
-                        (*w).status_edge,
-                        self.is_window_being_moved((*w).id()),
-                        (*w).rendering_requested.x,
-                        (*w).rendering_requested.y,
-                        (*w).box_geom.x,
-                        (*w).box_geom.y,
-                        (*w).box_geom.width,
-                        (*w).box_geom.height,
-                        (*w).status_collapsed_len,
+                        w.ref_key.index,
+                        w.get_app_id_string().unwrap_or_default(),
+                        w.state,
+                        w.closed,
+                        self.in_render_list(w.id()),
+                        w.tiling_mode,
+                        w.status_edge,
+                        self.is_window_being_moved(w.id()),
+                        w.rendering_requested.x,
+                        w.rendering_requested.y,
+                        w.box_geom.x,
+                        w.box_geom.y,
+                        w.box_geom.width,
+                        w.box_geom.height,
+                        w.status_collapsed_len,
                         cfg,
                     ));
                 }

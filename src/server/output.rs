@@ -483,11 +483,11 @@ impl Output {
         if ovdbg_enabled() {
         if let Ok(filter) = std::fs::read_to_string("/tmp/cce-ovdbg") {
             let pats: Vec<&str> = filter.trim().split(',').filter(|p| !p.is_empty()).collect();
-            for window in wm.windows.iter() {
-                if window.is_null() || (*window).closed {
+            for window in wm.windows.values() {
+                if window.closed {
                     continue;
                 }
-                let app = (*window).get_app_id_string().unwrap_or_default();
+                let app = window.get_app_id_string().unwrap_or_default();
                 if !pats.iter().any(|p| app.contains(p)) {
                     continue;
                 }
@@ -499,20 +499,20 @@ impl Output {
                     now.as_secs(),
                     now.subsec_millis(),
                     app,
-                    (*window).scale,
-                    (*window).rendering_requested.x,
-                    (*window).rendering_requested.y,
-                    (*window).box_geom.x,
-                    (*window).box_geom.y,
-                    (*window).state,
-                    (*window).rendering_requested.hidden,
-                    (*window).surfaces.saved,
-                    (*window).tree.is_enabled(),
+                    window.scale,
+                    window.rendering_requested.x,
+                    window.rendering_requested.y,
+                    window.box_geom.x,
+                    window.box_geom.y,
+                    window.state,
+                    window.rendering_requested.hidden,
+                    window.surfaces.saved,
+                    window.tree.is_enabled(),
                 );
                 if let Ok(tag) = std::ffi::CString::new(app) {
-                    ffi::river_scene_shadow_dbg((*window).shadow.raw(), tag.as_ptr());
+                    ffi::river_scene_shadow_dbg(window.shadow.raw(), tag.as_ptr());
                     ffi::river_scene_ovdbg_dump(
-                        (*window).tree.node(),
+                        window.tree.node(),
                         tag.as_ptr(),
                     );
                 }

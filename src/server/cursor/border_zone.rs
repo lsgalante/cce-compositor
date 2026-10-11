@@ -46,30 +46,30 @@ pub unsafe fn grid_surface_at(
 pub unsafe fn grid_node_info(
     wm: &crate::window_manager::WindowManager,
 ) -> Option<(*mut ffi::wlr_surface, f64, f64, f64, f64, f64)> {
-    for w in wm.windows.iter() {
-        if w.is_null() || (*w).closed || !(*w).is_grid() {
+    for w in wm.windows.values() {
+        if w.closed || !w.is_grid() {
             continue;
         }
-        if !matches!((*w).state, crate::window::WindowState::Mapped) {
+        if !matches!(w.state, crate::window::WindowState::Mapped) {
             continue;
         }
-        let surface = (*w).root_surface();
+        let surface = w.root_surface();
         if surface.is_null() {
             continue;
         }
-        let node = (*w).surfaces.tree.node();
+        let node = w.surfaces.tree.node();
         let (mut nx, mut ny) = (0, 0);
         if !ffi::wlr_scene_node_coords(node, &mut nx, &mut ny) {
             continue;
         }
-        let scale = if (*w).scale > 0.0 { (*w).scale } else { 1.0 };
+        let scale = if w.scale > 0.0 { w.scale } else { 1.0 };
         return Some((
             surface,
             nx as f64,
             ny as f64,
             scale,
-            (*w).box_geom.width as f64,
-            (*w).box_geom.height as f64,
+            w.box_geom.width as f64,
+            w.box_geom.height as f64,
         ));
     }
     None

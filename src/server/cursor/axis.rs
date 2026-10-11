@@ -550,19 +550,16 @@ impl Cursor {
         if focused.is_null() {
             return None;
         }
-        for window in wm.windows.iter() {
-            if window.is_null() {
-                continue;
-            }
-            let crate::window::WindowImpl::Xwayland(xwindow) = (*window).impl_type() else { continue };
+        for window in wm.windows.values() {
+            let crate::window::WindowImpl::Xwayland(xwindow) = window.impl_type() else { continue };
             if xwindow.is_null() || (*(*xwindow).xsurface).pid != pid {
                 continue;
             }
-            let app_id = (*window).get_app_id_string().unwrap_or_default();
+            let app_id = window.get_app_id_string().unwrap_or_default();
             if !crate::shared::layout().touchpad_view_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
                 continue;
             }
-            if focused == result.surface || focused == (*window).root_surface() {
+            if focused == result.surface || focused == window.root_surface() {
                 return Some(result.surface);
             }
         }

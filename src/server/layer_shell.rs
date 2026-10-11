@@ -585,15 +585,15 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                 let mut parent_y = None;
                 let mut parent_w = 0;
 
-                for win_ptr in (*crate::reentry::wm(server)).windows.iter() {
-                    if win_ptr.is_null() || (*win_ptr).closed {
+                for win_ptr in (*crate::reentry::wm(server)).windows.values() {
+                    if win_ptr.closed {
                         continue;
                     }
-                    if let Some(win_app_id) = (*win_ptr).get_app_id_string() {
+                    if let Some(win_app_id) = win_ptr.get_app_id_string() {
                         if win_app_id == parent_app_id {
-                            parent_x = Some((*win_ptr).rendering_requested.x);
-                            parent_y = Some((*win_ptr).rendering_requested.y);
-                            parent_w = (*win_ptr).box_geom.width;
+                            parent_x = Some(win_ptr.rendering_requested.x);
+                            parent_y = Some(win_ptr.rendering_requested.y);
+                            parent_w = win_ptr.box_geom.width;
                             break;
                         }
                     }

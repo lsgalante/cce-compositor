@@ -432,14 +432,14 @@ impl WindowManager {
 
         // Get list of windows we need to wait for to close cleanly
         let mut normal_windows = Vec::new();
-        for w in self.windows.iter() {
-            if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
+        for w in self.windows.values() {
+            if w.closed || matches!(w.state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                 continue;
             }
-            if (*w).is_status_bar() || (*w).is_wallpaper() {
+            if w.is_status_bar() || w.is_wallpaper() {
                 continue;
             }
-            normal_windows.push(w);
+            normal_windows.push(w.id());
         }
 
         if normal_windows.is_empty() {
@@ -449,9 +449,10 @@ impl WindowManager {
         }
 
         log::info!("Sending close request to {} windows...", normal_windows.len());
-        for &w in &normal_windows {
-            log::info!("Closing window: {:?}", (*w).get_title_string());
-            (*w).close();
+        for &id in &normal_windows {
+            let Some(w) = self.windows.get_mut(id) else { continue };
+            log::info!("Closing window: {:?}", w.get_title_string());
+            w.close();
         }
 
         // Windows that are still here when this fires are being held by
@@ -541,11 +542,11 @@ impl WindowManager {
         }
 
         let mut normal_windows_count = 0;
-        for w in self.windows.iter() {
-            if w.is_null() || (*w).closed || matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
+        for w in self.windows.values() {
+            if w.closed || matches!(w.state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                 continue;
             }
-            if (*w).is_status_bar() || (*w).is_wallpaper() {
+            if w.is_status_bar() || w.is_wallpaper() {
                 continue;
             }
             normal_windows_count += 1;

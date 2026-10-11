@@ -161,23 +161,23 @@ impl WindowManager {
     /// Wedge tracer: a Mapped status window outside the render list is
     /// invisible to configures and render_finish — exactly the tray
     /// mis-slot wedge. Silent unless one exists.
-    pub(crate) unsafe fn debug_check_unlinked_status(&self, phase: &str) {
+    pub(crate) fn debug_check_unlinked_status(&self, phase: &str) {
         crate::wm_scope!();
-        for w in self.windows.iter() {
-            if w.is_null() || (*w).closed {
+        for w in self.windows.values() {
+            if w.closed {
                 continue;
             }
-            if !matches!((*w).state, crate::window::WindowState::Mapped) {
+            if !matches!(w.state, crate::window::WindowState::Mapped) {
                 continue;
             }
-            if self.in_render_list((*w).id()) {
+            if self.in_render_list(w.id()) {
                 continue;
             }
             // Borrowed (`is_status_bar`), not `get_app_id_string`: this runs
             // three times a transaction — once a vblank during a drag — and
             // allocated a String per window to prefix-match it.
-            if (*w).is_status_bar() {
-                log::info!("[LinkDbg] UNLINKED-MAPPED at {}: app={:?}", phase, (*w).get_app_id_string());
+            if w.is_status_bar() {
+                log::info!("[LinkDbg] UNLINKED-MAPPED at {}: app={:?}", phase, w.get_app_id_string());
             }
         }
     }
@@ -450,15 +450,14 @@ impl WindowManager {
         // grid, which the loop raises in render-list order; keep the window
         // over it — the grid is the desk, and the window sits on the desk.
         if reorder {
-            for w in self.windows.iter() {
-                if !w.is_null()
-                    && !(*w).closed
-                    && matches!((*w).state, crate::window::WindowState::Mapped)
+            for w in self.windows.values() {
+                if !w.closed
+                    && matches!(w.state, crate::window::WindowState::Mapped)
                     && rendered_fullscreen(&*w)
                     && !fullscreen_on_top(self, &*w)
                 {
-                    (*w).tree.raise_to_top();
-                    (*w).popup_tree.place_above(&(*w).tree);
+                    w.tree.raise_to_top();
+                    w.popup_tree.place_above(&w.tree);
                 }
             }
         }
@@ -469,14 +468,13 @@ impl WindowManager {
         // every reorder pass — a rule in the stacking authority, not a
         // one-shot raise.
         if reorder {
-            for w in self.windows.iter() {
-                if !w.is_null()
-                    && !(*w).closed
-                    && matches!((*w).state, crate::window::WindowState::Mapped)
-                    && (*w).get_app_id_string().map_or(false, |id| id.ends_with("light_source"))
+            for w in self.windows.values() {
+                if !w.closed
+                    && matches!(w.state, crate::window::WindowState::Mapped)
+                    && w.get_app_id_string().map_or(false, |id| id.ends_with("light_source"))
                 {
-                    (*w).tree.raise_to_top();
-                    (*w).popup_tree.place_above(&(*w).tree);
+                    w.tree.raise_to_top();
+                    w.popup_tree.place_above(&w.tree);
                 }
             }
         }

@@ -412,15 +412,15 @@ impl WindowManager {
     /// — see the call site in the output frame handler.
     pub unsafe fn send_frame_done_to_grid_clients_awaiting_patch(&self) {
         crate::wm_scope!();
-        for w in self.windows.iter() {
-            if w.is_null() || (*w).closed || !(*w).is_grid() {
+        for w in self.windows.values() {
+            if w.closed || !w.is_grid() {
                 continue;
             }
-            if !matches!((*w).state, crate::window::WindowState::Mapped) {
+            if !matches!(w.state, crate::window::WindowState::Mapped) {
                 continue;
             }
-            if (*w).grid_patch_pending.is_some() {
-                (*w).send_frame_done();
+            if w.grid_patch_pending.is_some() {
+                w.send_frame_done();
             }
         }
     }
@@ -462,14 +462,14 @@ impl WindowManager {
         let zoom = crate::policy::background::sanitized_zoom(self.desk_zoom);
         let (vx, vy) = (self.desk_pan_x, self.desk_pan_y);
         let (vw, vh) = (out.width as f64 / zoom, out.height as f64 / zoom);
-        for w in self.windows.iter() {
-            if w.is_null() || (*w).closed || !(*w).is_grid() {
+        for w in self.windows.values() {
+            if w.closed || !w.is_grid() {
                 continue;
             }
-            if !matches!((*w).state, crate::window::WindowState::Mapped) {
+            if !matches!(w.state, crate::window::WindowState::Mapped) {
                 continue;
             }
-            let Some(p) = &(*w).grid_patch_current else { return false };
+            let Some(p) = &w.grid_patch_current else { return false };
             // Half a virtual unit of tolerance: the anchor is rounded to a
             // screen pixel, and a patch edge exactly on the viewport edge
             // must not read as a gap.
