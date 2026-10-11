@@ -163,15 +163,15 @@ impl WindowManager {
             let x = out_x + ((p.vx - self.desk_pan_x) * zoom).round() as i32;
             let y = out_y + ((p.vy - self.desk_pan_y) * zoom).round() as i32;
             let (w, h) = ((p.w as f64 * zoom) as i32, (p.h as f64 * zoom) as i32);
-            ffi::river_scene_node_set_position_if_changed(p.rect.node(), x, y);
-            ffi::river_scene_rect_set_size_if_changed(p.rect.raw(), w, h);
+            p.rect.set_position_if_changed(x, y);
+            p.rect.set_size_if_changed(w, h);
             // Span-widened like the window the placeholder stands in for
             // and the grid cell it sits on; the raw radius read visibly
             // squarer than both at corner_shape > 2.
             let radius = crate::window::widen_corner_radius(
                 (self.layout.root_plate_corner_radius as f64 * zoom) as i32, w, h,
             );
-            ffi::river_scene_rect_set_corner_radius(p.rect.raw(), radius);
+            p.rect.set_corner_radius(radius);
         }
     }
 
@@ -612,7 +612,7 @@ impl WindowManager {
     }
 
     /// `program` as for `match_and_remove_restore_state`.
-    pub unsafe fn match_last_window_state(
+    pub fn match_last_window_state(
         &self,
         app_id: &str,
         title: &str,
@@ -637,7 +637,7 @@ impl WindowManager {
         None
     }
 
-    pub unsafe fn spawn_restored_windows(&mut self) {
+    pub fn spawn_restored_windows(&mut self) {
         log::info!("Spawning restored windows. Total: {}", self.restore_queue.len());
         let restored = self.restore_queue.clone();
         std::thread::spawn(move || {

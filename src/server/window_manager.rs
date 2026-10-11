@@ -1634,7 +1634,7 @@ impl WindowManager {
 
         for (&win_ptr, wp) in win_ptrs.iter().zip(plan.windows.iter()) {
             if let Some(enabled) = wp.scene_enabled {
-                ffi::wlr_scene_node_set_enabled((*win_ptr).tree.node(), enabled);
+                (*win_ptr).tree.set_enabled(enabled);
             }
             if let Some(hidden) = wp.hidden {
                 (*win_ptr).rendering_requested.hidden = hidden;
@@ -1717,8 +1717,8 @@ impl WindowManager {
                     let y = (*win_ptr).rendering_requested.y;
                     (*win_ptr).box_geom.x = x;
                     (*win_ptr).box_geom.y = y;
-                    ffi::river_scene_node_set_position_if_changed((*win_ptr).tree.node(), x, y);
-                    ffi::river_scene_node_set_position_if_changed((*win_ptr).popup_tree.node(), x, y);
+                    (*win_ptr).tree.set_position_if_changed(x, y);
+                    (*win_ptr).popup_tree.set_position_if_changed(x, y);
                 }
             }
         }
@@ -2298,7 +2298,7 @@ impl WindowManager {
         {
             return;
         }
-        ffi::wlr_scene_node_raise_to_top((*window).popup_tree.node());
+        (*window).popup_tree.raise_to_top();
     }
 
     pub unsafe fn raise_window(&mut self, window: *mut Window) {
@@ -3328,7 +3328,7 @@ mod tests {
             fullscreen_at: None,
         });
 
-        unsafe {
+        {
             // Test exact match
             let matched = wm.match_last_window_state("test-app", "My App Window", None);
             assert!(matched.is_some());
@@ -3561,7 +3561,7 @@ mod tests {
         }
         wm.last_window_states
             .push(proton_entry("Ubisoft Connect", &format!("{UPC} -upc_desktop_mode")));
-        unsafe {
+        {
             assert!(wm.match_last_window_state("steam_proton", "", Some(EXPLORER)).is_none());
             // The launcher itself, under a changed title, still borrows.
             assert!(wm.match_last_window_state("steam_proton", "Library", Some(UPC)).is_some());
@@ -3569,7 +3569,7 @@ mod tests {
             assert!(wm.match_last_window_state("steam_proton", "", None).is_some());
         }
         wm.last_window_states[0] = proton_entry("", &format!("{EXPLORER} /desktop"));
-        unsafe {
+        {
             // Untitled on both sides is not an exact match, so the program
             // check applies to it too.
             assert!(wm.match_last_window_state("steam_proton", "", Some(UPC)).is_none());

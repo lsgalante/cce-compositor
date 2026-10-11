@@ -541,7 +541,7 @@ impl Cursor {
         }
     }
 
-    unsafe fn claimed_shape(&self) -> Shape {
+    fn claimed_shape(&self) -> Shape {
         let points: Vec<(f64, f64)> = self
             .touch_points
             .values()
@@ -551,7 +551,7 @@ impl Cursor {
         shape(&points)
     }
 
-    unsafe fn claim_rebase(&mut self) {
+    fn claim_rebase(&mut self) {
         let s = self.claimed_shape();
         match &mut self.touch_claim {
             Claim::Desk { track, .. } | Claim::Multi { track, .. } => track.rebase(s),

@@ -205,9 +205,7 @@ pub fn run_server() {
         }
     }
 
-    unsafe {
-        server.wm.spawn_restored_windows();
-    }
+    server.wm.spawn_restored_windows();
 
     struct ServerGuard {
         init_pid: Option<nix::unistd::Pid>,

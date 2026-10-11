@@ -159,9 +159,9 @@ impl WindowManager {
                     (*win).box_geom.x, (*win).box_geom.y, (*win).box_geom.width, (*win).box_geom.height,
                     (*win).scale,
                     (*win).surfaces.saved,
-                    ffi::river_scene_node_get_enabled((*win).tree.node()),
-                    ffi::river_scene_node_get_enabled((*win).surfaces.tree.node()),
-                    ffi::river_scene_node_get_enabled((*win).surfaces.saved_tree.node()),
+                    (*win).tree.is_enabled(),
+                    (*win).surfaces.tree.is_enabled(),
+                    (*win).surfaces.saved_tree.is_enabled(),
                 );
                 unsafe extern "C" fn dump_iter(
                     buffer: *mut ffi::wlr_scene_buffer,

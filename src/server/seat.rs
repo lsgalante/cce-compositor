@@ -296,7 +296,7 @@ impl Seat {
         ffi::river_wlr_surface_scale_logical_size(surface, scale);
     }
 
-    unsafe fn unwatch_x11_cursor(&mut self) {
+    fn unwatch_x11_cursor(&mut self) {
         if self.x11_cursor_surface.is_null() {
             return;
         }

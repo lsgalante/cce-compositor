@@ -37,7 +37,7 @@ impl LayerShell {
         Ok(())
     }
 
-    pub unsafe fn deinit(&mut self) {
+    pub fn deinit(&mut self) {
         self.new_surface.disconnect();
     }
 
@@ -236,7 +236,7 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
 
     (*layer_surface).destroy_popups();
 
-    ffi::wlr_scene_node_destroy((*layer_surface).popup_tree.node());
+    (*layer_surface).popup_tree.destroy();
 
     ffi::river_wlr_surface_set_data((*(*layer_surface).wlr_layer_surface).surface, std::ptr::null_mut());
 
@@ -800,7 +800,7 @@ impl LayerShellOutput {
 
                         let x = ffi::river_scene_node_get_x((*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node);
                         let y = ffi::river_scene_node_get_y((*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node);
-                        ffi::wlr_scene_node_set_position((*layer_surface).popup_tree.node(), x, y);
+                        (*layer_surface).popup_tree.set_position(x, y);
 
                         let clip = ffi::wlr_box {
                             x: -(x - (*output).scheduled.x),
@@ -884,7 +884,7 @@ impl Default for LayerShellSeat {
 }
 
 impl LayerShellSeat {
-    pub unsafe fn manage_start(&mut self) {
+    pub fn manage_start(&mut self) {
         if self.scheduled_focus != self.sent_focus {
             self.sent_focus = self.scheduled_focus;
         }

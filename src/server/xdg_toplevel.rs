@@ -700,18 +700,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         (*(*window).server).wm.layout.scenefx_optimized_blur
     };
     let blur_enabled = (*window).rendering_requested.blur && ((*window).wm_requested.ssd || is_decorated || is_status);
-    ffi::river_scene_node_enable_blur(
-        (*window).tree.node(),
-        blur_enabled,
-        use_optimized,
-        ignore_transparent,
-        0,
-        0,
-        geom_w,
-        geom_h,
-        // geom_w/h are already scaled to device px; the radius must match.
-        (radius as f64 * scale) as i32,
-    );
+    (*window).tree.enable_blur(blur_enabled, use_optimized, ignore_transparent, 0, 0, geom_w, geom_h, // geom_w/h are already scaled to device px; the radius must match.
+        (radius as f64 * scale) as i32);
     (*window).sync_backdrop_compress();
 
     let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;
@@ -907,8 +897,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         // (which restores the new buffer and applies it together) and make
         // sure that pass runs promptly.
         if !(*window).surfaces.saved {
-            ffi::river_scene_node_set_position_if_changed((*window).tree.node(), final_x, final_y);
-            ffi::river_scene_node_set_position_if_changed((*window).popup_tree.node(), final_x, final_y);
+            (*window).tree.set_position_if_changed(final_x, final_y);
+            (*window).popup_tree.set_position_if_changed(final_x, final_y);
             (*window).box_geom.width = geometry.width;
             (*window).box_geom.height = geometry.height;
             (*window).draw_borders();

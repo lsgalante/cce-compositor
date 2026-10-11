@@ -385,7 +385,7 @@ impl WindowManager {
                 (*window).surfaces.drop_saved();
             }
             if matches!((*window).state, crate::window::WindowState::Init) {
-                ffi::wlr_scene_node_reparent((*window).tree.node(), (*self.server).scene.hidden_tree.raw());
+                (*window).tree.reparent(&(*self.server).scene.hidden_tree);
             }
             if let crate::window::WindowImpl::Destroying = (*window).impl_type {
                 Window::destroy(window);
@@ -514,12 +514,12 @@ impl WindowManager {
 
                     ffi::wlr_scene_node_reparent((*window).tree.node(), layer);
                     if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
-                        ffi::wlr_scene_node_lower_to_bottom((*window).tree.node());
+                        (*window).tree.lower_to_bottom();
                     } else {
-                        ffi::wlr_scene_node_raise_to_top((*window).tree.node());
+                        (*window).tree.raise_to_top();
                     }
                     ffi::wlr_scene_node_reparent((*window).popup_tree.node(), layer);
-                    ffi::wlr_scene_node_place_above((*window).popup_tree.node(), (*window).tree.node());
+                    (*window).popup_tree.place_above(&(*window).tree);
                 }
             }
             curr = next;
@@ -561,11 +561,8 @@ impl WindowManager {
                     && !wm_layer.is_null()
                     && ffi::river_scene_node_get_parent((*window).tree.node()) == wm_layer;
                 if floats && in_wm_layer {
-                    ffi::wlr_scene_node_raise_to_top((*window).tree.node());
-                    ffi::wlr_scene_node_place_above(
-                        (*window).popup_tree.node(),
-                        (*window).tree.node(),
-                    );
+                    (*window).tree.raise_to_top();
+                    (*window).popup_tree.place_above(&(*window).tree);
                 }
                 // Last, so an open menu clears the plane it was just
                 // stacked behind (`raise_focused_popups`).
@@ -588,8 +585,8 @@ impl WindowManager {
                     && rendered_fullscreen(w)
                     && !fullscreen_on_top(w)
                 {
-                    ffi::wlr_scene_node_raise_to_top((*w).tree.node());
-                    ffi::wlr_scene_node_place_above((*w).popup_tree.node(), (*w).tree.node());
+                    (*w).tree.raise_to_top();
+                    (*w).popup_tree.place_above(&(*w).tree);
                 }
             }
         }
@@ -606,8 +603,8 @@ impl WindowManager {
                     && matches!((*w).state, crate::window::WindowState::Mapped)
                     && (*w).get_app_id_string().map_or(false, |id| id.ends_with("light_source"))
                 {
-                    ffi::wlr_scene_node_raise_to_top((*w).tree.node());
-                    ffi::wlr_scene_node_place_above((*w).popup_tree.node(), (*w).tree.node());
+                    (*w).tree.raise_to_top();
+                    (*w).popup_tree.place_above(&(*w).tree);
                 }
             }
         }

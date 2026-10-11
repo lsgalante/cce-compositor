@@ -125,7 +125,7 @@ impl Scene {
         // Layer shells, fullscreen and the lock screen stay put.
         for tree in [&self.layers.wm, &self.layers.border_overlay, &self.layers.popups, &self.layers.override_redirect] {
             if !tree.is_null() {
-                ffi::river_scene_tree_set_desk_offset(tree.raw(), true);
+                tree.set_desk_offset(true);
             }
         }
 
@@ -146,7 +146,7 @@ impl Scene {
         Ok(())
     }
 
-    pub unsafe fn deinit(&mut self) {}
+    pub fn deinit(&mut self) {}
 
     pub unsafe fn at(&self, lx: f64, ly: f64) -> Option<AtResult> {
         self.at_impl(lx, ly, true)
@@ -269,7 +269,7 @@ impl Scene {
         result
     }
 
-    pub unsafe fn layer_surface_tree(&self, layer: u32) -> *mut ffi::wlr_scene_tree {
+    pub fn layer_surface_tree(&self, layer: u32) -> *mut ffi::wlr_scene_tree {
         // layer is zwlr_layer_shell_v1_layer enum values
         match layer {
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND => self.layers.background_clients.raw(),
@@ -313,12 +313,12 @@ impl SaveableSurfaces {
         Ok(surfaces)
     }
 
-    pub unsafe fn sync_enabled(&self) {
+    pub fn sync_enabled(&self) {
         self.tree.set_enabled(self.enabled && !self.saved);
         self.saved_tree.set_enabled(self.enabled && self.saved);
     }
 
-    pub unsafe fn set_enabled(&mut self, enabled: bool) {
+    pub fn set_enabled(&mut self, enabled: bool) {
         if self.enabled == enabled {
             return;
         }

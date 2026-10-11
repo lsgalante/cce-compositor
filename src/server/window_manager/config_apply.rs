@@ -119,7 +119,7 @@ impl WindowManager {
     /// mapped windows. Without this, a window closed under one grid and
     /// reopened under another restores misaligned pixels, touches extra
     /// cells, and the tiled snap grows it by a cell.
-    pub unsafe fn remap_saved_entries(&mut self, old: &crate::policy::snap::SnapParams) {
+    pub fn remap_saved_entries(&mut self, old: &crate::policy::snap::SnapParams) {
         let new = self.layout.snap_params();
         for entry in self
             .restore_queue

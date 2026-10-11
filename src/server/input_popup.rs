@@ -105,7 +105,7 @@ impl InputPopup {
         let active_features = (*(*text_input).wlr_text_input).active_features;
         let feature_cursor_rect = ffi::wlr_text_input_v3_features_WLR_TEXT_INPUT_V3_FEATURE_CURSOR_RECTANGLE;
         if (active_features & feature_cursor_rect) == 0 {
-            ffi::wlr_scene_node_set_position(self.surface_tree.node(), 0, 0);
+            self.surface_tree.set_position(0, 0);
             return;
         }
 
@@ -149,11 +149,7 @@ impl InputPopup {
             cursor_box.y - popup_height
         };
 
-        ffi::wlr_scene_node_set_position(
-            self.surface_tree.node(),
-            popup_x - focused_x + output_box.x,
-            popup_y - focused_y + output_box.y,
-        );
+        self.surface_tree.set_position(popup_x - focused_x + output_box.x, popup_y - focused_y + output_box.y);
 
         cursor_box.x -= popup_x;
         cursor_box.y -= popup_y;

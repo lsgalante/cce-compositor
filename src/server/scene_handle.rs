@@ -64,6 +64,24 @@ kinds! {
     Droplet => wlr_scene_droplet, SceneDroplet;
 }
 
+/// Safe setters: each forwards to the FFI call of the same meaning on the
+/// handle's node (`$recv` is `node` for the base-node calls, `raw` for the
+/// kind's own), and does nothing when the handle is null. Every argument is
+/// a value; calls taking a pointer are written out by hand.
+macro_rules! setters {
+    ($recv:ident; $($(#[$doc:meta])* fn $name:ident($($arg:ident: $ty:ty),*) => $ffi:ident;)*) => {$(
+        $(#[$doc])*
+        pub fn $name(&self, $($arg: $ty),*) {
+            let p = self.$recv();
+            if !p.is_null() {
+                // SAFETY: a non-null pointer from a handle is a live node of
+                // this kind (see `destroy`).
+                unsafe { ffi::$ffi(p, $($arg),*) }
+            }
+        }
+    )*};
+}
+
 /// The heap half of a handle: where the node is, and the listener that
 /// clears it. Boxed so the listener's address stays put while the handle
 /// moves.
@@ -228,6 +246,33 @@ impl<K: Kind> Handle<K> {
         }
     }
 
+    setters! { node;
+        /// Move the node only if it is not already there (no damage otherwise).
+        fn set_position_if_changed(x: i32, y: i32) => river_scene_node_set_position_if_changed;
+        fn set_opacity(opacity: f32) => river_scene_node_set_opacity;
+        /// The backdrop compression of the node's blur.
+        fn set_blur_compress(ceil: f32, knee: f32, invert: bool) => river_scene_node_set_blur_compress;
+        /// Blur behind the node over the given region.
+        fn enable_blur(enabled: bool, optimized: bool, ignore_transparent: bool, x: i32, y: i32, width: i32, height: i32, corner_radius: i32) => river_scene_node_enable_blur;
+    }
+
+    /// Whether the node itself is enabled (not its ancestors); false when
+    /// gone.
+    pub fn is_enabled(&self) -> bool {
+        let n = self.node();
+        !n.is_null() && unsafe { ffi::river_scene_node_get_enabled(n) }
+    }
+
+    /// Clip a subsurface tree (`wlr_scene_subsurface_tree_create`'s) to
+    /// `clip`, in its own coordinates; `None` removes the clip.
+    pub fn set_subsurface_clip(&self, clip: Option<&ffi::wlr_box>) {
+        let n = self.node();
+        if !n.is_null() {
+            let c = clip.map_or(std::ptr::null(), |c| c as *const ffi::wlr_box);
+            unsafe { ffi::wlr_scene_subsurface_tree_set_clip(n, c) };
+        }
+    }
+
     /// The node's position in layout coordinates and whether it, and every
     /// ancestor, is enabled; `None` if it is gone.
     pub fn coords(&self) -> Option<(i32, i32, bool)> {
@@ -258,6 +303,11 @@ impl<K: Kind> Drop for Handle<K> {
 }
 
 impl SceneTree {
+    setters! { raw;
+        /// Render the tree with the camera's sub-pixel desk offset.
+        fn set_desk_offset(on: bool) => river_scene_tree_set_desk_offset;
+    }
+
     /// A new tree under the raw `parent`; empty if `parent` is null or the
     /// allocation fails.
     ///
@@ -295,11 +345,13 @@ impl SceneRect {
         unsafe { Self::create_in(parent.raw(), width, height, color) }
     }
 
-    pub fn set_size(&self, width: i32, height: i32) {
-        let r = self.raw();
-        if !r.is_null() {
-            unsafe { ffi::wlr_scene_rect_set_size(r, width, height) };
-        }
+    setters! { raw;
+        fn set_size(width: i32, height: i32) => wlr_scene_rect_set_size;
+        fn set_size_if_changed(width: i32, height: i32) => river_scene_rect_set_size_if_changed;
+        fn set_corner_radius(radius: i32) => river_scene_rect_set_corner_radius;
+        /// scenefx's fade-inset wire value (inset px * 1000 + fade mode; 0 off).
+        fn set_fade_inset(fade_inset: i32) => wlr_scene_rect_set_fade_inset;
+        fn set_clipped_region(region: ffi::clipped_region) => wlr_scene_rect_set_clipped_region;
     }
 
     pub fn set_color(&self, color: &[f32; 4]) {
@@ -311,6 +363,30 @@ impl SceneRect {
 }
 
 impl SceneBevel {
+    setters! { raw;
+        fn set_size(width: i32, height: i32) => wlr_scene_bevel_set_size;
+        fn set_corner_radius(radius: i32) => wlr_scene_bevel_set_corner_radius;
+        fn set_thickness(thickness: f32) => wlr_scene_bevel_set_thickness;
+        fn set_shoulder(shoulder: f32) => wlr_scene_bevel_set_shoulder;
+        fn set_light(dir_x: f32, dir_y: f32, light_intensity: f32, shade_intensity: f32) => wlr_scene_bevel_set_light;
+    }
+
+    pub fn set_color(&self, color: &[f32; 4]) {
+        let r = self.raw();
+        if !r.is_null() {
+            unsafe { ffi::wlr_scene_bevel_set_color(r, color.as_ptr()) };
+        }
+    }
+
+    /// The focus glint: `color` is RGB (scenefx reads three floats here,
+    /// four everywhere else).
+    pub fn set_focus(&self, focus: f32, sharpness: f32, color: &[f32; 3]) {
+        let r = self.raw();
+        if !r.is_null() {
+            unsafe { ffi::wlr_scene_bevel_set_focus(r, focus, sharpness, color.as_ptr()) };
+        }
+    }
+
     /// A new bevel rim under the raw `parent`; empty if `parent` is null.
     ///
     /// # Safety
@@ -327,6 +403,80 @@ impl SceneBevel {
             return Self::none();
         }
         Self::adopt(ffi::wlr_scene_bevel_create(parent, width, height, corner_radius, thickness, color.as_ptr()))
+    }
+}
+
+impl SceneShadow {
+    setters! { raw;
+        fn set_size(width: i32, height: i32) => wlr_scene_shadow_set_size;
+        fn set_corner_radius(radius: i32) => wlr_scene_shadow_set_corner_radius;
+        fn set_blur_sigma(sigma: f32) => wlr_scene_shadow_set_blur_sigma;
+        fn set_clipped_region(region: ffi::clipped_region) => wlr_scene_shadow_set_clipped_region;
+    }
+
+    pub fn set_color(&self, color: &[f32; 4]) {
+        let r = self.raw();
+        if !r.is_null() {
+            unsafe { ffi::wlr_scene_shadow_set_color(r, color.as_ptr()) };
+        }
+    }
+}
+
+impl SceneFrame {
+    setters! { raw;
+        fn set_size(width: i32, height: i32) => wlr_scene_frame_set_size;
+        fn set_corner_radius(radius: i32) => wlr_scene_frame_set_corner_radius;
+        fn set_buttons(buttons: f32) => wlr_scene_frame_set_buttons;
+        fn set_shape(band: f32, band_min: f32, corner_len: f32, gap: f32, swell_curve: f32, bulge: f32) => wlr_scene_frame_set_shape;
+    }
+
+    pub fn set_color(&self, color: &[f32; 4]) {
+        let r = self.raw();
+        if !r.is_null() {
+            unsafe { ffi::wlr_scene_frame_set_color(r, color.as_ptr()) };
+        }
+    }
+
+    pub fn set_hover(&self, hovered: f32, color: &[f32; 4]) {
+        let r = self.raw();
+        if !r.is_null() {
+            unsafe { ffi::wlr_scene_frame_set_hover(r, hovered, color.as_ptr()) };
+        }
+    }
+
+    /// The rectangle `[x, y, w, h]` the frame leaves undrawn.
+    pub fn set_exclusion(&self, rect: &[f32; 4]) {
+        let r = self.raw();
+        if !r.is_null() {
+            unsafe { ffi::wlr_scene_frame_set_exclusion(r, rect.as_ptr()) };
+        }
+    }
+}
+
+impl SceneDroplet {
+    setters! { raw;
+        fn set_size(width: i32, height: i32) => wlr_scene_droplet_set_size;
+        fn set_silhouette(attach_r: f32, sheet_r: f32, bow_rise: f32, blend_k: f32, curve: f32) => wlr_scene_droplet_set_silhouette;
+        fn set_lens(band_px: f32, refr: f32, ghost: f32) => wlr_scene_droplet_set_lens;
+        fn set_compress(ceil: f32, knee: f32, invert: bool) => wlr_scene_droplet_set_compress;
+    }
+}
+
+impl SceneBuffer {
+    setters! { raw;
+        fn set_dest_size(width: i32, height: i32) => wlr_scene_buffer_set_dest_size;
+        fn set_dest_size_if_changed(width: i32, height: i32) => river_scene_buffer_set_dest_size_if_changed;
+    }
+
+    /// Show `buffer` (null clears it).
+    ///
+    /// # Safety
+    /// `buffer` must be null or a live `wlr_buffer`.
+    pub unsafe fn set_buffer(&self, buffer: *mut ffi::wlr_buffer) {
+        let r = self.raw();
+        if !r.is_null() {
+            ffi::wlr_scene_buffer_set_buffer(r, buffer);
+        }
     }
 }
 

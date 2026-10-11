@@ -53,20 +53,12 @@ impl DragIcon {
             ffi::wlr_drag_grab_type_WLR_DRAG_GRAB_KEYBOARD_POINTER => {
                 let x = (*cursor).x();
                 let y = (*cursor).y();
-                ffi::wlr_scene_node_set_position(
-                    self.scene_drag_icon.node(),
-                    x as i32,
-                    y as i32,
-                );
+                self.scene_drag_icon.set_position(x as i32, y as i32);
             }
             ffi::wlr_drag_grab_type_WLR_DRAG_GRAB_KEYBOARD_TOUCH => {
                 let touch_id = ffi::river_wlr_drag_get_touch_id((*self.wlr_drag_icon).drag);
                 if let Some(&crate::cursor::TouchPoint { lx, ly, .. }) = (*cursor).touch_points.get(&touch_id) {
-                    ffi::wlr_scene_node_set_position(
-                        self.scene_drag_icon.node(),
-                        lx as i32,
-                        ly as i32,
-                    );
+                    self.scene_drag_icon.set_position(lx as i32, ly as i32);
                 }
             }
             _ => {}

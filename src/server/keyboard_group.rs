@@ -92,7 +92,7 @@ impl KeyboardGroup {
         Ok(group_ptr)
     }
 
-    pub unsafe fn ref_group(&mut self) -> *mut Self {
+    pub fn ref_group(&mut self) -> *mut Self {
         self.ref_count += 1;
         self
     }

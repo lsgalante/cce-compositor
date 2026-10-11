@@ -103,7 +103,7 @@ pub fn parse_trigger(s: &str) -> Result<Trigger, String> {
     if keysym == 0 {
         return Err(format!("unknown key {key:?}"));
     }
-    if unsafe { crate::keyboard::keysym_is_modifier(keysym) } {
+    if crate::keyboard::keysym_is_modifier(keysym) {
         return Err(format!("{key:?} is a modifier, not a key"));
     }
     Ok(Trigger { mods, keysym, description: describe(mods, keysym) })

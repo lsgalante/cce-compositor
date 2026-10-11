@@ -202,11 +202,7 @@ impl OutputManager {
                         ffi::wlr_scene_output_set_position(output.scene_output, output.sent.x, output.sent.y);
                         ffi::wlr_output_layout_add(self.output_layout, wlr_output, output.sent.x, output.sent.y);
                         if let Some(lock_surface) = (*server).lock_manager.lock_surface_from_output(output) {
-                            ffi::wlr_scene_node_set_position(
-                                (*lock_surface).tree.node(),
-                                output.sent.x,
-                                output.sent.y,
-                            );
+                            (*lock_surface).tree.set_position(output.sent.x, output.sent.y);
                         }
 
                         let (width, height) = output.sent.dimensions();

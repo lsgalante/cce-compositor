@@ -210,7 +210,7 @@ unsafe fn should_set_keymap(server: *mut crate::server::Server) -> bool {
     ffi::wlr_backend_is_wl(backend) || ffi::wlr_backend_is_x11(backend)
 }
 
-pub unsafe fn keysym_is_modifier(sym: u32) -> bool {
+pub fn keysym_is_modifier(sym: u32) -> bool {
     match sym {
         ffi::XKB_KEY_Shift_L |
         ffi::XKB_KEY_Shift_R |

@@ -339,10 +339,7 @@ impl WindowManager {
             && (self.selection.marquee.is_some() || self.has_selection());
         if !showing {
             if !self.selection.tree.is_null() {
-                ffi::wlr_scene_node_set_enabled(
-                    self.selection.tree.node(),
-                    false,
-                );
+                self.selection.tree.set_enabled(false);
             }
             return;
         }
@@ -403,7 +400,7 @@ impl WindowManager {
             tree.place_above(&scene.interactive_tree);
             // Desk content, like the windows it marks: rendered with the
             // camera's sub-pixel offset.
-            ffi::river_scene_tree_set_desk_offset(tree.raw(), true);
+            tree.set_desk_offset(true);
             self.selection.tree = tree;
         }
         self.selection.tree.set_enabled(true);
@@ -429,7 +426,7 @@ impl WindowManager {
             // wlr_scene_rect colours are premultiplied.
             let color = [accent[0] * fill, accent[1] * fill, accent[2] * fill, fill];
             if used == self.selection.boxes.len() {
-                let rect = crate::scene_handle::SceneRect::adopt(ffi::wlr_scene_rect_create(tree, w, h, color.as_ptr()));
+                let rect = crate::scene_handle::SceneRect::create_in(tree, w, h, &color);
                 let bevel = crate::scene_handle::SceneBevel::create_in(tree, w, h, radius, thickness, &layout.bevel_color);
                 if rect.is_null() || bevel.is_null() {
                     // Dropping them destroys whichever was made.
@@ -437,40 +434,27 @@ impl WindowManager {
                 }
                 self.selection.boxes.push((rect, bevel));
             }
-            let (rect, bevel) = (self.selection.boxes[used].0.raw(), self.selection.boxes[used].1.raw());
+            let (rect, bevel) = &self.selection.boxes[used];
             used += 1;
 
-            let rect_node = rect as *mut ffi::wlr_scene_node;
-            ffi::wlr_scene_node_set_enabled(rect_node, true);
-            ffi::river_scene_node_set_position_if_changed(rect_node, x, y);
-            ffi::river_scene_rect_set_size_if_changed(rect, w, h);
-            ffi::river_scene_rect_set_corner_radius(rect, radius);
-            ffi::wlr_scene_rect_set_color(rect, color.as_ptr());
+            rect.set_enabled(true);
+            rect.set_position_if_changed(x, y);
+            rect.set_size_if_changed(w, h);
+            rect.set_corner_radius(radius);
+            rect.set_color(&color);
 
-            let bevel_node = &mut (*bevel).node as *mut ffi::wlr_scene_node;
-            ffi::wlr_scene_node_set_enabled(bevel_node, true);
-            ffi::river_scene_node_set_position_if_changed(bevel_node, x, y);
-            ffi::wlr_scene_bevel_set_size(bevel, w, h);
-            ffi::wlr_scene_bevel_set_corner_radius(bevel, radius);
-            ffi::wlr_scene_bevel_set_thickness(bevel, thickness);
-            ffi::wlr_scene_bevel_set_light(
-                bevel,
-                light_x,
-                light_y,
-                light,
-                layout.bevel_shade_intensity,
-            );
-            ffi::wlr_scene_bevel_set_shoulder(bevel, layout.bevel_shoulder);
-            ffi::wlr_scene_bevel_set_color(bevel, layout.bevel_color.as_ptr());
+            bevel.set_enabled(true);
+            bevel.set_position_if_changed(x, y);
+            bevel.set_size(w, h);
+            bevel.set_corner_radius(radius);
+            bevel.set_thickness(thickness);
+            bevel.set_light(light_x, light_y, light, layout.bevel_shade_intensity);
+            bevel.set_shoulder(layout.bevel_shoulder);
+            bevel.set_color(&layout.bevel_color);
             // Focus 1 is the shader's glint-only branch: the accent on the
             // rim and nothing else, the tint the designer marks a region
             // and its nodes with.
-            ffi::wlr_scene_bevel_set_focus(
-                bevel,
-                1.0,
-                layout.bevel_focus_sharpness,
-                accent.as_ptr(),
-            );
+            bevel.set_focus(1.0, layout.bevel_focus_sharpness, &accent);
         }
         for (rect, bevel) in self.selection.boxes.iter().skip(used) {
             rect.set_enabled(false);

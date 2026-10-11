@@ -427,7 +427,7 @@ impl Cursor {
         ffi::river_wlr_cursor_get_y(self.wlr_cursor)
     }
 
-    pub unsafe fn update_hovered(&mut self) {
+    pub fn update_hovered(&mut self) {
         // Keyboard focus remains stable on pointer hover/motion.
         // It is only changed on mapping, click, touch, or shortcut focus transitions.
     }

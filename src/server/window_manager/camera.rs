@@ -5,7 +5,7 @@
 use super::*;
 
 impl WindowManager {
-    pub unsafe fn stop_panning_animation(&mut self) {
+    pub fn stop_panning_animation(&mut self) {
         self.target_desk_pan_x = None;
         self.target_desk_pan_y = None;
         self.target_desk_zoom = None;
@@ -251,7 +251,7 @@ impl WindowManager {
 
     /// Advance the camera animation by `dt` seconds. Returns true when
     /// nothing is left to animate.
-    pub(crate) unsafe fn advance_camera_animation(&mut self, dt: f64, frame_target_ns: u64) -> bool {
+    pub(crate) fn advance_camera_animation(&mut self, dt: f64, frame_target_ns: u64) -> bool {
         let mut done = true;
         // Animations off (`cce_core::motion`): every ease below covers its
         // whole distance in this step, the ramp lands, and a flick does not

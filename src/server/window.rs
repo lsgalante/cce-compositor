@@ -690,7 +690,7 @@ pub struct Window {
 pub use crate::policy::arrange::StatusEdge;
 
 impl Window {
-    pub unsafe fn is_wine(&self) -> bool {
+    pub fn is_wine(&self) -> bool {
         false
     }
 
@@ -703,7 +703,7 @@ impl Window {
             || self.tiling_mode != crate::tiling::TilingMode::Tiled
     }
 
-    pub unsafe fn is_fullscreen(&self) -> bool {
+    pub fn is_fullscreen(&self) -> bool {
         self.tiling_mode == crate::tiling::TilingMode::Fullscreen
             || !self.wm_requested.fullscreen.is_null()
     }
@@ -833,7 +833,7 @@ impl Window {
         self.role() == crate::policy::api::WindowRole::Background
     }
 
-    pub unsafe fn is_linked(&self) -> bool {
+    pub fn is_linked(&self) -> bool {
         let prev = self.node.link.prev;
         let next = self.node.link.next;
         if prev.is_null() || next.is_null() {
@@ -1118,11 +1118,14 @@ impl Window {
         Ok(raw)
     }
 
+    /// # Safety
+    /// `impl_type` names this window's live implementation: code that reads
+    /// it dereferences the pointer inside.
     pub unsafe fn set_impl(&mut self, impl_type: WindowImpl) {
         self.impl_type = impl_type;
     }
 
-    pub unsafe fn impl_destroying(&mut self) {
+    pub fn impl_destroying(&mut self) {
         self.impl_type = WindowImpl::Destroying;
     }
 
@@ -1687,13 +1690,13 @@ impl Window {
         }
 
         (*window).commit.disconnect();
-        ffi::wlr_scene_node_destroy((*window).tree.node());
-        ffi::wlr_scene_node_destroy((*window).popup_tree.node());
+        (*window).tree.destroy();
+        (*window).popup_tree.destroy();
         // The border segments hang off the global overlay layer, not off
         // `tree`, so destroying the window tree does not take them with it.
         // Left behind they would both leak and keep a SceneNodeData pointing
         // at this freed window for the next hit test to find.
-        ffi::wlr_scene_node_destroy((*window).border.tree.node());
+        (*window).border.tree.destroy();
         ffi::wlr_scene_node_destroy(&mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
 
         (*window).node.deinit();
@@ -2312,13 +2315,13 @@ impl Window {
         let requested = &self.rendering_requested;
         let enabled = !requested.hidden && (matches!(self.state, WindowState::Mapped) || matches!(self.state, WindowState::Closing));
 
-        ffi::wlr_scene_node_set_enabled(self.tree.node(), enabled);
-        ffi::wlr_scene_node_set_enabled(self.popup_tree.node(), enabled);
+        self.tree.set_enabled(enabled);
+        self.popup_tree.set_enabled(enabled);
         if !enabled {
             // The segment tree is not a child of `tree`, so disabling the
             // window does not hide a revealed border with it.
             self.border_reveal = [0.0; HANDLE_COUNT];
-            ffi::wlr_scene_node_set_enabled(self.border.tree.node(), false);
+            self.border.tree.set_enabled(false);
         }
 
         if enabled {
@@ -2388,8 +2391,7 @@ impl Window {
             };
             let width = (actual_w as f64 * scale_x).round() as i32;
             let height = (actual_h as f64 * scale_y).round() as i32;
-            ffi::river_scene_node_enable_blur(
-                self.tree.node(),
+            self.tree.enable_blur(
                 blur_enabled,
                 use_optimized,
                 ignore_transparent,
@@ -2415,7 +2417,7 @@ impl Window {
                 self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
                 self.sync_backdrop_compress();
-            ffi::river_scene_node_set_opacity(self.tree.node(), self.effective_opacity());
+            self.tree.set_opacity(self.effective_opacity());
 
             // Device px, like the blur radius above: the surface content is
             // scaled to its dest size, so an unscaled clip radius would keep
@@ -2425,10 +2427,7 @@ impl Window {
                 self.surfaces.tree.node(),
                 (radius as f64 * self.scale) as i32,
             );
-            ffi::river_scene_rect_set_corner_radius(
-                self.window_background.raw(),
-                (radius as f64 * self.scale) as i32,
-            );
+            self.window_background.set_corner_radius((radius as f64 * self.scale) as i32);
 
             struct ScaleData {
                 scale_x: f64,
@@ -2588,34 +2587,34 @@ impl Window {
                 (false, false)
             };
 
-            ffi::wlr_scene_node_set_enabled(self.fullscreen_background.node(), !is_status_bar && !is_wallpaper);
+            self.fullscreen_background.set_enabled(!is_status_bar && !is_wallpaper);
             let (width, height) = (*output).sent.dimensions();
             self.size_fullscreen_background(width as i32, height as i32);
             clip = ffi::wlr_box { x: 0, y: 0, width: width as i32, height: height as i32 };
             content_clip = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
 
-            ffi::wlr_scene_node_set_enabled(self.border.left.node(), false);
-            ffi::wlr_scene_node_set_enabled(self.border.right.node(), false);
-            ffi::wlr_scene_node_set_enabled(self.border.top.node(), false);
-            ffi::wlr_scene_node_set_enabled(self.border.bottom.node(), false);
-            ffi::wlr_scene_node_set_enabled(self.window_background.node(), false);
+            self.border.left.set_enabled(false);
+            self.border.right.set_enabled(false);
+            self.border.top.set_enabled(false);
+            self.border.bottom.set_enabled(false);
+            self.window_background.set_enabled(false);
             // Fullscreen skips draw_borders entirely, and the segment tree
             // lives outside this window's tree, so it has to be taken down
             // explicitly or a revealed edge would hang over the fullscreen
             // surface.
             self.border_reveal = [0.0; HANDLE_COUNT];
-            ffi::wlr_scene_node_set_enabled(self.border.tree.node(), false);
+            self.border.tree.set_enabled(false);
         } else {
             self.box_geom.x = requested.x;
             self.box_geom.y = requested.y;
-            ffi::wlr_scene_node_set_enabled(self.fullscreen_background.node(), false);
+            self.fullscreen_background.set_enabled(false);
             if self.fs_anim.is_none() {
                 self.draw_borders();
             }
         }
 
-        ffi::river_scene_node_set_position_if_changed(self.tree.node(), self.box_geom.x, self.box_geom.y);
-        ffi::river_scene_node_set_position_if_changed(self.popup_tree.node(), self.box_geom.x, self.box_geom.y);
+        self.tree.set_position_if_changed(self.box_geom.x, self.box_geom.y);
+        self.popup_tree.set_position_if_changed(self.box_geom.x, self.box_geom.y);
 
         // Mid fullscreen-toggle: draw at the animated rect regardless of which
         // branch above ran. The tree overrides its settled position, the black
@@ -2628,19 +2627,19 @@ impl Window {
             let ay = anim.y.round() as i32;
             let aw = (anim.w.round() as i32).max(1);
             let ah = (anim.h.round() as i32).max(1);
-            ffi::river_scene_node_set_position_if_changed(self.tree.node(), ax, ay);
-            ffi::river_scene_node_set_position_if_changed(self.popup_tree.node(), ax, ay);
-            ffi::wlr_scene_node_set_enabled(self.fullscreen_background.node(), true);
-            ffi::wlr_scene_rect_set_size(self.fullscreen_background.raw(), aw, ah);
+            self.tree.set_position_if_changed(ax, ay);
+            self.popup_tree.set_position_if_changed(ax, ay);
+            self.fullscreen_background.set_enabled(true);
+            self.fullscreen_background.set_size(aw, ah);
             clip = ffi::wlr_box { x: 0, y: 0, width: aw, height: ah };
             content_clip = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-            ffi::wlr_scene_node_set_enabled(self.border.left.node(), false);
-            ffi::wlr_scene_node_set_enabled(self.border.right.node(), false);
-            ffi::wlr_scene_node_set_enabled(self.border.top.node(), false);
-            ffi::wlr_scene_node_set_enabled(self.border.bottom.node(), false);
-            ffi::wlr_scene_node_set_enabled(self.window_background.node(), false);
+            self.border.left.set_enabled(false);
+            self.border.right.set_enabled(false);
+            self.border.top.set_enabled(false);
+            self.border.bottom.set_enabled(false);
+            self.window_background.set_enabled(false);
             self.border_reveal = [0.0; HANDLE_COUNT];
-            ffi::wlr_scene_node_set_enabled(self.border.tree.node(), false);
+            self.border.tree.set_enabled(false);
         }
 
         // No geometry compensation here: wlr_scene_xdg_surface_create already
@@ -2648,7 +2647,7 @@ impl Window {
         // re-offsets by -geometry on every commit), so subtracting geometry.x/y
         // again shifted CSD windows with shadow margins (Electron/Chromium
         // floating) up-left by their shadow size, off the desktop grid.
-        ffi::river_scene_node_set_position_if_changed(self.surfaces.tree.node(), 0, 0);
+        self.surfaces.tree.set_position_if_changed(0, 0);
 
         self.apply_surface_clip(&clip, &content_clip);
 
@@ -2658,9 +2657,9 @@ impl Window {
                     if !(*xwindow).surface_tree.is_null() {
                         let has_parent = !(*(*xwindow).xsurface).parent.is_null();
                         if self.is_wine() && !has_parent && !self.is_fullscreen() {
-                            ffi::wlr_scene_node_set_position((*xwindow).surface_tree.node(), -16, -16);
+                            (*xwindow).surface_tree.set_position(-16, -16);
                         } else {
-                            ffi::wlr_scene_node_set_position((*xwindow).surface_tree.node(), 0, 0);
+                            (*xwindow).surface_tree.set_position(0, 0);
                         }
                     }
                     (*xwindow).configure();
@@ -2780,18 +2779,18 @@ impl Window {
         let requested = &self.rendering_requested;
         let enabled = !requested.hidden && (matches!(self.state, WindowState::Mapped) || matches!(self.state, WindowState::Closing));
 
-        ffi::wlr_scene_node_set_enabled(self.tree.node(), enabled);
-        ffi::wlr_scene_node_set_enabled(self.popup_tree.node(), enabled);
+        self.tree.set_enabled(enabled);
+        self.popup_tree.set_enabled(enabled);
         if !enabled {
             self.border_reveal = [0.0; HANDLE_COUNT];
-            ffi::wlr_scene_node_set_enabled(self.border.tree.node(), false);
+            self.border.tree.set_enabled(false);
         }
 
         if enabled {
             self.box_geom.x = requested.x;
             self.box_geom.y = requested.y;
-            ffi::river_scene_node_set_position_if_changed(self.tree.node(), self.box_geom.x, self.box_geom.y);
-            ffi::river_scene_node_set_position_if_changed(self.popup_tree.node(), self.box_geom.x, self.box_geom.y);
+            self.tree.set_position_if_changed(self.box_geom.x, self.box_geom.y);
+            self.popup_tree.set_position_if_changed(self.box_geom.x, self.box_geom.y);
 
             // Blur stays on through a pan for every window. Non-cce windows
             // used to have their blur nodes DESTROYED on the first motion
@@ -2859,17 +2858,7 @@ impl Window {
                 let radius = if requested.circular { radius } else { widen_corner_radius(radius, actual_w as i32, actual_h as i32) };
                 let width = (actual_w as f64 * self.scale) as i32;
                 let height = (actual_h as f64 * self.scale) as i32;
-                ffi::river_scene_node_enable_blur(
-                    self.tree.node(),
-                    blur_enabled,
-                    use_optimized,
-                    ignore_transparent,
-                    0,
-                    0,
-                    width,
-                    height,
-                    (radius as f64 * self.scale) as i32,
-                );
+                self.tree.enable_blur(blur_enabled, use_optimized, ignore_transparent, 0, 0, width, height, (radius as f64 * self.scale) as i32);
                 // Every window, blurred or not: the shadow's size, blur sigma,
                 // offset and — critically — the clipped region that punches the
                 // window out of it are all scale-dependent, and nothing else on

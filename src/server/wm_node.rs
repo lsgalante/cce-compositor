@@ -13,6 +13,9 @@ pub struct WmNode {
 }
 
 impl WmNode {
+    /// # Safety
+    /// The node must not be linked into a list, and must not move afterwards
+    /// (the link points at itself).
     pub unsafe fn init(&mut self) {
         self.link.prev = &mut self.link;
         self.link.next = &mut self.link;

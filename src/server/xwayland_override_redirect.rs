@@ -81,11 +81,7 @@ impl XwaylandOverrideRedirect {
             return;
         }
         let s = crate::xwayland_window::x11_scale_for(self.server, self.xsurface);
-        ffi::wlr_scene_node_set_position(
-            self.surface_tree.node(),
-            crate::xwayland_window::from_x11((*self.xsurface).x as i32, s),
-            crate::xwayland_window::from_x11((*self.xsurface).y as i32, s),
-        );
+        self.surface_tree.set_position(crate::xwayland_window::from_x11((*self.xsurface).x as i32, s), crate::xwayland_window::from_x11((*self.xsurface).y as i32, s));
     }
 
     /// Draw the physical-pixel X11 buffer at 1/scale. Runs from the

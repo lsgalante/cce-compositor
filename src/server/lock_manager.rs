@@ -171,7 +171,7 @@ impl LockManager {
             LockState::WaitingForLockSurfaces => {
                 if all_outputs_rendered_lock_surface {
                     self.send_locked();
-                    ffi::wlr_scene_node_set_enabled((*self.server).scene.normal_tree.node(), false);
+                    (*self.server).scene.normal_tree.set_enabled(false);
                     ffi::wl_event_source_timer_update(self.lock_surfaces_timer, 0);
                 }
             }
@@ -218,8 +218,8 @@ impl LockManager {
         log::info!("locking the session (compositor-initiated)");
         self.state = LockState::WaitingForBlank;
         let scene = &(*self.server).scene;
-        ffi::wlr_scene_node_set_enabled(scene.locked_tree.node(), true);
-        ffi::wlr_scene_node_set_enabled(scene.normal_tree.node(), false);
+        scene.locked_tree.set_enabled(true);
+        scene.normal_tree.set_enabled(false);
 
         let seats_head = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*seats_head).next;
@@ -430,7 +430,7 @@ unsafe extern "C" fn handle_lock_surfaces_timeout(data: *mut std::ffi::c_void) -
     assert!(manager.state == LockState::WaitingForLockSurfaces);
     manager.state = LockState::WaitingForBlank;
 
-    ffi::wlr_scene_node_set_enabled((*manager.server).scene.normal_tree.node(), false);
+    (*manager.server).scene.normal_tree.set_enabled(false);
 
     manager.maybe_lock();
 
@@ -510,7 +510,7 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
     if manager.state == LockState::Unlocked {
         manager.state = LockState::WaitingForLockSurfaces;
 
-        ffi::wlr_scene_node_set_enabled((*manager.server).scene.locked_tree.node(), true);
+        (*manager.server).scene.locked_tree.set_enabled(true);
 
         ffi::wl_event_source_timer_update(manager.lock_surfaces_timer, 200);
 
@@ -549,8 +549,8 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
     manager.cancel_locker_respawn();
     manager.respawn_attempts = 0;
 
-    ffi::wlr_scene_node_set_enabled((*manager.server).scene.normal_tree.node(), true);
-    ffi::wlr_scene_node_set_enabled((*manager.server).scene.locked_tree.node(), false);
+    (*manager.server).scene.normal_tree.set_enabled(true);
+    (*manager.server).scene.locked_tree.set_enabled(false);
 
     let seats_head = &mut (*manager.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
     let mut curr = (*seats_head).next;
@@ -634,7 +634,7 @@ unsafe extern "C" fn handle_lock_surface_map(listener: *mut ffi::wl_listener, _d
     let output = (*lock_surface).get_output();
     let x = (*output).sent.x;
     let y = (*output).sent.y;
-    ffi::wlr_scene_node_set_position((*lock_surface).tree.node(), x, y);
+    (*lock_surface).tree.set_position(x, y);
 
     let server = (*(*lock_surface).manager).server;
     let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
