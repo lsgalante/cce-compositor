@@ -236,7 +236,7 @@ impl WindowManager {
             // would carry that process's cmdline and a session restore would
             // spawn the whole app a second time just to place a dialog that
             // no longer exists. `try_restore` skips transients to match.
-            if !w.get_parent().is_null() {
+            if w.get_parent().is_some() {
                 continue;
             }
 
@@ -496,7 +496,7 @@ impl WindowManager {
             // A later self-initiated close must not read as a crash.
             w.close_requested = false;
             let app_id = w.get_app_id_string().unwrap_or_default();
-            if w.get_parent().is_null() && !app_id.is_empty() {
+            if w.get_parent().is_none() && !app_id.is_empty() {
                 let title = w.get_title_string().unwrap_or_default();
                 remaining.push(if title.is_empty() { app_id.clone() } else { title });
             }

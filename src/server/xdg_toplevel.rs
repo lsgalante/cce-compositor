@@ -16,7 +16,9 @@ pub enum ConfigureState {
 }
 
 pub struct XdgToplevel {
-    pub window: *mut Window,
+    /// The window this toplevel is the protocol half of. An id, not a
+    /// pointer: a handler looks the window up in `wm.windows`.
+    pub window: crate::window::WindowId,
     pub wlr_toplevel: *mut ffi::wlr_xdg_toplevel,
     pub decoration: *mut XdgDecoration,
     pub geometry: ffi::wlr_box,
@@ -64,7 +66,7 @@ impl XdgToplevel {
         let window = Window::create(wm, crate::window::WindowImpl::Toplevel(std::ptr::null_mut()), server)?;
 
         let toplevel = Box::new(XdgToplevel {
-            window,
+            window: (*window).id(),
             wlr_toplevel,
             decoration: std::ptr::null_mut(),
             geometry: std::mem::zeroed(),
@@ -160,7 +162,9 @@ impl XdgToplevel {
         }
     }
 
-    pub unsafe fn configure(&mut self) -> bool {
+    /// `window` is this surface's window, passed in rather than reached
+    /// through `self.window`: the caller already holds it.
+    pub unsafe fn configure(&mut self, window: &mut Window) -> bool {
         match self.configure_state {
             ConfigureState::Idle
             | ConfigureState::Inflight(..)
@@ -170,10 +174,10 @@ impl XdgToplevel {
             | ConfigureState::TimedOutAcked => {}
         }
 
-        let scheduled = &(*self.window).configure_scheduled;
-        let sent = &(*self.window).configure_sent;
+        let scheduled = &window.configure_scheduled;
+        let sent = &window.configure_sent;
 
-        if !self.needs_configure() {
+        if !self.needs_configure(window) {
             match self.configure_state {
                 ConfigureState::Idle => return false,
                 ConfigureState::TimedOut(serial) => {
@@ -250,11 +254,11 @@ impl XdgToplevel {
                 )
             {
                 let absorbed_bounds = scheduled.bounds;
-                (*self.window).configure_sent.width = echo_w;
-                (*self.window).configure_sent.height = echo_h;
-                (*self.window).configure_sent.bounds = absorbed_bounds;
-                (*self.window).configure_scheduled.width = None;
-                (*self.window).configure_scheduled.height = None;
+                window.configure_sent.width = echo_w;
+                window.configure_sent.height = echo_h;
+                window.configure_sent.bounds = absorbed_bounds;
+                window.configure_scheduled.width = None;
+                window.configure_scheduled.height = None;
                 return false;
             }
             if size_is_echo && log::log_enabled!(log::Level::Debug) {
@@ -301,7 +305,7 @@ impl XdgToplevel {
 
         let width = if let Some(w) = scheduled.width {
             w
-        } else if let Some(w) = (*self.window).configure_sent.width {
+        } else if let Some(w) = window.configure_sent.width {
             w
         } else {
             self.geometry.width as u32
@@ -309,7 +313,7 @@ impl XdgToplevel {
 
         let height = if let Some(h) = scheduled.height {
             h
-        } else if let Some(h) = (*self.window).configure_sent.height {
+        } else if let Some(h) = window.configure_sent.height {
             h
         } else {
             self.geometry.height as u32
@@ -318,17 +322,17 @@ impl XdgToplevel {
         if log::log_enabled!(log::Level::Debug) {
             log::debug!(
                 "XdgToplevel::configure: sending size {}x{} (scheduled={:?}, sent={:?}, geometry={:?}) to client '{}'",
-                width, height, scheduled.width, sent.width, (self.geometry.width, self.geometry.height), (*self.window).get_title_string().unwrap_or_else(|| "None".to_string())
+                width, height, scheduled.width, sent.width, (self.geometry.width, self.geometry.height), window.get_title_string().unwrap_or_else(|| "None".to_string())
             );
         }
 
         let configure_serial = ffi::wlr_xdg_toplevel_set_size(self.wlr_toplevel, width as i32, height as i32);
 
-        (*self.window).configure_sent = (*self.window).configure_scheduled.clone();
-        (*self.window).configure_sent.width = Some(width);
-        (*self.window).configure_sent.height = Some(height);
-        (*self.window).configure_scheduled.width = None;
-        (*self.window).configure_scheduled.height = None;
+        window.configure_sent = window.configure_scheduled.clone();
+        window.configure_sent.width = Some(width);
+        window.configure_sent.height = Some(height);
+        window.configure_scheduled.width = None;
+        window.configure_scheduled.height = None;
 
         if width != 0 && height != 0 &&
            width == self.geometry.width as u32 && height == self.geometry.height as u32 &&
@@ -340,9 +344,9 @@ impl XdgToplevel {
         true
     }
 
-    pub unsafe fn needs_configure(&self) -> bool {
-        let scheduled = &(*self.window).configure_scheduled;
-        let sent = &(*self.window).configure_sent;
+    pub fn needs_configure(&self, window: &Window) -> bool {
+        let scheduled = &window.configure_scheduled;
+        let sent = &window.configure_sent;
 
         if scheduled.width.is_some() && scheduled.width != sent.width {
             return true;
@@ -381,6 +385,8 @@ impl XdgToplevel {
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, destroy);
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
 
     if !(*toplevel).decoration.is_null() {
         XdgDecoration::deinit((*toplevel).decoration);
@@ -406,13 +412,18 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     ffi::river_wlr_xdg_surface_set_data(base, std::ptr::null_mut());
     let surface = ffi::river_wlr_xdg_surface_get_surface(base);
     ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
-
-    let window = (*toplevel).window;
-    (*window).impl_destroying();
-    match (*window).state {
-        crate::window::WindowState::Init | crate::window::WindowState::Closing => {}
-        crate::window::WindowState::Ready | crate::window::WindowState::Initialized | crate::window::WindowState::Mapped => {
-            crate::window::Window::set_closing(&mut *crate::reentry::wm((*window).server), (*window).id());
+    // Teardown runs whatever happens; the window outlives this object.
+    let state = match wm.windows.get_mut(id) {
+        Some(this) => {
+            this.impl_destroying();
+            Some(this.state)
+        }
+        None => None,
+    };
+    match state {
+        None | Some(crate::window::WindowState::Init | crate::window::WindowState::Closing) => {}
+        Some(crate::window::WindowState::Ready | crate::window::WindowState::Initialized | crate::window::WindowState::Mapped) => {
+            crate::window::Window::set_closing(wm, id);
             crate::shared::pending().dirty_windowing();
         }
     }
@@ -422,13 +433,16 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, unmap);
-    crate::window::Window::unmap(&mut *crate::reentry::wm((*(*toplevel).window).server), (*(*toplevel).window).id());
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    crate::window::Window::unmap(wm, id);
 }
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, map);
-    let wm = &mut *crate::reentry::wm((*(*toplevel).window).server);
-    if let Err(e) = crate::window::Window::map(wm, (*(*toplevel).window).id()) {
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    if let Err(e) = crate::window::Window::map(wm, id) {
         log::error!("Window map failed: {}", e);
         let client = ffi::wl_resource_get_client((*(*toplevel).wlr_toplevel).resource);
         ffi::wl_client_post_no_memory(client);
@@ -448,8 +462,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
     // the size the window mapped at, or leaving fullscreen restores an
     // output-sized window.
     if ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel) {
-        let window = (*toplevel).window;
-        let id = (*window).id();
+        let id = (*toplevel).window;
         let this = window_mut!(wm, id);
         if this.box_geom.width <= 0 && this.box_geom.height <= 0 && new_geometry.width > 0 && new_geometry.height > 0 {
             this.box_geom.width = new_geometry.width;
@@ -459,42 +472,44 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
     }
     // Status segments and Utility windows are SELF-sizing: their bounds
     // track their own box, so the committed geometry is adopted as the box.
+    let this = window_mut!(wm, id);
     let is_self_sized = matches!(
-        (*(*toplevel).window).tiling_mode,
+        this.tiling_mode,
         crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Utility
-    ) || (*(*toplevel).window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+    ) || this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
     if is_self_sized {
-        (*(*toplevel).window).box_geom.width = new_geometry.width;
-        (*(*toplevel).window).box_geom.height = new_geometry.height;
+        this.box_geom.width = new_geometry.width;
+        this.box_geom.height = new_geometry.height;
         // A view-centered modal that is ALSO self-sizing was centered at map
         // against a size it had not committed yet; redo it now that it has.
-        crate::window::Window::take_pending_view_center(wm, (*(*toplevel).window).id());
+        crate::window::Window::take_pending_view_center(wm, id);
         crate::shared::pending().dirty_windowing();
-    } else if (*(*toplevel).window).pending_view_center
+    } else if this.pending_view_center
         && new_geometry.width > 0
         && new_geometry.height > 0
     {
         // A view-centered FLOATING window whose first size just arrived (the
         // file chooser): adopt the geometry and redo the centering, or the
         // map-time 400x400-floor placement stands for a 900x500 dialog.
-        (*(*toplevel).window).box_geom.width = new_geometry.width;
-        (*(*toplevel).window).box_geom.height = new_geometry.height;
-        crate::window::Window::take_pending_view_center(wm, (*(*toplevel).window).id());
+        this.box_geom.width = new_geometry.width;
+        this.box_geom.height = new_geometry.height;
+        crate::window::Window::take_pending_view_center(wm, id);
         crate::shared::pending().dirty_windowing();
     }
 }
 
 unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, new_popup);
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let this = window_mut!(wm, id);
     let wlr_xdg_popup = data as *mut ffi::wlr_xdg_popup;
-
-    let window = (*toplevel).window;
-    let capture_node = &mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree;
+    let capture_node = &mut (*this.capture_scene).tree as *mut ffi::wlr_scene_tree;
     if let Err(e) = crate::xdg_popup::XdgPopup::create(
         wlr_xdg_popup,
-        (*window).popup_tree.raw(),
+        this.popup_tree.raw(),
         capture_node,
-        (*window).popup_tree.raw(),
+        this.popup_tree.raw(),
     ) {
         log::error!("Failed to create popup: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_xdg_popup).resource);
@@ -504,7 +519,7 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
     // so it schedules no transaction: without this raise a tiled window's
     // menu would stay under the floating plane until some unrelated restack
     // came along. The pass re-applies it from then on.
-    (*crate::reentry::wm((*window).server)).raise_focused_popups((*window).id());
+    wm.raise_focused_popups(id);
 }
 
 unsafe extern "C" fn handle_ack_configure(
@@ -512,7 +527,9 @@ unsafe extern "C" fn handle_ack_configure(
     data: *mut std::ffi::c_void,
 ) {
     let toplevel = crate::container_of!(listener, XdgToplevel, ack_configure);
-    let wm = &mut *crate::reentry::wm((*(*toplevel).window).server);
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let this = window_mut!(wm, id);
     let acked_configure = data as *mut ffi::wlr_xdg_surface_configure;
     let serial = (*acked_configure).serial;
 
@@ -543,35 +560,34 @@ unsafe extern "C" fn handle_ack_configure(
     // Status segments and Utility windows are SELF-sizing: their bounds
     // track their own box, so the committed geometry is adopted as the box.
     let is_self_sized = matches!(
-        (*(*toplevel).window).tiling_mode,
+        this.tiling_mode,
         crate::tiling::TilingMode::Status | crate::tiling::TilingMode::Utility
-    ) || (*(*toplevel).window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
+    ) || this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status"));
     if is_self_sized {
-        (*(*toplevel).window).box_geom.width = new_geometry.width;
-        (*(*toplevel).window).box_geom.height = new_geometry.height;
+        this.box_geom.width = new_geometry.width;
+        this.box_geom.height = new_geometry.height;
         // A view-centered modal that is ALSO self-sizing was centered at map
         // against a size it had not committed yet; redo it now that it has.
-        crate::window::Window::take_pending_view_center(wm, (*(*toplevel).window).id());
+        crate::window::Window::take_pending_view_center(wm, id);
         crate::shared::pending().dirty_windowing();
-    } else if (*(*toplevel).window).pending_view_center
+    } else if this.pending_view_center
         && new_geometry.width > 0
         && new_geometry.height > 0
     {
         // A view-centered FLOATING window whose first size just arrived (the
         // file chooser): adopt the geometry and redo the centering, or the
         // map-time 400x400-floor placement stands for a 900x500 dialog.
-        (*(*toplevel).window).box_geom.width = new_geometry.width;
-        (*(*toplevel).window).box_geom.height = new_geometry.height;
-        crate::window::Window::take_pending_view_center(wm, (*(*toplevel).window).id());
+        this.box_geom.width = new_geometry.width;
+        this.box_geom.height = new_geometry.height;
+        crate::window::Window::take_pending_view_center(wm, id);
         crate::shared::pending().dirty_windowing();
     }
 }
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, commit);
-    let window = (*toplevel).window;
-    let wm = &mut *crate::reentry::wm((*window).server);
-    let id = (*window).id();
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let id = (*toplevel).window;
     let this = window_mut!(wm, id);
     // Grid-patch latch: the first commit after ack_grid_patch carries the
     // buffer rendered for that patch — anchor to it from this commit on.
@@ -926,10 +942,12 @@ unsafe extern "C" fn handle_request_show_window_menu(
     data: *mut std::ffi::c_void,
 ) {
     let toplevel = crate::container_of!(listener, XdgToplevel, request_show_window_menu);
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let this = window_mut!(wm, id);
     let event = data as *mut ffi::wlr_xdg_toplevel_show_window_menu_event;
-    let window = (*toplevel).window;
 
-    (*window).wm_scheduled.show_window_menu_requested = Some(crate::window::ShowWindowMenuRequest {
+    this.wm_scheduled.show_window_menu_requested = Some(crate::window::ShowWindowMenuRequest {
         x: (*event).x - (*toplevel).geometry.x,
         y: (*event).y - (*toplevel).geometry.y,
     });
@@ -938,41 +956,46 @@ unsafe extern "C" fn handle_request_show_window_menu(
 
 unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, request_fullscreen);
-    let window = (*toplevel).window;
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
 
     crate::shared::pending().dirty_windowing();
     let enter = ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel);
-    (*crate::reentry::wm((*window).server)).apply_client_fullscreen((*window).id(), enter);
+    wm.apply_client_fullscreen(id, enter);
 }
 
 unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, request_maximize);
-    let window = (*toplevel).window;
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let this = window_mut!(wm, id);
 
     // A Utility window declared itself content-shaped; a maximize would hand
     // sizing back to the compositor. Explicitly ignored, not just unmapped
     // from any affordance.
-    if (*window).tiling_mode == crate::tiling::TilingMode::Utility {
+    if this.tiling_mode == crate::tiling::TilingMode::Utility {
         return;
     }
 
     if ffi::river_wlr_xdg_toplevel_get_requested_maximized((*toplevel).wlr_toplevel) {
-        (*window).tiling_mode = crate::tiling::TilingMode::Tiled;
-        (*window).mode_locked = true;
-        (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Maximize;
+        this.tiling_mode = crate::tiling::TilingMode::Tiled;
+        this.mode_locked = true;
+        this.wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Maximize;
     } else {
-        (*window).tiling_mode = crate::tiling::TilingMode::Floating;
-        (*window).mode_locked = true;
-        (*window).wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Unmaximize;
+        this.tiling_mode = crate::tiling::TilingMode::Floating;
+        this.mode_locked = true;
+        this.wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Unmaximize;
     }
     crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, request_minimize);
-    let window = (*toplevel).window;
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let this = window_mut!(wm, id);
 
-    (*window).wm_scheduled.minimize_requested = true;
+    this.wm_scheduled.minimize_requested = true;
     crate::shared::pending().dirty_windowing();
 }
 
@@ -981,12 +1004,14 @@ unsafe extern "C" fn handle_request_move(
     data: *mut std::ffi::c_void,
 ) {
     let toplevel = crate::container_of!(listener, XdgToplevel, request_move);
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let this = window_mut!(wm, id);
     let event = data as *mut ffi::wlr_xdg_toplevel_move_event;
-    let window = (*toplevel).window;
     let seat = ffi::river_wlr_seat_get_data((*(*event).seat).seat) as *mut crate::seat::Seat;
 
     if ffi::wlr_seat_validate_pointer_grab_serial((*seat).wlr_seat, std::ptr::null_mut(), (*event).serial) {
-        let initial_mode = (*window).tiling_mode;
+        let initial_mode = this.tiling_mode;
         // A client's move (a cce-ui window-plate drag) is the bound edit-mode
         // drag in every way that matters: read the Tiled grab BEFORE the
         // un-tile below, so the drag snaps to whole cells and lands grid-
@@ -1003,13 +1028,11 @@ unsafe extern "C" fn handle_request_move(
         {
             // As the bound drag: un-tile for the drag but keep the
             // cell-quantized geometry (cursor.rs).
-            (*window).was_tiled = false;
-            (*window).tiling_mode = crate::tiling::TilingMode::Floating;
-            (*window).mode_locked = true;
+            this.was_tiled = false;
+            this.tiling_mode = crate::tiling::TilingMode::Floating;
+            this.mode_locked = true;
         }
-
-        let wm = &mut *crate::reentry::wm((*seat).server);
-        let id = (*window).id();
+        let id = (*toplevel).window;
         (*seat).focus(wm, crate::seat::Focus::Window(id));
         wm.stop_panning_animation();
         let cursor = &mut (*seat).cursor;
@@ -1052,20 +1075,22 @@ unsafe extern "C" fn handle_request_resize(
     data: *mut std::ffi::c_void,
 ) {
     let toplevel = crate::container_of!(listener, XdgToplevel, request_resize);
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let this = window_mut!(wm, id);
     let event = data as *mut ffi::wlr_xdg_toplevel_resize_event;
-    let window = (*toplevel).window;
 
     // Nothing may interactively resize a Utility window — its size is the
     // client's `settings()` data, not a drag. Rejected at the request, not
     // just left without an affordance.
-    if (*window).tiling_mode == crate::tiling::TilingMode::Utility {
+    if this.tiling_mode == crate::tiling::TilingMode::Utility {
         return;
     }
 
     let seat = ffi::river_wlr_seat_get_data((*(*event).seat).seat) as *mut crate::seat::Seat;
 
     if ffi::wlr_seat_validate_pointer_grab_serial((*seat).wlr_seat, std::ptr::null_mut(), (*event).serial) {
-        let initial_mode = (*window).tiling_mode;
+        let initial_mode = this.tiling_mode;
         // As in `handle_request_move`: read the Tiled grab before the
         // un-tile, so a client's edge resize snaps to whole cells like the
         // bound one and re-tiles where it lands, instead of leaving the
@@ -1075,13 +1100,11 @@ unsafe extern "C" fn handle_request_resize(
             && initial_mode != crate::tiling::TilingMode::Popup
             && initial_mode != crate::tiling::TilingMode::Fullscreen
         {
-            (*window).was_tiled = false;
-            (*window).tiling_mode = crate::tiling::TilingMode::Floating;
-            (*window).mode_locked = true;
+            this.was_tiled = false;
+            this.tiling_mode = crate::tiling::TilingMode::Floating;
+            this.mode_locked = true;
         }
-
-        let wm = &mut *crate::reentry::wm((*seat).server);
-        let id = (*window).id();
+        let id = (*toplevel).window;
         (*seat).focus(wm, crate::seat::Focus::Window(id));
         wm.stop_panning_animation();
         let cursor = &mut (*seat).cursor;
@@ -1132,14 +1155,16 @@ unsafe extern "C" fn handle_set_parent(_listener: *mut ffi::wl_listener, _data: 
 
 unsafe extern "C" fn handle_set_title(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, set_title);
-    let window = (*toplevel).window;
-    crate::window::Window::notify_title(&mut *crate::reentry::wm((*window).server), (*window).id());
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    crate::window::Window::notify_title(wm, id);
 }
 
 unsafe extern "C" fn handle_set_app_id(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let toplevel = crate::container_of!(listener, XdgToplevel, set_app_id);
-    let window = (*toplevel).window;
-    crate::window::Window::notify_app_id(&mut *crate::reentry::wm((*window).server), (*window).id());
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    crate::window::Window::notify_app_id(wm, id);
 }
 
 unsafe extern "C" fn handle_decoration_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -1152,7 +1177,9 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
     
     let base = ffi::river_wlr_xdg_toplevel_get_base((*(*decoration).wlr_decoration).toplevel);
     let toplevel = ffi::river_wlr_xdg_surface_get_data(base) as *mut XdgToplevel;
-    let window = (*toplevel).window;
+    let id = (*toplevel).window;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let this = window_mut!(wm, id);
 
     let hint = match (*(*decoration).wlr_decoration).requested_mode {
         ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_NONE => {
@@ -1166,13 +1193,13 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
         }
         _ => ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_NO_PREFERENCE,
     };
-    (*window).set_decoration_hint(hint);
+    this.set_decoration_hint(hint);
 
     if ffi::river_wlr_xdg_surface_get_initialized(base) {
         let mut mode = (*(*decoration).wlr_decoration).requested_mode;
         if mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_NONE {
-            let server = (*window).server;
-            let rule_ssd = (*crate::reentry::wm(server)).get_rule_for_window(&*window).and_then(|r| r.ssd);
+            let server = this.server;
+            let rule_ssd = wm.get_rule_for_window(window_ref!(wm, id, ())).and_then(|r| r.ssd);
             if let Some(true) = rule_ssd {
                 mode = ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
             } else {
@@ -1180,7 +1207,8 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
             }
         }
         ffi::wlr_xdg_toplevel_decoration_v1_set_mode((*decoration).wlr_decoration, mode);
-        (*window).wm_requested.ssd = mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+        let this = window_mut!(wm, id);
+        this.wm_requested.ssd = mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
         crate::shared::pending().dirty_windowing();
     }
 }

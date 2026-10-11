@@ -1578,7 +1578,6 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
 
     if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat, (*event).tool) {
         let wm = &*crate::reentry::wm(crate::shared::server_ptr());
-        let wm = &*crate::reentry::wm(crate::shared::server_ptr());
         (*tool).button(wm, tablet, event);
     }
 }

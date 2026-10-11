@@ -30,7 +30,7 @@ impl Window {
         // "Redeem Result" at the administrator's size. The save pass skips
         // transients for the same reason, so there is nothing of their own to
         // restore either; they size themselves.
-        if !this.get_parent().is_null() {
+        if this.get_parent().is_some() {
             return;
         }
         // For an X11 window that check is only meaningful once its properties

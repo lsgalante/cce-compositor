@@ -739,16 +739,16 @@ impl Window {
     /// the camera pans away from it like any other window rather than
     /// leaving it fixed behind the screen.
     pub unsafe fn fullscreen_yields(&self, wm: &crate::window_manager::WindowManager) -> bool {
-        let me = self as *const Window as *mut Window;
-        for w in wm.focus_history.iter().filter_map(|&id| wm.window(id)) {
-            if w == me {
+        let me = self.id();
+        for w in wm.focus_history.iter().filter_map(|&id| wm.windows.get(id)) {
+            if w.id() == me {
                 return false;
             }
-            if (*w).closed
-                || (*w).minimized
-                || !matches!((*w).state, WindowState::Mapped)
+            if w.closed
+                || w.minimized
+                || !matches!(w.state, WindowState::Mapped)
                 || !matches!(
-                    (*w).tiling_mode,
+                    w.tiling_mode,
                     crate::tiling::TilingMode::Floating
                         | crate::tiling::TilingMode::Tiled
                         | crate::tiling::TilingMode::Utility
@@ -758,13 +758,13 @@ impl Window {
                 continue;
             }
             // A dialog of this window opens over it, fullscreen or not.
-            let mut p = (*w).get_parent();
+            let mut p = w.get_parent();
             let mut depth = 0;
-            while !p.is_null() && p != me && depth < 16 {
-                p = (*p).get_parent();
+            while let Some(pid) = p.filter(|&pid| pid != me && depth < 16) {
+                p = wm.windows.get(pid).and_then(|pw| pw.get_parent());
                 depth += 1;
             }
-            if p == me {
+            if p == Some(me) {
                 continue;
             }
             return true;
@@ -1217,45 +1217,47 @@ impl Window {
         }
     }
 
-    pub unsafe fn get_parent(&self) -> *mut Window {
+    /// The window this one is a transient of (an xdg parent, or X11
+    /// WM_TRANSIENT_FOR), if it has one.
+    pub unsafe fn get_parent(&self) -> Option<WindowId> {
         match self.impl_type {
             WindowImpl::Toplevel(toplevel) => {
                 if toplevel.is_null() {
-                    std::ptr::null_mut()
+                    None
                 } else {
                     let wlr_parent = ffi::river_wlr_xdg_toplevel_get_parent((*toplevel).wlr_toplevel);
                     if wlr_parent.is_null() {
-                        std::ptr::null_mut()
+                        None
                     } else {
                         let base = ffi::river_wlr_xdg_toplevel_get_base(wlr_parent);
                         let parent_xdg = ffi::river_wlr_xdg_surface_get_data(base) as *mut crate::xdg_toplevel::XdgToplevel;
                         if parent_xdg.is_null() {
-                            std::ptr::null_mut()
+                            None
                         } else {
-                            (*parent_xdg).window
+                            Some((*parent_xdg).window)
                         }
                     }
                 }
             }
             WindowImpl::Xwayland(xwindow) => {
                 if xwindow.is_null() {
-                    std::ptr::null_mut()
+                    None
                 } else {
                     let parent_xsurface = (*(*xwindow).xsurface).parent;
                     if parent_xsurface.is_null() {
-                        std::ptr::null_mut()
+                        None
                     } else {
                         let parent_data = (*parent_xsurface).data;
                         if parent_data.is_null() {
-                            std::ptr::null_mut()
+                            None
                         } else {
                             let parent_xwindow = parent_data as *mut crate::xwayland_window::XwaylandWindow;
-                            (*parent_xwindow).window
+                            Some((*parent_xwindow).window)
                         }
                     }
                 }
             }
-            WindowImpl::Destroying => std::ptr::null_mut(),
+            WindowImpl::Destroying => None,
         }
     }
 
@@ -2159,14 +2161,14 @@ impl Window {
                 if toplevel.is_null() {
                     false
                 } else {
-                    (*toplevel).configure()
+                    (*toplevel).configure(this)
                 }
             }
             WindowImpl::Xwayland(xwindow) => {
                 if xwindow.is_null() {
                     false
                 } else {
-                    (*xwindow).configure()
+                    (*xwindow).configure(this)
                 }
             }
             WindowImpl::Destroying => unreachable!(),
@@ -2676,7 +2678,7 @@ impl Window {
                             (*xwindow).surface_tree.set_position(0, 0);
                         }
                     }
-                    (*xwindow).configure();
+                    (*xwindow).configure(self);
                 }
             }
             _ => {}
