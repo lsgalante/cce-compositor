@@ -7,7 +7,6 @@ use crate::seat::Seat;
 
 #[repr(C)]
 pub struct TextInput {
-    pub link: ffi::wl_list,
     pub wlr_text_input: *mut ffi::wlr_text_input_v3,
 
     pub enable: crate::listener::Listener,
@@ -30,7 +29,6 @@ impl TextInput {
         log::debug!("new text input on seat {}", seat_name);
 
         let mut text_input = Box::new(TextInput {
-            link: std::mem::zeroed(),
             wlr_text_input,
             enable: std::mem::zeroed(),
             commit: std::mem::zeroed(),
@@ -38,13 +36,11 @@ impl TextInput {
             destroy: std::mem::zeroed(),
         });
 
-        ffi::wl_list_init(&mut text_input.link);
 
         let raw = Box::into_raw(text_input);
 
         // Append to seat.relay.text_inputs
-        let text_inputs_list = &mut (*seat).relay.text_inputs as *mut ffi::wl_list as *mut WlList;
-        crate::server::wl_list_insert((*text_inputs_list).prev, &mut (*raw).link as *mut ffi::wl_list as *mut WlList);
+        (*seat).relay.text_inputs.push(raw);
 
         (*raw).enable.connect(&mut (*wlr_text_input).events.enable, handle_enable);
         (*raw).commit.connect(&mut (*wlr_text_input).events.commit, handle_commit);
@@ -143,7 +139,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     (*text_input).disable.disconnect();
     (*text_input).destroy.disconnect();
 
-    ffi::wl_list_remove(&mut (*text_input).link);
+    (*seat).relay.text_inputs.remove(text_input);
 
     let _ = Box::from_raw(text_input);
 }

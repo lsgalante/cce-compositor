@@ -8,7 +8,7 @@ use crate::seat::Seat;
 #[repr(C)]
 pub struct InputRelay {
     pub seat: *mut Seat,
-    pub text_inputs: ffi::wl_list,
+    pub text_inputs: crate::registry::Registry<TextInput>,
     pub input_method: *mut ffi::wlr_input_method_v2,
     pub input_popups: ffi::wl_list,
     pub text_input: *mut TextInput,
@@ -25,19 +25,29 @@ pub struct InputRelay {
 }
 
 impl InputRelay {
+    /// A relay with no seat yet; `init` finishes it once it is in place
+    /// (the popup list head must not move after it is initialised).
+    pub fn new() -> Self {
+        InputRelay {
+            seat: std::ptr::null_mut(),
+            text_inputs: crate::registry::Registry::new(),
+            input_method: std::ptr::null_mut(),
+            // SAFETY: a zeroed wl_list is a valid not-yet-initialised head;
+            // `init` initialises it in place.
+            input_popups: unsafe { std::mem::zeroed() },
+            text_input: std::ptr::null_mut(),
+            input_method_commit: crate::listener::Listener::default(),
+            grab_keyboard: crate::listener::Listener::default(),
+            input_method_destroy: crate::listener::Listener::default(),
+            input_method_new_popup: crate::listener::Listener::default(),
+            grab_keyboard_destroy: crate::listener::Listener::default(),
+            osk: crate::osk::Osk::new(),
+        }
+    }
+
     pub unsafe fn init(&mut self, seat: *mut Seat) {
         self.seat = seat;
-        ffi::wl_list_init(&mut self.text_inputs);
         ffi::wl_list_init(&mut self.input_popups);
-        self.input_method = std::ptr::null_mut();
-        self.text_input = std::ptr::null_mut();
-        self.input_method_commit = std::mem::zeroed();
-        self.grab_keyboard = std::mem::zeroed();
-        self.input_method_destroy = std::mem::zeroed();
-        self.input_method_new_popup = std::mem::zeroed();
-        self.grab_keyboard_destroy = std::mem::zeroed();
-        // The relay starts as zeroed memory: write, don't assign over it.
-        std::ptr::write(&mut self.osk, crate::osk::Osk::new());
     }
 
     pub unsafe fn new_input_method(&mut self, wm: &crate::window_manager::WindowManager, input_method: *mut ffi::wlr_input_method_v2) {
@@ -137,19 +147,13 @@ impl InputRelay {
     /// them only with one, but then no client ever enabled a field, and the
     /// on-screen keyboard (`osk.rs`) is driven by exactly that enable.
     pub unsafe fn focus(&mut self, wm: &mut crate::window_manager::WindowManager, new_focus: *mut ffi::wlr_surface) {
-        let head_ptr = &self.text_inputs as *const ffi::wl_list as *mut ffi::wl_list;
-
         // Send leave events. A text input already on the new surface keeps
         // it: a refocus of the same surface is not a leave.
-        let mut pos = self.text_inputs.next;
-        while pos != head_ptr {
-            let next_pos = (*pos).next;
-            let text_input = crate::container_of!(pos, TextInput, link);
+        for text_input in self.text_inputs.ptrs() {
             let focused = (*(*text_input).wlr_text_input).focused_surface;
             if !focused.is_null() && focused != new_focus {
                 ffi::wlr_text_input_v3_send_leave((*text_input).wlr_text_input);
             }
-            pos = next_pos;
         }
 
         // Clear the enabled text input unless its surface kept focus
@@ -164,17 +168,13 @@ impl InputRelay {
             return;
         }
         let new_client = ffi::wl_resource_get_client(ffi::river_wlr_surface_get_resource(new_focus));
-        let mut pos = self.text_inputs.next;
-        while pos != head_ptr {
-            let next_pos = (*pos).next;
-            let text_input = crate::container_of!(pos, TextInput, link);
+        for text_input in self.text_inputs.ptrs() {
             let wlr_text_input = (*text_input).wlr_text_input;
             if (*wlr_text_input).focused_surface.is_null()
                 && ffi::wl_resource_get_client((*wlr_text_input).resource) == new_client
             {
                 ffi::wlr_text_input_v3_send_enter(wlr_text_input, new_focus);
             }
-            pos = next_pos;
         }
     }
 }

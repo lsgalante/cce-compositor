@@ -8,13 +8,11 @@ use crate::scene_node_data::SceneNodeData;
 pub struct IdleInhibitManager {
     pub wlr_manager: *mut ffi::wlr_idle_inhibit_manager_v1,
     pub new_idle_inhibitor: crate::listener::Listener,
-    pub inhibitors: ffi::wl_list,
+    pub inhibitors: crate::registry::Registry<IdleInhibitor>,
 }
 
 impl IdleInhibitManager {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        ffi::wl_list_init(&mut self.inhibitors);
-
         let wlr_manager = ffi::wlr_idle_inhibit_v1_create((*server).wl_server);
         if wlr_manager.is_null() {
             return Err("Failed to create wlr_idle_inhibit_manager_v1");
@@ -29,14 +27,9 @@ impl IdleInhibitManager {
     pub unsafe fn deinit(&mut self) {
         self.new_idle_inhibitor.disconnect();
         
-        let inhibitors_head = &mut self.inhibitors as *mut ffi::wl_list as *mut crate::server::WlList;
-        let mut curr = (*inhibitors_head).next;
-        while curr != inhibitors_head {
-            let next = (*curr).next;
-            let inhibitor = crate::container_of!(curr, IdleInhibitor, link);
+        for inhibitor in self.inhibitors.ptrs() {
             // At shutdown: nothing is left to keep awake, so no recount.
             IdleInhibitor::destroy(inhibitor);
-            curr = next;
         }
     }
 
@@ -45,11 +38,7 @@ impl IdleInhibitManager {
     pub unsafe fn holders(&self, wm: &crate::window_manager::WindowManager) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
 
-        let inhibitors_head = &self.inhibitors as *const ffi::wl_list as *mut crate::server::WlList;
-        let mut curr = (*inhibitors_head).next;
-        while curr != inhibitors_head {
-            let next = (*curr).next;
-            let inhibitor = crate::container_of!(curr, IdleInhibitor, link);
+        for inhibitor in self.inhibitors.ptrs() {
 
             let surface = (*(*inhibitor).wlr_inhibitor).surface;
             if let Some(node_data) = SceneNodeData::from_surface(surface) {
@@ -72,7 +61,6 @@ impl IdleInhibitManager {
                     names.push(name);
                 }
             }
-            curr = next;
         }
 
         names
@@ -137,7 +125,6 @@ pub struct IdleInhibitor {
     pub inhibit_manager: *mut IdleInhibitManager,
     pub wlr_inhibitor: *mut ffi::wlr_idle_inhibitor_v1,
     pub listen_destroy: crate::listener::Listener,
-    pub link: ffi::wl_list,
 }
 
 impl IdleInhibitor {
@@ -149,13 +136,11 @@ impl IdleInhibitor {
             inhibit_manager,
             wlr_inhibitor,
             listen_destroy: std::mem::zeroed(),
-            link: std::mem::zeroed(),
         }));
 
         (*inhibitor).listen_destroy.connect(&mut (*wlr_inhibitor).events.destroy, handle_inhibitor_destroy);
 
-        let list_head = &mut (*inhibit_manager).inhibitors as *mut ffi::wl_list as *mut crate::server::WlList;
-        crate::server::wl_list_insert((*list_head).prev, &mut (*inhibitor).link as *mut ffi::wl_list as *mut crate::server::WlList);
+        (*inhibit_manager).inhibitors.push(inhibitor);
 
         Ok(inhibitor)
     }
@@ -164,7 +149,7 @@ impl IdleInhibitor {
     /// to keep awake).
     pub unsafe fn destroy(inhibitor: *mut Self) {
         (*inhibitor).listen_destroy.disconnect();
-        crate::server::wl_list_remove(&mut (*inhibitor).link as *mut ffi::wl_list as *mut crate::server::WlList);
+        (*(*inhibitor).inhibit_manager).inhibitors.remove(inhibitor);
         let _boxed = Box::from_raw(inhibitor);
     }
 }

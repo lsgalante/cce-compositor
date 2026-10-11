@@ -562,6 +562,22 @@ A function holding `&mut wm` reads the stores THROUGH it (`wm.outputs`,
 lock)` — never as a separate argument beside it, which would borrow the same
 memory twice.
 
+**Lists of live objects are `crate::registry::Registry<T>`** (since
+2026-10-11): a `Vec` of addresses an owner holds, replacing intrusive
+`wl_list`s threaded through a `link` field. An object pushes itself when it
+is created and removes itself in its destroy path before it is freed, so an
+address in a registry always names a live object; walks take a copy
+(`ptrs()`), since a visit may destroy what it visits. Converted: the input
+manager's devices, the idle inhibitors, a seat relay's text inputs. Still
+`wl_list`s: the keyboard groups, the xkb and libinput device and
+protocol-object lists, and the relay's input-method popups — every one of
+those runs only for real hardware, a client of the river input-config
+protocols (none in this workspace), or an input method, which no shadow
+test reaches. wlroots' own lists stay `wl_list`s: C owns them. A container
+that is zero-filled (`Server::default`, a `Default` returning
+`mem::zeroed()`) must WRITE each registry before the value is assumed
+initialised: a zeroed `Vec` is invalid.
+
 **No struct holds a server back-pointer** (RFC step 4, done 2026-10-11).
 Each subsystem gets what it needs another way:
 - Entity stores live on the window manager beside `windows`: `outputs`,

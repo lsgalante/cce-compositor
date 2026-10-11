@@ -7,11 +7,7 @@ use super::*;
 impl WindowManager {
     pub unsafe fn apply_input_rules(&mut self, input: &mut crate::input_manager::InputManager) {
         crate::wm_scope!(mut);
-        let devices_head = &mut input.devices as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*devices_head).next;
-        while curr != devices_head {
-            let next = (*curr).next;
-            let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
+        for device in input.devices.ptrs() {
             let name_ptr = ffi::river_wlr_input_device_get_name((*device).wlr_device);
             if !name_ptr.is_null() {
                 let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
@@ -23,21 +19,15 @@ impl WindowManager {
                     }
                 }
             }
-            curr = next;
         }
     }
 
     pub unsafe fn apply_input_config(&mut self, input: &mut crate::input_manager::InputManager) {
         crate::wm_scope!(mut);
-        let devices_head = &mut input.devices as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*devices_head).next;
-        while curr != devices_head {
-            let next = (*curr).next;
-            let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
+        for device in input.devices.ptrs() {
             if let Some(ref mut libinput) = (*device).libinput {
                 libinput.apply_config(&crate::shared::layout().input_config);
             }
-            curr = next;
         }
         self.apply_key_repeat(input);
     }
@@ -49,11 +39,7 @@ impl WindowManager {
         crate::wm_scope!(mut);
         let (rate, delay) = crate::shared::layout().input_config.repeat_info();
         let mut count = 0;
-        let devices_head = &mut input.devices as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*devices_head).next;
-        while curr != devices_head {
-            let next = (*curr).next;
-            let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
+        for device in input.devices.ptrs() {
             if !(*device).virtual_device
                 && ffi::river_wlr_input_device_get_type((*device).wlr_device) == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD
             {
@@ -65,7 +51,6 @@ impl WindowManager {
                     }
                 }
             }
-            curr = next;
         }
         count
     }

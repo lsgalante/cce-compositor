@@ -1329,11 +1329,7 @@ impl WindowManager {
                             return "error: scroll factor cannot be negative\n".to_string();
                         }
                         let mut found = false;
-                        let devices_head = &mut input.devices as *mut ffi::wl_list as *mut WlList;
-                        let mut curr = (*devices_head).next;
-                        while curr != devices_head {
-                            let next = (*curr).next;
-                            let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
+                        for device in input.devices.ptrs() {
                             let name_ptr = ffi::river_wlr_input_device_get_name((*device).wlr_device);
                             if !name_ptr.is_null() {
                                 let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
@@ -1342,7 +1338,6 @@ impl WindowManager {
                                     found = true;
                                 }
                             }
-                            curr = next;
                         }
                         if found {
                             "ok\n".to_string()

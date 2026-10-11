@@ -182,7 +182,7 @@ impl Seat {
             focused: Focus::None,
             touch_devices: 0,
             touch_injected: false,
-            relay: std::mem::zeroed(),
+            relay: crate::input_relay::InputRelay::new(),
             layer_shell: crate::layer_shell::LayerShellSeat::default(),
             keyboard_groups: std::mem::zeroed(),
             synthetic_keyboard: std::ptr::null_mut(),

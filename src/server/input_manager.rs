@@ -7,7 +7,7 @@ use crate::seat::Seat;
 
 pub struct InputManager {
     pub default_seat: *mut Seat,
-    pub devices: ffi::wl_list, // list of InputDevice
+    pub devices: crate::registry::Registry<crate::input_device::InputDevice>,
     pub objects: ffi::wl_list, // list of InputManagerObject
     pub global: *mut ffi::wl_global,
     
@@ -41,7 +41,14 @@ pub struct InputManagerObject {
 
 impl Default for InputManager {
     fn default() -> Self {
-        unsafe { std::mem::zeroed() }
+        let mut im = std::mem::MaybeUninit::<InputManager>::zeroed();
+        // SAFETY: every field but the device registry is a raw pointer, a C
+        // struct or a `Listener`, all valid zeroed; the registry is written
+        // before the value is assumed initialised.
+        unsafe {
+            std::ptr::write(std::ptr::addr_of_mut!((*im.as_mut_ptr()).devices), crate::registry::Registry::new());
+            im.assume_init()
+        }
     }
 }
 
@@ -49,7 +56,6 @@ impl InputManager {
     pub unsafe fn init(&mut self, server: *mut Server, seats: &mut crate::seat::Seats) -> Result<(), &'static str> {
         let wl_server = (*server).wl_server;
 
-        ffi::wl_list_init(&mut self.devices);
         ffi::wl_list_init(&mut self.objects);
 
         self.idle_notifier = ffi::wlr_idle_notifier_v1_create(wl_server);
@@ -156,17 +162,12 @@ impl InputManager {
         // Detach all devices from their seats and set their seat pointer to null
         // so they do not attempt to access a freed seat during backend destruction.
         log::info!("[deinit] detaching devices");
-        let devices_head = &mut self.devices as *mut ffi::wl_list as *mut WlList;
-        let mut curr_dev = (*devices_head).next;
-        while curr_dev != devices_head {
-            let next_dev = (*curr_dev).next;
-            let device = crate::container_of!(curr_dev, crate::input_device::InputDevice, link);
+        for device in self.devices.ptrs() {
             if !(*device).seat.is_null() {
                 log::info!("[deinit] detaching device from seat");
                 (*(*device).seat).detach_device(wm, device, sys);
                 (*device).seat = std::ptr::null_mut();
             }
-            curr_dev = next_dev;
         }
 
         // Destroy all seats
@@ -221,15 +222,10 @@ unsafe extern "C" fn bind_input_manager(
     wl_list_insert((*list_head).prev, &mut (*obj).link as *mut ffi::wl_list as *mut WlList);
 
     // Send existing devices to the client
-    let devices_head = &mut (*im).devices as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*devices_head).next;
-    while curr != devices_head {
-        let next = (*curr).next;
-        let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
+    for device in (*im).devices.ptrs() {
         if !(*device).virtual_device {
             (*device).create_object(crate::shared::server_ptr(), resource);
         }
-        curr = next;
     }
 }
 

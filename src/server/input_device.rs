@@ -21,7 +21,6 @@ pub struct InputDevice {
     pub destroy_data: *mut std::ffi::c_void,
 
     pub objects: ffi::wl_list, // list of InputDeviceObject
-    pub link: ffi::wl_list,    // link inside InputManager::devices
     pub libinput: Option<Box<crate::libinput_device::LibinputDevice>>,
     pub xkb_keyboard: Option<Box<crate::xkb_keyboard::XkbKeyboard>>,
 }
@@ -56,17 +55,14 @@ impl InputDevice {
             destroy_fn: None,
             destroy_data: std::ptr::null_mut(),
             objects: std::mem::zeroed(),
-            link: std::mem::zeroed(),
             libinput: None,
             xkb_keyboard: None,
         }));
 
         ffi::wl_list_init(&mut (*device).objects);
-        ffi::wl_list_init(&mut (*device).link);
 
         // Insert into InputManager::devices
-        let manager_devices_head = &mut (*server).input_manager.devices as *mut ffi::wl_list as *mut WlList;
-        wl_list_insert(manager_devices_head, &mut (*device).link as *mut ffi::wl_list as *mut WlList);
+        (*server).input_manager.devices.push_front(device);
 
         ffi::river_wlr_input_device_set_data(wlr_device, device as *mut _);
 
@@ -300,7 +296,7 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
     device.destroy_listener.disconnect();
 
     // Remove from InputManager::devices
-    wl_list_remove(&mut device.link as *mut ffi::wl_list as *mut WlList);
+    (*crate::shared::server_ptr()).input_manager.devices.remove(device_ptr);
 
     // Free wrapper memory
     let _boxed = Box::from_raw(device_ptr);
