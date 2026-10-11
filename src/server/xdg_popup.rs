@@ -166,7 +166,7 @@ unsafe fn update_blur(popup: *mut XdgPopup, base_surface: *mut ffi::wlr_xdg_surf
     if wlr_surface.is_null() {
         return;
     }
-    (*popup).tree.enable_blur((*crate::reentry::wm(server)).layout.window_blur, false, (*crate::reentry::wm(server)).layout.window_backdrop_blur_ignore_transparent, 0, 0, ffi::river_wlr_surface_get_width(wlr_surface), ffi::river_wlr_surface_get_height(wlr_surface), 0);
+    (*popup).tree.enable_blur(crate::shared::layout().window_blur, false, crate::shared::layout().window_backdrop_blur_ignore_transparent, 0, 0, ffi::river_wlr_surface_get_width(wlr_surface), ffi::river_wlr_surface_get_height(wlr_surface), 0);
 }
 
 /// The server a popup belongs to, found through its parent's scene node —

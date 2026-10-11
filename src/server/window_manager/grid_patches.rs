@@ -118,10 +118,10 @@ impl WindowManager {
         while zoom * out_scale / q > 2.0 && q < q_max {
             q = (q * 2.0).min(q_max);
         }
-        let period_x = self.layout.desktop_cell_width
-            + (self.layout.desktop_gap_width as f64).max(0.0);
-        let period_y = self.layout.desktop_cell_height
-            + (self.layout.desktop_gap_width as f64).max(0.0);
+        let period_x = crate::shared::layout().desktop_cell_width
+            + (crate::shared::layout().desktop_gap_width as f64).max(0.0);
+        let period_y = crate::shared::layout().desktop_cell_height
+            + (crate::shared::layout().desktop_gap_width as f64).max(0.0);
 
         // Target viewport (virtual units), for the union coverage below.
         let target_rect = target_cam.map(|c| {

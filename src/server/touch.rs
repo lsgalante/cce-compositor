@@ -587,7 +587,7 @@ impl Cursor {
                         self.touch_claim = Claim::Edge { id, edge, start, fired: true };
                         let mods = gesture_mods(&*self.seat);
                         let wm = &mut (*crate::reentry::wm(server));
-                        if let Some((action, command)) = gesture_bind(wm, "edge", 1, mods, |d| d == edge.name()) {
+                        if let Some((action, command)) = gesture_bind("edge", 1, mods, |d| d == edge.name()) {
                             log::info!("touch: edge_{} fired {action:?}", edge.name());
                             run_gesture_action(wm, action, command.as_deref());
                         }
@@ -711,8 +711,7 @@ impl Cursor {
     /// where no other output continues past it.
     unsafe fn bound_edge_at(&self, lx: f64, ly: f64) -> Option<Edge> {
         let server = (*self.seat).server;
-        let wm = &(*crate::reentry::wm(server));
-        if !wm.gesture_binds.iter().any(|b| b.gesture_type == "edge") {
+        if !crate::shared::layout().gesture_binds.iter().any(|b| b.gesture_type == "edge") {
             return None;
         }
         let layout = (*server).om.output_layout;
@@ -736,7 +735,7 @@ impl Cursor {
             .into_iter()
             .filter(|&(_, near)| near)
             .map(|(edge, _)| edge)
-            .find(|edge| gesture_bind(wm, "edge", 1, mods, |d| d == edge.name()).is_some())
+            .find(|edge| gesture_bind("edge", 1, mods, |d| d == edge.name()).is_some())
     }
 
     /// One stage of a touchscreen swipe, through the touchpad's handling.
@@ -750,7 +749,7 @@ impl Cursor {
     unsafe fn touch_pinch(&mut self, fingers: u32, scale: f64) -> MultiKind {
         let mods = gesture_mods(&*self.seat);
         let wm = &mut (*crate::reentry::wm((*self.seat).server));
-        match gesture_bind(wm, "pinch", fingers, mods, |d| pinch_hits(d, scale)) {
+        match gesture_bind("pinch", fingers, mods, |d| pinch_hits(d, scale)) {
             Some((action, command)) => {
                 log::info!("touch: pinch fired {action:?}");
                 run_gesture_action(wm, action, command.as_deref());

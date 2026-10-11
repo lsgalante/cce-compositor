@@ -11,6 +11,9 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     };
 
     let mut config: Config = parse_kdl_config(&content)?;
+    // The configuration is a shared snapshot (`crate::shared::layout`): build
+    // the new one here and publish it, before anything below reads it.
+    let mut next_layout = (*crate::shared::layout()).clone();
 
     let path_buf = std::path::Path::new(path);
     let input_path = path_buf.parent().unwrap_or_else(|| std::path::Path::new(".")).join("input.kdl");
@@ -38,46 +41,46 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     }
 
     state.output_scale = 1.0f32;
-    state.xwayland_hidpi = config
+    next_layout.xwayland_hidpi = config
         .window_manager
         .as_ref()
         .and_then(|wm| wm.xwayland_hidpi)
         .unwrap_or(true);
-    state.xwayland_hidpi_except = config
+    next_layout.xwayland_hidpi_except = config
         .window_manager
         .as_ref()
         .and_then(|wm| wm.xwayland_hidpi_except.clone())
         .unwrap_or_default();
     {
         let tv = config.window_manager.as_ref();
-        state.touchpad_view_apps = tv.and_then(|w| w.touchpad_view_apps.clone()).unwrap_or_default();
-        state.touchpad_view_swipe_tumble = tv
+        next_layout.touchpad_view_apps = tv.and_then(|w| w.touchpad_view_apps.clone()).unwrap_or_default();
+        next_layout.touchpad_view_swipe_tumble = tv
             .and_then(|w| w.touchpad_view_swipe.as_deref())
             .map_or(false, |s| s.eq_ignore_ascii_case("tumble"));
-        state.touchpad_view_sensitivity = tv.and_then(|w| w.touchpad_view_sensitivity).unwrap_or(1.0);
-        state.swipe_peek_px = tv
+        next_layout.touchpad_view_sensitivity = tv.and_then(|w| w.touchpad_view_sensitivity).unwrap_or(1.0);
+        next_layout.swipe_peek_px = tv
             .and_then(|w| w.swipe_peek)
             .filter(|v| v.is_finite() && *v >= 0.0)
             .unwrap_or(60.0);
-        state.swipe_repeat_peek_px = tv
+        next_layout.swipe_repeat_peek_px = tv
             .and_then(|w| w.swipe_repeat_peek)
             .filter(|v| v.is_finite() && *v >= 0.0)
-            .unwrap_or(state.swipe_peek_px * 0.5);
-        state.swipe_focus_cone_deg = tv
+            .unwrap_or(next_layout.swipe_peek_px * 0.5);
+        next_layout.swipe_focus_cone_deg = tv
             .and_then(|w| w.swipe_focus_cone)
             .filter(|v| v.is_finite())
             .map_or(45.0, |v| v.clamp(1.0, 89.0));
-        state.swipe_threshold = tv
+        next_layout.swipe_threshold = tv
             .and_then(|w| w.swipe_threshold)
             .filter(|v| v.is_finite() && *v > 0.0)
             .unwrap_or(70.0);
-        state.swipe_repeat_threshold = tv
+        next_layout.swipe_repeat_threshold = tv
             .and_then(|w| w.swipe_repeat_threshold)
             .filter(|v| v.is_finite() && *v > 0.0)
-            .unwrap_or(state.swipe_threshold * 4.0);
-        state.touchpad_view_invert = tv.and_then(|w| w.touchpad_view_invert).unwrap_or(false);
-        state.touchpad_hscroll_shift_apps = tv.and_then(|w| w.touchpad_hscroll_shift_apps.clone()).unwrap_or_default();
-        state.osk_on_touch = tv.and_then(|w| w.osk_on_touch).unwrap_or(true);
+            .unwrap_or(next_layout.swipe_threshold * 4.0);
+        next_layout.touchpad_view_invert = tv.and_then(|w| w.touchpad_view_invert).unwrap_or(false);
+        next_layout.touchpad_hscroll_shift_apps = tv.and_then(|w| w.touchpad_hscroll_shift_apps.clone()).unwrap_or_default();
+        next_layout.osk_on_touch = tv.and_then(|w| w.osk_on_touch).unwrap_or(true);
     }
     state.display = config.display.clone();
     state.on_app_exit = config
@@ -86,23 +89,23 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         .and_then(|wm| wm.on_app_exit.as_deref())
         .map(parse_on_app_exit)
         .unwrap_or(OnAppExit::FocusPrevious);
-    state.center_on_spawn = config
+    next_layout.center_on_spawn = config
         .window_manager
         .as_ref()
         .and_then(|wm| wm.center_on_spawn)
         .unwrap_or(true);
-    state.rounded_apps = config
+    next_layout.rounded_apps = config
         .window_manager
         .as_ref()
         .and_then(|wm| wm.rounded_apps.clone())
         .unwrap_or_default();
     // Unset means "same apps as rounded_apps" — which deliberately excludes
     // the implicit cce-* set, since those draw their own bevels.
-    state.bevel_apps = config
+    next_layout.bevel_apps = config
         .window_manager
         .as_ref()
         .and_then(|wm| wm.bevel_apps.clone())
-        .unwrap_or_else(|| state.rounded_apps.clone());
+        .unwrap_or_else(|| next_layout.rounded_apps.clone());
 
     // Feed scenefx's rounded-corner shaders the DE-wide corner-shape exponent
     // (clamped like cce-ui's corner_shape()). Plain C state, safe pre-renderer
@@ -123,61 +126,61 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     };
     CORNER_SPAN_FACTOR.store(span_factor.to_bits(), std::sync::atomic::Ordering::Relaxed);
 
-    state.layout.gap = config.layout.gap as i32;
-    state.layout.gap_top = config.layout.gap_top as i32;
-    state.layout.gap_left = config.layout.gap_left as i32;
-    state.layout.gap_right = config.layout.gap_right as i32;
-    state.layout.gap_bottom = config.layout.gap_bottom as i32;
-    state.layout.cascade_offset = config.layout.cascade_offset as i32;
-    state.layout.bar_height = config.layout.bar_height as i32;
-    state.layout.border_width = config.surface.border_width as i32;
-    state.layout.fullscreen_border_width = 0;
-    state.layout.cascade_border_width = 0;
-    state.layout.grid_border_width = 0;
-    state.layout.floating_border_width = 0;
+    next_layout.gap = config.layout.gap as i32;
+    next_layout.gap_top = config.layout.gap_top as i32;
+    next_layout.gap_left = config.layout.gap_left as i32;
+    next_layout.gap_right = config.layout.gap_right as i32;
+    next_layout.gap_bottom = config.layout.gap_bottom as i32;
+    next_layout.cascade_offset = config.layout.cascade_offset as i32;
+    next_layout.bar_height = config.layout.bar_height as i32;
+    next_layout.border_width = config.surface.border_width as i32;
+    next_layout.fullscreen_border_width = 0;
+    next_layout.cascade_border_width = 0;
+    next_layout.grid_border_width = 0;
+    next_layout.floating_border_width = 0;
 
-    state.layout.border_color = parse_hex_color_rgba(&config.surface.border_color);
-    state.layout.border_color_focused = config
+    next_layout.border_color = parse_hex_color_rgba(&config.surface.border_color);
+    next_layout.border_color_focused = config
         .surface
         .border_color_focused
         .as_deref()
         .map(parse_hex_color_rgba)
-        .unwrap_or(state.layout.border_color);
-    state.layout.border_color_hover = config
+        .unwrap_or(next_layout.border_color);
+    next_layout.border_color_hover = config
         .surface
         .border_color_hover
         .as_deref()
         .map(parse_hex_color_rgba)
-        .unwrap_or_else(|| lighten_premultiplied(state.layout.border_color_focused, HOVER_LIGHTEN));
-    state.layout.border_segment_gap = config.surface.border_segment_gap.max(0) as i32;
+        .unwrap_or_else(|| lighten_premultiplied(next_layout.border_color_focused, HOVER_LIGHTEN));
+    next_layout.border_segment_gap = config.surface.border_segment_gap.max(0) as i32;
     // Clamped at 1: past that the corners would be THICKER than the middle,
     // which is the moulding inside out.
-    state.layout.border_taper = config.surface.border_taper.clamp(0.05, 1.0) as f32;
-    state.layout.border_handle_width = config.surface.border_handle_width.max(4.0) as f32;
-    state.layout.border_overlap_opacity = config.surface.border_overlap_opacity.clamp(0.0, 1.0) as f32;
+    next_layout.border_taper = config.surface.border_taper.clamp(0.05, 1.0) as f32;
+    next_layout.border_handle_width = config.surface.border_handle_width.max(4.0) as f32;
+    next_layout.border_overlap_opacity = config.surface.border_overlap_opacity.clamp(0.0, 1.0) as f32;
     // Capped at 2s: the close fade is a deadline a client blocks on before it
     // exits, so a mistyped 20000 would hang every quit for 20 seconds.
-    state.layout.fade_in_ms = config.surface.fade_in_ms.clamp(0, 2000) as u32;
-    state.layout.fade_out_ms = config.surface.fade_out_ms.clamp(0, 2000) as u32;
-    state.layout.border_swell_curve = config.surface.border_swell_curve.clamp(0.1, 6.0) as f32;
-    state.layout.border_corner_bulge = config.surface.border_corner_bulge.max(0.0) as f32;
-    state.layout.border_corner_length = config.surface.border_corner_length.max(0) as i32;
+    next_layout.fade_in_ms = config.surface.fade_in_ms.clamp(0, 2000) as u32;
+    next_layout.fade_out_ms = config.surface.fade_out_ms.clamp(0, 2000) as u32;
+    next_layout.border_swell_curve = config.surface.border_swell_curve.clamp(0.1, 6.0) as f32;
+    next_layout.border_corner_bulge = config.surface.border_corner_bulge.max(0.0) as f32;
+    next_layout.border_corner_length = config.surface.border_corner_length.max(0) as i32;
 
-    state.layout.desktop_gap_color = config.surface.desktop_gap_color.clone();
+    next_layout.desktop_gap_color = config.surface.desktop_gap_color.clone();
 
     let background_color_val = parse_hex_color(&config.surface.desktop_gap_color);
-    state.layout.background_r = ((background_color_val >> 16) & 0xFF) * 0x01010101;
-    state.layout.background_g = ((background_color_val >> 8) & 0xFF) * 0x01010101;
-    state.layout.background_b = (background_color_val & 0xFF) * 0x01010101;
-    state.layout.background_a = 0xFFFFFFFF;
+    next_layout.background_r = ((background_color_val >> 16) & 0xFF) * 0x01010101;
+    next_layout.background_g = ((background_color_val >> 8) & 0xFF) * 0x01010101;
+    next_layout.background_b = (background_color_val & 0xFF) * 0x01010101;
+    next_layout.background_a = 0xFFFFFFFF;
 
-    state.layout.desktop_cell_color = parse_hex_color_rgba(&config.surface.desktop_cell_color);
-    state.layout.desktop_cell_width =
+    next_layout.desktop_cell_color = parse_hex_color_rgba(&config.surface.desktop_cell_color);
+    next_layout.desktop_cell_width =
         config.surface.grid_cell_width.unwrap_or(config.surface.desktop_grid_scale) as f64;
-    state.layout.desktop_cell_height =
+    next_layout.desktop_cell_height =
         config.surface.grid_cell_height.unwrap_or(config.surface.desktop_grid_scale) as f64;
-    state.layout.desktop_snap = config.surface.desktop_snap;
-    state.layout.overview_anim = if config.surface.desktop_overview_ramp.is_empty() {
+    next_layout.desktop_snap = config.surface.desktop_snap;
+    next_layout.overview_anim = if config.surface.desktop_overview_ramp.is_empty() {
         None
     } else {
         match crate::policy::ramp::SpeedRamp::from_spec(&config.surface.desktop_overview_ramp) {
@@ -188,68 +191,68 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             }
         }
     };
-    state.layout.desktop_snap_threshold = config.surface.desktop_snap_threshold.max(0) as f64;
-    state.layout.desktop_edge_pan = config.surface.desktop_edge_pan;
-    state.layout.desktop_edge_pan_band = config.surface.desktop_edge_pan_band.max(1) as f64;
-    state.layout.desktop_edge_pan_speed = config.surface.desktop_edge_pan_speed.max(0) as f64;
-    state.layout.desktop_gap_width = config.surface.desktop_gap_width as i32;
-    state.layout.desktop_line_relief = if config.surface.desktop_line_relief < 0 {
+    next_layout.desktop_snap_threshold = config.surface.desktop_snap_threshold.max(0) as f64;
+    next_layout.desktop_edge_pan = config.surface.desktop_edge_pan;
+    next_layout.desktop_edge_pan_band = config.surface.desktop_edge_pan_band.max(1) as f64;
+    next_layout.desktop_edge_pan_speed = config.surface.desktop_edge_pan_speed.max(0) as f64;
+    next_layout.desktop_gap_width = config.surface.desktop_gap_width as i32;
+    next_layout.desktop_line_relief = if config.surface.desktop_line_relief < 0 {
         None
     } else {
         Some(config.surface.desktop_line_relief as f64)
     };
-    state.layout.desktop_cell_fade_inset = config.surface.desktop_cell_fade_inset;
-    state.layout.desktop_cell_labels = config.surface.desktop_cell_labels;
-    state.layout.desktop_grid_fade_mode = config.surface.desktop_grid_fade_mode.clone();
+    next_layout.desktop_cell_fade_inset = config.surface.desktop_cell_fade_inset;
+    next_layout.desktop_cell_labels = config.surface.desktop_cell_labels;
+    next_layout.desktop_grid_fade_mode = config.surface.desktop_grid_fade_mode.clone();
 
-    state.layout.border_font_size = 11;
-    state.layout.transition_duration = config.layout.transition_duration as i32;
-    state.layout.grid_gap = config.layout.grid_gap as i32;
-    state.layout.border_blur = false;
-    state.layout.window_blur = config.surface.root_plate_blur > 0.001;
-    state.layout.root_plate_corner_radius = config.surface.root_plate_corner_radius as i32;
-    state.layout.overlay_behavior = config.layout.overlay_behavior;
-    state.layout.overlay_width = config.layout.overlay_width as i32;
-    state.layout.overlay_position = config.layout.overlay_position;
-    state.layout.overlay_border_gap = config.layout.overlay_border_gap as i32;
-    state.layout.status_normal_color = config.layout.status_normal_color.clone();
-    state.layout.status_background_blur = config.layout.status_background_blur as f32;
-    state.layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
+    next_layout.border_font_size = 11;
+    next_layout.transition_duration = config.layout.transition_duration as i32;
+    next_layout.grid_gap = config.layout.grid_gap as i32;
+    next_layout.border_blur = false;
+    next_layout.window_blur = config.surface.root_plate_blur > 0.001;
+    next_layout.root_plate_corner_radius = config.surface.root_plate_corner_radius as i32;
+    next_layout.overlay_behavior = config.layout.overlay_behavior;
+    next_layout.overlay_width = config.layout.overlay_width as i32;
+    next_layout.overlay_position = config.layout.overlay_position;
+    next_layout.overlay_border_gap = config.layout.overlay_border_gap as i32;
+    next_layout.status_normal_color = config.layout.status_normal_color.clone();
+    next_layout.status_background_blur = config.layout.status_background_blur as f32;
+    next_layout.transparency_opacity = config.transparency.as_ref().and_then(|t| t.opacity).unwrap_or(0.9) as f32;
     let root_plate_rgba = parse_hex_color_rgba(&config.surface.root_plate_color);
-    state.layout.window_opacity = root_plate_rgba[3] < 0.999;
-    state.layout.scenefx_optimized_blur = config.output.as_ref().map(|o| o.scenefx_optimized_blur).unwrap_or(true);
+    next_layout.window_opacity = root_plate_rgba[3] < 0.999;
+    next_layout.scenefx_optimized_blur = config.output.as_ref().map(|o| o.scenefx_optimized_blur).unwrap_or(true);
     // Idle timeouts live on the server, not the window manager; a reload
     // re-arms them from now with the new figures.
     if !state.server.is_null() {
         unsafe { (*state.server).idle.configure(&config.idle); }
     }
-    state.layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
-    state.layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
-    state.layout.status_module_hide_mode_preview = config.layout.status_module_hide_mode_preview;
-    state.layout.status_module_spacing = config.layout.status_module_spacing;
-    state.layout.status_droplet = config.layout.status_droplet.clone();
-    state.layout.status_backdrop_compress = config.layout.status_backdrop_compress;
-    state.layout.cloud_position_default = config.surface.cloud_position_default;
-    state.layout.shadow_enabled = config.surface.shadow_enabled;
-    state.layout.shadow_sigma = config.surface.shadow_sigma.max(0.0) as f32;
-    state.layout.shadow_color = parse_hex_color_rgba(&config.surface.shadow_color);
-    state.layout.shadow_offset_x = config.surface.shadow_offset_x as i32;
-    state.layout.shadow_offset_y = config.surface.shadow_offset_y as i32;
-    state.layout.shadow_tiled = config.surface.shadow_tiled;
-    state.layout.bevel_enabled = config.surface.bevel_enabled;
-    state.layout.bevel_thickness = config.surface.bevel_thickness.max(0.0) as f32;
+    next_layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
+    next_layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;
+    next_layout.status_module_hide_mode_preview = config.layout.status_module_hide_mode_preview;
+    next_layout.status_module_spacing = config.layout.status_module_spacing;
+    next_layout.status_droplet = config.layout.status_droplet.clone();
+    next_layout.status_backdrop_compress = config.layout.status_backdrop_compress;
+    next_layout.cloud_position_default = config.surface.cloud_position_default;
+    next_layout.shadow_enabled = config.surface.shadow_enabled;
+    next_layout.shadow_sigma = config.surface.shadow_sigma.max(0.0) as f32;
+    next_layout.shadow_color = parse_hex_color_rgba(&config.surface.shadow_color);
+    next_layout.shadow_offset_x = config.surface.shadow_offset_x as i32;
+    next_layout.shadow_offset_y = config.surface.shadow_offset_y as i32;
+    next_layout.shadow_tiled = config.surface.shadow_tiled;
+    next_layout.bevel_enabled = config.surface.bevel_enabled;
+    next_layout.bevel_thickness = config.surface.bevel_thickness.max(0.0) as f32;
     let (bevel_lx, bevel_ly) = parse_light_direction(&config.surface.bevel_light);
-    state.layout.bevel_light_x = bevel_lx;
-    state.layout.bevel_light_y = bevel_ly;
-    state.layout.bevel_light_intensity = config.surface.bevel_light_intensity.clamp(0.0, 1.0) as f32;
-    state.layout.bevel_shade_intensity = config.surface.bevel_shade_intensity.clamp(0.0, 1.0) as f32;
-    state.layout.bevel_shoulder = config.surface.bevel_shoulder.clamp(0.0, 1.0) as f32;
-    state.layout.bevel_color = parse_hex_color_rgba(&config.surface.bevel_color);
+    next_layout.bevel_light_x = bevel_lx;
+    next_layout.bevel_light_y = bevel_ly;
+    next_layout.bevel_light_intensity = config.surface.bevel_light_intensity.clamp(0.0, 1.0) as f32;
+    next_layout.bevel_shade_intensity = config.surface.bevel_shade_intensity.clamp(0.0, 1.0) as f32;
+    next_layout.bevel_shoulder = config.surface.bevel_shoulder.clamp(0.0, 1.0) as f32;
+    next_layout.bevel_color = parse_hex_color_rgba(&config.surface.bevel_color);
     let fc = parse_hex_color_rgba(&config.surface.bevel_focus_color);
-    state.layout.bevel_focus_color = [fc[0], fc[1], fc[2]];
+    next_layout.bevel_focus_color = [fc[0], fc[1], fc[2]];
     // Clamped low at 1: below that the glint would spread WIDER than the
     // rim's own slope, which is what `thickness` is for.
-    state.layout.bevel_focus_sharpness =
+    next_layout.bevel_focus_sharpness =
         config.surface.bevel_focus_sharpness.clamp(1.0, 64.0) as f32;
 
     for (key, val) in &config.env {
@@ -258,7 +261,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     }
 
     state.input_rules = config.device.clone();
-    state.input_config = config.input.clone().unwrap_or_default();
+    next_layout.input_config = config.input.clone().unwrap_or_default();
+    crate::shared::set_layout(next_layout.clone());
     unsafe {
         // Config first (its per-class scroll factors are defaults), then the
         // name-based device rules so they stay the most specific override.
@@ -400,12 +404,12 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
 
     state.keybinds = table.into_bindings();
 
-    state.pointer_binds.clear();
+    next_layout.pointer_binds.clear();
     for pb in &config.pointer_bind {
         let mods = parse_modifiers(&pb.mods);
         let button = parse_button(&pb.button);
         let action = parse_action(&pb.action);
-        state.pointer_binds.push(PointerBind {
+        next_layout.pointer_binds.push(PointerBind {
             mods,
             button,
             action,
@@ -415,8 +419,8 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     // Gesture table, first match wins in the cursor's swipe/pinch handlers:
     // input.kdl entries, then config.kdl `gesture_bind` nodes, then the
     // legacy `window_manager { toggle_overview "swipe_down" }`.
-    state.gesture_binds.clear();
-    state.gesture_binds.extend(input_gesture_binds);
+    next_layout.gesture_binds.clear();
+    next_layout.gesture_binds.extend(input_gesture_binds);
     for gb in &config.gesture_bind {
         let mods = gb.mods.as_ref().map(|m| parse_modifiers(m)).unwrap_or(0);
         let action = parse_action(&gb.action);
@@ -425,7 +429,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
         } else {
             None
         };
-        state.gesture_binds.push(GestureBind {
+        next_layout.gesture_binds.push(GestureBind {
             mods,
             gesture_type: gb.gesture_type.clone(),
             fingers: gb.fingers,
@@ -448,7 +452,7 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
             if let Some(g_type) = gesture_type {
                 let direction = normalized.trim_start_matches(g_type).trim_start_matches('_').to_string();
                 for fingers in [3, 4] {
-                    state.gesture_binds.push(GestureBind {
+                    next_layout.gesture_binds.push(GestureBind {
                         mods: 0,
                         gesture_type: g_type.to_string(),
                         fingers,
@@ -488,10 +492,12 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
     log::info!(
         "Parsed config: {} keybinds, {} pointer binds, {} gesture binds, {} startup programs",
         state.keybinds.len(),
-        state.pointer_binds.len(),
-        state.gesture_binds.len(),
+        next_layout.pointer_binds.len(),
+        next_layout.gesture_binds.len(),
         state.startup.len()
     );
+
+    crate::shared::set_layout(next_layout);
 
     unsafe {
         if !state.server.is_null() {

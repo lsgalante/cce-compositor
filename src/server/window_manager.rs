@@ -167,11 +167,8 @@ pub struct WindowManager {
     /// the fallback cells on after landing until the grid client's LATCHED
     /// patch reaches the whole viewport — see the gate in `arrange_views`.
     pub grid_cells_hold: bool,
-    pub layout: crate::config::Layout,
     pub mode_rules: Vec<crate::config::ModeRule>,
     pub keybinds: Vec<crate::config::Keybind>,
-    pub pointer_binds: Vec<crate::config::PointerBind>,
-    pub gesture_binds: Vec<crate::config::GestureBind>,
     /// Chords bound through the GlobalShortcuts portal backend — see
     /// `global_shortcuts`. Matched after `keybinds`, never persisted.
     pub portal_shortcuts: Vec<crate::global_shortcuts::PortalShortcut>,
@@ -218,48 +215,12 @@ pub struct WindowManager {
     pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
     pub status_sender: Option<crate::status_server::StatusSender>,
     pub output_scale: f32,
-    /// Xwayland sees a physical-pixel screen and X11 surfaces draw at
-    /// 1/scale (see `WindowManagerConfig::xwayland_hidpi`).
-    pub xwayland_hidpi: bool,
-    /// X11 windows kept in the logical world while `xwayland_hidpi` is on
-    /// (see `xwayland_window::x11_scale_for`).
-    pub xwayland_hidpi_except: Vec<String>,
-    /// Trackpad-to-view-drag emulation (see `cursor::ViewDrag`).
-    pub touchpad_view_apps: Vec<String>,
-    pub touchpad_view_swipe_tumble: bool,
-    pub touchpad_view_sensitivity: f64,
-    pub touchpad_view_invert: bool,
-    /// `window_manager { osk_on_touch }` (`osk.rs`).
-    pub osk_on_touch: bool,
-    /// `window_manager { swipe_peek }`: the desktop's lean toward a
-    /// directional swipe bind at its threshold, screen px (default 60;
-    /// 0 disables). See `cursor::swipe_peek_for`.
-    pub swipe_peek_px: f64,
-    /// `window_manager { swipe_repeat_peek }`: the lean toward each further
-    /// step once a swipe has switched focus, screen px at
-    /// `swipe_repeat_threshold` (default half of `swipe_peek_px`).
-    pub swipe_repeat_peek_px: f64,
-    /// `window_manager { swipe_focus_cone }`: degrees off a focus swipe's
-    /// direction within which a window center can take focus (default 45).
-    /// See `focus_toward`.
-    pub swipe_focus_cone_deg: f64,
-    /// `window_manager { swipe_threshold }`: accumulated swipe travel
-    /// (libinput units) at which a swipe bind fires (default 70).
-    pub swipe_threshold: f64,
-    /// `window_manager { swipe_repeat_threshold }`: the travel each FURTHER
-    /// fire of the same swipe needs after its first (default four times
-    /// `swipe_threshold`) — the resistance that keeps a swipe from
-    /// running on through a second window.
-    pub swipe_repeat_threshold: f64,
-    /// See `WindowManagerConfig::touchpad_hscroll_shift_apps`.
-    pub touchpad_hscroll_shift_apps: Vec<String>,
     /// Live override-redirect X11 surfaces (menus, tooltips, combo lists),
     /// so the per-frame pass can re-apply their 1/scale dest size — the
     /// scene's own commit listener resets it on every commit.
     pub override_redirects: Vec<*mut XwaylandOverrideRedirect>,
     pub display: std::collections::HashMap<String, f64>,
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
-    pub input_config: crate::config::InputConfig,
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
     pub status_hide_mode: bool,
     pub adjust_position_mode: bool,
@@ -408,15 +369,6 @@ pub struct WindowManager {
     /// Whether the fade timer is currently armed, so re-arming while a fade is
     /// already running doesn't restart it and double the step rate.
     pub border_fade_running: bool,
-    /// `window_manager.center_on_spawn`: whether a newly spawned window pulls the viewport
-    /// over to it when it takes focus. Off, the desk stays put and the window opens wherever
-    /// the layout placed it. Focus-follow panning between EXISTING windows is unaffected.
-    pub center_on_spawn: bool,
-    /// `window_manager.rounded_apps`: extra app_ids that get the decorated-window
-    /// treatment (rounded corner clip, blur-behind, shadow) alongside cce-* apps
-    /// and SSD requesters.
-    pub rounded_apps: Vec<String>,
-    pub bevel_apps: Vec<String>,
 }
 
 /// `CCE_DIRTY_BACKTRACE=1` — who called `dirty_windowing`. Separate from the
@@ -563,22 +515,8 @@ impl WindowManager {
         self.scheduled.output_config = std::ptr::null_mut();
         self.sent.output_config = std::ptr::null_mut();
         self.output_scale = 1.0;
-        self.xwayland_hidpi = true;
-        self.xwayland_hidpi_except = Vec::new();
-        self.touchpad_view_apps = Vec::new();
-        self.touchpad_view_swipe_tumble = false;
-        self.touchpad_view_sensitivity = 1.0;
-        self.swipe_peek_px = 60.0;
-        self.swipe_repeat_peek_px = 30.0;
-        self.swipe_focus_cone_deg = 45.0;
-        self.swipe_threshold = 70.0;
-        self.swipe_repeat_threshold = 280.0;
-        self.touchpad_view_invert = false;
-        self.osk_on_touch = true;
-        self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();
         self.input_rules = Vec::new();
-        self.input_config = crate::config::InputConfig::default();
         self.mode = WindowManagerMode::Normal;
         Ok(())
     }
@@ -639,24 +577,9 @@ impl WindowManager {
         self.last_saved_windows = Vec::new();
         self.override_redirects = Vec::new();
         self.pending_placements = Vec::new();
-        self.rounded_apps = Vec::new();
-        self.bevel_apps = Vec::new();
         self.shutting_down = false;
-        self.layout = crate::config::Layout::default();
+        crate::shared::set_layout(crate::config::Layout::default());
         self.output_scale = 1.0;
-        self.xwayland_hidpi = true;
-        self.xwayland_hidpi_except = Vec::new();
-        self.touchpad_view_apps = Vec::new();
-        self.touchpad_view_swipe_tumble = false;
-        self.touchpad_view_sensitivity = 1.0;
-        self.swipe_peek_px = 60.0;
-        self.swipe_repeat_peek_px = 30.0;
-        self.swipe_focus_cone_deg = 45.0;
-        self.swipe_threshold = 70.0;
-        self.swipe_repeat_threshold = 280.0;
-        self.touchpad_view_invert = false;
-        self.osk_on_touch = true;
-        self.touchpad_hscroll_shift_apps = Vec::new();
         self.display = std::collections::HashMap::new();
         self.has_restored_focused_window = false;
         self.restored_focused_window_mapped = false;
@@ -666,8 +589,6 @@ impl WindowManager {
         self.vanished_windows = Vec::new();
         self.mode_rules = Vec::new();
         self.keybinds = Vec::new();
-        self.pointer_binds = Vec::new();
-        self.gesture_binds = Vec::new();
         self.portal_shortcuts = Vec::new();
         self.ipc_rx = None;
         self.ipc_source = std::ptr::null_mut();
@@ -682,7 +603,6 @@ impl WindowManager {
         self.startup_pids = Vec::new();
         self.status_sender = None;
         self.input_rules = Vec::new();
-        self.input_config = crate::config::InputConfig::default();
         self.last_status_update = std::cell::RefCell::new(None);
         self.status_hide_mode = false;
         self.adjust_position_mode = false;
@@ -734,9 +654,6 @@ impl WindowManager {
         }
         // Not armed here: `start_stream` arms it when a subscriber appears,
         // and `handle_stream_timer` lets it lapse when the last one leaves.
-
-        // Default until the config is parsed (which happens after this init).
-        self.center_on_spawn = true;
 
         self.global = ffi::wl_global_create(
             (*server).wl_server,
@@ -831,26 +748,6 @@ impl WindowManager {
             self.target_desk_pan_y = Some(target.pan_y);
             self.start_panning_animation();
         }
-    }
-
-    /// Whether an app_id gets the decorated-window treatment (rounded corner
-    /// clip, blur-behind, drop shadow) without requesting SSD: every cce app,
-    /// plus the `window_manager.rounded_apps` config allowlist. The one
-    /// predicate behind every radius/blur/shadow decision — the mirrored
-    /// render sites must all agree or the effects visibly disagree per pass.
-    pub fn is_decorated_app(&self, app_id: &str) -> bool {
-        crate::wm_scope!();
-        app_id.starts_with("cce-") || self.rounded_apps.iter().any(|a| app_id_matches(a, app_id))
-    }
-
-    /// Should the compositor draw an edge bevel on this app? Unlike
-    /// `is_decorated_app` there is NO implicit cce-* arm: every cce-ui app
-    /// draws its own bevel, and a second one from the compositor just doubles
-    /// the rim. Only apps named in `bevel_apps` (defaulting to `rounded_apps`)
-    /// get one.
-    pub fn is_beveled_app(&self, app_id: &str) -> bool {
-        crate::wm_scope!();
-        self.bevel_apps.iter().any(|a| app_id_matches(a, app_id))
     }
 
     /// Consume the placement hint for `app_id`, if one was registered in the
@@ -1126,10 +1023,10 @@ impl WindowManager {
             cursor_y,
             hovered,
             focused,
-            grid_period_x: self.layout.desktop_cell_width.max(5.0)
-                + self.layout.desktop_gap_width.max(0) as f64,
-            grid_period_y: self.layout.desktop_cell_height.max(5.0)
-                + self.layout.desktop_gap_width.max(0) as f64,
+            grid_period_x: crate::shared::layout().desktop_cell_width.max(5.0)
+                + crate::shared::layout().desktop_gap_width.max(0) as f64,
+            grid_period_y: crate::shared::layout().desktop_cell_height.max(5.0)
+                + crate::shared::layout().desktop_gap_width.max(0) as f64,
             windows,
         }
     }
@@ -1320,7 +1217,7 @@ impl WindowManager {
     pub(crate) fn op_resize_size(&self, op: &crate::seat::SeatOp, edges: crate::window::Edges) -> (u32, u32) {
         crate::wm_scope!();
         // Zoom-aware: the felt grab distance stays constant in screen px.
-        let sp = self.layout.snap_params().for_zoom(self.desk_zoom);
+        let sp = crate::shared::layout().snap_params().for_zoom(self.desk_zoom);
         crate::policy::drag::resize_to(
             (op.start_win_virtual_x, op.start_win_virtual_y),
             (op.start_win_w, op.start_win_h),
@@ -1491,7 +1388,7 @@ impl WindowManager {
                     | crate::policy::arrange::StatusEdge::Right => (bg.height, bg.width),
                     _ => (bg.width, bg.height),
                 };
-                if thickness > 0 && thickness <= self.layout.bar_height {
+                if thickness > 0 && thickness <= crate::shared::layout().bar_height {
                     (*win_ptr).status_collapsed_len = len;
                 }
                 // Stacking of the expanded segment lives in the
@@ -1538,34 +1435,34 @@ impl WindowManager {
         let (layout_cam, sub_x, sub_y) = self.layout_camera();
         ffi::river_scene_set_desk_subpixel(crate::shared::scene().wlr_scene, sub_x, sub_y);
         let params = crate::policy::arrange::ArrangeParams {
-            bar_height: self.layout.bar_height,
+            bar_height: crate::shared::layout().bar_height,
             status_hide_mode: self.status_hide_mode,
-            hide_mode_preview: self.layout.status_module_hide_mode_preview as i32,
-            status_module_spacing: self.layout.status_module_spacing as i32,
+            hide_mode_preview: crate::shared::layout().status_module_hide_mode_preview as i32,
+            status_module_spacing: crate::shared::layout().status_module_spacing as i32,
             day_fraction: Some(local_day_fraction()),
-            status_blur: self.layout.status_background_blur > 0.001,
-            window_blur: self.layout.window_blur,
-            opacity_enabled: self.layout.window_opacity,
+            status_blur: crate::shared::layout().status_background_blur > 0.001,
+            window_blur: crate::shared::layout().window_blur,
+            opacity_enabled: crate::shared::layout().window_opacity,
             decoration: crate::policy::api::DecorationSpec {
-                border_width: self.layout.border_width,
-                border_color: crate::policy::api::Rgba(self.layout.border_color),
+                border_width: crate::shared::layout().border_width,
+                border_color: crate::policy::api::Rgba(crate::shared::layout().border_color),
             },
-            border_color_focused: crate::policy::api::Rgba(self.layout.border_color_focused),
+            border_color_focused: crate::policy::api::Rgba(crate::shared::layout().border_color_focused),
             overlay: crate::policy::arrange::OverlayParams {
-                overlay_width: self.layout.overlay_width,
-                border_gap: self.layout.overlay_border_gap,
-                border_width: self.layout.border_width,
-                position_right: self.layout.overlay_position == "right",
-                cloud_position_default: self.layout.cloud_position_default,
+                overlay_width: crate::shared::layout().overlay_width,
+                border_gap: crate::shared::layout().overlay_border_gap,
+                border_width: crate::shared::layout().border_width,
+                position_right: crate::shared::layout().overlay_position == "right",
+                cloud_position_default: crate::shared::layout().cloud_position_default,
             },
             normal: crate::policy::arrange::NormalParams {
-                gap_right: self.layout.gap_right,
-                gap_top: self.layout.gap_top,
-                cloud_position_default: self.layout.cloud_position_default,
-                desktop_cell_w: self.layout.desktop_cell_width,
-                desktop_cell_h: self.layout.desktop_cell_height,
-                desktop_gap_width: self.layout.desktop_gap_width as f64,
-                desktop_cell_inset: self.layout.desktop_cell_fade_inset as f64,
+                gap_right: crate::shared::layout().gap_right,
+                gap_top: crate::shared::layout().gap_top,
+                cloud_position_default: crate::shared::layout().cloud_position_default,
+                desktop_cell_w: crate::shared::layout().desktop_cell_width,
+                desktop_cell_h: crate::shared::layout().desktop_cell_height,
+                desktop_gap_width: crate::shared::layout().desktop_gap_width as f64,
+                desktop_cell_inset: crate::shared::layout().desktop_cell_fade_inset as f64,
             },
             pan_x: layout_cam.pan_x,
             pan_y: layout_cam.pan_y,
@@ -1685,7 +1582,7 @@ impl WindowManager {
                     edges: crate::window::Edges { top: true, bottom: true, left: true, right: true },
                     width: dec.border_width.max(0) as u32,
                     color: dec.border_color.0,
-                    hover_color: self.layout.border_color_hover,
+                    hover_color: crate::shared::layout().border_color_hover,
                 };
             }
             if let Some(blur) = wp.blur {
@@ -2091,7 +1988,7 @@ impl WindowManager {
     /// surface into the menu and shrinks it back on close.
     pub unsafe fn is_expanded_status_segment(&self, w: *mut crate::window::Window) -> bool {
         crate::wm_scope!();
-        let bar_h = self.layout.bar_height;
+        let bar_h = crate::shared::layout().bar_height;
         !w.is_null()
             && !(*w).closed
             && (*w).is_status_bar()
@@ -2440,9 +2337,9 @@ impl WindowManager {
             self.execute_action(fallback, None);
             return;
         }
-        let cmds = crate::policy::actions::focus_toward(&ctx, v, self.swipe_focus_cone_deg);
+        let cmds = crate::policy::actions::focus_toward(&ctx, v, crate::shared::layout().swipe_focus_cone_deg);
         if cmds.is_empty() {
-            log::info!("focus_toward {:?}: no window within {}°", v, self.swipe_focus_cone_deg);
+            log::info!("focus_toward {:?}: no window within {}°", v, crate::shared::layout().swipe_focus_cone_deg);
         }
         for cmd in &cmds {
             self.apply(cmd);
@@ -2460,7 +2357,7 @@ impl WindowManager {
         let ctx = self.build_action_ctx();
         let has_ray = ctx.windows.iter().any(|w| w.focus_cyclable && Some(w.id) == ctx.focused);
         let cmds = match v {
-            Some(v) if has_ray => crate::policy::actions::focus_toward(&ctx, v, self.swipe_focus_cone_deg),
+            Some(v) if has_ray => crate::policy::actions::focus_toward(&ctx, v, crate::shared::layout().swipe_focus_cone_deg),
             _ => crate::policy::actions::DefaultPolicy.action(&ctx, *action, None),
         };
         !cmds.is_empty()
@@ -2925,7 +2822,7 @@ impl crate::policy::api::Compositor for WindowManager {
                         self.set_mode(if overview { WindowManagerMode::Overview } else { WindowManagerMode::Normal });
                     }
                     if animate {
-                        if let Some((_, duration_ms)) = self.layout.overview_anim {
+                        if let Some((_, duration_ms)) = crate::shared::layout().overview_anim {
                             // Ramp-driven: a fixed-duration transition from
                             // the camera as it stands (a re-toggle mid-flight
                             // restarts the ramp from here). The exponential
@@ -3047,10 +2944,11 @@ impl crate::policy::api::Compositor for WindowManager {
                     }
                 }
                 Command::SetOverlayPosition(side) => {
-                    self.layout.overlay_position = match side {
-                        crate::policy::api::OverlaySide::Left => "left".to_string(),
-                        crate::policy::api::OverlaySide::Right => "right".to_string(),
+                    let side = match side {
+                        crate::policy::api::OverlaySide::Left => "left",
+                        crate::policy::api::OverlaySide::Right => "right",
                     };
+                    crate::shared::update_layout(|l| l.overlay_position = side.to_string());
                 }
                 Command::Relayout => crate::shared::pending().dirty_windowing(),
                 Command::RefreshCamera => {

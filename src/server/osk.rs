@@ -52,7 +52,7 @@ impl Osk {
     }
 
     unsafe fn enabled(&self) -> bool {
-        !self.server.is_null() && (*crate::reentry::wm(self.server)).osk_on_touch
+        !self.server.is_null() && crate::shared::layout().osk_on_touch
     }
 
     /// A finger landed on (or, for a tap, lifted from) a window.

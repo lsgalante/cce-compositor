@@ -526,7 +526,7 @@ unsafe extern "C" fn xwayland_global_filter(
     data: *mut std::ffi::c_void,
 ) -> bool {
     let server = data as *mut Server;
-    if server.is_null() || (*server).xwayland.is_null() || !(*crate::reentry::wm(server)).xwayland_hidpi {
+    if server.is_null() || (*server).xwayland.is_null() || !crate::shared::layout().xwayland_hidpi {
         return true;
     }
     let xserver = (*((*server).xwayland as *mut WlrXwayland)).server as *mut ffi::wlr_xwayland_server;
@@ -973,8 +973,6 @@ impl Default for Server {
             std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).focus_history, Vec::new());
             std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).mode_rules, Vec::new());
             std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).keybinds, Vec::new());
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).pointer_binds, Vec::new());
-            std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).gesture_binds, Vec::new());
             std::ptr::write(&mut (*crate::reentry::wm(server.as_mut_ptr())).ipc_rx, None);
             // Same reason as ipc_rx above, and not optional: an mpsc endpoint
             // has no null niche, so `Option` tags it out of band and zeroed

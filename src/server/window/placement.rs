@@ -228,7 +228,7 @@ impl Window {
             // Tiled window off the current grid is re-snapped by the Tiled
             // arrange arm instead.
             if self.tiling_mode == crate::tiling::TilingMode::Floating {
-                let sp = (*crate::reentry::wm(self.server)).layout.snap_params();
+                let sp = crate::shared::layout().snap_params();
                 if crate::policy::snap::is_cell_aligned(
                     self.virtual_x,
                     self.virtual_y,
@@ -575,7 +575,7 @@ impl Window {
             return;
         }
         let wm = &(*crate::reentry::wm(self.server));
-        let sp = wm.layout.snap_params();
+        let sp = crate::shared::layout().snap_params();
         if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
             return;
         }
@@ -643,7 +643,7 @@ impl Window {
     /// leaves it clear of its neighbours.
     pub(crate) unsafe fn place_on_invocation_cell(&mut self, app_id: &str, hx: f64, hy: f64) {
         let wm = &(*crate::reentry::wm(self.server));
-        let sp = wm.layout.snap_params();
+        let sp = crate::shared::layout().snap_params();
         if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
             return;
         }

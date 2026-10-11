@@ -443,7 +443,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
         }
         
         let mut matched_pb: Option<crate::config::PointerBind> = None;
-        for pb in &(*crate::reentry::wm((*seat).server)).pointer_binds {
+        for pb in &crate::shared::layout().pointer_binds {
             if pb.button == (*event).button && pb.mods == modifiers {
                 matched_pb = Some(pb.clone());
                 break;

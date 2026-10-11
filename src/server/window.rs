@@ -699,7 +699,7 @@ impl Window {
     /// Floating, popup and every other mode are unaffected. Evaluated on both
     /// render paths, so a float/tile toggle restyles on the next arrange.
     pub unsafe fn wants_tiled_shadow(&self) -> bool {
-        (*crate::reentry::wm(self.server)).layout.shadow_tiled
+        crate::shared::layout().shadow_tiled
             || self.tiling_mode != crate::tiling::TilingMode::Tiled
     }
 
@@ -1573,7 +1573,7 @@ impl Window {
         // segments, wallpaper), so there is no second branch here.
         // Animations off (`cce_core::motion`) is a zero-length fade, the
         // same as `surface { fade in_ms=0 }`.
-        let fade_ms = if cce_core::motion::enabled() { (*crate::reentry::wm(self.server)).layout.fade_in_ms } else { 0 };
+        let fade_ms = if cce_core::motion::enabled() { crate::shared::layout().fade_in_ms } else { 0 };
         if self.wants_map_fade() && fade_ms > 0 {
             self.map_fade = 0.0;
         }
@@ -2328,11 +2328,11 @@ impl Window {
             let app_id = self.get_app_id_string().unwrap_or_default();
             let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                             app_id.starts_with("cce-status");
-            let is_decorated = (*crate::reentry::wm(self.server)).is_decorated_app(&app_id);
+            let is_decorated = crate::shared::layout().is_decorated_app(&app_id);
             let blur_enabled = requested.blur && (self.wm_requested.ssd || is_decorated || is_status) && !self.droplet_backdrop_on();
-            let mut ignore_transparent = (*crate::reentry::wm(self.server)).layout.window_backdrop_blur_ignore_transparent;
+            let mut ignore_transparent = crate::shared::layout().window_backdrop_blur_ignore_transparent;
             if is_status {
-                ignore_transparent = (*crate::reentry::wm(self.server)).layout.status_backdrop_blur_ignore_transparent;
+                ignore_transparent = crate::shared::layout().status_backdrop_blur_ignore_transparent;
             }
             // Hoisted above the blur setup: the blur node needs this radius, and whether
             // the window wants rounded corners at all decides the optimized-blur question
@@ -2351,7 +2351,7 @@ impl Window {
             let use_optimized = if is_status {
                 false
             } else {
-                (*crate::reentry::wm(self.server)).layout.scenefx_optimized_blur
+                crate::shared::layout().scenefx_optimized_blur
             };
             let toplevel_w = match self.impl_type {
                 WindowImpl::Toplevel(toplevel) => {
@@ -2412,7 +2412,7 @@ impl Window {
                 // would sit on top of it.
                 let want_bevel = !is_status
                     && !self.is_fullscreen()
-                    && (*crate::reentry::wm(self.server)).is_beveled_app(&app_id);
+                    && crate::shared::layout().is_beveled_app(&app_id);
             self.update_shadow(width, height, radius, want_shadow);
                 self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
@@ -2808,11 +2808,11 @@ impl Window {
             {
                 let is_status = self.tiling_mode == crate::tiling::TilingMode::Status ||
                                 app_id.starts_with("cce-status");
-                let is_decorated = (*crate::reentry::wm(self.server)).is_decorated_app(&app_id);
+                let is_decorated = crate::shared::layout().is_decorated_app(&app_id);
                 let blur_enabled = requested.blur && (self.wm_requested.ssd || is_decorated || is_status) && !self.droplet_backdrop_on();
-                let mut ignore_transparent = (*crate::reentry::wm(self.server)).layout.window_backdrop_blur_ignore_transparent;
+                let mut ignore_transparent = crate::shared::layout().window_backdrop_blur_ignore_transparent;
                 if is_status {
-                    ignore_transparent = (*crate::reentry::wm(self.server)).layout.status_backdrop_blur_ignore_transparent;
+                    ignore_transparent = crate::shared::layout().status_backdrop_blur_ignore_transparent;
                 }
                 // Same radius/optimized reasoning as set_rendering_state — the
                 // one `root_plate_radius_base`, so the two paths, which drive
@@ -2830,7 +2830,7 @@ impl Window {
                 let use_optimized = if is_status {
                     false
                 } else {
-                    (*crate::reentry::wm(self.server)).layout.scenefx_optimized_blur
+                    crate::shared::layout().scenefx_optimized_blur
                 };
                 let toplevel_w = match self.impl_type {
                     WindowImpl::Toplevel(toplevel) => {
@@ -2874,7 +2874,7 @@ impl Window {
                 // would sit on top of it.
                 let want_bevel = !is_status
                     && !self.is_fullscreen()
-                    && (*crate::reentry::wm(self.server)).is_beveled_app(&app_id);
+                    && crate::shared::layout().is_beveled_app(&app_id);
                 self.update_shadow(width, height, radius, want_shadow);
                 self.update_bevel(width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);

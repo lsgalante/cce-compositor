@@ -44,7 +44,7 @@ impl Keyboard {
         let (repeat_rate, repeat_delay) = if virtual_device {
             (DEFAULT_REPEAT_RATE, DEFAULT_REPEAT_DELAY)
         } else {
-            (*crate::reentry::wm((*(*device).seat).server)).input_config.repeat_info()
+            crate::shared::layout().input_config.repeat_info()
         };
         let mut keymap = std::ptr::null_mut();
         if virtual_device {

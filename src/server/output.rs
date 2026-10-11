@@ -633,12 +633,11 @@ impl Output {
     }
 
     pub unsafe fn update_background_color(&mut self) {
-        let wm = &(*crate::reentry::wm(self.server));
         let color: [f32; 4] = [
-            (wm.layout.background_r as f64 / u32::MAX as f64) as f32,
-            (wm.layout.background_g as f64 / u32::MAX as f64) as f32,
-            (wm.layout.background_b as f64 / u32::MAX as f64) as f32,
-            (wm.layout.background_a as f64 / u32::MAX as f64) as f32,
+            (crate::shared::layout().background_r as f64 / u32::MAX as f64) as f32,
+            (crate::shared::layout().background_g as f64 / u32::MAX as f64) as f32,
+            (crate::shared::layout().background_b as f64 / u32::MAX as f64) as f32,
+            (crate::shared::layout().background_a as f64 / u32::MAX as f64) as f32,
         ];
         self.background_rect.set_color(&color);
     }
@@ -764,19 +763,19 @@ impl Output {
         };
 
         let (viewport_w, viewport_h) = self.current.dimensions();
-        let spec = wm.layout.background_spec();
+        let spec = crate::shared::layout().background_spec();
         let zoom = crate::policy::background::sanitized_zoom(wm.desk_zoom);
 
         // Spec/viewport/zoom/bevel changes force a redraw of the pools;
         // pan alone only moves the grid tree.
         let bevel_key = [
-            wm.layout.bevel_enabled as u32,
-            wm.layout.bevel_thickness.to_bits(),
-            wm.layout.bevel_light_x.to_bits(),
-            wm.layout.bevel_light_y.to_bits(),
-            wm.layout.bevel_light_intensity.to_bits(),
-            wm.layout.bevel_shade_intensity.to_bits(),
-            wm.layout.bevel_shoulder.to_bits(),
+            crate::shared::layout().bevel_enabled as u32,
+            crate::shared::layout().bevel_thickness.to_bits(),
+            crate::shared::layout().bevel_light_x.to_bits(),
+            crate::shared::layout().bevel_light_y.to_bits(),
+            crate::shared::layout().bevel_light_intensity.to_bits(),
+            crate::shared::layout().bevel_shade_intensity.to_bits(),
+            crate::shared::layout().bevel_shoulder.to_bits(),
         ];
         let structure_changed = self.last_grid_viewport_w != viewport_w
             || self.last_grid_viewport_h != viewport_h
@@ -819,7 +818,7 @@ impl Output {
         let pool = &mut self.grid_rect_pool;
         let mut pool_idx = 0;
 
-        let layout = &wm.layout;
+        let layout = &crate::shared::layout();
         // The relief lives on the LINES, never the cells (mirroring the
         // cce-grid client, which must be able to latch without swapping the
         // grid's material): each cell's chamfer box is expanded by the
@@ -1045,7 +1044,7 @@ impl Output {
     unsafe fn draw_cell_labels(&mut self) {
         let wm = &(*crate::reentry::wm(self.server));
         let overview = wm.mode == crate::window_manager::WindowManagerMode::Overview
-            && wm.layout.desktop_cell_labels;
+            && crate::shared::layout().desktop_cell_labels;
 
         if !overview {
             self.disable_cell_labels();
@@ -1065,7 +1064,7 @@ impl Output {
         self.cell_label_tree.raise_to_top();
 
         let (viewport_w, viewport_h) = self.current.dimensions();
-        let spec = wm.layout.background_spec();
+        let spec = crate::shared::layout().background_spec();
         let crate::policy::api::BackgroundSpec::Grid(grid) = &spec else {
             self.disable_cell_labels();
             return;

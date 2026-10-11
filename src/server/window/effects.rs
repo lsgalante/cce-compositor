@@ -30,9 +30,9 @@ impl Window {
         if is_status {
             return 0;
         }
-        let is_decorated = (*crate::reentry::wm(self.server)).is_decorated_app(&app_id);
+        let is_decorated = crate::shared::layout().is_decorated_app(&app_id);
         if self.wm_requested.ssd || is_decorated {
-            (*crate::reentry::wm(self.server)).layout.root_plate_corner_radius
+            crate::shared::layout().root_plate_corner_radius
         } else {
             0
         }
@@ -52,7 +52,7 @@ impl Window {
         if self.shadow.is_null() {
             return;
         }
-        let layout = &(*crate::reentry::wm(self.server)).layout;
+        let layout = &crate::shared::layout();
         let enabled = want && layout.shadow_enabled && width > 0 && height > 0;
         self.shadow.set_enabled(enabled);
         if !enabled {
@@ -133,7 +133,7 @@ impl Window {
         if self.bevel.is_null() {
             return;
         }
-        let layout = &(*crate::reentry::wm(self.server)).layout;
+        let layout = &crate::shared::layout();
         // Focused-window treatment: the rim highlight wraps all four sides
         // in the accent (the DE focus glint). Focus is read off the seats —
         // the window's `activated` field is a configure-time snapshot, not
@@ -183,7 +183,7 @@ impl Window {
     pub unsafe fn sync_backdrop_compress(&self) {
         let is_status = self.tiling_mode == crate::tiling::TilingMode::Status;
         let (ceil, knee, invert) = if is_status {
-            (*crate::reentry::wm(self.server)).layout.status_backdrop_compress.unwrap_or((0.0, 0.0, false))
+            crate::shared::layout().status_backdrop_compress.unwrap_or((0.0, 0.0, false))
         } else {
             (0.0, 0.0, false)
         };
@@ -199,7 +199,7 @@ impl Window {
         if self.droplet.is_null() {
             return;
         }
-        let layout = &(*crate::reentry::wm(self.server)).layout;
+        let layout = &crate::shared::layout();
         let is_status = self.tiling_mode == crate::tiling::TilingMode::Status;
         // Only bar-strip segments: an expanded (menu) segment is taller than
         // the bar and draws its own grown drop client-side — refracting the
@@ -243,7 +243,7 @@ impl Window {
         if self.droplet.is_null() || self.tiling_mode != crate::tiling::TilingMode::Status {
             return false;
         }
-        match (*crate::reentry::wm(self.server)).layout.status_droplet.as_deref() {
+        match crate::shared::layout().status_droplet.as_deref() {
             Some(raw) => {
                 let spec = cce_core::droplet::DropletSpec::parse(raw);
                 spec.refr > 0.0 || spec.ghost > 0.0
@@ -259,7 +259,7 @@ impl Window {
     /// `border.overlap_opacity`, and again by the map/close fade
     /// (`map_fade`), which rests at 1.0 whenever no fade is in flight.
     pub unsafe fn effective_opacity(&self) -> f32 {
-        let floor = (*crate::reentry::wm(self.server)).layout.border_overlap_opacity;
+        let floor = crate::shared::layout().border_overlap_opacity;
         self.rendering_requested.opacity
             * (1.0 - self.adjust_dim.clamp(0.0, 1.0) * (1.0 - floor))
             * self.map_fade.clamp(0.0, 1.0)

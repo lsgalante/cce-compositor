@@ -653,14 +653,14 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
 
     // Borrowed: this runs on every commit of every client.
     let app_id = (*window).app_id_str().unwrap_or_default();
-    let mut ignore_transparent = (*crate::reentry::wm((*window).server)).layout.window_backdrop_blur_ignore_transparent;
+    let mut ignore_transparent = crate::shared::layout().window_backdrop_blur_ignore_transparent;
     if app_id.starts_with("cce-status") {
-        ignore_transparent = (*crate::reentry::wm((*window).server)).layout.status_backdrop_blur_ignore_transparent;
+        ignore_transparent = crate::shared::layout().status_backdrop_blur_ignore_transparent;
     }
     let scale = (*window).scale;
     let is_status = (*window).tiling_mode == crate::tiling::TilingMode::Status ||
                     app_id.starts_with("cce-status");
-    let is_decorated = (*crate::reentry::wm((*window).server)).is_decorated_app(&app_id);
+    let is_decorated = crate::shared::layout().is_decorated_app(&app_id);
     // Status segments are SELF-sizing (their bounds track their own box), so
     // the geometry of the commit being handled is the truth. `rendering_sent`
     // is a render-start snapshot that lags a contract commit by a render pass
@@ -697,7 +697,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let use_optimized = if is_status {
         false
     } else {
-        (*crate::reentry::wm((*window).server)).layout.scenefx_optimized_blur
+        crate::shared::layout().scenefx_optimized_blur
     };
     let blur_enabled = (*window).rendering_requested.blur && ((*window).wm_requested.ssd || is_decorated || is_status);
     (*window).tree.enable_blur(blur_enabled, use_optimized, ignore_transparent, 0, 0, geom_w, geom_h, // geom_w/h are already scaled to device px; the radius must match.

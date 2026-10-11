@@ -421,7 +421,8 @@ listeners must not unlink into them on drop.
 `shared()` is a safe `&'static Shared`, one per thread, leaked on first use,
 and nothing ever takes `&mut` to it — every field is a `Cell` or `OnceCell`.
 It holds the scene (`crate::shared::scene()`, set once by `Server::init`;
-`Server` has no `scene` field any more), the display, and the pending work
+`Server` has no `scene` field any more), the configuration
+(`crate::shared::layout()`, below), the display, and the pending work
 (`crate::shared::pending()`): whether a manage pass and a render pass are
 wanted and the idle callback that runs them. `dirty_windowing()`,
 `dirty_rendering()`, `mark_*` (set without arming, for a caller about to run
@@ -435,6 +436,19 @@ cross-subsystem state that is fixed after init, or is a flag, belongs here;
 mutable state with structure does not (that is the planned context-passing
 step). `Pending::shutdown` runs in `Server::deinit` before the display is
 destroyed, so nothing arms an idle on a dead event loop.
+
+**The configuration is a shared snapshot** (`crate::shared::layout()`,
+since 2026-10-10): an `Rc<Layout>`, cheap to take, that keeps its values if
+the config changes while it is held. `WindowManager` has no `layout` field;
+the config-derived fields it used to carry beside it — the pointer and
+gesture binds, swipe thresholds and peeks, the touchpad view-drag and
+hscroll app lists, `input_config`, the Xwayland hidpi switches,
+`osk_on_touch`, `center_on_spawn`, `rounded_apps` / `bevel_apps` (with
+`is_decorated_app` / `is_beveled_app`, now `Layout` methods) — are `Layout`
+fields. A config load builds a copy and publishes it (`set_layout`, twice in
+`parse_config`: before the input config is applied and at the end); a single
+change goes through `update_layout(|l| …)`, which edits a copy with no borrow
+held. Take the snapshot once per loop, not per access.
 
 ### Re-entrancy tracer (`reentry.rs`, since 2026-10-10)
 
@@ -460,6 +474,14 @@ under 3% calls that mutate (`arm_border_fade`, `raise_window`,
 destroy path's history and selection cleanup, camera pan writes). By outer
 method: `step_camera_frame` (two thirds: every animation frame re-lays the
 windows, which read the layout), `manage_start`, `step_op_frame`.
+
+After the configuration moved into the shared snapshot (same workload,
+same day): **747 re-entries at 84 sites**, down 87%. What is left:
+`window_adjust_active()` (365 — window-manager state, overview or Super
+held, not config), `sent` (142 — the output manager walking the applied
+outputs), ten `let wm = &mut …` bindings (92), `mode` (19), and the calls
+that genuinely mutate, about 80 at about 20 sites — the context-passing
+scope.
 
 ### Scene nodes are owned handles (`scene_handle.rs`, since 2026-10-10)
 

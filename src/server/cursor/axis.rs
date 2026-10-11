@@ -286,9 +286,7 @@ pub(crate) const VIEW_DRAG_PINCH_PX: f64 = 150.0;
 impl Cursor {
     /// The window under the pointer, if `touchpad_view_apps` names its app.
     unsafe fn view_drag_target(&mut self) -> Option<(*mut crate::window::Window, *mut ffi::wlr_surface, f64, f64, f64)> {
-        let server = (*self.seat).server;
-        let wm = &(*crate::reentry::wm(server));
-        if wm.touchpad_view_apps.is_empty() {
+        if crate::shared::layout().touchpad_view_apps.is_empty() {
             return None;
         }
         let result = crate::shared::scene().at(self.x(), self.y())?;
@@ -297,7 +295,7 @@ impl Cursor {
             return None;
         }
         let app_id = (*window).get_app_id_string().unwrap_or_default();
-        if !wm.touchpad_view_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
+        if !crate::shared::layout().touchpad_view_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
             return None;
         }
         // The app may have narrowed the drag to its own view panes (see
@@ -435,19 +433,17 @@ impl Cursor {
             return false;
         }
         if self.view_drag.is_none() {
-            let wm = &(*crate::reentry::wm((*self.seat).server));
-            let tumble = wm.touchpad_view_swipe_tumble != (modifiers & SHIFT != 0);
+            let tumble = crate::shared::layout().touchpad_view_swipe_tumble != (modifiers & SHIFT != 0);
             let button = if tumble { BTN_LEFT } else { BTN_MIDDLE };
             if !self.begin_view_drag(button, false) {
                 return false;
             }
         }
-        let wm = &(*crate::reentry::wm((*self.seat).server));
-        let mut step = delta * wm.touchpad_view_sensitivity;
+        let mut step = delta * crate::shared::layout().touchpad_view_sensitivity;
         if self.axis_event_is_natural(event) {
             step = -step;
         }
-        if wm.touchpad_view_invert {
+        if crate::shared::layout().touchpad_view_invert {
             step = -step;
         }
         if (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL {
@@ -470,9 +466,8 @@ impl Cursor {
         if !d.from_pinch {
             return false;
         }
-        let wm = &(*crate::reentry::wm((*self.seat).server));
         // Pinch out (scale > 1) dollies in: an upward drag.
-        let px = -scale.max(0.05).ln() * VIEW_DRAG_PINCH_PX * wm.touchpad_view_sensitivity;
+        let px = -scale.max(0.05).ln() * VIEW_DRAG_PINCH_PX * crate::shared::layout().touchpad_view_sensitivity;
         let target_sy = d.origin_sy + px * d.ratio;
         let dy_layout = (target_sy - d.sy) / d.ratio;
         self.move_view_drag(0.0, dy_layout);
@@ -545,7 +540,7 @@ impl Cursor {
     unsafe fn popup_wheel_target(&mut self) -> Option<*mut ffi::wlr_surface> {
         let server = (*self.seat).server;
         let wm = &(*crate::reentry::wm(server));
-        if wm.touchpad_view_apps.is_empty() {
+        if crate::shared::layout().touchpad_view_apps.is_empty() {
             return None;
         }
         let result = crate::shared::scene().at(self.x(), self.y())?;
@@ -567,7 +562,7 @@ impl Cursor {
                 continue;
             }
             let app_id = (*window).get_app_id_string().unwrap_or_default();
-            if !wm.touchpad_view_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
+            if !crate::shared::layout().touchpad_view_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
                 continue;
             }
             if focused == result.surface || focused == (*window).root_surface() {
@@ -761,9 +756,7 @@ impl Cursor {
     /// The surface under the pointer, if it belongs to a window of an app
     /// in `touchpad_hscroll_shift_apps`.
     unsafe fn hscroll_shift_target(&mut self) -> Option<*mut ffi::wlr_surface> {
-        let server = (*self.seat).server;
-        let wm = &(*crate::reentry::wm(server));
-        if wm.touchpad_hscroll_shift_apps.is_empty() {
+        if crate::shared::layout().touchpad_hscroll_shift_apps.is_empty() {
             return None;
         }
         let result = crate::shared::scene().at(self.x(), self.y())?;
@@ -772,7 +765,7 @@ impl Cursor {
             return None;
         }
         let app_id = (*window).get_app_id_string().unwrap_or_default();
-        if !wm.touchpad_hscroll_shift_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
+        if !crate::shared::layout().touchpad_hscroll_shift_apps.iter().any(|p| crate::window_manager::app_id_matches(p, &app_id)) {
             return None;
         }
         Some(result.surface)

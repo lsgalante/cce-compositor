@@ -187,6 +187,57 @@ pub struct Layout {
     /// see `backdrop_compress_params`. `None` = off.
     pub status_backdrop_compress: Option<(f32, f32, bool)>,
     pub cloud_position_default: Option<[i32; 2]>,
+
+    // ---- Window-manager configuration, moved here from `WindowManager` on
+    // 2026-10-10 so code outside the window manager reads it through the
+    // shared snapshot (`crate::shared::layout()`) instead of a `&mut` to it.
+    pub pointer_binds: Vec<crate::config::PointerBind>,
+    pub gesture_binds: Vec<crate::config::GestureBind>,
+    /// Xwayland sees a physical-pixel screen and X11 surfaces draw at
+    /// 1/scale (see `WindowManagerConfig::xwayland_hidpi`).
+    pub xwayland_hidpi: bool,
+    /// X11 windows kept in the logical world while `xwayland_hidpi` is on
+    /// (see `xwayland_window::x11_scale_for`).
+    pub xwayland_hidpi_except: Vec<String>,
+    /// Trackpad-to-view-drag emulation (see `cursor::ViewDrag`).
+    pub touchpad_view_apps: Vec<String>,
+    pub touchpad_view_swipe_tumble: bool,
+    pub touchpad_view_sensitivity: f64,
+    pub touchpad_view_invert: bool,
+    /// `window_manager { osk_on_touch }` (`osk.rs`).
+    pub osk_on_touch: bool,
+    /// `window_manager { swipe_peek }`: the desktop's lean toward a
+    /// directional swipe bind at its threshold, screen px (default 60;
+    /// 0 disables). See `cursor::swipe_peek_for`.
+    pub swipe_peek_px: f64,
+    /// `window_manager { swipe_repeat_peek }`: the lean toward each further
+    /// step once a swipe has switched focus, screen px at
+    /// `swipe_repeat_threshold` (default half of `swipe_peek_px`).
+    pub swipe_repeat_peek_px: f64,
+    /// `window_manager { swipe_focus_cone }`: degrees off a focus swipe's
+    /// direction within which a window center can take focus (default 45).
+    /// See `focus_toward`.
+    pub swipe_focus_cone_deg: f64,
+    /// `window_manager { swipe_threshold }`: accumulated swipe travel
+    /// (libinput units) at which a swipe bind fires (default 70).
+    pub swipe_threshold: f64,
+    /// `window_manager { swipe_repeat_threshold }`: the travel each FURTHER
+    /// fire of the same swipe needs after its first (default four times
+    /// `swipe_threshold`) — the resistance that keeps a swipe from
+    /// running on through a second window.
+    pub swipe_repeat_threshold: f64,
+    /// See `WindowManagerConfig::touchpad_hscroll_shift_apps`.
+    pub touchpad_hscroll_shift_apps: Vec<String>,
+    pub input_config: crate::config::InputConfig,
+    /// `window_manager.center_on_spawn`: whether a newly spawned window pulls the viewport
+    /// over to it when it takes focus. Off, the desk stays put and the window opens wherever
+    /// the layout placed it. Focus-follow panning between EXISTING windows is unaffected.
+    pub center_on_spawn: bool,
+    /// `window_manager.rounded_apps`: extra app_ids that get the decorated-window
+    /// treatment (rounded corner clip, blur-behind, shadow) alongside cce-* apps
+    /// and SSD requesters.
+    pub rounded_apps: Vec<String>,
+    pub bevel_apps: Vec<String>,
 }
 
 impl Layout {
@@ -220,6 +271,26 @@ impl Layout {
             cell_inset: self.desktop_cell_fade_inset as f64,
             threshold: if self.desktop_snap { self.desktop_snap_threshold } else { 0.0 },
         }
+    }
+}
+
+impl Layout {
+    /// Whether an app_id gets the decorated-window treatment (rounded corner
+    /// clip, blur-behind, drop shadow) without requesting SSD: every cce app,
+    /// plus the `window_manager.rounded_apps` config allowlist. The one
+    /// predicate behind every radius/blur/shadow decision — the mirrored
+    /// render sites must all agree or the effects visibly disagree per pass.
+    pub fn is_decorated_app(&self, app_id: &str) -> bool {
+        app_id.starts_with("cce-") || self.rounded_apps.iter().any(|a| crate::window_manager::app_id_matches(a, app_id))
+    }
+
+    /// Should the compositor draw an edge bevel on this app? Unlike
+    /// `is_decorated_app` there is NO implicit cce-* arm: every cce-ui app
+    /// draws its own bevel, and a second one from the compositor just doubles
+    /// the rim. Only apps named in `bevel_apps` (defaulting to `rounded_apps`)
+    /// get one.
+    pub fn is_beveled_app(&self, app_id: &str) -> bool {
+        self.bevel_apps.iter().any(|a| crate::window_manager::app_id_matches(a, app_id))
     }
 }
 
@@ -307,6 +378,25 @@ impl Default for Layout {
             status_droplet: None,
             status_backdrop_compress: None,
             cloud_position_default: None,
+            pointer_binds: Vec::new(),
+            gesture_binds: Vec::new(),
+            xwayland_hidpi: true,
+            xwayland_hidpi_except: Vec::new(),
+            touchpad_view_apps: Vec::new(),
+            touchpad_view_swipe_tumble: false,
+            touchpad_view_sensitivity: 1.0,
+            touchpad_view_invert: false,
+            osk_on_touch: true,
+            swipe_peek_px: 60.0,
+            swipe_repeat_peek_px: 30.0,
+            swipe_focus_cone_deg: 45.0,
+            swipe_threshold: 70.0,
+            swipe_repeat_threshold: 280.0,
+            touchpad_hscroll_shift_apps: Vec::new(),
+            input_config: InputConfig::default(),
+            center_on_spawn: true,
+            rounded_apps: Vec::new(),
+            bevel_apps: Vec::new(),
         }
     }
 }
@@ -1343,9 +1433,9 @@ mod tests {
         if let Some(path) = default_config_path() {
             let mut server = crate::server::Server::default();
             parse_config(&path, &mut server.wm).unwrap();
-            assert!(!server.wm.layout.desktop_gap_color.is_empty());
-            assert!(server.wm.layout.desktop_gap_width >= 0);
-            assert!(server.wm.layout.root_plate_corner_radius >= 0);
+            assert!(!crate::shared::layout().desktop_gap_color.is_empty());
+            assert!(crate::shared::layout().desktop_gap_width >= 0);
+            assert!(crate::shared::layout().root_plate_corner_radius >= 0);
             println!("TEST_WM_STARTUP: {:?}", server.wm.startup);
             println!("TEST_WM_PATH: {:?}", std::env::var("PATH"));
         }

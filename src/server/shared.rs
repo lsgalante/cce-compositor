@@ -15,6 +15,7 @@
 //!
 //! - the scene, set once when `Server::init` has built it and only read
 //!   after ([`scene`]);
+//! - the configuration, as an `Rc` snapshot ([`layout`]);
 //! - the display and its event loop;
 //! - the pending work: whether a manage pass and a render pass are wanted,
 //!   and the idle callback that runs them ([`pending`]).
@@ -25,10 +26,13 @@
 
 use crate::ffi;
 use crate::scene::Scene;
-use std::cell::{Cell, OnceCell};
+use crate::config::Layout;
+use std::cell::{Cell, OnceCell, RefCell};
+use std::rc::Rc;
 
 pub struct Shared {
     scene: OnceCell<Scene>,
+    layout: RefCell<Rc<Layout>>,
     display: Cell<*mut ffi::wl_display>,
     server: Cell<*mut crate::server::Server>,
     pending: Pending,
@@ -37,6 +41,7 @@ pub struct Shared {
 thread_local! {
     static SHARED: &'static Shared = Box::leak(Box::new(Shared {
         scene: OnceCell::new(),
+        layout: RefCell::new(Rc::new(Layout::default())),
         display: Cell::new(std::ptr::null_mut()),
         server: Cell::new(std::ptr::null_mut()),
         pending: Pending::new(),
@@ -51,6 +56,30 @@ pub fn shared() -> &'static Shared {
 /// The scene. Panics before `Server::init` has built it.
 pub fn scene() -> &'static Scene {
     shared().scene.get().expect("scene used before Server::init built it")
+}
+
+/// The configuration as it stands: a snapshot, cheap to take (an `Rc`), that
+/// stays what it was if the configuration changes while it is held. Take it
+/// once in a loop rather than per access.
+pub fn layout() -> Rc<Layout> {
+    shared().layout.borrow().clone()
+}
+
+/// Replace the configuration (a config load).
+pub fn set_layout(layout: Layout) {
+    *shared().layout.borrow_mut() = Rc::new(layout);
+}
+
+/// Change the configuration. `f` edits a copy and no borrow is held while it
+/// runs, so `f` may itself read `layout()` (it sees the value before this
+/// change); the copy is published when `f` returns. Snapshots taken before
+/// keep the old value. Rare (a config load, an IPC `set`), so the copy is
+/// cheap enough.
+pub fn update_layout<R>(f: impl FnOnce(&mut Layout) -> R) -> R {
+    let mut next = (*layout()).clone();
+    let r = f(&mut next);
+    set_layout(next);
+    r
 }
 
 /// The pending manage and render work.

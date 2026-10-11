@@ -35,8 +35,7 @@ pub(crate) unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listen
     let event = data as *mut ffi::wlr_pointer_swipe_begin_event;
 
     let seat = &mut *cursor.seat;
-    let wm = &(*crate::reentry::wm(seat.server));
-    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
+    let swipe_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
         || cursor.gesture_from_touch;
     if !swipe_enabled {
         return;
@@ -77,8 +76,7 @@ pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_liste
     let event = data as *mut ffi::wlr_pointer_swipe_update_event;
 
     let seat = &mut *cursor.seat;
-    let wm = &(*crate::reentry::wm(seat.server));
-    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
+    let swipe_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
         || cursor.gesture_from_touch;
     if !swipe_enabled {
         return;
@@ -122,9 +120,9 @@ pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_liste
     // scales with the threshold in force, so it stays a preview of how
     // far the fingers are from the next step.
     let threshold = if cursor.gesture_triggered {
-        (*crate::reentry::wm(seat.server)).swipe_repeat_threshold
+        crate::shared::layout().swipe_repeat_threshold
     } else {
-        (*crate::reentry::wm(seat.server)).swipe_threshold
+        crate::shared::layout().swipe_threshold
     };
     let mut matched_action = crate::config::Action::None;
     let mut matched_command = None;
@@ -132,7 +130,7 @@ pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_liste
     // navigating bind in — the directions the camera may peek toward.
     let mut navigates = [false; 4]; // left, right, up, down
 
-    for gb in &(*crate::reentry::wm(seat.server)).gesture_binds {
+    for gb in &crate::shared::layout().gesture_binds {
         if gb.gesture_type == "swipe" && gb.fingers == (*event).fingers && gb.mods == modifiers {
             let (matched, slot) = match gb.direction.as_str() {
                 "left" => (cursor.gesture_dx < -threshold, Some(0)),
@@ -170,7 +168,7 @@ pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_liste
     if is_directional_focus(matched_action) {
         let travel = (cursor.gesture_dx, cursor.gesture_dy);
         let dead = cursor.swipe_dead_end == Some(matched_action) || {
-            let v = swipe_focus_vector(&(*crate::reentry::wm(seat.server)).gesture_binds, (*event).fingers, modifiers, travel);
+            let v = swipe_focus_vector(&crate::shared::layout().gesture_binds, (*event).fingers, modifiers, travel);
             !(*crate::reentry::wm(seat.server)).focus_toward_lands(v, &matched_action)
         };
         if dead {
@@ -243,7 +241,7 @@ pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_liste
         // `focus_left` on `swipe3_left` follows the fingers, one on
         // `swipe3_right` mirrors them), and the window manager picks the
         // nearest window center along the result.
-        let focus_vector = swipe_focus_vector(&(*crate::reentry::wm(seat.server)).gesture_binds, (*event).fingers, modifiers, travel);
+        let focus_vector = swipe_focus_vector(&crate::shared::layout().gesture_binds, (*event).fingers, modifiers, travel);
         match focus_vector {
             Some(v) if is_directional_focus(matched_action) => (*crate::reentry::wm(seat.server)).focus_toward(v, &matched_action),
             _ => (*crate::reentry::wm(seat.server)).execute_action(&matched_action, matched_command.as_deref()),
@@ -295,9 +293,9 @@ pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_liste
         let peek_px = if !cce_core::motion::enabled() {
             0.0
         } else if cursor.gesture_triggered {
-            wm.swipe_repeat_peek_px
+            crate::shared::layout().swipe_repeat_peek_px
         } else {
-            wm.swipe_peek_px
+            crate::shared::layout().swipe_peek_px
         };
         let (dx, dy) = (cursor.gesture_dx, cursor.gesture_dy);
         let want = swipe_lean(dx, dy, navigates, threshold, peek_px, wm.desk_zoom);
@@ -340,8 +338,7 @@ pub(crate) unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener
     let event = data as *mut ffi::wlr_pointer_swipe_end_event;
 
     let seat = &mut *cursor.seat;
-    let wm = &(*crate::reentry::wm(seat.server));
-    let swipe_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
+    let swipe_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
         || cursor.gesture_from_touch;
     if !swipe_enabled {
         return;
@@ -401,13 +398,12 @@ pub(crate) unsafe fn gesture_mods(seat: &Seat) -> u32 {
 /// finger count and modifiers whose direction `hit` accepts. First match
 /// wins, as everywhere in the bind table.
 pub(crate) fn gesture_bind(
-    wm: &crate::window_manager::WindowManager,
     kind: &str,
     fingers: u32,
     mods: u32,
     hit: impl Fn(&str) -> bool,
 ) -> Option<(crate::config::Action, Option<String>)> {
-    wm.gesture_binds
+    crate::shared::layout().gesture_binds
         .iter()
         .find(|gb| gb.gesture_type == kind && gb.fingers == fingers && gb.mods == mods && hit(&gb.direction))
         .map(|gb| (gb.action, gb.command.clone()))
@@ -444,8 +440,7 @@ pub(crate) unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listen
     let event = data as *mut ffi::wlr_pointer_pinch_begin_event;
 
     let seat = &mut *cursor.seat;
-    let wm = &(*crate::reentry::wm(seat.server));
-    let pinch_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
+    let pinch_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
     if !pinch_enabled {
         return;
     }
@@ -510,8 +505,7 @@ pub(crate) unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_liste
     let event = data as *mut ffi::wlr_pointer_pinch_update_event;
 
     let seat = &mut *cursor.seat;
-    let wm = &(*crate::reentry::wm(seat.server));
-    let pinch_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
+    let pinch_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
     if !pinch_enabled {
         return;
     }
@@ -550,7 +544,7 @@ pub(crate) unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_liste
 
     let modifiers = gesture_mods(seat);
     let scale = cursor.gesture_scale;
-    let bind = gesture_bind(&(*crate::reentry::wm(seat.server)), "pinch", (*event).fingers, modifiers, |d| pinch_hits(d, scale));
+    let bind = gesture_bind("pinch", (*event).fingers, modifiers, |d| pinch_hits(d, scale));
 
     if let Some((matched_action, matched_command)) = bind {
         cursor.gesture_triggered = true;
@@ -588,8 +582,7 @@ pub(crate) unsafe extern "C" fn handle_pinch_end(listener: *mut ffi::wl_listener
     let event = data as *mut ffi::wlr_pointer_pinch_end_event;
 
     let seat = &mut *cursor.seat;
-    let wm = &(*crate::reentry::wm(seat.server));
-    let pinch_enabled = wm.input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
+    let pinch_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
     if !pinch_enabled {
         return;
     }

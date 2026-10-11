@@ -23,7 +23,7 @@ impl WindowManager {
                 // restores consume the pixels. A pre-field file (grid: None)
                 // has nothing to remap from and loads as-is.
                 if let Some(g) = state.grid {
-                    let current = self.layout.snap_params();
+                    let current = crate::shared::layout().snap_params();
                     if !g.matches(&current) {
                         self.remap_saved_entries(&g.to_params(&current));
                     }
@@ -67,9 +67,9 @@ impl WindowManager {
                 continue;
             }
             let mut color = if entry.focused {
-                self.layout.border_color_focused
+                crate::shared::layout().border_color_focused
             } else {
-                self.layout.border_color
+                crate::shared::layout().border_color
             };
             // Dim: scale all channels (premultiplied convention).
             for c in color.iter_mut() {
@@ -173,7 +173,7 @@ impl WindowManager {
             // and the grid cell it sits on; the raw radius read visibly
             // squarer than both at corner_shape > 2.
             let radius = crate::window::widen_corner_radius(
-                (self.layout.root_plate_corner_radius as f64 * zoom) as i32, w, h,
+                (crate::shared::layout().root_plate_corner_radius as f64 * zoom) as i32, w, h,
             );
             p.rect.set_corner_radius(radius);
         }
@@ -398,7 +398,7 @@ impl WindowManager {
             // session under a different grid can keep each Tiled entry on
             // its squares (remap_saved_entries) instead of re-deriving the
             // span from stale pixels.
-            grid: Some(crate::policy::state::SavedGrid::from_params(&self.layout.snap_params())),
+            grid: Some(crate::policy::state::SavedGrid::from_params(&crate::shared::layout().snap_params())),
         };
         
         self.proc_args_cache.retain(|pid, _| live_pids.contains(pid));

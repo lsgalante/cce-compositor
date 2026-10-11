@@ -398,7 +398,7 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
     // furniture — wallpaper, status bar — and map once at login, where a
     // fade reads as the desktop failing to draw.
     if (*wlr_layer_surface).current.layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY {
-        let ms = if cce_core::motion::enabled() { (*crate::reentry::wm(server)).layout.fade_in_ms } else { 0 };
+        let ms = if cce_core::motion::enabled() { crate::shared::layout().fade_in_ms } else { 0 };
         if ms > 0 {
             (*layer_surface).opacity = 0.0;
         }
@@ -520,15 +520,14 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
     let wlr_layer_surface = (*layer_surface).wlr_layer_surface;
 
     if (*wlr_layer_surface).current.layer != ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND {
-        let server = (*layer_surface).server;
-        let mut blur_enabled = (*crate::reentry::wm(server)).layout.window_blur;
-        let mut ignore_transparent = (*crate::reentry::wm(server)).layout.window_backdrop_blur_ignore_transparent;
+        let mut blur_enabled = crate::shared::layout().window_blur;
+        let mut ignore_transparent = crate::shared::layout().window_backdrop_blur_ignore_transparent;
         let mut is_status = false;
         if !(*wlr_layer_surface).namespace.is_null() {
             let ns = std::ffi::CStr::from_ptr((*wlr_layer_surface).namespace).to_string_lossy();
             if ns == "cce-status" || ns == "cce-status-interface" {
-                blur_enabled = (*crate::reentry::wm(server)).layout.status_background_blur > 0.001;
-                ignore_transparent = (*crate::reentry::wm(server)).layout.status_backdrop_blur_ignore_transparent;
+                blur_enabled = crate::shared::layout().status_background_blur > 0.001;
+                ignore_transparent = crate::shared::layout().status_backdrop_blur_ignore_transparent;
                 is_status = true;
             }
         }
@@ -543,7 +542,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
         let layer = (*wlr_layer_surface).current.layer;
         let above_windows = layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_TOP
             || layer == ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY;
-        let use_optimized = if is_status || above_windows { false } else { (*crate::reentry::wm(server)).layout.scenefx_optimized_blur };
+        let use_optimized = if is_status || above_windows { false } else { crate::shared::layout().scenefx_optimized_blur };
         let wlr_surface = (*wlr_layer_surface).surface;
         let geom_w = if !wlr_surface.is_null() {
             ffi::river_wlr_surface_get_width(wlr_surface)

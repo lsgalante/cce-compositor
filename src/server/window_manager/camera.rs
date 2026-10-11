@@ -21,7 +21,7 @@ impl WindowManager {
     /// Wheel-glide rate for the desktop camera, 1/s (`input { scroll_ease }`).
     pub fn scroll_ease_rate(&self) -> f64 {
         crate::wm_scope!();
-        self.input_config
+        crate::shared::layout().input_config
             .scroll_ease
             .filter(|v| v.is_finite() && *v > 0.0)
             .unwrap_or(12.0)
@@ -30,13 +30,13 @@ impl WindowManager {
     /// Whether a trackpad flick coasts the desktop (`input { kinetic_scroll }`).
     pub fn kinetic_scroll(&self) -> bool {
         crate::wm_scope!();
-        self.input_config.kinetic_scroll.unwrap_or(true)
+        crate::shared::layout().input_config.kinetic_scroll.unwrap_or(true)
     }
 
     /// Coast decay, 1/s (`input { scroll_friction }`).
     pub fn scroll_friction(&self) -> f64 {
         crate::wm_scope!();
-        self.input_config
+        crate::shared::layout().input_config
             .scroll_friction
             .filter(|v| v.is_finite() && *v > 0.0)
             .unwrap_or(6.0)
@@ -287,7 +287,7 @@ impl WindowManager {
                 self.desk_pan_y = target.pan_y;
                 self.desk_zoom = target.zoom;
                 self.camera_ramp_anim = None;
-            } else if let Some((ramp, _)) = &self.layout.overview_anim {
+            } else if let Some((ramp, _)) = &crate::shared::layout().overview_anim {
                 let p = ramp.progress(t);
                 let cam = crate::policy::camera::anchored_interp(start, target, p);
                 self.desk_pan_x = cam.pan_x;

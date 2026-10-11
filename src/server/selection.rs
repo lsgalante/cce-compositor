@@ -406,7 +406,7 @@ impl WindowManager {
         self.selection.tree.set_enabled(true);
         let tree = self.selection.tree.raw();
 
-        let layout = &self.layout;
+        let layout = &crate::shared::layout();
         let accent = layout.bevel_focus_color;
         let (light_x, light_y) = {
             let (lx, ly) = (layout.bevel_light_x, layout.bevel_light_y);

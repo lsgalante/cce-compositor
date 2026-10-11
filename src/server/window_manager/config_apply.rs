@@ -41,7 +41,7 @@ impl WindowManager {
             let next = (*curr).next;
             let device = crate::container_of!(curr, crate::input_device::InputDevice, link);
             if let Some(ref mut libinput) = (*device).libinput {
-                libinput.apply_config(&self.input_config);
+                libinput.apply_config(&crate::shared::layout().input_config);
             }
             curr = next;
         }
@@ -56,7 +56,7 @@ impl WindowManager {
         if self.server.is_null() {
             return 0;
         }
-        let (rate, delay) = self.input_config.repeat_info();
+        let (rate, delay) = crate::shared::layout().input_config.repeat_info();
         let mut count = 0;
         let devices_head = &mut (*self.server).input_manager.devices as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*devices_head).next;
@@ -125,7 +125,7 @@ impl WindowManager {
     /// cells, and the tiled snap grows it by a cell.
     pub fn remap_saved_entries(&mut self, old: &crate::policy::snap::SnapParams) {
         crate::wm_scope!(mut);
-        let new = self.layout.snap_params();
+        let new = crate::shared::layout().snap_params();
         for entry in self
             .restore_queue
             .iter_mut()
@@ -161,7 +161,7 @@ impl WindowManager {
     /// geometry is unchanged.
     pub unsafe fn retile_for_grid_change(&mut self, old: crate::policy::snap::SnapParams) {
         crate::wm_scope!(mut);
-        let new = self.layout.snap_params();
+        let new = crate::shared::layout().snap_params();
         if old.cell_w == new.cell_w
             && old.cell_h == new.cell_h
             && old.gap_width == new.gap_width
@@ -207,7 +207,7 @@ impl WindowManager {
     pub unsafe fn reload_config(&mut self) -> Result<(), String> {
         crate::wm_scope!(mut);
         if let Some(path) = crate::config::default_config_path() {
-            let old_sp = self.layout.snap_params();
+            let old_sp = crate::shared::layout().snap_params();
             let old_pids = std::mem::take(&mut self.startup_pids);
             match crate::config::parse_config(&path, self) {
                 Ok(()) => {

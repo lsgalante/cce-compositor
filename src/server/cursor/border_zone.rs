@@ -129,7 +129,7 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     let content_w = geom.width as f64 * scale;
     let content_h = geom.height as f64 * scale;
 
-    let bw = ((*crate::reentry::wm((*window).server)).layout.border_handle_width as f64)
+    let bw = (crate::shared::layout().border_handle_width as f64)
         .max(crate::window::HOVER_BAND_MIN)
         // The same fifth-of-the-short-side cap draw_borders applies, so the
         // grab zone never outgrows the disc the user can see.

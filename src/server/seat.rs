@@ -550,7 +550,7 @@ impl Seat {
                 if !window.is_null() {
                     let spawn_pan = !(*window).session_restored
                         && !(*window).hint_placed
-                        && (*crate::reentry::wm(self.server)).center_on_spawn;
+                        && crate::shared::layout().center_on_spawn;
                     // A restored window maps unfocused and keeps is_new until
                     // its first focus — which, after a session restart, is
                     // the user's first CLICK on it. Suppressing that pan made
@@ -966,7 +966,7 @@ impl Seat {
     /// Snap parameters for interactive ops, from the current layout config.
     unsafe fn snap_params(&self) -> crate::policy::snap::SnapParams {
         // Zoom-aware: the felt grab distance stays constant in screen px.
-        (*crate::reentry::wm(self.server)).layout.snap_params().for_zoom((*crate::reentry::wm(self.server)).desk_zoom)
+        crate::shared::layout().snap_params().for_zoom((*crate::reentry::wm(self.server)).desk_zoom)
     }
 
     pub unsafe fn op_update(&mut self, x: i32, y: i32) {
@@ -1048,7 +1048,7 @@ impl Seat {
                                 .om
                                 .enabled_output_boxes();
                             if let Some(edge) = crate::policy::drag::status_edge_at((x as f64, y as f64), &outputs) {
-                                let bar_h = (*crate::reentry::wm(self.server)).layout.bar_height as u32;
+                                let bar_h = crate::shared::layout().bar_height as u32;
                                 let original_length = std::cmp::max((*win).box_geom.width, (*win).box_geom.height) as u32;
                                 let (target_w, target_h) = crate::policy::drag::status_bar_size(edge, bar_h, original_length);
 
@@ -1184,7 +1184,7 @@ impl Seat {
         let wm = &mut (*crate::reentry::wm(self.server));
         let mut vx = 0.0;
         let mut vy = 0.0;
-        let eligible = wm.layout.desktop_edge_pan
+        let eligible = crate::shared::layout().desktop_edge_pan
             && match self.op {
                 // The drag-selection has no window, and scrolls the desk
                 // only once the band is up — a press held still near the
@@ -1206,8 +1206,8 @@ impl Seat {
             if !wlr_output.is_null() {
                 let mut ob = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
                 ffi::wlr_output_layout_get_box((*self.server).om.output_layout, wlr_output, &mut ob);
-                let band = wm.layout.desktop_edge_pan_band.max(1.0);
-                let speed = wm.layout.desktop_edge_pan_speed.max(0.0);
+                let band = crate::shared::layout().desktop_edge_pan_band.max(1.0);
+                let speed = crate::shared::layout().desktop_edge_pan_speed.max(0.0);
                 // 0 outside the band, 1 at (or past) the screen edge.
                 let ramp = |dist_to_edge: f64| ((band - dist_to_edge) / band).clamp(0.0, 1.0);
                 vx = speed
@@ -1234,7 +1234,7 @@ impl Seat {
         }
         // Unscaled params: alignment classifies the resting geometry, the
         // zoom-aware grab distance is irrelevant.
-        let sp = (*crate::reentry::wm(self.server)).layout.snap_params();
+        let sp = crate::shared::layout().snap_params();
         let (w, h) = match (*win).wm_requested.dimensions {
             // A just-finished resize may not be acked into box_geom yet;
             // the requested size is what the window is about to become.

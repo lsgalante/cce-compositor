@@ -207,10 +207,10 @@ impl OutputManager {
 
                         let (width, height) = output.sent.dimensions();
                         let color: [f32; 4] = [
-                            ((*crate::reentry::wm(server)).layout.background_r as f64 / u32::MAX as f64) as f32,
-                            ((*crate::reentry::wm(server)).layout.background_g as f64 / u32::MAX as f64) as f32,
-                            ((*crate::reentry::wm(server)).layout.background_b as f64 / u32::MAX as f64) as f32,
-                            ((*crate::reentry::wm(server)).layout.background_a as f64 / u32::MAX as f64) as f32,
+                            (crate::shared::layout().background_r as f64 / u32::MAX as f64) as f32,
+                            (crate::shared::layout().background_g as f64 / u32::MAX as f64) as f32,
+                            (crate::shared::layout().background_b as f64 / u32::MAX as f64) as f32,
+                            (crate::shared::layout().background_a as f64 / u32::MAX as f64) as f32,
                         ];
                         if output.background_rect.is_null() {
                             output.background_rect = SceneRect::create_in(

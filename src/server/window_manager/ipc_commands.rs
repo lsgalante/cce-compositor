@@ -39,7 +39,7 @@ impl WindowManager {
             "fade-out" => {
                 // Animations off answers 0 like a disabled fade: the client
                 // exits at once and nothing ramps.
-                let ms = if cce_core::motion::enabled() { self.layout.fade_out_ms } else { 0 };
+                let ms = if cce_core::motion::enabled() { crate::shared::layout().fade_out_ms } else { 0 };
                 let pid = self.pending_ipc_peer_pid;
                 if pid <= 0 {
                     return "0\n".to_string();
@@ -696,7 +696,7 @@ impl WindowManager {
                 if parts.len() < 2 {
                     return "error: usage: move-window <square> [app_id|id]\n".to_string();
                 }
-                let sp = self.layout.snap_params();
+                let sp = crate::shared::layout().snap_params();
                 let Some((col, row)) = crate::policy::cells::parse_square(parts[1]) else {
                     return format!(
                         "error: '{}' is not a square (expected e.g. A1, C-9, -B2)\n",
@@ -1066,13 +1066,13 @@ impl WindowManager {
                     let (Ok(rate), Ok(delay)) = (parts[1].parse::<u32>(), parts[2].parse::<u32>()) else {
                         return "error: rate and delay must be non-negative integers\n".to_string();
                     };
-                    self.input_config.repeat_rate = Some(rate as i64);
-                    self.input_config.repeat_delay = Some(delay as i64);
+                    crate::shared::update_layout(|l| l.input_config.repeat_rate = Some(rate as i64));
+                    crate::shared::update_layout(|l| l.input_config.repeat_delay = Some(delay as i64));
                 } else if parts.len() != 1 {
                     return "error: usage: repeat [<rate> <delay>]\n".to_string();
                 }
                 let keyboards = unsafe { self.apply_key_repeat() };
-                let (rate, delay) = self.input_config.repeat_info();
+                let (rate, delay) = crate::shared::layout().input_config.repeat_info();
                 format!("rate={} delay={} keyboards={}\n", rate, delay, keyboards)
             }
             "outputs" => {
@@ -1174,7 +1174,7 @@ impl WindowManager {
                     }
                 }
                 let mut out = String::new();
-                let sp = self.layout.snap_params();
+                let sp = crate::shared::layout().snap_params();
                 for &w in self.windows.iter() {
                     if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
                         let stack = stack_of.get(&w).copied().unwrap_or(-1);
@@ -1221,8 +1221,8 @@ impl WindowManager {
                                 // per-window capture reads the client's
                                 // dmabuf, which is pre-composite and never
                                 // shows the compositor's clip.
-                                decorated: self.is_decorated_app(&app_id),
-                                beveled: self.is_beveled_app(&app_id),
+                                decorated: crate::shared::layout().is_decorated_app(&app_id),
+                                beveled: crate::shared::layout().is_beveled_app(&app_id),
                             };
                             out.push_str(&info.to_json_line());
                             out.push('\n');
@@ -1245,8 +1245,8 @@ impl WindowManager {
                                 w == focused_window,
                                 stack,
                                 (*w).wm_requested.ssd,
-                                self.is_decorated_app(&app_id),
-                                self.is_beveled_app(&app_id),
+                                crate::shared::layout().is_decorated_app(&app_id),
+                                crate::shared::layout().is_beveled_app(&app_id),
                             ));
                         }
                     }
@@ -1263,14 +1263,14 @@ impl WindowManager {
                 if parts.len() < 3 { return "error: missing layout key or value\n".to_string(); }
                 let key = parts[1];
                 let val = parts[2];
-                let old_sp = self.layout.snap_params();
+                let old_sp = crate::shared::layout().snap_params();
                 match key {
                     "desktop_gap_color" => {
-                        self.layout.desktop_gap_color = val.to_string();
+                        crate::shared::update_layout(|l| l.desktop_gap_color = val.to_string());
                         let parsed_color = crate::config::parse_hex_color(val);
-                        self.layout.background_r = ((parsed_color >> 16) & 0xFF) * 0x01010101;
-                        self.layout.background_g = ((parsed_color >> 8) & 0xFF) * 0x01010101;
-                        self.layout.background_b = (parsed_color & 0xFF) * 0x01010101;
+                        crate::shared::update_layout(|l| l.background_r = ((parsed_color >> 16) & 0xFF) * 0x01010101);
+                        crate::shared::update_layout(|l| l.background_g = ((parsed_color >> 8) & 0xFF) * 0x01010101);
+                        crate::shared::update_layout(|l| l.background_b = (parsed_color & 0xFF) * 0x01010101);
                         unsafe {
                             let outputs_head = &mut (*self.server).om.outputs as *mut crate::ffi::wl_list as *mut crate::server::WlList;
                             let mut curr = (*outputs_head).next;
@@ -1283,56 +1283,56 @@ impl WindowManager {
                         }
                     }
                     "desktop_cell_color" => {
-                        self.layout.desktop_cell_color = crate::config::parse_hex_color_rgba(val);
+                        crate::shared::update_layout(|l| l.desktop_cell_color = crate::config::parse_hex_color_rgba(val));
                     }
                     "desktop_grid_scale" | "grid_cell_size" => {
                         if let Ok(v) = parse_finite(val) {
-                            self.layout.desktop_cell_width = v;
-                            self.layout.desktop_cell_height = v;
+                            crate::shared::update_layout(|l| l.desktop_cell_width = v);
+                            crate::shared::update_layout(|l| l.desktop_cell_height = v);
                         }
                     }
                     "grid_cell_width" => {
                         if let Ok(v) = parse_finite(val) {
-                            self.layout.desktop_cell_width = v;
+                            crate::shared::update_layout(|l| l.desktop_cell_width = v);
                         }
                     }
                     "grid_cell_height" => {
                         if let Ok(v) = parse_finite(val) {
-                            self.layout.desktop_cell_height = v;
+                            crate::shared::update_layout(|l| l.desktop_cell_height = v);
                         }
                     }
                     "desktop_gap_width" => {
                         if let Ok(v) = val.parse::<i32>() {
-                            self.layout.desktop_gap_width = v;
+                            crate::shared::update_layout(|l| l.desktop_gap_width = v);
                         }
                     }
                     "desktop_cell_fade_inset" => {
                         if let Ok(v) = val.parse::<i64>() {
-                            self.layout.desktop_cell_fade_inset = v;
+                            crate::shared::update_layout(|l| l.desktop_cell_fade_inset = v);
                         }
                     }
                     "desktop_cell_labels" => {
                         if let Ok(v) = val.parse::<bool>() {
-                            self.layout.desktop_cell_labels = v;
+                            crate::shared::update_layout(|l| l.desktop_cell_labels = v);
                         }
                     }
                     "desktop_grid_fade_mode" => {
-                        self.layout.desktop_grid_fade_mode = val.to_string();
+                        crate::shared::update_layout(|l| l.desktop_grid_fade_mode = val.to_string());
                     }
-                    "gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap = v; } }
-                    "gap_top" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_top = v; } }
-                    "gap_left" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_left = v; } }
-                    "gap_right" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_right = v; } }
-                    "gap_bottom" => { if let Ok(v) = val.parse::<i32>() { self.layout.gap_bottom = v; } }
-                    "offset" | "cascade_offset" => { if let Ok(v) = val.parse::<i32>() { self.layout.cascade_offset = v; } }
-                    "grid_gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.grid_gap = v; } }
-                    "transition_duration" => { if let Ok(v) = val.parse::<i32>() { self.layout.transition_duration = v; } }
-                    "bar_height" => { if let Ok(v) = val.parse::<i32>() { self.layout.bar_height = v; } }
+                    "gap" => { if let Ok(v) = val.parse::<i32>() { crate::shared::update_layout(|l| l.gap = v); } }
+                    "gap_top" => { if let Ok(v) = val.parse::<i32>() { crate::shared::update_layout(|l| l.gap_top = v); } }
+                    "gap_left" => { if let Ok(v) = val.parse::<i32>() { crate::shared::update_layout(|l| l.gap_left = v); } }
+                    "gap_right" => { if let Ok(v) = val.parse::<i32>() { crate::shared::update_layout(|l| l.gap_right = v); } }
+                    "gap_bottom" => { if let Ok(v) = val.parse::<i32>() { crate::shared::update_layout(|l| l.gap_bottom = v); } }
+                    "offset" | "cascade_offset" => { if let Ok(v) = val.parse::<i32>() { crate::shared::update_layout(|l| l.cascade_offset = v); } }
+                    "grid_gap" => { if let Ok(v) = val.parse::<i32>() { crate::shared::update_layout(|l| l.grid_gap = v); } }
+                    "transition_duration" => { if let Ok(v) = val.parse::<i32>() { crate::shared::update_layout(|l| l.transition_duration = v); } }
+                    "bar_height" => { if let Ok(v) = val.parse::<i32>() { crate::shared::update_layout(|l| l.bar_height = v); } }
 
-                    "side_panel_width" | "pinned_width" | "overlay_width" => { if let Ok(v) = val.parse::<i32>() { self.layout.overlay_width = v; } }
-                    "side_panel_behavior" | "pinned_behavior" | "overlay_behavior" => { self.layout.overlay_behavior = val.to_string(); }
-                    "side_panel_position" | "pinned_position" | "overlay_position" => { self.layout.overlay_position = val.to_string(); }
-                    "side_panel_border_gap" | "pinned_border_gap" | "overlay_border_gap" => { if let Ok(v) = val.parse::<i32>() { self.layout.overlay_border_gap = v; } }
+                    "side_panel_width" | "pinned_width" | "overlay_width" => { if let Ok(v) = val.parse::<i32>() { crate::shared::update_layout(|l| l.overlay_width = v); } }
+                    "side_panel_behavior" | "pinned_behavior" | "overlay_behavior" => { crate::shared::update_layout(|l| l.overlay_behavior = val.to_string()); }
+                    "side_panel_position" | "pinned_position" | "overlay_position" => { crate::shared::update_layout(|l| l.overlay_position = val.to_string()); }
+                    "side_panel_border_gap" | "pinned_border_gap" | "overlay_border_gap" => { if let Ok(v) = val.parse::<i32>() { crate::shared::update_layout(|l| l.overlay_border_gap = v); } }
                     _ => return format!("error: unknown layout key: {}\n", key),
                 }
                 self.retile_for_grid_change(old_sp);

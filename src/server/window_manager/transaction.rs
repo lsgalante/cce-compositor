@@ -361,7 +361,7 @@ impl WindowManager {
         self.keep_status_bar_on_top();
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.layout.overlay_behavior.hash(&mut hasher);
+        crate::shared::layout().overlay_behavior.hash(&mut hasher);
         let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*render_list).next;
         while curr != render_list {
@@ -387,7 +387,7 @@ impl WindowManager {
                     | crate::policy::arrange::StatusEdge::Right => bg.width,
                     _ => bg.height,
                 };
-                (thickness > self.layout.bar_height).hash(&mut hasher);
+                (thickness > crate::shared::layout().bar_height).hash(&mut hasher);
             }
             curr = next;
         }
@@ -453,14 +453,14 @@ impl WindowManager {
                             | crate::policy::arrange::StatusEdge::Right => bg.width,
                             _ => bg.height,
                         };
-                        if thickness > self.layout.bar_height {
+                        if thickness > crate::shared::layout().bar_height {
                             crate::shared::scene().layers.popups.raw()
                         } else {
                             crate::shared::scene().layers.top.raw()
                         }
                     } else if (*window).rendering_requested.circular {
                         crate::shared::scene().layers.top.raw()
-                    } else if (*window).tiling_mode == crate::tiling::TilingMode::Overlay && self.layout.overlay_behavior == "above" {
+                    } else if (*window).tiling_mode == crate::tiling::TilingMode::Overlay && crate::shared::layout().overlay_behavior == "above" {
                         crate::shared::scene().layers.top.raw()
                     } else {
                         crate::shared::scene().layers.wm.raw()
