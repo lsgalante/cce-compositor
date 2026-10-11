@@ -148,11 +148,11 @@ impl Scene {
 
     pub fn deinit(&mut self) {}
 
-    pub unsafe fn at(&self, lx: f64, ly: f64) -> Option<AtResult> {
-        self.at_impl(lx, ly, true)
+    pub unsafe fn at(&self, wm: &crate::window_manager::WindowManager, lx: f64, ly: f64) -> Option<AtResult> {
+        self.at_impl(wm, lx, ly, true)
     }
 
-    unsafe fn at_impl(&self, lx: f64, ly: f64, include_grid: bool) -> Option<AtResult> {
+    unsafe fn at_impl(&self, wm: &crate::window_manager::WindowManager, lx: f64, ly: f64, include_grid: bool) -> Option<AtResult> {
         let mut disabled_nodes = Vec::new();
         let mut result = None;
 
@@ -172,7 +172,10 @@ impl Scene {
             }
 
             if let Some(scene_node_data) = SceneNodeData::from_node(node) {
-                if let SceneNodeDataVal::Window(window) = scene_node_data.data {
+                if let Some(window) = match scene_node_data.data {
+                    SceneNodeDataVal::Window(id) => wm.windows.get(id),
+                    _ => None,
+                } {
                     // The grid layer used to be skipped here to keep it
                     // input-transparent. It now advertises an input region
                     // covering exactly its desktop items, so wlr_scene_node_at
@@ -181,24 +184,24 @@ impl Scene {
                     // through it — while a click ON an item reaches the client
                     // that owns it. The parameter stays for the callers that
                     // must never see the grid at all.
-                    if !include_grid && (*window).is_grid() {
-                        let tree_node = (*window).tree.node();
+                    if !include_grid && window.is_grid() {
+                        let tree_node = window.tree.node();
                         ffi::wlr_scene_node_set_enabled(tree_node, false);
                         disabled_nodes.push(tree_node);
                         continue;
                     }
-                    if (*window).rendering_requested.circular {
+                    if window.rendering_requested.circular {
                         // Check if outside the circle
-                        let w = (*window).box_geom.width as f64 * (*window).scale;
-                        let h = (*window).box_geom.height as f64 * (*window).scale;
-                        let cx = (*window).box_geom.x as f64 + w / 2.0;
-                        let cy = (*window).box_geom.y as f64 + h / 2.0;
+                        let w = window.box_geom.width as f64 * window.scale;
+                        let h = window.box_geom.height as f64 * window.scale;
+                        let cx = window.box_geom.x as f64 + w / 2.0;
+                        let cy = window.box_geom.y as f64 + h / 2.0;
                         let r = w.min(h) / 2.0;
                         let dx = lx - cx;
                         let dy = ly - cy;
                         if dx * dx + dy * dy > r * r {
                             // Outside the circle! Disable the window tree node temporarily and try again.
-                            let tree_node = (*window).tree.node();
+                            let tree_node = window.tree.node();
                             ffi::wlr_scene_node_set_enabled(tree_node, false);
                             disabled_nodes.push(tree_node);
                             continue;
@@ -222,16 +225,16 @@ impl Scene {
                 let (mut sx, mut sy) = (sx, sy);
                 if !surface.is_null() {
                     let ratio: Option<f64> = match scene_node_data.data {
-                        SceneNodeDataVal::Window(window)
-                            if !window.is_null()
-                                && matches!((*window).impl_type(), crate::window::WindowImpl::Xwayland(_)) =>
+                        SceneNodeDataVal::Window(id)
+                            if wm.windows.get(id).is_some_and(|w| matches!(w.impl_type(), crate::window::WindowImpl::Xwayland(_))) =>
                         {
-                            let xsurface = match (*window).impl_type() {
+                            let window = wm.windows.get(id).expect("checked by the guard");
+                            let xsurface = match window.impl_type() {
                                 crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*xw).xsurface as *const _,
                                 _ => std::ptr::null(),
                             };
-                            let s = crate::xwayland_window::x11_scale_for((*window).server, xsurface) as f64;
-                            let zoom = if (*window).scale > 0.0 { (*window).scale } else { 1.0 };
+                            let s = crate::xwayland_window::x11_scale_for(window.server, xsurface) as f64;
+                            let zoom = if window.scale > 0.0 { window.scale } else { 1.0 };
                             (s != 1.0).then_some(s / zoom)
                         }
                         SceneNodeDataVal::OverrideRedirect(or) if !or.is_null() => {

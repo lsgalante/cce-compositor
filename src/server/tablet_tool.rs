@@ -136,7 +136,7 @@ impl TabletTool {
         ffi::wlr_cursor_detach_input_device(self.wlr_cursor, dev);
     }
 
-    pub unsafe fn axis(&mut self, tablet: *mut Tablet, event: *mut ffi::wlr_tablet_tool_axis_event) {
+    pub unsafe fn axis(&mut self, wm: &crate::window_manager::WindowManager, tablet: *mut Tablet, event: *mut ffi::wlr_tablet_tool_axis_event) {
         self.attach(tablet);
 
         let updated = (*event).updated_axes;
@@ -167,7 +167,7 @@ impl TabletTool {
 
             match self.mode {
                 TabletToolMode::Passthrough => {
-                    self.passthrough(tablet);
+                    self.passthrough(wm, tablet);
                 }
                 TabletToolMode::Down { lx, ly, sx, sy } => {
                     let dx = self.cursor_x() - lx;
@@ -219,6 +219,7 @@ impl TabletTool {
 
     pub unsafe fn proximity(
         &mut self,
+        wm: &crate::window_manager::WindowManager,
         tablet: *mut Tablet,
         event: *mut ffi::wlr_tablet_tool_proximity_event,
     ) {
@@ -240,7 +241,7 @@ impl TabletTool {
                 b"pencil\0".as_ptr() as *const _,
             );
 
-            self.passthrough(tablet);
+            self.passthrough(wm, tablet);
             self.detach(tablet);
         } else {
             ffi::wlr_tablet_v2_tablet_tool_notify_proximity_out(self.wp_tool);
@@ -248,7 +249,7 @@ impl TabletTool {
         }
     }
 
-    pub unsafe fn tip(&mut self, tablet: *mut Tablet, event: *mut ffi::wlr_tablet_tool_tip_event) {
+    pub unsafe fn tip(&mut self, wm: &crate::window_manager::WindowManager, tablet: *mut Tablet, event: *mut ffi::wlr_tablet_tool_tip_event) {
         let state = (*event).state;
         let is_down = ffi::river_wlr_tablet_v2_tablet_tool_get_is_down(self.wp_tool);
         if state == ffi::wlr_tablet_tool_tip_state_WLR_TABLET_TOOL_TIP_DOWN {
@@ -259,7 +260,7 @@ impl TabletTool {
 
             let lx = self.cursor_x();
             let ly = self.cursor_y();
-            if let Some(result) = crate::shared::scene().at(lx, ly) {
+            if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                 if !result.surface.is_null() {
                     self.mode = TabletToolMode::Down {
                         lx,
@@ -274,12 +275,13 @@ impl TabletTool {
                 return;
             }
             ffi::wlr_send_tablet_v2_tablet_tool_up(self.wp_tool);
-            self.maybe_exit_down(tablet);
+            self.maybe_exit_down(wm, tablet);
         }
     }
 
     pub unsafe fn button(
         &mut self,
+        wm: &crate::window_manager::WindowManager,
         tablet: *mut Tablet,
         event: *mut ffi::wlr_tablet_tool_button_event,
     ) {
@@ -288,25 +290,25 @@ impl TabletTool {
             (*event).button,
             (*event).state,
         );
-        self.maybe_exit_down(tablet);
+        self.maybe_exit_down(wm, tablet);
     }
 
-    pub unsafe fn maybe_exit_down(&mut self, tablet: *mut Tablet) {
+    pub unsafe fn maybe_exit_down(&mut self, wm: &crate::window_manager::WindowManager, tablet: *mut Tablet) {
         let is_down = ffi::river_wlr_tablet_v2_tablet_tool_get_is_down(self.wp_tool);
         let num_buttons = ffi::river_wlr_tablet_v2_tablet_tool_get_num_buttons(self.wp_tool);
         if !matches!(self.mode, TabletToolMode::Down { .. }) || is_down || num_buttons > 0 {
             return;
         }
         self.mode = TabletToolMode::Passthrough;
-        self.passthrough(tablet);
+        self.passthrough(wm, tablet);
     }
 
-    pub unsafe fn passthrough(&mut self, tablet: *mut Tablet) {
+    pub unsafe fn passthrough(&mut self, wm: &crate::window_manager::WindowManager, tablet: *mut Tablet) {
         let server = (*(*(*tablet).device).seat).server;
         let lx = self.cursor_x();
         let ly = self.cursor_y();
 
-        if let Some(result) = crate::shared::scene().at(lx, ly) {
+        if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
             if matches!(result.data, crate::scene_node_data::SceneNodeDataVal::LockSurface(_)) {
                 assert!((*server).lock_manager.state != crate::lock_manager::LockState::Unlocked);
             } else {

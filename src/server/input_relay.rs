@@ -40,7 +40,7 @@ impl InputRelay {
         std::ptr::write(&mut self.osk, crate::osk::Osk::new((*seat).server));
     }
 
-    pub unsafe fn new_input_method(&mut self, input_method: *mut ffi::wlr_input_method_v2) {
+    pub unsafe fn new_input_method(&mut self, wm: &crate::window_manager::WindowManager, input_method: *mut ffi::wlr_input_method_v2) {
         let seat = crate::container_of!(self, Seat, relay);
         let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat))
             .to_str()
@@ -65,7 +65,7 @@ impl InputRelay {
         // field already enabled.
         if !self.text_input.is_null() {
             ffi::wlr_input_method_v2_send_activate(input_method);
-            self.send_input_method_state();
+            self.send_input_method_state(wm);
         }
     }
 
@@ -80,7 +80,7 @@ impl InputRelay {
             while pos != head_ptr as *mut ffi::wl_list {
                 let next_pos = (*pos).next;
                 let popup = crate::container_of!(pos, crate::input_popup::InputPopup, link);
-                (*popup).update();
+                (*popup).update(wm);
                 pos = next_pos;
             }
 
@@ -89,7 +89,7 @@ impl InputRelay {
         }
     }
 
-    pub unsafe fn send_input_method_state(&mut self) {
+    pub unsafe fn send_input_method_state(&mut self, wm: &crate::window_manager::WindowManager) {
         let input_method = self.input_method;
         let wlr_text_input = (*self.text_input).wlr_text_input;
 
@@ -124,7 +124,7 @@ impl InputRelay {
         while pos != head_ptr as *mut ffi::wl_list {
             let next_pos = (*pos).next;
             let popup = crate::container_of!(pos, crate::input_popup::InputPopup, link);
-            (*popup).update();
+            (*popup).update(wm);
             pos = next_pos;
         }
 
@@ -253,7 +253,8 @@ unsafe extern "C" fn handle_input_method_new_popup(
     let relay = crate::container_of!(listener, InputRelay, input_method_new_popup);
     let wlr_popup = data as *mut ffi::wlr_input_popup_surface_v2;
 
-    if let Err(e) = crate::input_popup::InputPopup::create(wlr_popup, relay) {
+    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    if let Err(e) = crate::input_popup::InputPopup::create(wm, wlr_popup, relay) {
         log::error!("failed to create input popup: {}", e);
     }
 }

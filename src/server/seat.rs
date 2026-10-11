@@ -572,7 +572,7 @@ impl Seat {
 
                 let lx = self.cursor.x();
                 let ly = self.cursor.y();
-                if let Some(result) = crate::shared::scene().at(lx, ly) {
+                if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                     if result.surface == surface {
                         ffi::wlr_seat_pointer_notify_enter(self.wlr_seat, surface, result.sx, result.sy);
                     }
@@ -637,7 +637,7 @@ impl Seat {
 
                     let lx = self.cursor.x();
                     let ly = self.cursor.y();
-                    if let Some(result) = crate::shared::scene().at(lx, ly) {
+                    if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                         if result.surface == surface {
                             ffi::wlr_seat_pointer_notify_enter(self.wlr_seat, surface, result.sx, result.sy);
                         }
@@ -669,7 +669,7 @@ impl Seat {
 
                     let lx = self.cursor.x();
                     let ly = self.cursor.y();
-                    if let Some(result) = crate::shared::scene().at(lx, ly) {
+                    if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                         if result.surface == surface {
                             ffi::wlr_seat_pointer_notify_enter(self.wlr_seat, surface, result.sx, result.sy);
                         }

@@ -35,24 +35,26 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
 
     let mut is_app_surface = false;
     let mut is_overlay_window = false;
-    if let Some(result) = crate::shared::scene().at(lx, ly) {
+    if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
         match result.data {
-            SceneNodeDataVal::Window(window) => {
-                // The grid does not block: hitting it means the press is on a
-                // desktop item (its input region covers nothing else), and
-                // the item drag needs the press delivered in overview like
-                // any chrome click.
-                if !(*window).is_status_bar()
-                    && !(*window).is_wallpaper()
-                    && !(*window).is_grid()
-                {
-                    is_app_surface = true;
-                    // Popup counts as chrome like Overlay: the cce-cloud
-                    // launcher must keep receiving clicks in overview.
-                    if (*window).tiling_mode == crate::tiling::TilingMode::Overlay
-                        || (*window).tiling_mode == crate::tiling::TilingMode::Popup
+            SceneNodeDataVal::Window(window_id) => {
+                if let Some(window) = wm.windows.get(window_id) {
+                    // The grid does not block: hitting it means the press is on a
+                    // desktop item (its input region covers nothing else), and
+                    // the item drag needs the press delivered in overview like
+                    // any chrome click.
+                    if !window.is_status_bar()
+                        && !window.is_wallpaper()
+                        && !window.is_grid()
                     {
-                        is_overlay_window = true;
+                        is_app_surface = true;
+                        // Popup counts as chrome like Overlay: the cce-cloud
+                        // launcher must keep receiving clicks in overview.
+                        if window.tiling_mode == crate::tiling::TilingMode::Overlay
+                            || window.tiling_mode == crate::tiling::TilingMode::Popup
+                        {
+                            is_overlay_window = true;
+                        }
                     }
                 }
             }
@@ -88,8 +90,9 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
         };
         if (*event).button == 0x110 && (wm.adjust_position_mode || super_held) {
             let mut clicked_status: *mut crate::window::Window = std::ptr::null_mut();
-            if let Some(result) = crate::shared::scene().at(lx, ly) {
-                if let SceneNodeDataVal::Window(window) = result.data {
+            if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
+                if let SceneNodeDataVal::Window(window_id) = result.data {
+                    let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
                     if (*window).is_status_bar() {
                         clicked_status = window;
                     }
@@ -140,9 +143,9 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
         if (*event).button == 0x110 && crate::shared::window_adjust_active() {
             let mut clicked_win: *mut crate::window::Window = std::ptr::null_mut();
             let mut clicked_cloud_layer = false;
-            if let Some(result) = crate::shared::scene().at(lx, ly) {
+            if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                 match result.data {
-                    SceneNodeDataVal::Window(window) => clicked_win = window,
+                    SceneNodeDataVal::Window(window_id) => clicked_win = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut()),
                     SceneNodeDataVal::LayerSurface(layer_surface) => {
                         clicked_cloud_layer = is_cloud_layer(layer_surface);
                     }
@@ -395,11 +398,13 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
 
         if (*event).button == 0x111 && modifiers == 0 {
             let mut clicked_interactive = false;
-            if let Some(result) = crate::shared::scene().at(lx, ly) {
+            if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                 match result.data {
-                    SceneNodeDataVal::Window(window) => {
-                        if !(*window).is_wallpaper() {
-                            clicked_interactive = true;
+                    SceneNodeDataVal::Window(window_id) => {
+                        if let Some(window) = wm.windows.get(window_id) {
+                            if !window.is_wallpaper() {
+                                clicked_interactive = true;
+                            }
                         }
                     }
                     SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {
@@ -458,8 +463,9 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             let lx = cursor.x();
             let ly = cursor.y();
             let mut target_win: *mut crate::window::Window = std::ptr::null_mut();
-            if let Some(result) = crate::shared::scene().at(lx, ly) {
-                if let SceneNodeDataVal::Window(window) = result.data {
+            if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
+                if let SceneNodeDataVal::Window(window_id) = result.data {
+                    let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
                     target_win = window;
                 }
             }
@@ -550,8 +556,9 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
         let lx = cursor.x();
         let ly = cursor.y();
         let mut border_target_win: *mut crate::window::Window = std::ptr::null_mut();
-        if let Some(result) = crate::shared::scene().at(lx, ly) {
-            if let SceneNodeDataVal::Window(window) = result.data {
+        if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
+            if let SceneNodeDataVal::Window(window_id) = result.data {
+                let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
                 border_target_win = window;
             }
         }
@@ -745,7 +752,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             if first_grab_button {
                 let glx = cursor.x();
                 let gly = cursor.y();
-                if let Some(result) = crate::shared::scene().at(glx, gly) {
+                if let Some(result) = crate::shared::scene().at(wm, glx, gly) {
                     // A surface node's scene buffer begins with its node.
                     let mut ratio = 1.0;
                     if !result.surface.is_null() && !result.node.is_null() {
@@ -780,12 +787,14 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
         let lx = cursor.x();
         let ly = cursor.y();
         let mut clicked_something = false;
-        if let Some(result) = crate::shared::scene().at(lx, ly) {
+        if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
             match result.data {
-                SceneNodeDataVal::Window(window) => {
-                    clicked_something = true;
-                    if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                        seat.focus(wm, Focus::window(window));
+                SceneNodeDataVal::Window(window_id) => {
+                    if let Some(window) = wm.windows.get(window_id) {
+                        clicked_something = true;
+                        if !window.is_status_bar() && !window.is_wallpaper() {
+                            seat.focus(wm, Focus::Window(window_id));
+                        }
                     }
                 }
                 SceneNodeDataVal::LayerSurface(layer_surface) => {

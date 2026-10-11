@@ -255,10 +255,10 @@ impl Cursor {
     /// — the handles, a window body's drag, the rubber band — and those live
     /// on the pointer path, so the finger becomes the pointer even over a
     /// touch-capable window.
-    unsafe fn touch_route_at(&self, lx: f64, ly: f64) -> TouchRoute {
+    unsafe fn touch_route_at(&self, wm: &crate::window_manager::WindowManager, lx: f64, ly: f64) -> TouchRoute {
         let seat = &*self.seat;
         let server = seat.server;
-        let result = crate::shared::scene().at(lx, ly);
+        let result = crate::shared::scene().at(wm, lx, ly);
         if let Some(ref result) = result {
             // Locked, only the lock surface may hear a finger, as only it
             // may hear the pointer (`passthrough`).
@@ -294,7 +294,7 @@ impl Cursor {
         }
         let on_desk = match result {
             None => (*server).lock_manager.state == crate::lock_manager::LockState::Unlocked,
-            Some(r) => matches!(r.data, SceneNodeDataVal::Window(w) if (*w).is_wallpaper()),
+            Some(r) => matches!(r.data, SceneNodeDataVal::Window(id) if wm.windows.get(id).is_some_and(|w| w.is_wallpaper())),
         };
         TouchRoute::Pointer { start: (lx, ly), pressed: false, on_desk }
     }
@@ -369,11 +369,13 @@ impl Cursor {
 
     /// Arm the on-screen keyboard (`osk.rs`) when the finger is on an
     /// app's window — not the board itself, a layer surface, nor the bar.
-    unsafe fn note_touch_for_osk(&mut self, lx: f64, ly: f64) {
-        let Some(result) = crate::shared::scene().at(lx, ly) else { return };
-        if let SceneNodeDataVal::Window(window) = result.data {
-            if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                (*self.seat).relay.osk.note_touch();
+    unsafe fn note_touch_for_osk(&mut self, wm: &mut crate::window_manager::WindowManager, lx: f64, ly: f64) {
+        let Some(result) = crate::shared::scene().at(wm, lx, ly) else { return };
+        if let SceneNodeDataVal::Window(window_id) = result.data {
+            if let Some(window) = wm.windows.get(window_id) {
+                if !window.is_status_bar() && !window.is_wallpaper() {
+                    (*self.seat).relay.osk.note_touch();
+                }
             }
         }
     }
@@ -381,21 +383,23 @@ impl Cursor {
     /// Route a finger normally (`touch_route_at`) and deliver its down.
     unsafe fn touch_begin(&mut self, wm: &mut crate::window_manager::WindowManager, id: i32, lx: f64, ly: f64, time_msec: u32) {
         let server = (*self.seat).server;
-        let route = self.touch_route_at(lx, ly);
+        let route = self.touch_route_at(wm, lx, ly);
         self.touch_points.insert(id, TouchPoint { lx, ly, route });
         log::debug!("touch: down id={id} at ({lx:.0}, {ly:.0}) -> {route:?}");
 
         match route {
             TouchRoute::Client { origin, scale } => {
                 crate::cursor::press_dismissals(wm, server, lx, ly);
-                let Some(result) = crate::shared::scene().at(lx, ly) else { return };
+                let Some(result) = crate::shared::scene().at(wm, lx, ly) else { return };
                 // Focus as a click would (`handle_button`).
                 let seat = &mut *self.seat;
                 match result.data {
-                    SceneNodeDataVal::Window(window) => {
-                        if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                            seat.focus(wm, Focus::window(window));
-                            seat.relay.osk.note_touch();
+                    SceneNodeDataVal::Window(window_id) => {
+                        if let Some(window) = wm.windows.get(window_id) {
+                            if !window.is_status_bar() && !window.is_wallpaper() {
+                                seat.focus(wm, Focus::Window(window_id));
+                                seat.relay.osk.note_touch();
+                            }
                         }
                     }
                     SceneNodeDataVal::LayerSurface(layer_surface) => {
@@ -480,12 +484,12 @@ impl Cursor {
             TouchRoute::Client { .. } => {
                 // A field that starts editing on the release is still this
                 // touch's (`osk.rs`).
-                self.note_touch_for_osk(point.lx, point.ly);
+                self.note_touch_for_osk(wm, point.lx, point.ly);
                 ffi::wlr_seat_touch_notify_up((*self.seat).wlr_seat, time_msec, id);
             }
             TouchRoute::Pointer { start, pressed: false, .. } => {
                 // A tap.
-                self.note_touch_for_osk(start.0, start.1);
+                self.note_touch_for_osk(wm, start.0, start.1);
                 self.warp_to(wm, start.0, start.1);
                 self.inject_button(wm, BTN_LEFT, true);
                 self.inject_button(wm, BTN_LEFT, false);

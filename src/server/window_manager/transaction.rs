@@ -490,7 +490,7 @@ impl WindowManager {
             curr = next;
         }
 
-        (*self.server).idle_inhibit_manager.check_active();
+        (*self.server).idle_inhibit_manager.check_active(self);
 
         log::debug!("finished committing transaction");
         self.debug_check_unlinked_status("render_finish end");

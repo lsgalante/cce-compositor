@@ -8,7 +8,9 @@ use crate::lock_manager::LockSurface;
 
 #[derive(Clone, Copy)]
 pub enum SceneNodeDataVal {
-    Window(*mut Window),
+    /// A window's trees: looked up by id, so a hit test never hands out
+    /// the window's address.
+    Window(crate::window::WindowId),
     LockSurface(*mut LockSurface),
     LayerSurface(*mut LayerSurface),
     OverrideRedirect(*mut XwaylandOverrideRedirect),

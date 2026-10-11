@@ -230,8 +230,9 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
             let lx = cursor.x();
             let ly = cursor.y();
             let mut hovered_win: *mut crate::window::Window = std::ptr::null_mut();
-            if let Some(result) = crate::shared::scene().at(lx, ly) {
-                if let SceneNodeDataVal::Window(window) = result.data {
+            if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
+                if let SceneNodeDataVal::Window(window_id) = result.data {
+                    let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
                     hovered_win = window;
                 }
             }
@@ -485,11 +486,13 @@ pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_
     // for the whole gesture. Clients never see a begin, so update/end stay
     // ours too.
     let mut on_background = true;
-    if let Some(result) = crate::shared::scene().at(cursor.x(), cursor.y()) {
+    if let Some(result) = crate::shared::scene().at(wm, cursor.x(), cursor.y()) {
         match result.data {
-            SceneNodeDataVal::Window(window) => {
-                if !(*window).is_wallpaper() {
-                    on_background = false;
+            SceneNodeDataVal::Window(window_id) => {
+                if let Some(window) = wm.windows.get(window_id) {
+                    if !window.is_wallpaper() {
+                        on_background = false;
+                    }
                 }
             }
             SceneNodeDataVal::LayerSurface(_) | SceneNodeDataVal::LockSurface(_) | SceneNodeDataVal::OverrideRedirect(_) => {

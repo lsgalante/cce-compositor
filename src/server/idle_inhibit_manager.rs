@@ -36,7 +36,8 @@ impl IdleInhibitManager {
         while curr != inhibitors_head {
             let next = (*curr).next;
             let inhibitor = crate::container_of!(curr, IdleInhibitor, link);
-            IdleInhibitor::destroy(inhibitor);
+            // At shutdown: nothing is left to keep awake, so no recount.
+            IdleInhibitor::destroy(inhibitor, None);
             curr = next;
         }
     }
@@ -44,7 +45,7 @@ impl IdleInhibitManager {
     /// Recount the live inhibitors and hand the idle manager the list of who
     /// holds one, so `ccectl idle status` can name them. Every inhibitor is
     /// visited (no early exit): two apps holding one are both reported.
-    pub unsafe fn check_active(&self) {
+    pub unsafe fn check_active(&self, wm: &crate::window_manager::WindowManager) {
         let mut names: Vec<String> = Vec::new();
 
         let inhibitors_head = &self.inhibitors as *const ffi::wl_list as *mut crate::server::WlList;
@@ -57,11 +58,10 @@ impl IdleInhibitManager {
             if let Some(node_data) = SceneNodeData::from_surface(surface) {
                 use crate::scene_node_data::SceneNodeDataVal::*;
                 let name = match node_data.data {
-                    Window(w) => inhibitor_name(
-                        "window",
-                        (*w).get_app_id_string().as_deref(),
-                        (*w).get_title_string().as_deref(),
-                    ),
+                    Window(id) => match wm.windows.get(id) {
+                        Some(w) => inhibitor_name("window", w.get_app_id_string().as_deref(), w.get_title_string().as_deref()),
+                        None => inhibitor_name("window", None, None),
+                    },
                     LockSurface(_) => inhibitor_name("lock-surface", None, None),
                     LayerSurface(l) => {
                         let ns = (*(*l).wlr_layer_surface).namespace;
@@ -130,6 +130,7 @@ pub struct IdleInhibitor {
 
 impl IdleInhibitor {
     pub unsafe fn create(
+        wm: &crate::window_manager::WindowManager,
         wlr_inhibitor: *mut ffi::wlr_idle_inhibitor_v1,
         inhibit_manager: *mut IdleInhibitManager,
     ) -> Result<*mut Self, &'static str> {
@@ -145,19 +146,22 @@ impl IdleInhibitor {
         let list_head = &mut (*inhibit_manager).inhibitors as *mut ffi::wl_list as *mut crate::server::WlList;
         crate::server::wl_list_insert((*list_head).prev, &mut (*inhibitor).link as *mut ffi::wl_list as *mut crate::server::WlList);
 
-        (*inhibit_manager).check_active();
+        (*inhibit_manager).check_active(wm);
 
         Ok(inhibitor)
     }
 
-    pub unsafe fn destroy(inhibitor: *mut Self) {
+    /// `wm` is `None` at shutdown, which skips the recount.
+    pub unsafe fn destroy(inhibitor: *mut Self, wm: Option<&crate::window_manager::WindowManager>) {
         (*inhibitor).listen_destroy.disconnect();
         crate::server::wl_list_remove(&mut (*inhibitor).link as *mut ffi::wl_list as *mut crate::server::WlList);
         
         let manager = (*inhibitor).inhibit_manager;
         let _boxed = Box::from_raw(inhibitor);
         
-        (*manager).check_active();
+        if let Some(wm) = wm {
+            (*manager).check_active(wm);
+        }
     }
 }
 
@@ -168,7 +172,8 @@ unsafe extern "C" fn handle_new_idle_inhibitor(
     let manager = &mut *crate::container_of!(listener, IdleInhibitManager, new_idle_inhibitor);
     let inhibitor = data as *mut ffi::wlr_idle_inhibitor_v1;
 
-    if IdleInhibitor::create(inhibitor, manager).is_err() {
+    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    if IdleInhibitor::create(wm, inhibitor, manager).is_err() {
         log::error!("failed to create idle inhibitor");
     }
 }
@@ -178,5 +183,5 @@ unsafe extern "C" fn handle_inhibitor_destroy(
     _data: *mut std::ffi::c_void,
 ) {
     let inhibitor = crate::container_of!(listener, IdleInhibitor, listen_destroy);
-    IdleInhibitor::destroy(inhibitor);
+    IdleInhibitor::destroy(inhibitor, Some(&*crate::reentry::wm(crate::shared::server_ptr())));
 }

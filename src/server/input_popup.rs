@@ -22,6 +22,7 @@ pub struct InputPopup {
 
 impl InputPopup {
     pub unsafe fn create(
+        wm: &crate::window_manager::WindowManager,
         wlr_popup: *mut ffi::wlr_input_popup_surface_v2,
         input_relay: *mut InputRelay,
     ) -> Result<(), &'static str> {
@@ -56,12 +57,12 @@ impl InputPopup {
         (*raw).unmap.connect(ffi::river_wlr_surface_get_unmap_signal((*wlr_popup).surface), handle_unmap);
         (*raw).commit.connect(ffi::river_wlr_surface_get_commit_signal((*wlr_popup).surface), handle_commit);
 
-        (*raw).update();
+        (*raw).update(wm);
 
         Ok(())
     }
 
-    pub unsafe fn update(&mut self) {
+    pub unsafe fn update(&mut self, wm: &crate::window_manager::WindowManager) {
         let text_input = (*self.input_relay).text_input;
         if text_input.is_null() {
             let hidden_tree = crate::shared::scene().hidden_tree.raw();
@@ -91,7 +92,10 @@ impl InputPopup {
         let server = (*(*self.input_relay).seat).server;
 
         let popup_tree = match focused.data {
-            SceneNodeDataVal::Window(window) => (*window).popup_tree.raw(),
+            SceneNodeDataVal::Window(id) => match wm.windows.get(id) {
+                Some(w) => w.popup_tree.raw(),
+                None => return,
+            },
             SceneNodeDataVal::LockSurface(_) => crate::shared::scene().layers.popups.raw(),
             SceneNodeDataVal::LayerSurface(layer_surface) => (*layer_surface).popup_tree.raw(),
             SceneNodeDataVal::OverrideRedirect(_) => panic!("Xwayland doesn't use text-input protocol"),
@@ -170,7 +174,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let input_popup = crate::container_of!(listener, InputPopup, map);
-    (*input_popup).update();
+    (*input_popup).update(&*crate::reentry::wm(crate::shared::server_ptr()));
 }
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -188,5 +192,5 @@ unsafe extern "C" fn handle_commit(
     _data: *mut std::ffi::c_void,
 ) {
     let input_popup = crate::container_of!(listener, InputPopup, commit);
-    (*input_popup).update();
+    (*input_popup).update(&*crate::reentry::wm(crate::shared::server_ptr()));
 }

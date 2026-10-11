@@ -1094,18 +1094,18 @@ impl Window {
 
         crate::scene_node_data::SceneNodeData::attach(
             (*raw).tree.node(),
-            crate::scene_node_data::SceneNodeDataVal::Window(raw),
+            crate::scene_node_data::SceneNodeDataVal::Window((*raw).id()),
         );
         crate::scene_node_data::SceneNodeData::attach(
             (*raw).popup_tree.node(),
-            crate::scene_node_data::SceneNodeDataVal::Window(raw),
+            crate::scene_node_data::SceneNodeDataVal::Window((*raw).id()),
         );
         // The border segments sit outside the window tree; without data of
         // their own a hit on a revealed segment would resolve to no window at
         // all, so tag them with the window they belong to.
         crate::scene_node_data::SceneNodeData::attach(
             (*raw).border.tree.node(),
-            crate::scene_node_data::SceneNodeDataVal::Window(raw),
+            crate::scene_node_data::SceneNodeDataVal::Window((*raw).id()),
         );
         (*raw).border.tree.set_enabled(false);
 

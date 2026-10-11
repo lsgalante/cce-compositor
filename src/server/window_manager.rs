@@ -886,10 +886,12 @@ impl WindowManager {
                     height: output_box.height,
                 };
             }
-            if let Some(result) = crate::shared::scene().at(cursor_x, cursor_y) {
-                if let crate::scene_node_data::SceneNodeDataVal::Window(w) = result.data {
-                    if !(*w).is_status_bar() && !(*w).is_wallpaper() {
-                        hovered = Some(WindowId((*w).ref_key));
+            if let Some(result) = crate::shared::scene().at(self, cursor_x, cursor_y) {
+                if let crate::scene_node_data::SceneNodeDataVal::Window(w_id) = result.data {
+                    if let Some(w) = self.windows.get(w_id) {
+                        if !w.is_status_bar() && !w.is_wallpaper() {
+                            hovered = Some(WindowId(w.ref_key));
+                        }
                     }
                 }
             }

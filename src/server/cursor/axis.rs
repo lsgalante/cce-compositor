@@ -79,9 +79,10 @@ pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager
         // during overview, same as in the button and motion paths: a wheel
         // over the launcher's list scrolls the list, not the desktop.
         let mut over_chrome = false;
-        if let Some(result) = crate::shared::scene().at(lx, ly) {
+        if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
             match result.data {
-                SceneNodeDataVal::Window(window) => {
+                SceneNodeDataVal::Window(window_id) => {
+                    let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
                     over_interactive = true;
                     over_chrome = !window.is_null()
                         && matches!(
@@ -198,7 +199,7 @@ pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager
     }
     // A horizontal one over an app in `touchpad_hscroll_shift_apps` is
     // delivered as Shift + vertical (see `HScrollShift`).
-    if is_finger && cursor.hscroll_shift_axis(event, delta, delta_discrete, modifiers) {
+    if is_finger && cursor.hscroll_shift_axis(wm, event, delta, delta_discrete, modifiers) {
         return;
     }
 
@@ -288,12 +289,13 @@ pub(crate) const VIEW_DRAG_PINCH_PX: f64 = 150.0;
 
 impl Cursor {
     /// The window under the pointer, if `touchpad_view_apps` names its app.
-    unsafe fn view_drag_target(&mut self) -> Option<(*mut crate::window::Window, *mut ffi::wlr_surface, f64, f64, f64)> {
+    unsafe fn view_drag_target(&mut self, wm: &crate::window_manager::WindowManager) -> Option<(*mut crate::window::Window, *mut ffi::wlr_surface, f64, f64, f64)> {
         if crate::shared::layout().touchpad_view_apps.is_empty() {
             return None;
         }
-        let result = crate::shared::scene().at(self.x(), self.y())?;
-        let SceneNodeDataVal::Window(window) = result.data else { return None };
+        let result = crate::shared::scene().at(wm, self.x(), self.y())?;
+        let SceneNodeDataVal::Window(window_id) = result.data else { return None };
+        let Some(window) = wm.windows.ptr(window_id) else { return None };
         if window.is_null() || result.surface.is_null() || result.node.is_null() {
             return None;
         }
@@ -338,7 +340,7 @@ impl Cursor {
     }
 
     unsafe fn begin_view_drag(&mut self, wm: &mut crate::window_manager::WindowManager, button: u32, from_pinch: bool) -> bool {
-        let Some((window, surface, sx, sy, ratio)) = self.view_drag_target() else { return false };
+        let Some((window, surface, sx, sy, ratio)) = self.view_drag_target(wm) else { return false };
         let seat = &mut *self.seat;
         // Space must reach the window: give it keyboard focus as a click would.
         if seat.focused != crate::seat::Focus::window(window) {
@@ -540,7 +542,7 @@ impl Cursor {
         if crate::shared::layout().touchpad_view_apps.is_empty() {
             return None;
         }
-        let result = crate::shared::scene().at(self.x(), self.y())?;
+        let result = crate::shared::scene().at(wm, self.x(), self.y())?;
         let SceneNodeDataVal::OverrideRedirect(or) = result.data else { return None };
         if or.is_null() || result.surface.is_null() || (*or).xsurface.is_null() {
             return None;
@@ -745,12 +747,13 @@ pub(crate) const HSCROLL_SHIFT_IDLE_MS: i32 = 300;
 impl Cursor {
     /// The surface under the pointer, if it belongs to a window of an app
     /// in `touchpad_hscroll_shift_apps`.
-    unsafe fn hscroll_shift_target(&mut self) -> Option<*mut ffi::wlr_surface> {
+    unsafe fn hscroll_shift_target(&mut self, wm: &crate::window_manager::WindowManager) -> Option<*mut ffi::wlr_surface> {
         if crate::shared::layout().touchpad_hscroll_shift_apps.is_empty() {
             return None;
         }
-        let result = crate::shared::scene().at(self.x(), self.y())?;
-        let SceneNodeDataVal::Window(window) = result.data else { return None };
+        let result = crate::shared::scene().at(wm, self.x(), self.y())?;
+        let SceneNodeDataVal::Window(window_id) = result.data else { return None };
+        let Some(window) = wm.windows.ptr(window_id) else { return None };
         if window.is_null() || result.surface.is_null() {
             return None;
         }
@@ -788,7 +791,7 @@ impl Cursor {
 
     /// A finger-source axis event over such a window. Returns true when
     /// consumed (re-emitted as Shift + vertical, or dropped).
-    pub unsafe fn hscroll_shift_axis(&mut self, event: *const ffi::wlr_pointer_axis_event, delta: f64, delta_discrete: i32, modifiers: u32) -> bool {
+    pub unsafe fn hscroll_shift_axis(&mut self, wm: &crate::window_manager::WindowManager, event: *const ffi::wlr_pointer_axis_event, delta: f64, delta_discrete: i32, modifiers: u32) -> bool {
         const SHIFT: u32 = 0x1;
         const CTRL: u32 = 0x4;
         let vertical = (*event).orientation == ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL;
@@ -812,7 +815,7 @@ impl Cursor {
             if vertical {
                 return false;
             }
-            let Some(surface) = self.hscroll_shift_target() else { return false };
+            let Some(surface) = self.hscroll_shift_target(wm) else { return false };
             let seat = &mut *self.seat;
             seat.ensure_synthetic_keyboard();
             let mut repeat = None;

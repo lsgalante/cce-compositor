@@ -436,7 +436,7 @@ impl Cursor {
 
     pub unsafe fn update_state(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if !self.constraint.is_null() {
-            (*self.constraint).update_state();
+            (*self.constraint).update_state(wm);
         }
         self.update_hovered();
         self.passthrough(wm, crate::util::msec_timestamp());
@@ -788,7 +788,7 @@ impl Cursor {
             }
         }
 
-        if let Some(result) = crate::shared::scene().at(lx, ly) {
+        if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
             let lock_state = (*server).lock_manager.state;
             if lock_state != crate::lock_manager::LockState::Unlocked {
                 if !matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
@@ -809,7 +809,8 @@ impl Cursor {
             let mut is_window = false;
             let mut hovered_toplevel: *mut crate::window::Window = std::ptr::null_mut();
             match result.data {
-                SceneNodeDataVal::Window(window) => {
+                SceneNodeDataVal::Window(window_id) => {
+                    let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
                     // The grid is not a toplevel for hover purposes: hitting it
                     // means the pointer is on a desktop item (its input region
                     // covers nothing else), and the item drag needs the
@@ -1408,8 +1409,9 @@ pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowMana
     // dismissing any other open menu.
     {
         let mut target_status: *mut crate::window::Window = std::ptr::null_mut();
-        if let Some(result) = crate::shared::scene().at(lx, ly) {
-            if let SceneNodeDataVal::Window(window) = result.data {
+        if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
+            if let SceneNodeDataVal::Window(window_id) = result.data {
+                let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
                 if (*window).is_status_bar() {
                     target_status = window;
                 }
@@ -1444,9 +1446,10 @@ pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowMana
             .iter()
             .any(|&or| !or.is_null() && !(*or).surface_tree.is_null());
         if or_showing {
-            let on_x11 = match crate::shared::scene().at(lx, ly) {
+            let on_x11 = match crate::shared::scene().at(wm, lx, ly) {
                 Some(result) => match result.data {
-                    SceneNodeDataVal::Window(window) => {
+                    SceneNodeDataVal::Window(window_id) => {
+                        let window = wm.windows.ptr(window_id).unwrap_or(std::ptr::null_mut());
                         matches!((*window).impl_type(), crate::window::WindowImpl::Xwayland(_))
                     }
                     SceneNodeDataVal::OverrideRedirect(_) => true,
@@ -1499,7 +1502,8 @@ unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, da
     }
 
     if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat, (*event).tool) {
-        (*tool).axis(tablet, event);
+        let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+        (*tool).axis(wm, tablet, event);
     }
 }
 
@@ -1525,7 +1529,8 @@ unsafe extern "C" fn handle_tablet_tool_proximity(listener: *mut ffi::wl_listene
     }
 
     if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat, (*event).tool) {
-        (*tool).proximity(tablet, event);
+        let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+        (*tool).proximity(wm, tablet, event);
     }
 }
 
@@ -1548,7 +1553,8 @@ unsafe extern "C" fn handle_tablet_tool_tip(listener: *mut ffi::wl_listener, dat
     }
 
     if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat, (*event).tool) {
-        (*tool).tip(tablet, event);
+        let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+        (*tool).tip(wm, tablet, event);
     }
 }
 
@@ -1571,7 +1577,9 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
     }
 
     if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat, (*event).tool) {
-        (*tool).button(tablet, event);
+        let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+        let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+        (*tool).button(wm, tablet, event);
     }
 }
 

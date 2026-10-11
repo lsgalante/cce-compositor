@@ -20,7 +20,7 @@ pub struct PointerConstraint {
 }
 
 impl PointerConstraint {
-    pub unsafe fn create(wlr_constraint: *mut ffi::wlr_pointer_constraint_v1) -> *mut Self {
+    pub unsafe fn create(wm: &crate::window_manager::WindowManager, wlr_constraint: *mut ffi::wlr_pointer_constraint_v1) -> *mut Self {
         let constraint = Box::into_raw(Box::new(Self {
             wlr_constraint,
             state: PointerConstraintState::Inactive,
@@ -43,7 +43,7 @@ impl PointerConstraint {
             if let Focus::LayerSurface(surface) = (*seat).focused {
                 if surface == (*wlr_constraint).surface {
                     (*seat).cursor.constraint = constraint;
-                    (*constraint).maybe_activate();
+                    (*constraint).maybe_activate(wm);
                 }
             }
         }
@@ -51,7 +51,7 @@ impl PointerConstraint {
         constraint
     }
 
-    pub unsafe fn maybe_activate(&mut self) {
+    pub unsafe fn maybe_activate(&mut self, wm: &crate::window_manager::WindowManager) {
         let seat = river_wlr_seat_get_data_safe((*self.wlr_constraint).seat);
         if seat.is_null() {
             return;
@@ -69,7 +69,7 @@ impl PointerConstraint {
         let cx = (*seat).cursor.x();
         let cy = (*seat).cursor.y();
 
-        if let Some(result) = crate::shared::scene().at(cx, cy) {
+        if let Some(result) = crate::shared::scene().at(wm, cx, cy) {
             if result.surface != (*self.wlr_constraint).surface {
                 return;
             }
@@ -108,8 +108,8 @@ impl PointerConstraint {
         ffi::wlr_pointer_constraint_v1_send_deactivated(self.wlr_constraint);
     }
 
-    pub unsafe fn update_state(&mut self) {
-        self.maybe_activate();
+    pub unsafe fn update_state(&mut self, wm: &crate::window_manager::WindowManager) {
+        self.maybe_activate(wm);
 
         if let PointerConstraintState::Active { node, sx, sy } = self.state {
             let seat = river_wlr_seat_get_data_safe((*self.wlr_constraint).seat);
@@ -225,6 +225,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 }
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
     let constraint_ptr = crate::container_of!(listener, PointerConstraint, commit_listener) as *mut PointerConstraint;
     let constraint = &mut *constraint_ptr;
     let seat = river_wlr_seat_get_data_safe((*constraint.wlr_constraint).seat);
@@ -238,7 +239,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         }
         PointerConstraintState::Inactive => {
             if !seat.is_null() && (*seat).cursor.constraint == constraint_ptr {
-                constraint.maybe_activate();
+                constraint.maybe_activate(wm);
             }
         }
     }

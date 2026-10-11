@@ -409,10 +409,10 @@ unsafe extern "C" fn handle_new_input_method(listener: *mut ffi::wl_listener, da
     let input_method = data as *mut ffi::wlr_input_method_v2;
     let seat = ffi::river_wlr_seat_get_data((*input_method).seat) as *mut Seat;
     if !seat.is_null() {
-        (*seat).relay.new_input_method(input_method);
+        (*seat).relay.new_input_method(&*crate::reentry::wm(crate::shared::server_ptr()), input_method);
     } else {
         // Fallback to default seat if input_method.seat has no data set yet
-        (*im.default_seat).relay.new_input_method(input_method);
+        (*im.default_seat).relay.new_input_method(&*crate::reentry::wm(crate::shared::server_ptr()), input_method);
     }
 }
 
