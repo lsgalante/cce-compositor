@@ -472,7 +472,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                                     // Dismissing chrome, not switching windows:
                                     // the camera stays where the user left it.
                                     (*seat).suppress_focus_pan = true;
-                                    (*seat).focus(wm, crate::seat::Focus::Window(win_ptr));
+                                    (*seat).focus(wm, crate::seat::Focus::window(win_ptr));
                                     (*seat).suppress_focus_pan = false;
                                     break;
                                 }

@@ -502,6 +502,26 @@ walked from `head()` — and the output configuration being applied
 (`output_config()` / `take_output_config()` / `set_output_config()`).
 `WindowManager` has no `sent` field.
 
+### Windows are named by id (since 2026-10-11)
+
+Only `wm.windows` (the `SlotMap`) holds a window's address. Everything else
+that refers to a window holds its `WindowId` (`crate::window::WindowId`, the
+policy crate's wrapper of the slot key; `Window::id()`, or
+`window::id_of(ptr)` for a maybe-null pointer) and looks it up with
+`wm.window(id) -> Option<*mut Window>` when it needs the window:
+`focus_history`, the selection, `Seat::focused` (`Focus::Window(id)`; build
+one from a pointer with `Focus::window(ptr)`, read it with
+`focused.live_window(wm)` / `as_window(wm)`), the seat op's grabbed window
+(`SeatOp::window`, read with `op.window(wm)`), the overview displacement
+ledger and `group_move`, and the cursor's `adjust_hover`,
+`hovered_border_window`, `button_press` and `last_click_window`. Removing a
+window bumps its slot's generation, so an id that outlives its window looks
+up as `None` — never as a later window that reused the address, which is
+what the address-scan liveness checks these replaced (`wm.windows.iter()
+.any(|&w| w == p)`) could not rule out. A new holder takes an id; the
+exceptions are a window's own protocol objects (`XdgToplevel::window`,
+`XwaylandWindow::window`), which die before it, and its `SceneNodeData`.
+
 ### Re-entrancy tracer (`reentry.rs`, since 2026-10-10)
 
 Code outside the window manager reaches it as `(*crate::reentry::wm(server))`
@@ -951,7 +971,7 @@ inside the region, but a window spans many cells and the background between
 two of them is a strip, so touching is enough.
 
 - **The background press no longer exits overview on the spot.** It starts a
-  `PointerOpType::Select` seat op — the one op whose `window_ptr` is null —
+  `PointerOpType::Select` seat op — the one op whose `window` is `None` —
   and the RELEASE decides: past `selection::DRAG_THRESHOLD` (5 px) it was a
   drag; short of it, a click, which drops the selection if there is one and
   leaves overview if there is none. `Cursor::left_click_on_bg_in_overview`
@@ -977,8 +997,9 @@ two of them is a strip, so touching is enough.
   `WindowManager::draw_selection` places them per frame from
   `Output::render_and_commit`.
 - The selection lives only in overview (`set_mode` clears it) and a
-  destroyed window is dropped from it and from `group_move`
-  (`Window::destroy`).
+  destroyed window is dropped from it (`Window::destroy`); `group_move`
+  holds ids, so a carried window that closes mid-drag just stops being
+  found.
 - **The desktop images select too** (since 2026-09-30). They are
   `cce-grid`'s pinned items, which the compositor otherwise knows only as
   the grid surface's input region, so the grid reports them over the

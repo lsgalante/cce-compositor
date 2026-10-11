@@ -170,27 +170,26 @@ pub struct Cursor {
     /// absolute w.r.t. the gesture start, so every update maps off this.
     pub pinch_start_zoom: f64,
     pub last_click_time: u32,
-    pub last_click_window: *mut crate::window::Window,
+    pub last_click_window: Option<crate::window::WindowId>,
     /// Window whose border currently draws highlighted, kept to un-highlight
-    /// on hover transitions. May dangle after a close — validate against
-    /// `wm.windows` before dereferencing.
-    pub hovered_border_window: *mut crate::window::Window,
+    /// on hover transitions. May name a closed window: look it up.
+    pub hovered_border_window: Option<crate::window::WindowId>,
     /// Which of that window's handle discs is highlighted.
     pub hovered_border_element: Option<crate::window::BorderElement>,
     /// The toplevel under the pointer while adjust mode (overview, or Super
     /// held) is on: the window the ring lands on and whose handles are live,
     /// focused or not. Set by `passthrough` on every hover evaluation and
     /// cleared when the pointer rests on nothing adjustable or the mode is
-    /// off — see `Window::is_adjust_target`. May dangle after a close:
-    /// compared by address only, and nulled in `Window::destroy`.
-    pub adjust_hover: *mut crate::window::Window,
+    /// off — see `Window::is_adjust_target`. A closed window's id never
+    /// matches a live one, so nothing clears it on close.
+    pub adjust_hover: Option<crate::window::WindowId>,
     pub right_click_on_bg: bool,
     pub right_click_on_border: bool,
     /// A left press on a window button (minimize / maximize / float-tile),
     /// waiting for its release: a button acts on the release, and only when
-    /// the pointer is still on the same button of the same window. May
-    /// dangle after a close — validated against `wm.windows` at release.
-    pub button_press: Option<(*mut crate::window::Window, crate::window::BorderElement)>,
+    /// the pointer is still on the same button of the same window. May name
+    /// a closed window: looked up at release.
+    pub button_press: Option<(crate::window::WindowId, crate::window::BorderElement)>,
     /// The grid surface's node mapping — (node_x, node_y, scale) — FROZEN at
     /// the start of an implicit grab that landed on the grid, cleared when
     /// the grab's last button releases. Motion during the grab is mapped
@@ -266,10 +265,10 @@ impl Default for Cursor {
             hscroll_shift: None,
             view_drag_timer: crate::event_source::Timer::new(),
             last_click_time: 0,
-            last_click_window: std::ptr::null_mut(),
-            hovered_border_window: std::ptr::null_mut(),
+            last_click_window: None,
+            hovered_border_window: None,
             hovered_border_element: None,
-            adjust_hover: std::ptr::null_mut(),
+            adjust_hover: None,
             right_click_on_bg: false,
             right_click_on_border: false,
             button_press: None,
@@ -665,7 +664,7 @@ impl Cursor {
         // the raise happens here for whatever the op grabbed. (A window
         // un-tiled by the drag is raised in `op_update` instead.)
         let grabbed = match &(*self.seat).op {
-            Some(op) => op.window_ptr,
+            Some(op) => op.window(wm),
             None => std::ptr::null_mut(),
         };
         if !grabbed.is_null()
@@ -689,25 +688,24 @@ impl Cursor {
 
     /// Move the border hover highlight to `target`'s `element` (null/None to
     /// clear): updates `hovered_border_element` on the old and new windows
-    /// and repaints their borders. The stored pointer may refer to a closed
-    /// window, so it is only dereferenced after checking it is still in
-    /// `wm.windows`.
+    /// and repaints their borders. The stored id may name a closed window,
+    /// which looks up as `None`.
     pub unsafe fn set_border_hover(
         &mut self,
         wm: &mut crate::window_manager::WindowManager,
         target: *mut crate::window::Window,
         element: Option<crate::window::BorderElement>,
     ) {
-        if self.hovered_border_window == target && self.hovered_border_element == element {
+        let target_id = crate::window::id_of(target);
+        if self.hovered_border_window == target_id && self.hovered_border_element == element {
             return;
         }
-        let old = self.hovered_border_window;
-        if !old.is_null() && old != target {
-            if wm.windows.iter().any(|&w| w == old) && !(*old).closed {
+        if let Some(old_id) = self.hovered_border_window.filter(|&id| Some(id) != target_id) {
+            if let Some(old) = wm.window(old_id).filter(|&w| !(*w).closed) {
                 (*old).hovered_border_element = None;
             }
         }
-        self.hovered_border_window = target;
+        self.hovered_border_window = target_id;
         self.hovered_border_element = element;
         if !target.is_null() {
             (*target).hovered_border_element = element;
@@ -718,10 +716,10 @@ impl Cursor {
         wm.arm_border_fade();
     }
 
-    /// Move the Super-held adjust target to `target` (null to clear). The
+    /// Move the Super-held adjust target to `target` (`None` to clear). The
     /// ring eases off the old window and onto the new one through the same
     /// border fade a hover swap uses, so a change arms that timer.
-    pub fn set_adjust_hover(&mut self, wm: &mut crate::window_manager::WindowManager, target: *mut crate::window::Window) {
+    pub fn set_adjust_hover(&mut self, wm: &mut crate::window_manager::WindowManager, target: Option<crate::window::WindowId>) {
         if self.adjust_hover == target {
             return;
         }
@@ -795,14 +793,14 @@ impl Cursor {
             if lock_state != crate::lock_manager::LockState::Unlocked {
                 if !matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
                     self.set_border_hover(wm, std::ptr::null_mut(), None);
-                    self.set_adjust_hover(wm, std::ptr::null_mut());
+                    self.set_adjust_hover(wm, None);
                     self.clear_focus();
                     return;
                 }
             } else {
                 if matches!(result.data, SceneNodeDataVal::LockSurface(_)) {
                     self.set_border_hover(wm, std::ptr::null_mut(), None);
-                    self.set_adjust_hover(wm, std::ptr::null_mut());
+                    self.set_adjust_hover(wm, None);
                     self.clear_focus();
                     return;
                 }
@@ -830,9 +828,9 @@ impl Cursor {
                     // below, so the band is live on the first hover. (Null
                     // for the status bar, wallpaper and grid.)
                     self.set_adjust_hover(wm, if crate::shared::window_adjust_active() {
-                        hovered_toplevel
+                        crate::window::id_of(hovered_toplevel)
                     } else {
-                        std::ptr::null_mut()
+                        None
                     });
                     // No mode gate: the band scales with the window
                     // (get_border_zone is zoom-aware), so the resize/move
@@ -869,10 +867,10 @@ impl Cursor {
                 }
                 SceneNodeDataVal::OverrideRedirect(_) => {
                     is_window = true;
-                    self.set_adjust_hover(wm, std::ptr::null_mut());
+                    self.set_adjust_hover(wm, None);
                 }
                 _ => {
-                    self.set_adjust_hover(wm, std::ptr::null_mut());
+                    self.set_adjust_hover(wm, None);
                 }
             }
             self.set_border_hover(wm, std::ptr::null_mut(), None);
@@ -917,13 +915,13 @@ impl Cursor {
                 // instead (`Window::is_adjust_target`).
                 if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
                     && !hovered_toplevel.is_null()
-                    && !(*self.seat).focus_is_chrome()
+                    && !(*self.seat).focus_is_chrome(wm)
                     && (*self.seat).focused
-                        != crate::seat::Focus::Window(hovered_toplevel)
+                        != crate::seat::Focus::window(hovered_toplevel)
                 {
                     let prev = (*self.seat).suppress_focus_pan;
                     (*self.seat).suppress_focus_pan = true;
-                    (*self.seat).focus(wm, crate::seat::Focus::Window(hovered_toplevel));
+                    (*self.seat).focus(wm, crate::seat::Focus::window(hovered_toplevel));
                     (*self.seat).suppress_focus_pan = prev;
                 }
                 self.clear_focus();
@@ -957,7 +955,7 @@ impl Cursor {
         }
 
         self.set_border_hover(wm, std::ptr::null_mut(), None);
-        self.set_adjust_hover(wm, std::ptr::null_mut());
+        self.set_adjust_hover(wm, None);
         self.clear_focus();
     }
 

@@ -242,7 +242,6 @@ pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager
 pub struct ViewDrag {
     pub button: u32,
     pub surface: *mut ffi::wlr_surface,
-    pub window: *mut crate::window::Window,
     /// Synthetic pointer position, surface-local.
     pub sx: f64,
     pub sy: f64,
@@ -342,8 +341,8 @@ impl Cursor {
         let Some((window, surface, sx, sy, ratio)) = self.view_drag_target() else { return false };
         let seat = &mut *self.seat;
         // Space must reach the window: give it keyboard focus as a click would.
-        if seat.focused != crate::seat::Focus::Window(window) {
-            seat.focus(wm, crate::seat::Focus::Window(window));
+        if seat.focused != crate::seat::Focus::window(window) {
+            seat.focus(wm, crate::seat::Focus::window(window));
         }
         seat.ensure_synthetic_keyboard();
         let time = crate::util::msec_timestamp();
@@ -357,7 +356,7 @@ impl Cursor {
         ffi::wlr_seat_keyboard_notify_key(seat.wlr_seat, time, KEY_SPACE, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
         ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
         log::info!("[ViewDrag] begin button={:#x} from_pinch={} at surface ({:.0}, {:.0}) ratio={}", button, from_pinch, sx, sy, ratio);
-        self.view_drag = Some(ViewDrag { button, surface, window, sx, sy, origin_sx: sx, origin_sy: sy, ratio, from_pinch, button_down: false, repeat });
+        self.view_drag = Some(ViewDrag { button, surface, sx, sy, origin_sx: sx, origin_sy: sy, ratio, from_pinch, button_down: false, repeat });
         self.arm_view_drag_timer();
         true
     }

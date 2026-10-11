@@ -24,13 +24,6 @@ pub enum WindowImpl {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FullscreenRequest {
-    NoRequest,
-    Fullscreen(*mut crate::output::Output),
-    Exit,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaximizeRequest {
     NoRequest,
     Maximize,
@@ -377,7 +370,6 @@ pub struct WmScheduledState {
     pub dimensions_hint: DimensionsHint,
     pub decoration_hint: ffi::zcce_window_v1_decoration_hint,
     pub show_window_menu_requested: Option<ShowWindowMenuRequest>,
-    pub fullscreen_requested: FullscreenRequest,
     pub maximize_requested: MaximizeRequest,
     pub minimize_requested: bool,
     pub dirty_app_id: bool,
@@ -400,7 +392,6 @@ pub struct WmRequestedState {
     pub capabilities: u32,
     pub resizing: bool,
     pub maximized: bool,
-    pub fullscreen: *mut crate::output::Output,
     pub inform_fullscreen: bool,
     pub close: bool,
 }
@@ -466,8 +457,26 @@ mod effects;
 #[path = "window/borders.rs"]
 mod borders;
 pub use borders::*;
+
+/// What everything but the window manager's map holds to name a window:
+/// a generational key, so one that outlives its window looks up as gone.
+pub use crate::policy::api::WindowId;
 pub(crate) unsafe fn clock_gettime(clk_id: libc::clockid_t, tp: &mut libc::timespec) -> libc::c_int {
     libc::clock_gettime(clk_id, tp)
+}
+
+impl Window {
+    pub fn id(&self) -> WindowId {
+        WindowId(self.ref_key)
+    }
+}
+
+/// `window`'s id, or `None` for null.
+///
+/// # Safety
+/// `window` is null or points at a live `Window`.
+pub unsafe fn id_of(window: *mut Window) -> Option<WindowId> {
+    if window.is_null() { None } else { Some((*window).id()) }
 }
 
 pub struct Window {
@@ -708,7 +717,6 @@ impl Window {
 
     pub fn is_fullscreen(&self) -> bool {
         self.tiling_mode == crate::tiling::TilingMode::Fullscreen
-            || !self.wm_requested.fullscreen.is_null()
     }
 
     /// A fullscreen window has stepped aside for another: a window focused
@@ -731,12 +739,11 @@ impl Window {
     /// leaving it fixed behind the screen.
     pub unsafe fn fullscreen_yields(&self, wm: &crate::window_manager::WindowManager) -> bool {
         let me = self as *const Window as *mut Window;
-        for &w in wm.focus_history.iter() {
+        for w in wm.focus_history.iter().filter_map(|&id| wm.window(id)) {
             if w == me {
                 return false;
             }
-            if w.is_null()
-                || (*w).closed
+            if (*w).closed
                 || (*w).minimized
                 || !matches!((*w).state, WindowState::Mapped)
                 || !matches!(
@@ -1030,7 +1037,6 @@ impl Window {
                 dimensions_hint: DimensionsHint { min_width: 0, min_height: 0, max_width: 0, max_height: 0 },
                 decoration_hint: ffi::zcce_window_v1_decoration_hint_ZCCE_WINDOW_V1_DECORATION_HINT_ONLY_SUPPORTS_CSD,
                 show_window_menu_requested: None,
-                fullscreen_requested: FullscreenRequest::NoRequest,
                 maximize_requested: MaximizeRequest::NoRequest,
                 minimize_requested: false,
                 dirty_app_id: false,
@@ -1051,7 +1057,6 @@ impl Window {
                 capabilities: 1 | 2 | 4 | 8,
                 resizing: false,
                 maximized: false,
-                fullscreen: std::ptr::null_mut(),
                 inform_fullscreen: false,
                 close: false,
             },
@@ -1568,7 +1573,7 @@ impl Window {
                 while curr != seats {
                     let next = (*curr).next;
                     let seat = crate::container_of!(curr, crate::seat::Seat, link);
-                    (*seat).focus(wm, crate::seat::Focus::Window(self as *mut Window));
+                    (*seat).focus(wm, crate::seat::Focus::window(self as *mut Window));
                     curr = next;
                 }
             }
@@ -1683,14 +1688,12 @@ impl Window {
         while curr != seats {
             let next = (*curr).next;
             let seat = crate::container_of!(curr, crate::seat::Seat, link);
-            if let crate::seat::Focus::Window(w) = (*seat).focused {
-                if w == window {
-                    (*seat).focus(wm, crate::seat::Focus::None);
-                    wm.focus_next_visible_window(seat);
-                }
+            if (*seat).focused == crate::seat::Focus::Window((*window).id()) {
+                (*seat).focus(wm, crate::seat::Focus::None);
+                wm.focus_next_visible_window(seat);
             }
             if let Some(ref op) = (*seat).op {
-                if op.window_ptr == window {
+                if op.window == Some((*window).id()) {
                     (*seat).op = None;
                 }
             }
@@ -1709,23 +1712,11 @@ impl Window {
 
         (*window).node.deinit();
 
-        wm.remove_from_history(window);
+        wm.remove_from_history((*window).id());
         wm.selection_forget(window);
-        // A seat cursor may still name this window as its adjust target.
-        // The next hover evaluation would replace it, but a window allocated
-        // at the same address in the meantime must not inherit the ring.
-        {
-            let seats = &mut (*(*window).server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-            let mut curr = (*seats).next;
-            while curr != seats {
-                let seat = crate::container_of!(curr, crate::seat::Seat, link);
-                if (*seat).cursor.adjust_hover == window {
-                    (*seat).cursor.adjust_hover = std::ptr::null_mut();
-                }
-                (*seat).group_move.retain(|&(w, _, _)| w != window);
-                curr = (*curr).next;
-            }
-        }
+        // Seats and cursors that still name this window (the adjust target,
+        // a group move, the border hover) hold its id, which goes stale with
+        // the remove below: nothing there to clear.
         wm.windows.remove((*window).ref_key);
         wm.check_clean_exit_progress();
 
@@ -1772,7 +1763,7 @@ impl Window {
         while curr_seat != seats_list {
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
             if let Some(ref op) = (*seat).op {
-                if op.window_ptr == self as *const Window as *mut Window {
+                if op.window == Some(self.id()) {
                     if let crate::seat::PointerOpType::Resize { .. } = op.op_type {
                         return true;
                     }
@@ -1920,7 +1911,6 @@ impl Window {
                     capabilities: 1 | 2 | 4 | 8,
                     resizing: false,
                     maximized: false,
-                    fullscreen: std::ptr::null_mut(),
                     inform_fullscreen: false,
                     close: false,
                 };
@@ -2006,7 +1996,7 @@ impl Window {
         match self.state {
             WindowState::Init => unreachable!(),
             WindowState::Ready => {
-                if self.wm_requested.dimensions.is_none() && self.wm_requested.fullscreen.is_null() {
+                if self.wm_requested.dimensions.is_none() {
                     return false;
                 }
                 if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
@@ -2030,11 +2020,9 @@ impl Window {
         while curr != seats {
             let next = (*curr).next;
             let seat = crate::container_of!(curr, crate::seat::Seat, link_sent);
-            if let crate::seat::Focus::Window(w) = (*seat).focused {
-                if w == self as *mut Window {
-                    activated = true;
-                    break;
-                }
+            if (*seat).focused == crate::seat::Focus::Window(self.id()) {
+                activated = true;
+                break;
             }
             curr = next;
         }
@@ -2043,9 +2031,7 @@ impl Window {
             ffi::wlr_foreign_toplevel_handle_v1_set_activated(self.wlr_toplevel_handle, activated);
         }
 
-        let output = if !self.wm_requested.fullscreen.is_null() {
-            self.wm_requested.fullscreen
-        } else if self.is_fullscreen() {
+        let output = if self.is_fullscreen() {
             let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
             let mut curr = (*outputs_list).next;
             let mut found_output = std::ptr::null_mut();
@@ -2556,9 +2542,7 @@ impl Window {
         let mut clip = requested.clip;
         let mut content_clip = requested.content_clip;
 
-        let output = if !self.wm_requested.fullscreen.is_null() {
-            self.wm_requested.fullscreen
-        } else if self.is_fullscreen() {
+        let output = if self.is_fullscreen() {
             let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
             let mut curr = (*outputs_list).next;
             let mut found_output = std::ptr::null_mut();

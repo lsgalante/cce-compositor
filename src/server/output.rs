@@ -254,16 +254,11 @@ impl Output {
                     
                     self.destroy_scene_nodes();
 
-                    // remove output from windows fullscreen hint
-                    for &window in wm.windows.iter() {
-                        if let crate::window::FullscreenRequest::Fullscreen(out) = (*window).wm_scheduled.fullscreen_requested {
-                            if out == self as *mut Output {
-                                (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());
-                            }
-                        }
-                        if (*window).wm_requested.fullscreen == self as *mut Output {
-                            (*window).wm_requested.fullscreen = std::ptr::null_mut();
-                        }
+                    // A screenshot parked for this output would never be
+                    // taken; dropping it answers the IPC caller with an
+                    // error, and no later output at this address inherits it.
+                    if wm.pending_screenshot.as_ref().is_some_and(|s| s.output == self as *mut Output) {
+                        wm.pending_screenshot = None;
                     }
 
                     wl_list_remove(&mut self.link as *mut ffi::wl_list as *mut WlList);

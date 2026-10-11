@@ -94,10 +94,8 @@ impl Window {
         let mut curr = (*seats).next;
         while curr != seats {
             let seat = crate::container_of!(curr, crate::seat::Seat, link);
-            if let crate::seat::Focus::Window(w) = (*seat).focused {
-                if w == self as *const Window as *mut Window {
-                    return true;
-                }
+            if (*seat).focused == crate::seat::Focus::Window(self.id()) {
+                return true;
             }
             curr = (*curr).next;
         }
@@ -116,7 +114,7 @@ impl Window {
     /// (`cursor::get_border_zone`) all ask this one predicate, so the ring
     /// cannot be drawn on one window and grabbed on another.
     pub unsafe fn is_adjust_target(&self) -> bool {
-        let me = self as *const Window as *mut Window;
+        let me = Some(self.id());
         let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*seats).next;
         while curr != seats {
@@ -428,12 +426,9 @@ impl Window {
         self.fullscreen_background.set_size((width as f64 * s).round() as i32, (height as f64 * s).round() as i32);
     }
 
-    /// The output a fullscreen window fills: the one the WM pinned it to, or
-    /// the first enabled output (the same fallback manage/render use).
+    /// The output a fullscreen window fills: the first enabled output (the
+    /// same choice manage/render make).
     pub unsafe fn fullscreen_output(&self) -> *mut crate::output::Output {
-        if !self.wm_requested.fullscreen.is_null() {
-            return self.wm_requested.fullscreen;
-        }
         let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*outputs_list).next;
         while curr != outputs_list {

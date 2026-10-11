@@ -306,7 +306,7 @@ impl WindowManager {
                     .selection
                     .windows
                     .iter()
-                    .map(|&w| (*w).ref_key.index.to_string())
+                    .map(|&w| w.0.index.to_string())
                     .collect();
                 let items: Vec<String> =
                     self.selection.items.iter().map(|id| id.to_string()).collect();
@@ -444,7 +444,7 @@ impl WindowManager {
                 if parts.len() < 3 { return "error: missing x or y\n".to_string(); }
                 if let (Ok(x), Ok(y)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
                     if let Some(seat) = self.first_seat() {
-                        if let crate::seat::Focus::Window(fw) = (*seat).focused {
+                        if let Some(fw) = (*seat).focused.live_window(self) {
                             (*fw).virtual_x = x;
                             (*fw).virtual_y = y;
                             crate::shared::pending().dirty_windowing();
@@ -624,7 +624,7 @@ impl WindowManager {
                         if (*best_target).minimized {
                             (*best_target).minimized = false;
                         }
-                        (*seat).focus(self, crate::seat::Focus::Window(best_target));
+                        (*seat).focus(self, crate::seat::Focus::window(best_target));
                         self.raise_window(best_target);
                         crate::shared::pending().dirty_windowing();
                         if wait {
@@ -707,7 +707,7 @@ impl WindowManager {
                     self.find_window_by_query(&parts[2..].join(" "))
                 } else if let Some(seat) = self.first_seat() {
                     match (*seat).focused {
-                        crate::seat::Focus::Window(w) => w,
+                        crate::seat::Focus::Window(_) => (*seat).focused.as_window(self),
                         _ => std::ptr::null_mut(),
                     }
                 } else {
@@ -768,7 +768,7 @@ impl WindowManager {
                     self.find_window_by_query(&parts[3..].join(" "))
                 } else if let Some(seat) = self.first_seat() {
                     match (*seat).focused {
-                        crate::seat::Focus::Window(w) => w,
+                        crate::seat::Focus::Window(_) => (*seat).focused.as_window(self),
                         _ => std::ptr::null_mut(),
                     }
                 } else {
@@ -849,7 +849,7 @@ impl WindowManager {
                     self.find_window_by_query(&parts[1..].join(" "))
                 } else if let Some(seat) = self.first_seat() {
                     match (*seat).focused {
-                        crate::seat::Focus::Window(w) => w,
+                        crate::seat::Focus::Window(_) => (*seat).focused.as_window(self),
                         _ => std::ptr::null_mut(),
                     }
                 } else {
@@ -892,7 +892,7 @@ impl WindowManager {
                 self.desk_pan_y = center_y - (vp_h / 2.0) / self.desk_zoom;
 
                 if let Some(seat) = self.first_seat() {
-                    (*seat).focus(self, crate::seat::Focus::Window(target));
+                    (*seat).focus(self, crate::seat::Focus::window(target));
                 }
                 self.raise_window(target);
                 crate::shared::pending().dirty_windowing();
@@ -919,7 +919,7 @@ impl WindowManager {
                             self.find_window_by_query(&parts[2..].join(" "))
                         } else if let Some(seat) = self.first_seat() {
                             match (*seat).focused {
-                                crate::seat::Focus::Window(w) => w,
+                                crate::seat::Focus::Window(_) => (*seat).focused.as_window(self),
                                 _ => std::ptr::null_mut(),
                             }
                         } else {
@@ -1150,7 +1150,7 @@ impl WindowManager {
                 while curr_seat != seats_list {
                     let next_seat = (*curr_seat).next;
                     let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
-                    if let crate::seat::Focus::Window(w) = (*seat).focused {
+                    if let Some(w) = (*seat).focused.live_window(self) {
                         focused_window = w;
                         break;
                     }

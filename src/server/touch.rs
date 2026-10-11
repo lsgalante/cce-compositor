@@ -394,7 +394,7 @@ impl Cursor {
                 match result.data {
                     SceneNodeDataVal::Window(window) => {
                         if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                            seat.focus(wm, Focus::Window(window));
+                            seat.focus(wm, Focus::window(window));
                             seat.relay.osk.note_touch();
                         }
                     }

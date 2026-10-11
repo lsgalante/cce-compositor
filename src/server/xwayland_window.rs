@@ -815,10 +815,6 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow
         return;
     }
 
-    if (*(*xwindow).xsurface).fullscreen {
-        (*(*xwindow).window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());
-    }
-
     place_transient_where_it_asked(wm, xwindow);
     place_shy_where_it_is(wm, xwindow);
     (*xwindow).apply_stored_min_size(wm);
@@ -1349,11 +1345,6 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
         crate::shared::pending().dirty_windowing();
         return;
     }
-    (*(*xwindow).window).wm_scheduled.fullscreen_requested = if fullscreen {
-        crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut())
-    } else {
-        crate::window::FullscreenRequest::Exit
-    };
     crate::shared::pending().dirty_windowing();
     (*crate::reentry::wm((*(*xwindow).window).server)).apply_client_fullscreen((*xwindow).window, fullscreen);
 }

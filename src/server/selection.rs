@@ -116,7 +116,7 @@ pub struct Selection {
     /// The selected windows, in `wm.windows` order. Entries are dropped in
     /// `Window::destroy`; a window that is merely unmapped or minimized
     /// stays listed and is skipped where it matters.
-    pub windows: Vec<*mut Window>,
+    pub windows: Vec<crate::window::WindowId>,
     /// The selected desktop images, by the grid's id, in report order.
     pub items: Vec<u64>,
     /// Every desktop image the grid has reported, in its draw order. Moved
@@ -176,8 +176,8 @@ impl WindowManager {
         (ox + (vx - cam.pan_x) * cam.zoom, oy + (vy - cam.pan_y) * cam.zoom)
     }
 
-    pub fn is_selected(&self, window: *mut Window) -> bool {
-        self.selection.windows.iter().any(|&w| w == window)
+    pub fn is_selected(&self, id: crate::window::WindowId) -> bool {
+        self.selection.windows.iter().any(|&w| w == id)
     }
 
     pub fn is_item_selected(&self, id: u64) -> bool {
@@ -231,7 +231,7 @@ impl WindowManager {
         let marquee = Marquee { anchor, far: self.layout_to_virtual(lx, ly) };
         self.selection.marquee = Some(marquee);
         let rect = marquee.rect();
-        let mut picked: Vec<*mut Window> = Vec::new();
+        let mut picked: Vec<crate::window::WindowId> = Vec::new();
         for &w in self.windows.iter() {
             if !self.selectable(w) {
                 continue;
@@ -243,7 +243,7 @@ impl WindowManager {
                 (*w).box_geom.height as f64,
             );
             if touches(rect, win) {
-                picked.push(w);
+                picked.push((*w).id());
             }
         }
         if picked != self.selection.windows {
@@ -285,12 +285,13 @@ impl WindowManager {
         self.schedule_frame_all_outputs();
     }
 
-    /// `window` is being destroyed: it must not stay listed for a window
-    /// allocated at the same address to inherit. The grid going away takes
-    /// its images with it.
+    /// `window` is being destroyed: drop it from the list, so the
+    /// `selection` query and the highlight stop counting it. The grid going
+    /// away takes its images with it.
     pub unsafe fn selection_forget(&mut self, window: *mut Window) {
         let before = self.selection.windows.len();
-        self.selection.windows.retain(|&w| w != window);
+        let id = (*window).id();
+        self.selection.windows.retain(|&w| w != id);
         let mut changed = self.selection.windows.len() != before;
         if (*window).is_grid() && !self.selection.desktop_items.is_empty() {
             self.selection.desktop_items.clear();
@@ -321,14 +322,6 @@ impl WindowManager {
         )
     }
 
-    /// `selectable`, for a window a group move is already carrying: the
-    /// drag floats a Tiled one, which `selectable` would still accept, but
-    /// the pointer may dangle if the window closed mid-drag — so this one
-    /// checks it is still a window before looking at it.
-    pub unsafe fn selectable_in_drag(&self, w: *mut Window) -> bool {
-        self.windows.iter().any(|&p| p == w) && self.selectable(w)
-    }
-
     /// Place the band and the selected windows' highlights for the frame
     /// about to render. Called from `Output::render_and_commit` beside the
     /// grid, so the highlights follow a window through a drag and the camera
@@ -346,7 +339,7 @@ impl WindowManager {
 
         // (x, y, width, height, corner radius, fill opacity), layout px.
         let mut wanted: Vec<(i32, i32, i32, i32, i32, f32)> = Vec::new();
-        for &w in self.selection.windows.iter() {
+        for w in self.selection.windows.iter().filter_map(|&id| self.window(id)) {
             if !self.selectable(w) || (*w).rendering_requested.hidden {
                 continue;
             }

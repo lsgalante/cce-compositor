@@ -54,7 +54,7 @@ impl TextInput {
         // A client that binds its text input after its surface took focus
         // (cce-ui binds lazily) is entered now; `InputRelay::focus` only
         // enters on a focus change.
-        let focused = (*seat).focused.surface();
+        let focused = (*seat).focused.surface(&*crate::reentry::wm((*seat).server));
         if !focused.is_null()
             && ffi::wl_resource_get_client(ffi::river_wlr_surface_get_resource(focused))
                 == ffi::wl_resource_get_client((*wlr_text_input).resource)

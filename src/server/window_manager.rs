@@ -142,7 +142,7 @@ pub struct WindowManager {
     /// while one is being dragged out, and the nodes that draw both. See
     /// [`crate::selection`].
     pub selection: crate::selection::Selection,
-    pub focus_history: Vec<*mut Window>,
+    pub focus_history: Vec<crate::window::WindowId>,
     pub scheduled: WindowManagerScheduled,
     pub rendering_requested: WindowManagerRenderingRequested,
     pub timeout: crate::event_source::Timer,
@@ -1167,7 +1167,7 @@ impl WindowManager {
         while curr_seat != seats_list {
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
             if let Some(ref op) = (*seat).op {
-                if op.window_ptr == win_ptr {
+                if op.window == crate::window::id_of(win_ptr) {
                     if let crate::seat::PointerOpType::Resize { edges } = op.op_type {
                         let (new_w, new_h) = self.op_resize_size(op, edges);
                         // Same clamp as the seat op (see its Resize arm).
@@ -1187,7 +1187,7 @@ impl WindowManager {
         while curr_seat != seats_list {
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
             if let Some(ref op) = (*seat).op {
-                if op.window_ptr == win_ptr {
+                if op.window == crate::window::id_of(win_ptr) {
                     if let crate::seat::PointerOpType::Move = op.op_type {
                         return true;
                     }
@@ -1199,7 +1199,7 @@ impl WindowManager {
                     op.op_type,
                     crate::seat::PointerOpType::Move | crate::seat::PointerOpType::GroupMove
                 ) {
-                    if (*seat).group_move.iter().any(|&(w, _, _)| w == win_ptr) {
+                    if (*seat).group_move.iter().any(|&(w, _, _)| w == (*win_ptr).id()) {
                         return true;
                     }
                 }
@@ -1264,7 +1264,7 @@ impl WindowManager {
         while curr_seat != seats_list {
             let next_seat = (*curr_seat).next;
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
-            if let crate::seat::Focus::Window(w) = (*seat).focused {
+            if let Some(w) = (*seat).focused.live_window(self) {
                 focused_window = w;
                 break;
             }
@@ -1571,7 +1571,8 @@ impl WindowManager {
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
             let mut focused_visible = false;
             match (*seat).focused {
-                crate::seat::Focus::Window(w) => {
+                crate::seat::Focus::Window(_) => {
+                    let w = (*seat).focused.as_window(self);
                     if !w.is_null() && !(*w).closed && !(*w).minimized && matches!((*w).state, crate::window::WindowState::Mapped) {
                         focused_visible = true;
                     }
@@ -1849,7 +1850,7 @@ impl WindowManager {
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
-            if let crate::seat::Focus::Window(w) = (*seat).focused {
+            if let Some(w) = (*seat).focused.live_window(self) {
                 if !w.is_null() && !(*w).is_overlay_ui() {
                     return w;
                 }
@@ -1859,9 +1860,8 @@ impl WindowManager {
         }
         // Seat focus is on overlay UI (or nothing): the effective focused
         // window is the most recent real one still on screen.
-        for &w in self.focus_history.iter() {
-            if !w.is_null()
-                && !(*w).closed
+        for w in self.focus_history.iter().filter_map(|&id| self.window(id)) {
+            if !(*w).closed
                 && matches!((*w).state, crate::window::WindowState::Mapped)
                 && !(*w).is_overlay_ui()
                 && !(*w).is_status_bar()
@@ -1873,12 +1873,11 @@ impl WindowManager {
         std::ptr::null_mut()
     }
 
-    pub fn window_is_valid(&self, win: *mut Window) -> bool {
-        crate::wm_scope!();
-        if win.is_null() {
-            return false;
-        }
-        self.windows.iter().any(|&w| w == win)
+    /// The window `id` names, while it lives. A closed window's id stays
+    /// stale forever (the slot's generation moves on), so a holder that
+    /// missed the close reads `None` here rather than a reused address.
+    pub fn window(&self, id: crate::window::WindowId) -> Option<*mut Window> {
+        self.windows.get(id.0).copied().filter(|w| !w.is_null())
     }
 
     pub unsafe fn focused_layer_surface(&self) -> *mut ffi::wlr_surface {
@@ -1963,13 +1962,14 @@ impl WindowManager {
         if (*window).is_overlay_ui() {
             return;
         }
-        self.focus_history.retain(|&w| w != window);
-        self.focus_history.insert(0, window);
+        let id = (*window).id();
+        self.focus_history.retain(|&w| w != id);
+        self.focus_history.insert(0, id);
     }
 
-    pub fn remove_from_history(&mut self, window: *mut Window) {
+    pub fn remove_from_history(&mut self, id: crate::window::WindowId) {
         crate::wm_scope!(mut);
-        self.focus_history.retain(|&w| w != window);
+        self.focus_history.retain(|&w| w != id);
     }
 
     /// Record that this app_id's window disappeared unbidden, and which
@@ -2029,8 +2029,8 @@ impl WindowManager {
         let history: Vec<_> = self
             .focus_history
             .iter()
-            .filter(|&&w| !w.is_null())
-            .map(|&w| candidate(w))
+            .filter_map(|&id| self.window(id))
+            .map(candidate)
             .collect();
         let windows: Vec<_> = self
             .windows
@@ -2050,9 +2050,10 @@ impl WindowManager {
         // Chrome departing is not an app exit: dismissing the cce-cloud
         // launcher (Popup) or an Overlay dock must never fire the camera
         // reaction — those close as part of using them.
+        let focused_window = (*seat).focused.as_window(self);
         let departing_chrome = match (*seat).focused {
-            crate::seat::Focus::Window(w) if !w.is_null() => matches!(
-                (*w).tiling_mode,
+            crate::seat::Focus::Window(_) if !focused_window.is_null() => matches!(
+                (*focused_window).tiling_mode,
                 crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
             ),
             _ => false,
@@ -2064,7 +2065,7 @@ impl WindowManager {
         };
         (*seat).suppress_focus_pan = behavior != crate::config::OnAppExit::FocusPrevious;
         if !next.is_null() {
-            (*seat).focus(self, crate::seat::Focus::Window(next));
+            (*seat).focus(self, crate::seat::Focus::window(next));
         } else {
             (*seat).focus(self, crate::seat::Focus::None);
         }
@@ -2306,7 +2307,7 @@ impl WindowManager {
         match elem {
             BorderElement::Minimize | BorderElement::Maximize => {
                 if let Some(seat) = self.first_seat() {
-                    (*seat).focus(self, crate::seat::Focus::Window(window));
+                    (*seat).focus(self, crate::seat::Focus::window(window));
                 }
                 let action = if elem == BorderElement::Minimize {
                     crate::config::Action::Minimize
@@ -2852,7 +2853,7 @@ impl crate::policy::api::Compositor for WindowManager {
                     if let Some(&win) = self.windows.get(id.0) {
                         if !win.is_null() && !(*win).closed {
                             if let Some(seat) = self.first_seat() {
-                                (*seat).focus(self, crate::seat::Focus::Window(win));
+                                (*seat).focus(self, crate::seat::Focus::window(win));
                             }
                         }
                     }

@@ -12,11 +12,11 @@ pub enum PointerOpType {
     Move,
     Resize { edges: crate::window::Edges },
     /// The overview drag-selection: a press on the bare desktop, stretching
-    /// a rubber band. The one op with no window (`window_ptr` is null); its
+    /// a rubber band. The one op with no window (`window` is `None`); its
     /// state is the window manager's (`crate::selection`).
     Select,
     /// A group move grabbed by a selected desktop IMAGE: no window under
-    /// the pointer (`window_ptr` is null), the whole selection — windows
+    /// the pointer (`window` is `None`), the whole selection — windows
     /// (`Seat::group_move`) and images (`Seat::group_items`) — follows the
     /// pointer's own travel. `start_was_tiled` says a carried window was
     /// Tiled at the grab and `start_win_virtual_*` is where it stood, so
@@ -31,7 +31,8 @@ pub struct SeatOp {
     pub start_y: i32,
     pub x: i32,
     pub y: i32,
-    pub window_ptr: *mut crate::window::Window,
+    /// The window the op grabbed, if any. Look it up with [`SeatOp::window`].
+    pub window: Option<crate::window::WindowId>,
     pub op_type: PointerOpType,
     pub start_win_x: i32,
     pub start_win_y: i32,
@@ -56,21 +57,57 @@ pub struct SeatOp {
     pub started_in_overview: bool,
 }
 
+impl SeatOp {
+    /// The grabbed window, or null when the op grabbed none or it closed.
+    pub fn window(&self, wm: &crate::window_manager::WindowManager) -> *mut crate::window::Window {
+        self.window.and_then(|id| wm.window(id)).unwrap_or(std::ptr::null_mut())
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Focus {
     None,
     LayerSurface(*mut ffi::wlr_surface),
-    Window(*mut crate::window::Window),
+    Window(crate::window::WindowId),
     LockSurface(*mut crate::lock_manager::LockSurface),
     OverrideRedirect(*mut crate::xwayland_override_redirect::XwaylandOverrideRedirect),
 }
 
 impl Focus {
-    pub unsafe fn surface(&self) -> *mut ffi::wlr_surface {
+    /// Focus on `window`; nothing for null.
+    ///
+    /// # Safety
+    /// `window` is null or points at a live `Window`.
+    pub unsafe fn window(window: *mut crate::window::Window) -> Focus {
+        match crate::window::id_of(window) {
+            Some(id) => Focus::Window(id),
+            None => Focus::None,
+        }
+    }
+
+    /// The focused window, or null when focus is on something else or the
+    /// window has closed.
+    pub fn as_window(&self, wm: &crate::window_manager::WindowManager) -> *mut crate::window::Window {
+        match *self {
+            Focus::Window(id) => wm.window(id).unwrap_or(std::ptr::null_mut()),
+            _ => std::ptr::null_mut(),
+        }
+    }
+
+    /// The focused window while it lives; `None` when focus is on something
+    /// else or the window has closed.
+    pub fn live_window(&self, wm: &crate::window_manager::WindowManager) -> Option<*mut crate::window::Window> {
+        Some(self.as_window(wm)).filter(|w| !w.is_null())
+    }
+
+    pub unsafe fn surface(&self, wm: &crate::window_manager::WindowManager) -> *mut ffi::wlr_surface {
         match *self {
             Focus::None => std::ptr::null_mut(),
             Focus::LayerSurface(surface) => surface,
-            Focus::Window(window) => if window.is_null() { std::ptr::null_mut() } else { (*window).root_surface() },
+            Focus::Window(_) => {
+                let window = self.as_window(wm);
+                if window.is_null() { std::ptr::null_mut() } else { (*window).root_surface() }
+            }
             Focus::LockSurface(lock_surface) => if lock_surface.is_null() { std::ptr::null_mut() } else { (*(*lock_surface).wlr_lock_surface).surface },
             Focus::OverrideRedirect(or) => if or.is_null() { std::ptr::null_mut() } else { (*(*or).xsurface).surface },
         }
@@ -123,14 +160,14 @@ pub struct Seat {
     /// was pushed FROM, so a drag that moves away releases the window back
     /// home. Cleared (finalizing the positions) in `op_end`. Lives on the
     /// Seat because `SeatOp` is `Copy`.
-    pub overview_displaced: Vec<(*mut crate::window::Window, f64, f64)>,
+    pub overview_displaced: Vec<(crate::window::WindowId, f64, f64)>,
     /// The other selected windows a move op carries along, with the virtual
     /// position each had at the grab: a press on the body of a selected
     /// window moves the whole selection (`crate::selection`). They follow
     /// the grabbed window's SNAPPED position rigidly, by the same offset.
     /// Empty for an ordinary move. Filled at the grab, cleared in `op_end`;
     /// on the Seat for the reason `overview_displaced` is.
-    pub group_move: Vec<(*mut crate::window::Window, f64, f64)>,
+    pub group_move: Vec<(crate::window::WindowId, f64, f64)>,
     /// The selected desktop images a group move carries: the grid's id and
     /// the virtual position each had at the grab. Filled beside
     /// `group_move`; the positions go to the grid over the `selection`
@@ -388,7 +425,10 @@ impl Seat {
     }
 
     pub unsafe fn focus(&mut self, wm: &mut crate::window_manager::WindowManager, new_focus: Focus) {
-        if let Focus::Window(window) = new_focus {
+        // A window that has closed is nothing to focus.
+        let window = new_focus.as_window(wm);
+        let new_focus = if matches!(new_focus, Focus::Window(_)) && window.is_null() { Focus::None } else { new_focus };
+        if !window.is_null() {
             // The grid is the canvas, not a window: it must never take focus.
             // It became clickable when it started advertising an input region
             // for its desktop items, and the click path focuses whatever it
@@ -410,7 +450,7 @@ impl Seat {
             }
         }
 
-        if let Focus::Window(window) = new_focus {
+        if !window.is_null() {
             if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
                 wm.raise_window(window);
                 crate::shared::pending().dirty_windowing();
@@ -423,7 +463,7 @@ impl Seat {
             // a clipped one) should bring it over — its popups/menus open
             // relative to the window and land off-viewport otherwise. The
             // pan no-ops once the window is fully visible.
-            if let Focus::Window(window) = new_focus {
+            if !window.is_null() {
                 self.focus_follow_pan(wm, window);
             }
             return;
@@ -455,7 +495,7 @@ impl Seat {
         match new_focus {
             Focus::None => log::info!("[FocusDebug] Seat::focus set to None"),
             Focus::LayerSurface(surface) => log::info!("[FocusDebug] Seat::focus set to LayerSurface {:?}", surface),
-            Focus::Window(window) => {
+            Focus::Window(_) => {
                 let title = if window.is_null() { "null".to_string() } else { (*window).get_title_string().unwrap_or_default() };
                 let app_id = if window.is_null() { "null".to_string() } else { (*window).get_app_id_string().unwrap_or_default() };
                 log::info!("[FocusDebug] Seat::focus set to Window {:?} (title={:?}, app_id={:?})", window, title, app_id);
@@ -486,7 +526,7 @@ impl Seat {
         // arm that timer or the old ring lingers and the new one waits for an
         // unrelated redraw (the same reason WindowManager::set_mode arms it).
         wm.arm_border_fade();
-        if let Focus::Window(window) = new_focus {
+        if !window.is_null() {
             if !window.is_null() {
                 wm.record_focus(window);
                 // Focus decides whether a fullscreen window stays on top
@@ -532,7 +572,7 @@ impl Seat {
                     }
                 }
             }
-            Focus::Window(window) => {
+            Focus::Window(_) => {
                 let is_new = if !window.is_null() {
                     let was_new = (*window).is_new;
                     (*window).is_new = false;
@@ -655,7 +695,7 @@ impl Seat {
                 }
             }
         }
-        let target_surface = new_focus.surface();
+        let target_surface = new_focus.surface(wm);
         self.relay.focus(wm, target_surface);
     }
 
@@ -821,9 +861,10 @@ impl Seat {
     /// focus as a world window's: keys are delivered rather than eaten, and
     /// hover-to-focus leaves the ring where it is instead of pulling the
     /// keyboard out from under the launcher.
-    pub unsafe fn focus_is_chrome(&self) -> bool {
+    pub unsafe fn focus_is_chrome(&self, wm: &crate::window_manager::WindowManager) -> bool {
+        let w = self.focused.as_window(wm);
         match self.focused {
-            Focus::Window(w) if !w.is_null() => matches!(
+            Focus::Window(_) if !w.is_null() => matches!(
                 (*w).tiling_mode,
                 crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
             ),
@@ -1009,7 +1050,7 @@ impl Seat {
                 return;
             }
 
-            let win = op.window_ptr;
+            let win = op.window(wm);
             if !win.is_null() && !(*win).closed {
                 // Every drag step can bring a Floating window over the
                 // adjust target or take it off: re-evaluate the overlap dim.
@@ -1190,9 +1231,8 @@ impl Seat {
                 // Grabbed by an image: no window, always a drag.
                 Some(ref op) if op.op_type == PointerOpType::GroupMove => true,
                 Some(ref op) => {
-                    !op.window_ptr.is_null()
-                        && !(*op.window_ptr).closed
-                        && !(*op.window_ptr).is_status_bar()
+                    let win = op.window(wm);
+                    !win.is_null() && !(*win).closed && !(*win).is_status_bar()
                 }
                 None => false,
             };
@@ -1265,7 +1305,7 @@ impl Seat {
             log::debug!("end seat op");
             wm.edge_pan_vx = 0.0;
             wm.edge_pan_vy = 0.0;
-            let win = op.window_ptr;
+            let win = op.window(wm);
             if !win.is_null() && !(*win).closed {
                 if let PointerOpType::Resize { .. } = op.op_type {
                     (*win).wm_requested.resizing = false;
@@ -1295,7 +1335,7 @@ impl Seat {
                 let dx = (op.x - op.start_x).abs();
                 let dy = (op.y - op.start_y).abs();
                 if dx < 4 && dy < 4 && !op.started_in_overview && !(*win).is_status_bar() {
-                    self.focus(wm, Focus::Window(win));
+                    self.focus(wm, Focus::window(win));
                     self.focus_follow_pan(wm, win);
                 }
             }
@@ -1303,8 +1343,9 @@ impl Seat {
             // the grabbed one, each on its own geometry — whether the grab
             // was a window or an image (then `win` is null).
             let group = std::mem::take(&mut self.group_move);
-            for &(w, start_vx, start_vy) in group.iter() {
-                if w == win || !wm.selectable_in_drag(w) {
+            for &(id, start_vx, start_vy) in group.iter() {
+                let Some(w) = wm.window(id) else { continue };
+                if w == win || !wm.selectable(w) {
                     continue;
                 }
                 if (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
@@ -1317,9 +1358,7 @@ impl Seat {
             // cue to save them, if any actually moved.
             let items = std::mem::take(&mut self.group_items);
             let moved = items.iter().any(|&(id, sx, sy)| {
-                (*self.server)
-                    .wm
-                    .desktop_item(id)
+                wm.desktop_item(id)
                     .map_or(false, |i| i.x != sx || i.y != sy)
             });
             if moved {
@@ -1346,13 +1385,14 @@ impl Seat {
 /// too, and must not un-tile them.
 unsafe fn carry_group_windows(
     wm: &mut crate::window_manager::WindowManager,
-    group: &[(*mut crate::window::Window, f64, f64)],
+    group: &[(crate::window::WindowId, f64, f64)],
     grabbed: *mut crate::window::Window,
     gdx: f64,
     gdy: f64,
 ) {
-    for &(w, start_vx, start_vy) in group.iter() {
-        if w == grabbed || !wm.selectable_in_drag(w) {
+    for &(id, start_vx, start_vy) in group.iter() {
+        let Some(w) = wm.window(id) else { continue };
+        if w == grabbed || !wm.selectable(w) {
             continue;
         }
         if gdx == 0.0 && gdy == 0.0 && (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
@@ -1427,11 +1467,11 @@ unsafe fn displace_covered(
     moved_tiled: bool,
     drag_delta: (f64, f64),
     sp: &crate::policy::snap::SnapParams,
-    ledger: &mut Vec<(*mut crate::window::Window, f64, f64)>,
-    group: &[(*mut crate::window::Window, f64, f64)],
+    ledger: &mut Vec<(crate::window::WindowId, f64, f64)>,
+    group: &[(crate::window::WindowId, f64, f64)],
 ) {
     // A window can close mid-drag; drop its entry before any deref.
-    ledger.retain(|&(w, _, _)| wm.windows.iter().any(|&p| p == w));
+    ledger.retain(|&(id, _, _)| wm.window(id).is_some());
     let moved = (
         (*win).virtual_x,
         (*win).virtual_y,
@@ -1445,7 +1485,7 @@ unsafe fn displace_covered(
             continue;
         }
         // A window moving WITH the drag is not in its way.
-        if group.iter().any(|&(g, _, _)| g == w) {
+        if group.iter().any(|&(g, _, _)| g == (*w).id()) {
             continue;
         }
         if !matches!((*w).state, crate::window::WindowState::Mapped) {
@@ -1464,7 +1504,7 @@ unsafe fn displace_covered(
         // where it fled to.
         let (ox, oy) = ledger
             .iter()
-            .find(|&&(p, _, _)| p == w)
+            .find(|&&(p, _, _)| p == (*w).id())
             .map(|&(_, x, y)| (x, y))
             .unwrap_or(((*w).virtual_x, (*w).virtual_y));
         ptrs.push(w);
@@ -1481,12 +1521,13 @@ unsafe fn displace_covered(
     );
 
     let mut changed = false;
-    let mut displaced_now: Vec<*mut crate::window::Window> = Vec::new();
+    let mut displaced_now: Vec<crate::window::WindowId> = Vec::new();
     for &(idx, (nx, ny)) in &moves {
         let w = ptrs[idx];
-        displaced_now.push(w);
-        if !ledger.iter().any(|&(p, _, _)| p == w) {
-            ledger.push((w, cands[idx].x, cands[idx].y));
+        let id = (*w).id();
+        displaced_now.push(id);
+        if !ledger.iter().any(|&(p, _, _)| p == id) {
+            ledger.push((id, cands[idx].x, cands[idx].y));
         }
         if (*w).virtual_x != nx || (*w).virtual_y != ny {
             (*w).virtual_x = nx;
@@ -1495,10 +1536,11 @@ unsafe fn displace_covered(
         }
     }
     // No longer covered at its original spot: back home.
-    ledger.retain(|&(w, ox, oy)| {
-        if displaced_now.contains(&w) {
+    ledger.retain(|&(id, ox, oy)| {
+        if displaced_now.contains(&id) {
             return true;
         }
+        let Some(w) = wm.window(id) else { return false };
         if !(*w).closed && ((*w).virtual_x != ox || (*w).virtual_y != oy) {
             (*w).virtual_x = ox;
             (*w).virtual_y = oy;

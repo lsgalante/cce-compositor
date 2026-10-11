@@ -504,7 +504,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             // Overlay AND Popup: desktop chrome (docks, the cce-cloud
             // launcher) stays keyboard-interactive in overview — only world
             // windows (spatial thumbnails) have their presses eaten.
-            let is_overlay_mode = (*group.seat).focus_is_chrome();
+            let is_overlay_mode = (*group.seat).focus_is_chrome(wm);
 
             if crate::shared::mode() != crate::window_manager::WindowManagerMode::Overview
                 || is_overlay_mode

@@ -69,7 +69,7 @@ impl WindowManager {
         // window lands first, so cce-cloud auto-selects index 1 — the previously
         // focused window — which is the classic alt-tab default.
         let mut ordered: Vec<*mut Window> = Vec::new();
-        for &w in self.focus_history.iter() {
+        for w in self.focus_history.iter().filter_map(|&id| self.window(id)) {
             if self.is_switchable_window(w) && !ordered.contains(&w) {
                 ordered.push(w);
             }

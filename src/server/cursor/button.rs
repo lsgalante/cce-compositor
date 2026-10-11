@@ -109,7 +109,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                     start_y: cursor_y as i32,
                     x: cursor_x as i32,
                     y: cursor_y as i32,
-                    window_ptr: clicked_status,
+                    window: crate::window::id_of(clicked_status),
                     op_type: crate::seat::PointerOpType::Move,
                     start_win_x: (*clicked_status).box_geom.x,
                     start_win_y: (*clicked_status).box_geom.y,
@@ -190,7 +190,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             // never sees the press, and the release decides
             // (`Cursor::button_press`, answered in the release path).
             if let BorderZone::Button(elem) = overview_border_zone {
-                cursor.button_press = Some((clicked_win, elem));
+                cursor.button_press = Some(((*clicked_win).id(), elem));
                 cursor.pressed.insert((*event).button);
                 return;
             }
@@ -208,16 +208,15 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                     seat.group_items.clear();
                     // The first Tiled window carried is the snap anchor.
                     let mut tiled_anchor: Option<(f64, f64)> = None;
-                    let carried: Vec<*mut crate::window::Window> = (*server)
-                        .wm
+                    let carried: Vec<*mut crate::window::Window> = wm
                         .selection
                         .windows
                         .iter()
-                        .copied()
+                        .filter_map(|&id| wm.window(id))
                         .filter(|&w| wm.selectable(w))
                         .collect();
                     for w in carried {
-                        seat.group_move.push((w, (*w).virtual_x, (*w).virtual_y));
+                        seat.group_move.push(((*w).id(), (*w).virtual_x, (*w).virtual_y));
                         if (*w).tiling_mode == crate::tiling::TilingMode::Tiled {
                             if tiled_anchor.is_none() {
                                 tiled_anchor = Some(((*w).virtual_x, (*w).virtual_y));
@@ -241,7 +240,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                         start_y: cursor_y as i32,
                         x: cursor_x as i32,
                         y: cursor_y as i32,
-                        window_ptr: std::ptr::null_mut(),
+                        window: None,
                         op_type: crate::seat::PointerOpType::GroupMove,
                         start_win_x: 0,
                         start_win_y: 0,
@@ -281,17 +280,16 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 // `op_start_pointer`.
                 seat.group_move.clear();
                 seat.group_items.clear();
-                if wm.is_selected(clicked_win) {
-                    let carried: Vec<*mut crate::window::Window> = (*server)
-                        .wm
+                if wm.is_selected((*clicked_win).id()) {
+                    let carried: Vec<*mut crate::window::Window> = wm
                         .selection
                         .windows
                         .iter()
-                        .copied()
+                        .filter_map(|&id| wm.window(id))
                         .filter(|&w| w != clicked_win && wm.selectable(w))
                         .collect();
                     for w in carried {
-                        seat.group_move.push((w, (*w).virtual_x, (*w).virtual_y));
+                        seat.group_move.push(((*w).id(), (*w).virtual_x, (*w).virtual_y));
                         if (*w).tiling_mode == crate::tiling::TilingMode::Floating {
                             wm.raise_window(w);
                         }
@@ -314,7 +312,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                     start_y: cursor_y as i32,
                     x: cursor_x as i32,
                     y: cursor_y as i32,
-                    window_ptr: clicked_win,
+                    window: crate::window::id_of(clicked_win),
                     op_type: crate::seat::PointerOpType::Move,
                     start_win_x: (*clicked_win).box_geom.x,
                     start_win_y: (*clicked_win).box_geom.y,
@@ -366,7 +364,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                     start_y: cursor_y as i32,
                     x: cursor_x as i32,
                     y: cursor_y as i32,
-                    window_ptr: std::ptr::null_mut(),
+                    window: None,
                     op_type: crate::seat::PointerOpType::Select,
                     start_win_x: 0,
                     start_win_y: 0,
@@ -421,7 +419,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 // script asks `ccectl windows` nothing is focused. Hand it
                 // the window here instead. Only a window whose mode
                 // `set-mode` accepts is worth naming.
-                if let Focus::Window(w) = seat.focused {
+                if let Some(w) = seat.focused.live_window(wm) {
                     if !w.is_null()
                         && matches!(
                             (*w).tiling_mode,
@@ -514,7 +512,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                         start_y: cursor_y as i32,
                         x: cursor_x as i32,
                         y: cursor_y as i32,
-                        window_ptr: target_win,
+                        window: crate::window::id_of(target_win),
                         op_type: ot,
                         start_win_x: (*target_win).box_geom.x,
                         start_win_y: (*target_win).box_geom.y,
@@ -625,7 +623,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                             start_y: cursor_y as i32,
                             x: cursor_x as i32,
                             y: cursor_y as i32,
-                            window_ptr: border_target_win,
+                            window: crate::window::id_of(border_target_win),
                             op_type: crate::seat::PointerOpType::Resize { edges },
                             start_win_x: (*border_target_win).box_geom.x,
                             start_win_y: (*border_target_win).box_geom.y,
@@ -653,11 +651,11 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                         let current_time = (*event).time_msec;
                         let is_titlebar = ly < (*border_target_win).box_geom.y as f64;
                         let is_double_click = is_titlebar
-                            && border_target_win == cursor.last_click_window
+                            && Some((*border_target_win).id()) == cursor.last_click_window
                             && current_time.saturating_sub(cursor.last_click_time) < 300;
 
                         cursor.last_click_time = current_time;
-                        cursor.last_click_window = border_target_win;
+                        cursor.last_click_window = Some((*border_target_win).id());
 
                         // A Utility window has no Tiled state to toggle;
                         // the double-click falls through to an ordinary move.
@@ -669,10 +667,10 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                                 (*border_target_win).tiling_mode = crate::tiling::TilingMode::Tiled;
                                 (*border_target_win).mode_locked = true;
                             }
-                            seat.focus(wm, Focus::Window(border_target_win));
+                            seat.focus(wm, Focus::window(border_target_win));
                             crate::shared::pending().dirty_windowing();
                             cursor.last_click_time = 0;
-                            cursor.last_click_window = std::ptr::null_mut();
+                            cursor.last_click_window = None;
                             return;
                         }
 
@@ -700,7 +698,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                             start_y: cursor_y as i32,
                             x: cursor_x as i32,
                             y: cursor_y as i32,
-                            window_ptr: border_target_win,
+                            window: crate::window::id_of(border_target_win),
                             op_type: crate::seat::PointerOpType::Move,
                             start_win_x: (*border_target_win).box_geom.x,
                             start_win_y: (*border_target_win).box_geom.y,
@@ -787,7 +785,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 SceneNodeDataVal::Window(window) => {
                     clicked_something = true;
                     if !(*window).is_status_bar() && !(*window).is_wallpaper() {
-                        seat.focus(wm, Focus::Window(window));
+                        seat.focus(wm, Focus::window(window));
                     }
                 }
                 SceneNodeDataVal::LayerSurface(layer_surface) => {
@@ -858,13 +856,14 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 return;
             }
 
+            let op_win = op.window(wm);
             #[allow(unused_assignments)]
-            if !op.window_ptr.is_null()
-                && (*op.window_ptr).is_status_bar()
+            if !op_win.is_null()
+                && (*op_win).is_status_bar()
                 && op.op_type == crate::seat::PointerOpType::Move
                 && (*event).button == 0x110
             {
-                let win = op.window_ptr;
+                let win = op_win;
                 let app_id = (*win).get_app_id_string().unwrap_or_default();
 
                 // A press that never travelled is a CLICK, not a drag: end
@@ -1058,8 +1057,9 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             }
             if op.started_in_overview && (*event).button == 0x110 {
                 let moved = (cursor_x as i32 - op.start_x).abs() > 5 || (cursor_y as i32 - op.start_y).abs() > 5;
-                if !moved && !op.window_ptr.is_null() {
-                    let win_ptr = op.window_ptr;
+                let op_win = op.window(wm);
+                if !moved && !op_win.is_null() {
+                    let win_ptr = op_win;
                     // Restore original tiling mode & lock status
                     (*win_ptr).tiling_mode = op.start_tiling_mode;
                     (*win_ptr).mode_locked = op.start_mode_locked;
@@ -1082,9 +1082,9 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
         }
         if cursor.pressed.remove(&(*event).button) {
             if (*event).button == 0x110 {
-                if let Some((win, elem)) = cursor.button_press.take() {
-                    let alive = wm.windows.iter().any(|&w| w == win) && !(*win).closed;
-                    if alive && get_border_zone(win, lx, ly) == BorderZone::Button(elem) {
+                if let Some((id, elem)) = cursor.button_press.take() {
+                    let win = wm.window(id).filter(|&w| !(*w).closed);
+                    if let Some(win) = win.filter(|&w| get_border_zone(w, lx, ly) == BorderZone::Button(elem)) {
                         wm.press_window_button(win, elem);
                     }
                     return;

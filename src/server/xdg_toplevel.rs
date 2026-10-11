@@ -931,17 +931,6 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
     let toplevel = crate::container_of!(listener, XdgToplevel, request_fullscreen);
     let window = (*toplevel).window;
 
-    if ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel) {
-        let wlr_output = ffi::river_wlr_xdg_toplevel_get_requested_fullscreen_output((*toplevel).wlr_toplevel);
-        if !wlr_output.is_null() {
-            let output = ffi::river_wlr_output_get_data(wlr_output) as *mut crate::output::Output;
-            (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(output);
-        } else {
-            (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());
-        }
-    } else {
-        (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Exit;
-    }
     crate::shared::pending().dirty_windowing();
     let enter = ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel);
     (*crate::reentry::wm((*window).server)).apply_client_fullscreen(window, enter);
@@ -1011,7 +1000,7 @@ unsafe extern "C" fn handle_request_move(
         }
 
         let wm = &mut *crate::reentry::wm((*seat).server);
-        (*seat).focus(wm, crate::seat::Focus::Window(window));
+        (*seat).focus(wm, crate::seat::Focus::window(window));
         wm.stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = (*cursor.wlr_cursor).x;
@@ -1023,7 +1012,7 @@ unsafe extern "C" fn handle_request_move(
             start_y: cursor_y as i32,
             x: cursor_x as i32,
             y: cursor_y as i32,
-            window_ptr: window,
+            window: crate::window::id_of(window),
             op_type: crate::seat::PointerOpType::Move,
             start_win_x: (*window).box_geom.x,
             start_win_y: (*window).box_geom.y,
@@ -1080,7 +1069,7 @@ unsafe extern "C" fn handle_request_resize(
         }
 
         let wm = &mut *crate::reentry::wm((*seat).server);
-        (*seat).focus(wm, crate::seat::Focus::Window(window));
+        (*seat).focus(wm, crate::seat::Focus::window(window));
         wm.stop_panning_animation();
         let cursor = &mut (*seat).cursor;
         let cursor_x = (*cursor.wlr_cursor).x;
@@ -1093,7 +1082,7 @@ unsafe extern "C" fn handle_request_resize(
             start_y: cursor_y as i32,
             x: cursor_x as i32,
             y: cursor_y as i32,
-            window_ptr: window,
+            window: crate::window::id_of(window),
             op_type: crate::seat::PointerOpType::Resize {
                 edges,
             },

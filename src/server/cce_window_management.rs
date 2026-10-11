@@ -178,7 +178,7 @@ unsafe extern "C" fn toplevel_set_floating(
         (*window).tiling_mode = crate::tiling::TilingMode::Floating;
         (*window).mode_locked = true;
         if let Some(seat) = wm.first_seat() {
-            if (*seat).focused == crate::seat::Focus::Window(window) {
+            if (*seat).focused == crate::seat::Focus::window(window) {
                 wm.raise_window(window);
             }
         }
@@ -255,7 +255,6 @@ unsafe extern "C" fn toplevel_set_fullscreen(
     let window_key = (*data).window_key;
     let wm = &mut *crate::reentry::wm(server);
     if let Some(window) = resolve_window(wm, server, window_key) {
-        (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Fullscreen(std::ptr::null_mut());
         crate::shared::pending().dirty_windowing();
         wm.apply_client_fullscreen(window, true);
     }
@@ -273,7 +272,6 @@ unsafe extern "C" fn toplevel_unset_fullscreen(
     let window_key = (*data).window_key;
     let wm = &mut *crate::reentry::wm(server);
     if let Some(window) = resolve_window(wm, server, window_key) {
-        (*window).wm_scheduled.fullscreen_requested = crate::window::FullscreenRequest::Exit;
         crate::shared::pending().dirty_windowing();
         wm.apply_client_fullscreen(window, false);
     }

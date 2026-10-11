@@ -236,7 +236,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
                 }
             }
             if !hovered_win.is_null() && !(*hovered_win).is_status_bar() && !(*hovered_win).is_wallpaper() {
-                seat.focus(wm, Focus::Window(hovered_win));
+                seat.focus(wm, Focus::window(hovered_win));
             }
         }
 

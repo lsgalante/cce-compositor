@@ -155,8 +155,9 @@ impl XwaylandOverrideRedirect {
             return;
         }
         let pid = (*self.xsurface).pid;
+        let window = (*seat).focused.as_window(wm);
         match (*seat).focused {
-            crate::seat::Focus::Window(window) if !window.is_null() => {
+            crate::seat::Focus::Window(_) if !window.is_null() => {
                 if let crate::window::WindowImpl::Xwayland(xwindow) = (*window).impl_type() {
                     if !xwindow.is_null() && (*(*xwindow).xsurface).pid == pid {
                         (*seat).keyboard_enter_or_leave(wm, (*self.xsurface).surface);
@@ -286,15 +287,16 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
 
     let default_seat = (*(*or).server).input_manager.default_seat;
     if !default_seat.is_null() {
-        if let crate::seat::Focus::Window(window) = (*default_seat).focused {
-            if !window.is_null() && matches!((*window).impl_type(), crate::window::WindowImpl::Xwayland(_)) {
+        let wm = &mut *crate::reentry::wm((*default_seat).server);
+        if let Some(window) = (*default_seat).focused.live_window(wm) {
+            if matches!((*window).impl_type(), crate::window::WindowImpl::Xwayland(_)) {
                 let parent_xwindow = (*window).impl_type();
                 if let crate::window::WindowImpl::Xwayland(xwindow) = parent_xwindow {
                     if !xwindow.is_null()
                         && (*(*xwindow).xsurface).pid == (*(*or).xsurface).pid
                         && ffi::river_wlr_seat_get_keyboard_focused_surface((*default_seat).wlr_seat) == surface
                     {
-                        (*default_seat).keyboard_enter_or_leave(&mut *crate::reentry::wm((*default_seat).server), (*window).root_surface());
+                        (*default_seat).keyboard_enter_or_leave(wm, (*window).root_surface());
                     }
                 }
             }
