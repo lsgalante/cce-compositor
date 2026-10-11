@@ -145,7 +145,7 @@ pub struct WindowManager {
     pub focus_history: Vec<*mut Window>,
     pub scheduled: WindowManagerScheduled,
     pub rendering_requested: WindowManagerRenderingRequested,
-    pub timeout: *mut ffi::wl_event_source,
+    pub timeout: crate::event_source::Timer,
     pub desk_pan_x: f64,
     pub desk_pan_y: f64,
     pub desk_zoom: f64,
@@ -172,18 +172,18 @@ pub struct WindowManager {
     pub ipc_wake: Option<std::sync::Arc<std::os::fd::OwnedFd>>,
     /// One-shot timer behind `schedule_save_state`: the state file is written
     /// at most once per `SAVE_STATE_DELAY_MS`, not once per transaction.
-    pub save_state_timer: *mut ffi::wl_event_source,
+    pub save_state_timer: crate::event_source::Timer,
     pub save_state_pending: bool,
     /// The stream hub's wake eventfd as an event source: a new subscriber
     /// arms `stream_timer`, which otherwise does not tick at all.
     pub stream_source: *mut ffi::wl_event_source,
     /// Minute tick for the traveling light_source segment: re-arranges so
     /// its perimeter position follows the time of day.
-    pub sun_timer: *mut ffi::wl_event_source,
+    pub sun_timer: crate::event_source::Timer,
     /// Window-stream subscribers (cce-remote's live view); frames are
     /// produced by `handle_stream_timer` when a subscribed window is dirty.
     pub stream_hub: Option<crate::stream_server::StreamHub>,
-    pub stream_timer: *mut ffi::wl_event_source,
+    pub stream_timer: crate::event_source::Timer,
     /// A full-output/region screenshot parked for the next composited frame
     /// (`ccectl screenshot`); consumed by `Output::render_and_commit`.
     pub pending_screenshot: Option<crate::screenshot::PendingScreenshot>,
@@ -202,7 +202,7 @@ pub struct WindowManager {
     pub settle_waiters: Vec<SettleWaiter>,
     /// Polls `settle_waiters`; created on the first wait, armed while any
     /// waiter is left.
-    pub settle_timer: *mut ffi::wl_event_source,
+    pub settle_timer: crate::event_source::Timer,
     pub startup: Vec<crate::config::StartupConfig>,
     pub startup_pids: Vec<(crate::config::StartupConfig, nix::unistd::Pid)>,
     pub status_sender: Option<crate::status_server::StatusSender>,
@@ -310,19 +310,19 @@ pub struct WindowManager {
     /// sizes per frame, most rendered and never shown. Now it queues one
     /// frame and `step_op_frame` does both once, on the vblank.
     pub op_frame_pending: bool,
-    pub animation_timer: *mut ffi::wl_event_source,
+    pub animation_timer: crate::event_source::Timer,
     /// Edge auto-pan velocity during an interactive move/resize, in SCREEN
     /// px/s (the tick divides by zoom). Written by `Seat::update_edge_pan`
     /// on every op motion; both zero when the cursor is outside the bands.
     pub edge_pan_vx: f64,
     pub edge_pan_vy: f64,
-    pub edge_pan_timer: *mut ffi::wl_event_source,
+    pub edge_pan_timer: crate::event_source::Timer,
     pub has_restored_focused_window: bool,
     pub restored_focused_window_mapped: bool,
     /// Dim frames at restored windows' saved geometry while their programs
     /// relaunch (see create_restore_placeholders).
     pub restore_placeholders: Vec<RestorePlaceholder>,
-    pub restore_placeholder_timer: *mut ffi::wl_event_source,
+    pub restore_placeholder_timer: crate::event_source::Timer,
     /// True after the first deliberate input (key or button press) of the
     /// session. Until then the session is still "settling" from restore:
     /// windows that map unbidden (autostarts like keepassxc) must not steal
@@ -341,9 +341,9 @@ pub struct WindowManager {
     /// Cleared by `viewport_settle_timer` a short debounce after the last motion,
     /// so blur restores exactly once when the gesture truly stops.
     pub viewport_is_active: bool,
-    pub viewport_settle_timer: *mut ffi::wl_event_source,
+    pub viewport_settle_timer: crate::event_source::Timer,
     pub clean_exit_in_progress: bool,
-    pub clean_exit_timer: *mut ffi::wl_event_source,
+    pub clean_exit_timer: crate::event_source::Timer,
     /// Entries of the last written state snapshot whose windows a since-
     /// cancelled clean exit had already closed (see `cancel_clean_exit`).
     /// Merged into every later snapshot until the app is relaunched, so the
@@ -352,7 +352,7 @@ pub struct WindowManager {
     /// The `windows` list of the last state snapshot actually written.
     pub last_saved_windows: Vec<SavedWindowState>,
     /// Drives the hover fade on window borders (see `Window::border_reveal`).
-    pub border_fade_timer: *mut ffi::wl_event_source,
+    pub border_fade_timer: crate::event_source::Timer,
     /// Whether the fade timer is currently armed, so re-arming while a fade is
     /// already running doesn't restart it and double the step rate.
     pub border_fade_running: bool,
@@ -446,7 +446,7 @@ pub unsafe fn window_by_query(windows: impl Iterator<Item = *mut Window>, query:
             return false;
         }
         if let Some(x11) = x11 {
-            return match (*w).impl_type {
+            return match (*w).impl_type() {
                 crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*(*xw).xsurface).window_id == x11,
                 _ => false,
             };
@@ -494,7 +494,7 @@ pub fn app_id_matches(pattern: &str, app_id: &str) -> bool {
 }
 
 impl WindowManager {
-    pub unsafe fn init(&mut self) -> Result<(), ()> {
+    pub fn init(&mut self) -> Result<(), ()> {
         crate::wm_scope!(mut);
         // This is a stub for the 0-arg struct instantiation.
         // We will call the real initialization with the server parameter.
@@ -536,17 +536,17 @@ impl WindowManager {
         self.pan_pending = [0.0, 0.0];
         self.pinch_pending = None;
         self.op_frame_pending = false;
-        self.animation_timer = std::ptr::null_mut();
+        self.animation_timer = crate::event_source::Timer::new();
         self.edge_pan_vx = 0.0;
         self.edge_pan_vy = 0.0;
-        self.edge_pan_timer = std::ptr::null_mut();
+        self.edge_pan_timer = crate::event_source::Timer::new();
         self.viewport_is_active = false;
-        self.viewport_settle_timer = std::ptr::null_mut();
+        self.viewport_settle_timer = crate::event_source::Timer::new();
         self.desk_zoom = 1.0;
         self.pending_screenshot = None;
         self.pending_ipc_reply = None;
         self.pending_ipc_peer_pid = 0;
-        self.settle_timer = std::ptr::null_mut();
+        self.settle_timer = crate::event_source::Timer::new();
         crate::shared::shared().store_mode(WindowManagerMode::Normal);
         self.on_app_exit = crate::config::OnAppExit::FocusPrevious;
         self.grid_cells_enabled = true;
@@ -564,7 +564,7 @@ impl WindowManager {
         self.has_restored_focused_window = false;
         self.restored_focused_window_mapped = false;
         self.restore_placeholders = Vec::new();
-        self.restore_placeholder_timer = std::ptr::null_mut();
+        self.restore_placeholder_timer = crate::event_source::Timer::new();
         self.startup_input_seen = false;
         self.vanished_windows = Vec::new();
         self.mode_rules = Vec::new();
@@ -573,12 +573,12 @@ impl WindowManager {
         self.ipc_rx = None;
         self.ipc_source = std::ptr::null_mut();
         self.ipc_wake = None;
-        self.save_state_timer = std::ptr::null_mut();
+        self.save_state_timer = crate::event_source::Timer::new();
         self.save_state_pending = false;
         self.stream_source = std::ptr::null_mut();
-        self.sun_timer = std::ptr::null_mut();
+        self.sun_timer = crate::event_source::Timer::new();
         self.stream_hub = None;
-        self.stream_timer = std::ptr::null_mut();
+        self.stream_timer = crate::event_source::Timer::new();
         self.startup = Vec::new();
         self.startup_pids = Vec::new();
         self.status_sender = None;
@@ -593,41 +593,40 @@ impl WindowManager {
         ffi::wl_list_init(&mut self.rendering_requested.list);
 
         let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
-        self.timeout = ffi::wl_event_loop_add_timer(event_loop, Some(handle_timeout), self as *mut WindowManager as *mut _);
-        if self.timeout.is_null() {
+        self.timeout = crate::event_source::Timer::add(event_loop, handle_timeout, self as *mut WindowManager as *mut _);
+        if !self.timeout.is_set() {
             return Err("Failed to create timer event source");
         }
 
         self.ipc_rx = None;
 
-        self.sun_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_sun_timer), self as *mut WindowManager as *mut _);
-        if self.sun_timer.is_null() {
-            ffi::wl_event_source_remove(self.timeout);
+        self.sun_timer = crate::event_source::Timer::add(event_loop, handle_sun_timer, self as *mut WindowManager as *mut _);
+        if !self.sun_timer.is_set() {
+            self.timeout.remove();
             return Err("Failed to create sun timer event source");
         }
-        ffi::wl_event_source_timer_update(self.sun_timer, 60_000);
+        self.sun_timer.arm(60_000);
 
-        self.clean_exit_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_clean_exit_timeout), self as *mut WindowManager as *mut _);
-        if self.clean_exit_timer.is_null() {
-            ffi::wl_event_source_remove(self.timeout);
+        self.clean_exit_timer = crate::event_source::Timer::add(event_loop, handle_clean_exit_timeout, self as *mut WindowManager as *mut _);
+        if !self.clean_exit_timer.is_set() {
+            self.timeout.remove();
             return Err("Failed to create clean exit timer event source");
         }
         self.clean_exit_in_progress = false;
 
-        self.border_fade_timer =
-            ffi::wl_event_loop_add_timer(event_loop, Some(handle_border_fade_tick), self as *mut WindowManager as *mut _);
-        if self.border_fade_timer.is_null() {
-            ffi::wl_event_source_remove(self.timeout);
-            ffi::wl_event_source_remove(self.clean_exit_timer);
+        self.border_fade_timer = crate::event_source::Timer::add(event_loop, handle_border_fade_tick, self as *mut WindowManager as *mut _);
+        if !self.border_fade_timer.is_set() {
+            self.timeout.remove();
+            self.clean_exit_timer.remove();
             return Err("Failed to create border fade timer event source");
         }
         self.border_fade_running = false;
 
-        self.stream_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_stream_timer), self as *mut WindowManager as *mut _);
-        if self.stream_timer.is_null() {
-            ffi::wl_event_source_remove(self.timeout);
-            ffi::wl_event_source_remove(self.clean_exit_timer);
-            ffi::wl_event_source_remove(self.border_fade_timer);
+        self.stream_timer = crate::event_source::Timer::add(event_loop, handle_stream_timer, self as *mut WindowManager as *mut _);
+        if !self.stream_timer.is_set() {
+            self.timeout.remove();
+            self.clean_exit_timer.remove();
+            self.border_fade_timer.remove();
             return Err("Failed to create stream timer event source");
         }
         // Not armed here: `start_stream` arms it when a subscriber appears,
@@ -647,7 +646,7 @@ impl WindowManager {
             Some(bind),
         );
         if self.global.is_null() {
-            ffi::wl_event_source_remove(self.timeout);
+            self.timeout.remove();
             return Err("Failed to create zcce_window_manager_v1 global");
         }
 
@@ -813,55 +812,25 @@ impl WindowManager {
             ffi::wl_event_source_remove(self.stream_source);
             self.stream_source = std::ptr::null_mut();
         }
-        if !self.stream_timer.is_null() {
-            ffi::wl_event_source_remove(self.stream_timer);
-            self.stream_timer = std::ptr::null_mut();
-        }
-        if !self.save_state_timer.is_null() {
-            ffi::wl_event_source_remove(self.save_state_timer);
-            self.save_state_timer = std::ptr::null_mut();
-        }
-        if !self.timeout.is_null() {
-            ffi::wl_event_source_remove(self.timeout);
-            self.timeout = std::ptr::null_mut();
-        }
-        if !self.clean_exit_timer.is_null() {
-            ffi::wl_event_source_remove(self.clean_exit_timer);
-            self.clean_exit_timer = std::ptr::null_mut();
-        }
-        if !self.sun_timer.is_null() {
-            ffi::wl_event_source_remove(self.sun_timer);
-            self.sun_timer = std::ptr::null_mut();
-        }
-        if !self.animation_timer.is_null() {
-            ffi::wl_event_source_remove(self.animation_timer);
-            self.animation_timer = std::ptr::null_mut();
-        }
-        if !self.edge_pan_timer.is_null() {
-            ffi::wl_event_source_remove(self.edge_pan_timer);
-            self.edge_pan_timer = std::ptr::null_mut();
-        }
-        if !self.settle_timer.is_null() {
-            ffi::wl_event_source_remove(self.settle_timer);
-            self.settle_timer = std::ptr::null_mut();
-        }
+        self.stream_timer.remove();
+        self.save_state_timer.remove();
+        self.timeout.remove();
+        self.clean_exit_timer.remove();
+        self.sun_timer.remove();
+        self.animation_timer.remove();
+        self.edge_pan_timer.remove();
+        self.settle_timer.remove();
         // Dropping a waiter drops its reply channel: the caller is told the
         // command timed out rather than left hanging.
         self.settle_waiters.clear();
-        if !self.restore_placeholder_timer.is_null() {
-            ffi::wl_event_source_remove(self.restore_placeholder_timer);
-            self.restore_placeholder_timer = std::ptr::null_mut();
-        }
+        self.restore_placeholder_timer.remove();
         // Placeholder rects go down with the scene; only the bookkeeping.
         // Released, not dropped: dropping a handle would destroy its rect
         // here, mid display teardown.
         for mut p in self.restore_placeholders.drain(..) {
             p.rect.release();
         }
-        if !self.viewport_settle_timer.is_null() {
-            ffi::wl_event_source_remove(self.viewport_settle_timer);
-            self.viewport_settle_timer = std::ptr::null_mut();
-        }
+        self.viewport_settle_timer.remove();
         self.server_destroy.disconnect();
     }
 
@@ -1012,22 +981,18 @@ impl WindowManager {
     /// Poll the held `focus-window --wait` replies in [`SETTLE_POLL_MS`].
     unsafe fn arm_settle_timer(&mut self) {
         crate::wm_scope!(mut);
-        if self.settle_timer.is_null() {
+        if !self.settle_timer.is_set() {
             let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-            self.settle_timer = ffi::wl_event_loop_add_timer(
-                event_loop,
-                Some(handle_settle_tick),
-                self as *mut WindowManager as *mut _,
-            );
+            self.settle_timer = crate::event_source::Timer::add(event_loop, handle_settle_tick, self as *mut WindowManager as *mut _);
         }
-        if self.settle_timer.is_null() {
+        if !self.settle_timer.is_set() {
             // No timer: answer now rather than never.
             for w in self.settle_waiters.drain(..) {
                 let _ = w.tx.send("ok\n".to_string());
             }
             return;
         }
-        ffi::wl_event_source_timer_update(self.settle_timer, SETTLE_POLL_MS);
+        self.settle_timer.arm(SETTLE_POLL_MS);
     }
 
     /// Answer each `focus-window --wait` whose window has stopped moving
@@ -1071,21 +1036,17 @@ impl WindowManager {
         if self.shutting_down || self.save_state_pending {
             return;
         }
-        if self.save_state_timer.is_null() {
+        if !self.save_state_timer.is_set() {
             let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-            self.save_state_timer = ffi::wl_event_loop_add_timer(
-                event_loop,
-                Some(handle_save_state_timer),
-                self as *mut WindowManager as *mut _,
-            );
-            if self.save_state_timer.is_null() {
+            self.save_state_timer = crate::event_source::Timer::add(event_loop, handle_save_state_timer, self as *mut WindowManager as *mut _);
+            if !self.save_state_timer.is_set() {
                 log::error!("failed to create the save-state timer; saving synchronously");
                 self.save_state();
                 return;
             }
         }
         self.save_state_pending = true;
-        ffi::wl_event_source_timer_update(self.save_state_timer, SAVE_STATE_DELAY_MS);
+        self.save_state_timer.arm(SAVE_STATE_DELAY_MS);
     }
 }
 
@@ -1825,17 +1786,11 @@ impl WindowManager {
     /// the settle out; it only fires `VIEWPORT_SETTLE_MS` after the last motion.
     unsafe fn arm_viewport_settle_timer(&mut self) {
         crate::wm_scope!(mut);
-        if self.viewport_settle_timer.is_null() {
+        if !self.viewport_settle_timer.is_set() {
             let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-            self.viewport_settle_timer = ffi::wl_event_loop_add_timer(
-                event_loop,
-                Some(handle_viewport_settle_tick),
-                self as *mut WindowManager as *mut _,
-            );
+            self.viewport_settle_timer = crate::event_source::Timer::add(event_loop, handle_viewport_settle_tick, self as *mut WindowManager as *mut _);
         }
-        if !self.viewport_settle_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.viewport_settle_timer, VIEWPORT_SETTLE_MS);
-        }
+        self.viewport_settle_timer.arm(VIEWPORT_SETTLE_MS);
     }
 
     /// Restore the settled (blurred) render state for every window and repaint.
@@ -1918,7 +1873,7 @@ impl WindowManager {
         std::ptr::null_mut()
     }
 
-    pub unsafe fn window_is_valid(&self, win: *mut Window) -> bool {
+    pub fn window_is_valid(&self, win: *mut Window) -> bool {
         crate::wm_scope!();
         if win.is_null() {
             return false;
@@ -2012,7 +1967,7 @@ impl WindowManager {
         self.focus_history.insert(0, window);
     }
 
-    pub unsafe fn remove_from_history(&mut self, window: *mut Window) {
+    pub fn remove_from_history(&mut self, window: *mut Window) {
         crate::wm_scope!(mut);
         self.focus_history.retain(|&w| w != window);
     }
@@ -2513,7 +2468,7 @@ unsafe extern "C" fn handle_sun_timer(data: *mut std::ffi::c_void) -> std::os::r
         return 0;
     }
     crate::shared::pending().dirty_windowing();
-    ffi::wl_event_source_timer_update((*wm).sun_timer, 60_000);
+    (*wm).sun_timer.arm(60_000);
     0
 }
 
@@ -2579,9 +2534,7 @@ unsafe extern "C" fn handle_stream_wake(fd: std::os::raw::c_int, _mask: u32, dat
         return 0;
     }
     crate::ipc_server::drain_wake_fd(fd);
-    if !(*wm).stream_timer.is_null() {
-        ffi::wl_event_source_timer_update((*wm).stream_timer, 1);
-    }
+    (*wm).stream_timer.arm(1);
     0
 }
 
@@ -2593,9 +2546,7 @@ unsafe extern "C" fn handle_stream_wake(fd: std::os::raw::c_int, _mask: u32, dat
 unsafe extern "C" fn handle_stream_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let wm = &mut *(data as *mut WindowManager);
     let idle_rearm = |wm: &WindowManager, ms: i32| {
-        if !wm.stream_timer.is_null() {
-            ffi::wl_event_source_timer_update(wm.stream_timer, ms);
-        }
+        wm.stream_timer.arm(ms);
     };
     let Some(hub) = wm.stream_hub.clone() else {
         return 0;
@@ -3022,9 +2973,7 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
     }
     if (*wm).camera_anim_active {
         (*wm).schedule_frame_all_outputs();
-        if !(*wm).animation_timer.is_null() {
-            ffi::wl_event_source_timer_update((*wm).animation_timer, CAMERA_WATCHDOG_MS);
-        }
+        (*wm).animation_timer.arm(CAMERA_WATCHDOG_MS);
     }
     0
 }
@@ -3066,7 +3015,7 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
     }
 
     if moving {
-        ffi::wl_event_source_timer_update((*wm).border_fade_timer, 16);
+        (*wm).border_fade_timer.arm(16);
         let outputs_list = &mut (*(*wm).server).om.outputs as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*outputs_list).next;
         while curr != outputs_list {

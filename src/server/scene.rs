@@ -224,9 +224,9 @@ impl Scene {
                     let ratio: Option<f64> = match scene_node_data.data {
                         SceneNodeDataVal::Window(window)
                             if !window.is_null()
-                                && matches!((*window).impl_type, crate::window::WindowImpl::Xwayland(_)) =>
+                                && matches!((*window).impl_type(), crate::window::WindowImpl::Xwayland(_)) =>
                         {
-                            let xsurface = match (*window).impl_type {
+                            let xsurface = match (*window).impl_type() {
                                 crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*xw).xsurface as *const _,
                                 _ => std::ptr::null(),
                             };

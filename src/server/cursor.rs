@@ -42,7 +42,7 @@ pub struct Cursor {
     /// never run at once — that has seen no finger event for a while: a
     /// two-finger scroll normally ends with a zero-delta axis event, but
     /// not every path delivers one. Each arms it with its own timeout.
-    pub view_drag_timer: *mut ffi::wl_event_source,
+    pub view_drag_timer: crate::event_source::Timer,
 
     /// Animated-XCursor playback. An XCursor theme may ship several images per
     /// cursor with a per-frame `delay`; wlroots parses them but never advances
@@ -56,7 +56,7 @@ pub struct Cursor {
     /// destroyed (see `set_theme`) and whenever anything else takes over this
     /// seat's cursor image (a client surface). Tablet tools are not such a
     /// case: each drives its own `wlr_cursor`, never the seat's.
-    pub anim_timer: *mut ffi::wl_event_source,
+    pub anim_timer: crate::event_source::Timer,
     pub anim_xcursor: *mut ffi::wlr_xcursor,
     /// Wall-clock ms at which the current animation started, so elapsed time
     /// (not absolute time) picks the frame and every cursor starts at frame 0.
@@ -208,7 +208,7 @@ impl Default for Cursor {
             wlr_cursor: std::ptr::null_mut(),
             xcursor_manager: std::ptr::null_mut(),
             constraint: std::ptr::null_mut(),
-            anim_timer: std::ptr::null_mut(),
+            anim_timer: crate::event_source::Timer::new(),
             anim_xcursor: std::ptr::null_mut(),
             anim_started_msec: 0,
             motion_listener: unsafe { std::mem::zeroed() },
@@ -264,7 +264,7 @@ impl Default for Cursor {
             view_drag: None,
             popup_wheel: None,
             hscroll_shift: None,
-            view_drag_timer: std::ptr::null_mut(),
+            view_drag_timer: crate::event_source::Timer::new(),
             last_click_time: 0,
             last_click_window: std::ptr::null_mut(),
             hovered_border_window: std::ptr::null_mut(),
@@ -303,12 +303,12 @@ impl Cursor {
         // The animated-cursor driver. Created disarmed; `set_xcursor` arms it
         // only for a cursor that actually has more than one frame.
         let event_loop = ffi::wl_display_get_event_loop((*(*seat).server).wl_server);
-        let anim_timer = ffi::wl_event_loop_add_timer(
+        let anim_timer = crate::event_source::Timer::add(
             event_loop,
-            Some(handle_xcursor_anim),
+            handle_xcursor_anim,
             self as *mut Cursor as *mut _,
         );
-        if anim_timer.is_null() {
+        if !anim_timer.is_set() {
             ffi::wlr_xcursor_manager_destroy(xcursor_manager);
             ffi::wlr_cursor_destroy(wlr_cursor);
             self.xcursor_manager = std::ptr::null_mut();
@@ -316,11 +316,7 @@ impl Cursor {
             return Err("Failed to create xcursor animation timer");
         }
         self.anim_timer = anim_timer;
-        self.view_drag_timer = ffi::wl_event_loop_add_timer(
-            event_loop,
-            Some(handle_view_drag_timeout),
-            self as *mut Cursor as *mut _,
-        );
+        self.view_drag_timer = crate::event_source::Timer::add(event_loop, handle_view_drag_timeout, self as *mut Cursor as *mut _);
 
         // Load default cursor theme
         ffi::wlr_xcursor_manager_load(xcursor_manager, 1.0);
@@ -404,10 +400,7 @@ impl Cursor {
         self.hold_end_listener.disconnect();
 
         self.stop_xcursor_animation();
-        if !self.anim_timer.is_null() {
-            ffi::wl_event_source_remove(self.anim_timer);
-            self.anim_timer = std::ptr::null_mut();
-        }
+        self.anim_timer.remove();
 
         if !self.xcursor_manager.is_null() {
             ffi::wlr_xcursor_manager_destroy(self.xcursor_manager);
@@ -419,12 +412,22 @@ impl Cursor {
         }
     }
 
-    pub unsafe fn x(&self) -> f64 {
-        ffi::river_wlr_cursor_get_x(self.wlr_cursor)
+    /// The cursor's layout position; 0 before `init` and after `deinit`.
+    pub fn x(&self) -> f64 {
+        if self.wlr_cursor.is_null() {
+            return 0.0;
+        }
+        // SAFETY: a non-null `wlr_cursor` is the one `init` created, live
+        // until `deinit` destroys it and nulls the field.
+        unsafe { ffi::river_wlr_cursor_get_x(self.wlr_cursor) }
     }
 
-    pub unsafe fn y(&self) -> f64 {
-        ffi::river_wlr_cursor_get_y(self.wlr_cursor)
+    pub fn y(&self) -> f64 {
+        if self.wlr_cursor.is_null() {
+            return 0.0;
+        }
+        // SAFETY: as `x`.
+        unsafe { ffi::river_wlr_cursor_get_y(self.wlr_cursor) }
     }
 
     pub fn update_hovered(&mut self) {
@@ -551,18 +554,18 @@ impl Cursor {
     /// unsafe transitions rather than a list of states where animating is known
     /// to be fine — a state nobody thought of must land on "stop", not on
     /// "keep dereferencing a freed theme".
-    pub unsafe fn stop_xcursor_animation(&mut self) {
+    pub fn stop_xcursor_animation(&mut self) {
         self.anim_xcursor = std::ptr::null_mut();
-        if !self.anim_timer.is_null() {
+        if self.anim_timer.is_set() {
             // 0 disarms a libwayland timer.
-            ffi::wl_event_source_timer_update(self.anim_timer, 0);
+            self.anim_timer.arm(0);
         }
     }
 
     /// Begin driving `name`'s frames, if it has more than one. Static cursors —
     /// every cursor in a stock theme — leave the timer disarmed.
     unsafe fn start_xcursor_animation(&mut self, name: *const std::os::raw::c_char) {
-        if self.anim_timer.is_null() || self.xcursor_manager.is_null() {
+        if !self.anim_timer.is_set() || self.xcursor_manager.is_null() {
             self.stop_xcursor_animation();
             return;
         }
@@ -609,7 +612,7 @@ impl Cursor {
             return;
         }
         let delay = (*image).delay.max(1).min(i32::MAX as u32) as i32;
-        ffi::wl_event_source_timer_update(self.anim_timer, delay);
+        self.anim_timer.arm(delay);
     }
 
     /// Timer body: pick the frame for the elapsed time and paint it.
@@ -718,7 +721,7 @@ impl Cursor {
     /// Move the Super-held adjust target to `target` (null to clear). The
     /// ring eases off the old window and onto the new one through the same
     /// border fade a hover swap uses, so a change arms that timer.
-    pub unsafe fn set_adjust_hover(&mut self, wm: &mut crate::window_manager::WindowManager, target: *mut crate::window::Window) {
+    pub fn set_adjust_hover(&mut self, wm: &mut crate::window_manager::WindowManager, target: *mut crate::window::Window) {
         if self.adjust_hover == target {
             return;
         }
@@ -1446,7 +1449,7 @@ pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowMana
             let on_x11 = match crate::shared::scene().at(lx, ly) {
                 Some(result) => match result.data {
                     SceneNodeDataVal::Window(window) => {
-                        matches!((*window).impl_type, crate::window::WindowImpl::Xwayland(_))
+                        matches!((*window).impl_type(), crate::window::WindowImpl::Xwayland(_))
                     }
                     SceneNodeDataVal::OverrideRedirect(_) => true,
                     _ => false,

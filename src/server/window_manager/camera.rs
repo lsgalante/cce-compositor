@@ -102,17 +102,11 @@ impl WindowManager {
         if vx == 0.0 && vy == 0.0 {
             return;
         }
-        if self.edge_pan_timer.is_null() {
+        if !self.edge_pan_timer.is_set() {
             let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-            self.edge_pan_timer = ffi::wl_event_loop_add_timer(
-                event_loop,
-                Some(handle_edge_pan_tick),
-                self as *mut WindowManager as *mut _,
-            );
+            self.edge_pan_timer = crate::event_source::Timer::add(event_loop, handle_edge_pan_tick, self as *mut WindowManager as *mut _);
         }
-        if !self.edge_pan_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.edge_pan_timer, 16);
-        }
+        self.edge_pan_timer.arm(16);
     }
 
     /// Start (or continue) the camera animation: the step itself runs in
@@ -126,17 +120,11 @@ impl WindowManager {
             self.anim_last_tick = Some(crate::util::timestamp_ns());
         }
         self.schedule_frame_all_outputs();
-        if self.animation_timer.is_null() {
+        if !self.animation_timer.is_set() {
             let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-            self.animation_timer = ffi::wl_event_loop_add_timer(
-                event_loop,
-                Some(handle_panning_animation_tick),
-                self as *mut WindowManager as *mut _,
-            );
+            self.animation_timer = crate::event_source::Timer::add(event_loop, handle_panning_animation_tick, self as *mut WindowManager as *mut _);
         }
-        if !self.animation_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.animation_timer, CAMERA_WATCHDOG_MS);
-        }
+        self.animation_timer.arm(CAMERA_WATCHDOG_MS);
     }
 
     /// Ask every enabled output for a frame (the camera step runs in the

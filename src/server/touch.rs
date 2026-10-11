@@ -558,7 +558,7 @@ impl Cursor {
         }
     }
 
-    unsafe fn start_desk(&mut self, wm: &mut crate::window_manager::WindowManager) {
+    fn start_desk(&mut self, wm: &mut crate::window_manager::WindowManager) {
         wm.stop_panning_animation();
         self.touch_claim = Claim::Desk {
             track: Track::new(self.claimed_shape()),

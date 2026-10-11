@@ -238,7 +238,7 @@ Native libs via `pkg-config`: `wlroots-0.20`, `wayland-server`, `xkbcommon`,
 
 ## Tests
 
-Twenty-one modules carry unit tests — `window_manager.rs` (the most of any, among
+Twenty-two modules carry unit tests — `window_manager.rs` (the most of any, among
 them the saved-state matchers: same-program borrowing, untitled entries),
 `config.rs` (among them `backdrop_compress_params`), `idle.rs`,
 `idle_inhibit_manager.rs`, `xwayland_window.rs`, `screenshot.rs`, `window.rs`, `migrate_input.rs`,
@@ -252,7 +252,9 @@ the offsets `layout_probe.c` gets from the real headers),
 `ipc_server.rs` (command framing and cutting off a stalled subscriber),
 `status_server.rs` (a slow reader, and a client that never reads),
 `keyboard_group.rs` (the keys a locked session keeps),
-`osk.rs` (a touch shows the keyboard once, and only while it is fresh) and
+`osk.rs` (a touch shows the keyboard once, and only while it is fresh),
+`event_source.rs` (a `Timer` fires once, disarms, and is removed on drop, on a
+real `wl_event_loop`) and
 `sleep_lock.rs` (logind's sleep delay). They cluster where the logic is
 pure and the FFI is not, which is the only kind of thing testable in a crate
 this deep in wlroots. The arrange/slotmap tests live in the sibling
@@ -414,6 +416,35 @@ takes `field.as_ptr()`. What the type adds:
 The `Server` is `std::mem::forget`ten after `deinit` (`run_server.rs`): by
 then the display and every wlroots object are gone, and its subsystems'
 listeners must not unlink into them on drop.
+
+### Timers are `crate::event_source::Timer` (since 2026-10-11)
+
+Every timer field is a `Timer` (`event_source.rs`), `repr(transparent)` over
+the raw `*mut wl_event_source`, so a zeroed one is unset. Create with
+`Timer::add(event_loop, callback, data)` — the one `unsafe` step: `data` must
+outlive the timer — then `arm(ms)` / `disarm()` (safe, and no-ops on an unset
+timer, so no null check at each use) and `remove()` (idempotent). Dropping a
+`Timer` removes it, so a struct freed with `Box::from_raw` leaves nothing to
+fire into freed memory; teardown paths still `remove()` explicitly, before
+the event loop goes. Assigning a new `Timer` over a set one removes the old
+source. The fd, signal and idle sources (`ipc_source`, `sigchld_source`,
+`pointer_refresh_idle`, …) are still raw pointers.
+
+Arming was an FFI call, so every function that re-armed a timer was `unsafe`
+for that alone; with the type, and a fixpoint pass that dropped `unsafe` from
+every function left with no unsafe operation in it, the non-callback
+`unsafe fn` count went 531 → 476. To find the next candidates:
+`cargo rustc -p cce-fx --lib --profile=check -- -W unsafe_op_in_unsafe_fn`
+lists every unsafe operation, and an `unsafe fn` that gets no warning needs
+no `unsafe`. Keep `unsafe` on one that ESTABLISHES something a safe function
+later trusts (`Window::set_impl`, `WmNode::init`, `Listener::prepare`): storing
+a raw pointer is safe Rust, but not when a safe accessor dereferences it.
+
+`Window::impl_type` is private for that reason (read it with `impl_type()`):
+`get_title` / `get_app_id` and the `role` / `is_*` / `*_str` helpers on them
+are safe now, and they dereference the impl it names, so it may change only
+through `set_impl` and `impl_destroying`. `Cursor::x` / `y` are safe and read
+0 before `init` and after `deinit`.
 
 ### Shared state: `crate::shared` (since 2026-10-10)
 

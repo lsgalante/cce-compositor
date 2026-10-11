@@ -627,7 +627,7 @@ impl Output {
         self.adjust_rects.clear();
     }
 
-    pub unsafe fn update_background_color(&mut self) {
+    pub fn update_background_color(&mut self) {
         let color: [f32; 4] = [
             (crate::shared::layout().background_r as f64 / u32::MAX as f64) as f32,
             (crate::shared::layout().background_g as f64 / u32::MAX as f64) as f32,

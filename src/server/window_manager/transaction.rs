@@ -75,13 +75,13 @@ impl WindowManager {
 
     /// Start the border hover fade if it isn't already running. Idempotent —
     /// re-arming mid-fade would restart the timer and step it twice as fast.
-    pub unsafe fn arm_border_fade(&mut self) {
+    pub fn arm_border_fade(&mut self) {
         crate::wm_scope!(mut);
-        if self.border_fade_running || self.border_fade_timer.is_null() {
+        if self.border_fade_running || !self.border_fade_timer.is_set() {
             return;
         }
         self.border_fade_running = true;
-        ffi::wl_event_source_timer_update(self.border_fade_timer, 16);
+        self.border_fade_timer.arm(16);
     }
 
     pub unsafe fn manage_start(&mut self) {
@@ -276,18 +276,14 @@ impl WindowManager {
         }
     }
 
-    pub(crate) unsafe fn start_timeout_timer(&mut self, ms: u32) {
+    pub(crate) fn start_timeout_timer(&mut self, ms: u32) {
         crate::wm_scope!(mut);
-        if !self.timeout.is_null() {
-            ffi::wl_event_source_timer_update(self.timeout, ms as i32);
-        }
+        self.timeout.arm(ms as i32);
     }
 
-    pub(crate) unsafe fn cancel_timeout_timer(&mut self) {
+    pub(crate) fn cancel_timeout_timer(&mut self) {
         crate::wm_scope!(mut);
-        if !self.timeout.is_null() {
-            ffi::wl_event_source_timer_update(self.timeout, 0);
-        }
+        self.timeout.arm(0);
     }
 
     pub unsafe fn notify_configured(&mut self) {
@@ -340,7 +336,7 @@ impl WindowManager {
             if matches!((*window).state, crate::window::WindowState::Init) {
                 (*window).tree.reparent(&crate::shared::scene().hidden_tree);
             }
-            if let crate::window::WindowImpl::Destroying = (*window).impl_type {
+            if let crate::window::WindowImpl::Destroying = (*window).impl_type() {
                 Window::destroy(window, self);
             }
         }

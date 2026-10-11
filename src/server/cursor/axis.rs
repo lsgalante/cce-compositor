@@ -362,10 +362,8 @@ impl Cursor {
         true
     }
 
-    unsafe fn arm_view_drag_timer(&mut self) {
-        if !self.view_drag_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.view_drag_timer, VIEW_DRAG_IDLE_MS);
-        }
+    fn arm_view_drag_timer(&mut self) {
+        self.view_drag_timer.arm(VIEW_DRAG_IDLE_MS);
     }
 
     /// Move the synthetic pointer by layout pixels.
@@ -392,9 +390,7 @@ impl Cursor {
     pub unsafe fn end_view_drag(&mut self, wm: &mut crate::window_manager::WindowManager, reason: &str) {
         let Some(d) = self.view_drag.take() else { return };
         log::info!("[ViewDrag] end reason={} button={:#x} from_pinch={} at surface ({:.0}, {:.0})", reason, d.button, d.from_pinch, d.sx, d.sy);
-        if !self.view_drag_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.view_drag_timer, 0);
-        }
+        self.view_drag_timer.arm(0);
         let seat = &mut *self.seat;
         let time = crate::util::msec_timestamp();
         if d.button_down {
@@ -559,7 +555,7 @@ impl Cursor {
             if window.is_null() {
                 continue;
             }
-            let crate::window::WindowImpl::Xwayland(xwindow) = (*window).impl_type else { continue };
+            let crate::window::WindowImpl::Xwayland(xwindow) = (*window).impl_type() else { continue };
             if xwindow.is_null() || (*(*xwindow).xsurface).pid != pid {
                 continue;
             }
@@ -616,10 +612,8 @@ impl Cursor {
         }
     }
 
-    unsafe fn arm_popup_wheel_timer(&mut self) {
-        if !self.view_drag_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.view_drag_timer, POPUP_WHEEL_IDLE_MS);
-        }
+    fn arm_popup_wheel_timer(&mut self) {
+        self.view_drag_timer.arm(POPUP_WHEEL_IDLE_MS);
     }
 
     /// `reason` names what ended it, as `end_view_drag`'s does.
@@ -630,9 +624,7 @@ impl Cursor {
         self.hold_popup_ctrl(false);
         let Some(p) = self.popup_wheel.take() else { return };
         log::info!("[PopupWheel] end reason={}", reason);
-        if !self.view_drag_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.view_drag_timer, 0);
-        }
+        self.view_drag_timer.arm(0);
         if let Some((rate, delay)) = p.repeat {
             let kbd = ffi::river_wlr_seat_get_keyboard((*self.seat).wlr_seat);
             if !kbd.is_null() {
@@ -789,9 +781,7 @@ impl Cursor {
         self.hold_hscroll_shift(false);
         let Some(h) = self.hscroll_shift.take() else { return };
         log::info!("[HScrollShift] end reason={}", reason);
-        if !self.view_drag_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.view_drag_timer, 0);
-        }
+        self.view_drag_timer.arm(0);
         if let Some((rate, delay)) = h.repeat {
             let kbd = ffi::river_wlr_seat_get_keyboard((*self.seat).wlr_seat);
             if !kbd.is_null() {
@@ -864,9 +854,7 @@ impl Cursor {
         true
     }
 
-    unsafe fn arm_hscroll_shift_timer(&mut self) {
-        if !self.view_drag_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.view_drag_timer, HSCROLL_SHIFT_IDLE_MS);
-        }
+    fn arm_hscroll_shift_timer(&mut self) {
+        self.view_drag_timer.arm(HSCROLL_SHIFT_IDLE_MS);
     }
 }

@@ -110,8 +110,8 @@ fn read_plan_ms(path: &str) -> Option<i64> {
 
 pub struct IdleManager {
     pub server: *mut Server,
-    display_timer: *mut ffi::wl_event_source,
-    sleep_timer: *mut ffi::wl_event_source,
+    display_timer: crate::event_source::Timer,
+    sleep_timer: crate::event_source::Timer,
     /// The timeouts in force, in ms; 0 = disabled. The plan's when it has
     /// one, else the config's (`effective_ms`).
     display_off_ms: i64,
@@ -125,7 +125,7 @@ pub struct IdleManager {
     plan_display_off_ms: Option<i64>,
     plan_sleep_ms: Option<i64>,
     /// Polls the plan files when they cannot be watched; see `PLAN_POLL_MS`.
-    plan_timer: *mut ffi::wl_event_source,
+    plan_timer: crate::event_source::Timer,
     /// An inotify fd on the plan directory, and its event-loop source: the
     /// plan files are re-read when the directory reports a change, and
     /// nothing runs at rest. -1 / null while polling instead. Until
@@ -153,7 +153,7 @@ pub struct IdleManager {
     /// the zeroed init, like `inhibitors`.
     external: Option<Vec<ExternalLease>>,
     /// Fires at the earliest lease expiry; disarmed when there are none.
-    lease_timer: *mut ffi::wl_event_source,
+    lease_timer: crate::event_source::Timer,
     /// The display timeout fired and outputs were darkened by us.
     displays_off: bool,
     /// The sleep command was spawned; cleared by the next activity.
@@ -161,7 +161,7 @@ pub struct IdleManager {
     /// A sleep is waiting for the session lock to complete (`on_locked`),
     /// or for `lock_fallback_timer`, whichever comes first.
     sleep_after_lock: bool,
-    lock_fallback_timer: *mut ffi::wl_event_source,
+    lock_fallback_timer: crate::event_source::Timer,
     /// Monotonic ms of the last (re)arm and of the last activity.
     armed_at_ms: u64,
     last_activity_ms: u64,
@@ -218,60 +218,32 @@ impl IdleManager {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         self.server = server;
         let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
-        self.display_timer = ffi::wl_event_loop_add_timer(
-            event_loop,
-            Some(handle_display_timeout),
-            self as *mut IdleManager as *mut _,
-        );
-        if self.display_timer.is_null() {
+        self.display_timer = crate::event_source::Timer::add(event_loop, handle_display_timeout, self as *mut IdleManager as *mut _);
+        if !self.display_timer.is_set() {
             return Err("Failed to create idle display timer");
         }
-        self.sleep_timer = ffi::wl_event_loop_add_timer(
-            event_loop,
-            Some(handle_sleep_timeout),
-            self as *mut IdleManager as *mut _,
-        );
-        if self.sleep_timer.is_null() {
-            ffi::wl_event_source_remove(self.display_timer);
-            self.display_timer = std::ptr::null_mut();
+        self.sleep_timer = crate::event_source::Timer::add(event_loop, handle_sleep_timeout, self as *mut IdleManager as *mut _);
+        if !self.sleep_timer.is_set() {
+            self.display_timer.remove();
             return Err("Failed to create idle sleep timer");
         }
-        self.lock_fallback_timer = ffi::wl_event_loop_add_timer(
-            event_loop,
-            Some(handle_lock_fallback),
-            self as *mut IdleManager as *mut _,
-        );
-        if self.lock_fallback_timer.is_null() {
-            ffi::wl_event_source_remove(self.display_timer);
-            ffi::wl_event_source_remove(self.sleep_timer);
-            self.display_timer = std::ptr::null_mut();
-            self.sleep_timer = std::ptr::null_mut();
+        self.lock_fallback_timer = crate::event_source::Timer::add(event_loop, handle_lock_fallback, self as *mut IdleManager as *mut _);
+        if !self.lock_fallback_timer.is_set() {
+            self.display_timer.remove();
+            self.sleep_timer.remove();
             return Err("Failed to create idle lock-fallback timer");
         }
-        self.plan_timer = ffi::wl_event_loop_add_timer(
-            event_loop,
-            Some(handle_plan_poll),
-            self as *mut IdleManager as *mut _,
-        );
-        if self.plan_timer.is_null() {
-            ffi::wl_event_source_remove(self.display_timer);
-            ffi::wl_event_source_remove(self.sleep_timer);
-            self.display_timer = std::ptr::null_mut();
-            self.sleep_timer = std::ptr::null_mut();
+        self.plan_timer = crate::event_source::Timer::add(event_loop, handle_plan_poll, self as *mut IdleManager as *mut _);
+        if !self.plan_timer.is_set() {
+            self.display_timer.remove();
+            self.sleep_timer.remove();
             return Err("Failed to create idle plan-poll timer");
         }
-        self.lease_timer = ffi::wl_event_loop_add_timer(
-            event_loop,
-            Some(handle_lease_expiry),
-            self as *mut IdleManager as *mut _,
-        );
-        if self.lease_timer.is_null() {
-            ffi::wl_event_source_remove(self.display_timer);
-            ffi::wl_event_source_remove(self.sleep_timer);
-            ffi::wl_event_source_remove(self.plan_timer);
-            self.display_timer = std::ptr::null_mut();
-            self.sleep_timer = std::ptr::null_mut();
-            self.plan_timer = std::ptr::null_mut();
+        self.lease_timer = crate::event_source::Timer::add(event_loop, handle_lease_expiry, self as *mut IdleManager as *mut _);
+        if !self.lease_timer.is_set() {
+            self.display_timer.remove();
+            self.sleep_timer.remove();
+            self.plan_timer.remove();
             return Err("Failed to create idle lease timer");
         }
         self.display_off_ms = 0;
@@ -285,7 +257,7 @@ impl IdleManager {
         self.plan_inotify = -1;
         self.plan_inotify_source = std::ptr::null_mut();
         if !self.watch_plan_dir(event_loop) {
-            ffi::wl_event_source_timer_update(self.plan_timer, PLAN_POLL_MS);
+            self.plan_timer.arm(PLAN_POLL_MS);
         }
         self.sleep_command = None;
         self.inhibited = false;
@@ -312,32 +284,17 @@ impl IdleManager {
             self.session_active.disconnect();
             self.session_listening = false;
         }
-        if !self.display_timer.is_null() {
-            ffi::wl_event_source_remove(self.display_timer);
-            self.display_timer = std::ptr::null_mut();
-        }
-        if !self.sleep_timer.is_null() {
-            ffi::wl_event_source_remove(self.sleep_timer);
-            self.sleep_timer = std::ptr::null_mut();
-        }
-        if !self.plan_timer.is_null() {
-            ffi::wl_event_source_remove(self.plan_timer);
-            self.plan_timer = std::ptr::null_mut();
-        }
-        if !self.lease_timer.is_null() {
-            ffi::wl_event_source_remove(self.lease_timer);
-            self.lease_timer = std::ptr::null_mut();
-        }
+        self.display_timer.remove();
+        self.sleep_timer.remove();
+        self.plan_timer.remove();
+        self.lease_timer.remove();
         self.unwatch_plan_dir();
-        if !self.lock_fallback_timer.is_null() {
-            ffi::wl_event_source_remove(self.lock_fallback_timer);
-            self.lock_fallback_timer = std::ptr::null_mut();
-        }
+        self.lock_fallback_timer.remove();
     }
 
     /// Apply an `idle { }` block (config load and `ccectl reload`). A plan
     /// override in force stays in force: the config is the base it lifts to.
-    pub unsafe fn configure(&mut self, cfg: &IdleConfig) {
+    pub fn configure(&mut self, cfg: &IdleConfig) {
         self.cfg_display_off_ms = cfg.display_off_s.max(0) * 1000;
         self.cfg_sleep_ms = cfg.sleep_s.max(0) * 1000;
         self.sleep_command = cfg.sleep_command.clone();
@@ -427,7 +384,7 @@ impl IdleManager {
 
     /// From `plan_timer` or the directory watch: re-read the plan files when either changed, and
     /// put the new timeouts in force from now.
-    pub unsafe fn poll_plan(&mut self) {
+    pub fn poll_plan(&mut self) {
         let (off_path, sleep_path) = (plan_path(PLAN_DISPLAY_OFF_FILE), plan_path(PLAN_SLEEP_FILE));
         let stamps = [plan_stamp(&off_path), plan_stamp(&sleep_path)];
         if stamps == self.plan_stamps {
@@ -464,7 +421,7 @@ impl IdleManager {
         // The lock itself stands.
         if self.sleep_after_lock {
             self.sleep_after_lock = false;
-            ffi::wl_event_source_timer_update(self.lock_fallback_timer, 0);
+            self.lock_fallback_timer.arm(0);
             log::info!("idle: activity while locking; the sleep is off, the lock stays");
         }
         self.rearm(changed);
@@ -474,13 +431,13 @@ impl IdleManager {
     /// an inhibitor changed. The names are what `ccectl idle status` and the
     /// log report, so a display that never darkens can be traced to the app
     /// keeping it on rather than to a bare `inhibited=true`.
-    pub unsafe fn set_inhibitors(&mut self, names: Vec<String>) {
+    pub fn set_inhibitors(&mut self, names: Vec<String>) {
         self.wayland_inhibitors = Some(names);
         self.apply_inhibitors();
     }
 
     /// Recompute the holder list from both halves and act on a change.
-    unsafe fn apply_inhibitors(&mut self) {
+    fn apply_inhibitors(&mut self) {
         let names = merge_inhibitors(
             self.wayland_inhibitors.as_deref().unwrap_or(&[]),
             self.external.as_deref().unwrap_or(&[]),
@@ -511,7 +468,7 @@ impl IdleManager {
 
     /// Arm (or disarm, when inhibited or unconfigured) both timers from
     /// now. Throttled unless `force`: pointer motion calls this per event.
-    unsafe fn rearm(&mut self, force: bool) {
+    fn rearm(&mut self, force: bool) {
         let now = now_ms();
         if !force && now.saturating_sub(self.armed_at_ms) < REARM_MIN_MS {
             return;
@@ -520,12 +477,8 @@ impl IdleManager {
         let active = !self.inhibited;
         let display_ms = if active { self.display_off_ms } else { 0 };
         let sleep_ms = if active { self.sleep_ms } else { 0 };
-        if !self.display_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.display_timer, display_ms.min(i32::MAX as i64) as i32);
-        }
-        if !self.sleep_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.sleep_timer, sleep_ms.min(i32::MAX as i64) as i32);
-        }
+        self.display_timer.arm(display_ms.min(i32::MAX as i64) as i32);
+        self.sleep_timer.arm(sleep_ms.min(i32::MAX as i64) as i32);
     }
 
     /// Darken (`on == false`) every enabled output, or wake the ones this
@@ -605,21 +558,21 @@ impl IdleManager {
         }
         log::info!("idle: locking before sleep");
         self.sleep_after_lock = true;
-        ffi::wl_event_source_timer_update(self.lock_fallback_timer, LOCK_BEFORE_SLEEP_MS);
+        self.lock_fallback_timer.arm(LOCK_BEFORE_SLEEP_MS);
     }
 
     /// The session finished locking (`LockManager::send_locked`).
     pub unsafe fn on_locked(&mut self) {
         if self.sleep_after_lock {
             self.sleep_after_lock = false;
-            ffi::wl_event_source_timer_update(self.lock_fallback_timer, 0);
+            self.lock_fallback_timer.arm(0);
             self.sleep_now();
         }
     }
 
     /// `ccectl idle` report.
     /// Grant or renew a lease (`idle inhibit`).
-    unsafe fn grant_lease(&mut self, lease: ExternalLease) {
+    fn grant_lease(&mut self, lease: ExternalLease) {
         let leases = self.external.get_or_insert_with(Vec::new);
         match leases.iter_mut().find(|l| l.token == lease.token) {
             Some(existing) => *existing = lease,
@@ -633,7 +586,7 @@ impl IdleManager {
     }
 
     /// End leases: one by token, or every one (`None`).
-    unsafe fn end_leases(&mut self, token: Option<&str>) {
+    fn end_leases(&mut self, token: Option<&str>) {
         if let Some(leases) = self.external.as_mut() {
             leases.retain(|l| token.is_some_and(|t| l.token != t));
         }
@@ -642,7 +595,7 @@ impl IdleManager {
     }
 
     /// Drop the leases whose time is up.
-    unsafe fn expire_leases(&mut self) {
+    fn expire_leases(&mut self) {
         let now = now_ms();
         if let Some(leases) = self.external.as_mut() {
             leases.retain(|l| {
@@ -657,8 +610,8 @@ impl IdleManager {
         self.apply_inhibitors();
     }
 
-    unsafe fn arm_lease_timer(&mut self) {
-        if self.lease_timer.is_null() {
+    fn arm_lease_timer(&mut self) {
+        if !self.lease_timer.is_set() {
             return;
         }
         let next = self.external.as_deref().unwrap_or(&[]).iter().map(|l| l.expires_ms).min();
@@ -667,7 +620,7 @@ impl IdleManager {
             Some(at) => at.saturating_sub(now_ms()).clamp(1, i32::MAX as u64) as i32,
             None => 0,
         };
-        ffi::wl_event_source_timer_update(self.lease_timer, ms);
+        self.lease_timer.arm(ms);
     }
 
     pub fn status(&self) -> String {
@@ -773,9 +726,7 @@ unsafe extern "C" fn handle_plan_inotify(_fd: i32, _mask: u32, data: *mut std::f
     if dir_gone {
         log::info!("idle: power-plan directory went away; polling for it");
         idle.unwatch_plan_dir();
-        if !idle.plan_timer.is_null() {
-            ffi::wl_event_source_timer_update(idle.plan_timer, PLAN_POLL_MS);
-        }
+        idle.plan_timer.arm(PLAN_POLL_MS);
     }
     idle.poll_plan();
     0
@@ -792,9 +743,7 @@ unsafe extern "C" fn handle_plan_poll(data: *mut std::ffi::c_void) -> std::os::r
         return 0;
     }
     // wl timers fire once; re-arm for the next look.
-    if !idle.plan_timer.is_null() {
-        ffi::wl_event_source_timer_update(idle.plan_timer, PLAN_POLL_MS);
-    }
+    idle.plan_timer.arm(PLAN_POLL_MS);
     0
 }
 

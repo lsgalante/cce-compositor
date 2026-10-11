@@ -260,7 +260,7 @@ pub unsafe fn window_is_hidpi_exempt(window: *const crate::window::Window) -> bo
     if window.is_null() {
         return false;
     }
-    let crate::window::WindowImpl::Xwayland(xwindow) = (*window).impl_type else {
+    let crate::window::WindowImpl::Xwayland(xwindow) = (*window).impl_type() else {
         return false;
     };
     if xwindow.is_null() || (*xwindow).xsurface.is_null() {

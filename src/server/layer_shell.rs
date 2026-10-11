@@ -140,7 +140,7 @@ pub struct LayerSurface {
     /// fade starts. Linear rather than exponential because a close fade has
     /// to actually reach zero before the client's exit deadline.
     pub opacity_step: f32,
-    pub animation_timer: *mut ffi::wl_event_source,
+    pub animation_timer: crate::event_source::Timer,
 
     pub destroy: crate::listener::Listener,
     pub map: crate::listener::Listener,
@@ -176,7 +176,7 @@ impl LayerSurface {
             opacity: 1.0,
             opacity_target: 1.0,
             opacity_step: 1.0,
-            animation_timer: std::ptr::null_mut(),
+            animation_timer: crate::event_source::Timer::new(),
             destroy: std::mem::zeroed(),
             map: std::mem::zeroed(),
             unmap: std::mem::zeroed(),
@@ -223,10 +223,7 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
 
     log::debug!("layer surface {:?} destroyed", CStr::from_ptr((*(*layer_surface).wlr_layer_surface).namespace));
 
-    if !(*layer_surface).animation_timer.is_null() {
-        ffi::wl_event_source_remove((*layer_surface).animation_timer);
-        (*layer_surface).animation_timer = std::ptr::null_mut();
-    }
+    (*layer_surface).animation_timer.remove();
 
     (*layer_surface).destroy.disconnect();
     (*layer_surface).map.disconnect();
@@ -269,14 +266,9 @@ unsafe extern "C" fn handle_animation_tick(data: *mut std::ffi::c_void) -> std::
     );
 
     if settled {
-        if !(*layer_surface).animation_timer.is_null() {
-            ffi::wl_event_source_remove((*layer_surface).animation_timer);
-            (*layer_surface).animation_timer = std::ptr::null_mut();
-        }
+        (*layer_surface).animation_timer.remove();
     } else {
-        if !(*layer_surface).animation_timer.is_null() {
-            ffi::wl_event_source_timer_update((*layer_surface).animation_timer, 16);
-        }
+        (*layer_surface).animation_timer.arm(16);
     }
 
     0
@@ -288,10 +280,7 @@ impl LayerSurface {
     /// `target`" whether or not fading is configured on.
     pub unsafe fn start_fade(&mut self, target: f32, ms: u32) {
         self.opacity_target = target.clamp(0.0, 1.0);
-        if !self.animation_timer.is_null() {
-            ffi::wl_event_source_remove(self.animation_timer);
-            self.animation_timer = std::ptr::null_mut();
-        }
+        self.animation_timer.remove();
         if ms == 0 {
             self.opacity = self.opacity_target;
             ffi::river_scene_node_set_opacity(
@@ -310,12 +299,12 @@ impl LayerSurface {
         );
 
         let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-        let timer = ffi::wl_event_loop_add_timer(
+        let timer = crate::event_source::Timer::add(
             event_loop,
-            Some(handle_animation_tick),
+            handle_animation_tick,
             self as *mut LayerSurface as *mut _,
         );
-        if timer.is_null() {
+        if !timer.is_set() {
             log::error!("Failed to create layer surface animation timer");
             // No timer means no ramp; land on the target rather than leave
             // the surface stranded at whatever it was mid-fade.
@@ -326,7 +315,7 @@ impl LayerSurface {
             );
         } else {
             self.animation_timer = timer;
-            ffi::wl_event_source_timer_update(timer, 16);
+            self.animation_timer.arm(16);
         }
     }
 
@@ -436,10 +425,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
 
     log::debug!("layer surface {:?} unmapped", CStr::from_ptr((*wlr_layer_surface).namespace));
 
-    if !(*layer_surface).animation_timer.is_null() {
-        ffi::wl_event_source_remove((*layer_surface).animation_timer);
-        (*layer_surface).animation_timer = std::ptr::null_mut();
-    }
+    (*layer_surface).animation_timer.remove();
 
     let server = (*layer_surface).server;
 

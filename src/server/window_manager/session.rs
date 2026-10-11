@@ -100,14 +100,8 @@ impl WindowManager {
         self.update_restore_placeholders();
         // Sweep leftovers whose programs never came back.
         let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-        self.restore_placeholder_timer = ffi::wl_event_loop_add_timer(
-            event_loop,
-            Some(handle_restore_placeholder_timeout),
-            self as *mut WindowManager as *mut _,
-        );
-        if !self.restore_placeholder_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.restore_placeholder_timer, 60_000);
-        }
+        self.restore_placeholder_timer = crate::event_source::Timer::add(event_loop, handle_restore_placeholder_timeout, self as *mut WindowManager as *mut _);
+        self.restore_placeholder_timer.arm(60_000);
     }
 
     /// The restore placeholder under a layout-space point, as its virtual
@@ -180,7 +174,7 @@ impl WindowManager {
     }
 
     /// Drop the placeholder claimed by a matched restore entry.
-    pub(crate) unsafe fn remove_placeholder_for(&mut self, entry: &SavedWindowState) {
+    pub(crate) fn remove_placeholder_for(&mut self, entry: &SavedWindowState) {
         crate::wm_scope!(mut);
         if let Some(pos) = self
             .restore_placeholders
@@ -190,19 +184,15 @@ impl WindowManager {
             // Dropping the placeholder destroys its rect.
             self.restore_placeholders.remove(pos);
         }
-        if self.restore_placeholders.is_empty() && !self.restore_placeholder_timer.is_null() {
-            ffi::wl_event_source_remove(self.restore_placeholder_timer);
-            self.restore_placeholder_timer = std::ptr::null_mut();
+        if self.restore_placeholders.is_empty() && self.restore_placeholder_timer.is_set() {
+            self.restore_placeholder_timer.remove();
         }
     }
 
-    pub unsafe fn clear_restore_placeholders(&mut self) {
+    pub fn clear_restore_placeholders(&mut self) {
         crate::wm_scope!(mut);
         self.restore_placeholders.clear();
-        if !self.restore_placeholder_timer.is_null() {
-            ffi::wl_event_source_remove(self.restore_placeholder_timer);
-            self.restore_placeholder_timer = std::ptr::null_mut();
-        }
+        self.restore_placeholder_timer.remove();
     }
 
     pub unsafe fn save_state(&mut self) {
@@ -212,9 +202,7 @@ impl WindowManager {
         }
         // A direct save supersedes a scheduled one.
         self.save_state_pending = false;
-        if !self.save_state_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.save_state_timer, 0);
-        }
+        self.save_state_timer.arm(0);
         let Some(path_str) = crate::config::default_state_path() else {
             log::error!("Could not resolve state file path");
             return;
@@ -471,7 +459,7 @@ impl WindowManager {
         // timeout CANCELS the logout rather than forcing the display down
         // over the prompt. Long enough for the user to answer the prompt in
         // place; a quick answer completes the logout with no cancel at all.
-        ffi::wl_event_source_timer_update(self.clean_exit_timer, 10_000);
+        self.clean_exit_timer.arm(10_000);
     }
 
     /// Abandon a clean exit whose windows did not all close in time.
@@ -494,9 +482,7 @@ impl WindowManager {
         }
         self.clean_exit_in_progress = false;
         self.shutting_down = false;
-        if !self.clean_exit_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.clean_exit_timer, 0);
-        }
+        self.clean_exit_timer.arm(0);
 
         let mut remaining: Vec<String> = Vec::new();
         for &w in self.windows.iter() {
@@ -567,10 +553,7 @@ impl WindowManager {
 
         if normal_windows_count == 0 {
             log::info!("All windows closed cleanly. Exiting display server.");
-            if !self.clean_exit_timer.is_null() {
-                ffi::wl_event_source_remove(self.clean_exit_timer);
-                self.clean_exit_timer = std::ptr::null_mut();
-            }
+            self.clean_exit_timer.remove();
             ffi::wl_display_terminate((*self.server).wl_server);
         } else {
             log::info!("Clean exit: waiting for {} remaining windows to close...", normal_windows_count);
@@ -579,7 +562,7 @@ impl WindowManager {
 
     /// `program` is the asking window's argv[0] (`proc_args`), `None` when
     /// unknown; it gates only the app_id-only pass (see `same_program`).
-    pub unsafe fn match_and_remove_restore_state(
+    pub fn match_and_remove_restore_state(
         &mut self,
         app_id: &str,
         title: &str,

@@ -226,7 +226,7 @@ impl WindowManager {
                     if w.is_null() {
                         continue;
                     }
-                    let cfg = match (*w).impl_type {
+                    let cfg = match (*w).impl_type() {
                         crate::window::WindowImpl::Toplevel(t) if !t.is_null() => {
                             format!("{:?}", (*t).configure_state)
                         }
@@ -815,7 +815,7 @@ impl WindowManager {
                         if target.is_null() {
                             return "error: window not found\n".to_string();
                         }
-                        let crate::window::WindowImpl::Xwayland(xw) = (*target).impl_type else {
+                        let crate::window::WindowImpl::Xwayland(xw) = (*target).impl_type() else {
                             return "error: not an X11 window; only those have a learned minimum\n".to_string();
                         };
                         if xw.is_null() {
@@ -1205,7 +1205,7 @@ impl WindowManager {
                                 h: (*w).box_geom.height,
                                 vx: (*w).virtual_x,
                                 vy: (*w).virtual_y,
-                                x11: match (*w).impl_type {
+                                x11: match (*w).impl_type() {
                                     crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => Some((*(*xw).xsurface).window_id),
                                     _ => None,
                                 },

@@ -43,15 +43,15 @@ pub struct Osk {
     armed_at: Option<Instant>,
     /// This module put the board up, so it may take it down.
     shown_by_us: bool,
-    hide_timer: *mut ffi::wl_event_source,
+    hide_timer: crate::event_source::Timer,
 }
 
 impl Osk {
     pub fn new(server: *mut Server) -> Self {
-        Osk { server, armed_at: None, shown_by_us: false, hide_timer: std::ptr::null_mut() }
+        Osk { server, armed_at: None, shown_by_us: false, hide_timer: crate::event_source::Timer::new() }
     }
 
-    unsafe fn enabled(&self) -> bool {
+    fn enabled(&self) -> bool {
         !self.server.is_null() && crate::shared::layout().osk_on_touch
     }
 
@@ -87,22 +87,20 @@ impl Osk {
         if !self.shown_by_us || self.server.is_null() {
             return;
         }
-        if self.hide_timer.is_null() {
+        if !self.hide_timer.is_set() {
             let event_loop = ffi::wl_display_get_event_loop((*self.server).wl_server);
-            self.hide_timer = ffi::wl_event_loop_add_timer(event_loop, Some(handle_hide_timer), self as *mut Osk as *mut _);
-            if self.hide_timer.is_null() {
+            self.hide_timer = crate::event_source::Timer::add(event_loop, handle_hide_timer, self as *mut Osk as *mut _);
+            if !self.hide_timer.is_set() {
                 log::error!("osk: failed to create the hide timer; hiding now");
                 self.hide_now(wm);
                 return;
             }
         }
-        ffi::wl_event_source_timer_update(self.hide_timer, HIDE_DELAY_MS);
+        self.hide_timer.arm(HIDE_DELAY_MS);
     }
 
-    unsafe fn cancel_hide(&mut self) {
-        if !self.hide_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.hide_timer, 0);
-        }
+    fn cancel_hide(&mut self) {
+        self.hide_timer.arm(0);
     }
 
     unsafe fn hide_now(&mut self, wm: &mut crate::window_manager::WindowManager) {

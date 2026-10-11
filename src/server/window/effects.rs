@@ -15,7 +15,7 @@ impl Window {
     /// the BORDER ring's radius to the root plate node and, running last,
     /// silently overrode the value set_rendering_state had just written,
     /// making `root_plate_corner_radius` dead config.
-    pub unsafe fn root_plate_radius_base(&self) -> i32 {
+    pub fn root_plate_radius_base(&self) -> i32 {
         if self.is_fullscreen() {
             return 0;
         }
@@ -48,7 +48,7 @@ impl Window {
     /// window's own box is punched out via the clipped region so the shadow
     /// darkens only the desktop around the window, never the (translucent)
     /// window itself.
-    pub unsafe fn update_shadow(&self, width: i32, height: i32, radius: i32, want: bool) {
+    pub fn update_shadow(&self, width: i32, height: i32, radius: i32, want: bool) {
         if self.shadow.is_null() {
             return;
         }
@@ -180,7 +180,7 @@ impl Window {
     /// status segment. Call after `river_scene_node_enable_blur`, which can
     /// recreate the blur node with compression off — from every path that
     /// calls it for a status segment.
-    pub unsafe fn sync_backdrop_compress(&self) {
+    pub fn sync_backdrop_compress(&self) {
         let is_status = self.tiling_mode == crate::tiling::TilingMode::Status;
         let (ceil, knee, invert) = if is_status {
             crate::shared::layout().status_backdrop_compress.unwrap_or((0.0, 0.0, false))
@@ -195,7 +195,7 @@ impl Window {
     /// Sync the droplet backdrop-refraction node for a droplet-styled status
     /// segment. Called from BOTH render paths, like update_bevel — one-path
     /// effects freeze at the pre-gesture zoom (the shadow's old trap).
-    pub unsafe fn update_droplet(&self, width: i32, height: i32) {
+    pub fn update_droplet(&self, width: i32, height: i32) {
         if self.droplet.is_null() {
             return;
         }
@@ -239,7 +239,7 @@ impl Window {
     /// True when this status segment's droplet backdrop node is live. The
     /// per-window blur must yield to it: the blur pass would composite the
     /// UNREFRACTED cached backdrop over the lens output.
-    pub unsafe fn droplet_backdrop_on(&self) -> bool {
+    pub fn droplet_backdrop_on(&self) -> bool {
         if self.droplet.is_null() || self.tiling_mode != crate::tiling::TilingMode::Status {
             return false;
         }
@@ -258,7 +258,7 @@ impl Window {
     /// adjust-mode overlap dim (`adjust_dim`, 0..1) toward
     /// `border.overlap_opacity`, and again by the map/close fade
     /// (`map_fade`), which rests at 1.0 whenever no fade is in flight.
-    pub unsafe fn effective_opacity(&self) -> f32 {
+    pub fn effective_opacity(&self) -> f32 {
         let floor = crate::shared::layout().border_overlap_opacity;
         self.rendering_requested.opacity
             * (1.0 - self.adjust_dim.clamp(0.0, 1.0) * (1.0 - floor))
@@ -271,14 +271,14 @@ impl Window {
     /// map once at login and a dissolve there reads as the desktop failing to
     /// draw. Same exclusion list `adjust_dim_wanted` uses, for the same
     /// reason: these are not windows the user thinks of as opening.
-    pub unsafe fn wants_map_fade(&self) -> bool {
+    pub fn wants_map_fade(&self) -> bool {
         !self.is_status_bar() && !self.is_wallpaper() && !self.is_grid()
     }
 
     /// Begin a fade toward `target` (0.0 out, 1.0 in) over `ms`, and arm the
     /// timer that steps it. A `ms` of 0 (or fading disabled) snaps instead,
     /// so every caller can treat this as "put the window at `target`".
-    pub unsafe fn start_map_fade(&mut self, wm: &mut crate::window_manager::WindowManager, target: f32, ms: u32) {
+    pub fn start_map_fade(&mut self, wm: &mut crate::window_manager::WindowManager, target: f32, ms: u32) {
         self.map_fade_target = target.clamp(0.0, 1.0);
         if ms == 0 || !self.wants_map_fade() {
             self.map_fade = self.map_fade_target;
@@ -296,7 +296,7 @@ impl Window {
     /// Advance the map/close fade one tick toward `map_fade_target`, applying
     /// the opacity as it goes. Returns true while still in motion, like
     /// `step_adjust_dim`.
-    pub unsafe fn step_map_fade(&mut self) -> bool {
+    pub fn step_map_fade(&mut self) -> bool {
         let delta = self.map_fade_target - self.map_fade;
         if delta.abs() <= self.map_fade_step {
             if self.map_fade == self.map_fade_target {
@@ -453,7 +453,7 @@ impl Window {
     /// last_applied_scale (the scale actually drawn) because self.scale has
     /// already been rewritten to the destination state's scale by the arrange
     /// pass in this same cycle.
-    pub(crate) unsafe fn start_fs_anim(&mut self, wm: &mut crate::window_manager::WindowManager) {
+    pub(crate) fn start_fs_anim(&mut self, wm: &mut crate::window_manager::WindowManager) {
         // Animations off: the window is simply drawn at its new rect.
         if !cce_core::motion::enabled() {
             self.fs_anim = None;

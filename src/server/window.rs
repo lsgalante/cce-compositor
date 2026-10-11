@@ -475,7 +475,10 @@ pub struct Window {
     pub server: *mut Server,
     pub node: WmNode,
     pub state: WindowState,
-    pub impl_type: WindowImpl,
+    /// Private: `get_title` / `get_app_id` dereference what it names, so
+    /// it changes only through `set_impl` (whose contract covers that) and
+    /// `impl_destroying`. Read it with `impl_type()`.
+    impl_type: WindowImpl,
     /// Where a two-finger scroll over this window becomes an emulated
     /// view drag (see `cursor::ViewDrag`), when the app has said so through
     /// `touchpad-view-regions`: rectangles in surface-local pixels, `[x, y,
@@ -698,7 +701,7 @@ impl Window {
     /// also what Maximized resolves to) casts no drop shadow when it is off.
     /// Floating, popup and every other mode are unaffected. Evaluated on both
     /// render paths, so a float/tile toggle restyles on the next arrange.
-    pub unsafe fn wants_tiled_shadow(&self) -> bool {
+    pub fn wants_tiled_shadow(&self) -> bool {
         crate::shared::layout().shadow_tiled
             || self.tiling_mode != crate::tiling::TilingMode::Tiled
     }
@@ -807,7 +810,7 @@ impl Window {
         }
     }
 
-    pub unsafe fn role(&self) -> crate::policy::api::WindowRole {
+    pub fn role(&self) -> crate::policy::api::WindowRole {
         if self.grid_declared {
             return crate::policy::api::WindowRole::Grid;
         }
@@ -815,20 +818,18 @@ impl Window {
         // pointer-motion event (`is_status_bar`/`is_grid`/`is_wallpaper` in
         // the cursor passthrough) and per window per transaction, and each
         // call used to heap-allocate a String just to prefix-match it.
-        let ptr = self.get_app_id();
-        let app_id = if ptr.is_null() { None } else { std::ffi::CStr::from_ptr(ptr).to_str().ok() };
-        crate::policy::api::WindowRole::from_app_id(app_id)
+        crate::policy::api::WindowRole::from_app_id(self.app_id_str())
     }
 
-    pub unsafe fn is_grid(&self) -> bool {
+    pub fn is_grid(&self) -> bool {
         self.role() == crate::policy::api::WindowRole::Grid
     }
 
-    pub unsafe fn is_status_bar(&self) -> bool {
+    pub fn is_status_bar(&self) -> bool {
         self.role() == crate::policy::api::WindowRole::StatusBar
     }
 
-    pub unsafe fn is_wallpaper(&self) -> bool {
+    pub fn is_wallpaper(&self) -> bool {
         self.role() == crate::policy::api::WindowRole::Background
     }
 
@@ -1124,12 +1125,22 @@ impl Window {
         self.impl_type = impl_type;
     }
 
+    pub fn impl_type(&self) -> WindowImpl {
+        self.impl_type
+    }
+
     pub fn impl_destroying(&mut self) {
         self.impl_type = WindowImpl::Destroying;
     }
 
-    pub unsafe fn get_title(&self) -> *const libc::c_char {
-        match self.impl_type {
+    /// The title as wlroots holds it (null when there is none): valid until
+    /// the client next sets it, so copy it before handing control back.
+    pub fn get_title(&self) -> *const libc::c_char {
+        // SAFETY: `impl_type` names this window's live implementation
+        // (`set_impl`'s contract): each impl's destroy handler switches it to
+        // `Destroying` before freeing itself, and an impl's wlroots object
+        // outlives the impl.
+        unsafe { match self.impl_type {
             WindowImpl::Toplevel(toplevel) => {
                 if toplevel.is_null() {
                     std::ptr::null()
@@ -1145,11 +1156,13 @@ impl Window {
                 }
             }
             WindowImpl::Destroying => std::ptr::null(),
-        }
+        } }
     }
 
-    pub unsafe fn get_app_id(&self) -> *const libc::c_char {
-        match self.impl_type {
+    /// The app_id (an X11 window's class) — see `get_title`.
+    pub fn get_app_id(&self) -> *const libc::c_char {
+        // SAFETY: as `get_title`.
+        unsafe { match self.impl_type {
             WindowImpl::Toplevel(toplevel) => {
                 if toplevel.is_null() {
                     std::ptr::null()
@@ -1165,39 +1178,35 @@ impl Window {
                 }
             }
             WindowImpl::Destroying => std::ptr::null(),
-        }
+        } }
+    }
+
+    /// `ptr` read as a borrowed C string: `None` when null.
+    fn c_str_at(&self, ptr: *const libc::c_char) -> Option<&std::ffi::CStr> {
+        // SAFETY: `ptr` came from `get_title` / `get_app_id`: null or a
+        // NUL-terminated string the impl keeps until the client changes it,
+        // which cannot happen while `&self` is borrowed on this thread.
+        (!ptr.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(ptr) })
     }
 
     /// The app_id borrowed, for hot paths that only compare it (the per-
     /// commit and per-transaction passes): `get_app_id_string` allocates.
     /// `None` when absent or not UTF-8.
-    pub unsafe fn app_id_str(&self) -> Option<&str> {
-        let ptr = self.get_app_id();
-        if ptr.is_null() { None } else { std::ffi::CStr::from_ptr(ptr).to_str().ok() }
+    pub fn app_id_str(&self) -> Option<&str> {
+        self.c_str_at(self.get_app_id())?.to_str().ok()
     }
 
     /// The title borrowed — see `app_id_str`.
-    pub unsafe fn title_str(&self) -> Option<&str> {
-        let ptr = self.get_title();
-        if ptr.is_null() { None } else { std::ffi::CStr::from_ptr(ptr).to_str().ok() }
+    pub fn title_str(&self) -> Option<&str> {
+        self.c_str_at(self.get_title())?.to_str().ok()
     }
 
-    pub unsafe fn get_app_id_string(&self) -> Option<String> {
-        let ptr = self.get_app_id();
-        if ptr.is_null() {
-            None
-        } else {
-            Some(std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned())
-        }
+    pub fn get_app_id_string(&self) -> Option<String> {
+        Some(self.c_str_at(self.get_app_id())?.to_string_lossy().into_owned())
     }
 
-    pub unsafe fn get_title_string(&self) -> Option<String> {
-        let ptr = self.get_title();
-        if ptr.is_null() {
-            None
-        } else {
-            Some(std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned())
-        }
+    pub fn get_title_string(&self) -> Option<String> {
+        Some(self.c_str_at(self.get_title())?.to_string_lossy().into_owned())
     }
 
     /// Dest-size factor for this window's surface buffers on top of the
@@ -1300,7 +1309,7 @@ impl Window {
     /// while open, but is invisible to the window manager's notion of "the
     /// focused window" — persistence, camera follow, arrange focus styling
     /// and refocus rules all look through it to the real window underneath.
-    pub unsafe fn is_overlay_ui(&self) -> bool {
+    pub fn is_overlay_ui(&self) -> bool {
         self.tiling_mode == crate::tiling::TilingMode::Overlay
             || self.get_app_id_string().as_deref() == Some("cce-cloud")
     }

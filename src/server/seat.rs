@@ -960,7 +960,7 @@ impl Seat {
     }
 
     /// Snap parameters for interactive ops, from the current layout config.
-    unsafe fn snap_params(&self, wm: &crate::window_manager::WindowManager) -> crate::policy::snap::SnapParams {
+    fn snap_params(&self, wm: &crate::window_manager::WindowManager) -> crate::policy::snap::SnapParams {
         // Zoom-aware: the felt grab distance stays constant in screen px.
         crate::shared::layout().snap_params().for_zoom(wm.desk_zoom)
     }

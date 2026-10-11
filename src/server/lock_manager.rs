@@ -32,10 +32,10 @@ pub struct LockManager {
     pub wlr_manager: *mut ffi::wlr_session_lock_manager_v1,
     pub state: LockState,
     pub lock: *mut ffi::wlr_session_lock_v1,
-    pub lock_surfaces_timer: *mut ffi::wl_event_source,
+    pub lock_surfaces_timer: crate::event_source::Timer,
     /// Fires to bring a locker back after one died mid-lock; see
     /// [`LockManager::schedule_locker_respawn`].
-    pub respawn_timer: *mut ffi::wl_event_source,
+    pub respawn_timer: crate::event_source::Timer,
     /// Respawns since the last locker that got as far as drawing. Indexes
     /// [`RESPAWN_BACKOFF_MS`]; past its end, we stop trying.
     pub respawn_attempts: usize,
@@ -79,22 +79,22 @@ impl LockManager {
         self.wlr_manager = wlr_manager;
 
         let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
-        let timer = ffi::wl_event_loop_add_timer(
+        let timer = crate::event_source::Timer::add(
             event_loop,
-            Some(handle_lock_surfaces_timeout),
+            handle_lock_surfaces_timeout,
             self as *mut LockManager as *mut _,
         );
-        if timer.is_null() {
+        if !timer.is_set() {
             return Err("Failed to create lock surfaces timer");
         }
         self.lock_surfaces_timer = timer;
 
-        let respawn_timer = ffi::wl_event_loop_add_timer(
+        let respawn_timer = crate::event_source::Timer::add(
             event_loop,
-            Some(handle_respawn_timeout),
+            handle_respawn_timeout,
             self as *mut LockManager as *mut _,
         );
-        if respawn_timer.is_null() {
+        if !respawn_timer.is_set() {
             return Err("Failed to create the locker respawn timer");
         }
         self.respawn_timer = respawn_timer;
@@ -104,15 +104,9 @@ impl LockManager {
         Ok(())
     }
 
-    pub unsafe fn deinit(&mut self) {
-        if !self.lock_surfaces_timer.is_null() {
-            ffi::wl_event_source_remove(self.lock_surfaces_timer);
-            self.lock_surfaces_timer = std::ptr::null_mut();
-        }
-        if !self.respawn_timer.is_null() {
-            ffi::wl_event_source_remove(self.respawn_timer);
-            self.respawn_timer = std::ptr::null_mut();
-        }
+    pub fn deinit(&mut self) {
+        self.lock_surfaces_timer.remove();
+        self.respawn_timer.remove();
         self.new_lock.disconnect();
     }
 
@@ -172,7 +166,7 @@ impl LockManager {
                 if all_outputs_rendered_lock_surface {
                     self.send_locked();
                     crate::shared::scene().normal_tree.set_enabled(false);
-                    ffi::wl_event_source_timer_update(self.lock_surfaces_timer, 0);
+                    self.lock_surfaces_timer.arm(0);
                 }
             }
             LockState::WaitingForBlank => {
@@ -248,9 +242,7 @@ impl LockManager {
         self.maybe_lock();
 
         self.respawn_attempts = 0;
-        if !self.respawn_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.respawn_timer, 1);
-        }
+        self.respawn_timer.arm(1);
     }
 
     /// Answer `tx` once the session is locked: now if it is, else from
@@ -277,8 +269,8 @@ impl LockManager {
     /// Backed off and capped by [`RESPAWN_BACKOFF_MS`]. Exhausting it leaves
     /// the session exactly as it is now — locked — which is why giving up is
     /// an acceptable outcome and looping forever is not.
-    unsafe fn schedule_locker_respawn(&mut self) {
-        if self.respawn_timer.is_null() {
+    fn schedule_locker_respawn(&mut self) {
+        if !self.respawn_timer.is_set() {
             return;
         }
         let Some(&delay) = RESPAWN_BACKOFF_MS.get(self.respawn_attempts) else {
@@ -303,16 +295,14 @@ impl LockManager {
             self.respawn_attempts,
             RESPAWN_BACKOFF_MS.len()
         );
-        ffi::wl_event_source_timer_update(self.respawn_timer, delay);
+        self.respawn_timer.arm(delay);
     }
 
     /// Stop a respawn that is armed but no longer wanted — a locker is here.
     /// Without this, a timer armed during the gap could fire after the
     /// session was unlocked and lock it again out of nowhere.
-    unsafe fn cancel_locker_respawn(&mut self) {
-        if !self.respawn_timer.is_null() {
-            ffi::wl_event_source_timer_update(self.respawn_timer, 0);
-        }
+    fn cancel_locker_respawn(&mut self) {
+        self.respawn_timer.arm(0);
     }
 }
 
@@ -512,7 +502,7 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
 
         crate::shared::scene().locked_tree.set_enabled(true);
 
-        ffi::wl_event_source_timer_update(manager.lock_surfaces_timer, 200);
+        manager.lock_surfaces_timer.arm(200);
 
         let seats_head = &mut (*manager.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
         let mut curr = (*seats_head).next;
@@ -578,7 +568,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     manager.lock = std::ptr::null_mut();
     if manager.state == LockState::WaitingForLockSurfaces {
         manager.state = LockState::WaitingForBlank;
-        ffi::wl_event_source_timer_update(manager.lock_surfaces_timer, 0);
+        manager.lock_surfaces_timer.arm(0);
     }
 
     // Reached two ways: from `handle_unlock`, which has already set the state

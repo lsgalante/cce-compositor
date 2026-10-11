@@ -102,12 +102,14 @@ impl XdgToplevel {
 
         let scene_xdg = ffi::wlr_scene_xdg_surface_create(surfaces_tree, base);
         if scene_xdg.is_null() {
+            (*window).impl_destroying();
             let _ = Box::from_raw(raw);
             return Err("wlr_scene_xdg_surface_create failed");
         }
         let capture_xdg = ffi::wlr_scene_xdg_surface_create(capture_tree, base);
         if capture_xdg.is_null() {
-            // Already added unmap listener, but let's at least try to free raw
+            // Dropping `raw` disconnects its unmap listener.
+            (*window).impl_destroying();
             let _ = Box::from_raw(raw);
             return Err("wlr_scene_xdg_surface_create for capture tree failed");
         }

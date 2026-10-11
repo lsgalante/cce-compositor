@@ -456,7 +456,7 @@ static CCE_TOPLEVEL_INTERFACE: ffi::zcce_toplevel_v1_interface = ffi::zcce_tople
     set_popover_region: Some(toplevel_set_popover_region),
 };
 
-unsafe fn resolve_window(wm: &crate::window_manager::WindowManager, server: *mut Server, key: SlotMapKey) -> Option<*mut Window> {
+fn resolve_window(wm: &crate::window_manager::WindowManager, server: *mut Server, key: SlotMapKey) -> Option<*mut Window> {
     if server.is_null() {
         return None;
     }
