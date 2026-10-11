@@ -426,9 +426,15 @@ impl Seat {
 
     pub unsafe fn focus(&mut self, wm: &mut crate::window_manager::WindowManager, new_focus: Focus) {
         // A window that has closed is nothing to focus.
-        let window = new_focus.as_window(wm);
-        let new_focus = if matches!(new_focus, Focus::Window(_)) && window.is_null() { Focus::None } else { new_focus };
-        if !window.is_null() {
+        let wid = match new_focus {
+            Focus::Window(id) => wm.windows.get(id).map(|_| id),
+            _ => None,
+        };
+        let new_focus = if matches!(new_focus, Focus::Window(_)) && wid.is_none() { Focus::None } else { new_focus };
+        let window_is = |wm: &crate::window_manager::WindowManager, f: fn(&crate::window::Window) -> bool| {
+            wid.and_then(|id| wm.windows.get(id)).is_some_and(f)
+        };
+        if wid.is_some() {
             // The grid is the canvas, not a window: it must never take focus.
             // It became clickable when it started advertising an input region
             // for its desktop items, and the click path focuses whatever it
@@ -436,23 +442,21 @@ impl Seat {
             // patch and then let focus-follow pan the camera to "reveal" it,
             // so every press on an item dragged the desktop out from under
             // the pointer.
-            if !window.is_null()
-                && ((*window).is_status_bar() || (*window).is_wallpaper() || (*window).is_grid())
-            {
+            if window_is(wm, |w| w.is_status_bar() || w.is_wallpaper() || w.is_grid()) {
                 log::info!("[FocusDebug] Seat::focus blocking focus to status bar/wallpaper/grid window");
                 return;
             }
             // A shy helper window declines focus by its own hints
             // (WM_HINTS input = False); honour that — see `Window::is_shy`.
-            if !window.is_null() && (*window).is_shy() {
+            if window_is(wm, |w| w.is_shy()) {
                 log::info!("[FocusDebug] Seat::focus blocking focus to a no-activate helper window");
                 return;
             }
         }
 
-        if !window.is_null() {
-            if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
-                wm.raise_window((*window).id());
+        if let Some(id) = wid {
+            if window_is(wm, |w| w.tiling_mode == crate::tiling::TilingMode::Floating) {
+                wm.raise_window(id);
                 crate::shared::pending().dirty_windowing();
             }
         }
@@ -463,8 +467,8 @@ impl Seat {
             // a clipped one) should bring it over — its popups/menus open
             // relative to the window and land off-viewport otherwise. The
             // pan no-ops once the window is fully visible.
-            if !window.is_null() {
-                self.focus_follow_pan(wm, (*window).id());
+            if let Some(id) = wid {
+                self.focus_follow_pan(wm, id);
             }
             return;
         }
@@ -496,9 +500,11 @@ impl Seat {
             Focus::None => log::info!("[FocusDebug] Seat::focus set to None"),
             Focus::LayerSurface(surface) => log::info!("[FocusDebug] Seat::focus set to LayerSurface {:?}", surface),
             Focus::Window(_) => {
-                let title = if window.is_null() { "null".to_string() } else { (*window).get_title_string().unwrap_or_default() };
-                let app_id = if window.is_null() { "null".to_string() } else { (*window).get_app_id_string().unwrap_or_default() };
-                log::info!("[FocusDebug] Seat::focus set to Window {:?} (title={:?}, app_id={:?})", window, title, app_id);
+                let (title, app_id) = wid.and_then(|id| wm.windows.get(id)).map_or(
+                    ("null".to_string(), "null".to_string()),
+                    |w| (w.get_title_string().unwrap_or_default(), w.get_app_id_string().unwrap_or_default()),
+                );
+                log::info!("[FocusDebug] Seat::focus set to Window {:?} (title={:?}, app_id={:?})", wid, title, app_id);
             }
             Focus::LockSurface(lock) => log::info!("[FocusDebug] Seat::focus set to LockSurface {:?}", lock),
             Focus::OverrideRedirect(or) => log::info!("[FocusDebug] Seat::focus set to OverrideRedirect {:?}", or),
@@ -526,13 +532,13 @@ impl Seat {
         // arm that timer or the old ring lingers and the new one waits for an
         // unrelated redraw (the same reason WindowManager::set_mode arms it).
         wm.arm_border_fade();
-        if !window.is_null() {
-            if !window.is_null() {
-                wm.record_focus((*window).id());
+        if let Some(id) = wid {
+            {
+                wm.record_focus(id);
                 // Focus decides whether a fullscreen window stays on top
                 // (`Window::fullscreen_yields`); restack whenever one is up,
                 // since not every path to here dirties on its own.
-                if wm.windows.iter().any(|w| !w.is_null() && !(*w).closed && (*w).is_fullscreen()) {
+                if wm.windows.values().any(|w| !w.closed && w.is_fullscreen()) {
                     crate::shared::pending().dirty_windowing();
                 }
             }
@@ -573,12 +579,9 @@ impl Seat {
                 }
             }
             Focus::Window(_) => {
-                let is_new = if !window.is_null() {
-                    let was_new = (*window).is_new;
-                    (*window).is_new = false;
-                    was_new
-                } else {
-                    false
+                let is_new = match wid.and_then(|id| wm.windows.get_mut(id)) {
+                    Some(w) => std::mem::replace(&mut w.is_new, false),
+                    None => false,
                 };
 
                 // A window newly on screen pulls the viewport over to it only when
@@ -587,9 +590,10 @@ impl Seat {
                 // spawn even though `restored` is set — it only borrowed its old geometry
                 // from `last_window_states`. Focus moving between windows that were
                 // already up still pans either way; the key is about spawning.
-                if !window.is_null() {
-                    let spawn_pan = !(*window).session_restored
-                        && !(*window).hint_placed
+                if let Some((id, w)) = wid.and_then(|id| Some((id, wm.windows.get(id)?))) {
+                    let (session_restored, hint_placed) = (w.session_restored, w.hint_placed);
+                    let spawn_pan = !session_restored
+                        && !hint_placed
                         && crate::shared::layout().center_on_spawn;
                     // A restored window maps unfocused and keeps is_new until
                     // its first focus — which, after a session restart, is
@@ -599,15 +603,17 @@ impl Seat {
                     // is over: a first focus is user intent and pans like any
                     // other, except for placement-hinted spawns (pickers that
                     // open at their control and must not yank the camera).
-                    let user_focus = wm.startup_input_seen && !(*window).hint_placed;
+                    let user_focus = wm.startup_input_seen && !hint_placed;
                     if !is_new || spawn_pan || user_focus {
-                        self.focus_follow_pan(wm, (*window).id());
+                        self.focus_follow_pan(wm, id);
                     }
                 }
 
 
                 // Focus root surface of window
-                let surface = (*window).root_surface();
+                let surface = wid
+                    .and_then(|id| wm.windows.get(id))
+                    .map_or(std::ptr::null_mut(), |w| w.root_surface());
                 if !surface.is_null() {
                     let kbd = ffi::river_wlr_seat_get_keyboard(self.wlr_seat);
                     if !kbd.is_null() {
@@ -1043,41 +1049,43 @@ impl Seat {
                     &sp,
                 );
                 wm.arm_border_fade();
-                carry_group_windows(wm, &self.group_move, std::ptr::null_mut(), gdx, gdy);
+                carry_group_windows(wm, &self.group_move, None, gdx, gdy);
                 carry_group_items(wm, &self.group_items, gdx, gdy);
                 wm.queue_op_frame();
                 self.update_edge_pan(wm, x as f64, y as f64);
                 return;
             }
 
-            let win = op.window(wm);
-            if !win.is_null() && !(*win).closed {
+            let live = op.window.filter(|&id| wm.windows.get(id).is_some_and(|w| !w.closed));
+            if let Some(id) = live {
                 // Every drag step can bring a Floating window over the
                 // adjust target or take it off: re-evaluate the overlap dim.
                 wm.arm_border_fade();
-                if (*win).tiling_mode != crate::tiling::TilingMode::Floating
-                    && (*win).tiling_mode != crate::tiling::TilingMode::Overlay
+                let this = window_mut!(wm, id);
+                if this.tiling_mode != crate::tiling::TilingMode::Floating
+                    && this.tiling_mode != crate::tiling::TilingMode::Overlay
                     // A drag moves a Utility window; it must not re-class it.
-                    && (*win).tiling_mode != crate::tiling::TilingMode::Utility
+                    && this.tiling_mode != crate::tiling::TilingMode::Utility
                 {
                     // Un-tile for the drag but KEEP the geometry (clearing
                     // was_tiled suppresses the arrange Exit restore);
                     // landing grid-aligned re-tiles it in op_end.
-                    (*win).was_tiled = false;
-                    (*win).tiling_mode = crate::tiling::TilingMode::Floating;
-                    (*win).mode_locked = true;
-                    wm.raise_window((*win).id());
+                    this.was_tiled = false;
+                    this.tiling_mode = crate::tiling::TilingMode::Floating;
+                    this.mode_locked = true;
+                    wm.raise_window(id);
                 }
                 
                 match op.op_type {
                     PointerOpType::Move => {
-                        if (*win).is_status_bar() {
+                        let this = window_mut!(wm, id);
+                        if this.is_status_bar() {
                             let final_x = op.start_win_x + dx;
                             let final_y = op.start_win_y + dy;
-                            (*win).rendering_requested.x = final_x;
-                            (*win).rendering_requested.y = final_y;
-                            (*win).box_geom.x = final_x;
-                            (*win).box_geom.y = final_y;
+                            this.rendering_requested.x = final_x;
+                            this.rendering_requested.y = final_y;
+                            this.box_geom.x = final_x;
+                            this.box_geom.y = final_y;
 
                             // Re-dock the bar to the edge the pointer is at as
                             // it goes, standing it up along a side.
@@ -1086,12 +1094,12 @@ impl Seat {
                                 .enabled_output_boxes();
                             if let Some(edge) = crate::policy::drag::status_edge_at((x as f64, y as f64), &outputs) {
                                 let bar_h = crate::shared::layout().bar_height as u32;
-                                let original_length = std::cmp::max((*win).box_geom.width, (*win).box_geom.height) as u32;
+                                let original_length = std::cmp::max(this.box_geom.width, this.box_geom.height) as u32;
                                 let (target_w, target_h) = crate::policy::drag::status_bar_size(edge, bar_h, original_length);
 
-                                if (*win).box_geom.width as u32 != target_w || (*win).box_geom.height as u32 != target_h {
-                                    (*win).wm_requested.dimensions = Some(crate::window::Dimensions { width: target_w, height: target_h });
-                                    (*win).wm_requested.bounds = crate::window::Dimensions { width: target_w, height: target_h };
+                                if this.box_geom.width as u32 != target_w || this.box_geom.height as u32 != target_h {
+                                    this.wm_requested.dimensions = Some(crate::window::Dimensions { width: target_w, height: target_h });
+                                    this.wm_requested.bounds = crate::window::Dimensions { width: target_w, height: target_h };
                                     crate::shared::pending().dirty_windowing();
                                 }
                             }
@@ -1100,15 +1108,16 @@ impl Seat {
                             // Hard snap for a window grabbed Tiled, the
                             // magnetic pull for a Floating one
                             // (`policy::drag::move_to`).
+                            let this = window_mut!(wm, id);
                             let (vx, vy) = crate::policy::drag::move_to(
                                 (op.start_win_virtual_x, op.start_win_virtual_y),
                                 (virtual_dx, virtual_dy),
-                                ((*win).box_geom.width as f64, (*win).box_geom.height as f64),
+                                (this.box_geom.width as f64, this.box_geom.height as f64),
                                 op.start_was_tiled,
                                 &sp,
                             );
-                            (*win).virtual_x = vx;
-                            (*win).virtual_y = vy;
+                            this.virtual_x = vx;
+                            this.virtual_y = vy;
 
                             // Overview moves displace what they cover: any
                             // window the drag covers past the threshold
@@ -1118,7 +1127,7 @@ impl Seat {
                             {
                                 displace_covered(
                                     wm,
-                                    win,
+                                    id,
                                     op.start_was_tiled,
                                     (virtual_dx, virtual_dy),
                                     &sp,
@@ -1135,14 +1144,15 @@ impl Seat {
                             // through here too, and must not un-tile them.
                             let gdx = vx - op.start_win_virtual_x;
                             let gdy = vy - op.start_win_virtual_y;
-                            carry_group_windows(wm, &self.group_move, win, gdx, gdy);
+                            carry_group_windows(wm, &self.group_move, Some(id), gdx, gdy);
                             carry_group_items(wm, &self.group_items, gdx, gdy);
 
-                            let (final_x, final_y) = (*win).virtual_to_screen(wm, vx, vy);
-                            (*win).rendering_requested.x = final_x;
-                            (*win).rendering_requested.y = final_y;
-                            (*win).box_geom.x = final_x;
-                            (*win).box_geom.y = final_y;
+                            let (final_x, final_y) = window_ref!(wm, id, ()).virtual_to_screen(wm, vx, vy);
+                            let this = window_mut!(wm, id);
+                            this.rendering_requested.x = final_x;
+                            this.rendering_requested.y = final_y;
+                            this.box_geom.x = final_x;
+                            this.box_geom.y = final_y;
                         }
                     }
                     PointerOpType::Resize { edges } => {
@@ -1150,18 +1160,21 @@ impl Seat {
                         let mut vy = op.start_win_virtual_y;
 
                         if edges.left {
-                            vx = (*win).virtual_x;
+                            let this = window_mut!(wm, id);
+                            vx = this.virtual_x;
                         }
                         if edges.top {
-                            vy = (*win).virtual_y;
+                            let this = window_mut!(wm, id);
+                            vy = this.virtual_y;
                         }
 
-                        if (*win).resize_edges != Some(edges) {
-                            (*win).resize_start_vx = op.start_win_virtual_x;
-                            (*win).resize_start_vy = op.start_win_virtual_y;
-                            (*win).resize_start_w = op.start_win_w;
-                            (*win).resize_start_h = op.start_win_h;
-                            (*win).resize_edges = Some(edges);
+                        let this = window_mut!(wm, id);
+                        if this.resize_edges != Some(edges) {
+                            this.resize_start_vx = op.start_win_virtual_x;
+                            this.resize_start_vy = op.start_win_virtual_y;
+                            this.resize_start_w = op.start_win_w;
+                            this.resize_start_h = op.start_win_h;
+                            this.resize_edges = Some(edges);
                         }
 
                         // Shared with the arrange snapshot's
@@ -1171,24 +1184,26 @@ impl Seat {
                         // suggestion: a configure below it is applied by
                         // cce-ui as-is, and a layout with less room than its
                         // fixed parts panicked cce-data-editor mid-drag.
-                        let (new_w, new_h) = (*win).wm_scheduled.dimensions_hint.clamp(new_w, new_h);
+                        let this = window_mut!(wm, id);
+                        let (new_w, new_h) = this.wm_scheduled.dimensions_hint.clamp(new_w, new_h);
 
-                        (*win).virtual_x = vx;
-                        (*win).virtual_y = vy;
+                        this.virtual_x = vx;
+                        this.virtual_y = vy;
 
-                        let (final_x, final_y) = (*win).virtual_to_screen(wm, vx, vy);
+                        let (final_x, final_y) = window_ref!(wm, id, ()).virtual_to_screen(wm, vx, vy);
 
-                        (*win).rendering_requested.x = final_x;
-                        (*win).rendering_requested.y = final_y;
-                        (*win).box_geom.x = final_x;
-                        (*win).box_geom.y = final_y;
+                        let this = window_mut!(wm, id);
+                        this.rendering_requested.x = final_x;
+                        this.rendering_requested.y = final_y;
+                        this.box_geom.x = final_x;
+                        this.box_geom.y = final_y;
 
-                        (*win).wm_requested.resizing = true;
-                        (*win).wm_requested.dimensions = Some(crate::window::Dimensions {
+                        this.wm_requested.resizing = true;
+                        this.wm_requested.dimensions = Some(crate::window::Dimensions {
                             width: new_w,
                             height: new_h,
                         });
-                        (*win).wm_requested.bounds = crate::window::Dimensions {
+                        this.wm_requested.bounds = crate::window::Dimensions {
                             width: new_w,
                             height: new_h,
                         };
@@ -1307,19 +1322,21 @@ impl Seat {
             log::debug!("end seat op");
             wm.edge_pan_vx = 0.0;
             wm.edge_pan_vy = 0.0;
-            let win = op.window(wm);
-            if !win.is_null() && !(*win).closed {
+            let live = op.window.filter(|&id| wm.windows.get(id).is_some_and(|w| !w.closed));
+            if let Some(id) = live {
                 if let PointerOpType::Resize { .. } = op.op_type {
-                    (*win).wm_requested.resizing = false;
-                    crate::window::Window::manage_finish(wm, (*win).id());
+                    if let Some(w) = wm.windows.get_mut(id) {
+                        w.wm_requested.resizing = false;
+                    }
+                    crate::window::Window::manage_finish(wm, id);
                     crate::shared::pending().dirty_windowing();
                 }
                 if let PointerOpType::Move = op.op_type {
-                    if (*win).tiling_mode == crate::tiling::TilingMode::Overlay {
+                    if wm.windows.get(id).is_some_and(|w| w.tiling_mode == crate::tiling::TilingMode::Overlay) {
                         crate::shared::pending().dirty_windowing();
                     }
                 }
-                self.settle_tiling(wm, (*win).id());
+                self.settle_tiling(wm, id);
                 // A TAP — press+release without meaningful motion — is a
                 // click, not a drag. A drag never focuses the window it
                 // moves or resizes (the press grabs without focusing), but
@@ -1336,24 +1353,27 @@ impl Seat {
                 // target (hover focused it there anyway).
                 let dx = (op.x - op.start_x).abs();
                 let dy = (op.y - op.start_y).abs();
-                if dx < 4 && dy < 4 && !op.started_in_overview && !(*win).is_status_bar() {
-                    self.focus(wm, Focus::window(win));
-                    self.focus_follow_pan(wm, (*win).id());
+                if dx < 4 && dy < 4 && !op.started_in_overview && !wm.windows.get(id).is_some_and(|w| w.is_status_bar()) {
+                    self.focus(wm, Focus::Window(id));
+                    self.focus_follow_pan(wm, id);
                 }
             }
             // The windows a group move carried land by the same rule as
             // the grabbed one, each on its own geometry — whether the grab
-            // was a window or an image (then `win` is null).
+            // was a window or an image (then `live` is None).
             let group = std::mem::take(&mut self.group_move);
             for &(id, start_vx, start_vy) in group.iter() {
-                let Some(w) = wm.window(id) else { continue };
-                if w == win || !wm.selectable(&*w) {
+                if Some(id) == live {
                     continue;
                 }
-                if (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
+                let Some(w) = wm.windows.get(id) else { continue };
+                if !wm.selectable(w) {
                     continue;
                 }
-                self.settle_tiling(wm, (*w).id());
+                if w.virtual_x == start_vx && w.virtual_y == start_vy {
+                    continue;
+                }
+                self.settle_tiling(wm, id);
                 crate::shared::pending().dirty_windowing();
             }
             // The images it carried are the grid's to keep: `drop` is its
@@ -1388,33 +1408,40 @@ impl Seat {
 unsafe fn carry_group_windows(
     wm: &mut crate::window_manager::WindowManager,
     group: &[(crate::window::WindowId, f64, f64)],
-    grabbed: *mut crate::window::Window,
+    grabbed: Option<crate::window::WindowId>,
     gdx: f64,
     gdy: f64,
 ) {
     for &(id, start_vx, start_vy) in group.iter() {
-        let Some(w) = wm.window(id) else { continue };
-        if w == grabbed || !wm.selectable(&*w) {
+        if Some(id) == grabbed {
             continue;
         }
-        if gdx == 0.0 && gdy == 0.0 && (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
+        let Some(w) = wm.windows.get(id) else { continue };
+        if !wm.selectable(w) {
             continue;
         }
-        if (*w).tiling_mode == crate::tiling::TilingMode::Tiled {
+        if gdx == 0.0 && gdy == 0.0 && w.virtual_x == start_vx && w.virtual_y == start_vy {
+            continue;
+        }
+        if w.tiling_mode == crate::tiling::TilingMode::Tiled {
             // As for a grabbed window: floating for the drag, geometry
             // kept, re-tiled in op_end if it lands aligned.
-            (*w).was_tiled = false;
-            (*w).tiling_mode = crate::tiling::TilingMode::Floating;
-            (*w).mode_locked = true;
-            wm.raise_window((*w).id());
+            let Some(w) = wm.windows.get_mut(id) else { continue };
+            w.was_tiled = false;
+            w.tiling_mode = crate::tiling::TilingMode::Floating;
+            w.mode_locked = true;
+            wm.raise_window(id);
         }
-        (*w).virtual_x = start_vx + gdx;
-        (*w).virtual_y = start_vy + gdy;
-        let (fx, fy) = (*w).virtual_to_screen(wm, (*w).virtual_x, (*w).virtual_y);
-        (*w).rendering_requested.x = fx;
-        (*w).rendering_requested.y = fy;
-        (*w).box_geom.x = fx;
-        (*w).box_geom.y = fy;
+        let (vx, vy) = (start_vx + gdx, start_vy + gdy);
+        let Some(w) = wm.windows.get(id) else { continue };
+        let (fx, fy) = w.virtual_to_screen(wm, vx, vy);
+        let Some(w) = wm.windows.get_mut(id) else { continue };
+        w.virtual_x = vx;
+        w.virtual_y = vy;
+        w.rendering_requested.x = fx;
+        w.rendering_requested.y = fy;
+        w.box_geom.x = fx;
+        w.box_geom.y = fy;
     }
 }
 
@@ -1463,9 +1490,9 @@ unsafe fn carry_group_items(wm: &mut crate::window_manager::WindowManager, items
 /// `start_was_tiled`), for the reason the snap call above gives: the drag
 /// un-tiles it on the first motion event, so its live mode reads Floating
 /// however it started. The policy skips candidates of the other kind.
-unsafe fn displace_covered(
+fn displace_covered(
     wm: &mut crate::window_manager::WindowManager,
-    win: *mut crate::window::Window,
+    moving: crate::window::WindowId,
     moved_tiled: bool,
     drag_delta: (f64, f64),
     sp: &crate::policy::snap::SnapParams,
@@ -1474,29 +1501,30 @@ unsafe fn displace_covered(
 ) {
     // A window can close mid-drag; drop its entry before any deref.
     ledger.retain(|&(id, _, _)| wm.window(id).is_some());
+    let Some(win) = wm.windows.get(moving) else { return };
     let moved = (
-        (*win).virtual_x,
-        (*win).virtual_y,
-        (*win).box_geom.width as f64,
-        (*win).box_geom.height as f64,
+        win.virtual_x,
+        win.virtual_y,
+        win.box_geom.width as f64,
+        win.box_geom.height as f64,
     );
-    let mut ptrs: Vec<*mut crate::window::Window> = Vec::new();
+    let mut ids: Vec<crate::window::WindowId> = Vec::new();
     let mut cands: Vec<crate::policy::overview::DisplaceCandidate> = Vec::new();
-    for w in wm.windows.iter() {
-        if w.is_null() || w == win || (*w).closed || (*w).minimized {
+    for w in wm.windows.values() {
+        if w.id() == moving || w.closed || w.minimized {
             continue;
         }
         // A window moving WITH the drag is not in its way.
-        if group.iter().any(|&(g, _, _)| g == (*w).id()) {
+        if group.iter().any(|&(g, _, _)| g == w.id()) {
             continue;
         }
-        if !matches!((*w).state, crate::window::WindowState::Mapped) {
+        if !matches!(w.state, crate::window::WindowState::Mapped) {
             continue;
         }
-        if (*w).is_status_bar() || (*w).is_wallpaper() || (*w).is_grid() {
+        if w.is_status_bar() || w.is_wallpaper() || w.is_grid() {
             continue;
         }
-        let mode = wm.get_mode_for_window(&*w);
+        let mode = wm.get_mode_for_window(w);
         if mode != crate::tiling::TilingMode::Floating
             && mode != crate::tiling::TilingMode::Tiled
         {
@@ -1506,15 +1534,15 @@ unsafe fn displace_covered(
         // where it fled to.
         let (ox, oy) = ledger
             .iter()
-            .find(|&&(p, _, _)| p == (*w).id())
+            .find(|&&(p, _, _)| p == w.id())
             .map(|&(_, x, y)| (x, y))
-            .unwrap_or(((*w).virtual_x, (*w).virtual_y));
-        ptrs.push(w);
+            .unwrap_or((w.virtual_x, w.virtual_y));
+        ids.push(w.id());
         cands.push(crate::policy::overview::DisplaceCandidate {
             x: ox,
             y: oy,
-            w: (*w).box_geom.width as f64,
-            h: (*w).box_geom.height as f64,
+            w: w.box_geom.width as f64,
+            h: w.box_geom.height as f64,
             tiled: mode == crate::tiling::TilingMode::Tiled,
         });
     }
@@ -1525,15 +1553,15 @@ unsafe fn displace_covered(
     let mut changed = false;
     let mut displaced_now: Vec<crate::window::WindowId> = Vec::new();
     for &(idx, (nx, ny)) in &moves {
-        let w = ptrs[idx];
-        let id = (*w).id();
+        let id = ids[idx];
         displaced_now.push(id);
         if !ledger.iter().any(|&(p, _, _)| p == id) {
             ledger.push((id, cands[idx].x, cands[idx].y));
         }
-        if (*w).virtual_x != nx || (*w).virtual_y != ny {
-            (*w).virtual_x = nx;
-            (*w).virtual_y = ny;
+        let Some(w) = wm.windows.get_mut(id) else { continue };
+        if w.virtual_x != nx || w.virtual_y != ny {
+            w.virtual_x = nx;
+            w.virtual_y = ny;
             changed = true;
         }
     }
@@ -1542,10 +1570,10 @@ unsafe fn displace_covered(
         if displaced_now.contains(&id) {
             return true;
         }
-        let Some(w) = wm.window(id) else { return false };
-        if !(*w).closed && ((*w).virtual_x != ox || (*w).virtual_y != oy) {
-            (*w).virtual_x = ox;
-            (*w).virtual_y = oy;
+        let Some(w) = wm.windows.get_mut(id) else { return false };
+        if !w.closed && (w.virtual_x != ox || w.virtual_y != oy) {
+            w.virtual_x = ox;
+            w.virtual_y = oy;
             changed = true;
         }
         false
