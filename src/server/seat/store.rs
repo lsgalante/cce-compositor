@@ -77,6 +77,26 @@ impl Seats {
         self.seats.iter().flatten().map(|p| p.as_ptr()).collect()
     }
 
+    /// Whether any seat's keyboard focus is window `id`.
+    pub fn focuses(&self, id: crate::window::WindowId) -> bool {
+        self.values().any(|seat| seat.focused == super::Focus::Window(id))
+    }
+
+    /// Whether any seat's pointer hovers window `id` in adjust mode
+    /// (`Cursor::adjust_hover`).
+    pub fn adjust_hovers(&self, id: crate::window::WindowId) -> bool {
+        self.values().any(|seat| seat.cursor.adjust_hover == Some(id))
+    }
+
+    /// Whether any seat is resizing window `id` with the pointer.
+    pub fn resizing(&self, id: crate::window::WindowId) -> bool {
+        self.values().any(|seat| {
+            seat.op.as_ref().is_some_and(|op| {
+                op.window == Some(id) && matches!(op.op_type, super::PointerOpType::Resize { .. })
+            })
+        })
+    }
+
     /// Every live seat, mutably, oldest first. Each seat is its own
     /// allocation, so the references are disjoint.
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Seat> + '_ {

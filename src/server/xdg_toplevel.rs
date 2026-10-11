@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList};
+use crate::server::WlList;
 use crate::window::Window;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,11 +59,10 @@ impl XdgToplevel {
     pub unsafe fn create(
     wm: &mut crate::window_manager::WindowManager,
         wlr_toplevel: *mut ffi::wlr_xdg_toplevel,
-        server: *mut Server,
     ) -> Result<(), &'static str> {
         log::debug!("new xdg_toplevel");
 
-        let id = Window::create(wm, crate::window::WindowImpl::Toplevel(std::ptr::null_mut()), server)?;
+        let id = Window::create(wm, crate::window::WindowImpl::Toplevel(std::ptr::null_mut()))?;
         let this = window_mut!(wm, id, Err("window gone at creation"));
 
         let toplevel = Box::new(XdgToplevel {
@@ -586,6 +585,7 @@ unsafe extern "C" fn handle_ack_configure(
 }
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    let stores = crate::ctx::Stores::of(crate::shared::server_ptr());
     let toplevel = crate::container_of!(listener, XdgToplevel, commit);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let id = (*toplevel).window;
@@ -607,7 +607,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         {
             let zoom = crate::policy::background::sanitized_zoom(wm.desk_zoom);
             let (mut ox, mut oy) = (0i32, 0i32);
-            let first = (*this.server).om.outputs.first_enabled_ptr();
+            let first = stores.outputs.first_enabled_ptr();
             if !first.is_null() {
                 let b = (*first).sent.box_layout();
                 ox = b.x;
@@ -668,7 +668,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         if mapping_changed
             && matches!(this.state, crate::window::WindowState::Mapped)
         {
-            (*this.server).input_manager.schedule_pointer_refresh();
+            (*crate::shared::server_ptr()).input_manager.schedule_pointer_refresh();
         }
     }
 
@@ -803,7 +803,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             // render_finish would otherwise reset box_geom from the render-start
             // snapshot (rendering_sent) and snap the border back to the old size.
             this.self_resized = true;
-            this.draw_borders();
+            this.draw_borders(stores);
             this.set_dimensions(live.width as u32, live.height as u32);
             crate::shared::pending().dirty_windowing();
         }
@@ -924,7 +924,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             this.popup_tree.set_position_if_changed(final_x, final_y);
             this.box_geom.width = geometry.width;
             this.box_geom.height = geometry.height;
-            this.draw_borders();
+            this.draw_borders(stores);
         } else {
             crate::shared::pending().dirty_rendering();
         }

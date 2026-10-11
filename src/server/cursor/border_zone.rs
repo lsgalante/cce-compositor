@@ -94,7 +94,7 @@ pub unsafe fn grid_node_info(
 /// `window::handle_disc_layout` places the discs for the hit test here,
 /// the catchers in `draw_borders`, and (mirrored in the frame shader) the
 /// drawing, so the zones and the visuals cannot drift.
-pub unsafe fn get_border_zone(window: &crate::window::Window, lx: f64, ly: f64) -> BorderZone {
+pub fn get_border_zone(window: &crate::window::Window, stores: crate::ctx::Stores, lx: f64, ly: f64) -> BorderZone {
     // Overview, or Super held (window-adjust mode): the same ring either way.
     if !crate::shared::window_adjust_active() {
         return BorderZone::None;
@@ -107,7 +107,7 @@ pub unsafe fn get_border_zone(window: &crate::window::Window, lx: f64, ly: f64) 
     // that is not drawn is the failure mode this file keeps warning about.
     // The pointer reaches a window's edge through its body, so the band is
     // live by the time it arrives.
-    if !window.is_adjust_target() {
+    if !window.is_adjust_target(stores) {
         return BorderZone::None;
     }
 

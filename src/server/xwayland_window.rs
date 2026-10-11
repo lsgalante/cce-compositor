@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server};
 use crate::window::{Window, WindowImpl, WindowState};
 use crate::xwayland_override_redirect::XwaylandOverrideRedirect;
 
@@ -369,7 +368,6 @@ impl XwaylandWindow {
     pub unsafe fn create(
     wm: &mut crate::window_manager::WindowManager,
         xsurface: *mut ffi::wlr_xwayland_surface,
-        server: *mut Server,
     ) -> Result<(), &'static str> {
         let title_ptr = (*xsurface).title;
         let class_ptr = (*xsurface).class;
@@ -379,7 +377,7 @@ impl XwaylandWindow {
             if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") }
         );
 
-        let id = Window::create(wm, WindowImpl::Xwayland(std::ptr::null_mut()), server)?;
+        let id = Window::create(wm, WindowImpl::Xwayland(std::ptr::null_mut()))?;
         let this = window_mut!(wm, id, Err("window gone at creation"));
 
         let xwindow = Box::new(XwaylandWindow {
@@ -945,6 +943,7 @@ unsafe fn handle_unmap_impl(wm: &mut crate::window_manager::WindowManager, xwind
 }
 
 unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+    let stores = crate::ctx::Stores::of(crate::shared::server_ptr());
     let xwindow = crate::container_of!(listener, XwaylandWindow, request_configure);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let id = (*xwindow).window;
@@ -1015,7 +1014,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
             // second. So the request is answered with at most the output's
             // logical box, kept on that output: the whole root becomes the
             // whole screen, which is what the game meant.
-            let out = this.fullscreen_output();
+            let out = this.fullscreen_output(stores);
             if !out.is_null() {
                 let ob = (*out).sent.box_layout();
                 let (ox, oy, ow, oh) = (ob.x, ob.y, ob.width, ob.height);

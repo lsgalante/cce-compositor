@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList};
+use crate::server::WlList;
 use crate::scene_handle::{SceneBevel, SceneDroplet, SceneFrame, SceneRect, SceneShadow, SceneTree};
 use crate::xdg_toplevel::ConfigureState;
 
@@ -475,7 +475,6 @@ impl Window {
 
 pub struct Window {
     pub ref_key: crate::slotmap::Key,
-    pub server: *mut Server,
     pub state: WindowState,
     /// Private: `get_title` / `get_app_id` dereference what it names, so
     /// it changes only through `set_impl` (whose contract covers that) and
@@ -769,12 +768,13 @@ impl Window {
     /// stepped aside slides in and lands pinned without a jump. `None`
     /// without an output to fill.
     pub unsafe fn fullscreen_anchor_pan(&self, wm: &crate::window_manager::WindowManager) -> Option<(f64, f64)> {
-        let output = self.fullscreen_output();
+        let stores = wm.stores();
+        let output = self.fullscreen_output(stores);
         if output.is_null() {
             return None;
         }
         let zoom = wm.desk_zoom.max(0.01);
-        let (first_x, first_y, _, _) = self.first_enabled_output_box();
+        let (first_x, first_y, _, _) = self.first_enabled_output_box(stores);
         Some((
             self.virtual_x - ((*output).sent.x as f64 - first_x) / zoom,
             self.virtual_y - ((*output).sent.y as f64 - first_y) / zoom,
@@ -836,7 +836,7 @@ impl Window {
 
 
 
-    pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, impl_type: WindowImpl, server: *mut Server) -> Result<WindowId, &'static str> {
+    pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, impl_type: WindowImpl) -> Result<WindowId, &'static str> {
         // Every node below is a handle: an early return drops what was made
         // so far, which destroys it. Only the capture scene, a scene root
         // rather than a node, is cleaned up by hand.
@@ -932,7 +932,6 @@ impl Window {
         let window = Box::new(Window {
             view_regions: None,
             ref_key: crate::slotmap::Key { generation: 0, index: 0 },
-            server,
             state: WindowState::Init,
             impl_type,
             tree,
@@ -1530,7 +1529,8 @@ impl Window {
                 }
             }
             let this = window_mut!(wm, id, Err("window gone"));
-            let (is_grid, server) = (this.is_grid(), this.server);
+            let is_grid = this.is_grid();
+            let stores = crate::ctx::Stores::of(wm.server);
 
             // A WORLD window spawning during overview stays in overview:
             // the camera keeps its zoom and only pans, as little as it
@@ -1561,7 +1561,7 @@ impl Window {
             // would be unreachable-by-click and unswitchable-away for
             // keyboard input).
             if should_focus && !is_grid {
-                for seat in (*server).input_manager.seats.ptrs() {
+                for seat in stores.seats.ptrs() {
                     (*seat).focus(wm, crate::seat::Focus::Window(id));
                 }
             }
@@ -1683,7 +1683,7 @@ impl Window {
             _ => unreachable!(),
         }
 
-        for seat in (*this.server).input_manager.seats.ptrs() {
+        for seat in crate::ctx::Stores::of(wm.server).seats.ptrs() {
             if (*seat).focused == crate::seat::Focus::Window(id) {
                 (*seat).focus(wm, crate::seat::Focus::None);
                 wm.focus_next_visible_window(seat);
@@ -1752,17 +1752,8 @@ impl Window {
     }
 
     /// Is a pointer resize op on this window still in progress on any seat?
-    pub unsafe fn resize_op_active(&self) -> bool {
-        for seat in (*self.server).input_manager.seats.ptrs() {
-            if let Some(ref op) = (*seat).op {
-                if op.window == Some(self.id()) {
-                    if let crate::seat::PointerOpType::Resize { .. } = op.op_type {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+    pub fn resize_op_active(&self, stores: crate::ctx::Stores) -> bool {
+        stores.seats.resizing(self.id())
     }
 
     /// Interactive-resize anchoring for the commit path, shared by every
@@ -1782,9 +1773,10 @@ impl Window {
     /// the seat op by one commit — the last configure is usually still in
     /// flight at release — so the first commit after the op disarms it.
     pub unsafe fn anchor_resize_commit(wm: &mut crate::window_manager::WindowManager, id: WindowId, committed_w: i32, committed_h: i32) -> Option<(i32, i32)> {
+        let stores = wm.stores();
         let this = window_mut!(wm, id, None);
         let edges = this.resize_edges?;
-        let resize_active = this.resize_op_active();
+        let resize_active = this.resize_op_active(stores);
 
         if edges.left {
             this.virtual_x = this.resize_start_vx + (this.resize_start_w as f64 - committed_w as f64);
@@ -1951,7 +1943,7 @@ impl Window {
 
                     let this = window_mut!(wm, id);
                     if this.foreign_toplevel_handle.is_null() {
-                        let list = (*this.server).foreign_toplevel_list;
+                        let list = (*wm.server).foreign_toplevel_list;
                         let title = this.get_title();
                         let app_id = this.get_app_id();
                         let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
@@ -1966,7 +1958,7 @@ impl Window {
                     }
 
                     if this.wlr_toplevel_handle.is_null() {
-                        let manager = (*this.server).wlr_foreign_toplevel_manager;
+                        let manager = (*wm.server).wlr_foreign_toplevel_manager;
                         let handle = ffi::wlr_foreign_toplevel_handle_v1_create(manager);
                         if !handle.is_null() {
                             this.wlr_toplevel_handle = handle;
@@ -2031,7 +2023,7 @@ impl Window {
         }
 
         let output = if this.is_fullscreen() {
-            (*this.server).om.outputs.first_enabled_ptr()
+            crate::ctx::Stores::of(wm.server).outputs.first_enabled_ptr()
         } else {
             std::ptr::null_mut()
         };
@@ -2303,7 +2295,7 @@ impl Window {
         }
     }
 
-    pub unsafe fn render_finish(&mut self) {
+    pub unsafe fn render_finish(&mut self, stores: crate::ctx::Stores) {
         let requested = &self.rendering_requested;
         let enabled = !requested.hidden && (matches!(self.state, WindowState::Mapped) || matches!(self.state, WindowState::Closing));
 
@@ -2406,7 +2398,7 @@ impl Window {
                     && !self.is_fullscreen()
                     && crate::shared::layout().is_beveled_app(&app_id);
             self.update_shadow(width, height, radius, want_shadow);
-                self.update_bevel(width, height, radius, want_bevel, want_decor);
+                self.update_bevel(stores, width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
                 self.sync_backdrop_compress();
             self.tree.set_opacity(self.effective_opacity());
@@ -2542,7 +2534,7 @@ impl Window {
         let mut content_clip = requested.content_clip;
 
         let output = if self.is_fullscreen() {
-            (*self.server).om.outputs.first_enabled_ptr()
+            stores.outputs.first_enabled_ptr()
         } else {
             std::ptr::null_mut()
         };
@@ -2588,7 +2580,7 @@ impl Window {
             self.box_geom.y = requested.y;
             self.fullscreen_background.set_enabled(false);
             if self.fs_anim.is_none() {
-                self.draw_borders();
+                self.draw_borders(stores);
             }
         }
 
@@ -2754,7 +2746,7 @@ impl Window {
         );
     }
 
-    pub unsafe fn render_viewport_update(&mut self) {
+    pub unsafe fn render_viewport_update(&mut self, stores: crate::ctx::Stores) {
         let requested = &self.rendering_requested;
         let enabled = !requested.hidden && (matches!(self.state, WindowState::Mapped) || matches!(self.state, WindowState::Closing));
 
@@ -2855,13 +2847,13 @@ impl Window {
                     && !self.is_fullscreen()
                     && crate::shared::layout().is_beveled_app(&app_id);
                 self.update_shadow(width, height, radius, want_shadow);
-                self.update_bevel(width, height, radius, want_bevel, want_decor);
+                self.update_bevel(stores, width, height, radius, want_bevel, want_decor);
                 self.update_droplet(width, height);
                 self.sync_backdrop_compress();
             }
 
             if self.fs_on_desk && self.fs_anim.is_none() {
-                let output = self.fullscreen_output();
+                let output = self.fullscreen_output(stores);
                 if !output.is_null() {
                     let (w, h) = (*output).sent.dimensions();
                     self.size_fullscreen_background(w as i32, h as i32);
@@ -2869,7 +2861,7 @@ impl Window {
             }
 
             self.scale_only_render_finish();
-            self.draw_borders();
+            self.draw_borders(stores);
         }
     }
 }
@@ -2915,6 +2907,7 @@ unsafe fn get_parent_position_relative_to(
 }
 
 unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    let stores = crate::ctx::Stores::of(crate::shared::server_ptr());
     let window = crate::container_of!(listener, Window, commit);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let id = (*window).id();
@@ -2952,7 +2945,7 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
         }
     }
     let this = window_mut!(wm, id);
-    this.render_finish();
+    this.render_finish(stores);
     // The scene's own commit handler (registered before this one, so it has
     // already run) resets the committed buffer's dest size to natural. For
     // an X11 surface under xwayland_hidpi that is the physical size — twice

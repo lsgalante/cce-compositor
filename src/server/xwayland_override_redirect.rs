@@ -366,7 +366,7 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     (*or).set_override_redirect.disconnect();
     let _ = Box::from_raw(or);
 
-    if let Err(e) = XwaylandWindow::create(wm, xsurface, server) {
+    if let Err(e) = XwaylandWindow::create(wm, xsurface) {
         log::error!("Failed to transition OR to XwaylandWindow: {}", e);
     }
 }

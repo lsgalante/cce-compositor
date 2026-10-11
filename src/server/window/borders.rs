@@ -4,7 +4,7 @@
 use super::*;
 
 impl Window {
-    pub unsafe fn draw_borders(&mut self) {
+    pub unsafe fn draw_borders(&mut self, stores: crate::ctx::Stores) {
         let requested = &self.rendering_requested;
 
         let border = &requested.border;
@@ -125,7 +125,7 @@ impl Window {
             // like the reveal in step_border_fade: without this the
             // invisible catcher rects would keep intercepting scene hits on
             // windows whose ring is not even drawn.
-            let handles_live = in_overview && self.is_adjust_target();
+            let handles_live = in_overview && self.is_adjust_target(stores);
             // Drawn handles: live, OR still fading out — releasing Super (or
             // leaving overview, or losing focus) eases the ring away instead
             // of cutting it, so the ring stays drawn while any reveal is

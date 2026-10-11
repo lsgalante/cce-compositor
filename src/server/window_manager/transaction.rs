@@ -244,6 +244,7 @@ impl WindowManager {
     }
 
     pub unsafe fn render_finish(&mut self) {
+        let stores = self.stores();
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Render));
         self.state = WindowManagerState::Idle;
@@ -307,7 +308,7 @@ impl WindowManager {
         self.rendering_requested.order_hash = new_order_hash;
         for &id in &order {
             let Some(window) = self.windows.get_mut(id) else { continue };
-            window.render_finish();
+            window.render_finish(stores);
             let Some(window) = self.windows.get(id) else { continue };
             if reorder {
                 {
@@ -424,7 +425,7 @@ impl WindowManager {
                 }
                 // Last, so an open menu clears the plane it was just
                 // stacked behind (`raise_focused_popups`).
-                focused_popups = if window.is_seat_focused() { Some(window.id()) } else { focused_popups };
+                focused_popups = if window.is_seat_focused(stores) { Some(window.id()) } else { focused_popups };
             }
             if let Some(id) = focused_popups {
                 self.raise_focused_popups(id);

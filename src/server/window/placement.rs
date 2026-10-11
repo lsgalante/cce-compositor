@@ -7,6 +7,7 @@ use super::*;
 
 impl Window {
     pub unsafe fn try_restore(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let stores = wm.stores();
         let this = window_mut!(wm, id);
         if this.restored {
             return;
@@ -260,7 +261,7 @@ impl Window {
             // along, and stays where it was put — cce-data-editor parked
             // left of the first column came back mid-view every login.
             if this.tiling_mode == crate::tiling::TilingMode::Floating && !this.minimized {
-                let (_, _, vp_w, vp_h) = this.first_enabled_output_box();
+                let (_, _, vp_w, vp_h) = this.first_enabled_output_box(stores);
                 let cam = crate::policy::camera::Camera {
                     pan_x: wm.desk_pan_x,
                     pan_y: wm.desk_pan_y,
@@ -357,6 +358,7 @@ impl Window {
     }
 
     pub(crate) unsafe fn apply_sibling_centering(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let stores = wm.stores();
         let this = window_mut!(wm, id);
         let app_id = this.get_app_id_string().unwrap_or_default();
         let Some(sibling) = window_ref!(wm, id, ()).find_sibling(wm, &app_id) else {
@@ -367,7 +369,7 @@ impl Window {
         let sibling_at = (sibling.virtual_x, sibling.virtual_y);
         let sibling_title = sibling.get_title_string().unwrap_or_default();
         let this = window_mut!(wm, id);
-        let (_, _, vp_w, vp_h) = this.first_enabled_output_box();
+        let (_, _, vp_w, vp_h) = this.first_enabled_output_box(stores);
         let zoom = wm.desk_zoom.max(0.01);
         let (w, h) = this.mapped_size_hint();
         let (x, y) = centered_over(
@@ -431,14 +433,8 @@ impl Window {
     /// Layout box of the first enabled output — `(phys_x, phys_y, width,
     /// height)`, the viewport every placement decision is measured against.
     /// Falls back to a 1920x1080 box at the origin before any output is up.
-    pub(crate) unsafe fn first_enabled_output_box(&self) -> (f64, f64, f64, f64) {
-        for output in (*self.server).om.outputs.ptrs() {
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                let b = (*output).sent.box_layout();
-                return (b.x as f64, b.y as f64, b.width as f64, b.height as f64);
-            }
-        }
-        (0.0, 0.0, 1920.0, 1080.0)
+    pub(crate) fn first_enabled_output_box(&self, stores: crate::ctx::Stores) -> (f64, f64, f64, f64) {
+        stores.outputs.first_enabled_box()
     }
 
     /// Virtual position to layout (screen) position, ROUNDED — the same
@@ -450,8 +446,9 @@ impl Window {
     /// the next arrange — a twitch on every resize step at overview zoom,
     /// and a one-pixel hop on grab and release.
     pub unsafe fn virtual_to_screen(&self, wm: &crate::window_manager::WindowManager, vx: f64, vy: f64) -> (i32, i32) {
+        let stores = wm.stores();
         let (cam, _, _) = wm.layout_camera();
-        let (out_x, out_y, _, _) = self.first_enabled_output_box();
+        let (out_x, out_y, _, _) = self.first_enabled_output_box(stores);
         (
             out_x as i32 + ((vx - cam.pan_x) * cam.zoom).round() as i32,
             out_y as i32 + ((vy - cam.pan_y) * cam.zoom).round() as i32,
@@ -464,9 +461,10 @@ impl Window {
     /// VIRTUAL one, so a screen origin written on its own survives exactly
     /// until the next transaction and is then recomputed away.
     pub unsafe fn screen_to_virtual(&self, wm: &crate::window_manager::WindowManager, sx: i32, sy: i32) -> (f64, f64) {
+        let stores = wm.stores();
         let (cam, _, _) = wm.layout_camera();
         let zoom = cam.zoom.max(0.01);
-        let (out_x, out_y, _, _) = self.first_enabled_output_box();
+        let (out_x, out_y, _, _) = self.first_enabled_output_box(stores);
         (
             cam.pan_x + (sx as f64 - out_x) / zoom,
             cam.pan_y + (sy as f64 - out_y) / zoom,
@@ -493,6 +491,7 @@ impl Window {
     }
 
     pub(crate) unsafe fn try_hint_placement(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let stores = wm.stores();
         let this = window_mut!(wm, id);
         let app_id = this.get_app_id_string().unwrap_or_default();
         if app_id.is_empty() {
@@ -532,7 +531,7 @@ impl Window {
             return;
         }
 
-        let (phys_x, phys_y, vp_w, vp_h) = this.first_enabled_output_box();
+        let (phys_x, phys_y, vp_w, vp_h) = this.first_enabled_output_box(stores);
 
         let zoom = wm.desk_zoom.max(0.01);
         let (vw, vh) = this.mapped_size_hint();
@@ -647,12 +646,13 @@ impl Window {
     /// opens filling four squares, at the corner of the invocation square that
     /// leaves it clear of its neighbours.
     pub(crate) unsafe fn place_on_invocation_cell(wm: &mut crate::window_manager::WindowManager, id: WindowId, app_id: &str, hx: f64, hy: f64) {
+        let stores = wm.stores();
         let this = window_mut!(wm, id);
         let sp = crate::shared::layout().snap_params();
         if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
             return;
         }
-        let (phys_x, phys_y, vp_w, vp_h) = this.first_enabled_output_box();
+        let (phys_x, phys_y, vp_w, vp_h) = this.first_enabled_output_box(stores);
         let zoom = wm.desk_zoom.max(0.01);
         // The hint is a layout point; the grid is in virtual coordinates.
         let inv_vx = wm.desk_pan_x + (hx - phys_x) / zoom;
@@ -822,12 +822,13 @@ impl Window {
     /// The centering itself, split out so the self-sizing commit path can redo
     /// it once the client's real size lands.
     pub(crate) unsafe fn apply_view_centering(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+        let stores = wm.stores();
         let this = window_mut!(wm, id);
         if this.satellite {
             Window::apply_sibling_centering(wm, id);
             return;
         }
-        let (_, _, vp_w, vp_h) = this.first_enabled_output_box();
+        let (_, _, vp_w, vp_h) = this.first_enabled_output_box(stores);
         let zoom = wm.desk_zoom.max(0.01);
         let (w, h) = this.mapped_size_hint();
 

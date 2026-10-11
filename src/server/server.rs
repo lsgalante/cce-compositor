@@ -344,7 +344,7 @@ unsafe extern "C" fn handle_new_xdg_toplevel(listener: *mut ffi::wl_listener, da
     let server = container_of!(listener, Server, new_xdg_toplevel);
     let xdg_toplevel = data as *mut ffi::wlr_xdg_toplevel;
     log::info!("new xdg toplevel surface");
-    if let Err(e) = crate::xdg_toplevel::XdgToplevel::create(&mut *crate::reentry::wm(server), xdg_toplevel, server) {
+    if let Err(e) = crate::xdg_toplevel::XdgToplevel::create(&mut *crate::reentry::wm(server), xdg_toplevel) {
         log::error!("Failed to create xdg toplevel: {}", e);
         let client = ffi::wl_resource_get_client((*xdg_toplevel).resource);
         ffi::wl_client_post_no_memory(client);
@@ -501,7 +501,7 @@ unsafe extern "C" fn handle_new_xwayland_surface(listener: *mut ffi::wl_listener
             log::error!("Failed to create xwayland override redirect surface: {}", e);
         }
     } else {
-        if let Err(e) = crate::xwayland_window::XwaylandWindow::create(wm, xsurface, server) {
+        if let Err(e) = crate::xwayland_window::XwaylandWindow::create(wm, xsurface) {
             log::error!("Failed to create xwayland window surface: {}", e);
         }
     }

@@ -1575,6 +1575,7 @@ impl WindowManager {
     /// entering transition (and sets the first desk spot there), which
     /// this would overwrite.
     unsafe fn place_fullscreen_windows(&mut self) {
+        let stores = self.stores();
         crate::wm_scope!(mut);
         let zoom = self.desk_zoom;
         let mut spot_moved = false;
@@ -1609,7 +1610,7 @@ impl WindowManager {
                 if on_desk {
                     Some((true, Some(w.virtual_to_screen(self, w.virtual_x, w.virtual_y)), None))
                 } else {
-                    let output = w.fullscreen_output();
+                    let output = w.fullscreen_output(stores);
                     let spot = (!output.is_null())
                         .then(|| w.screen_to_virtual(self, (*output).sent.x, (*output).sent.y));
                     Some((false, None, spot))
@@ -1642,6 +1643,7 @@ impl WindowManager {
     }
 
     pub unsafe fn update_viewport_local(&mut self) {
+        let stores = self.stores();
         crate::wm_scope!(mut);
         let zoom_changed = self.desk_zoom != self.last_viewport_zoom;
         // A pan counts as motion only once it moves a DEVICE pixel: the
@@ -1698,7 +1700,7 @@ impl WindowManager {
             ffi::river_scene_set_blur_frozen(scene, true);
             for window in self.windows.values_mut() {
                 {
-                    window.render_viewport_update();
+                    window.render_viewport_update(stores);
                 }
             }
             // (Re)arm the settle debounce: while motion keeps arriving this pushes
@@ -1709,14 +1711,14 @@ impl WindowManager {
             // suppressed and let the settle timer decide when the gesture ended.
             for window in self.windows.values_mut() {
                 {
-                    window.render_viewport_update();
+                    window.render_viewport_update(stores);
                 }
             }
         } else {
             // Stationary viewport: hold the finished, blurred state.
             for window in self.windows.values_mut() {
                 {
-                    window.render_finish();
+                    window.render_finish(stores);
                 }
             }
         }
@@ -1759,6 +1761,7 @@ impl WindowManager {
     /// positions are already final from the last motion frame's arrange pass, so
     /// this only flips each window back to its finished (blur-on) render.
     unsafe fn finish_viewport_settle(&mut self) {
+        let stores = self.stores();
         crate::wm_scope!(mut);
         if !self.viewport_is_active {
             return;
@@ -1775,7 +1778,7 @@ impl WindowManager {
         }
         for window in self.windows.values_mut() {
             {
-                window.render_finish();
+                window.render_finish(stores);
             }
         }
         // Settling re-enables blur and re-finishes every window; sweep any
@@ -1883,6 +1886,16 @@ impl WindowManager {
     pub unsafe fn first_seat(&self) -> Option<*mut crate::seat::Seat> {
         crate::wm_scope!();
         (*self.server).input_manager.seats.ptrs().first().copied()
+    }
+
+    /// The output and seat stores, through the server pointer until the
+    /// window manager is itself handed them (RFC step 4). The borrow is not
+    /// tied to `self`: take it before borrowing a window from `windows`.
+    ///
+    /// # Safety
+    /// As [`crate::ctx::Stores::of`].
+    pub unsafe fn stores<'a>(&self) -> crate::ctx::Stores<'a> {
+        crate::ctx::Stores::of(self.server)
     }
 
     pub fn record_focus(&mut self, id: crate::window::WindowId) {
@@ -2032,9 +2045,10 @@ impl WindowManager {
     /// and popup creation (opening a menu changes nothing the order hash can
     /// see, so it schedules no transaction at all).
     pub unsafe fn raise_focused_popups(&mut self, id: crate::window::WindowId) {
+        let stores = self.stores();
         crate::wm_scope!(mut);
         let Some(window) = self.windows.get(id) else { return };
-        if window.popup_tree.is_null() || !window.is_seat_focused() {
+        if window.popup_tree.is_null() || !window.is_seat_focused(stores) {
             return;
         }
         let wm_layer = crate::shared::scene().layers.wm.raw();
@@ -2901,11 +2915,12 @@ unsafe extern "C" fn handle_settle_tick(data: *mut std::ffi::c_void) -> std::os:
 /// rest cost one comparison per zone and no repaint, so leaving this running
 /// for the tail of a fade is cheap.
 unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let stores = crate::ctx::Stores::of(crate::shared::server_ptr());
     let wm = data as *mut WindowManager;
     let mut moving = false;
     for id in (*wm).windows.ids() {
         let Some(window) = (*wm).windows.get_mut(id).filter(|w| !w.closed) else { continue };
-        if window.step_border_fade() {
+        if window.step_border_fade(stores) {
             moving = true;
         }
         if Window::step_adjust_dim(&mut *wm, id) {
@@ -2915,8 +2930,8 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
         if window.step_map_fade() {
             moving = true;
         }
-        if window.step_fs_anim() {
-            window.render_finish();
+        if window.step_fs_anim(stores) {
+            window.render_finish(stores);
             moving = true;
         }
     }

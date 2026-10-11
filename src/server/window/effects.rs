@@ -89,13 +89,8 @@ impl Window {
     /// Is this window any seat's keyboard focus? The window's `activated`
     /// field is a configure-time snapshot, not live state, so live answers
     /// come from the seats.
-    pub unsafe fn is_seat_focused(&self) -> bool {
-        for seat in (*self.server).input_manager.seats.ptrs() {
-            if (*seat).focused == crate::seat::Focus::Window(self.id()) {
-                return true;
-            }
-        }
-        false
+    pub fn is_seat_focused(&self, stores: crate::ctx::Stores) -> bool {
+        stores.seats.focuses(self.id())
     }
 
     /// Whether this is the window the adjust-mode handles belong to: the
@@ -109,17 +104,11 @@ impl Window {
     /// and catchers (`draw_borders`) and the hit test
     /// (`cursor::get_border_zone`) all ask this one predicate, so the ring
     /// cannot be drawn on one window and grabbed on another.
-    pub unsafe fn is_adjust_target(&self) -> bool {
-        let me = Some(self.id());
-        for seat in (*self.server).input_manager.seats.ptrs() {
-            if (*seat).cursor.adjust_hover == me {
-                return true;
-            }
-        }
-        false
+    pub fn is_adjust_target(&self, stores: crate::ctx::Stores) -> bool {
+        stores.seats.adjust_hovers(self.id())
     }
 
-    pub unsafe fn update_bevel(&self, width: i32, height: i32, radius: i32, want: bool, want_focus: bool) {
+    pub fn update_bevel(&self, stores: crate::ctx::Stores, width: i32, height: i32, radius: i32, want: bool, want_focus: bool) {
         if self.bevel.is_null() {
             return;
         }
@@ -132,7 +121,7 @@ impl Window {
         // bevel app list still enables the node: the shader's focus branch
         // draws ONLY the glint, so it lays cleanly over a cce-ui app's own
         // client-side bevel instead of doubling its shading.
-        let focused = self.is_seat_focused();
+        let focused = self.is_seat_focused(stores);
         let enabled = (want || (focused && want_focus))
             && layout.bevel_enabled
             && layout.bevel_thickness > 0.0
@@ -307,6 +296,7 @@ impl Window {
     /// the target's handles. Windows under the target are left alone; they
     /// hide nothing.
     pub unsafe fn adjust_dim_wanted(&self, wm: &crate::window_manager::WindowManager) -> bool {
+        let stores = wm.stores();
         if !crate::shared::window_adjust_active()
             || self.closed
             || self.tiling_mode != crate::tiling::TilingMode::Floating
@@ -332,7 +322,7 @@ impl Window {
             }
             if !w.closed
                 && window_takes_handles(w)
-                && w.is_adjust_target()
+                && w.is_adjust_target(stores)
             {
                 let (tx, ty, tw, th) = on_screen(w);
                 if mx < tx + tw && tx < mx + mw && my < ty + th && ty < my + mh {
@@ -368,7 +358,7 @@ impl Window {
     /// Advance the hover fade one tick. Every zone eases toward 1.0 if it is
     /// the one under the pointer and 0.0 otherwise. Returns true while any
     /// zone is still in motion, so the caller knows to schedule another tick.
-    pub unsafe fn step_border_fade(&mut self) -> bool {
+    pub unsafe fn step_border_fade(&mut self, stores: crate::ctx::Stores) -> bool {
         let mut moving = false;
         let mut changed = false;
         // The adjust TARGET — the window under the pointer — shows its whole
@@ -379,7 +369,7 @@ impl Window {
         // reveal.
         let all_on = crate::shared::window_adjust_active()
             && window_takes_handles(self)
-            && self.is_adjust_target();
+            && self.is_adjust_target(stores);
         for elem in BorderElement::ALL {
             let i = elem.index();
             let target = if all_on || self.hovered_border_element == Some(elem) { 1.0 } else { 0.0 };
@@ -401,7 +391,7 @@ impl Window {
             changed = true;
         }
         if changed {
-            self.draw_borders();
+            self.draw_borders(stores);
         }
         moving
     }
@@ -416,14 +406,8 @@ impl Window {
 
     /// The output a fullscreen window fills: the first enabled output (the
     /// same choice manage/render make).
-    pub unsafe fn fullscreen_output(&self) -> *mut crate::output::Output {
-        for output_ptr in (*self.server).om.outputs.ptrs() {
-            let out = output_ptr;
-            if (*out).sent.state == crate::output::OutputStateValue::Enabled {
-                return out;
-            }
-        }
-        std::ptr::null_mut()
+    pub fn fullscreen_output(&self, stores: crate::ctx::Stores) -> *mut crate::output::Output {
+        stores.outputs.first_enabled_ptr()
     }
 
     /// Arms the fullscreen-toggle animation at the window's current on-screen
@@ -468,7 +452,7 @@ impl Window {
     /// fullscreen, else the arranged position at the last configured size —
     /// so it tracks the client's asynchronous resize instead of freezing a
     /// stale goal on the first frame.
-    pub unsafe fn step_fs_anim(&mut self) -> bool {
+    pub unsafe fn step_fs_anim(&mut self, stores: crate::ctx::Stores) -> bool {
         let Some(mut anim) = self.fs_anim else {
             return false;
         };
@@ -479,7 +463,7 @@ impl Window {
         }
 
         let (tx, ty, tw, th) = if self.is_fullscreen() {
-            let output = self.fullscreen_output();
+            let output = self.fullscreen_output(stores);
             if output.is_null() {
                 self.fs_anim = None;
                 return true;

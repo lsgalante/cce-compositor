@@ -97,6 +97,22 @@ impl Outputs {
             .map_or(std::ptr::null_mut(), |o| o as *const Output as *mut Output)
     }
 
+    /// Layout box of the first enabled output — `(x, y, width, height)`,
+    /// the viewport placement is measured against; 1920x1080 at the origin
+    /// before any output is up.
+    pub fn first_enabled_box(&self) -> (f64, f64, f64, f64) {
+        match self.values().find(|o| o.sent.state == super::OutputStateValue::Enabled) {
+            Some(o) => {
+                // SAFETY: a stored output's modes point into its live
+                // wlr_output; the destroy handler resets them to None before
+                // the wlr_output goes.
+                let b = unsafe { o.sent.box_layout() };
+                (b.x as f64, b.y as f64, b.width as f64, b.height as f64)
+            }
+            None => (0.0, 0.0, 1920.0, 1080.0),
+        }
+    }
+
     /// Every output, mutably, oldest first. Each output is its own
     /// allocation, so the references are disjoint.
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Output> + '_ {

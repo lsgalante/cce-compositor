@@ -12,6 +12,7 @@ pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, d
 
 /// `handle_button` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
 pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void) {
+    let stores = wm.stores();
     let event = data as *mut ffi::wlr_pointer_button_event;
     (*cursor.seat).handle_activity();
     if cursor.view_drag.is_some() {
@@ -188,7 +189,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             let overview_win_valid = clicked.is_some_and(|w| !w.is_status_bar() && !w.is_wallpaper())
                 && !clicked_grid;
             let overview_border_zone = match clicked {
-                Some(w) if overview_win_valid => get_border_zone(w, lx, ly),
+                Some(w) if overview_win_valid => get_border_zone(w, stores, lx, ly),
                 _ => BorderZone::None,
             };
             // A window button is a click: nothing is grabbed, the client
@@ -591,7 +592,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             let id = border_id;
             let this = window_mut!(wm, id);
             let initial_mode = this.tiling_mode;
-            let zone = get_border_zone(window_ref!(wm, id, ()), lx, ly);
+            let zone = get_border_zone(window_ref!(wm, id, ()), stores, lx, ly);
             // The window context menu (`scripts/cce-app-menu`, a cce-cloud
             // popup like the desktop menu and cce-grid's item menu). A
             // right-click on a handle disc opens it in either adjust mode;
@@ -1118,7 +1119,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                     let still_on_it = wm
                         .windows
                         .get(id)
-                        .is_some_and(|w| !w.closed && get_border_zone(w, lx, ly) == BorderZone::Button(elem));
+                        .is_some_and(|w| !w.closed && get_border_zone(w, stores, lx, ly) == BorderZone::Button(elem));
                     if still_on_it {
                         wm.press_window_button(id, elem);
                     }

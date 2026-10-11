@@ -553,8 +553,15 @@ the manage pass (`Seat::manage_start` returns true) and handed to
 `sent().seats` (`Seat::link_sent`) is still intrusive. Test two outputs with a copy of `cce-shadow` whose
 `WLR_HEADLESS_OUTPUTS=1` reads 2.
 
-**Server back-pointers** (RFC step 4, 2026-10-11): only `Seat`, `Window` and
-`WindowManager` still hold `server: *mut Server`. The others take what they
+**Server back-pointers** (RFC step 4, 2026-10-11): only `Seat` and
+`WindowManager` still hold `server: *mut Server`. `Window`'s drawing, effect
+and placement code runs with the window borrowed from `wm.windows`, so it
+cannot take the window manager; it takes `crate::ctx::Stores` instead — the
+output and seat stores, `Copy`, borrowed to read (`stores.seats.focuses(id)`,
+`adjust_hovers`, `resizing`, `stores.outputs.first_enabled_box()`). Code
+holding `wm` gets one from `wm.stores()`, taken BEFORE a `window_mut!`
+borrow (or `Stores::of(wm.server)` inside one: that reads a single field);
+an entry point uses `Stores::of(crate::shared::server_ptr())`. The others take what they
 need as parameters (`LockManager::maybe_lock(&Outputs)`,
 `IdleManager::set_displays(&mut Outputs, on)`,
 `Output::render_and_commit(wm, renderer)` + `note_lock_state(&LockManager)`, …)

@@ -724,6 +724,7 @@ impl Cursor {
     }
 
     pub unsafe fn passthrough(&mut self, wm: &mut crate::window_manager::WindowManager, time_msec: u32) {
+        let stores = wm.stores();
         let lx = self.x();
         let ly = self.y();
         let server = (*self.seat).server;
@@ -839,7 +840,7 @@ impl Cursor {
                         && mode != crate::tiling::TilingMode::Fullscreen
                         && mode != crate::tiling::TilingMode::Status
                     {
-                        let zone = wm.windows.get(window_id).map_or(BorderZone::None, |w| get_border_zone(w, lx, ly));
+                        let zone = wm.windows.get(window_id).map_or(BorderZone::None, |w| get_border_zone(w, stores, lx, ly));
                         match zone {
                             BorderZone::Resize(edges) => {
                                 self.set_border_hover(wm, Some(window_id), Some(border_element_for_edges(edges)));

@@ -56,6 +56,8 @@ pub mod global_shortcuts;
 pub mod stream_server;
 #[path = "server/scene_node_data.rs"]
 pub mod scene_node_data;
+#[path = "server/ctx.rs"]
+pub mod ctx;
 #[path = "server/output.rs"]
 pub mod output;
 #[path = "server/output_manager.rs"]
