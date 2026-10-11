@@ -800,7 +800,10 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow
         ffi::wlr_scene_node_set_position(surface_tree as *mut ffi::wlr_scene_node, -WINE_MARGIN, -WINE_MARGIN);
     }
 
-    ffi::river_wlr_surface_set_data(surface, &mut (*(*xwindow).window).node as *mut crate::wm_node::WmNode as *mut _);
+    // A scene node, as every other surface's data is: `SceneNodeData::
+    // from_surface` reads it as one. This was `&window.node` (the render-list
+    // link), which that lookup read past into the Window's other fields.
+    ffi::river_wlr_surface_set_data(surface, (*(*xwindow).window).tree.node() as *mut _);
 
     let capture_tree = &mut (*(*(*xwindow).window).capture_scene).tree as *mut ffi::wlr_scene_tree;
     let capture_surface = ffi::wlr_scene_surface_create(capture_tree, surface);
