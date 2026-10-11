@@ -437,7 +437,7 @@ every function left with no unsafe operation in it, the non-callback
 `cargo rustc -p cce-fx --lib --profile=check -- -W unsafe_op_in_unsafe_fn`
 lists every unsafe operation, and an `unsafe fn` that gets no warning needs
 no `unsafe`. Keep `unsafe` on one that ESTABLISHES something a safe function
-later trusts (`Window::set_impl`, `WmNode::init`, `Listener::prepare`): storing
+later trusts (`Window::set_impl`, `Listener::prepare`): storing
 a raw pointer is safe Rust, but not when a safe accessor dereferences it.
 
 `Window::impl_type` is private for that reason (read it with `impl_type()`):
@@ -521,6 +521,18 @@ what the address-scan liveness checks these replaced (`wm.windows.iter()
 .any(|&w| w == p)`) could not rule out. A new holder takes an id; the
 exceptions are a window's own protocol objects (`XdgToplevel::window`,
 `XwaylandWindow::window`), which die before it, and its `SceneNodeData`.
+
+**The render list is a `Vec<WindowId>`** (`wm.rendering_requested.list`,
+bottom of the stack first; since 2026-10-11). It was an intrusive `wl_list`
+threaded through each window (`WmNode`), and the `[LinkDbg]` tracing and the
+"healing" in `keep_status_bar_on_top` date from that list's corruption (the
+tray mis-slot wedge). Change it only through `render_list_raise` /
+`render_list_lower` / `render_list_remove`, ask `in_render_list(id)`, and walk
+it with `render_list()`, which copies the live windows out: the manage and
+render passes hand the window manager to each window, and a window's pass
+may raise itself or another. The old walk saved `next` and so visited a
+window twice when its own pass moved it to the top; the copy visits each
+once.
 
 ### Re-entrancy tracer (`reentry.rs`, since 2026-10-10)
 
@@ -756,7 +768,7 @@ children, and re-enabling the output crashed in `draw_grid`'s
   `input_relay.rs`/`input_popup.rs` (IME).
 - Shell/surface: `xdg_toplevel.rs`, `xdg_popup.rs`, `layer_shell.rs`
   (wlr-layer-shell), `xwayland_window.rs`, `xwayland_override_redirect.rs`,
-  `drag_icon.rs`, `wm_node.rs` (a window's link in the render list). An override-redirect window whose WM_CLASS
+  `drag_icon.rs`. An override-redirect window whose WM_CLASS
   class is `cce-xembed-tray` gets no scene node at all
   (`is_xembed_tray_container`): it is the tray bridge's container for a
   legacy X11 tray icon, which X must have mapped for the icon to draw but

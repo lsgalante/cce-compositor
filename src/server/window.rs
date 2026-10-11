@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_insert, wl_list_remove_and_reinit};
-use crate::wm_node::WmNode;
+use crate::server::{Server, WlList};
 use crate::scene_handle::{SceneBevel, SceneDroplet, SceneFrame, SceneRect, SceneShadow, SceneTree};
 use crate::xdg_toplevel::ConfigureState;
 
@@ -482,7 +481,6 @@ pub unsafe fn id_of(window: *mut Window) -> Option<WindowId> {
 pub struct Window {
     pub ref_key: crate::slotmap::Key,
     pub server: *mut Server,
-    pub node: WmNode,
     pub state: WindowState,
     /// Private: `get_title` / `get_app_id` dereference what it names, so
     /// it changes only through `set_impl` (whose contract covers that) and
@@ -840,15 +838,6 @@ impl Window {
         self.role() == crate::policy::api::WindowRole::Background
     }
 
-    pub fn is_linked(&self) -> bool {
-        let prev = self.node.link.prev;
-        let next = self.node.link.next;
-        if prev.is_null() || next.is_null() {
-            return false;
-        }
-        let self_ptr = &self.node.link as *const ffi::wl_list as *mut ffi::wl_list;
-        prev != self_ptr
-    }
 
 
     pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, impl_type: WindowImpl, server: *mut Server) -> Result<*mut Self, &'static str> {
@@ -948,7 +937,6 @@ impl Window {
             view_regions: None,
             ref_key: crate::slotmap::Key { generation: 0, index: 0 },
             server,
-            node: std::mem::zeroed(),
             state: WindowState::Init,
             impl_type,
             tree,
@@ -1097,7 +1085,6 @@ impl Window {
         let raw = Box::into_raw(window);
         let key = wm.windows.put(raw);
         (*raw).ref_key = key;
-        (*raw).node.init();
 
         (*raw).tree.set_enabled(false);
         (*raw).popup_tree.set_enabled(false);
@@ -1350,7 +1337,7 @@ impl Window {
         log::debug!("window '{:?}' mapped", self.get_title());
         if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
             log::debug!("[LinkDbg] map app={:?} was_state={:?} linked={}",
-                self.get_app_id_string(), self.state, self.is_linked());
+                self.get_app_id_string(), self.state, wm.in_render_list(self.id()));
         }
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
         assert_eq!(self.state, WindowState::Initialized);
@@ -1596,16 +1583,14 @@ impl Window {
         Ok(())
     }
 
-    pub unsafe fn set_closing(&mut self) {
+    pub fn set_closing(&mut self, wm: &mut crate::window_manager::WindowManager) {
         if self.state != WindowState::Closing {
             if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
                 log::debug!("[LinkDbg] set_closing app={:?} was_state={:?} was_linked={}",
-                    self.get_app_id_string(), self.state, self.is_linked());
+                    self.get_app_id_string(), self.state, wm.in_render_list(self.id()));
             }
             self.state = WindowState::Closing;
-            if self.is_linked() {
-                wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
-            }
+            wm.render_list_remove(self.id());
         }
     }
 
@@ -1613,7 +1598,7 @@ impl Window {
         log::debug!("window '{:?}' unmapped", self.get_title());
         if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
             log::debug!("[LinkDbg] unmap app={:?} state={:?} linked={}",
-                self.get_app_id_string(), self.state, self.is_linked());
+                self.get_app_id_string(), self.state, wm.in_render_list(self.id()));
         }
         if self.state != WindowState::Mapped {
             return;
@@ -1640,7 +1625,7 @@ impl Window {
         self.commit.disconnect();
         self.surfaces.save();
         assert!(!matches!(self.impl_type, WindowImpl::Destroying));
-        self.set_closing();
+        self.set_closing(wm);
         crate::shared::pending().dirty_windowing();
 
         if !self.foreign_toplevel_handle.is_null() {
@@ -1710,7 +1695,7 @@ impl Window {
         (*window).border.tree.destroy();
         ffi::wlr_scene_node_destroy(&mut (*(*window).capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
 
-        (*window).node.deinit();
+        wm.render_list_remove((*window).id());
 
         wm.remove_from_history((*window).id());
         wm.selection_forget(window);
@@ -1895,7 +1880,7 @@ impl Window {
             WindowState::Closing => {
                 if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
                     log::debug!("[LinkDbg] manage_start closing->init app={:?} was_linked={}",
-                        self.get_app_id_string(), self.is_linked());
+                        self.get_app_id_string(), wm.in_render_list(self.id()));
                 }
                 self.state = WindowState::Init;
                 self.wm_sent = WmSentState {
@@ -1931,26 +1916,23 @@ impl Window {
                     blur: false,
                 };
 
-                if self.is_linked() {
-                    wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
-                }
+                wm.render_list_remove(self.id());
             }
             WindowState::Ready | WindowState::Initialized | WindowState::Mapped => {
-                let is_linked = self.is_linked();
+                let is_linked = wm.in_render_list(self.id());
                 if !is_linked {
                     if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
                         log::debug!("[LinkDbg] manage_start LINK app={:?} state={:?}",
                             self.get_app_id_string(), self.state);
                     }
-                    if !self.node.link.prev.is_null() && !self.node.link.next.is_null() {
-                        wl_list_remove_and_reinit(&mut self.node.link as *mut ffi::wl_list as *mut WlList);
+                    // The end is the top of the stack. A shy helper window
+                    // (`is_shy`) goes in at the bottom instead — beneath the
+                    // app's own windows, where its app keeps it.
+                    if self.is_shy() {
+                        wm.render_list_lower(self.id());
+                    } else {
+                        wm.render_list_raise(self.id());
                     }
-                    let rendering_list = &mut wm.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-                    // The tail is the top of the stack. A shy helper
-                    // window (`is_shy`) links at the head instead — beneath
-                    // the app's own windows, where its app keeps it.
-                    let anchor = if self.is_shy() { rendering_list } else { (*rendering_list).prev };
-                    wl_list_insert(anchor, &mut self.node.link as *mut ffi::wl_list as *mut WlList);
 
                     if self.foreign_toplevel_handle.is_null() {
                         let list = (*self.server).foreign_toplevel_list;
@@ -2001,7 +1983,7 @@ impl Window {
                 }
                 if self.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
                     log::debug!("[LinkDbg] manage_finish ready->initialized app={:?} linked={}",
-                        self.get_app_id_string(), self.is_linked());
+                        self.get_app_id_string(), wm.in_render_list(self.id()));
                 }
                 self.state = WindowState::Initialized;
             }

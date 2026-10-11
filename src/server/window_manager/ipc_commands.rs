@@ -238,7 +238,7 @@ impl WindowManager {
                         (*w).get_app_id_string().unwrap_or_default(),
                         (*w).state,
                         (*w).closed,
-                        (*w).is_linked(),
+                        self.in_render_list((*w).id()),
                         (*w).tiling_mode,
                         (*w).status_edge,
                         self.is_window_being_moved(w),
@@ -1161,17 +1161,8 @@ impl WindowManager {
                 // order the reorder pass applies within a layer, which a
                 // window list keyed by slot id cannot show. -1 = not linked.
                 let mut stack_of: std::collections::HashMap<*mut Window, i64> = std::collections::HashMap::new();
-                {
-                    let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-                    let mut curr = (*render_list).next;
-                    let mut i = 0i64;
-                    while !curr.is_null() && curr != render_list {
-                        let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-                        let win = (*node).window();
-                        stack_of.insert(win, i);
-                        i += 1;
-                        curr = (*curr).next;
-                    }
+                for (i, win) in self.render_list().into_iter().enumerate() {
+                    stack_of.insert(win, i as i64);
                 }
                 let mut out = String::new();
                 let sp = crate::shared::layout().snap_params();

@@ -332,12 +332,8 @@ impl Window {
         let (mx, my, mw, mh) = on_screen(me);
         // The render list runs bottom to top (raise_window moves to the
         // tail), so a target met before this window sits beneath it.
-        let list = &wm.rendering_requested.list as *const ffi::wl_list as *mut WlList;
-        let mut curr = (*list).next;
         let mut covered = false;
-        while curr != list {
-            let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            let w = (*node).window();
+        for w in wm.render_list() {
             if w == me {
                 return covered;
             }
@@ -351,7 +347,6 @@ impl Window {
                     covered = true;
                 }
             }
-            curr = (*curr).next;
         }
         false
     }

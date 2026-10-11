@@ -170,63 +170,14 @@ impl WindowManager {
             if !matches!((*w).state, crate::window::WindowState::Mapped) {
                 continue;
             }
-            if (*w).is_linked() {
+            if self.in_render_list((*w).id()) {
                 continue;
             }
             // Borrowed (`is_status_bar`), not `get_app_id_string`: this runs
             // three times a transaction — once a vblank during a drag — and
             // allocated a String per window to prefix-match it.
             if (*w).is_status_bar() {
-                log::info!("[LinkDbg] UNLINKED-MAPPED at {}: app={:?} link.prev_self={} link.prev_null={}",
-                    phase,
-                    (*w).get_app_id_string(),
-                    (*w).node.link.prev == &(*w).node.link as *const ffi::wl_list as *mut ffi::wl_list,
-                    (*w).node.link.prev.is_null());
-            }
-        }
-        self.debug_check_render_list(phase);
-    }
-
-    /// Structural check of rendering_requested.list: every member's neighbor
-    /// pointers must agree, and every Mapped status window must be reachable
-    /// from the head. Silent when consistent.
-    pub(crate) unsafe fn debug_check_render_list(&self, phase: &str) {
-        crate::wm_scope!();
-        let head = &self.rendering_requested.list as *const ffi::wl_list as *mut WlList;
-        let mut members: Vec<*mut WlList> = Vec::new();
-        let mut curr = (*head).next;
-        let mut steps = 0;
-        while curr != head {
-            if curr.is_null() {
-                log::info!("[LinkDbg] LIST BROKEN at {}: null next after {} steps", phase, steps);
-                return;
-            }
-            if (*(*curr).next).prev != curr {
-                log::info!("[LinkDbg] LIST INCONSISTENT at {}: member {:p} next.prev mismatch", phase, curr);
-            }
-            members.push(curr);
-            curr = (*curr).next;
-            steps += 1;
-            if steps > 10000 {
-                log::info!("[LinkDbg] LIST CYCLE at {}: >10000 members", phase);
-                return;
-            }
-        }
-        for &w in self.windows.iter() {
-            if w.is_null() || (*w).closed {
-                continue;
-            }
-            if !matches!((*w).state, crate::window::WindowState::Mapped) {
-                continue;
-            }
-            if !(*w).is_status_bar() {
-                continue;
-            }
-            let node = &(*w).node.link as *const ffi::wl_list as *mut WlList;
-            let reachable = members.contains(&node);
-            if (*w).is_linked() && !reachable {
-                log::info!("[LinkDbg] ORPHAN-RING at {}: app={:?} is_linked=true but unreachable from head",
-                    phase, (*w).get_app_id_string());
+                log::info!("[LinkDbg] UNLINKED-MAPPED at {}: app={:?}", phase, (*w).get_app_id_string());
             }
         }
     }
@@ -249,12 +200,7 @@ impl WindowManager {
 
         self.state = WindowManagerState::InflightConfigures(0);
 
-        let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*render_list).next;
-        while curr != render_list {
-            let next = (*curr).next;
-            let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            let window = (*node).window();
+        for window in self.render_list() {
             if (*window).manage_finish(self) {
                 if !(*window).wm_requested.resizing {
                     if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
@@ -262,7 +208,6 @@ impl WindowManager {
                     }
                 }
             }
-            curr = next;
         }
 
         if let WindowManagerState::InflightConfigures(count) = self.state {
@@ -306,14 +251,8 @@ impl WindowManager {
 
         log::debug!("render sequence start");
 
-        let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*render_list).next;
-        while curr != render_list {
-            let next = (*curr).next;
-            let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            let window = (*node).window();
+        for window in self.render_list() {
             (*window).render_start();
-            curr = next;
         }
 
         self.render_finish();
@@ -357,12 +296,7 @@ impl WindowManager {
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         crate::shared::layout().overlay_behavior.hash(&mut hasher);
-        let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*render_list).next;
-        while curr != render_list {
-            let next = (*curr).next;
-            let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            let window = (*node).window();
+        for window in self.render_list() {
             (*window).ref_key.hash(&mut hasher);
             rendered_fullscreen(window).hash(&mut hasher);
             fullscreen_on_top(self, window).hash(&mut hasher);
@@ -384,16 +318,11 @@ impl WindowManager {
                 };
                 (thickness > crate::shared::layout().bar_height).hash(&mut hasher);
             }
-            curr = next;
         }
         let new_order_hash = hasher.finish();
         let reorder = self.rendering_requested.order_hash != new_order_hash;
         self.rendering_requested.order_hash = new_order_hash;
-        curr = (*render_list).next;
-        while curr != render_list {
-            let next = (*curr).next;
-            let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            let window = (*node).window();
+        for window in self.render_list() {
             (*window).render_finish();
             if reorder {
                 {
@@ -471,7 +400,6 @@ impl WindowManager {
                     (*window).popup_tree.place_above(&(*window).tree);
                 }
             }
-            curr = next;
         }
 
         // Floating windows are a plane IN FRONT of the tiled ones: a tiled
@@ -497,11 +425,7 @@ impl WindowManager {
         if reorder {
             let wm_layer = crate::shared::scene().layers.wm.raw();
             let mut focused_popups: *mut Window = std::ptr::null_mut();
-            curr = (*render_list).next;
-            while curr != render_list {
-                let next = (*curr).next;
-                let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-                let window = (*node).window();
+            for window in self.render_list() {
                 let floats = matches!(
                     (*window).tiling_mode,
                     crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Utility
@@ -516,7 +440,6 @@ impl WindowManager {
                 // Last, so an open menu clears the plane it was just
                 // stacked behind (`raise_focused_popups`).
                 focused_popups = if (*window).is_seat_focused() { window } else { focused_popups };
-                curr = next;
             }
             if !focused_popups.is_null() {
                 self.raise_focused_popups(focused_popups);
@@ -561,7 +484,7 @@ impl WindowManager {
         (*self.server).om.commit_output_state(self.server);
 
         let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        curr = (*seats).next;
+        let mut curr = (*seats).next;
         while curr != seats {
             let next = (*curr).next;
             let seat = crate::container_of!(curr, crate::seat::Seat, link);

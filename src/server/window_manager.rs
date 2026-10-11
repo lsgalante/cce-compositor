@@ -56,7 +56,12 @@ pub struct WindowManagerScheduled {
 }
 
 pub struct WindowManagerRenderingRequested {
-    pub list: ffi::wl_list,
+    /// The render list, bottom of the stack first: the windows the manage
+    /// pass has found ready, in the order the reorder pass stacks them.
+    /// `Window::manage_start` adds a window (at the top, or the bottom for
+    /// a shy one), `raise_window` and `keep_status_bar_on_top` move one to
+    /// the top, and `set_closing` takes it out.
+    pub list: Vec<crate::window::WindowId>,
     pub order_hash: u64,
 }
 
@@ -518,7 +523,7 @@ impl WindowManager {
             output_config: std::ptr::null_mut(),
         };
         self.rendering_requested = WindowManagerRenderingRequested {
-            list: std::mem::zeroed(),
+            list: Vec::new(),
             order_hash: 0,
         };
         self.desk_pan_x = 0.0;
@@ -590,7 +595,6 @@ impl WindowManager {
         self.injected_super_held = false;
         self.injected_key_mods = 0;
 
-        ffi::wl_list_init(&mut self.rendering_requested.list);
 
         let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
         self.timeout = crate::event_source::Timer::add(event_loop, handle_timeout, self as *mut WindowManager as *mut _);
@@ -903,17 +907,8 @@ impl WindowManager {
 
         // Render-list membership feeds focus_cyclable: the focus ring only
         // walks windows that are actually being rendered.
-        let mut rendered = std::collections::HashSet::new();
-        let render_list = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*render_list).next;
-        while curr != render_list {
-            let node = crate::container_of!(curr, crate::wm_node::WmNode, link);
-            let window = (*node).window();
-            if !window.is_null() {
-                rendered.insert(window as usize);
-            }
-            curr = (*curr).next;
-        }
+        let rendered: std::collections::HashSet<usize> =
+            self.render_list().into_iter().map(|w| w as usize).collect();
 
         let mut windows = Vec::new();
         for &w in self.windows.iter() {
@@ -2088,30 +2083,10 @@ impl WindowManager {
                 status_bar_windows.push(win_ptr);
             }
         }
+        // Each Mapped status window moves to the top, in windows order —
+        // including one the list does not hold, which this links.
         for win_ptr in status_bar_windows {
-            let node_link = &mut (*win_ptr).node.link as *mut ffi::wl_list as *mut WlList;
-            let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-            if !node_link.is_null() && !list_head.is_null() {
-                // Unconditional remove+reinsert, not a `next != head` tail
-                // check: a node with a stale next that happened to equal the
-                // head skipped the move here AND read as linked to
-                // manage_start, so nothing ever re-attached it — the segment
-                // froze at its last applied position (the tray mis-slot
-                // wedge). The final order is identical (each Mapped status
-                // window moves to the tail in windows order) and the
-                // primitives no-op cleanly on every unlinked pointer state.
-                if !(*win_ptr).is_linked() {
-                    log::info!("[LinkDbg] keep_on_top healing unlinked app={:?}",
-                        (*win_ptr).get_app_id_string());
-                }
-                crate::server::wl_list_remove_and_reinit(node_link);
-                let last = (*list_head).prev;
-                // head.prev can only name this node via pre-existing
-                // corruption (a dangling backpointer); fall back to the head
-                // so the node still rejoins the list.
-                let after = if last.is_null() || last == node_link { list_head } else { last };
-                crate::server::wl_list_insert(after, node_link);
-            }
+            self.render_list_raise((*win_ptr).id());
         }
     }
 
@@ -2153,6 +2128,33 @@ impl WindowManager {
         (*window).popup_tree.raise_to_top();
     }
 
+    pub fn in_render_list(&self, id: crate::window::WindowId) -> bool {
+        self.rendering_requested.list.contains(&id)
+    }
+
+    /// Take `id` out of the render list, if it is there.
+    pub fn render_list_remove(&mut self, id: crate::window::WindowId) {
+        self.rendering_requested.list.retain(|&w| w != id);
+    }
+
+    /// Put `id` on top of the render list, moving it if it is there.
+    pub fn render_list_raise(&mut self, id: crate::window::WindowId) {
+        self.render_list_remove(id);
+        self.rendering_requested.list.push(id);
+    }
+
+    /// Put `id` at the bottom of the render list, moving it if it is there.
+    pub fn render_list_lower(&mut self, id: crate::window::WindowId) {
+        self.render_list_remove(id);
+        self.rendering_requested.list.insert(0, id);
+    }
+
+    /// The render list's windows, bottom first, copied out: a loop that
+    /// hands the window manager to each window may change the list.
+    pub fn render_list(&self) -> Vec<*mut Window> {
+        self.rendering_requested.list.iter().filter_map(|&id| self.window(id)).collect()
+    }
+
     pub unsafe fn raise_window(&mut self, window: *mut Window) {
         crate::wm_scope!(mut);
         if window.is_null() {
@@ -2162,20 +2164,12 @@ impl WindowManager {
         if (*window).is_shy() {
             return;
         }
-        let node_link = &mut (*window).node.link as *mut ffi::wl_list as *mut WlList;
-        let list_head = &mut self.rendering_requested.list as *mut ffi::wl_list as *mut WlList;
-        if !node_link.is_null() && !list_head.is_null() {
-            // Same shape as keep_status_bar_on_top: no `next != head` tail
-            // check (stale pointers made it lie), just a safe move-to-tail.
-            // A window that isn't Mapped stays out of the render list — its
-            // linking is manage_start's job, and force-inserting a
-            // Closing/Init window here would resurrect it for one frame.
-            if (*window).is_linked() || matches!((*window).state, crate::window::WindowState::Mapped) {
-                crate::server::wl_list_remove_and_reinit(node_link);
-                let last = (*list_head).prev;
-                let after = if last.is_null() || last == node_link { list_head } else { last };
-                crate::server::wl_list_insert(after, node_link);
-            }
+        // A window that isn't Mapped stays out of the render list — its
+        // linking is manage_start's job, and force-inserting a Closing/Init
+        // window here would resurrect it for one frame.
+        let id = (*window).id();
+        if self.in_render_list(id) || matches!((*window).state, crate::window::WindowState::Mapped) {
+            self.render_list_raise(id);
         }
         self.keep_status_bar_on_top();
         // Restacking changes who covers the adjust target.

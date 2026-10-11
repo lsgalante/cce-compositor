@@ -97,8 +97,6 @@ pub mod window;
 pub mod xdg_toplevel;
 #[path = "server/xdg_popup.rs"]
 pub mod xdg_popup;
-#[path = "server/wm_node.rs"]
-pub mod wm_node;
 #[path = "server/xwayland_window.rs"]
 pub mod xwayland_window;
 #[path = "server/min_sizes.rs"]

@@ -412,7 +412,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     match (*window).state {
         crate::window::WindowState::Init | crate::window::WindowState::Closing => {}
         crate::window::WindowState::Ready | crate::window::WindowState::Initialized | crate::window::WindowState::Mapped => {
-            (*window).set_closing();
+            (*window).set_closing(&mut *crate::reentry::wm((*window).server));
             crate::shared::pending().dirty_windowing();
         }
     }
@@ -731,7 +731,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         assert!((*window).state != crate::window::WindowState::Ready);
         if (*window).get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
             log::debug!("[LinkDbg] initial commit -> ready app={:?} was_state={:?} linked={}",
-                (*window).get_app_id_string(), (*window).state, (*window).is_linked());
+                (*window).get_app_id_string(), (*window).state, wm.in_render_list((*window).id()));
         }
         (*window).state = crate::window::WindowState::Ready;
         let mut new_geometry = std::mem::zeroed();
