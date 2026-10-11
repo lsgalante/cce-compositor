@@ -45,16 +45,15 @@ impl WindowManager {
                     return "0\n".to_string();
                 }
                 let mut faded = false;
-                let windows: Vec<*mut crate::window::Window> =
-                    self.windows.iter().collect();
-                for window in windows {
-                    if window.is_null() || (*window).closed {
-                        continue;
-                    }
-                    if (*window).unreliable_pid() == pid && (*window).wants_map_fade() {
-                        Window::start_map_fade(self, (*window).id(), 0.0, ms);
-                        faded = true;
-                    }
+                let fading: Vec<crate::window::WindowId> = self
+                    .windows
+                    .values()
+                    .filter(|w| !w.closed && w.unreliable_pid() == pid && w.wants_map_fade())
+                    .map(|w| w.id())
+                    .collect();
+                for id in fading {
+                    Window::start_map_fade(self, id, 0.0, ms);
+                    faded = true;
                 }
                 // The same client may own layer surfaces instead of (or as
                 // well as) windows — cce-cloud's launcher is one.
@@ -147,22 +146,22 @@ impl WindowManager {
             // surface-backed or not. Found the zoom-ghost bug; kept as a
             // debugging tool.
             "debug-buffers" => {
-                let win = if parts.len() >= 2 {
-                    self.find_window_by_query(&parts[1..].join(" "))
+                let id = if parts.len() >= 2 {
+                    self.find_window_id(&parts[1..].join(" "))
                 } else {
-                    self.focused_window()
+                    crate::window::id_of(self.focused_window())
                 };
-                if win.is_null() {
+                let Some(win) = id.and_then(|id| self.windows.get(id)) else {
                     return "error: no matching window\n".to_string();
-                }
+                };
                 let mut out = format!(
                     "window box=({},{},{}x{}) scale={} saved={} tree_en={} surf_en={} saved_en={}\n",
-                    (*win).box_geom.x, (*win).box_geom.y, (*win).box_geom.width, (*win).box_geom.height,
-                    (*win).scale,
-                    (*win).surfaces.saved,
-                    (*win).tree.is_enabled(),
-                    (*win).surfaces.tree.is_enabled(),
-                    (*win).surfaces.saved_tree.is_enabled(),
+                    win.box_geom.x, win.box_geom.y, win.box_geom.width, win.box_geom.height,
+                    win.scale,
+                    win.surfaces.saved,
+                    win.tree.is_enabled(),
+                    win.surfaces.tree.is_enabled(),
+                    win.surfaces.saved_tree.is_enabled(),
                 );
                 unsafe extern "C" fn dump_iter(
                     buffer: *mut ffi::wlr_scene_buffer,
@@ -186,10 +185,10 @@ impl WindowManager {
                     ));
                 }
                 for (name, node) in [
-                    ("surfaces", (*win).surfaces.tree.node()),
-                    ("saved", (*win).surfaces.saved_tree.node()),
-                    ("popup", (*win).popup_tree.node()),
-                    ("whole-tree", (*win).tree.node()),
+                    ("surfaces", win.surfaces.tree.node()),
+                    ("saved", win.surfaces.saved_tree.node()),
+                    ("popup", win.popup_tree.node()),
+                    ("whole-tree", win.tree.node()),
                 ] {
                     out.push_str(&format!("[{}]\n", name));
                     ffi::wlr_scene_node_for_each_buffer(
@@ -441,9 +440,13 @@ impl WindowManager {
                 if parts.len() < 3 { return "error: missing x or y\n".to_string(); }
                 if let (Ok(x), Ok(y)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
                     if let Some(seat) = self.first_seat() {
-                        if let Some(fw) = (*seat).focused.live_window(self) {
-                            (*fw).virtual_x = x;
-                            (*fw).virtual_y = y;
+                        let focused = match (*seat).focused {
+                            crate::seat::Focus::Window(id) => self.windows.get_mut(id),
+                            _ => None,
+                        };
+                        if let Some(fw) = focused {
+                            fw.virtual_x = x;
+                            fw.virtual_y = y;
                             crate::shared::pending().dirty_windowing();
                             return "ok\n".to_string();
                         }
@@ -592,16 +595,15 @@ impl WindowManager {
                     other => return format!("error: unknown mode: {} (floating|tiled|fullscreen)\n", other),
                 };
                 let target = if parts.len() >= 3 {
-                    self.find_window_by_query(&parts[2..].join(" "))
+                    self.find_window_id(&parts[2..].join(" "))
                 } else {
-                    self.focused_window()
+                    crate::window::id_of(self.focused_window())
                 };
-                if target.is_null() {
+                let Some(id) = target else {
                     return "error: no target window\n".to_string();
-                }
+                };
                 {
-                    use crate::policy::api::{Command, Compositor, WindowId};
-                    let id = WindowId((*target).ref_key);
+                    use crate::policy::api::{Command, Compositor};
                     self.apply(&Command::SetWindowMode { id, mode, locked: true });
                     self.apply(&Command::Relayout);
                 }
@@ -616,18 +618,17 @@ impl WindowManager {
                     return "error: missing app_id/id\n".to_string();
                 };
                 if let Some(seat) = self.first_seat() {
-                    let best_target = self.find_window_by_query(&query);
-                    if !best_target.is_null() {
-                        if (*best_target).minimized {
-                            (*best_target).minimized = false;
+                    if let Some(id) = self.find_window_id(&query) {
+                        if let Some(w) = self.windows.get_mut(id) {
+                            w.minimized = false;
                         }
-                        (*seat).focus(self, crate::seat::Focus::window(best_target));
-                        self.raise_window((*best_target).id());
+                        (*seat).focus(self, crate::seat::Focus::Window(id));
+                        self.raise_window(id);
                         crate::shared::pending().dirty_windowing();
                         if wait {
                             if let Some(tx) = self.pending_ipc_reply.take() {
                                 let started = crate::util::timestamp_ns();
-                                self.settle_waiters.push(SettleWaiter::new(tx, (*best_target).ref_key, started));
+                                self.settle_waiters.push(SettleWaiter::new(tx, id.0, started));
                                 self.arm_settle_timer();
                                 return String::new();
                             }
@@ -648,9 +649,9 @@ impl WindowManager {
                 if parts.len() < 2 { return "error: missing app_id/id\n".to_string(); }
                 let query = parts[1].to_lowercase();
                 let title_filter = parts[2..].join(" ").to_lowercase();
-                let mut target: *mut Window = std::ptr::null_mut();
+                let mut target: Option<crate::window::WindowId> = None;
                 let mut best_score = 0;
-                for w in self.windows.values_mut() {
+                for w in self.windows.values() {
                     if w.closed
                         || !matches!(w.state, crate::window::WindowState::Mapped)
                     {
@@ -673,15 +674,15 @@ impl WindowManager {
                     };
                     if score > best_score {
                         best_score = score;
-                        target = w;
+                        target = Some(w.id());
                     }
                 }
-                if target.is_null() {
+                let Some(target) = target.and_then(|id| self.windows.get_mut(id)) else {
                     return "error: window not found\n".to_string();
-                }
-                let title = (*target).get_title_string().unwrap_or_default();
+                };
+                let title = target.get_title_string().unwrap_or_default();
                 log::info!("[ipc] close-window: closing {:?}", title);
-                (*target).close();
+                target.close();
                 format!("ok {}\n", title)
             }
             "move-window" => {
@@ -700,22 +701,15 @@ impl WindowManager {
                         parts[1]
                     );
                 };
-                let target: *mut Window = if parts.len() >= 3 {
-                    self.find_window_by_query(&parts[2..].join(" "))
-                } else if let Some(seat) = self.first_seat() {
-                    match (*seat).focused {
-                        crate::seat::Focus::Window(_) => (*seat).focused.as_window(self),
-                        _ => std::ptr::null_mut(),
-                    }
+                let target = if parts.len() >= 3 {
+                    self.find_window_id(&parts[2..].join(" "))
                 } else {
-                    std::ptr::null_mut()
+                    self.seat_focused_window_id()
                 };
-                if target.is_null() {
+                let Some(target) = target.and_then(|id| self.windows.get_mut(id)) else {
                     return "error: window not found\n".to_string();
-                }
-                if (*target).minimized {
-                    (*target).minimized = false;
-                }
+                };
+                target.minimized = false;
 
                 let (x, y, _, _) = crate::policy::cells::square_rect(
                     col,
@@ -725,20 +719,20 @@ impl WindowManager {
                     sp.gap_width,
                     sp.cell_inset,
                 );
-                (*target).virtual_x = x;
-                (*target).virtual_y = y;
+                target.virtual_x = x;
+                target.virtual_y = y;
                 // Saved floating geometry follows the window, so a later
                 // Tiled -> Floating transition restores it at the new square
                 // rather than yanking it back to where it used to live.
-                (*target).saved_floating_virtual_x = x;
-                (*target).saved_floating_virtual_y = y;
+                target.saved_floating_virtual_x = x;
+                target.saved_floating_virtual_y = y;
                 crate::shared::pending().dirty_windowing();
 
                 let cell = crate::policy::cells::window_span_label(
                     x,
                     y,
-                    (*target).box_geom.width as f64,
-                    (*target).box_geom.height as f64,
+                    target.box_geom.width as f64,
+                    target.box_geom.height as f64,
                     sp.cell_w,
                     sp.cell_h,
                     sp.gap_width,
@@ -761,30 +755,25 @@ impl WindowManager {
                 ) else {
                     return usage.to_string();
                 };
-                let target: *mut Window = if parts.len() >= 4 {
-                    self.find_window_by_query(&parts[3..].join(" "))
-                } else if let Some(seat) = self.first_seat() {
-                    match (*seat).focused {
-                        crate::seat::Focus::Window(_) => (*seat).focused.as_window(self),
-                        _ => std::ptr::null_mut(),
-                    }
+                let target = if parts.len() >= 4 {
+                    self.find_window_id(&parts[3..].join(" "))
                 } else {
-                    std::ptr::null_mut()
+                    self.seat_focused_window_id()
                 };
-                if target.is_null() {
+                let Some(target) = target.and_then(|id| self.windows.get_mut(id)) else {
                     return "error: window not found\n".to_string();
-                }
+                };
                 if matches!(
-                    (*target).tiling_mode,
+                    target.tiling_mode,
                     crate::tiling::TilingMode::Fullscreen
                         | crate::tiling::TilingMode::Utility
                         | crate::tiling::TilingMode::Status
                 ) {
                     return "error: a fullscreen, utility or status window sizes itself\n".to_string();
                 }
-                let (w, h) = (*target).wm_scheduled.dimensions_hint.clamp(w, h);
-                (*target).box_geom.width = w as i32;
-                (*target).box_geom.height = h as i32;
+                let (w, h) = target.wm_scheduled.dimensions_hint.clamp(w, h);
+                target.box_geom.width = w as i32;
+                target.box_geom.height = h as i32;
                 crate::shared::pending().dirty_windowing();
                 format!("ok w={} h={}\n", w, h)
             }
@@ -808,11 +797,10 @@ impl WindowManager {
                         if out.is_empty() { "none\n".to_string() } else { out }
                     }
                     "forget" if parts.len() >= 3 => {
-                        let target = self.find_window_by_query(&parts[2..].join(" "));
-                        if target.is_null() {
+                        let Some(target) = self.find_window_id(&parts[2..].join(" ")).and_then(|id| self.windows.get(id)) else {
                             return "error: window not found\n".to_string();
-                        }
-                        let crate::window::WindowImpl::Xwayland(xw) = (*target).impl_type() else {
+                        };
+                        let crate::window::WindowImpl::Xwayland(xw) = target.impl_type() else {
                             return "error: not an X11 window; only those have a learned minimum\n".to_string();
                         };
                         if xw.is_null() {
@@ -842,23 +830,16 @@ impl WindowManager {
                 // focused window if omitted) is centered in the output, then focus
                 // and raise it. Replies with the window's resulting on-screen box so
                 // the caller can screenshot it directly (grim -g "X,Y WxH").
-                let target: *mut Window = if parts.len() >= 2 {
-                    self.find_window_by_query(&parts[1..].join(" "))
-                } else if let Some(seat) = self.first_seat() {
-                    match (*seat).focused {
-                        crate::seat::Focus::Window(_) => (*seat).focused.as_window(self),
-                        _ => std::ptr::null_mut(),
-                    }
+                let target = if parts.len() >= 2 {
+                    self.find_window_id(&parts[1..].join(" "))
                 } else {
-                    std::ptr::null_mut()
+                    self.seat_focused_window_id()
                 };
-
-                if target.is_null() {
+                let Some(target_id) = target.filter(|&id| self.windows.contains(id)) else {
                     return "error: window not found\n".to_string();
-                }
-                if (*target).minimized {
-                    (*target).minimized = false;
-                }
+                };
+                let target = window_mut!(self, target_id, String::new());
+                target.minimized = false;
 
                 // Enabled output's origin + size (fall back to 1920x1080 @ 0,0).
                 let (mut vp_w, mut vp_h) = (1920.0_f64, 1080.0_f64);
@@ -878,25 +859,27 @@ impl WindowManager {
                     curr_out = (*curr_out).next;
                 }
 
-                let w = if (*target).box_geom.width > 0 { (*target).box_geom.width as f64 } else { 800.0 };
-                let h = if (*target).box_geom.height > 0 { (*target).box_geom.height as f64 } else { 600.0 };
+                let w = if target.box_geom.width > 0 { target.box_geom.width as f64 } else { 800.0 };
+                let h = if target.box_geom.height > 0 { target.box_geom.height as f64 } else { 600.0 };
 
                 // Center the window's virtual center in the viewport. Sets desk_pan
                 // directly (no animation) so the reply geometry is immediately valid.
-                let center_x = (*target).virtual_x + w / 2.0;
-                let center_y = (*target).virtual_y + h / 2.0;
+                let center_x = target.virtual_x + w / 2.0;
+                let center_y = target.virtual_y + h / 2.0;
                 self.desk_pan_x = center_x - (vp_w / 2.0) / self.desk_zoom;
                 self.desk_pan_y = center_y - (vp_h / 2.0) / self.desk_zoom;
 
                 if let Some(seat) = self.first_seat() {
-                    (*seat).focus(self, crate::seat::Focus::window(target));
+                    (*seat).focus(self, crate::seat::Focus::Window(target_id));
                 }
-                self.raise_window((*target).id());
+                self.raise_window(target_id);
                 crate::shared::pending().dirty_windowing();
 
                 // screen = output_origin + (virtual - desk_pan) * zoom
-                let screen_x = phys_x as f64 + ((*target).virtual_x - self.desk_pan_x) * self.desk_zoom;
-                let screen_y = phys_y as f64 + ((*target).virtual_y - self.desk_pan_y) * self.desk_zoom;
+                let target = window_mut!(self, target_id, String::new());
+                let (vx, vy) = (target.virtual_x, target.virtual_y);
+                let screen_x = phys_x as f64 + (vx - self.desk_pan_x) * self.desk_zoom;
+                let screen_y = phys_y as f64 + (vy - self.desk_pan_y) * self.desk_zoom;
                 format!(
                     "ok x={} y={} w={} h={}\n",
                     screen_x.round() as i32,
@@ -912,19 +895,14 @@ impl WindowManager {
                 let path = crate::screenshot::default_path();
                 match parts.get(1).copied() {
                     Some("window") => {
-                        let target: *mut Window = if parts.len() >= 3 {
-                            self.find_window_by_query(&parts[2..].join(" "))
-                        } else if let Some(seat) = self.first_seat() {
-                            match (*seat).focused {
-                                crate::seat::Focus::Window(_) => (*seat).focused.as_window(self),
-                                _ => std::ptr::null_mut(),
-                            }
+                        let target = if parts.len() >= 3 {
+                            self.find_window_id(&parts[2..].join(" "))
                         } else {
-                            std::ptr::null_mut()
+                            self.seat_focused_window_id()
                         };
-                        if target.is_null() {
+                        let Some(target) = target.and_then(|id| self.windows.ptr(id)) else {
                             return "error: window not found\n".to_string();
-                        }
+                        };
                         match crate::screenshot::capture_window(target, path) {
                             Ok(p) => format!("ok {}\n", p),
                             Err(e) => format!("error: {}\n", e),
@@ -1141,15 +1119,17 @@ impl WindowManager {
                 // `windows --json` emits one JSON object per line; titles and
                 // app_ids are then properly escaped, unlike the text format.
                 let as_json = parts.get(1).copied() == Some("--json");
-                let mut focused_window: *mut Window = std::ptr::null_mut();
+                let mut focused_id: Option<crate::window::WindowId> = None;
                 let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
                 let mut curr_seat = (*seats_list).next;
                 while curr_seat != seats_list {
                     let next_seat = (*curr_seat).next;
                     let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
-                    if let Some(w) = (*seat).focused.live_window(self) {
-                        focused_window = w;
-                        break;
+                    if let crate::seat::Focus::Window(id) = (*seat).focused {
+                        if self.windows.contains(id) {
+                            focused_id = Some(id);
+                            break;
+                        }
                     }
                     curr_seat = next_seat;
                 }
@@ -1157,24 +1137,28 @@ impl WindowManager {
                 // Render-list position, bottom (0) to top: the stacking
                 // order the reorder pass applies within a layer, which a
                 // window list keyed by slot id cannot show. -1 = not linked.
-                let mut stack_of: std::collections::HashMap<*mut Window, i64> = std::collections::HashMap::new();
-                for (i, win) in self.render_list().into_iter().enumerate() {
-                    stack_of.insert(win, i as i64);
-                }
+                let stack_of: std::collections::HashMap<crate::window::WindowId, i64> = self
+                    .rendering_requested
+                    .list
+                    .iter()
+                    .filter(|&&id| self.windows.contains(id))
+                    .enumerate()
+                    .map(|(i, &id)| (id, i as i64))
+                    .collect();
                 let mut out = String::new();
                 let sp = crate::shared::layout().snap_params();
-                for w in self.windows.iter() {
-                    if !w.is_null() && !(*w).closed && !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
-                        let stack = stack_of.get(&w).copied().unwrap_or(-1);
-                        let app_id = (*w).get_app_id_string().unwrap_or_default();
-                        let title = (*w).get_title_string().unwrap_or_default();
+                for w in self.windows.values() {
+                    if !w.closed && !matches!(w.state, crate::window::WindowState::Closing | crate::window::WindowState::Init) {
+                        let stack = stack_of.get(&w.id()).copied().unwrap_or(-1);
+                        let app_id = w.get_app_id_string().unwrap_or_default();
+                        let title = w.get_title_string().unwrap_or_default();
                         // Which desktop square(s) the window sits on, chess
                         // style: "C-9" for one, "C-9:D-9" for a block.
                         let cell = crate::policy::cells::window_span_label(
-                            (*w).virtual_x,
-                            (*w).virtual_y,
-                            (*w).box_geom.width as f64,
-                            (*w).box_geom.height as f64,
+                            w.virtual_x,
+                            w.virtual_y,
+                            w.box_geom.width as f64,
+                            w.box_geom.height as f64,
                             sp.cell_w,
                             sp.cell_h,
                             sp.gap_width,
@@ -1183,26 +1167,26 @@ impl WindowManager {
                             // The line is cce-core's `ctl::WindowInfo`, which
                             // the status bar, its OSD and cce-remote parse.
                             let info = cce_core::ipc::ctl::WindowInfo {
-                                id: (*w).ref_key.index as u64,
+                                id: w.ref_key.index as u64,
                                 app_id: app_id.clone(),
                                 title: title.clone(),
-                                mode: (*w).tiling_mode.as_str().to_string(),
-                                x: (*w).box_geom.x,
-                                y: (*w).box_geom.y,
-                                w: (*w).box_geom.width,
-                                h: (*w).box_geom.height,
-                                vx: (*w).virtual_x,
-                                vy: (*w).virtual_y,
-                                x11: match (*w).impl_type() {
+                                mode: w.tiling_mode.as_str().to_string(),
+                                x: w.box_geom.x,
+                                y: w.box_geom.y,
+                                w: w.box_geom.width,
+                                h: w.box_geom.height,
+                                vx: w.virtual_x,
+                                vy: w.virtual_y,
+                                x11: match w.impl_type() {
                                     crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => Some((*(*xw).xsurface).window_id),
                                     _ => None,
                                 },
                                 cell: cell.clone(),
-                                minimized: (*w).minimized,
-                                has_parent: (*w).has_parent,
-                                focused: w == focused_window,
+                                minimized: w.minimized,
+                                has_parent: w.has_parent,
+                                focused: Some(w.id()) == focused_id,
                                 stack,
-                                ssd: (*w).wm_requested.ssd,
+                                ssd: w.wm_requested.ssd,
                                 // Why a window has (or lacks) rounded corners,
                                 // blur and shadow. Without it the only way to
                                 // tell is a full-output screenshot: a
@@ -1217,22 +1201,22 @@ impl WindowManager {
                         } else {
                             out.push_str(&format!(
                                 "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} cell={} minimized={} has_parent={} focused={} stack={} ssd={} decorated={} beveled={}\n",
-                                (*w).ref_key.index,
+                                w.ref_key.index,
                                 app_id,
                                 title,
-                                (*w).tiling_mode.as_str(),
-                                (*w).box_geom.x,
-                                (*w).box_geom.y,
-                                (*w).box_geom.width,
-                                (*w).box_geom.height,
-                                (*w).virtual_x,
-                                (*w).virtual_y,
+                                w.tiling_mode.as_str(),
+                                w.box_geom.x,
+                                w.box_geom.y,
+                                w.box_geom.width,
+                                w.box_geom.height,
+                                w.virtual_x,
+                                w.virtual_y,
                                 cell,
-                                (*w).minimized,
-                                (*w).has_parent,
-                                w == focused_window,
+                                w.minimized,
+                                w.has_parent,
+                                Some(w.id()) == focused_id,
                                 stack,
-                                (*w).wm_requested.ssd,
+                                w.wm_requested.ssd,
                                 crate::shared::layout().is_decorated_app(&app_id),
                                 crate::shared::layout().is_beveled_app(&app_id),
                             ));
@@ -1570,11 +1554,11 @@ impl WindowManager {
                 if parts.len() < 3 {
                     return "error: usage: touchpad-view-regions <x11:ID|id|app_id> clear|<x,y,w,h> ...\n".to_string();
                 }
-                let Some(w) = window_by_query(self.windows.iter(), parts[1]) else {
+                let Some(w) = window_by_query(self.windows.values(), parts[1]).and_then(|id| self.windows.get_mut(id)) else {
                     return format!("error: no mapped window matches {}\n", parts[1]);
                 };
                 if parts[2] == "clear" {
-                    (*w).view_regions = None;
+                    w.view_regions = None;
                     log::info!("[touchpad-view-regions] {} cleared", parts[1]);
                     return "ok\n".to_string();
                 }
@@ -1587,7 +1571,7 @@ impl WindowManager {
                     regions.push([v[0], v[1], v[2], v[3]]);
                 }
                 log::info!("[touchpad-view-regions] {} -> {:?}", parts[1], regions);
-                (*w).view_regions = Some(regions);
+                w.view_regions = Some(regions);
                 "ok\n".to_string()
             }
             "place-next" => {

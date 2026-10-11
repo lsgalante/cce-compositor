@@ -442,24 +442,24 @@ pub fn point_in_view_regions(regions: &[[f64; 4]], x: f64, y: f64) -> bool {
 /// app_id. Only the first form is unambiguous for an app with several
 /// windows, which is why a client that publishes per-window state should
 /// use it.
-pub unsafe fn window_by_query(windows: impl Iterator<Item = *mut Window>, query: &str) -> Option<*mut Window> {
+pub unsafe fn window_by_query<'a>(windows: impl Iterator<Item = &'a Window>, query: &str) -> Option<crate::window::WindowId> {
     let x11 = query.strip_prefix("x11:").and_then(|v| v.parse::<u32>().ok());
     let id = query.parse::<u32>().ok();
-    windows.into_iter().find(|&w| {
-        if w.is_null() || (*w).closed || !matches!((*w).state, crate::window::WindowState::Mapped) {
+    windows.into_iter().find(|w| {
+        if w.closed || !matches!(w.state, crate::window::WindowState::Mapped) {
             return false;
         }
         if let Some(x11) = x11 {
-            return match (*w).impl_type() {
+            return match w.impl_type() {
                 crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*(*xw).xsurface).window_id == x11,
                 _ => false,
             };
         }
         if let Some(id) = id {
-            return (*w).ref_key.index == id;
+            return w.ref_key.index == id;
         }
-        (*w).get_app_id_string().map_or(false, |a| app_id_matches(query, &a))
-    })
+        w.get_app_id_string().map_or(false, |a| app_id_matches(query, &a))
+    }).map(|w| w.id())
 }
 
 pub fn app_id_matches(pattern: &str, app_id: &str) -> bool {
@@ -2432,24 +2432,30 @@ impl WindowManager {
     /// rules (numeric window id first, then app_id with
     /// exact-beats-substring). Returns null if nothing mapped matches.
     /// Shared by focus-window / center-window / window-stream.
-    pub unsafe fn find_window_by_query(&self, query: &str) -> *mut Window {
+    /// The mapped window a user query names (`policy::query`: an id, else
+    /// an app_id, exact before substring).
+    pub fn find_window_id(&self, query: &str) -> Option<crate::window::WindowId> {
         crate::wm_scope!();
         let mut candidates = Vec::new();
-        let mut ptrs: Vec<*mut Window> = Vec::new();
-        for w in self.windows.iter() {
-            if !w.is_null() && !(*w).closed
-                && matches!((*w).state, crate::window::WindowState::Mapped)
-            {
+        let mut ids = Vec::new();
+        for w in self.windows.values() {
+            if !w.closed && matches!(w.state, crate::window::WindowState::Mapped) {
                 candidates.push(crate::policy::query::QueryCandidate {
-                    index: (*w).ref_key.index,
-                    app_id: (*w).get_app_id_string(),
+                    index: w.ref_key.index,
+                    app_id: w.get_app_id_string(),
                 });
-                ptrs.push(w);
+                ids.push(w.id());
             }
         }
-        match crate::policy::query::find_window(&candidates, query) {
-            Some(pos) => ptrs[pos],
-            None => std::ptr::null_mut(),
+        crate::policy::query::find_window(&candidates, query).map(|pos| ids[pos])
+    }
+
+    /// The window the first seat's keyboard focus is on, while it lives.
+    pub unsafe fn seat_focused_window_id(&self) -> Option<crate::window::WindowId> {
+        let seat = self.first_seat()?;
+        match (*seat).focused {
+            crate::seat::Focus::Window(id) if self.windows.contains(id) => Some(id),
+            _ => None,
         }
     }
 
@@ -2573,14 +2579,14 @@ unsafe extern "C" fn handle_stream_timer(data: *mut std::ffi::c_void) -> std::os
     let mut captured: Vec<(*mut Window, std::sync::Arc<crate::stream_server::Frame>)> = Vec::new();
     let mut dead: Vec<usize> = Vec::new();
     for i in 0..subs.len() {
-        let win = if subs[i].query == "focused" {
-            wm.focused_window()
+        let id = if subs[i].query == "focused" {
+            crate::window::id_of(wm.focused_window())
         } else {
-            wm.find_window_by_query(&subs[i].query)
+            wm.find_window_id(&subs[i].query)
         };
-        if win.is_null() {
+        let Some(win) = id.and_then(|id| wm.windows.ptr(id)) else {
             continue;
-        }
+        };
         let keepalive = subs[i].last_sent.elapsed().as_secs() >= 15;
         if !(*win).stream_dirty && !subs[i].needs_frame && !keepalive {
             continue;
