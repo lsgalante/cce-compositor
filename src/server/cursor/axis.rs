@@ -31,7 +31,7 @@ pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager
         }
     }
 
-    let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+    let wlr_keyboard = seat.wlr_seat.keyboard();
     // Modifiers held through `ccectl key-down` count too, so a headless
     // session can exercise the modifier branches below.
     let modifiers = if !wlr_keyboard.is_null() {
@@ -55,7 +55,7 @@ pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager
                     let wlr_output = crate::output_manager::output_at(cx, cy);
                     let (phys_x, phys_y) = if !wlr_output.is_null() {
                         let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-                        ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut output_box);
+                        ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut output_box);
                         (output_box.x as f64, output_box.y as f64)
                     } else {
                         (0.0, 0.0)
@@ -204,15 +204,7 @@ pub(crate) unsafe fn on_axis(cursor: &mut Cursor, wm: &mut crate::window_manager
         return;
     }
 
-    ffi::wlr_seat_pointer_notify_axis(
-        seat.wlr_seat,
-        (*event).time_msec,
-        (*event).orientation,
-        delta,
-        delta_discrete,
-        (*event).source,
-        (*event).relative_direction,
-    );
+    seat.wlr_seat.pointer_notify_axis((*event).time_msec, (*event).orientation, delta, delta_discrete, (*event).source, (*event).relative_direction);
 }
 
 /// An emulated view drag: trackpad input over a window turned into what
@@ -349,15 +341,11 @@ impl Cursor {
         }
         seat.ensure_synthetic_keyboard();
         let time = crate::util::msec_timestamp();
-        let mut repeat = None;
-        let kbd = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
-        if !kbd.is_null() {
-            repeat = Some(((*kbd).repeat_info.rate, (*kbd).repeat_info.delay));
-            ffi::wlr_keyboard_set_repeat_info(kbd, 0, 0);
-        }
-        ffi::wlr_seat_pointer_notify_enter(seat.wlr_seat, surface, sx, sy);
-        ffi::wlr_seat_keyboard_notify_key(seat.wlr_seat, time, KEY_SPACE, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
-        ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+        let repeat = seat.wlr_seat.keyboard_repeat_info();
+        seat.wlr_seat.set_keyboard_repeat_info(0, 0);
+        ffi::wlr_seat_pointer_notify_enter(seat.wlr_seat.ptr(), surface, sx, sy);
+        seat.wlr_seat.keyboard_notify_key(time, KEY_SPACE, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
+        seat.wlr_seat.pointer_notify_frame();
         log::info!("[ViewDrag] begin button={:#x} from_pinch={} at surface ({:.0}, {:.0}) ratio={}", button, from_pinch, sx, sy, ratio);
         self.view_drag = Some(ViewDrag { button, surface, sx, sy, origin_sx: sx, origin_sy: sy, ratio, from_pinch, button_down: false, repeat });
         self.arm_view_drag_timer();
@@ -374,15 +362,15 @@ impl Cursor {
         let seat = &mut *self.seat;
         let time = crate::util::msec_timestamp();
         if !d.button_down {
-            ffi::wlr_seat_pointer_notify_button(seat.wlr_seat, time, d.button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED);
-            ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+            seat.wlr_seat.pointer_notify_button(time, d.button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED);
+            seat.wlr_seat.pointer_notify_frame();
             d.button_down = true;
         }
         d.sx += dx * d.ratio;
         d.sy += dy * d.ratio;
         let (sx, sy) = (d.sx, d.sy);
-        ffi::wlr_seat_pointer_notify_motion(seat.wlr_seat, time, sx, sy);
-        ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+        seat.wlr_seat.pointer_notify_motion(time, sx, sy);
+        seat.wlr_seat.pointer_notify_frame();
         self.arm_view_drag_timer();
     }
 
@@ -396,19 +384,16 @@ impl Cursor {
         let seat = &mut *self.seat;
         let time = crate::util::msec_timestamp();
         if d.button_down {
-            ffi::wlr_seat_pointer_notify_button(seat.wlr_seat, time, d.button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED);
-            ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+            seat.wlr_seat.pointer_notify_button(time, d.button, ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED);
+            seat.wlr_seat.pointer_notify_frame();
         }
-        ffi::wlr_seat_keyboard_notify_key(seat.wlr_seat, time, KEY_SPACE, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);
+        seat.wlr_seat.keyboard_notify_key(time, KEY_SPACE, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);
         if let Some((rate, delay)) = d.repeat {
-            let kbd = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
-            if !kbd.is_null() {
-                ffi::wlr_keyboard_set_repeat_info(kbd, rate, delay);
-            }
+            seat.wlr_seat.set_keyboard_repeat_info(rate, delay);
         }
         // Put the client's idea of the pointer back where the cursor is.
         self.passthrough(wm, time);
-        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        self.wlr_seat.pointer_notify_frame();
     }
 
     /// A finger-source axis event over a `touchpad_view_apps` window.
@@ -549,7 +534,7 @@ impl Cursor {
             return None;
         }
         let pid = (*(*or).xsurface).pid;
-        let focused = ffi::river_wlr_seat_get_keyboard_focused_surface((*self.seat).wlr_seat);
+        let focused = self.wlr_seat.keyboard_focused_surface();
         if focused.is_null() {
             return None;
         }
@@ -595,8 +580,8 @@ impl Cursor {
         } else {
             ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
         };
-        ffi::wlr_seat_keyboard_notify_key(seat.wlr_seat, time, key, state);
-        let kb = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+        seat.wlr_seat.keyboard_notify_key(time, key, state);
+        let kb = seat.wlr_seat.keyboard();
         if !kb.is_null() && !(*kb).keymap.is_null() {
             let idx = ffi::xkb_keymap_mod_get_index((*kb).keymap, xkb_name.as_ptr() as *const _);
             if idx != ffi::XKB_MOD_INVALID {
@@ -606,7 +591,7 @@ impl Cursor {
                 if down {
                     mods.depressed |= 1u32 << idx;
                 }
-                ffi::wlr_seat_keyboard_notify_modifiers(seat.wlr_seat, &mut mods);
+                seat.wlr_seat.keyboard_notify_modifiers(&mut mods);
             }
         }
     }
@@ -625,10 +610,7 @@ impl Cursor {
         log::info!("[PopupWheel] end reason={}", reason);
         self.view_drag_timer.arm(0);
         if let Some((rate, delay)) = p.repeat {
-            let kbd = ffi::river_wlr_seat_get_keyboard((*self.seat).wlr_seat);
-            if !kbd.is_null() {
-                ffi::wlr_keyboard_set_repeat_info(kbd, rate, delay);
-            }
+            self.wlr_seat.set_keyboard_repeat_info(rate, delay);
         }
     }
 
@@ -656,18 +638,14 @@ impl Cursor {
             let Some(surface) = self.popup_wheel_target(wm) else { return false };
             let seat = &mut *self.seat;
             seat.ensure_synthetic_keyboard();
-            let mut repeat = None;
-            let kbd = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
-            if !kbd.is_null() {
-                repeat = Some(((*kbd).repeat_info.rate, (*kbd).repeat_info.delay));
-                ffi::wlr_keyboard_set_repeat_info(kbd, 0, 0);
-            }
+            let repeat = seat.wlr_seat.keyboard_repeat_info();
+            seat.wlr_seat.set_keyboard_repeat_info(0, 0);
             log::info!("[PopupWheel] begin on popup surface {:p}", surface);
             self.popup_wheel = Some(PopupWheel { surface, accum: [0.0, 0.0], ctrl_down: false, repeat });
             self.hold_popup_ctrl(true);
         }
         // The gesture belongs to the popup it started on.
-        let focused = ffi::river_wlr_seat_get_pointer_focused_surface((*self.seat).wlr_seat);
+        let focused = self.wlr_seat.pointer_focused_surface();
         if matches!(&self.popup_wheel, Some(p) if focused != p.surface) {
             self.end_popup_wheel("left-popup");
             return false;
@@ -687,16 +665,8 @@ impl Cursor {
             let step = POPUP_WHEEL_NOTCH_PX * notches.signum();
             let discrete = 120 * notches.signum() as i32;
             for _ in 0..notches.abs() as i32 {
-                ffi::wlr_seat_pointer_notify_axis(
-                    seat.wlr_seat,
-                    time,
-                    (*event).orientation,
-                    step,
-                    discrete,
-                    ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_WHEEL,
-                    (*event).relative_direction,
-                );
-                ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+                seat.wlr_seat.pointer_notify_axis(time, (*event).orientation, step, discrete, ffi::wl_pointer_axis_source_WL_POINTER_AXIS_SOURCE_WHEEL, (*event).relative_direction);
+                seat.wlr_seat.pointer_notify_frame();
             }
         }
         self.arm_popup_wheel_timer();
@@ -783,10 +753,7 @@ impl Cursor {
         log::info!("[HScrollShift] end reason={}", reason);
         self.view_drag_timer.arm(0);
         if let Some((rate, delay)) = h.repeat {
-            let kbd = ffi::river_wlr_seat_get_keyboard((*self.seat).wlr_seat);
-            if !kbd.is_null() {
-                ffi::wlr_keyboard_set_repeat_info(kbd, rate, delay);
-            }
+            self.wlr_seat.set_keyboard_repeat_info(rate, delay);
         }
     }
 
@@ -819,17 +786,13 @@ impl Cursor {
             let Some(surface) = self.hscroll_shift_target(wm) else { return false };
             let seat = &mut *self.seat;
             seat.ensure_synthetic_keyboard();
-            let mut repeat = None;
-            let kbd = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
-            if !kbd.is_null() {
-                repeat = Some(((*kbd).repeat_info.rate, (*kbd).repeat_info.delay));
-                ffi::wlr_keyboard_set_repeat_info(kbd, 0, 0);
-            }
+            let repeat = seat.wlr_seat.keyboard_repeat_info();
+            seat.wlr_seat.set_keyboard_repeat_info(0, 0);
             log::info!("[HScrollShift] begin on surface {:p}", surface);
             self.hscroll_shift = Some(HScrollShift { surface, shift_down: false, repeat });
             self.hold_hscroll_shift(true);
         }
-        let focused = ffi::river_wlr_seat_get_pointer_focused_surface((*self.seat).wlr_seat);
+        let focused = self.wlr_seat.pointer_focused_surface();
         if matches!(&self.hscroll_shift, Some(h) if focused != h.surface) {
             self.end_hscroll_shift("left-window");
             return false;
@@ -841,15 +804,7 @@ impl Cursor {
             return true;
         }
         let seat = &mut *self.seat;
-        ffi::wlr_seat_pointer_notify_axis(
-            seat.wlr_seat,
-            (*event).time_msec,
-            ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL,
-            delta,
-            delta_discrete,
-            (*event).source,
-            (*event).relative_direction,
-        );
+        seat.wlr_seat.pointer_notify_axis((*event).time_msec, ffi::wl_pointer_axis_WL_POINTER_AXIS_VERTICAL_SCROLL, delta, delta_discrete, (*event).source, (*event).relative_direction);
         self.arm_hscroll_shift_timer();
         true
     }

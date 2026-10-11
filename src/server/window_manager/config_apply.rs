@@ -63,8 +63,8 @@ impl WindowManager {
             Ok(nix::unistd::ForkResult::Child) => {
                 crate::process::cleanup_child();
 
-                if !crate::shared::handles().xwayland.get().is_null() {
-                    let xwayland_cast = crate::shared::handles().xwayland.get() as *mut crate::server::WlrXwayland;
+                if !crate::shared::handles().xwayland.ptr().is_null() {
+                    let xwayland_cast = crate::shared::handles().xwayland.ptr() as *mut crate::server::WlrXwayland;
                     if !(*xwayland_cast).display_name.is_null() {
                         let display_name = std::ffi::CStr::from_ptr((*xwayland_cast).display_name)
                             .to_string_lossy()
@@ -188,10 +188,9 @@ impl WindowManager {
                     // Update scales of existing outputs from the newly loaded config
                     for output_ptr in self.outputs.ptrs() {
                         let output = &mut *output_ptr;
-                        let wlr_output = output.wlr_output;
+                        let wlr_output = output.wlr_output.ptr();
                         if !wlr_output.is_null() {
-                            let name_raw = ffi::river_wlr_output_get_name(wlr_output);
-                            let name = std::ffi::CStr::from_ptr(name_raw).to_string_lossy();
+                            let name = output.wlr_output.name();
                             let scale_key = format!("scale_{}", name);
                             let output_scale = self.display.get(&scale_key)
                                 .map(|&s| s as f32)

@@ -52,9 +52,7 @@ impl InputRelay {
 
     pub unsafe fn new_input_method(&mut self, wm: &crate::window_manager::WindowManager, input_method: *mut ffi::wlr_input_method_v2) {
         let seat = crate::container_of!(self, Seat, relay);
-        let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat))
-            .to_str()
-            .unwrap_or("unknown");
+        let seat_name = (*seat).wlr_seat.name();
         log::debug!("new input method on seat {}", seat_name);
 
         if !self.input_method.is_null() {
@@ -240,7 +238,7 @@ unsafe extern "C" fn handle_input_method_grab_keyboard(
     let keyboard_grab = data as *mut ffi::wlr_input_method_keyboard_grab_v2;
     let seat = crate::container_of!(relay, Seat, relay);
 
-    let active_keyboard = ffi::river_wlr_seat_get_keyboard((*seat).wlr_seat);
+    let active_keyboard = (*seat).wlr_seat.keyboard();
     ffi::wlr_input_method_keyboard_grab_v2_set_keyboard(keyboard_grab, active_keyboard);
 
     (*relay).grab_keyboard_destroy.connect(ffi::river_wlr_input_method_keyboard_grab_v2_get_destroy_signal(keyboard_grab), handle_input_method_grab_keyboard_destroy);

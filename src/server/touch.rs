@@ -266,7 +266,7 @@ impl Cursor {
             if lock_ok
                 && !result.surface.is_null()
                 && !crate::shared::window_adjust_active()
-                && ffi::wlr_surface_accepts_touch(result.surface, seat.wlr_seat)
+                && ffi::wlr_surface_accepts_touch(result.surface, seat.wlr_seat.ptr())
             {
                 // The implicit grab's frame (see the button path): the
                 // surface's scene buffer may be drawn scaled, so map through
@@ -408,7 +408,7 @@ impl Cursor {
                     _ => {}
                 }
                 ffi::wlr_seat_touch_notify_down(
-                    seat.wlr_seat,
+                    seat.wlr_seat.ptr(),
                     result.surface,
                     time_msec,
                     id,
@@ -431,13 +431,7 @@ impl Cursor {
         match route {
             TouchRoute::Claimed => self.claim_motion(wm, time_msec, sys),
             TouchRoute::Client { origin, scale } => {
-                ffi::wlr_seat_touch_notify_motion(
-                    (*self.seat).wlr_seat,
-                    time_msec,
-                    id,
-                    (lx - origin.0) * scale,
-                    (ly - origin.1) * scale,
-                );
+                self.wlr_seat.touch_notify_motion(time_msec, id, (lx - origin.0) * scale, (ly - origin.1) * scale);
                 // A touch drag's icon follows the finger.
                 self.update_drag_icons();
             }
@@ -483,7 +477,7 @@ impl Cursor {
                 // A field that starts editing on the release is still this
                 // touch's (`osk.rs`).
                 self.note_touch_for_osk(wm, point.lx, point.ly);
-                ffi::wlr_seat_touch_notify_up((*self.seat).wlr_seat, time_msec, id);
+                self.wlr_seat.touch_notify_up(time_msec, id);
             }
             TouchRoute::Pointer { start, pressed: false, .. } => {
                 // A tap.
@@ -507,19 +501,19 @@ impl Cursor {
         let Some(point) = self.touch_points.remove(&id) else { return };
         match point.route {
             TouchRoute::Claimed => self.claim_lift(wm, id, point, crate::util::msec_timestamp(), true, sys),
-            TouchRoute::Client { .. } => ffi::river_wlr_seat_touch_cancel_point((*self.seat).wlr_seat, id),
+            TouchRoute::Client { .. } => self.wlr_seat.touch_cancel_point(id),
             TouchRoute::Pointer { pressed: true, .. } => self.inject_button(wm, BTN_LEFT, false, sys),
             TouchRoute::Pointer { pressed: false, .. } | TouchRoute::Ignored => {}
         }
     }
 
-    pub unsafe fn touch_frame(&mut self) {
+    pub fn touch_frame(&mut self) {
         // The emulated pointer frames each of its own events; only touch
         // clients are waiting on this one.
         if self.touch_points.values().any(|p| matches!(p.route, TouchRoute::Client { .. }))
-            || ffi::wlr_seat_touch_num_points((*self.seat).wlr_seat) > 0
+            || self.wlr_seat.touch_num_points() > 0
         {
-            ffi::wlr_seat_touch_notify_frame((*self.seat).wlr_seat);
+            self.wlr_seat.touch_notify_frame();
         }
     }
 
@@ -529,13 +523,12 @@ impl Cursor {
     /// `wl_touch.cancel`, and a pointer finger that never pressed is simply
     /// dropped (the reason the press waits).
     unsafe fn claim_all(&mut self, wm: &mut crate::window_manager::WindowManager, sys: &mut crate::ctx::Sys) {
-        let seat = (*self.seat).wlr_seat;
         let ids: Vec<i32> = self.touch_points.keys().copied().collect();
         for id in ids {
             let point = self.touch_points.get_mut(&id).unwrap();
             let route = std::mem::replace(&mut point.route, TouchRoute::Claimed);
             match route {
-                TouchRoute::Client { .. } => ffi::river_wlr_seat_touch_cancel_point(seat, id),
+                TouchRoute::Client { .. } => self.wlr_seat.touch_cancel_point(id),
                 TouchRoute::Pointer { pressed: true, .. } => self.inject_button(wm, BTN_LEFT, false, sys),
                 _ => {}
             }
@@ -710,7 +703,7 @@ impl Cursor {
         if !crate::shared::layout().gesture_binds.iter().any(|b| b.gesture_type == "edge") {
             return None;
         }
-        let layout = crate::shared::handles().output_layout.get();
+        let layout = crate::shared::handles().output_layout.ptr();
         let output = ffi::wlr_output_layout_output_at(layout, lx, ly);
         if output.is_null() {
             return None;
@@ -764,7 +757,7 @@ impl Cursor {
         };
         let mut lx = 0.0;
         let mut ly = 0.0;
-        ffi::wlr_cursor_absolute_to_layout_coords(self.wlr_cursor, wlr_device, x, y, &mut lx, &mut ly);
+        ffi::wlr_cursor_absolute_to_layout_coords(self.wlr_cursor.ptr(), wlr_device, x, y, &mut lx, &mut ly);
         (lx, ly)
     }
 }
@@ -777,7 +770,7 @@ unsafe fn output_local((x, y): (f64, f64)) -> (f64, f64) {
         return (x, y);
     }
     let mut b = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-    ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut b);
+    ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut b);
     (x - b.x as f64, y - b.y as f64)
 }
 

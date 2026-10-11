@@ -66,11 +66,11 @@ pub(crate) unsafe fn on_swipe_begin(cursor: &mut Cursor, wm: &mut crate::window_
 
     log::info!("handle_swipe_begin: fingers={}", (*event).fingers);
 
-    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
+    let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
         ffi::wlr_pointer_gestures_v1_send_swipe_begin(
             pointer_gestures,
-            seat.wlr_seat,
+            seat.wlr_seat.ptr(),
             (*event).time_msec,
             (*event).fingers,
         );
@@ -119,7 +119,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
         cursor.gesture_dy
     );
 
-    let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
+    let wlr_keyboard = seat.wlr_seat.keyboard();
     let modifiers = if !wlr_keyboard.is_null() {
         ffi::wlr_keyboard_get_modifiers(wlr_keyboard) & 0x4d
     } else {
@@ -272,11 +272,11 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
         // newly focused window clipped.
 
         if first_fire {
-            let pointer_gestures = crate::shared::handles().pointer_gestures.get();
+            let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
             if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
                 ffi::wlr_pointer_gestures_v1_send_swipe_end(
                     pointer_gestures,
-                    seat.wlr_seat,
+                    seat.wlr_seat.ptr(),
                     (*event).time_msec,
                     true, // cancelled: true
                 );
@@ -332,11 +332,11 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
     if cursor.gesture_triggered {
         return;
     }
-    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
+    let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
         ffi::wlr_pointer_gestures_v1_send_swipe_update(
             pointer_gestures,
-            seat.wlr_seat,
+            seat.wlr_seat.ptr(),
             (*event).time_msec,
             (*event).dx,
             (*event).dy,
@@ -388,11 +388,11 @@ pub(crate) unsafe fn on_swipe_end(cursor: &mut Cursor, wm: &mut crate::window_ma
         return;
     }
 
-    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
+    let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
         ffi::wlr_pointer_gestures_v1_send_swipe_end(
             pointer_gestures,
-            seat.wlr_seat,
+            seat.wlr_seat.ptr(),
             (*event).time_msec,
             (*event).cancelled,
         );
@@ -401,13 +401,8 @@ pub(crate) unsafe fn on_swipe_end(cursor: &mut Cursor, wm: &mut crate::window_ma
 
 /// The modifiers a gesture bind is matched under: the keyboard's, less
 /// Caps and Num Lock (`& 0x4d`), as for every gesture.
-pub(crate) unsafe fn gesture_mods(seat: &Seat) -> u32 {
-    let wlr_keyboard = ffi::river_wlr_seat_get_keyboard(seat.wlr_seat);
-    if wlr_keyboard.is_null() {
-        0
-    } else {
-        ffi::wlr_keyboard_get_modifiers(wlr_keyboard) & 0x4d
-    }
+pub(crate) fn gesture_mods(seat: &Seat) -> u32 {
+    seat.wlr_seat.keyboard_modifiers() & 0x4d
 }
 
 /// The first gesture bind of `kind` ("swipe", "pinch", "edge") for this
@@ -512,11 +507,11 @@ pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_
         return;
     }
 
-    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
+    let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_pinch_begin(
             pointer_gestures,
-            seat.wlr_seat,
+            seat.wlr_seat.ptr(),
             (*event).time_msec,
             (*event).fingers,
         );
@@ -552,7 +547,7 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
         let wlr_output = crate::output_manager::output_at(cx, cy);
         let (phys_x, phys_y) = if !wlr_output.is_null() {
             let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-            ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut output_box);
+            ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut output_box);
             (output_box.x as f64, output_box.y as f64)
         } else {
             (0.0, 0.0)
@@ -579,11 +574,11 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
         cursor.gesture_triggered = true;
         run_gesture_action(wm, matched_action, matched_command.as_deref());
 
-        let pointer_gestures = crate::shared::handles().pointer_gestures.get();
+        let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
         if !pointer_gestures.is_null() {
             ffi::wlr_pointer_gestures_v1_send_pinch_end(
                 pointer_gestures,
-                seat.wlr_seat,
+                seat.wlr_seat.ptr(),
                 (*event).time_msec,
                 true, // cancelled: true
             );
@@ -591,11 +586,11 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
         return;
     }
 
-    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
+    let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_pinch_update(
             pointer_gestures,
-            seat.wlr_seat,
+            seat.wlr_seat.ptr(),
             (*event).time_msec,
             (*event).dx,
             (*event).dy,
@@ -639,11 +634,11 @@ pub(crate) unsafe fn on_pinch_end(cursor: &mut Cursor, wm: &mut crate::window_ma
         return;
     }
 
-    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
+    let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_pinch_end(
             pointer_gestures,
-            seat.wlr_seat,
+            seat.wlr_seat.ptr(),
             (*event).time_msec,
             (*event).cancelled,
         );
@@ -659,11 +654,11 @@ pub(crate) unsafe extern "C" fn handle_hold_begin(listener: *mut ffi::wl_listene
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     seat.handle_activity(wm, sys);
 
-    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
+    let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_hold_begin(
             pointer_gestures,
-            seat.wlr_seat,
+            seat.wlr_seat.ptr(),
             (*event).time_msec,
             (*event).fingers,
         );
@@ -679,11 +674,11 @@ pub(crate) unsafe extern "C" fn handle_hold_end(listener: *mut ffi::wl_listener,
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     seat.handle_activity(wm, sys);
 
-    let pointer_gestures = crate::shared::handles().pointer_gestures.get();
+    let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
         ffi::wlr_pointer_gestures_v1_send_hold_end(
             pointer_gestures,
-            seat.wlr_seat,
+            seat.wlr_seat.ptr(),
             (*event).time_msec,
             (*event).cancelled,
         );

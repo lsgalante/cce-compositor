@@ -310,7 +310,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
         if let Some((crate::window::WindowImpl::Xwayland(xwindow), root_surface)) = parent {
             if !xwindow.is_null()
                 && (*(*xwindow).xsurface).pid == (*(*or).xsurface).pid
-                && ffi::river_wlr_seat_get_keyboard_focused_surface((*default_seat).wlr_seat) == surface
+                && (*default_seat).wlr_seat.keyboard_focused_surface() == surface
             {
                 (*default_seat).keyboard_enter_or_leave(wm, root_surface);
             }

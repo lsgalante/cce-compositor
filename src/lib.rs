@@ -16,6 +16,8 @@ pub mod listener;
 pub mod scene_handle;
 #[path = "server/event_source.rs"]
 pub mod event_source;
+#[path = "server/wlr.rs"]
+pub mod wlr;
 #[path = "server/shared.rs"]
 pub mod shared;
 #[path = "server/reentry.rs"]

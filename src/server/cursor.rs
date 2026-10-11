@@ -22,8 +22,12 @@ pub use border_zone::*;
 
 pub struct Cursor {
     pub seat: *mut Seat,
-    pub wlr_cursor: *mut ffi::wlr_cursor,
-    pub xcursor_manager: *mut ffi::wlr_xcursor_manager,
+    pub wlr_cursor: crate::wlr::Wlr<ffi::wlr_cursor>,
+    /// The seat's `wlr_seat`, held from `init` to `deinit` (which the seat
+    /// runs before it destroys the `wlr_seat`), so the pointer paths reach
+    /// it without going through `seat`.
+    pub wlr_seat: crate::wlr::Wlr<ffi::wlr_seat>,
+    pub xcursor_manager: crate::wlr::Wlr<ffi::wlr_xcursor_manager>,
     pub constraint: *mut crate::pointer_constraint::PointerConstraint,
 
     /// Trackpad-to-view-drag emulation for the apps `touchpad_view_apps`
@@ -57,7 +61,7 @@ pub struct Cursor {
     /// seat's cursor image (a client surface). Tablet tools are not such a
     /// case: each drives its own `wlr_cursor`, never the seat's.
     pub anim_timer: crate::event_source::Timer,
-    pub anim_xcursor: *mut ffi::wlr_xcursor,
+    anim_xcursor: *mut ffi::wlr_xcursor,
     /// Wall-clock ms at which the current animation started, so elapsed time
     /// (not absolute time) picks the frame and every cursor starts at frame 0.
     pub anim_started_msec: u32,
@@ -204,8 +208,9 @@ impl Default for Cursor {
     fn default() -> Self {
         Self {
             seat: std::ptr::null_mut(),
-            wlr_cursor: std::ptr::null_mut(),
-            xcursor_manager: std::ptr::null_mut(),
+            wlr_cursor: crate::wlr::Wlr::null(),
+            wlr_seat: crate::wlr::Wlr::null(),
+            xcursor_manager: crate::wlr::Wlr::null(),
             constraint: std::ptr::null_mut(),
             anim_timer: crate::event_source::Timer::new(),
             anim_xcursor: std::ptr::null_mut(),
@@ -296,30 +301,31 @@ impl Cursor {
         }
 
         self.seat = seat;
-        self.wlr_cursor = wlr_cursor;
-        self.xcursor_manager = xcursor_manager;
+        self.wlr_cursor.set(wlr_cursor);
+        // Released in `deinit`, which `Seat::destroy` runs before it
+        // destroys the `wlr_seat`.
+        self.wlr_seat.set((*seat).wlr_seat.ptr());
+        self.xcursor_manager.set(xcursor_manager);
 
         // The animated-cursor driver. Created disarmed; `set_xcursor` arms it
         // only for a cursor that actually has more than one frame.
-        let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
+        let event_loop = crate::shared::event_loop();
         let anim_timer = crate::event_source::Timer::add(
             event_loop,
             handle_xcursor_anim,
             self as *mut Cursor as *mut _,
         );
         if !anim_timer.is_set() {
-            ffi::wlr_xcursor_manager_destroy(xcursor_manager);
-            ffi::wlr_cursor_destroy(wlr_cursor);
-            self.xcursor_manager = std::ptr::null_mut();
-            self.wlr_cursor = std::ptr::null_mut();
+            ffi::wlr_xcursor_manager_destroy(self.xcursor_manager.take());
+            ffi::wlr_cursor_destroy(self.wlr_cursor.take());
             return Err("Failed to create xcursor animation timer");
         }
         self.anim_timer = anim_timer;
         self.view_drag_timer = crate::event_source::Timer::add(event_loop, handle_view_drag_timeout, self as *mut Cursor as *mut _);
 
         // Load default cursor theme
-        ffi::wlr_xcursor_manager_load(xcursor_manager, 1.0);
-        self.set_xcursor(b"default\0".as_ptr() as *const _);
+        self.xcursor_manager.load(1.0);
+        self.set_xcursor(c"default");
 
         // Setup listeners
         self.motion_listener.connect(ffi::river_wlr_cursor_get_motion_signal(wlr_cursor), handle_motion);
@@ -402,31 +408,21 @@ impl Cursor {
         self.anim_timer.remove();
 
         if !self.xcursor_manager.is_null() {
-            ffi::wlr_xcursor_manager_destroy(self.xcursor_manager);
-            self.xcursor_manager = std::ptr::null_mut();
+            ffi::wlr_xcursor_manager_destroy(self.xcursor_manager.take());
         }
         if !self.wlr_cursor.is_null() {
-            ffi::wlr_cursor_destroy(self.wlr_cursor);
-            self.wlr_cursor = std::ptr::null_mut();
+            ffi::wlr_cursor_destroy(self.wlr_cursor.take());
         }
+        self.wlr_seat.take();
     }
 
     /// The cursor's layout position; 0 before `init` and after `deinit`.
     pub fn x(&self) -> f64 {
-        if self.wlr_cursor.is_null() {
-            return 0.0;
-        }
-        // SAFETY: a non-null `wlr_cursor` is the one `init` created, live
-        // until `deinit` destroys it and nulls the field.
-        unsafe { ffi::river_wlr_cursor_get_x(self.wlr_cursor) }
+        self.wlr_cursor.x()
     }
 
     pub fn y(&self) -> f64 {
-        if self.wlr_cursor.is_null() {
-            return 0.0;
-        }
-        // SAFETY: as `x`.
-        unsafe { ffi::river_wlr_cursor_get_y(self.wlr_cursor) }
+        self.wlr_cursor.y()
     }
 
     pub fn update_hovered(&mut self) {
@@ -470,7 +466,7 @@ impl Cursor {
             if !drag_icon_raw.is_null() {
                 let drag_icon = &mut *drag_icon_raw;
                 let drag_seat = ffi::river_wlr_drag_get_seat((*drag_icon.wlr_drag_icon).drag);
-                if drag_seat == (*self.seat).wlr_seat {
+                if drag_seat == self.wlr_seat.ptr() {
                     drag_icon.update_position(self);
                 }
             }
@@ -493,7 +489,7 @@ impl Cursor {
         // If this cursor belongs to the default seat, update the Xwayland cursor to match the theme.
         let handles = crate::shared::handles();
         if self.seat == handles.default_seat.get() {
-            if !handles.xwayland.get().is_null() {
+            if !handles.xwayland.ptr().is_null() {
                 ffi::wlr_xcursor_manager_load(xcursor_manager, 1.0);
                 let wlr_xcursor = ffi::wlr_xcursor_manager_get_xcursor(
                     xcursor_manager,
@@ -505,7 +501,7 @@ impl Cursor {
                     if !image.is_null() {
                         let buffer = ffi::wlr_xcursor_image_get_buffer(image);
                         ffi::wlr_xwayland_set_cursor(
-                            handles.xwayland.get(),
+                            handles.xwayland.ptr(),
                             buffer,
                             (*image).hotspot_x as i32,
                             (*image).hotspot_y as i32,
@@ -520,25 +516,21 @@ impl Cursor {
         self.stop_xcursor_animation();
 
         if !self.xcursor_manager.is_null() {
-            ffi::wlr_xcursor_manager_destroy(self.xcursor_manager);
+            ffi::wlr_xcursor_manager_destroy(self.xcursor_manager.take());
         }
-        self.xcursor_manager = xcursor_manager;
+        self.xcursor_manager.set(xcursor_manager);
 
-        ffi::wlr_xcursor_manager_load(self.xcursor_manager, 1.0);
-        self.set_xcursor(b"default\0".as_ptr() as *const _);
+        self.xcursor_manager.load(1.0);
+        self.set_xcursor(c"default");
 
         Ok(())
     }
 
-    pub unsafe fn set_xcursor(&mut self, name: *const std::os::raw::c_char) {
+    pub fn set_xcursor(&mut self, name: &std::ffi::CStr) {
         if self.hidden_by_touch {
             return;
         }
-        ffi::wlr_cursor_set_xcursor(
-            self.wlr_cursor,
-            self.xcursor_manager,
-            name,
-        );
+        self.wlr_cursor.set_xcursor(&self.xcursor_manager, name);
         // `wlr_cursor_set_xcursor` paints frame 0 and stops there; if this
         // cursor has more frames, take over from here.
         self.start_xcursor_animation(name);
@@ -563,13 +555,13 @@ impl Cursor {
 
     /// Begin driving `name`'s frames, if it has more than one. Static cursors —
     /// every cursor in a stock theme — leave the timer disarmed.
-    unsafe fn start_xcursor_animation(&mut self, name: *const std::os::raw::c_char) {
+    fn start_xcursor_animation(&mut self, name: &std::ffi::CStr) {
         if !self.anim_timer.is_set() || self.xcursor_manager.is_null() {
             self.stop_xcursor_animation();
             return;
         }
 
-        let xcursor = ffi::wlr_xcursor_manager_get_xcursor(self.xcursor_manager, name, 1.0);
+        let xcursor = self.xcursor_manager.xcursor(name, 1.0);
 
         // Already playing this exact cursor: leave its clock running. The
         // compositor re-asserts its cursor constantly — `clear_focus` sets
@@ -590,13 +582,16 @@ impl Cursor {
         // One image is a static cursor. `total_delay == 0` would also make
         // `wlr_xcursor_frame`'s `time % total_delay` divide by zero, so a theme
         // with all-zero delays must never reach the driver.
-        if (*xcursor).image_count <= 1 || (*xcursor).total_delay == 0 {
+        // SAFETY: the manager this field holds just returned it, and it
+        // lives as long as the manager.
+        if unsafe { (*xcursor).image_count <= 1 || (*xcursor).total_delay == 0 } {
             return;
         }
 
         self.anim_xcursor = xcursor;
         self.anim_started_msec = crate::util::msec_timestamp();
-        self.arm_next_frame(0);
+        // SAFETY: `anim_xcursor` is the held manager's, set just above.
+        unsafe { self.arm_next_frame(0) };
     }
 
     /// Arm the timer for the delay of frame `idx`, clamped to >= 1ms: a zero
@@ -639,7 +634,7 @@ impl Cursor {
         let buffer = ffi::wlr_xcursor_image_get_buffer(image);
         if !buffer.is_null() {
             ffi::wlr_cursor_set_buffer(
-                self.wlr_cursor,
+                self.wlr_cursor.ptr(),
                 buffer,
                 (*image).hotspot_x as i32,
                 (*image).hotspot_y as i32,
@@ -657,7 +652,7 @@ impl Cursor {
         }
 
         log::debug!("entering cursor mode op");
-        ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+        self.wlr_seat.pointer_notify_clear_focus();
 
         // A grab does not focus the window it moves or resizes, and it was
         // the press's `seat.focus` that used to raise a Floating one — so
@@ -742,7 +737,7 @@ impl Cursor {
         // delivered anywhere — the source keeps receiving motion instead.
         if !self.notified_pressed.is_empty() && (*self.seat).drag == crate::seat::DragState::None {
             let focused =
-                ffi::river_wlr_seat_get_pointer_focused_surface((*self.seat).wlr_seat);
+                self.wlr_seat.pointer_focused_surface();
             if !focused.is_null() {
                 // A grab held on the GRID maps through the surface node, not
                 // through the fixed origin: the offset formula assumes an
@@ -764,22 +759,12 @@ impl Cursor {
                     // values must not map points for its replacement.
                     if let Some((gsurf, ..)) = grid_node_info(wm) {
                         if gsurf == focused {
-                            ffi::wlr_seat_pointer_notify_motion(
-                                (*self.seat).wlr_seat,
-                                time_msec,
-                                (lx - nx) / scale,
-                                (ly - ny) / scale,
-                            );
+                            self.wlr_seat.pointer_notify_motion(time_msec, (lx - nx) / scale, (ly - ny) / scale);
                             return;
                         }
                     }
                 }
-                ffi::wlr_seat_pointer_notify_motion(
-                    (*self.seat).wlr_seat,
-                    time_msec,
-                    (lx - self.grab_origin.0) * self.grab_scale,
-                    (ly - self.grab_origin.1) * self.grab_scale,
-                );
+                self.wlr_seat.pointer_notify_motion(time_msec, (lx - self.grab_origin.0) * self.grab_scale, (ly - self.grab_origin.1) * self.grab_scale);
                 return;
             }
         }
@@ -843,21 +828,21 @@ impl Cursor {
                         match zone {
                             BorderZone::Resize(edges) => {
                                 self.set_border_hover(wm, Some(window_id), Some(border_element_for_edges(edges)));
-                                ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+                                self.wlr_seat.pointer_notify_clear_focus();
                                 let cursor_name = get_resize_cursor_name(edges);
-                                self.set_xcursor(cursor_name.as_ptr() as *const _);
+                                self.set_xcursor(cursor_name);
                                 return;
                             }
                             BorderZone::Move => {
                                 self.set_border_hover(wm, Some(window_id), Some(crate::window::BorderElement::Top));
-                                ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
-                                self.set_xcursor(b"grab\0".as_ptr() as *const _);
+                                self.wlr_seat.pointer_notify_clear_focus();
+                                self.set_xcursor(c"grab");
                                 return;
                             }
                             BorderZone::Button(elem) => {
                                 self.set_border_hover(wm, Some(window_id), Some(elem));
-                                ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
-                                self.set_xcursor(b"pointer\0".as_ptr() as *const _);
+                                self.wlr_seat.pointer_notify_clear_focus();
+                                self.set_xcursor(c"pointer");
                                 return;
                             }
                             BorderZone::None => {}
@@ -928,8 +913,8 @@ impl Cursor {
             }
 
             if !result.surface.is_null() {
-                ffi::wlr_seat_pointer_notify_enter((*self.seat).wlr_seat, result.surface, result.sx, result.sy);
-                ffi::wlr_seat_pointer_notify_motion((*self.seat).wlr_seat, time_msec, result.sx, result.sy);
+                ffi::wlr_seat_pointer_notify_enter(self.wlr_seat.ptr(), result.surface, result.sx, result.sy);
+                self.wlr_seat.pointer_notify_motion(time_msec, result.sx, result.sy);
                 return;
             }
         }
@@ -947,8 +932,8 @@ impl Cursor {
         if (*self.seat).drag != crate::seat::DragState::None {
             if let Some((surface, sx, sy)) = grid_surface_at(wm, lx, ly) {
                 log::debug!("[drag] focus -> grid at ({lx:.0}, {ly:.0})");
-                ffi::wlr_seat_pointer_notify_enter((*self.seat).wlr_seat, surface, sx, sy);
-                ffi::wlr_seat_pointer_notify_motion((*self.seat).wlr_seat, time_msec, sx, sy);
+                ffi::wlr_seat_pointer_notify_enter(self.wlr_seat.ptr(), surface, sx, sy);
+                self.wlr_seat.pointer_notify_motion(time_msec, sx, sy);
                 return;
             }
         }
@@ -959,13 +944,13 @@ impl Cursor {
     }
 
     /// Take the cursor image off for a touch (see `hidden_by_touch`).
-    pub(crate) unsafe fn hide_for_touch(&mut self) {
+    pub(crate) fn hide_for_touch(&mut self) {
         if self.hidden_by_touch {
             return;
         }
         self.hidden_by_touch = true;
         self.stop_xcursor_animation();
-        ffi::wlr_cursor_unset_image(self.wlr_cursor);
+        self.wlr_cursor.unset_image();
     }
 
     /// Bring the cursor image back once a real pointer moves. Called before
@@ -974,20 +959,20 @@ impl Cursor {
     /// client sets its cursor again — `handle_request_set_cursor` dropped
     /// whatever it asked for while the image was off. Not while a client
     /// holds an implicit grab: clearing pointer focus would end it.
-    pub unsafe fn unhide_after_touch(&mut self) {
+    pub fn unhide_after_touch(&mut self) {
         if !self.hidden_by_touch {
             return;
         }
         self.hidden_by_touch = false;
         if self.notified_pressed.is_empty() {
-            ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
+            self.wlr_seat.pointer_notify_clear_focus();
         }
-        self.set_xcursor(b"default\0".as_ptr() as *const _);
+        self.set_xcursor(c"default");
     }
 
-    pub unsafe fn clear_focus(&mut self) {
-        ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
-        self.set_xcursor(b"default\0".as_ptr() as *const _);
+    pub fn clear_focus(&mut self) {
+        self.wlr_seat.pointer_notify_clear_focus();
+        self.set_xcursor(c"default");
     }
 
     // ── Synthetic pointer injection (`ccectl pointer-*`) ─────────────────────────
@@ -1012,13 +997,13 @@ impl Cursor {
     /// emulated pointer of a touch (`TouchRoute::Pointer`) moves this way.
     pub(crate) unsafe fn warp_to(&mut self, wm: &mut crate::window_manager::WindowManager, x: f64, y: f64, sys: &mut crate::ctx::Sys) {
         (*self.seat).handle_activity(wm, sys);
-        ffi::wlr_cursor_warp(self.wlr_cursor, std::ptr::null_mut(), x, y);
+        self.wlr_cursor.warp(x, y);
         self.update_hovered();
         self.update_drag_icons();
         let seat = &mut *self.seat;
         if seat.op.is_some() {
-            let lx = (*self.wlr_cursor).x as i32;
-            let ly = (*self.wlr_cursor).y as i32;
+            let lx = self.wlr_cursor.x() as i32;
+            let ly = self.wlr_cursor.y() as i32;
             seat.op_update(wm, lx, ly);
             return;
         }
@@ -1098,7 +1083,7 @@ impl Cursor {
         // Every libinput axis event is followed by a frame; clients
         // (Xwayland among them) deliver only on the frame, and wlroots
         // asserts if a later axis event changes source within one.
-        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        self.wlr_seat.pointer_notify_frame();
     }
 
     /// The zero-delta event that ends a finger scroll (libinput sends one
@@ -1125,7 +1110,7 @@ impl Cursor {
         // Every libinput axis event is followed by a frame; clients
         // (Xwayland among them) deliver only on the frame, and wlroots
         // asserts if a later axis event changes source within one.
-        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        self.wlr_seat.pointer_notify_frame();
     }
 
     /// Inject a whole two-finger pinch: begin, `steps` updates easing the
@@ -1150,7 +1135,7 @@ impl Cursor {
                 on_pinch_end(self, wm, &mut ev as *mut _ as *mut std::ffi::c_void, sys);
             }
         }
-        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        self.wlr_seat.pointer_notify_frame();
     }
 
     /// One stage of a touchpad swipe, paced by the caller (`pointer-swipe
@@ -1174,7 +1159,7 @@ impl Cursor {
                 on_swipe_end(self, wm, &mut ev as *mut _ as *mut std::ffi::c_void, sys);
             }
         }
-        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        self.wlr_seat.pointer_notify_frame();
     }
 
     /// Inject a whole touchpad swipe: begin with `fingers`, `steps` updates
@@ -1191,7 +1176,7 @@ impl Cursor {
         on_swipe_begin(self, wm,
             &mut begin as *mut ffi::wlr_pointer_swipe_begin_event as *mut std::ffi::c_void,
          sys);
-        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        self.wlr_seat.pointer_notify_frame();
         let steps = steps.max(1);
         for i in 1..=steps {
             let mut update = ffi::wlr_pointer_swipe_update_event {
@@ -1204,7 +1189,7 @@ impl Cursor {
             on_swipe_update(self, wm,
                 &mut update as *mut ffi::wlr_pointer_swipe_update_event as *mut std::ffi::c_void,
              sys);
-            ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+            self.wlr_seat.pointer_notify_frame();
         }
         let mut end = ffi::wlr_pointer_swipe_end_event {
             pointer: std::ptr::null_mut(),
@@ -1214,7 +1199,7 @@ impl Cursor {
         on_swipe_end(self, wm,
             &mut end as *mut ffi::wlr_pointer_swipe_end_event as *mut std::ffi::c_void,
          sys);
-        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        self.wlr_seat.pointer_notify_frame();
     }
 
     pub unsafe fn inject_pinch(&mut self, wm: &mut crate::window_manager::WindowManager, scale: f64, rotation: f64, steps: u32, sys: &mut crate::ctx::Sys) {
@@ -1227,7 +1212,7 @@ impl Cursor {
         on_pinch_begin(self, wm,
             &mut begin as *mut ffi::wlr_pointer_pinch_begin_event as *mut std::ffi::c_void,
          sys);
-        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        self.wlr_seat.pointer_notify_frame();
         let steps = steps.max(1);
         for i in 1..=steps {
             let t = i as f64 / steps as f64;
@@ -1243,7 +1228,7 @@ impl Cursor {
             on_pinch_update(self, wm,
                 &mut update as *mut ffi::wlr_pointer_pinch_update_event as *mut std::ffi::c_void,
              sys);
-            ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+            self.wlr_seat.pointer_notify_frame();
         }
         let mut end = ffi::wlr_pointer_pinch_end_event {
             pointer: std::ptr::null_mut(),
@@ -1253,7 +1238,7 @@ impl Cursor {
         on_pinch_end(self, wm,
             &mut end as *mut ffi::wlr_pointer_pinch_end_event as *mut std::ffi::c_void,
          sys);
-        ffi::wlr_seat_pointer_notify_frame((*self.seat).wlr_seat);
+        self.wlr_seat.pointer_notify_frame();
     }
 }
 
@@ -1300,7 +1285,7 @@ pub(crate) unsafe fn on_motion(cursor: &mut Cursor, wm: &mut crate::window_manag
         None
     };
 
-    ffi::wlr_cursor_move(cursor.wlr_cursor, std::ptr::null_mut(), dx, dy);
+    cursor.wlr_cursor.move_by(dx, dy);
     let t_move = t_start.map(|s| s.elapsed().as_micros());
     cursor.update_hovered();
     let t_hovered = t_start.map(|s| s.elapsed().as_micros());
@@ -1309,8 +1294,8 @@ pub(crate) unsafe fn on_motion(cursor: &mut Cursor, wm: &mut crate::window_manag
 
     let seat = &mut *cursor.seat;
     if (*seat).op.is_some() {
-        let lx = (*cursor.wlr_cursor).x as i32;
-        let ly = (*cursor.wlr_cursor).y as i32;
+        let lx = cursor.wlr_cursor.x() as i32;
+        let ly = cursor.wlr_cursor.y() as i32;
         (*seat).op_update(wm, lx, ly);
         if let (Some(s), Some(m), Some(h), Some(d)) = (t_start, t_move, t_hovered, t_drag) {
             log::info!(
@@ -1352,14 +1337,14 @@ pub(crate) unsafe fn on_motion_absolute(cursor: &mut Cursor, wm: &mut crate::win
     } else {
         &mut (*(*event).pointer).base as *mut ffi::wlr_input_device
     };
-    ffi::wlr_cursor_warp_absolute(cursor.wlr_cursor, wlr_device, (*event).x, (*event).y);
+    ffi::wlr_cursor_warp_absolute(cursor.wlr_cursor.ptr(), wlr_device, (*event).x, (*event).y);
     cursor.update_hovered();
     cursor.update_drag_icons();
 
     let seat = &mut *cursor.seat;
     if (*seat).op.is_some() {
-        let lx = (*cursor.wlr_cursor).x as i32;
-        let ly = (*cursor.wlr_cursor).y as i32;
+        let lx = cursor.wlr_cursor.x() as i32;
+        let ly = cursor.wlr_cursor.y() as i32;
         (*seat).op_update(wm, lx, ly);
         return;
     }
@@ -1467,7 +1452,7 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
     let cursor = &mut *crate::container_of!(listener, Cursor, frame_listener);
 
     let seat = &mut *cursor.seat;
-    ffi::wlr_seat_pointer_notify_frame(seat.wlr_seat);
+    seat.wlr_seat.pointer_notify_frame();
 }
 
 /// Animated-xcursor tick. `data` is the `Cursor`, which lives inline in a
@@ -1500,7 +1485,7 @@ unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, da
         return;
     }
 
-    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat, (*event).tool) {
+    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat.ptr(), (*event).tool) {
         (*tool).axis(wm, tablet, event);
     }
 }
@@ -1528,7 +1513,7 @@ unsafe extern "C" fn handle_tablet_tool_proximity(listener: *mut ffi::wl_listene
         return;
     }
 
-    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat, (*event).tool) {
+    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat.ptr(), (*event).tool) {
         (*tool).proximity(wm, tablet, event);
     }
 }
@@ -1553,7 +1538,7 @@ unsafe extern "C" fn handle_tablet_tool_tip(listener: *mut ffi::wl_listener, dat
         return;
     }
 
-    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat, (*event).tool) {
+    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat.ptr(), (*event).tool) {
         (*tool).tip(wm, tablet, event);
     }
 }
@@ -1578,7 +1563,7 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
         return;
     }
 
-    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat, (*event).tool) {
+    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat.ptr(), (*event).tool) {
         (*tool).button(wm, tablet, event);
     }
 }

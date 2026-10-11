@@ -98,7 +98,7 @@ unsafe extern "C" fn handle_new_surface(_listener: *mut ffi::wl_listener, data: 
     if (*wlr_layer_surface).output.is_null() {
         if let Some(&output) = (*crate::reentry::wm(crate::shared::server_ptr())).outputs.ptrs().first() {
             log::info!("layer surface named no output, choosing the first");
-            (*wlr_layer_surface).output = (*output).wlr_output;
+            (*wlr_layer_surface).output = (*output).wlr_output.ptr();
         } else {
             log::error!("no output available for layer surface {:?}", CStr::from_ptr((*wlr_layer_surface).namespace));
             ffi::wlr_layer_surface_v1_destroy(wlr_layer_surface);
@@ -572,7 +572,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                         let mut output_y = 0;
                         let mut output_w = 0;
                         for output in (*crate::reentry::wm(server)).outputs.ptrs() {
-                            if (*output).wlr_output == wlr_output {
+                            if (*output).wlr_output.ptr() == wlr_output {
                                 let wlr_box = (*output).sent.box_layout();
                                 output_x = wlr_box.x;
                                 output_y = wlr_box.y;
@@ -722,7 +722,7 @@ impl LayerShellOutput {
                             curr = next;
                             continue;
                         }
-                        if (*wlr_layer_surface).output != (*output).wlr_output {
+                        if (*wlr_layer_surface).output != (*output).wlr_output.ptr() {
                             curr = next;
                             continue;
                         }

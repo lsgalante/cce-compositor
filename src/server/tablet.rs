@@ -15,12 +15,12 @@ impl Tablet {
         wlr_device: *mut ffi::wlr_input_device,
         virtual_device: bool,
     ) -> Result<*mut Self, &'static str> {
-        let tablet_manager = crate::shared::handles().tablet_manager.get();
+        let tablet_manager = crate::shared::handles().tablet_manager.ptr();
         if tablet_manager.is_null() {
             return Err("Tablet manager is null");
         }
 
-        let wp_tablet = ffi::wlr_tablet_create(tablet_manager, (*seat).wlr_seat, wlr_device);
+        let wp_tablet = ffi::wlr_tablet_create(tablet_manager, (*seat).wlr_seat.ptr(), wlr_device);
         if wp_tablet.is_null() {
             return Err("Failed to create wp_tablet");
         }

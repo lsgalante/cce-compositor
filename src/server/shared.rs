@@ -55,16 +55,16 @@ pub struct Shared {
 /// a seat's cursor, a device being attached — without a `server`
 /// back-pointer (RFC step 4). Null before the owner's init.
 pub struct Handles {
-    pub backend: Cell<*mut ffi::wlr_backend>,
-    pub session: Cell<*mut ffi::wlr_session>,
-    pub xwayland: Cell<*mut ffi::wlr_xwayland>,
-    pub output_layout: Cell<*mut ffi::wlr_output_layout>,
-    pub idle_notifier: Cell<*mut ffi::wlr_idle_notifier_v1>,
-    pub pointer_gestures: Cell<*mut ffi::wlr_pointer_gestures_v1>,
-    pub tablet_manager: Cell<*mut ffi::wlr_tablet_manager_v2>,
-    pub default_keymap: Cell<*mut ffi::xkb_keymap>,
-    pub foreign_toplevel_list: Cell<*mut ffi::wlr_ext_foreign_toplevel_list_v1>,
-    pub foreign_toplevel_manager: Cell<*mut ffi::wlr_foreign_toplevel_manager_v1>,
+    pub backend: crate::wlr::Wlr<ffi::wlr_backend>,
+    pub session: crate::wlr::Wlr<ffi::wlr_session>,
+    pub xwayland: crate::wlr::Wlr<ffi::wlr_xwayland>,
+    pub output_layout: crate::wlr::Wlr<ffi::wlr_output_layout>,
+    pub idle_notifier: crate::wlr::Wlr<ffi::wlr_idle_notifier_v1>,
+    pub pointer_gestures: crate::wlr::Wlr<ffi::wlr_pointer_gestures_v1>,
+    pub tablet_manager: crate::wlr::Wlr<ffi::wlr_tablet_manager_v2>,
+    pub default_keymap: crate::wlr::Wlr<ffi::xkb_keymap>,
+    pub foreign_toplevel_list: crate::wlr::Wlr<ffi::wlr_ext_foreign_toplevel_list_v1>,
+    pub foreign_toplevel_manager: crate::wlr::Wlr<ffi::wlr_foreign_toplevel_manager_v1>,
     /// The "default" seat, once `InputManager::init` has created it (null
     /// while it is being created, and after the deinit).
     pub default_seat: Cell<*mut crate::seat::Seat>,
@@ -82,19 +82,25 @@ thread_local! {
         sent: Sent::new(),
         pending: Pending::new(),
         handles: Handles {
-            backend: Cell::new(std::ptr::null_mut()),
-            session: Cell::new(std::ptr::null_mut()),
-            xwayland: Cell::new(std::ptr::null_mut()),
-            output_layout: Cell::new(std::ptr::null_mut()),
-            idle_notifier: Cell::new(std::ptr::null_mut()),
-            pointer_gestures: Cell::new(std::ptr::null_mut()),
-            tablet_manager: Cell::new(std::ptr::null_mut()),
-            default_keymap: Cell::new(std::ptr::null_mut()),
-            foreign_toplevel_list: Cell::new(std::ptr::null_mut()),
-            foreign_toplevel_manager: Cell::new(std::ptr::null_mut()),
+            backend: crate::wlr::Wlr::null(),
+            session: crate::wlr::Wlr::null(),
+            xwayland: crate::wlr::Wlr::null(),
+            output_layout: crate::wlr::Wlr::null(),
+            idle_notifier: crate::wlr::Wlr::null(),
+            pointer_gestures: crate::wlr::Wlr::null(),
+            tablet_manager: crate::wlr::Wlr::null(),
+            default_keymap: crate::wlr::Wlr::null(),
+            foreign_toplevel_list: crate::wlr::Wlr::null(),
+            foreign_toplevel_manager: crate::wlr::Wlr::null(),
             default_seat: Cell::new(std::ptr::null_mut()),
         },
     });
+}
+
+/// The display's event loop, for adding timers and fd sources; null before
+/// `Shared::set_server`.
+pub fn event_loop() -> *mut ffi::wl_event_loop {
+    shared().pending.event_loop.get()
 }
 
 /// This thread's `Shared`.

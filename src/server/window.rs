@@ -1943,7 +1943,7 @@ impl Window {
 
                     let this = window_mut!(wm, id);
                     if this.foreign_toplevel_handle.is_null() {
-                        let list = crate::shared::handles().foreign_toplevel_list.get();
+                        let list = crate::shared::handles().foreign_toplevel_list.ptr();
                         let title = this.get_title();
                         let app_id = this.get_app_id();
                         let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
@@ -1958,7 +1958,7 @@ impl Window {
                     }
 
                     if this.wlr_toplevel_handle.is_null() {
-                        let manager = crate::shared::handles().foreign_toplevel_manager.get();
+                        let manager = crate::shared::handles().foreign_toplevel_manager.ptr();
                         let handle = ffi::wlr_foreign_toplevel_handle_v1_create(manager);
                         if !handle.is_null() {
                             this.wlr_toplevel_handle = handle;

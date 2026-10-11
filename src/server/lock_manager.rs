@@ -147,8 +147,7 @@ impl LockManager {
         let mut all_outputs_rendered_lock_surface = true;
 
         for output in outputs.values() {
-            let wlr_output = output.wlr_output;
-            if !wlr_output.is_null() && ffi::river_wlr_output_get_enabled(wlr_output) {
+            if output.wlr_output.enabled() {
                 match output.lock_render_state {
                     crate::output::LockRenderState::PendingUnlock
                     | crate::output::LockRenderState::Unlocked
@@ -233,8 +232,8 @@ impl LockManager {
         // (the idle timeout darkened them all) there is nothing to wait for,
         // and this call completes it now.
         for output in wm.outputs.values() {
-            if !output.wlr_output.is_null() && ffi::river_wlr_output_get_enabled(output.wlr_output) {
-                ffi::wlr_output_schedule_frame(output.wlr_output);
+            if !output.wlr_output.is_null() && output.wlr_output.enabled() {
+                output.wlr_output.schedule_frame();
             }
         }
         crate::shared::pending().dirty_windowing();
@@ -613,7 +612,7 @@ unsafe extern "C" fn handle_lock_surface_map(listener: *mut ffi::wl_listener, _d
     let y = (*output).sent.y;
     (*lock_surface).tree.set_position(x, y);
 
-    let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
+    let event_loop = crate::shared::event_loop();
     assert!((*lock_surface).idle_update_focus.is_null());
 
     let idle = ffi::wl_event_loop_add_idle(

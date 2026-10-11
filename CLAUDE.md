@@ -446,6 +446,32 @@ are safe now, and they dereference the impl it names, so it may change only
 through `set_impl` and `impl_destroying`. `Cursor::x` / `y` are safe and read
 0 before `init` and after `deinit`.
 
+### wlroots objects a field keeps: `crate::wlr::Wlr<T>` (since 2026-10-11)
+
+The same pattern as `Timer`, for wlroots objects (`wlr.rs`): `Wlr<T>` is
+`repr(transparent)` over a `Cell<*mut T>` (zeroed = unset), `set` /
+`from_raw` are the `unsafe` step (the object must stay live until the field
+lets go: `take`, another `set`, or drop), and the methods are SAFE and no-op
+(or return null / 0 / false) when unset. Fields on it: `Seat::wlr_seat`,
+`Cursor::{wlr_cursor, xcursor_manager, wlr_seat}`, `TabletTool::wlr_cursor`,
+`Output::wlr_output`, and every `shared::Handles` field but `default_seat`.
+`Cursor::wlr_seat` is a SECOND hold on the seat's `wlr_seat`, taken in
+`Cursor::init` and released in `Cursor::deinit` (which `Seat::destroy` runs
+before it destroys the `wlr_seat`), so pointer paths reach the seat without
+`(*self.seat)`. An owner's destroy path frees through `take()`
+(`wlr_seat_destroy(seat.wlr_seat.take())`); the output's destroy handler
+`take()`s before wlroots frees it.
+
+Only calls whose other arguments are values (or another `Wlr`) are wrapped:
+a call that also passes a raw surface, device or keyboard pointer stays an
+FFI call through `.ptr()`, because that pointer is the caller's to vouch for.
+In particular there is NO safe "layout box of any `*mut wlr_output`":
+`wlr_output_layout_get` reads `reference->addons`, so only
+`Wlr<wlr_output>::layout_box()` (an output the field holds) is safe. Add a
+method to `wlr.rs` when a new value-argument call is needed, rather than an
+`unsafe` block at the call site. `shared::event_loop()` is the safe way to
+the event loop (the display's, recorded at `set_server`).
+
 ### Shared state: `crate::shared` (since 2026-10-10)
 
 `shared.rs` holds what every subsystem may reach through a SHARED reference:

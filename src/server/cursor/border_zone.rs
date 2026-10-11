@@ -218,25 +218,25 @@ pub fn border_element_for_edges(edges: crate::window::Edges) -> crate::window::B
     }
 }
 
-pub fn get_resize_cursor_name(edges: crate::window::Edges) -> &'static [u8] {
+pub fn get_resize_cursor_name(edges: crate::window::Edges) -> &'static std::ffi::CStr {
     if edges.top && edges.left {
-        b"nw-resize\0"
+        c"nw-resize"
     } else if edges.top && edges.right {
-        b"ne-resize\0"
+        c"ne-resize"
     } else if edges.bottom && edges.left {
-        b"sw-resize\0"
+        c"sw-resize"
     } else if edges.bottom && edges.right {
-        b"se-resize\0"
+        c"se-resize"
     } else if edges.top {
-        b"n-resize\0"
+        c"n-resize"
     } else if edges.bottom {
-        b"s-resize\0"
+        c"s-resize"
     } else if edges.left {
-        b"w-resize\0"
+        c"w-resize"
     } else if edges.right {
-        b"e-resize\0"
+        c"e-resize"
     } else {
-        b"default\0"
+        c"default"
     }
 }
 

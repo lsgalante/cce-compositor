@@ -54,7 +54,7 @@ impl Keyboard {
                 ffi::xkb_keymap_ref(keymap);
             }
         } else {
-            keymap = crate::shared::handles().default_keymap.get();
+            keymap = crate::shared::handles().default_keymap.ptr();
             if !keymap.is_null() {
                 ffi::xkb_keymap_ref(keymap);
             }
@@ -205,7 +205,7 @@ unsafe extern "C" fn destroy_callback(data: *mut std::ffi::c_void) {
 }
 
 unsafe fn should_set_keymap() -> bool {
-    let backend = crate::shared::handles().backend.get();
+    let backend = crate::shared::handles().backend.ptr();
     ffi::wlr_backend_is_wl(backend) || ffi::wlr_backend_is_x11(backend)
 }
 

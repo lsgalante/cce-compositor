@@ -118,15 +118,15 @@ impl KeyboardGroup {
         self.modifiers_listener.disconnect();
 
         // If the currently active keyboard of a seat is destroyed, we need to set a new active keyboard.
-        let active_wlr_kbd = ffi::river_wlr_seat_get_keyboard((*self.seat).wlr_seat);
+        let active_wlr_kbd = (*self.seat).wlr_seat.keyboard();
         if active_wlr_kbd == &mut self.wlr_keyboard {
             let seat_groups_head = &mut (*self.seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
             let first_node = (*seat_groups_head).next;
             if first_node != seat_groups_head {
                 let other_group = crate::container_of!(first_node, KeyboardGroup, link);
-                ffi::wlr_seat_set_keyboard((*self.seat).wlr_seat, &mut (*other_group).wlr_keyboard);
+                ffi::wlr_seat_set_keyboard((*self.seat).wlr_seat.ptr(), &mut (*other_group).wlr_keyboard);
             } else {
-                ffi::wlr_seat_set_keyboard((*self.seat).wlr_seat, std::ptr::null_mut());
+                ffi::wlr_seat_set_keyboard((*self.seat).wlr_seat.ptr(), std::ptr::null_mut());
             }
         }
 
@@ -307,7 +307,7 @@ unsafe fn handle_builtin_binding(wm: &mut crate::window_manager::WindowManager, 
     match keysym {
         ffi::XKB_KEY_XF86Switch_VT_1..=ffi::XKB_KEY_XF86Switch_VT_12 => {
             log::debug!("switch VT keysym received");
-            let session = crate::shared::handles().session.get();
+            let session = crate::shared::handles().session.ptr();
             if !session.is_null() {
                 let vt = keysym - ffi::XKB_KEY_XF86Switch_VT_1 + 1;
                 log::info!("switching to VT {}", vt);
@@ -509,8 +509,8 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
                 || is_overlay_mode
                 || (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
             {
-                ffi::wlr_seat_set_keyboard((*group.seat).wlr_seat, &mut group.wlr_keyboard);
-                ffi::wlr_seat_keyboard_notify_key((*group.seat).wlr_seat, (*event).time_msec, (*event).keycode, (*event).state);
+                ffi::wlr_seat_set_keyboard((*group.seat).wlr_seat.ptr(), &mut group.wlr_keyboard);
+                (*group.seat).wlr_seat.keyboard_notify_key((*event).time_msec, (*event).keycode, (*event).state);
             }
         }
     }
@@ -607,8 +607,8 @@ unsafe extern "C" fn handle_group_modifiers(listener: *mut ffi::wl_listener, _da
         ffi::wlr_input_method_keyboard_grab_v2_set_keyboard(grab, &mut group.wlr_keyboard);
         ffi::wlr_input_method_keyboard_grab_v2_send_modifiers(grab, &mut group.wlr_keyboard.modifiers);
     } else {
-        ffi::wlr_seat_set_keyboard((*group.seat).wlr_seat, &mut group.wlr_keyboard);
-        ffi::wlr_seat_keyboard_notify_modifiers((*group.seat).wlr_seat, &mut group.wlr_keyboard.modifiers);
+        ffi::wlr_seat_set_keyboard((*group.seat).wlr_seat.ptr(), &mut group.wlr_keyboard);
+        (*group.seat).wlr_seat.keyboard_notify_modifiers(&mut group.wlr_keyboard.modifiers);
     }
     // Window-adjust mode (Super held) reads the seat keyboard's mask, which
     // is this group's — the DEVICE keyboard has no keymap on the DRM

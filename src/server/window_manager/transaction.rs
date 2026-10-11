@@ -45,7 +45,7 @@ impl WindowManager {
         crate::wm_scope!(mut);
         let mut held = self.injected_super_held;
         for seat in self.seats.ptrs() {
-            let kb = ffi::river_wlr_seat_get_keyboard((*seat).wlr_seat);
+            let kb = (*seat).wlr_seat.keyboard();
             if !kb.is_null() && (ffi::wlr_keyboard_get_modifiers(kb) & ffi::wlr_keyboard_modifier_WLR_MODIFIER_LOGO) != 0 {
                 held = true;
             }
@@ -468,7 +468,7 @@ impl WindowManager {
         }
 
         let holders = sys.inhibit.holders(self);
-        crate::idle_inhibit_manager::publish(holders, crate::shared::handles().idle_notifier.get(), sys.idle);
+        crate::idle_inhibit_manager::publish(holders, crate::shared::handles().idle_notifier.ptr(), sys.idle);
 
         log::debug!("finished committing transaction");
         self.debug_check_unlinked_status("render_finish end");

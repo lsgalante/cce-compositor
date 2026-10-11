@@ -371,7 +371,7 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
 
     let default_seat = (*server).input_manager.default_seat;
     if !default_seat.is_null() {
-        let focused_surf = ffi::river_wlr_seat_get_keyboard_focused_surface((*default_seat).wlr_seat);
+        let focused_surf = (*default_seat).wlr_seat.keyboard_focused_surface();
         if focused_surf == surface {
             log::info!("xdg activation request ignored: window is already focused");
             return;
@@ -478,8 +478,8 @@ unsafe extern "C" fn handle_request_set_cursor_shape(_listener: *mut ffi::wl_lis
 
     if focused_client == (*event).seat_client {
         let seat = ffi::river_wlr_seat_get_data(wlr_seat) as *mut crate::seat::Seat;
-        if !seat.is_null() {
-            (*seat).cursor.set_xcursor(shape_name);
+        if !seat.is_null() && !shape_name.is_null() {
+            (*seat).cursor.set_xcursor(std::ffi::CStr::from_ptr(shape_name));
         }
     }
 }

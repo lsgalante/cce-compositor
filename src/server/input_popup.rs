@@ -130,7 +130,7 @@ impl InputPopup {
             width: 0,
             height: 0,
         };
-        ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut output_box);
+        ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut output_box);
 
         cursor_box.x += focused_x - output_box.x;
         cursor_box.y += focused_y - output_box.y;

@@ -55,7 +55,7 @@ pub struct OutputManager {
 /// output layout: for code with no output manager in hand. Null before the
 /// layout exists or while it holds no output.
 pub unsafe fn output_at(lx: f64, ly: f64) -> *mut ffi::wlr_output {
-    let layout = crate::shared::handles().output_layout.get();
+    let layout = crate::shared::handles().output_layout.ptr();
     if layout.is_null() {
         return std::ptr::null_mut();
     }
@@ -84,7 +84,7 @@ impl OutputManager {
         self.gamma_control_manager = gamma_control_manager;
         ffi::wlr_scene_set_gamma_control_manager_v1(crate::shared::scene().wlr_scene, gamma_control_manager);
 
-        let presentation = ffi::wlr_presentation_create((*server).wl_server, crate::shared::handles().backend.get(), 2);
+        let presentation = ffi::wlr_presentation_create((*server).wl_server, crate::shared::handles().backend.ptr(), 2);
         if presentation.is_null() {
             return Err("Failed to create wlr_presentation");
         }
@@ -109,7 +109,7 @@ impl OutputManager {
         self.power_manager = power_manager;
 
         // Add backend new_output listener
-        let backend_cast = crate::shared::handles().backend.get() as *mut crate::server::WlrBackend;
+        let backend_cast = crate::shared::handles().backend.ptr() as *mut crate::server::WlrBackend;
         self.new_output.connect(&mut (*backend_cast).events.new_output, handle_new_output);
 
         // Add apply/test listeners
@@ -149,7 +149,7 @@ impl OutputManager {
             assert!(output.sent.state != OutputStateValue::Destroying);
             output.rendering_current = output.rendering_requested;
 
-            let wlr_output = output.wlr_output;
+            let wlr_output = output.wlr_output.ptr();
             if !wlr_output.is_null() {
                 match output.sent.state {
                     OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
@@ -209,12 +209,12 @@ impl OutputManager {
         for id in crate::shared::sent().outputs.ids() {
             let Some(output_ptr) = outputs.ptr(id) else { continue };
             let output = &mut *output_ptr;
-            let wlr_output = output.wlr_output;
+            let wlr_output = output.wlr_output.ptr();
             if wlr_output.is_null() {
                 continue;
             }
 
-            let wlr_enabled = ffi::river_wlr_output_get_enabled(wlr_output);
+            let wlr_enabled = output.wlr_output.enabled();
             match output.sent.state {
                 OutputStateValue::Enabled => {
                     if !wlr_enabled {
@@ -239,9 +239,9 @@ impl OutputManager {
                     }
                 }
                 OutputMode::Custom { width, height, refresh } => {
-                    if width != ffi::river_wlr_output_get_width(wlr_output) 
-                        || height != ffi::river_wlr_output_get_height(wlr_output) 
-                        || refresh != ffi::river_wlr_output_get_refresh(wlr_output) {
+                    if width != output.wlr_output.width() 
+                        || height != output.wlr_output.height() 
+                        || refresh != output.wlr_output.refresh() {
                         need_modeset = true;
                         break;
                     }
@@ -277,7 +277,7 @@ impl OutputManager {
             for id in crate::shared::sent().outputs.ids() {
                 let Some(output_ptr) = outputs.ptr(id) else { continue };
                 let output = &mut *output_ptr;
-                let wlr_output = output.wlr_output;
+                let wlr_output = output.wlr_output.ptr();
                 if wlr_output.is_null() {
                     continue;
                 }
@@ -296,7 +296,7 @@ impl OutputManager {
             }
 
             let mut swapchain_manager = std::mem::zeroed();
-            ffi::wlr_output_swapchain_manager_init(&mut swapchain_manager, crate::shared::handles().backend.get());
+            ffi::wlr_output_swapchain_manager_init(&mut swapchain_manager, crate::shared::handles().backend.ptr());
 
             if !ffi::wlr_output_swapchain_manager_prepare(
                 &mut swapchain_manager,
@@ -324,7 +324,7 @@ impl OutputManager {
                 }
             }
 
-            if !ffi::wlr_backend_commit(crate::shared::handles().backend.get(), states_vec.as_ptr(), states_vec.len()) {
+            if !ffi::wlr_backend_commit(crate::shared::handles().backend.ptr(), states_vec.as_ptr(), states_vec.len()) {
                 log::error!("failed to commit new output configuration");
                 self.modeset_failed(outputs);
                 for state in &mut states_vec {
@@ -352,18 +352,18 @@ impl OutputManager {
         for id in crate::shared::sent().outputs.ids() {
             let Some(output_ptr) = outputs.ptr(id) else { continue };
             let output = &mut *output_ptr;
-            let wlr_output = output.wlr_output;
+            let wlr_output = output.wlr_output.ptr();
             if wlr_output.is_null() {
                 continue;
             }
 
             match output.sent.state {
                 OutputStateValue::Enabled => {
-                    assert!(ffi::river_wlr_output_get_enabled(wlr_output));
-                    ffi::wlr_output_schedule_frame(wlr_output);
+                    assert!(output.wlr_output.enabled());
+                    output.wlr_output.schedule_frame();
                 }
                 OutputStateValue::DisabledSoft | OutputStateValue::DisabledHard => {
-                    assert!(!ffi::river_wlr_output_get_enabled(wlr_output));
+                    assert!(!output.wlr_output.enabled());
                     output.lock_render_state = crate::output::LockRenderState::Blanked;
                     if output.sent.state == OutputStateValue::DisabledHard {
                         crate::shared::sent().outputs.remove(output.id);
@@ -410,7 +410,7 @@ impl OutputManager {
 
         for output_ptr in outputs.ptrs() {
             let output = &mut *output_ptr;
-            let wlr_output = output.wlr_output;
+            let wlr_output = output.wlr_output.ptr();
             if wlr_output.is_null() {
                 continue;
             }
@@ -487,13 +487,12 @@ impl crate::output::Outputs {
 
         for output_ptr in self.ptrs() {
             let output = &mut *output_ptr;
-            let wlr_output = output.wlr_output;
+            let wlr_output = output.wlr_output.ptr();
             if wlr_output.is_null() {
                 continue;
             }
 
-            let mut overlap: ffi::wlr_box = std::mem::zeroed();
-            ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut overlap);
+            let overlap = output.wlr_output.layout_box();
             
             if overlap.width <= 0 || overlap.height <= 0 {
                 continue;
@@ -579,7 +578,7 @@ unsafe extern "C" fn handle_manager_test(listener: *mut ffi::wl_listener, data: 
     }
 
     let mut swapchain_manager = std::mem::zeroed();
-    ffi::wlr_output_swapchain_manager_init(&mut swapchain_manager, crate::shared::handles().backend.get());
+    ffi::wlr_output_swapchain_manager_init(&mut swapchain_manager, crate::shared::handles().backend.ptr());
 
     if ffi::wlr_output_swapchain_manager_prepare(&mut swapchain_manager, states, states_len) {
         ffi::wlr_output_configuration_v1_send_succeeded(config);

@@ -96,7 +96,7 @@ impl WindowManager {
             return;
         }
         if !self.edge_pan_timer.is_set() {
-            let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
+            let event_loop = crate::shared::event_loop();
             self.edge_pan_timer = crate::event_source::Timer::add(event_loop, handle_edge_pan_tick, self as *mut WindowManager as *mut _);
         }
         self.edge_pan_timer.arm(16);
@@ -114,7 +114,7 @@ impl WindowManager {
         }
         self.schedule_frame_all_outputs();
         if !self.animation_timer.is_set() {
-            let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
+            let event_loop = crate::shared::event_loop();
             self.animation_timer = crate::event_source::Timer::add(event_loop, handle_panning_animation_tick, self as *mut WindowManager as *mut _);
         }
         self.animation_timer.arm(CAMERA_WATCHDOG_MS);
@@ -126,7 +126,7 @@ impl WindowManager {
         crate::wm_scope!(mut);
         for output in self.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                ffi::wlr_output_schedule_frame((*output).wlr_output);
+                (*output).wlr_output.schedule_frame();
             }
         }
     }

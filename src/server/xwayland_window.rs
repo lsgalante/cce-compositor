@@ -979,10 +979,9 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         (*(*xwindow).xsurface).x, (*(*xwindow).xsurface).y, (*(*xwindow).xsurface).width, (*(*xwindow).xsurface).height,
     );
 
-    let is_tiled = unsafe {
-        this.wm_requested.tiled != 0 || !matches!(this.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Utility)
-    };
-    let is_fullscreen = unsafe { this.is_fullscreen() };
+    let is_tiled = this.wm_requested.tiled != 0
+        || !matches!(this.tiling_mode, crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Utility);
+    let is_fullscreen = this.is_fullscreen();
 
     // A window named in `xwayland_hidpi_except` is a full-screen X11 game
     // that sizes AND places itself to the screen (Trackmania's

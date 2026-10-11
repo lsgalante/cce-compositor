@@ -739,7 +739,7 @@ unsafe extern "C" fn handle_plan_poll(data: *mut std::ffi::c_void) -> std::os::r
     let idle = &mut *(data as *mut IdleManager);
     idle.poll_plan();
     // The directory may exist now: watch it, and stop polling.
-    let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
+    let event_loop = crate::shared::event_loop();
     if idle.watch_plan_dir(event_loop) {
         log::info!("idle: watching the power-plan directory");
         idle.poll_plan();

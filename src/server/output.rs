@@ -147,7 +147,7 @@ pub struct RenderingState {
 }
 
 pub struct Output {
-    pub wlr_output: *mut ffi::wlr_output,
+    pub wlr_output: crate::wlr::Wlr<ffi::wlr_output>,
     pub scene_output: *mut ffi::wlr_scene_output,
     pub background_rect: SceneRect,
     pub grid_tree: SceneTree,
@@ -343,7 +343,9 @@ impl Output {
         };
 
         let output = Box::new(Output {
-            wlr_output,
+            // SAFETY: the output's destroy handler takes it back out before
+            // wlroots frees it (`handle_destroy`).
+            wlr_output: crate::wlr::Wlr::from_raw(wlr_output),
             scene_output,
             background_rect: SceneRect::none(),
             grid_tree: SceneTree::none(),
@@ -547,7 +549,7 @@ impl Output {
             // this episode, asking again every frame just taxes the game.
             if !self.tearing_test_failed {
                 state.tearing_page_flip = true;
-                if !ffi::wlr_output_test_state(self.wlr_output, &state) {
+                if !ffi::wlr_output_test_state(self.wlr_output.ptr(), &state) {
                     state.tearing_page_flip = false;
                     self.tearing_test_failed = true;
                 }
@@ -556,14 +558,14 @@ impl Output {
             self.tearing_test_failed = false;
         }
 
-        if !ffi::wlr_output_commit_state(self.wlr_output, &state) {
+        if !ffi::wlr_output_commit_state(self.wlr_output.ptr(), &state) {
             ffi::wlr_output_state_finish(&mut state);
             // The damage this frame carried is still pending (only a
             // successful commit clears it), but nothing else asks for
             // another frame: a refused commit (the panel's EBUSY bursts)
             // left the screen stale until something unrelated moved. Retry
             // at the next vblank.
-            ffi::wlr_output_schedule_frame(self.wlr_output);
+            self.wlr_output.schedule_frame();
             return Err("Failed to commit state");
         }
 
@@ -577,8 +579,8 @@ impl Output {
                 crate::screenshot::capture_state_buffer(
                     renderer,
                     state.buffer,
-                    ffi::river_wlr_output_get_width(self.wlr_output),
-                    ffi::river_wlr_output_get_height(self.wlr_output),
+                    self.wlr_output.width(),
+                    self.wlr_output.height(),
                     shot,
                 );
             }
@@ -656,7 +658,7 @@ impl Output {
 
         if wm.adjust_position_mode != self.last_adjust_mode {
             self.last_adjust_mode = wm.adjust_position_mode;
-            ffi::wlr_output_schedule_frame(self.wlr_output);
+            self.wlr_output.schedule_frame();
         }
 
         if !wm.adjust_position_mode {
@@ -1178,10 +1180,10 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     (*output).destroy_scene_nodes();
 
     if !(*output).wlr_output.is_null() {
-        ffi::river_wlr_output_set_data((*output).wlr_output, std::ptr::null_mut());
+        ffi::river_wlr_output_set_data((*output).wlr_output.ptr(), std::ptr::null_mut());
     }
 
-    (*output).wlr_output = std::ptr::null_mut();
+    (*output).wlr_output.take();
     (*output).scheduled.mode = OutputMode::None;
     (*output).sent.mode = OutputMode::None;
     (*output).current.mode = OutputMode::None;
@@ -1230,11 +1232,11 @@ fn ovdbg_enabled() -> bool {
 impl Output {
     /// The refresh period to plan frames by: what the last `present`
     /// reported, else the current mode's rate, else 60 Hz.
-    unsafe fn refresh_period_ns(&self) -> u64 {
+    fn refresh_period_ns(&self) -> u64 {
         if self.present_refresh_ns > 0 {
             return self.present_refresh_ns;
         }
-        let mhz = if self.wlr_output.is_null() { 0 } else { ffi::river_wlr_output_get_refresh(self.wlr_output) };
+        let mhz = if self.wlr_output.is_null() { 0 } else { self.wlr_output.refresh() };
         if mhz > 0 {
             1_000_000_000_000 / mhz as u64
         } else {
@@ -1253,7 +1255,7 @@ impl Output {
     /// re-anchors only when they drift by more than a quarter period, so
     /// the per-present jitter of the timestamps themselves (and the
     /// headless backend's commit-time stamps) never reaches the camera.
-    pub unsafe fn predicted_present_ns(&mut self) -> u64 {
+    pub fn predicted_present_ns(&mut self) -> u64 {
         let now = util::timestamp_ns();
         let period = self.refresh_period_ns().max(1);
         if self.present_when_ns != 0 {

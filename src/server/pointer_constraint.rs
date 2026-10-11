@@ -130,7 +130,7 @@ impl PointerConstraint {
             let warp_lx = lx as f64 + sx;
             let warp_ly = ly as f64 + sy;
 
-            if !ffi::wlr_cursor_warp((*seat).cursor.wlr_cursor, std::ptr::null_mut(), warp_lx, warp_ly) {
+            if !(*seat).cursor.wlr_cursor.warp(warp_lx, warp_ly) {
                 log::info!("deactivating pointer constraint, could not warp cursor");
                 self.deactivate();
                 return;
@@ -181,8 +181,8 @@ impl PointerConstraint {
 
                 let sx = (*self.wlr_constraint).current.cursor_hint.x;
                 let sy = (*self.wlr_constraint).current.cursor_hint.y;
-                ffi::wlr_cursor_warp((*seat).cursor.wlr_cursor, std::ptr::null_mut(), lx as f64 + sx, ly as f64 + sy);
-                ffi::wlr_seat_pointer_warp((*seat).wlr_seat, sx, sy);
+                (*seat).cursor.wlr_cursor.warp(lx as f64 + sx, ly as f64 + sy);
+                ffi::wlr_seat_pointer_warp((*seat).wlr_seat.ptr(), sx, sy);
             }
         }
     }

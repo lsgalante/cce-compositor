@@ -231,7 +231,7 @@ pub fn parse_config(
     // Idle timeouts live on the server, not the window manager; a reload
     // re-arms them from now with the new figures.
     if let Some((sys, _)) = live.as_mut() {
-        unsafe { sys.idle.configure(&config.idle); }
+        sys.idle.configure(&config.idle);
     }
     next_layout.status_backdrop_blur_ignore_transparent = config.layout.status_backdrop_blur_ignore_transparent;
     next_layout.window_backdrop_blur_ignore_transparent = config.layout.window_backdrop_blur_ignore_transparent;

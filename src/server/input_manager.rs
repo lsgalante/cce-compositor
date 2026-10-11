@@ -76,7 +76,7 @@ impl InputManager {
         crate::shared::handles().default_seat.set(self.default_seat);
 
         if !(*server).xwayland.is_null() {
-            ffi::wlr_xwayland_set_seat((*server).xwayland, (*self.default_seat).wlr_seat);
+            ffi::wlr_xwayland_set_seat((*server).xwayland, (*self.default_seat).wlr_seat.ptr());
         }
 
         self.global = ffi::wl_global_create(
@@ -174,7 +174,7 @@ impl InputManager {
         log::info!("[deinit] destroying seats");
         for id in wm.seats.ids() {
             if let Some(seat) = wm.seats.take(id) {
-                log::info!("[deinit] calling Seat::destroy for {:?}", seat.wlr_seat);
+                log::info!("[deinit] calling Seat::destroy for {:?}", seat.wlr_seat.ptr());
                 Seat::destroy(seat);
             }
         }
@@ -304,7 +304,7 @@ unsafe extern "C" fn input_manager_create_seat(
 
     // Check if seat already exists
     let exists = (*crate::reentry::wm(crate::shared::server_ptr())).seats.values().any(|seat| {
-        std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name(seat.wlr_seat)).to_string_lossy() == name_str
+        std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name(seat.wlr_seat.ptr())).to_string_lossy() == name_str
     });
 
     if !exists {
@@ -333,7 +333,7 @@ unsafe extern "C" fn input_manager_destroy_seat(
 
     // Skip default seat (which is the first seat in the list)
     for seat in (*crate::reentry::wm(crate::shared::server_ptr())).seats.ptrs().into_iter().skip(1) {
-        let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
+        let seat_name = (*seat).wlr_seat.name();
         if seat_name == name_str {
             (*seat).destroying = true;
             crate::shared::pending().dirty_windowing();

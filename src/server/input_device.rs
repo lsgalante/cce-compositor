@@ -120,7 +120,7 @@ impl InputDevice {
 
         if let Some(name) = output_name {
             for output in outputs.ptrs() {
-                let wlr_output = (*output).wlr_output;
+                let wlr_output = (*output).wlr_output.ptr();
                 if !wlr_output.is_null() {
                     let wlr_name = std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name(wlr_output));
                     if wlr_name == name {
@@ -160,7 +160,7 @@ impl InputDevice {
             return mapping;
         }
         if !self.config.map_to_output.is_null() {
-            ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), self.config.map_to_output, &mut mapping);
+            ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), self.config.map_to_output, &mut mapping);
         }
         mapping
     }
@@ -353,7 +353,7 @@ unsafe extern "C" fn input_device_assign_to_seat(
     let mut found = false;
     let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
     for seat in (*crate::reentry::wm(server)).seats.ptrs() {
-        let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
+        let seat_name = (*seat).wlr_seat.name();
         if seat_name == name_str {
             (*device).assign_to_seat(&mut *crate::reentry::wm(server), seat, sys);
             found = true;
@@ -451,7 +451,7 @@ unsafe extern "C" fn input_device_map_to_output(
         ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TABLET => {
             if !(*device).seat.is_null() {
                 let cursor = &mut (*(*device).seat).cursor;
-                ffi::wlr_cursor_map_input_to_output(cursor.wlr_cursor, (*device).wlr_device, wlr_output);
+                ffi::wlr_cursor_map_input_to_output(cursor.wlr_cursor.ptr(), (*device).wlr_device, wlr_output);
             }
         }
         _ => {}
@@ -502,7 +502,7 @@ unsafe extern "C" fn input_device_map_to_rectangle(
             if !(*device).seat.is_null() {
                 let cursor = &mut (*(*device).seat).cursor;
                 ffi::wlr_cursor_map_input_to_region(
-                    cursor.wlr_cursor,
+                    cursor.wlr_cursor.ptr(),
                     (*device).wlr_device,
                     &mut (*device).config.map_to_rectangle,
                 );

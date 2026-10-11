@@ -769,11 +769,11 @@ impl WindowManager {
         crate::wm_scope!(mut);
         if self.ipc_rx.is_none() {
             // Lock before logind's sleeps (lid, power key) — a real seat only.
-            if !crate::shared::handles().session.get().is_null() {
+            if !crate::shared::handles().session.ptr().is_null() {
                 crate::sleep_lock::spawn(display_socket.clone());
             }
             let (rx, wake) = crate::ipc_server::spawn_ipc_server(display_socket);
-            let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
+            let event_loop = crate::shared::event_loop();
             self.ipc_source = ffi::wl_event_loop_add_fd(
                 event_loop,
                 std::os::fd::AsRawFd::as_raw_fd(&*wake),
@@ -792,7 +792,7 @@ impl WindowManager {
     /// Own the window-stream hub and wake on its subscriber eventfd.
     pub unsafe fn start_stream(&mut self, hub: crate::stream_server::StreamHub) {
         crate::wm_scope!(mut);
-        let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
+        let event_loop = crate::shared::event_loop();
         self.stream_source = ffi::wl_event_loop_add_fd(
             event_loop,
             std::os::fd::AsRawFd::as_raw_fd(&*hub.wake),
@@ -881,7 +881,7 @@ impl WindowManager {
             let wlr_output = crate::output_manager::output_at(cursor_x, cursor_y);
             if !wlr_output.is_null() {
                 let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-                ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.get(), wlr_output, &mut output_box);
+                ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut output_box);
                 cursor_viewport = Rect {
                     x: output_box.x,
                     y: output_box.y,
@@ -977,7 +977,7 @@ impl WindowManager {
     unsafe fn arm_settle_timer(&mut self) {
         crate::wm_scope!(mut);
         if !self.settle_timer.is_set() {
-            let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
+            let event_loop = crate::shared::event_loop();
             self.settle_timer = crate::event_source::Timer::add(event_loop, handle_settle_tick, self as *mut WindowManager as *mut _);
         }
         if !self.settle_timer.is_set() {
@@ -1032,7 +1032,7 @@ impl WindowManager {
             return;
         }
         if !self.save_state_timer.is_set() {
-            let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
+            let event_loop = crate::shared::event_loop();
             self.save_state_timer = crate::event_source::Timer::add(event_loop, handle_save_state_timer, self as *mut WindowManager as *mut _);
             if !self.save_state_timer.is_set() {
                 log::error!("failed to create the save-state timer; saving synchronously");
@@ -1746,7 +1746,7 @@ impl WindowManager {
                 if moved && !(*output).scene_output.is_null() {
                     ffi::river_scene_output_damage_whole((*output).scene_output);
                 } else {
-                    ffi::wlr_output_schedule_frame((*output).wlr_output);
+                    (*output).wlr_output.schedule_frame();
                 }
             }
         }
@@ -1763,7 +1763,7 @@ impl WindowManager {
     unsafe fn arm_viewport_settle_timer(&mut self) {
         crate::wm_scope!(mut);
         if !self.viewport_settle_timer.is_set() {
-            let event_loop = ffi::wl_display_get_event_loop(crate::shared::shared().display());
+            let event_loop = crate::shared::event_loop();
             self.viewport_settle_timer = crate::event_source::Timer::add(event_loop, handle_viewport_settle_tick, self as *mut WindowManager as *mut _);
         }
         self.viewport_settle_timer.arm(VIEWPORT_SETTLE_MS);
@@ -1801,7 +1801,7 @@ impl WindowManager {
                 if !(*output).scene_output.is_null() {
                     ffi::river_scene_output_damage_whole((*output).scene_output);
                 } else {
-                    ffi::wlr_output_schedule_frame((*output).wlr_output);
+                    (*output).wlr_output.schedule_frame();
                 }
             }
         }
@@ -2952,7 +2952,7 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
         (*wm).border_fade_timer.arm(16);
         for output in (*wm).outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                ffi::wlr_output_schedule_frame((*output).wlr_output);
+                (*output).wlr_output.schedule_frame();
             }
         }
     } else {
