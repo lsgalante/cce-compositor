@@ -415,6 +415,29 @@ The `Server` is `std::mem::forget`ten after `deinit` (`run_server.rs`): by
 then the display and every wlroots object are gone, and its subsystems'
 listeners must not unlink into them on drop.
 
+### Scene nodes are owned handles (`scene_handle.rs`, since 2026-10-10)
+
+`SceneTree`, `SceneRect`, `SceneBuffer`, `SceneBevel` (and the other scenefx
+kinds) are `Handle<K>`: dropping one destroys its node, and the handle
+listens to the node's destroy signal, so a node that goes with its parent, or
+is destroyed through a raw pointer elsewhere, leaves the handle null rather
+than dangling. Methods on a null handle do nothing; `raw()` / `node()` give
+the pointer (null when gone) for calls the module does not wrap. An empty
+handle is zero bits, so `std::mem::zeroed()` structs need nothing. Use
+`create` / `create_in` to make one, `adopt` to take an existing node, and
+`release` to give one back.
+
+Converted: `Output`'s background rect, grid, backdrop, rims, labels and
+adjust overlay (`Output::destroy_scene_nodes` is their one teardown). The
+rest of the compositor still holds raw scene pointers; convert a struct at a
+time. A pool of child handles can be cleared after its parent tree was
+destroyed — its entries are already null — which is exactly what the raw
+pointers could not do: output_manager's DisabledHard path destroyed
+`grid_tree` and kept `grid_bevel_tree` / `cell_label_tree` naming its dead
+children, and re-enabling the output crashed in `draw_grid`'s
+`wlr_scene_node_raise_to_top` (reproduced in a shadow with `wlr-randr
+--output HEADLESS-1 --off` then `--on`).
+
 ### Central files (by size/importance)
 
 - **`server.rs`** — `Server` struct: owns the wlroots backend, renderer, `wl_display`,

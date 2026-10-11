@@ -399,9 +399,7 @@ impl WindowManager {
             let next_out = (*curr_out).next;
             let output = crate::container_of!(curr_out, crate::output::Output, link);
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                if !(*output).background_rect.is_null() {
-                    ffi::wlr_scene_node_set_enabled((*output).background_rect as *mut ffi::wlr_scene_node, !has_wallpaper);
-                }
+                (*output).background_rect.set_enabled(!has_wallpaper);
             }
             curr_out = next_out;
         }

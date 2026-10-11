@@ -1560,9 +1560,7 @@ impl WindowManager {
         let plan = crate::policy::arrange::arrange(&window_snaps, &output_snaps, &params);
 
         for &output in &active_outputs {
-            if !(*output).background_rect.is_null() {
-                ffi::wlr_scene_node_set_enabled((*output).background_rect as *mut ffi::wlr_scene_node, plan.background_rect_enabled);
-            }
+            (*output).background_rect.set_enabled(plan.background_rect_enabled);
         }
         // During a camera flight the native cell lattice draws even while a
         // client patch is latched: the fallback renders BELOW the grid

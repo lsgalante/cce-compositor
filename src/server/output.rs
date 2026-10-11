@@ -6,6 +6,7 @@ use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
 use crate::layer_shell::LayerShellOutput;
 use crate::lock_manager::LockState;
 use crate::util;
+use crate::scene_handle::{SceneBevel, SceneBuffer, SceneRect, SceneTree};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OutputStateValue {
@@ -140,16 +141,16 @@ pub struct Output {
     pub server: *mut Server,
     pub wlr_output: *mut ffi::wlr_output,
     pub scene_output: *mut ffi::wlr_scene_output,
-    pub background_rect: *mut ffi::wlr_scene_rect,
-    pub grid_tree: *mut ffi::wlr_scene_tree,
+    pub background_rect: SceneRect,
+    pub grid_tree: SceneTree,
     /// The grid's backdrop (gap colour, or the Solid spec's colour), kept in
     /// its own tree under `scene.layers.background_clients` so a client
     /// background surface paints over it while the cells in `grid_tree` stay
     /// on top. Positioned in lockstep with `grid_tree`.
-    pub grid_backdrop_tree: *mut ffi::wlr_scene_tree,
-    pub grid_backdrop_rect: *mut ffi::wlr_scene_rect,
-    pub adjust_tree: *mut ffi::wlr_scene_tree,
-    pub adjust_rects: Vec<*mut ffi::wlr_scene_rect>,
+    pub grid_backdrop_tree: SceneTree,
+    pub grid_backdrop_rect: SceneRect,
+    pub adjust_tree: SceneTree,
+    pub adjust_rects: Vec<SceneRect>,
     pub last_adjust_mode: bool,
     pub layer_shell: LayerShellOutput,
     pub lock_render_state: LockRenderState,
@@ -194,20 +195,20 @@ pub struct Output {
     /// change) forces a redraw. Pan alone never redraws — it only moves the
     /// grid tree.
     pub last_grid_spec: Option<crate::policy::api::BackgroundSpec>,
-    pub grid_rect_pool: Vec<*mut ffi::wlr_scene_rect>,
+    pub grid_rect_pool: Vec<SceneRect>,
     /// Lit-chamfer rims over the grid cells — the same scenefx bevel node
     /// the windows use, so the grid lines read as raised rails descending
     /// into each cell through a shaded fillet that wraps the corner arcs.
     /// Pooled like `grid_rect_pool`, but in their own subtree kept above
     /// the rects: pool reuse must never stack a rim beneath a
     /// later-created cell rect.
-    pub grid_bevel_pool: Vec<*mut ffi::wlr_scene_bevel>,
-    pub grid_bevel_tree: *mut ffi::wlr_scene_tree,
+    pub grid_bevel_pool: Vec<SceneBevel>,
+    pub grid_bevel_tree: SceneTree,
     /// The cell labels' own subtree inside `grid_tree`, raised above the
     /// cell rects and bevels on every draw: label nodes used to be direct
     /// children of the grid tree, so any cell rect the pool created after
     /// them stacked on top and hid them.
-    pub cell_label_tree: *mut ffi::wlr_scene_tree,
+    pub cell_label_tree: SceneTree,
     /// Bevel params the rims were last drawn with (enabled, thickness,
     /// light x/y/intensity, shade, shoulder as bits) — the spec alone does
     /// not cover them, and a live config reload must redraw the rims too.
@@ -220,7 +221,7 @@ pub struct Output {
     /// `wlr_scene_buffer_set_buffer` damages the node unconditionally — even
     /// when handed the buffer already on it — and these are re-walked every
     /// frame while the overview camera moves.
-    pub cell_label_pool: Vec<(*mut ffi::wlr_scene_buffer, *mut ffi::wlr_buffer)>,
+    pub cell_label_pool: Vec<(SceneBuffer, *mut ffi::wlr_buffer)>,
     pub cell_labels: crate::text::LabelCache,
     /// Label point size actually in use, so a zoom change can re-rasterize.
     pub last_label_px: u32,
@@ -253,32 +254,7 @@ impl Output {
                 if self.scheduled.state == OutputStateValue::Destroying {
                     assert!(self.wlr_output.is_null());
                     
-                    if !self.background_rect.is_null() {
-                        ffi::wlr_scene_node_destroy(self.background_rect as *mut ffi::wlr_scene_node);
-                        self.background_rect = std::ptr::null_mut();
-                    }
-
-                    if !self.grid_tree.is_null() {
-                        ffi::wlr_scene_node_destroy(self.grid_tree as *mut ffi::wlr_scene_node);
-                        self.grid_tree = std::ptr::null_mut();
-                    }
-                    if !self.grid_backdrop_tree.is_null() {
-                        ffi::wlr_scene_node_destroy(self.grid_backdrop_tree as *mut ffi::wlr_scene_node);
-                        self.grid_backdrop_tree = std::ptr::null_mut();
-                        self.grid_backdrop_rect = std::ptr::null_mut();
-                    }
-                    self.grid_rect_pool.clear();
-                    // The bevel and label subtrees died with grid_tree above.
-                    self.grid_bevel_pool.clear();
-                    self.grid_bevel_tree = std::ptr::null_mut();
-                    self.cell_label_pool.clear();
-                    self.cell_label_tree = std::ptr::null_mut();
-
-                    if !self.adjust_tree.is_null() {
-                        ffi::wlr_scene_node_destroy(self.adjust_tree as *mut ffi::wlr_scene_node);
-                        self.adjust_tree = std::ptr::null_mut();
-                    }
-                    self.adjust_rects.clear();
+                    self.destroy_scene_nodes();
 
                     // remove output from windows fullscreen hint
                     for &window in (*self.server).wm.windows.iter() {
@@ -367,11 +343,11 @@ impl Output {
             server,
             wlr_output,
             scene_output,
-            background_rect: std::ptr::null_mut(),
-            grid_tree: std::ptr::null_mut(),
-            grid_backdrop_tree: std::ptr::null_mut(),
-            grid_backdrop_rect: std::ptr::null_mut(),
-            adjust_tree: std::ptr::null_mut(),
+            background_rect: SceneRect::none(),
+            grid_tree: SceneTree::none(),
+            grid_backdrop_tree: SceneTree::none(),
+            grid_backdrop_rect: SceneRect::none(),
+            adjust_tree: SceneTree::none(),
             adjust_rects: Vec::new(),
             last_adjust_mode: false,
             layer_shell: LayerShellOutput::default(),
@@ -399,8 +375,8 @@ impl Output {
             last_grid_spec: None,
             grid_rect_pool: Vec::new(),
             grid_bevel_pool: Vec::new(),
-            grid_bevel_tree: std::ptr::null_mut(),
-            cell_label_tree: std::ptr::null_mut(),
+            grid_bevel_tree: SceneTree::none(),
+            cell_label_tree: SceneTree::none(),
             last_grid_bevel: None,
             grid_force_redraw_frames: 0,
             cell_label_pool: Vec::new(),
@@ -638,17 +614,33 @@ impl Output {
         Ok(())
     }
 
+    /// Destroy this output's scene nodes: the base rect, the grid (whose
+    /// pools, rims and labels go with it), its backdrop and the adjust
+    /// overlay. The pools' handles read null once their parent tree is
+    /// gone, so clearing them afterwards destroys nothing twice.
+    pub fn destroy_scene_nodes(&mut self) {
+        self.background_rect.destroy();
+        self.grid_tree.destroy();
+        self.grid_backdrop_tree.destroy();
+        self.grid_backdrop_rect.destroy();
+        self.grid_rect_pool.clear();
+        self.grid_bevel_pool.clear();
+        self.grid_bevel_tree.destroy();
+        self.cell_label_pool.clear();
+        self.cell_label_tree.destroy();
+        self.adjust_tree.destroy();
+        self.adjust_rects.clear();
+    }
+
     pub unsafe fn update_background_color(&mut self) {
-        if !self.background_rect.is_null() {
-            let wm = &(*self.server).wm;
-            let color: [f32; 4] = [
-                (wm.layout.background_r as f64 / u32::MAX as f64) as f32,
-                (wm.layout.background_g as f64 / u32::MAX as f64) as f32,
-                (wm.layout.background_b as f64 / u32::MAX as f64) as f32,
-                (wm.layout.background_a as f64 / u32::MAX as f64) as f32,
-            ];
-            ffi::wlr_scene_rect_set_color(self.background_rect, color.as_ptr());
-        }
+        let wm = &(*self.server).wm;
+        let color: [f32; 4] = [
+            (wm.layout.background_r as f64 / u32::MAX as f64) as f32,
+            (wm.layout.background_g as f64 / u32::MAX as f64) as f32,
+            (wm.layout.background_b as f64 / u32::MAX as f64) as f32,
+            (wm.layout.background_a as f64 / u32::MAX as f64) as f32,
+        ];
+        self.background_rect.set_color(&color);
     }
 
     pub unsafe fn draw_adjust_overlay(&mut self) {
@@ -663,13 +655,13 @@ impl Output {
         }
 
         if !wm.adjust_position_mode {
-            ffi::wlr_scene_node_set_enabled(self.adjust_tree as *mut ffi::wlr_scene_node, false);
+            self.adjust_tree.set_enabled(false);
             return;
         }
 
         // Enable the overlay tree.
-        ffi::wlr_scene_node_set_enabled(self.adjust_tree as *mut ffi::wlr_scene_node, true);
-        ffi::wlr_scene_node_lower_to_bottom(self.adjust_tree as *mut ffi::wlr_scene_node);
+        self.adjust_tree.set_enabled(true);
+        self.adjust_tree.lower_to_bottom();
 
         let (viewport_w, viewport_h) = self.current.dimensions();
         let w = viewport_w;
@@ -696,34 +688,29 @@ impl Output {
         ];
 
         let color: [f32; 4] = [0.4, 0.6, 0.9, 0.5];
-        let color_ptr = color.as_ptr();
 
         for (idx, &(tx, ty)) in targets.iter().enumerate() {
-            let rect = if idx < self.adjust_rects.len() {
-                let node = self.adjust_rects[idx];
-                ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, true);
-                ffi::wlr_scene_rect_set_size(node, 120, 120);
-                ffi::wlr_scene_rect_set_color(node, color_ptr);
-                node
+            if idx < self.adjust_rects.len() {
+                let rect = &self.adjust_rects[idx];
+                rect.set_enabled(true);
+                rect.set_size(120, 120);
+                rect.set_color(&color);
+                rect.set_position(tx, ty);
             } else {
-                let node = ffi::wlr_scene_rect_create(self.adjust_tree, 120, 120, color_ptr);
-                if !node.is_null() {
-                    self.adjust_rects.push(node);
-                    // Make it circular!
-                    ffi::river_scene_rect_set_corner_radius(node, 60);
+                let rect = SceneRect::create(&self.adjust_tree, 120, 120, &color);
+                if rect.is_null() {
+                    continue;
                 }
-                node
-            };
-
-            if !rect.is_null() {
-                ffi::wlr_scene_node_set_position(rect as *mut ffi::wlr_scene_node, tx, ty);
+                // Make it circular!
+                ffi::river_scene_rect_set_corner_radius(rect.raw(), 60);
+                rect.set_position(tx, ty);
+                self.adjust_rects.push(rect);
             }
         }
 
         // Disable any extra rects in the pool if we somehow have more
-        for idx in targets.len()..self.adjust_rects.len() {
-            let node = self.adjust_rects[idx];
-            ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, false);
+        for rect in &self.adjust_rects[targets.len().min(self.adjust_rects.len())..] {
+            rect.set_enabled(false);
         }
     }
 
@@ -741,41 +728,38 @@ impl Output {
         let wm = &(*self.server).wm;
 
         // Enable the grid tree.
-        ffi::wlr_scene_node_set_enabled(self.grid_tree as *mut ffi::wlr_scene_node, true);
+        self.grid_tree.set_enabled(true);
 
         // Keep the grid tree (cells + rims) at the top of the background layer,
         // above the client backgrounds in layers.background_clients.
-        ffi::wlr_scene_node_raise_to_top(self.grid_tree as *mut ffi::wlr_scene_node);
+        self.grid_tree.raise_to_top();
 
         // The backdrop goes BELOW the client backgrounds: its own tree, placed
         // just above this output's base rect (or at the very bottom), so a
         // layer-shell Background surface or a wallpaper window replaces the flat
         // colour and keeps the cell lattice.
         if self.grid_backdrop_tree.is_null() {
-            self.grid_backdrop_tree = ffi::wlr_scene_tree_create((*self.server).scene.layers.background);
-            ffi::river_scene_tree_set_desk_offset(self.grid_backdrop_tree, true);
+            self.grid_backdrop_tree = SceneTree::create_in((*self.server).scene.layers.background);
             if self.grid_backdrop_tree.is_null() {
                 return;
             }
+            ffi::river_scene_tree_set_desk_offset(self.grid_backdrop_tree.raw(), true);
             if !self.background_rect.is_null() {
-                ffi::wlr_scene_node_lower_to_bottom(self.background_rect as *mut ffi::wlr_scene_node);
-                ffi::wlr_scene_node_place_above(
-                    self.grid_backdrop_tree as *mut ffi::wlr_scene_node,
-                    self.background_rect as *mut ffi::wlr_scene_node,
-                );
+                self.background_rect.lower_to_bottom();
+                self.grid_backdrop_tree.place_above(&self.background_rect);
             } else {
-                ffi::wlr_scene_node_lower_to_bottom(self.grid_backdrop_tree as *mut ffi::wlr_scene_node);
+                self.grid_backdrop_tree.lower_to_bottom();
             }
         }
-        ffi::wlr_scene_node_set_enabled(self.grid_backdrop_tree as *mut ffi::wlr_scene_node, true);
-        let backdrop_tree = self.grid_backdrop_tree;
+        self.grid_backdrop_tree.set_enabled(true);
+        let backdrop_tree = self.grid_backdrop_tree.raw();
         let backdrop_rect = &mut self.grid_backdrop_rect;
         let mut set_backdrop = |w: i32, h: i32, color_ptr: *const f32| {
             if backdrop_rect.is_null() {
-                *backdrop_rect = ffi::wlr_scene_rect_create(backdrop_tree, w, h, color_ptr);
+                *backdrop_rect = SceneRect::adopt(ffi::wlr_scene_rect_create(backdrop_tree, w, h, color_ptr));
             } else {
-                ffi::wlr_scene_rect_set_size(*backdrop_rect, w, h);
-                ffi::wlr_scene_rect_set_color(*backdrop_rect, color_ptr);
+                ffi::wlr_scene_rect_set_size(backdrop_rect.raw(), w, h);
+                ffi::wlr_scene_rect_set_color(backdrop_rect.raw(), color_ptr);
             }
         };
 
@@ -823,11 +807,11 @@ impl Output {
         // The cell rims live in their own subtree kept above every pooled
         // rect (incl. the backdrop), so reuse order can never bury one.
         if self.grid_bevel_tree.is_null() {
-            self.grid_bevel_tree = ffi::wlr_scene_tree_create(self.grid_tree);
+            self.grid_bevel_tree = SceneTree::create(&self.grid_tree);
         }
-        ffi::wlr_scene_node_raise_to_top(self.grid_bevel_tree as *mut ffi::wlr_scene_node);
+        self.grid_bevel_tree.raise_to_top();
 
-        let grid_tree = self.grid_tree;
+        let grid_tree = self.grid_tree.raw();
         if !grid_tree.is_null() {
             // Desk content: rendered with the camera's sub-pixel offset.
             ffi::river_scene_tree_set_desk_offset(grid_tree, true);
@@ -851,20 +835,26 @@ impl Output {
             let len = (lx * lx + ly * ly).sqrt();
             if len > 1e-6 { (lx / len, ly / len) } else { (-0.7071, -0.7071) }
         };
-        let bevel_tree = self.grid_bevel_tree;
+        let bevel_tree = self.grid_bevel_tree.raw();
         let bevel_pool = &mut self.grid_bevel_pool;
         let mut bevel_idx = 0;
 
         let mut get_bevel = |w: i32, h: i32, x: i32, y: i32, radius: i32, thickness: f32| {
-            let bevel = if bevel_idx < bevel_pool.len() {
-                let node = bevel_pool[bevel_idx];
+            // An entry whose node went with its tree reads null: refill it.
+            let bevel = if bevel_idx < bevel_pool.len() && !bevel_pool[bevel_idx].is_null() {
+                let node = bevel_pool[bevel_idx].raw();
                 ffi::wlr_scene_node_set_enabled(&mut (*node).node as *mut ffi::wlr_scene_node, true);
                 ffi::wlr_scene_bevel_set_size(node, w, h);
                 node
             } else {
-                let node = ffi::wlr_scene_bevel_create(bevel_tree, w, h, 0, 0.0, layout.bevel_color.as_ptr());
+                let handle = SceneBevel::create_in(bevel_tree, w, h, 0, 0.0, &layout.bevel_color);
+                let node = handle.raw();
                 if !node.is_null() {
-                    bevel_pool.push(node);
+                    if bevel_idx < bevel_pool.len() {
+                        bevel_pool[bevel_idx] = handle;
+                    } else {
+                        bevel_pool.push(handle);
+                    }
                 }
                 node
             };
@@ -887,16 +877,21 @@ impl Output {
 
         // Helper closure to manage/reuse the pool of wlr_scene_rect elements.
         let mut get_rect = |w: i32, h: i32, color_ptr: *const f32, x: i32, y: i32, corner_r: i32, fade_i: i32| -> *mut ffi::wlr_scene_rect {
-            let rect = if pool_idx < pool.len() {
-                let node = pool[pool_idx];
+            let rect = if pool_idx < pool.len() && !pool[pool_idx].is_null() {
+                let node = pool[pool_idx].raw();
                 ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, true);
                 ffi::wlr_scene_rect_set_size(node, w, h);
                 ffi::wlr_scene_rect_set_color(node, color_ptr);
                 node
             } else {
-                let node = ffi::wlr_scene_rect_create(grid_tree, w, h, color_ptr);
+                let handle = SceneRect::adopt(ffi::wlr_scene_rect_create(grid_tree, w, h, color_ptr));
+                let node = handle.raw();
                 if !node.is_null() {
-                    pool.push(node);
+                    if pool_idx < pool.len() {
+                        pool[pool_idx] = handle;
+                    } else {
+                        pool.push(handle);
+                    }
                 }
                 node
             };
@@ -1034,11 +1029,11 @@ impl Output {
 
         if force {
             // Disable unused rects in the pool to release GPU/scene resources.
-            for i in pool_idx..pool.len() {
-                ffi::wlr_scene_node_set_enabled(pool[i] as *mut ffi::wlr_scene_node, false);
+            for rect in pool.iter().skip(pool_idx) {
+                rect.set_enabled(false);
             }
-            for i in bevel_idx..bevel_pool.len() {
-                ffi::wlr_scene_node_set_enabled(&mut (*bevel_pool[i]).node as *mut ffi::wlr_scene_node, false);
+            for bevel in bevel_pool.iter().skip(bevel_idx) {
+                bevel.set_enabled(false);
             }
         }
 
@@ -1061,25 +1056,21 @@ impl Output {
             && wm.layout.desktop_cell_labels;
 
         if !overview {
-            if !self.cell_label_pool.is_empty() {
-                for &(node, _) in &self.cell_label_pool {
-                    ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, false);
-                }
-            }
+            self.disable_cell_labels();
             return;
         }
         if self.grid_tree.is_null() {
             return;
         }
         if self.cell_label_tree.is_null() {
-            self.cell_label_tree = ffi::wlr_scene_tree_create(self.grid_tree);
+            self.cell_label_tree = SceneTree::create(&self.grid_tree);
             if self.cell_label_tree.is_null() {
                 return;
             }
         }
         // Above the cell rects and the bevel subtree, which draw_grid raised
         // just before this.
-        ffi::wlr_scene_node_raise_to_top(self.cell_label_tree as *mut ffi::wlr_scene_node);
+        self.cell_label_tree.raise_to_top();
 
         let (viewport_w, viewport_h) = self.current.dimensions();
         let spec = wm.layout.background_spec();
@@ -1132,20 +1123,25 @@ impl Output {
                 };
                 let (buf, lw, lh) = (label.buffer, label.width, label.height);
 
-                let node = if idx < self.cell_label_pool.len() {
-                    let (node, shown) = self.cell_label_pool[idx];
-                    if shown != buf {
+                let node = if idx < self.cell_label_pool.len() && !self.cell_label_pool[idx].0.is_null() {
+                    let node = self.cell_label_pool[idx].0.raw();
+                    if self.cell_label_pool[idx].1 != buf {
                         ffi::wlr_scene_buffer_set_buffer(node, buf);
                         self.cell_label_pool[idx].1 = buf;
                     }
                     ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, true);
                     node
                 } else {
-                    let node = ffi::wlr_scene_buffer_create(self.cell_label_tree, buf);
+                    let handle = SceneBuffer::adopt(ffi::wlr_scene_buffer_create(self.cell_label_tree.raw(), buf));
+                    let node = handle.raw();
                     if node.is_null() {
                         continue;
                     }
-                    self.cell_label_pool.push((node, buf));
+                    if idx < self.cell_label_pool.len() {
+                        self.cell_label_pool[idx] = (handle, buf);
+                    } else {
+                        self.cell_label_pool.push((handle, buf));
+                    }
                     node
                 };
                 ffi::wlr_scene_buffer_set_dest_size(node, lw, lh);
@@ -1160,17 +1156,14 @@ impl Output {
             }
         }
 
-        for i in idx..self.cell_label_pool.len() {
-            ffi::wlr_scene_node_set_enabled(
-                self.cell_label_pool[i].0 as *mut ffi::wlr_scene_node,
-                false,
-            );
+        for (node, _) in self.cell_label_pool.iter().skip(idx) {
+            node.set_enabled(false);
         }
     }
 
-    unsafe fn disable_cell_labels(&self) {
-        for &(node, _) in &self.cell_label_pool {
-            ffi::wlr_scene_node_set_enabled(node as *mut ffi::wlr_scene_node, false);
+    fn disable_cell_labels(&self) {
+        for (node, _) in &self.cell_label_pool {
+            node.set_enabled(false);
         }
     }
 }
@@ -1192,26 +1185,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
         (*output).scene_output = std::ptr::null_mut();
     }
 
-    if !(*output).background_rect.is_null() {
-        ffi::wlr_scene_node_destroy((*output).background_rect as *mut ffi::wlr_scene_node);
-        (*output).background_rect = std::ptr::null_mut();
-    }
-
-    if !(*output).grid_tree.is_null() {
-        ffi::wlr_scene_node_destroy((*output).grid_tree as *mut ffi::wlr_scene_node);
-        (*output).grid_tree = std::ptr::null_mut();
-    }
-    if !(*output).grid_backdrop_tree.is_null() {
-        ffi::wlr_scene_node_destroy((*output).grid_backdrop_tree as *mut ffi::wlr_scene_node);
-        (*output).grid_backdrop_tree = std::ptr::null_mut();
-        (*output).grid_backdrop_rect = std::ptr::null_mut();
-    }
-
-    if !(*output).adjust_tree.is_null() {
-        ffi::wlr_scene_node_destroy((*output).adjust_tree as *mut ffi::wlr_scene_node);
-        (*output).adjust_tree = std::ptr::null_mut();
-    }
-    (*output).adjust_rects.clear();
+    (*output).destroy_scene_nodes();
 
     if !(*output).wlr_output.is_null() {
         ffi::river_wlr_output_set_data((*output).wlr_output, std::ptr::null_mut());

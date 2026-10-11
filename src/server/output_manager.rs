@@ -4,6 +4,7 @@
 use crate::ffi;
 use crate::server::{Server, WlList, wl_list_remove};
 use crate::output::{Output, OutputStateValue, OutputMode};
+use crate::scene_handle::{SceneRect, SceneTree};
 
 #[repr(C)]
 pub struct WlrOutputManagerV1Events {
@@ -216,73 +217,38 @@ impl OutputManager {
                             ((*server).wm.layout.background_a as f64 / u32::MAX as f64) as f32,
                         ];
                         if output.background_rect.is_null() {
-                            output.background_rect = ffi::wlr_scene_rect_create(
+                            output.background_rect = SceneRect::create_in(
                                 (*server).scene.layers.background,
                                 width,
                                 height,
-                                color.as_ptr(),
+                                &color,
                             );
                         } else {
-                            ffi::wlr_scene_rect_set_size(output.background_rect, width, height);
-                            ffi::wlr_scene_rect_set_color(output.background_rect, color.as_ptr());
+                            output.background_rect.set_size(width, height);
+                            output.background_rect.set_color(&color);
                         }
-                        if !output.background_rect.is_null() {
-                            ffi::wlr_scene_node_set_position(
-                                output.background_rect as *mut ffi::wlr_scene_node,
-                                output.sent.x,
-                                output.sent.y,
-                            );
-                        }
+                        output.background_rect.set_position(output.sent.x, output.sent.y);
                         if output.grid_tree.is_null() {
-                            output.grid_tree = ffi::wlr_scene_tree_create((*server).scene.layers.background);
+                            output.grid_tree = SceneTree::create_in((*server).scene.layers.background);
                         }
-                        if !output.grid_tree.is_null() {
-                            ffi::wlr_scene_node_set_position(
-                                output.grid_tree as *mut ffi::wlr_scene_node,
-                                output.sent.x,
-                                output.sent.y,
-                            );
-                        }
-                        if !output.grid_backdrop_tree.is_null() {
-                            ffi::wlr_scene_node_set_position(
-                                output.grid_backdrop_tree as *mut ffi::wlr_scene_node,
-                                output.sent.x,
-                                output.sent.y,
-                            );
-                        }
+                        output.grid_tree.set_position(output.sent.x, output.sent.y);
+                        output.grid_backdrop_tree.set_position(output.sent.x, output.sent.y);
 
                         if output.adjust_tree.is_null() {
-                            output.adjust_tree = ffi::wlr_scene_tree_create((*server).scene.layers.top);
+                            output.adjust_tree = SceneTree::create_in((*server).scene.layers.top);
                         }
-                        if !output.adjust_tree.is_null() {
-                            ffi::wlr_scene_node_set_position(
-                                output.adjust_tree as *mut ffi::wlr_scene_node,
-                                output.sent.x,
-                                output.sent.y,
-                            );
-                        }
+                        output.adjust_tree.set_position(output.sent.x, output.sent.y);
                     }
                     OutputStateValue::DisabledHard => {
                         ffi::wlr_output_layout_remove(self.output_layout, wlr_output);
-                        if !output.background_rect.is_null() {
-                            ffi::wlr_scene_node_destroy(output.background_rect as *mut ffi::wlr_scene_node);
-                            output.background_rect = std::ptr::null_mut();
-                        }
-                        if !output.grid_tree.is_null() {
-                            ffi::wlr_scene_node_destroy(output.grid_tree as *mut ffi::wlr_scene_node);
-                            output.grid_tree = std::ptr::null_mut();
-                            output.grid_rect_pool.clear();
-                        }
-                        if !output.grid_backdrop_tree.is_null() {
-                            ffi::wlr_scene_node_destroy(output.grid_backdrop_tree as *mut ffi::wlr_scene_node);
-                            output.grid_backdrop_tree = std::ptr::null_mut();
-                            output.grid_backdrop_rect = std::ptr::null_mut();
-                        }
-                        if !output.adjust_tree.is_null() {
-                            ffi::wlr_scene_node_destroy(output.adjust_tree as *mut ffi::wlr_scene_node);
-                            output.adjust_tree = std::ptr::null_mut();
-                            output.adjust_rects.clear();
-                        }
+                        // All of them, rims and labels included: until
+                        // 2026-10-10 this path left grid_bevel_tree and
+                        // cell_label_tree naming children that died with
+                        // grid_tree, and re-enabling the output raised a
+                        // freed node.
+                        output.destroy_scene_nodes();
+                        // A fresh grid redraws its pools.
+                        output.grid_force_redraw_frames = 3;
                     }
                     OutputStateValue::Destroying => unreachable!(),
                 }
