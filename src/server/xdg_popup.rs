@@ -5,14 +5,17 @@ use crate::ffi;
 
 pub struct XdgPopup {
     pub wlr_popup: *mut ffi::wlr_xdg_popup,
-    pub tree: *mut ffi::wlr_scene_tree,
-    pub capture_tree: *mut ffi::wlr_scene_tree,
+    /// Watched, as is `capture_tree`: wlroots destroys the xdg-surface trees
+    /// with the popup.
+    pub tree: crate::scene_handle::SceneTree,
+    pub capture_tree: crate::scene_handle::SceneTree,
     /// The scene tree of the popup's ROOT — the window's or layer
     /// surface's popup tree, which sits at that surface's origin — shared
     /// by every submenu under it. `handle_reposition` measures the screen
     /// from here, because wlroots wants the unconstrain box in the root
     /// toplevel surface's coordinates, not the immediate parent's.
-    pub root_tree: *mut ffi::wlr_scene_tree,
+    /// Watched: the root window's (or layer surface's) tree, not ours.
+    pub root_tree: crate::scene_handle::SceneTree,
     /// The server, found once at creation through the root's scene node —
     /// a destroyed popup's own tree may already be gone when its destroy
     /// signal runs, so nothing can be looked up then. Null for a root that
@@ -55,9 +58,9 @@ impl XdgPopup {
 
         let popup = Box::into_raw(Box::new(XdgPopup {
             wlr_popup,
-            tree,
-            capture_tree,
-            root_tree: root,
+            tree: crate::scene_handle::SceneTree::watch(tree),
+            capture_tree: crate::scene_handle::SceneTree::watch(capture_tree),
+            root_tree: crate::scene_handle::SceneTree::watch(root),
             server: tree_server(root),
             last_box: (0, 0, 0, 0),
             destroy: std::mem::zeroed(),
@@ -120,7 +123,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     // motion, and an animating menu commits every frame.
     let surface = ffi::river_wlr_xdg_surface_get_surface(base_surface);
     let (mut lx, mut ly) = (0, 0);
-    ffi::wlr_scene_node_coords((*popup).tree as *mut ffi::wlr_scene_node, &mut lx, &mut ly);
+    ffi::wlr_scene_node_coords((*popup).tree.node(), &mut lx, &mut ly);
     let at = (lx, ly, ffi::river_wlr_surface_get_width(surface), ffi::river_wlr_surface_get_height(surface));
     if at != (*popup).last_box {
         (*popup).last_box = at;
@@ -164,7 +167,7 @@ unsafe fn update_blur(popup: *mut XdgPopup, base_surface: *mut ffi::wlr_xdg_surf
         return;
     }
     ffi::river_scene_node_enable_blur(
-        (*popup).tree as *mut ffi::wlr_scene_node,
+        (*popup).tree.node(),
         (*server).wm.layout.window_blur,
         false,
         (*server).wm.layout.window_backdrop_blur_ignore_transparent,
@@ -179,7 +182,7 @@ unsafe fn update_blur(popup: *mut XdgPopup, base_surface: *mut ffi::wlr_xdg_surf
 /// The server a popup belongs to, found through its parent's scene node —
 /// a window or a shell surface. Null when the parent is neither.
 unsafe fn popup_server(popup: *mut XdgPopup) -> *mut crate::server::Server {
-    let parent_tree = ffi::river_wlr_scene_tree_get_parent((*popup).tree);
+    let parent_tree = ffi::river_wlr_scene_tree_get_parent((*popup).tree.raw());
     if parent_tree.is_null() {
         return std::ptr::null_mut();
     }
@@ -196,7 +199,7 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
     let popup = crate::container_of!(listener, XdgPopup, new_popup);
     let wlr_xdg_popup = data as *mut ffi::wlr_xdg_popup;
 
-    if let Err(e) = XdgPopup::create(wlr_xdg_popup, (*popup).tree, (*popup).capture_tree, (*popup).root_tree) {
+    if let Err(e) = XdgPopup::create(wlr_xdg_popup, (*popup).tree.raw(), (*popup).capture_tree.raw(), (*popup).root_tree.raw()) {
         log::error!("Failed to create nested popup: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_xdg_popup).resource);
     }
@@ -207,7 +210,7 @@ unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *
 
     let mut parent_lx: i32 = 0;
     let mut parent_ly: i32 = 0;
-    let parent_tree = ffi::river_wlr_scene_tree_get_parent((*popup).tree);
+    let parent_tree = ffi::river_wlr_scene_tree_get_parent((*popup).tree.raw());
     if parent_tree.is_null() {
         return;
     }
@@ -237,7 +240,7 @@ unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *
     // flip decisions were made against the wrong right edge.
     let mut root_lx: i32 = 0;
     let mut root_ly: i32 = 0;
-    ffi::wlr_scene_node_coords((*popup).root_tree as *mut ffi::wlr_scene_node, &mut root_lx, &mut root_ly);
+    ffi::wlr_scene_node_coords((*popup).root_tree.node(), &mut root_lx, &mut root_ly);
 
     let mut constraint = std::mem::zeroed();
     ffi::wlr_output_layout_get_box((*server).om.output_layout, wlr_output, &mut constraint);

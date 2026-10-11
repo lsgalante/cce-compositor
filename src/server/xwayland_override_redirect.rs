@@ -9,7 +9,7 @@ use crate::xwayland_window::XwaylandWindow;
 pub struct XwaylandOverrideRedirect {
     pub server: *mut Server,
     pub xsurface: *mut ffi::wlr_xwayland_surface,
-    pub surface_tree: *mut ffi::wlr_scene_tree,
+    pub surface_tree: crate::scene_handle::SceneTree,
 
     pub request_configure: crate::listener::Listener,
     pub destroy: crate::listener::Listener,
@@ -43,7 +43,7 @@ impl XwaylandOverrideRedirect {
         let override_redirect = Box::new(XwaylandOverrideRedirect {
             server,
             xsurface,
-            surface_tree: std::ptr::null_mut(),
+            surface_tree: crate::scene_handle::SceneTree::none(),
             request_configure: std::mem::zeroed(),
             destroy: std::mem::zeroed(),
             set_override_redirect: std::mem::zeroed(),
@@ -82,7 +82,7 @@ impl XwaylandOverrideRedirect {
         }
         let s = crate::xwayland_window::x11_scale_for(self.server, self.xsurface);
         ffi::wlr_scene_node_set_position(
-            self.surface_tree as *mut ffi::wlr_scene_node,
+            self.surface_tree.node(),
             crate::xwayland_window::from_x11((*self.xsurface).x as i32, s),
             crate::xwayland_window::from_x11((*self.xsurface).y as i32, s),
         );
@@ -122,7 +122,7 @@ impl XwaylandOverrideRedirect {
         }
         let inv = 1.0 / s;
         ffi::wlr_scene_node_for_each_buffer(
-            self.surface_tree as *mut ffi::wlr_scene_node,
+            self.surface_tree.node(),
             Some(iter),
             &inv as *const f64 as *mut std::ffi::c_void,
         );
@@ -245,7 +245,7 @@ unsafe fn handle_map_impl(or: *mut XwaylandOverrideRedirect) {
         return;
     }
     let surface = (*(*or).xsurface).surface;
-    let override_redirect_tree = (*(*or).server).scene.layers.override_redirect;
+    let override_redirect_tree = (*(*or).server).scene.layers.override_redirect.raw();
 
     let surface_tree = ffi::wlr_scene_subsurface_tree_create(override_redirect_tree, surface);
     if surface_tree.is_null() {
@@ -255,7 +255,7 @@ unsafe fn handle_map_impl(or: *mut XwaylandOverrideRedirect) {
         ffi::wl_client_post_no_memory(client);
         return;
     }
-    (*or).surface_tree = surface_tree;
+    (*or).surface_tree = crate::scene_handle::SceneTree::adopt(surface_tree);
 
     crate::scene_node_data::SceneNodeData::attach(
         surface_tree as *mut ffi::wlr_scene_node,
@@ -285,10 +285,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
         ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
     }
 
-    if !(*or).surface_tree.is_null() {
-        ffi::wlr_scene_node_destroy((*or).surface_tree as *mut ffi::wlr_scene_node);
-        (*or).surface_tree = std::ptr::null_mut();
-    }
+    (*or).surface_tree.destroy();
 
     let default_seat = (*(*or).server).input_manager.default_seat;
     if !default_seat.is_null() {
@@ -333,10 +330,7 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
             (*or).set_geometry.disconnect();
     (*or).commit.disconnect();
             ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
-            if !(*or).surface_tree.is_null() {
-                ffi::wlr_scene_node_destroy((*or).surface_tree as *mut ffi::wlr_scene_node);
-                (*or).surface_tree = std::ptr::null_mut();
-            }
+            (*or).surface_tree.destroy();
         }
         (*or).map.disconnect();
         (*or).unmap.disconnect();

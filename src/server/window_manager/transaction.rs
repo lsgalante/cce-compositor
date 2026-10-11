@@ -385,7 +385,7 @@ impl WindowManager {
                 (*window).surfaces.drop_saved();
             }
             if matches!((*window).state, crate::window::WindowState::Init) {
-                ffi::wlr_scene_node_reparent((*window).tree.node(), (*self.server).scene.hidden_tree);
+                ffi::wlr_scene_node_reparent((*window).tree.node(), (*self.server).scene.hidden_tree.raw());
             }
             if let crate::window::WindowImpl::Destroying = (*window).impl_type {
                 Window::destroy(window);
@@ -461,7 +461,7 @@ impl WindowManager {
                     let layer = if (*window).get_app_id_string().as_deref() == Some("cce-wallpaper") {
                         // Between the native backdrop and the fallback
                         // cells, like a layer-shell Background surface.
-                        (*self.server).scene.layers.background_clients
+                        (*self.server).scene.layers.background_clients.raw()
                     } else if (*window).is_grid() {
                         // The grid client is a desktop fixture: above
                         // the native backdrop and fallback cells
@@ -469,9 +469,9 @@ impl WindowManager {
                         // Left to the generic wm arm it stacks by
                         // render-list order, burying whichever windows
                         // happened to map before it.
-                        (*self.server).scene.layers.bottom
+                        (*self.server).scene.layers.bottom.raw()
                     } else if fullscreen_on_top(window) {
-                        (*self.server).scene.layers.fullscreen
+                        (*self.server).scene.layers.fullscreen.raw()
                     } else if rendered_fullscreen(window) {
                         // Stepped aside for a focused window (alt-tab
                         // out), or in overview: behind every window
@@ -480,9 +480,9 @@ impl WindowManager {
                         // sits on the desk there
                         // (`place_fullscreen_windows`), like the grid
                         // beneath it.
-                        (*self.server).scene.layers.bottom
+                        (*self.server).scene.layers.bottom.raw()
                     } else if (*window).tiling_mode == crate::tiling::TilingMode::Popup {
-                        (*self.server).scene.layers.popups
+                        (*self.server).scene.layers.popups.raw()
                     } else if (*window).tiling_mode == crate::tiling::TilingMode::Status {
                         // An EXPANDED segment (in-surface menu open;
                         // thicker than the bar) stacks like a popup:
@@ -500,16 +500,16 @@ impl WindowManager {
                             _ => bg.height,
                         };
                         if thickness > self.layout.bar_height {
-                            (*self.server).scene.layers.popups
+                            (*self.server).scene.layers.popups.raw()
                         } else {
-                            (*self.server).scene.layers.top
+                            (*self.server).scene.layers.top.raw()
                         }
                     } else if (*window).rendering_requested.circular {
-                        (*self.server).scene.layers.top
+                        (*self.server).scene.layers.top.raw()
                     } else if (*window).tiling_mode == crate::tiling::TilingMode::Overlay && self.layout.overlay_behavior == "above" {
-                        (*self.server).scene.layers.top
+                        (*self.server).scene.layers.top.raw()
                     } else {
-                        (*self.server).scene.layers.wm
+                        (*self.server).scene.layers.wm.raw()
                     };
 
                     ffi::wlr_scene_node_reparent((*window).tree.node(), layer);
@@ -546,7 +546,7 @@ impl WindowManager {
         // and moves like any other), so it rides in the same plane; `Overlay`
         // keeps its own `overlay_behavior` rule and stays out of this.
         if reorder {
-            let wm_layer = (*self.server).scene.layers.wm;
+            let wm_layer = (*self.server).scene.layers.wm.raw();
             let mut focused_popups: *mut Window = std::ptr::null_mut();
             curr = (*render_list).next;
             while curr != render_list {

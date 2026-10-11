@@ -3,9 +3,10 @@
 
 use crate::ffi;
 use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
+use crate::scene_handle::SceneTree;
 
 pub struct SceneLayers {
-    pub background: *mut ffi::wlr_scene_tree,
+    pub background: SceneTree,
     /// Client-provided backgrounds — wlr-layer-shell Background surfaces and
     /// the `cce-wallpaper` window — inside `background`, ABOVE each output's
     /// base rect and grid backdrop and BELOW its grid cells (`Output::draw_grid`
@@ -13,29 +14,29 @@ pub struct SceneLayers {
     /// wallpaper therefore replaces the flat backdrop colour and keeps the cell
     /// lattice; before this tree the grid tree, re-raised on every redraw, buried
     /// every client background under its opaque backdrop.
-    pub background_clients: *mut ffi::wlr_scene_tree,
-    pub bottom: *mut ffi::wlr_scene_tree,
-    pub wm: *mut ffi::wlr_scene_tree,
-    pub top: *mut ffi::wlr_scene_tree,
-    pub fullscreen: *mut ffi::wlr_scene_tree,
-    pub overlay: *mut ffi::wlr_scene_tree,
-    pub popups: *mut ffi::wlr_scene_tree,
-    pub override_redirect: *mut ffi::wlr_scene_tree,
+    pub background_clients: SceneTree,
+    pub bottom: SceneTree,
+    pub wm: SceneTree,
+    pub top: SceneTree,
+    pub fullscreen: SceneTree,
+    pub overlay: SceneTree,
+    pub popups: SceneTree,
+    pub override_redirect: SceneTree,
     /// Hover-revealed window borders. Borders draw outside the content box, so
     /// with the content filling its grid cell they overhang into the gap and
     /// over the neighbouring window. Hosting them above every other layer
     /// keeps a revealed edge visible instead of letting the neighbour occlude
     /// it. Each window parents its own `border_tree` here.
-    pub border_overlay: *mut ffi::wlr_scene_tree,
+    pub border_overlay: SceneTree,
 }
 
 pub struct Scene {
     pub wlr_scene: *mut ffi::wlr_scene,
-    pub interactive_tree: *mut ffi::wlr_scene_tree,
-    pub drag_icons: *mut ffi::wlr_scene_tree,
-    pub hidden_tree: *mut ffi::wlr_scene_tree,
-    pub normal_tree: *mut ffi::wlr_scene_tree,
-    pub locked_tree: *mut ffi::wlr_scene_tree,
+    pub interactive_tree: SceneTree,
+    pub drag_icons: SceneTree,
+    pub hidden_tree: SceneTree,
+    pub normal_tree: SceneTree,
+    pub locked_tree: SceneTree,
     pub layers: SceneLayers,
 }
 
@@ -43,22 +44,22 @@ impl Scene {
     pub fn new() -> Self {
         Self {
             wlr_scene: std::ptr::null_mut(),
-            interactive_tree: std::ptr::null_mut(),
-            drag_icons: std::ptr::null_mut(),
-            hidden_tree: std::ptr::null_mut(),
-            normal_tree: std::ptr::null_mut(),
-            locked_tree: std::ptr::null_mut(),
+            interactive_tree: SceneTree::none(),
+            drag_icons: SceneTree::none(),
+            hidden_tree: SceneTree::none(),
+            normal_tree: SceneTree::none(),
+            locked_tree: SceneTree::none(),
             layers: SceneLayers {
-                background: std::ptr::null_mut(),
-                background_clients: std::ptr::null_mut(),
-                bottom: std::ptr::null_mut(),
-                wm: std::ptr::null_mut(),
-                top: std::ptr::null_mut(),
-                fullscreen: std::ptr::null_mut(),
-                overlay: std::ptr::null_mut(),
-                popups: std::ptr::null_mut(),
-                override_redirect: std::ptr::null_mut(),
-                border_overlay: std::ptr::null_mut(),
+                background: SceneTree::none(),
+                background_clients: SceneTree::none(),
+                bottom: SceneTree::none(),
+                wm: SceneTree::none(),
+                top: SceneTree::none(),
+                fullscreen: SceneTree::none(),
+                overlay: SceneTree::none(),
+                popups: SceneTree::none(),
+                override_redirect: SceneTree::none(),
+                border_overlay: SceneTree::none(),
             },
         }
     }
@@ -84,50 +85,47 @@ impl Scene {
 
         ffi::wlr_scene_set_blur_data(wlr_scene, 3, 5, 0.0, 1.0, 1.0, 1.0);
 
-        let interactive_tree = ffi::wlr_scene_tree_create(&mut (*wlr_scene).tree);
-        let drag_icons = ffi::wlr_scene_tree_create(&mut (*wlr_scene).tree);
-        let hidden_tree = ffi::wlr_scene_tree_create(&mut (*wlr_scene).tree);
-        if interactive_tree.is_null() || drag_icons.is_null() || hidden_tree.is_null() {
+        let root = &mut (*wlr_scene).tree as *mut ffi::wlr_scene_tree;
+        self.interactive_tree = SceneTree::create_in(root);
+        self.drag_icons = SceneTree::create_in(root);
+        self.hidden_tree = SceneTree::create_in(root);
+        if self.interactive_tree.is_null() || self.drag_icons.is_null() || self.hidden_tree.is_null() {
             return Err("Failed to create root scene trees");
         }
-        self.interactive_tree = interactive_tree;
-        self.drag_icons = drag_icons;
-        self.hidden_tree = hidden_tree;
 
-        ffi::wlr_scene_node_set_enabled(hidden_tree as *mut ffi::wlr_scene_node, false);
+        self.hidden_tree.set_enabled(false);
 
-        let normal_tree = ffi::wlr_scene_tree_create(interactive_tree);
-        let locked_tree = ffi::wlr_scene_tree_create(interactive_tree);
-        if normal_tree.is_null() || locked_tree.is_null() {
+        self.normal_tree = SceneTree::create(&self.interactive_tree);
+        self.locked_tree = SceneTree::create(&self.interactive_tree);
+        if self.normal_tree.is_null() || self.locked_tree.is_null() {
             return Err("Failed to create normal/locked scene trees");
         }
-        self.normal_tree = normal_tree;
-        self.locked_tree = locked_tree;
 
-        ffi::wlr_scene_node_set_enabled(locked_tree as *mut ffi::wlr_scene_node, false);
+        self.locked_tree.set_enabled(false);
 
-        self.layers.background = ffi::wlr_scene_tree_create(normal_tree);
-        self.layers.background_clients = ffi::wlr_scene_tree_create(self.layers.background);
-        self.layers.bottom = ffi::wlr_scene_tree_create(normal_tree);
-        self.layers.wm = ffi::wlr_scene_tree_create(normal_tree);
-        self.layers.top = ffi::wlr_scene_tree_create(normal_tree);
-        self.layers.fullscreen = ffi::wlr_scene_tree_create(normal_tree);
-        self.layers.overlay = ffi::wlr_scene_tree_create(normal_tree);
+        let normal_tree = &self.normal_tree;
+        self.layers.background = SceneTree::create(normal_tree);
+        self.layers.background_clients = SceneTree::create(&self.layers.background);
+        self.layers.bottom = SceneTree::create(normal_tree);
+        self.layers.wm = SceneTree::create(normal_tree);
+        self.layers.top = SceneTree::create(normal_tree);
+        self.layers.fullscreen = SceneTree::create(normal_tree);
+        self.layers.overlay = SceneTree::create(normal_tree);
         // Window decorations (the resize ring) sit above every window but
         // BELOW popups: a cce-ui dropdown is a separate Popup-mode window in
         // layers.popups, and a menu must never be drawn under the chrome of
         // the window that opened it. Creation order is stacking order.
-        self.layers.border_overlay = ffi::wlr_scene_tree_create(normal_tree);
-        self.layers.popups = ffi::wlr_scene_tree_create(normal_tree);
-        self.layers.override_redirect = ffi::wlr_scene_tree_create(normal_tree);
+        self.layers.border_overlay = SceneTree::create(normal_tree);
+        self.layers.popups = SceneTree::create(normal_tree);
+        self.layers.override_redirect = SceneTree::create(normal_tree);
 
         // Desk content renders with the camera's sub-pixel offset
         // (`WindowManager::layout_camera`): windows, their borders, their
         // popups and X11 menus, and the grid (flagged where it is built).
         // Layer shells, fullscreen and the lock screen stay put.
-        for tree in [self.layers.wm, self.layers.border_overlay, self.layers.popups, self.layers.override_redirect] {
+        for tree in [&self.layers.wm, &self.layers.border_overlay, &self.layers.popups, &self.layers.override_redirect] {
             if !tree.is_null() {
-                ffi::river_scene_tree_set_desk_offset(tree, true);
+                ffi::river_scene_tree_set_desk_offset(tree.raw(), true);
             }
         }
 
@@ -162,7 +160,7 @@ impl Scene {
             let mut sx: f64 = 0.0;
             let mut sy: f64 = 0.0;
             let node = ffi::wlr_scene_node_at(
-                self.interactive_tree as *mut ffi::wlr_scene_node,
+                self.interactive_tree.node(),
                 lx,
                 ly,
                 &mut sx,
@@ -274,10 +272,10 @@ impl Scene {
     pub unsafe fn layer_surface_tree(&self, layer: u32) -> *mut ffi::wlr_scene_tree {
         // layer is zwlr_layer_shell_v1_layer enum values
         match layer {
-            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND => self.layers.background_clients,
-            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM => self.layers.bottom,
-            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_TOP => self.layers.top,
-            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY => self.layers.overlay,
+            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND => self.layers.background_clients.raw(),
+            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM => self.layers.bottom.raw(),
+            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_TOP => self.layers.top.raw(),
+            ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY => self.layers.overlay.raw(),
             _ => std::ptr::null_mut(),
         }
     }

@@ -11,7 +11,8 @@ pub struct InputPopup {
     pub link: ffi::wl_list,
     pub input_relay: *mut InputRelay,
     pub wlr_popup: *mut ffi::wlr_input_popup_surface_v2,
-    pub surface_tree: *mut ffi::wlr_scene_tree,
+    /// Watched: wlroots destroys it with the popup surface.
+    pub surface_tree: crate::scene_handle::SceneTree,
 
     pub destroy: crate::listener::Listener,
     pub map: crate::listener::Listener,
@@ -25,7 +26,7 @@ impl InputPopup {
         input_relay: *mut InputRelay,
     ) -> Result<(), &'static str> {
         let server = (*(*input_relay).seat).server;
-        let hidden_tree = (*server).scene.hidden_tree;
+        let hidden_tree = (*server).scene.hidden_tree.raw();
 
         let surface_tree = ffi::wlr_scene_subsurface_tree_create(hidden_tree, (*wlr_popup).surface);
         if surface_tree.is_null() {
@@ -36,7 +37,7 @@ impl InputPopup {
             link: std::mem::zeroed(),
             input_relay,
             wlr_popup,
-            surface_tree,
+            surface_tree: crate::scene_handle::SceneTree::watch(surface_tree),
             destroy: std::mem::zeroed(),
             map: std::mem::zeroed(),
             unmap: std::mem::zeroed(),
@@ -65,9 +66,9 @@ impl InputPopup {
         let text_input = (*self.input_relay).text_input;
         if text_input.is_null() {
             let server = (*(*self.input_relay).seat).server;
-            let hidden_tree = (*server).scene.hidden_tree;
+            let hidden_tree = (*server).scene.hidden_tree.raw();
             ffi::wlr_scene_node_reparent(
-                self.surface_tree as *mut ffi::wlr_scene_node,
+                self.surface_tree.node(),
                 hidden_tree,
             );
             return;
@@ -93,18 +94,18 @@ impl InputPopup {
 
         let popup_tree = match focused.data {
             SceneNodeDataVal::Window(window) => (*window).popup_tree.raw(),
-            SceneNodeDataVal::LockSurface(_) => (*server).scene.layers.popups,
-            SceneNodeDataVal::LayerSurface(layer_surface) => (*layer_surface).popup_tree,
+            SceneNodeDataVal::LockSurface(_) => (*server).scene.layers.popups.raw(),
+            SceneNodeDataVal::LayerSurface(layer_surface) => (*layer_surface).popup_tree.raw(),
             SceneNodeDataVal::OverrideRedirect(_) => panic!("Xwayland doesn't use text-input protocol"),
         };
 
-        ffi::wlr_scene_node_reparent(self.surface_tree as *mut ffi::wlr_scene_node, popup_tree);
+        ffi::wlr_scene_node_reparent(self.surface_tree.node(), popup_tree);
 
         // cursor_rectangle features check: check if WLR_TEXT_INPUT_V3_FEATURE_CURSOR_RECTANGLE is active
         let active_features = (*(*text_input).wlr_text_input).active_features;
         let feature_cursor_rect = ffi::wlr_text_input_v3_features_WLR_TEXT_INPUT_V3_FEATURE_CURSOR_RECTANGLE;
         if (active_features & feature_cursor_rect) == 0 {
-            ffi::wlr_scene_node_set_position(self.surface_tree as *mut ffi::wlr_scene_node, 0, 0);
+            ffi::wlr_scene_node_set_position(self.surface_tree.node(), 0, 0);
             return;
         }
 
@@ -149,7 +150,7 @@ impl InputPopup {
         };
 
         ffi::wlr_scene_node_set_position(
-            self.surface_tree as *mut ffi::wlr_scene_node,
+            self.surface_tree.node(),
             popup_x - focused_x + output_box.x,
             popup_y - focused_y + output_box.y,
         );
@@ -181,10 +182,10 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let input_popup = crate::container_of!(listener, InputPopup, unmap);
     let server = (*(*(*input_popup).input_relay).seat).server;
-    let hidden_tree = (*server).scene.hidden_tree;
+    let hidden_tree = (*server).scene.hidden_tree.raw();
 
     ffi::wlr_scene_node_reparent(
-        (*input_popup).surface_tree as *mut ffi::wlr_scene_node,
+        (*input_popup).surface_tree.node(),
         hidden_tree,
     );
 }

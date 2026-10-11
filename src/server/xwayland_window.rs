@@ -10,7 +10,7 @@ use crate::xwayland_override_redirect::XwaylandOverrideRedirect;
 pub struct XwaylandWindow {
     pub window: *mut Window,
     pub xsurface: *mut ffi::wlr_xwayland_surface,
-    pub surface_tree: *mut ffi::wlr_scene_tree,
+    pub surface_tree: crate::scene_handle::SceneTree,
 
     pub destroy: crate::listener::Listener,
     pub request_configure: crate::listener::Listener,
@@ -385,7 +385,7 @@ impl XwaylandWindow {
         let xwindow = Box::new(XwaylandWindow {
             window,
             xsurface,
-            surface_tree: std::ptr::null_mut(),
+            surface_tree: crate::scene_handle::SceneTree::none(),
             destroy: std::mem::zeroed(),
             request_configure: std::mem::zeroed(),
             set_override_redirect: std::mem::zeroed(),
@@ -791,7 +791,7 @@ unsafe fn handle_map_impl(xwindow: *mut XwaylandWindow) {
         ffi::wl_client_post_no_memory(client);
         return;
     }
-    (*xwindow).surface_tree = surface_tree;
+    (*xwindow).surface_tree = crate::scene_handle::SceneTree::adopt(surface_tree);
 
     let has_parent = !(*(*xwindow).xsurface).parent.is_null();
 
@@ -925,10 +925,7 @@ unsafe fn handle_unmap_impl(xwindow: *mut XwaylandWindow) {
         ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
     }
     (*(*xwindow).window).unmap();
-    if !(*xwindow).surface_tree.is_null() {
-        ffi::wlr_scene_node_destroy((*xwindow).surface_tree as *mut ffi::wlr_scene_node);
-        (*xwindow).surface_tree = std::ptr::null_mut();
-    }
+    (*xwindow).surface_tree.destroy();
 }
 
 unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

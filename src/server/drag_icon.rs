@@ -7,7 +7,8 @@ use crate::cursor::Cursor;
 #[repr(C)]
 pub struct DragIcon {
     pub wlr_drag_icon: *mut ffi::wlr_drag_icon,
-    pub scene_drag_icon: *mut ffi::wlr_scene_tree,
+    /// Watched: wlroots destroys it with the drag icon.
+    pub scene_drag_icon: crate::scene_handle::SceneTree,
     pub destroy: crate::listener::Listener,
 }
 
@@ -18,14 +19,14 @@ impl DragIcon {
     ) -> Result<(), &'static str> {
         let server = (*(*cursor).seat).server;
         
-        let scene_drag_icon = ffi::wlr_scene_drag_icon_create((*server).scene.drag_icons, wlr_drag_icon);
+        let scene_drag_icon = ffi::wlr_scene_drag_icon_create((*server).scene.drag_icons.raw(), wlr_drag_icon);
         if scene_drag_icon.is_null() {
             return Err("Failed to create scene drag icon");
         }
 
         let drag_icon = Box::new(Self {
             wlr_drag_icon,
-            scene_drag_icon,
+            scene_drag_icon: crate::scene_handle::SceneTree::watch(scene_drag_icon),
             destroy: std::mem::zeroed(),
         });
         let raw = Box::into_raw(drag_icon);
@@ -53,7 +54,7 @@ impl DragIcon {
                 let x = (*cursor).x();
                 let y = (*cursor).y();
                 ffi::wlr_scene_node_set_position(
-                    self.scene_drag_icon as *mut ffi::wlr_scene_node,
+                    self.scene_drag_icon.node(),
                     x as i32,
                     y as i32,
                 );
@@ -62,7 +63,7 @@ impl DragIcon {
                 let touch_id = ffi::river_wlr_drag_get_touch_id((*self.wlr_drag_icon).drag);
                 if let Some(&crate::cursor::TouchPoint { lx, ly, .. }) = (*cursor).touch_points.get(&touch_id) {
                     ffi::wlr_scene_node_set_position(
-                        self.scene_drag_icon as *mut ffi::wlr_scene_node,
+                        self.scene_drag_icon.node(),
                         lx as i32,
                         ly as i32,
                     );

@@ -203,7 +203,7 @@ impl OutputManager {
                         ffi::wlr_output_layout_add(self.output_layout, wlr_output, output.sent.x, output.sent.y);
                         if let Some(lock_surface) = (*server).lock_manager.lock_surface_from_output(output) {
                             ffi::wlr_scene_node_set_position(
-                                (*lock_surface).tree as *mut ffi::wlr_scene_node,
+                                (*lock_surface).tree.node(),
                                 output.sent.x,
                                 output.sent.y,
                             );
@@ -218,7 +218,7 @@ impl OutputManager {
                         ];
                         if output.background_rect.is_null() {
                             output.background_rect = SceneRect::create_in(
-                                (*server).scene.layers.background,
+                                (*server).scene.layers.background.raw(),
                                 width,
                                 height,
                                 &color,
@@ -229,13 +229,13 @@ impl OutputManager {
                         }
                         output.background_rect.set_position(output.sent.x, output.sent.y);
                         if output.grid_tree.is_null() {
-                            output.grid_tree = SceneTree::create_in((*server).scene.layers.background);
+                            output.grid_tree = SceneTree::create_in((*server).scene.layers.background.raw());
                         }
                         output.grid_tree.set_position(output.sent.x, output.sent.y);
                         output.grid_backdrop_tree.set_position(output.sent.x, output.sent.y);
 
                         if output.adjust_tree.is_null() {
-                            output.adjust_tree = SceneTree::create_in((*server).scene.layers.top);
+                            output.adjust_tree = SceneTree::create_in((*server).scene.layers.top.raw());
                         }
                         output.adjust_tree.set_position(output.sent.x, output.sent.y);
                     }

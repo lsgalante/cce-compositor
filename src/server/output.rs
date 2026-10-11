@@ -739,7 +739,7 @@ impl Output {
         // layer-shell Background surface or a wallpaper window replaces the flat
         // colour and keeps the cell lattice.
         if self.grid_backdrop_tree.is_null() {
-            self.grid_backdrop_tree = SceneTree::create_in((*self.server).scene.layers.background);
+            self.grid_backdrop_tree = SceneTree::create_in((*self.server).scene.layers.background.raw());
             if self.grid_backdrop_tree.is_null() {
                 return;
             }

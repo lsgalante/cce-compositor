@@ -128,7 +128,7 @@ pub struct LayerSurface {
     pub server: *mut Server,
     pub wlr_layer_surface: *mut ffi::wlr_layer_surface_v1,
     pub scene_layer_surface: *mut ffi::wlr_scene_layer_surface_v1,
-    pub popup_tree: *mut ffi::wlr_scene_tree,
+    pub popup_tree: crate::scene_handle::SceneTree,
     /// Where the open/close dissolve currently stands, 0.0 (invisible) to
     /// 1.0. Applied to the whole scene subtree, so the scenefx backdrop blur
     /// behind the surface fades with it (`river_scene_node_set_opacity`) —
@@ -161,7 +161,7 @@ impl LayerSurface {
             return Err("Failed to create wlr_scene_layer_surface_v1");
         }
 
-        let popup_tree = ffi::wlr_scene_tree_create((*server).scene.layers.popups);
+        let popup_tree = ffi::wlr_scene_tree_create((*server).scene.layers.popups.raw());
         if popup_tree.is_null() {
             ffi::wlr_scene_node_destroy((*scene_layer_surface).tree as *mut ffi::wlr_scene_node);
             return Err("Failed to create popup_tree");
@@ -172,7 +172,7 @@ impl LayerSurface {
             server,
             wlr_layer_surface,
             scene_layer_surface,
-            popup_tree,
+            popup_tree: crate::scene_handle::SceneTree::adopt(popup_tree),
             opacity: 1.0,
             opacity_target: 1.0,
             opacity_step: 1.0,
@@ -236,7 +236,7 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
 
     (*layer_surface).destroy_popups();
 
-    ffi::wlr_scene_node_destroy((*layer_surface).popup_tree as *mut ffi::wlr_scene_node);
+    ffi::wlr_scene_node_destroy((*layer_surface).popup_tree.node());
 
     ffi::river_wlr_surface_set_data((*(*layer_surface).wlr_layer_surface).surface, std::ptr::null_mut());
 
@@ -679,9 +679,9 @@ unsafe extern "C" fn handle_layer_surface_new_popup(listener: *mut ffi::wl_liste
 
     if let Err(e) = XdgPopup::create(
         wlr_xdg_popup,
-        (*layer_surface).popup_tree,
+        (*layer_surface).popup_tree.raw(),
         std::ptr::null_mut(),
-        (*layer_surface).popup_tree,
+        (*layer_surface).popup_tree.raw(),
     ) {
         log::error!("Failed to create layer surface popup: {}", e);
         ffi::wl_resource_post_no_memory((*wlr_xdg_popup).resource);
@@ -800,7 +800,7 @@ impl LayerShellOutput {
 
                         let x = ffi::river_scene_node_get_x((*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node);
                         let y = ffi::river_scene_node_get_y((*(*layer_surface).scene_layer_surface).tree as *mut ffi::wlr_scene_node);
-                        ffi::wlr_scene_node_set_position((*layer_surface).popup_tree as *mut ffi::wlr_scene_node, x, y);
+                        ffi::wlr_scene_node_set_position((*layer_surface).popup_tree.node(), x, y);
 
                         let clip = ffi::wlr_box {
                             x: -(x - (*output).scheduled.x),

@@ -425,15 +425,24 @@ than dangling. Methods on a null handle do nothing; `raw()` / `node()` give
 the pointer (null when gone) for calls the module does not wrap. An empty
 handle is zero bits, so `std::mem::zeroed()` structs need nothing. Use
 `create` / `create_in` to make one, `adopt` to take an existing node, and
-`release` to give one back.
+`release` to give one back. `watch` makes a handle that follows a node it
+does NOT own — dropping it leaves the node — for references (a popup's
+`root_tree`) and for trees a wlroots helper destroys itself
+(`wlr_scene_xdg_surface_create`, `wlr_scene_subsurface_tree_create`,
+`wlr_scene_drag_icon_create`). The rule used: a struct owns a node exactly
+when its own code destroyed it before handles.
 
 Converted: `Output`'s background rect, grid, backdrop, rims, labels and
 adjust overlay (`Output::destroy_scene_nodes` is their one teardown), and
 `Window`'s nodes — `tree`, `popup_tree`, the two background rects, shadow,
 bevel, droplet, every `BorderRects` node, and `SaveableSurfaces`' two trees
 (`Window::create`'s early returns drop what they made; only the capture
-scene, a scene root, is still cleaned by hand). The rest of the compositor
-still holds raw scene pointers; convert a struct at a time. A pool of child handles can be cleared after its parent tree was
+scene, a scene root, is still cleaned by hand), and since the same day every
+other scene node a struct holds: the scene layers and root trees, popups,
+layer-surface popup trees, lock surfaces, Xwayland surface trees, the drag
+icon, the selection marquee and boxes, and the restore placeholders. No
+struct field holds a raw `*mut wlr_scene_*` node any more (`wlr_scene` and
+`wlr_scene_output` are not nodes); a new one should be a handle. A pool of child handles can be cleared after its parent tree was
 destroyed — its entries are already null — which is exactly what the raw
 pointers could not do: output_manager's DisabledHard path destroyed
 `grid_tree` and kept `grid_bevel_tree` / `cell_label_tree` naming its dead

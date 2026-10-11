@@ -115,18 +115,18 @@ impl WindowManager {
                 let scene = &(*self.server).scene;
                 let mut out = String::new();
                 let layers: [(&str, *mut ffi::wlr_scene_tree); 12] = [
-                    ("background", scene.layers.background),
-                    ("bottom", scene.layers.bottom),
-                    ("wm", scene.layers.wm),
-                    ("top", scene.layers.top),
-                    ("fullscreen", scene.layers.fullscreen),
-                    ("overlay", scene.layers.overlay),
-                    ("popups", scene.layers.popups),
-                    ("override_redirect", scene.layers.override_redirect),
-                    ("border_overlay", scene.layers.border_overlay),
-                    ("drag_icons", scene.drag_icons),
-                    ("hidden", scene.hidden_tree),
-                    ("locked", scene.locked_tree),
+                    ("background", scene.layers.background.raw()),
+                    ("bottom", scene.layers.bottom.raw()),
+                    ("wm", scene.layers.wm.raw()),
+                    ("top", scene.layers.top.raw()),
+                    ("fullscreen", scene.layers.fullscreen.raw()),
+                    ("overlay", scene.layers.overlay.raw()),
+                    ("popups", scene.layers.popups.raw()),
+                    ("override_redirect", scene.layers.override_redirect.raw()),
+                    ("border_overlay", scene.layers.border_overlay.raw()),
+                    ("drag_icons", scene.drag_icons.raw()),
+                    ("hidden", scene.hidden_tree.raw()),
+                    ("locked", scene.locked_tree.raw()),
                 ];
                 for (name, tree) in layers {
                     if tree.is_null() {

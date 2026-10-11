@@ -128,8 +128,8 @@ pub struct Selection {
     pub anchor: Option<(f64, f64)>,
     /// The rubber band, once the press has travelled past the threshold.
     pub marquee: Option<Marquee>,
-    tree: *mut ffi::wlr_scene_tree,
-    boxes: Vec<(*mut ffi::wlr_scene_rect, *mut ffi::wlr_scene_bevel)>,
+    tree: crate::scene_handle::SceneTree,
+    boxes: Vec<(crate::scene_handle::SceneRect, crate::scene_handle::SceneBevel)>,
 }
 
 impl Default for Selection {
@@ -140,7 +140,7 @@ impl Default for Selection {
             desktop_items: Vec::new(),
             anchor: None,
             marquee: None,
-            tree: std::ptr::null_mut(),
+            tree: crate::scene_handle::SceneTree::none(),
             boxes: Vec::new(),
         }
     }
@@ -340,7 +340,7 @@ impl WindowManager {
         if !showing {
             if !self.selection.tree.is_null() {
                 ffi::wlr_scene_node_set_enabled(
-                    self.selection.tree as *mut ffi::wlr_scene_node,
+                    self.selection.tree.node(),
                     false,
                 );
             }
@@ -395,22 +395,19 @@ impl WindowManager {
 
         if self.selection.tree.is_null() {
             let scene = &(*self.server).scene;
-            let tree = ffi::wlr_scene_tree_create(&mut (*scene.wlr_scene).tree);
+            let tree = crate::scene_handle::SceneTree::create_in(&mut (*scene.wlr_scene).tree);
             if tree.is_null() {
                 return;
             }
             // Over everything interactive, under a drag icon.
-            ffi::wlr_scene_node_place_above(
-                tree as *mut ffi::wlr_scene_node,
-                scene.interactive_tree as *mut ffi::wlr_scene_node,
-            );
+            tree.place_above(&scene.interactive_tree);
             // Desk content, like the windows it marks: rendered with the
             // camera's sub-pixel offset.
-            ffi::river_scene_tree_set_desk_offset(tree, true);
+            ffi::river_scene_tree_set_desk_offset(tree.raw(), true);
             self.selection.tree = tree;
         }
-        let tree = self.selection.tree;
-        ffi::wlr_scene_node_set_enabled(tree as *mut ffi::wlr_scene_node, true);
+        self.selection.tree.set_enabled(true);
+        let tree = self.selection.tree.raw();
 
         let layout = &self.layout;
         let accent = layout.bevel_focus_color;
@@ -432,27 +429,15 @@ impl WindowManager {
             // wlr_scene_rect colours are premultiplied.
             let color = [accent[0] * fill, accent[1] * fill, accent[2] * fill, fill];
             if used == self.selection.boxes.len() {
-                let rect = ffi::wlr_scene_rect_create(tree, w, h, color.as_ptr());
-                let bevel = ffi::wlr_scene_bevel_create(
-                    tree,
-                    w,
-                    h,
-                    radius,
-                    thickness,
-                    layout.bevel_color.as_ptr(),
-                );
+                let rect = crate::scene_handle::SceneRect::adopt(ffi::wlr_scene_rect_create(tree, w, h, color.as_ptr()));
+                let bevel = crate::scene_handle::SceneBevel::create_in(tree, w, h, radius, thickness, &layout.bevel_color);
                 if rect.is_null() || bevel.is_null() {
-                    if !rect.is_null() {
-                        ffi::wlr_scene_node_destroy(rect as *mut ffi::wlr_scene_node);
-                    }
-                    if !bevel.is_null() {
-                        ffi::wlr_scene_node_destroy(&mut (*bevel).node as *mut ffi::wlr_scene_node);
-                    }
+                    // Dropping them destroys whichever was made.
                     break;
                 }
                 self.selection.boxes.push((rect, bevel));
             }
-            let (rect, bevel) = self.selection.boxes[used];
+            let (rect, bevel) = (self.selection.boxes[used].0.raw(), self.selection.boxes[used].1.raw());
             used += 1;
 
             let rect_node = rect as *mut ffi::wlr_scene_node;
@@ -487,9 +472,9 @@ impl WindowManager {
                 accent.as_ptr(),
             );
         }
-        for &(rect, bevel) in self.selection.boxes.iter().skip(used) {
-            ffi::wlr_scene_node_set_enabled(rect as *mut ffi::wlr_scene_node, false);
-            ffi::wlr_scene_node_set_enabled(&mut (*bevel).node as *mut ffi::wlr_scene_node, false);
+        for (rect, bevel) in self.selection.boxes.iter().skip(used) {
+            rect.set_enabled(false);
+            bevel.set_enabled(false);
         }
     }
 }

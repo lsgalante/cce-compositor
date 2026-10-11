@@ -49,7 +49,7 @@ impl WindowManager {
     /// has something to be pointed at. Purely visual — placeholders are
     /// scene rects, not windows; focus logic never sees them.
     pub unsafe fn create_restore_placeholders(&mut self) {
-        let parent = (*self.server).scene.layers.wm;
+        let parent = (*self.server).scene.layers.wm.raw();
         if parent.is_null() {
             return;
         }
@@ -78,7 +78,7 @@ impl WindowManager {
                 continue;
             }
             self.restore_placeholders.push(RestorePlaceholder {
-                rect,
+                rect: crate::scene_handle::SceneRect::adopt(rect),
                 app_id: entry.app_id.clone(),
                 title: entry.title.clone(),
                 vx: entry.virtual_x,
@@ -163,15 +163,15 @@ impl WindowManager {
             let x = out_x + ((p.vx - self.desk_pan_x) * zoom).round() as i32;
             let y = out_y + ((p.vy - self.desk_pan_y) * zoom).round() as i32;
             let (w, h) = ((p.w as f64 * zoom) as i32, (p.h as f64 * zoom) as i32);
-            ffi::river_scene_node_set_position_if_changed(p.rect as *mut ffi::wlr_scene_node, x, y);
-            ffi::river_scene_rect_set_size_if_changed(p.rect, w, h);
+            ffi::river_scene_node_set_position_if_changed(p.rect.node(), x, y);
+            ffi::river_scene_rect_set_size_if_changed(p.rect.raw(), w, h);
             // Span-widened like the window the placeholder stands in for
             // and the grid cell it sits on; the raw radius read visibly
             // squarer than both at corner_shape > 2.
             let radius = crate::window::widen_corner_radius(
                 (self.layout.root_plate_corner_radius as f64 * zoom) as i32, w, h,
             );
-            ffi::river_scene_rect_set_corner_radius(p.rect, radius);
+            ffi::river_scene_rect_set_corner_radius(p.rect.raw(), radius);
         }
     }
 
@@ -182,10 +182,8 @@ impl WindowManager {
             .iter()
             .position(|p| p.app_id == entry.app_id && p.title == entry.title)
         {
-            let p = self.restore_placeholders.remove(pos);
-            if !p.rect.is_null() {
-                ffi::wlr_scene_node_destroy(p.rect as *mut ffi::wlr_scene_node);
-            }
+            // Dropping the placeholder destroys its rect.
+            self.restore_placeholders.remove(pos);
         }
         if self.restore_placeholders.is_empty() && !self.restore_placeholder_timer.is_null() {
             ffi::wl_event_source_remove(self.restore_placeholder_timer);
@@ -194,11 +192,7 @@ impl WindowManager {
     }
 
     pub unsafe fn clear_restore_placeholders(&mut self) {
-        for p in self.restore_placeholders.drain(..) {
-            if !p.rect.is_null() {
-                ffi::wlr_scene_node_destroy(p.rect as *mut ffi::wlr_scene_node);
-            }
-        }
+        self.restore_placeholders.clear();
         if !self.restore_placeholder_timer.is_null() {
             ffi::wl_event_source_remove(self.restore_placeholder_timer);
             self.restore_placeholder_timer = std::ptr::null_mut();

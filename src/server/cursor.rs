@@ -458,7 +458,7 @@ impl Cursor {
     }
 
     pub unsafe fn update_drag_icons(&mut self) {
-        let drag_icons_tree = (*(*self.seat).server).scene.drag_icons;
+        let drag_icons_tree = (*(*self.seat).server).scene.drag_icons.raw();
         let children_head = ffi::river_scene_tree_get_children(drag_icons_tree) as *mut WlList;
         let mut curr = (*children_head).next;
         while curr != children_head {

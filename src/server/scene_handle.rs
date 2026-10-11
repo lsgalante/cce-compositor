@@ -14,6 +14,13 @@
 //! An empty handle is all zero bits (`Option<Box<_>>`'s `None`), so a struct
 //! zero-initialised with `std::mem::zeroed()` holds empty handles.
 //!
+//! A handle can also *watch* a node it does not own (`watch`): it reads null
+//! once the node is gone, like an owning one, but dropping it leaves the node
+//! alone. That is for references to someone else's node — a popup's root
+//! tree — and for nodes a wlroots helper destroys itself (the trees
+//! `wlr_scene_xdg_surface_create` and `wlr_scene_subsurface_tree_create`
+//! make go when their surface does).
+//!
 //! The kinds share one type, `Handle<K>`, aliased as `SceneTree`,
 //! `SceneRect` and so on; `raw()` hands back the kind's own pointer for the
 //! calls this module does not wrap, and `node()` the base node.
@@ -63,6 +70,9 @@ kinds! {
 struct Slot {
     node: *mut ffi::wlr_scene_node,
     destroy: Listener,
+    /// Whether dropping the handle destroys the node (`adopt`) or only
+    /// stops watching it (`watch`).
+    owned: bool,
 }
 
 unsafe extern "C" fn handle_node_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -91,13 +101,32 @@ impl<K: Kind> Handle<K> {
     /// `raw` must be null or a live node of kind `K` that nothing else owns:
     /// the handle will destroy it when dropped.
     pub unsafe fn adopt(raw: *mut K::Raw) -> Self {
+        Self::with_slot(raw, true)
+    }
+
+    /// Watch `raw` without owning it: the handle reads null once the node
+    /// is gone, and dropping it leaves the node alone. A null `raw` gives an
+    /// empty handle.
+    ///
+    /// # Safety
+    /// `raw` must be null or a live node of kind `K`.
+    pub unsafe fn watch(raw: *mut K::Raw) -> Self {
+        Self::with_slot(raw, false)
+    }
+
+    unsafe fn with_slot(raw: *mut K::Raw, owned: bool) -> Self {
         if raw.is_null() {
             return Self::none();
         }
         let node = raw as *mut ffi::wlr_scene_node;
-        let mut slot = Box::new(Slot { node, destroy: Listener::new() });
+        let mut slot = Box::new(Slot { node, destroy: Listener::new(), owned });
         slot.destroy.connect(ffi::river_scene_node_get_destroy_signal(node), handle_node_destroy);
         Handle { slot: Some(slot), _kind: PhantomData }
+    }
+
+    /// Whether dropping this handle destroys its node.
+    pub fn is_owned(&self) -> bool {
+        self.slot.as_ref().map_or(false, |s| s.owned)
     }
 
     /// The base node, or null when the handle is empty or its node is gone.
@@ -116,7 +145,8 @@ impl<K: Kind> Handle<K> {
         self.node().is_null()
     }
 
-    /// Destroy the node now and leave the handle empty. Same as dropping it.
+    /// Destroy the node now and leave the handle empty — whether or not the
+    /// handle owns it; dropping an owning handle does the same.
     pub fn destroy(&mut self) {
         let Some(mut slot) = self.slot.take() else { return };
         if slot.node.is_null() {
@@ -219,7 +249,11 @@ impl<K: Kind> Default for Handle<K> {
 
 impl<K: Kind> Drop for Handle<K> {
     fn drop(&mut self) {
-        self.destroy();
+        if self.is_owned() {
+            self.destroy();
+        } else {
+            self.release();
+        }
     }
 }
 
@@ -384,6 +418,19 @@ mod tests {
         b.raise_to_top();
         tree.set_enabled(false);
         assert_eq!(b.coords().map(|c| c.2), Some(false));
+    }
+
+    #[test]
+    fn a_watched_node_outlives_its_handle_and_its_death_is_seen() {
+        let scene = Scene::new();
+        let tree = unsafe { SceneTree::create_in(scene.root()) };
+        let watcher = unsafe { SceneTree::watch(tree.raw()) };
+        assert!(!watcher.is_owned() && tree.is_owned());
+        drop(watcher);
+        assert!(!tree.is_null(), "dropping a watcher leaves the node");
+        let watcher = unsafe { SceneTree::watch(tree.raw()) };
+        drop(tree);
+        assert!(watcher.is_null(), "and a watcher sees it go");
     }
 
     #[test]

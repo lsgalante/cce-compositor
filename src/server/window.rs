@@ -848,7 +848,7 @@ impl Window {
         // Every node below is a handle: an early return drops what was made
         // so far, which destroys it. Only the capture scene, a scene root
         // rather than a node, is cleaned up by hand.
-        let hidden_tree = (*server).scene.hidden_tree;
+        let hidden_tree = (*server).scene.hidden_tree.raw();
         let tree = SceneTree::create_in(hidden_tree);
         if tree.is_null() {
             return Err("Failed to create tree");
@@ -923,7 +923,7 @@ impl Window {
         let border_top = SceneRect::create(&tree, 0, 0, &clear_color);
         let border_bottom = SceneRect::create(&tree, 0, 0, &clear_color);
 
-        let border_tree = SceneTree::create_in((*server).scene.layers.border_overlay);
+        let border_tree = SceneTree::create_in((*server).scene.layers.border_overlay.raw());
         if border_tree.is_null() {
             destroy_capture_scene();
             return Err("Failed to create window border tree");
@@ -2658,9 +2658,9 @@ impl Window {
                     if !(*xwindow).surface_tree.is_null() {
                         let has_parent = !(*(*xwindow).xsurface).parent.is_null();
                         if self.is_wine() && !has_parent && !self.is_fullscreen() {
-                            ffi::wlr_scene_node_set_position((*xwindow).surface_tree as *mut ffi::wlr_scene_node, -16, -16);
+                            ffi::wlr_scene_node_set_position((*xwindow).surface_tree.node(), -16, -16);
                         } else {
-                            ffi::wlr_scene_node_set_position((*xwindow).surface_tree as *mut ffi::wlr_scene_node, 0, 0);
+                            ffi::wlr_scene_node_set_position((*xwindow).surface_tree.node(), 0, 0);
                         }
                     }
                     (*xwindow).configure();

@@ -982,7 +982,11 @@ impl WindowManager {
             self.restore_placeholder_timer = std::ptr::null_mut();
         }
         // Placeholder rects go down with the scene; only the bookkeeping.
-        self.restore_placeholders.clear();
+        // Released, not dropped: dropping a handle would destroy its rect
+        // here, mid display teardown.
+        for mut p in self.restore_placeholders.drain(..) {
+            p.rect.release();
+        }
         if !self.viewport_settle_timer.is_null() {
             ffi::wl_event_source_remove(self.viewport_settle_timer);
             self.viewport_settle_timer = std::ptr::null_mut();
@@ -2288,7 +2292,7 @@ impl WindowManager {
         if !(*window).is_seat_focused() {
             return;
         }
-        let wm_layer = (*self.server).scene.layers.wm;
+        let wm_layer = (*self.server).scene.layers.wm.raw();
         if wm_layer.is_null()
             || ffi::river_scene_node_get_parent((*window).popup_tree.node()) != wm_layer
         {
@@ -3025,7 +3029,7 @@ impl crate::policy::api::Compositor for WindowManager {
 
 /// One dim frame standing in for a restored window until its program maps.
 pub struct RestorePlaceholder {
-    pub rect: *mut ffi::wlr_scene_rect,
+    pub rect: crate::scene_handle::SceneRect,
     pub app_id: String,
     pub title: String,
     pub vx: f64,
