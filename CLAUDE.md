@@ -494,11 +494,12 @@ nothing else calls. Read them from anywhere; change them through the
 methods.
 
 **What a manage pass applied is shared** (`crate::shared::sent()`, since
-2026-10-10): the `outputs` and `seats` lists — intrusive `wl_list` heads
-(`ListHead`) that the leaked `Shared` gives a fixed address, holding
-`Output::link_sent` / `Seat::link_sent`, each appended by its
-`manage_start` (`sent().outputs.move_to_back(&mut self.link_sent)`) and
-walked from `head()` — and the output configuration being applied
+2026-10-10): the `outputs` and `seats` lists — `IdList`s of `OutputId` /
+`SeatId` (an ordered `RefCell<Vec>`; intrusive `wl_list` heads threaded
+through `link_sent` fields until 2026-10-11), each entry moved to the back
+by its `manage_start` (`sent().outputs.move_to_back(self.id)`) and walked as
+a copy (`ids()`, resolved in `wm.outputs` / `wm.seats`) — and the output
+configuration being applied
 (`output_config()` / `take_output_config()` / `set_output_config()`).
 `WindowManager` has no `sent` field.
 
@@ -543,14 +544,12 @@ output and the manage pass removes it from the store. Iteration is in
 creation order, as the list's was (several walks take the first enabled
 output: `first_enabled_ptr()`). `ptrs()` is a copied list of addresses
 for the walks not yet converted to borrows; `values()`, `get` and
-`get_mut` borrow. `PendingScreenshot` names its output by id. The
-applied-outputs list `crate::shared::sent().outputs` is still intrusive
-(`Output::link_sent`). **Seats likewise** (`wm.seats`,
+`get_mut` borrow. `PendingScreenshot` names its output by id.
+**Seats likewise** (`wm.seats`,
 `crate::seat::Seats`, `seat/store.rs`, by `SeatId`, an index into slots
 that are never reused): a seat a client asked to destroy is taken out by
 the manage pass (`Seat::manage_start` returns true) and handed to
-`Seat::destroy`, which takes the box; the deinit takes each in turn.
-`sent().seats` (`Seat::link_sent`) is still intrusive. Test two outputs with a copy of `cce-shadow` whose
+`Seat::destroy`, which takes the box; the deinit takes each in turn. Test two outputs with a copy of `cce-shadow` whose
 `WLR_HEADLESS_OUTPUTS=1` reads 2. Both stores live on the WINDOW MANAGER, beside `windows`
 (since 2026-10-11; they were `om.outputs` and `input_manager.seats`), for
 the reason the window store does: each holds raw pointers, so a `&mut

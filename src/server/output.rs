@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_remove};
+use crate::server::Server;
 use crate::layer_shell::LayerShellOutput;
 use crate::lock_manager::LockState;
 use crate::util;
@@ -164,7 +164,6 @@ pub struct Output {
     pub lock_render_state: LockRenderState,
     /// This output's id in `om.outputs`, set by `Outputs::insert`.
     pub id: OutputId,
-    pub link_sent: ffi::wl_list,
     pub scheduled: OutputState,
     pub sent: OutputState,
     pub current: OutputState,
@@ -256,7 +255,7 @@ impl Output {
 
                 self.sent = self.scheduled;
 
-                crate::shared::sent().outputs.move_to_back(&mut self.link_sent);
+                crate::shared::sent().outputs.move_to_back(self.id);
             }
             OutputStateValue::DisabledHard | OutputStateValue::Destroying => {
                 self.sent = self.scheduled;
@@ -273,7 +272,7 @@ impl Output {
                         wm.pending_screenshot = None;
                     }
 
-                    wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut WlList);
+                    crate::shared::sent().outputs.remove(self.id);
                     return true;
                 }
             }
@@ -356,7 +355,6 @@ impl Output {
             layer_shell: LayerShellOutput::default(),
             lock_render_state: LockRenderState::Blanked,
             id: OutputId(crate::slotmap::Key { generation: 0, index: u32::MAX }),
-            link_sent: std::mem::zeroed(),
             scheduled: initial,
             sent: initial,
             current: initial,
@@ -396,7 +394,6 @@ impl Output {
         let raw = wm.outputs.ptr(id).ok_or("output gone at creation")?;
         ffi::river_wlr_output_set_data(wlr_output, raw as *mut std::ffi::c_void);
 
-        ffi::wl_list_init(&mut (*raw).link_sent);
 
         // Add event listeners
         (*raw).destroy.connect(ffi::river_wlr_output_get_destroy_signal(wlr_output), handle_destroy);

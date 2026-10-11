@@ -34,7 +34,7 @@ use crate::ffi;
 use crate::scene::Scene;
 use crate::config::Layout;
 use crate::window_manager::WindowManagerMode;
-use std::cell::{Cell, OnceCell, RefCell, UnsafeCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 
 pub struct Shared {
@@ -187,8 +187,6 @@ impl Shared {
     /// once a link points at them.
     fn leak(shared: Shared) -> &'static Shared {
         let shared: &'static Shared = Box::leak(Box::new(shared));
-        shared.sent.outputs.init();
-        shared.sent.seats.init();
         shared
     }
 
@@ -234,38 +232,32 @@ impl Shared {
     }
 }
 
-/// An intrusive `wl_list` head that lives in `Shared`, so its address is
-/// fixed for the life of the thread. The links in it are fields of the
-/// structs on the list (`Output::link_sent`, `Seat::link_sent`), recovered
-/// with `container_of!`.
-pub struct ListHead(UnsafeCell<ffi::wl_list>);
+/// An ordered list of ids, for [`Sent`]. It replaced an intrusive
+/// `wl_list` head threaded through `link_sent` fields on the outputs and
+/// seats; the order is the same: an entry moves to the back each time a manage
+/// pass applies it.
+pub struct IdList<T>(RefCell<Vec<T>>);
 
-impl ListHead {
+impl<T: Copy + PartialEq> IdList<T> {
     const fn new() -> Self {
-        ListHead(UnsafeCell::new(ffi::wl_list { prev: std::ptr::null_mut(), next: std::ptr::null_mut() }))
+        IdList(RefCell::new(Vec::new()))
     }
 
-    fn init(&self) {
-        // SAFETY: called once, from `Shared::leak`, before anything can link
-        // into it.
-        unsafe { ffi::wl_list_init(self.0.get()) };
+    /// Move `id` to the back, adding it if it is not listed.
+    pub fn move_to_back(&self, id: T) {
+        let mut ids = self.0.borrow_mut();
+        ids.retain(|&x| x != id);
+        ids.push(id);
     }
 
-    /// The head, for a walk: `(*head).next` until it comes back to `head`.
-    pub fn head(&self) -> *mut ffi::wl_list {
-        self.0.get()
+    /// Take `id` off the list, if it is on it.
+    pub fn remove(&self, id: T) {
+        self.0.borrow_mut().retain(|&x| x != id);
     }
 
-    /// Move `link` to the back of this list, unlinking it from wherever it
-    /// was.
-    ///
-    /// # Safety
-    /// `link` must be an initialised `wl_list` (linked or self-looped) in a
-    /// struct that unlinks it before it is freed.
-    pub unsafe fn move_to_back(&self, link: *mut ffi::wl_list) {
-        use crate::server::{wl_list_insert, wl_list_remove, WlList};
-        wl_list_remove(link as *mut WlList);
-        wl_list_insert((*self.head()).prev as *mut WlList, link as *mut WlList);
+    /// The ids, in order, copied out: a walk may move or remove entries.
+    pub fn ids(&self) -> Vec<T> {
+        self.0.borrow().clone()
     }
 }
 
@@ -276,16 +268,16 @@ impl ListHead {
 /// output and seat — and by every window, to find the seats focusing it —
 /// from inside the manage pass that held the window manager.
 pub struct Sent {
-    pub outputs: ListHead,
-    pub seats: ListHead,
+    pub outputs: IdList<crate::output::OutputId>,
+    pub seats: IdList<crate::seat::SeatId>,
     output_config: Cell<*mut ffi::wlr_output_configuration_v1>,
 }
 
 impl Sent {
     const fn new() -> Self {
         Sent {
-            outputs: ListHead::new(),
-            seats: ListHead::new(),
+            outputs: IdList::new(),
+            seats: IdList::new(),
             output_config: Cell::new(std::ptr::null_mut()),
         }
     }
@@ -462,44 +454,24 @@ unsafe extern "C" fn handle_idle(_data: *mut std::ffi::c_void) {
 mod tests {
     use super::*;
 
-    fn order(head: &ListHead, links: &[*mut ffi::wl_list]) -> Vec<usize> {
-        let mut out = Vec::new();
-        unsafe {
-            let mut cur = (*head.head()).next;
-            while cur != head.head() {
-                out.push(links.iter().position(|&l| l == cur).unwrap());
-                cur = (*cur).next;
-            }
-        }
-        out
-    }
-
     #[test]
     fn move_to_back_appends_and_moves_without_duplicating() {
-        let head = Box::new(ListHead::new());
-        head.init();
-        let mut a: Box<ffi::wl_list> = Box::new(unsafe { std::mem::zeroed() });
-        let mut b: Box<ffi::wl_list> = Box::new(unsafe { std::mem::zeroed() });
-        let links = [&mut *a as *mut ffi::wl_list, &mut *b as *mut ffi::wl_list];
-        unsafe {
-            ffi::wl_list_init(links[0]);
-            ffi::wl_list_init(links[1]);
-            head.move_to_back(links[0]);
-            head.move_to_back(links[1]);
-            assert_eq!(order(&head, &links), [0, 1]);
-            // The next manage pass appends them again, in its own order.
-            head.move_to_back(links[0]);
-            assert_eq!(order(&head, &links), [1, 0]);
-            crate::server::wl_list_remove(links[0] as *mut crate::server::WlList);
-            crate::server::wl_list_remove(links[1] as *mut crate::server::WlList);
-        }
-        assert_eq!(order(&head, &links), Vec::<usize>::new());
+        let list = IdList::new();
+        list.move_to_back(1);
+        list.move_to_back(2);
+        assert_eq!(list.ids(), [1, 2]);
+        // The next manage pass appends them again, in its own order.
+        list.move_to_back(1);
+        assert_eq!(list.ids(), [2, 1]);
+        list.remove(2);
+        list.remove(3);
+        assert_eq!(list.ids(), [1]);
     }
 
     #[test]
-    fn the_shared_lists_start_empty_and_initialised() {
-        let head = sent().outputs.head();
-        assert_eq!(unsafe { (*head).next }, head);
+    fn the_shared_lists_start_empty() {
+        assert!(sent().outputs.ids().is_empty());
+        assert!(sent().seats.ids().is_empty());
         assert!(sent().output_config().is_null());
     }
 }

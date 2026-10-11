@@ -2006,16 +2006,12 @@ impl Window {
         }
 
         let mut activated = false;
-        let seats = crate::shared::sent().seats.head() as *mut WlList;
-        let mut curr = (*seats).next;
-        while curr != seats {
-            let next = (*curr).next;
-            let seat = crate::container_of!(curr, crate::seat::Seat, link_sent);
-            if (*seat).focused == crate::seat::Focus::Window(id) {
+        for seat_id in crate::shared::sent().seats.ids() {
+            let Some(seat) = wm.seats.get(seat_id) else { continue };
+            if seat.focused == crate::seat::Focus::Window(id) {
                 activated = true;
                 break;
             }
-            curr = next;
         }
 
         if !this.wlr_toplevel_handle.is_null() {

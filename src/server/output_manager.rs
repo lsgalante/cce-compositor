@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_remove};
+use crate::server::Server;
 use crate::output::{Output, OutputStateValue, OutputMode};
 use crate::scene_handle::{SceneRect, SceneTree};
 
@@ -143,10 +143,9 @@ impl OutputManager {
 
     pub unsafe fn commit_output_state(&mut self, lock: &crate::lock_manager::LockManager, outputs: &crate::output::Outputs) {
 
-        let head = crate::shared::sent().outputs.head();
-        let mut link = (*head).next;
-        while link != head {
-            let output = &mut *crate::container_of!(link, Output, link_sent);
+        for id in crate::shared::sent().outputs.ids() {
+            let Some(output_ptr) = outputs.ptr(id) else { continue };
+            let output = &mut *output_ptr;
             assert!(output.sent.state != OutputStateValue::Destroying);
             output.rendering_current = output.rendering_requested;
 
@@ -204,17 +203,14 @@ impl OutputManager {
                     OutputStateValue::Destroying => unreachable!(),
                 }
             }
-            link = (*link).next;
         }
 
         let mut need_modeset = false;
-        let head = crate::shared::sent().outputs.head();
-        let mut link = (*head).next;
-        while link != head {
-            let output = &mut *crate::container_of!(link, Output, link_sent);
+        for id in crate::shared::sent().outputs.ids() {
+            let Some(output_ptr) = outputs.ptr(id) else { continue };
+            let output = &mut *output_ptr;
             let wlr_output = output.wlr_output;
             if wlr_output.is_null() {
-                link = (*link).next;
                 continue;
             }
 
@@ -272,20 +268,17 @@ impl OutputManager {
                 break;
             }
 
-            link = (*link).next;
         }
 
         if need_modeset {
             log::debug!("committing output state requires modeset");
 
             let mut states_vec = Vec::new();
-            let head = crate::shared::sent().outputs.head();
-            let mut link = (*head).next;
-            while link != head {
-                let output = &mut *crate::container_of!(link, Output, link_sent);
+            for id in crate::shared::sent().outputs.ids() {
+                let Some(output_ptr) = outputs.ptr(id) else { continue };
+                let output = &mut *output_ptr;
                 let wlr_output = output.wlr_output;
                 if wlr_output.is_null() {
-                    link = (*link).next;
                     continue;
                 }
 
@@ -294,7 +287,6 @@ impl OutputManager {
                     base: std::mem::zeroed(),
                 });
 
-                link = (*link).next;
             }
 
             for state in &mut states_vec {
@@ -312,7 +304,7 @@ impl OutputManager {
                 states_vec.len(),
             ) {
                 log::error!("failed to prepare new output configuration");
-                self.modeset_failed();
+                self.modeset_failed(outputs);
                 for state in &mut states_vec {
                     ffi::wlr_output_state_finish(&mut state.base);
                 }
@@ -334,7 +326,7 @@ impl OutputManager {
 
             if !ffi::wlr_backend_commit(crate::shared::handles().backend.get(), states_vec.as_ptr(), states_vec.len()) {
                 log::error!("failed to commit new output configuration");
-                self.modeset_failed();
+                self.modeset_failed(outputs);
                 for state in &mut states_vec {
                     ffi::wlr_output_state_finish(&mut state.base);
                 }
@@ -357,14 +349,11 @@ impl OutputManager {
             ffi::wlr_output_configuration_v1_destroy(config);
         }
 
-        let head = crate::shared::sent().outputs.head();
-        let mut link = (*head).next;
-        while link != head {
-            let next_link = (*link).next;
-            let output = &mut *crate::container_of!(link, Output, link_sent);
+        for id in crate::shared::sent().outputs.ids() {
+            let Some(output_ptr) = outputs.ptr(id) else { continue };
+            let output = &mut *output_ptr;
             let wlr_output = output.wlr_output;
             if wlr_output.is_null() {
-                link = next_link;
                 continue;
             }
 
@@ -377,22 +366,20 @@ impl OutputManager {
                     assert!(!ffi::river_wlr_output_get_enabled(wlr_output));
                     output.lock_render_state = crate::output::LockRenderState::Blanked;
                     if output.sent.state == OutputStateValue::DisabledHard {
-                        wl_list_remove(&mut output.link_sent as *mut ffi::wl_list as *mut WlList);
-                        ffi::wl_list_init(&mut output.link_sent);
+                        crate::shared::sent().outputs.remove(output.id);
                     }
                 }
                 OutputStateValue::Destroying => unreachable!(),
             }
 
             output.current = output.sent;
-            link = next_link;
         }
         crate::xwayland_window::note_output_scale(outputs);
 
         let _ = self.send_config(outputs);
     }
 
-    pub unsafe fn modeset_failed(&mut self) {
+    pub unsafe fn modeset_failed(&mut self, outputs: &crate::output::Outputs) {
 
         if self.first_modeset {
             log::error!("initial modeset failed, exiting river");
@@ -406,13 +393,11 @@ impl OutputManager {
             ffi::wlr_output_configuration_v1_destroy(config);
         }
 
-        let head = crate::shared::sent().outputs.head();
-        let mut link = (*head).next;
-        while link != head {
-            let output = &mut *crate::container_of!(link, Output, link_sent);
+        for id in crate::shared::sent().outputs.ids() {
+            let Some(output_ptr) = outputs.ptr(id) else { continue };
+            let output = &mut *output_ptr;
             output.scheduled = output.current;
             output.sent = output.current;
-            link = (*link).next;
         }
         crate::shared::pending().dirty_windowing();
     }

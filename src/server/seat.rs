@@ -164,7 +164,6 @@ pub struct Seat {
 
     /// This seat's id in `input_manager.seats`, set by `Seats::insert`.
     pub id: SeatId,
-    pub link_sent: ffi::wl_list,
     pub destroying: bool,
     pub focus_requested: bool,
 }
@@ -205,13 +204,11 @@ impl Seat {
             drag: DragState::None,
             drag_destroy: std::mem::zeroed(),
             id: SeatId(u32::MAX),
-            link_sent: std::mem::zeroed(),
             destroying: false,
             focus_requested: false,
         }));
         let seat = seats.ptr(id).ok_or("seat gone at creation")?;
 
-        ffi::wl_list_init(&mut (*seat).link_sent);
         ffi::wl_list_init(&mut (*seat).keyboard_groups);
 
         ffi::river_wlr_seat_set_data(wlr_seat, seat as *mut _);
@@ -256,7 +253,7 @@ impl Seat {
         let groups_head = &mut (*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
         assert_eq!((*groups_head).next, groups_head);
 
-        crate::server::wl_list_remove(&mut (*seat).link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
+        crate::shared::sent().seats.remove((*seat).id);
 
         (*seat).unwatch_x11_cursor();
         (*seat).request_set_cursor.disconnect();
@@ -800,7 +797,7 @@ impl Seat {
         self.focus_requested = false;
         self.layer_shell.manage_start();
 
-        crate::shared::sent().seats.move_to_back(&mut self.link_sent);
+        crate::shared::sent().seats.move_to_back(self.id);
         false
     }
 

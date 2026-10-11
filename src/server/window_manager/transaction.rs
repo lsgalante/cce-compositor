@@ -173,13 +173,9 @@ impl WindowManager {
 
         log::debug!("manage sequence finish");
 
-        let seats = crate::shared::sent().seats.head() as *mut WlList;
-        let mut curr = (*seats).next;
-        while curr != seats {
-            let next = (*curr).next;
-            let seat = crate::container_of!(curr, crate::seat::Seat, link_sent);
+        for id in crate::shared::sent().seats.ids() {
+            let Some(seat) = self.seats.ptr(id) else { continue };
             (*seat).manage_finish(self);
-            curr = next;
         }
 
         self.state = WindowManagerState::InflightConfigures(0);
