@@ -44,15 +44,11 @@ impl WindowManager {
     pub unsafe fn refresh_adjust_held(&mut self) {
         crate::wm_scope!(mut);
         let mut held = self.injected_super_held;
-        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr_seat = (*seats_list).next;
-        while curr_seat != seats_list {
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             let kb = ffi::river_wlr_seat_get_keyboard((*seat).wlr_seat);
             if !kb.is_null() && (ffi::wlr_keyboard_get_modifiers(kb) & ffi::wlr_keyboard_modifier_WLR_MODIFIER_LOGO) != 0 {
                 held = true;
             }
-            curr_seat = (*curr_seat).next;
         }
         if held == crate::shared::adjust_held() {
             return;
@@ -63,13 +59,10 @@ impl WindowManager {
         // handles in step with the windows'.
         self.update_status();
         let now = crate::util::msec_timestamp();
-        let mut curr_seat = (*seats_list).next;
-        while curr_seat != seats_list {
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if (*seat).op.is_none() {
                 (*seat).cursor.passthrough(self, now);
             }
-            curr_seat = (*curr_seat).next;
         }
     }
 
@@ -121,13 +114,13 @@ impl WindowManager {
         }
         let mt_windows = mt0.map(|s| s.elapsed().as_micros());
 
-        let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*seats).next;
-        while curr != seats {
-            let next = (*curr).next;
-            let seat = crate::container_of!(curr, crate::seat::Seat, link);
-            (*seat).manage_start();
-            curr = next;
+        for id in (*self.server).input_manager.seats.ids() {
+            let Some(seat) = (*self.server).input_manager.seats.ptr(id) else { continue };
+            if (*seat).manage_start() {
+                if let Some(seat) = (*self.server).input_manager.seats.take(id) {
+                    crate::seat::Seat::destroy(seat);
+                }
+            }
         }
 
         let mt_seats = mt0.map(|s| s.elapsed().as_micros());
@@ -472,13 +465,8 @@ impl WindowManager {
 
         (*self.server).om.commit_output_state(self.server);
 
-        let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*seats).next;
-        while curr != seats {
-            let next = (*curr).next;
-            let seat = crate::container_of!(curr, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             (*seat).cursor.update_hovered();
-            curr = next;
         }
 
         (*self.server).idle_inhibit_manager.check_active(self);

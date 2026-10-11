@@ -2,6 +2,15 @@ use crate::ffi;
 use crate::server::Server;
 use crate::cursor::Cursor;
 
+#[path = "seat/store.rs"]
+mod store;
+pub use store::Seats;
+
+/// Names a seat in [`Seats`]: an index into its slots, which are never
+/// reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SeatId(pub u32);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeatOpInput {
     Pointer,
@@ -154,7 +163,8 @@ pub struct Seat {
     pub drag: DragState,
     pub drag_destroy: crate::listener::Listener,
 
-    pub link: ffi::wl_list,
+    /// This seat's id in `input_manager.seats`, set by `Seats::insert`.
+    pub id: SeatId,
     pub link_sent: ffi::wl_list,
     pub destroying: bool,
     pub focus_requested: bool,
@@ -168,7 +178,7 @@ impl Seat {
             return Err("Failed to create wlr_seat");
         }
 
-        let seat = Box::into_raw(Box::new(Self {
+        let id = (*server).input_manager.seats.insert(Box::new(Self {
             server,
             wlr_seat,
             cursor: Cursor::default(),
@@ -196,19 +206,15 @@ impl Seat {
             request_set_primary_selection: std::mem::zeroed(),
             drag: DragState::None,
             drag_destroy: std::mem::zeroed(),
-            link: std::mem::zeroed(),
+            id: SeatId(u32::MAX),
             link_sent: std::mem::zeroed(),
             destroying: false,
             focus_requested: false,
         }));
+        let seat = (*server).input_manager.seats.ptr(id).ok_or("seat gone at creation")?;
 
-        ffi::wl_list_init(&mut (*seat).link);
         ffi::wl_list_init(&mut (*seat).link_sent);
         ffi::wl_list_init(&mut (*seat).keyboard_groups);
-
-        // Add to input_manager seats
-        let seats_list = &mut (*server).input_manager.seats as *mut ffi::wl_list as *mut crate::server::WlList;
-        crate::server::wl_list_insert((*seats_list).prev, &mut (*seat).link as *mut ffi::wl_list as *mut crate::server::WlList);
 
         ffi::river_wlr_seat_set_data(wlr_seat, seat as *mut _);
         (*seat).relay.init(seat);
@@ -233,7 +239,10 @@ impl Seat {
         Ok(seat)
     }
 
-    pub unsafe fn destroy(seat: *mut Self) {
+    /// Tear the seat down and free it: `seat` is its box, taken from
+    /// `input_manager.seats`.
+    pub unsafe fn destroy(seat: Box<Self>) {
+        let seat = Box::into_raw(seat);
         (*seat).cursor.deinit();
 
         // The synthetic keyboard has no device to outlive, so nothing else
@@ -249,7 +258,6 @@ impl Seat {
         let groups_head = &mut (*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
         assert_eq!((*groups_head).next, groups_head);
 
-        crate::server::wl_list_remove(&mut (*seat).link as *mut ffi::wl_list as *mut crate::server::WlList);
         crate::server::wl_list_remove(&mut (*seat).link_sent as *mut ffi::wl_list as *mut crate::server::WlList);
 
         (*seat).unwatch_x11_cursor();
@@ -780,16 +788,20 @@ impl Seat {
         self.relay.focus(wm, target_surface);
     }
 
-    pub unsafe fn manage_start(&mut self) {
+    /// Returns true when the seat is to be destroyed (a client asked for
+    /// it): the caller takes it out of `input_manager.seats` and hands the
+    /// box to [`Self::destroy`].
+    #[must_use]
+    pub unsafe fn manage_start(&mut self) -> bool {
         if self.destroying {
-            Self::destroy(self);
-            return;
+            return true;
         }
 
         self.focus_requested = false;
         self.layer_shell.manage_start();
 
         crate::shared::sent().seats.move_to_back(&mut self.link_sent);
+        false
     }
 
     pub unsafe fn manage_finish(&mut self, wm: &mut crate::window_manager::WindowManager) {

@@ -1104,18 +1104,13 @@ impl WindowManager {
                 // app_ids are then properly escaped, unlike the text format.
                 let as_json = parts.get(1).copied() == Some("--json");
                 let mut focused_id: Option<crate::window::WindowId> = None;
-                let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-                let mut curr_seat = (*seats_list).next;
-                while curr_seat != seats_list {
-                    let next_seat = (*curr_seat).next;
-                    let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+                for seat in (*self.server).input_manager.seats.ptrs() {
                     if let crate::seat::Focus::Window(id) = (*seat).focused {
                         if self.windows.contains(id) {
                             focused_id = Some(id);
                             break;
                         }
                     }
-                    curr_seat = next_seat;
                 }
 
                 // Render-list position, bottom (0) to top: the stacking
@@ -1586,11 +1581,8 @@ impl WindowManager {
             }
             "pointer-location" => {
                 let mut reply = "error: no seat\n".to_string();
-                let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-                let curr_seat = (*seats_list).next;
-                if curr_seat != seats_list {
-                    let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
-                    let cursor = &(*seat).cursor;
+                if let Some(seat) = (*self.server).input_manager.seats.values().next() {
+                    let cursor = &seat.cursor;
                     reply = format!("x={} y={}\n", cursor.x(), cursor.y());
                 }
                 reply
@@ -1619,11 +1611,7 @@ impl WindowManager {
                         125 | 126 => Some(b"Mod4\0"),
                         _ => None,
                     };
-                    let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-                    let mut curr_seat = (*seats_list).next;
-                    while curr_seat != seats_list {
-                        let next_seat = (*curr_seat).next;
-                        let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+                    for seat in (*self.server).input_manager.seats.ptrs() {
                         (*seat).ensure_synthetic_keyboard();
                         (*seat).handle_activity();
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, crate::util::msec_timestamp(), keycode, state);
@@ -1646,7 +1634,6 @@ impl WindowManager {
                                 }
                             }
                         }
-                        curr_seat = next_seat;
                     }
                     // The compositor's own Super state (window-adjust mode)
                     // reads the keyboard device, which injection bypasses.
@@ -1662,11 +1649,7 @@ impl WindowManager {
             "keypress" | "key-press" => {
                 if parts.len() < 2 { return "error: usage: keypress <keycode>\n".to_string(); }
                 if let Ok(keycode) = parts[1].parse::<u32>() {
-                    let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-                    let mut curr_seat = (*seats_list).next;
-                    while curr_seat != seats_list {
-                        let next_seat = (*curr_seat).next;
-                        let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+                    for seat in (*self.server).input_manager.seats.ptrs() {
                         // A backend with no keyboard device leaves clients
                         // without a keymap, and a keymap-less client drops
                         // every key we notify. Attach one first.
@@ -1675,7 +1658,6 @@ impl WindowManager {
                         let time = crate::util::msec_timestamp();
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
                         ffi::wlr_seat_keyboard_notify_key((*seat).wlr_seat, time + 1, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);
-                        curr_seat = next_seat;
                     }
                     "ok\n".to_string()
                 } else {
@@ -1693,13 +1675,8 @@ impl WindowManager {
     /// like the pre-existing pointer-move-to loop did).
     pub(crate) unsafe fn for_each_cursor(&mut self, mut f: impl FnMut(&mut WindowManager, &mut crate::cursor::Cursor)) {
         crate::wm_scope!(mut);
-        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr_seat = (*seats_list).next;
-        while curr_seat != seats_list {
-            let next_seat = (*curr_seat).next;
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             f(self, &mut (*seat).cursor);
-            curr_seat = next_seat;
         }
     }
 
@@ -1707,17 +1684,12 @@ impl WindowManager {
     /// touch injected first, which offers clients the touch capability.
     pub(crate) unsafe fn for_each_seat_touch(&mut self, mut f: impl FnMut(&mut WindowManager, &mut crate::cursor::Cursor)) {
         crate::wm_scope!(mut);
-        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr_seat = (*seats_list).next;
-        while curr_seat != seats_list {
-            let next_seat = (*curr_seat).next;
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if !(*seat).touch_injected {
                 (*seat).touch_injected = true;
                 (*seat).update_capabilities();
             }
             f(self, &mut (*seat).cursor);
-            curr_seat = next_seat;
         }
     }
 

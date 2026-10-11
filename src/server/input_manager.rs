@@ -8,7 +8,7 @@ use crate::seat::Seat;
 pub struct InputManager {
     pub server: *mut Server,
     pub default_seat: *mut Seat,
-    pub seats: ffi::wl_list,
+    pub seats: crate::seat::Seats,
     pub devices: ffi::wl_list, // list of InputDevice
     pub objects: ffi::wl_list, // list of InputManagerObject
     pub global: *mut ffi::wl_global,
@@ -43,7 +43,14 @@ pub struct InputManagerObject {
 
 impl Default for InputManager {
     fn default() -> Self {
-        unsafe { std::mem::zeroed() }
+        let mut im = std::mem::MaybeUninit::<InputManager>::zeroed();
+        // SAFETY: every field but the seat store is a raw pointer, a C
+        // struct or a `Listener`, all valid zeroed; the store is written
+        // before the value is assumed initialised.
+        unsafe {
+            std::ptr::write(std::ptr::addr_of_mut!((*im.as_mut_ptr()).seats), crate::seat::Seats::new());
+            im.assume_init()
+        }
     }
 }
 
@@ -52,7 +59,6 @@ impl InputManager {
         self.server = server;
         let wl_server = (*server).wl_server;
 
-        ffi::wl_list_init(&mut self.seats);
         ffi::wl_list_init(&mut self.devices);
         ffi::wl_list_init(&mut self.objects);
 
@@ -167,14 +173,11 @@ impl InputManager {
 
         // Destroy all seats
         log::info!("[deinit] destroying seats");
-        let seats_head = &mut self.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr_seat = (*seats_head).next;
-        while curr_seat != seats_head {
-            let next_seat = (*curr_seat).next;
-            let seat = crate::container_of!(curr_seat, Seat, link);
-            log::info!("[deinit] calling Seat::destroy for {:?}", (*seat).wlr_seat);
-            Seat::destroy(seat);
-            curr_seat = next_seat;
+        for id in self.seats.ids() {
+            if let Some(seat) = self.seats.take(id) {
+                log::info!("[deinit] calling Seat::destroy for {:?}", seat.wlr_seat);
+                Seat::destroy(seat);
+            }
         }
         self.default_seat = std::ptr::null_mut();
         log::info!("[deinit] seats destroyed");
@@ -306,19 +309,9 @@ unsafe extern "C" fn input_manager_create_seat(
     let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
 
     // Check if seat already exists
-    let seats_head = &mut (*im).seats as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*seats_head).next;
-    let mut exists = false;
-    while curr != seats_head {
-        let next = (*curr).next;
-        let seat = crate::container_of!(curr, Seat, link);
-        let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
-        if seat_name == name_str {
-            exists = true;
-            break;
-        }
-        curr = next;
-    }
+    let exists = (*im).seats.values().any(|seat| {
+        std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name(seat.wlr_seat)).to_string_lossy() == name_str
+    });
 
     if !exists {
         let server = (*im).server;
@@ -345,20 +338,14 @@ unsafe extern "C" fn input_manager_destroy_seat(
         return;
     }
 
-    let seats_head = &mut (*im).seats as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*seats_head).next;
     // Skip default seat (which is the first seat in the list)
-    curr = (*curr).next;
-    while curr != seats_head {
-        let next = (*curr).next;
-        let seat = crate::container_of!(curr, Seat, link);
+    for seat in (*im).seats.ptrs().into_iter().skip(1) {
         let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
         if seat_name == name_str {
             (*seat).destroying = true;
             crate::shared::pending().dirty_windowing();
             break;
         }
-        curr = next;
     }
 }
 
@@ -457,12 +444,7 @@ unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener
 unsafe extern "C" fn handle_pointer_refresh_idle(data: *mut std::ffi::c_void) {
     let manager = data as *mut InputManager;
     (*manager).pointer_refresh_idle = std::ptr::null_mut();
-    let seats_head = &mut (*manager).seats as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*seats_head).next;
-    while curr != seats_head {
-        let next = (*curr).next;
-        let seat = crate::container_of!(curr, Seat, link);
+    for seat in (*manager).seats.ptrs() {
         (*seat).cursor.refresh_after_scene_change(&mut *crate::reentry::wm((*seat).server));
-        curr = next;
     }
 }

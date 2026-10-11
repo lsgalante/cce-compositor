@@ -1561,13 +1561,8 @@ impl Window {
             // would be unreachable-by-click and unswitchable-away for
             // keyboard input).
             if should_focus && !is_grid {
-                let seats = &mut (*server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-                let mut curr = (*seats).next;
-                while curr != seats {
-                    let next = (*curr).next;
-                    let seat = crate::container_of!(curr, crate::seat::Seat, link);
+                for seat in (*server).input_manager.seats.ptrs() {
                     (*seat).focus(wm, crate::seat::Focus::Window(id));
-                    curr = next;
                 }
             }
         }
@@ -1688,11 +1683,7 @@ impl Window {
             _ => unreachable!(),
         }
 
-        let seats = &mut (*this.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*seats).next;
-        while curr != seats {
-            let next = (*curr).next;
-            let seat = crate::container_of!(curr, crate::seat::Seat, link);
+        for seat in (*this.server).input_manager.seats.ptrs() {
             if (*seat).focused == crate::seat::Focus::Window(id) {
                 (*seat).focus(wm, crate::seat::Focus::None);
                 wm.focus_next_visible_window(seat);
@@ -1702,7 +1693,6 @@ impl Window {
                     (*seat).op = None;
                 }
             }
-            curr = next;
         }
 
         let this = window_mut!(wm, id);
@@ -1763,10 +1753,7 @@ impl Window {
 
     /// Is a pointer resize op on this window still in progress on any seat?
     pub unsafe fn resize_op_active(&self) -> bool {
-        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr_seat = (*seats_list).next;
-        while curr_seat != seats_list {
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if let Some(ref op) = (*seat).op {
                 if op.window == Some(self.id()) {
                     if let crate::seat::PointerOpType::Resize { .. } = op.op_type {
@@ -1774,7 +1761,6 @@ impl Window {
                     }
                 }
             }
-            curr_seat = (*curr_seat).next;
         }
         false
     }

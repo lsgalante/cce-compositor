@@ -90,14 +90,10 @@ impl Window {
     /// field is a configure-time snapshot, not live state, so live answers
     /// come from the seats.
     pub unsafe fn is_seat_focused(&self) -> bool {
-        let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*seats).next;
-        while curr != seats {
-            let seat = crate::container_of!(curr, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if (*seat).focused == crate::seat::Focus::Window(self.id()) {
                 return true;
             }
-            curr = (*curr).next;
         }
         false
     }
@@ -115,14 +111,10 @@ impl Window {
     /// cannot be drawn on one window and grabbed on another.
     pub unsafe fn is_adjust_target(&self) -> bool {
         let me = Some(self.id());
-        let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*seats).next;
-        while curr != seats {
-            let seat = crate::container_of!(curr, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if (*seat).cursor.adjust_hover == me {
                 return true;
             }
-            curr = (*curr).next;
         }
         false
     }

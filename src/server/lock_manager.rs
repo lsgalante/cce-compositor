@@ -210,13 +210,8 @@ impl LockManager {
         scene.locked_tree.set_enabled(true);
         scene.normal_tree.set_enabled(false);
 
-        let seats_head = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*seats_head).next;
-        while curr != seats_head {
-            let next = (*curr).next;
-            let seat = crate::container_of!(curr, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             (*seat).focus(wm, Focus::None);
-            curr = next;
         }
 
         // Each enabled output reports `Blanked` after its next frame, and the
@@ -365,18 +360,13 @@ impl LockSurface {
         }
 
         let server = (*(*lock_surface).manager).server;
-        let seats_head = &mut (*server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*seats_head).next;
-        while curr != seats_head {
-            let next = (*curr).next;
-            let seat = crate::container_of!(curr, crate::seat::Seat, link);
+        for seat in (*server).input_manager.seats.ptrs() {
             if let Focus::LockSurface(focused_surf) = (*seat).focused {
                 if focused_surf == lock_surface {
                     (*seat).focus(wm, new_focus);
                 }
             }
             (*seat).cursor.update_state(wm);
-            curr = next;
         }
 
         if !(*lock_surface).idle_update_focus.is_null() {
@@ -494,13 +484,8 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
 
         manager.lock_surfaces_timer.arm(200);
 
-        let seats_head = &mut (*manager.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*seats_head).next;
-        while curr != seats_head {
-            let next = (*curr).next;
-            let seat = crate::container_of!(curr, crate::seat::Seat, link);
+        for seat in (*manager.server).input_manager.seats.ptrs() {
             (*seat).focus(&mut *crate::reentry::wm((*seat).server), Focus::None);
-            curr = next;
         }
     } else {
         if manager.state == LockState::Locked {
@@ -532,13 +517,8 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
     crate::shared::scene().normal_tree.set_enabled(true);
     crate::shared::scene().locked_tree.set_enabled(false);
 
-    let seats_head = &mut (*manager.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*seats_head).next;
-    while curr != seats_head {
-        let next = (*curr).next;
-        let seat = crate::container_of!(curr, crate::seat::Seat, link);
+    for seat in (*manager.server).input_manager.seats.ptrs() {
         (*seat).focus(&mut *crate::reentry::wm((*seat).server), Focus::None);
-        curr = next;
     }
 
     handle_destroy(manager.destroy.as_ptr(), std::ptr::null_mut());
@@ -594,16 +574,11 @@ unsafe extern "C" fn update_focus(data: *mut std::ffi::c_void) {
     let manager = (*lock_surface).manager;
     let wm = &mut *crate::reentry::wm((*manager).server);
 
-    let seats_head = &mut (*(*manager).server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*seats_head).next;
-    while curr != seats_head {
-        let next = (*curr).next;
-        let seat = crate::container_of!(curr, crate::seat::Seat, link);
+    for seat in (*(*manager).server).input_manager.seats.ptrs() {
         if !matches!((*seat).focused, Focus::LockSurface(s) if s == lock_surface) {
             (*seat).focus(wm, Focus::LockSurface(lock_surface));
         }
         (*seat).cursor.update_state(wm);
-        curr = next;
     }
 
     (*lock_surface).idle_update_focus = std::ptr::null_mut();

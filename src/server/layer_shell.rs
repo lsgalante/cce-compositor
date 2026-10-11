@@ -6,7 +6,6 @@ use crate::ffi;
 use crate::server::{Server, WlList};
 use crate::slotmap::{SlotMap, Key};
 use crate::output::Output;
-use crate::seat::Seat;
 use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
 use crate::xdg_popup::XdgPopup;
 
@@ -69,17 +68,12 @@ impl LayerShell {
             }
         }
 
-        let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*seats).next;
-        while curr != seats {
-            let next = (*curr).next;
-            let seat = crate::container_of!(curr, Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if !to_focus.is_null() {
                 (*seat).layer_shell.scheduled_focus = LayerShellSeatFocus::Exclusive((*to_focus).ref_key);
             } else if matches!((*seat).layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_)) {
                 (*seat).layer_shell.scheduled_focus = LayerShellSeatFocus::None;
             }
-            curr = next;
         }
     }
 }
@@ -339,28 +333,16 @@ impl LayerSurface {
 
 unsafe fn update_scheduled_focus_and_dirty_windowing<F>(server: *mut Server, f: F)
 where F: FnOnce() {
-    let seats = &mut (*server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*seats).next;
-    let mut old_focuses = Vec::new();
-    while curr != seats {
-        let seat = crate::container_of!(curr, Seat, link);
-        old_focuses.push((*seat).layer_shell.scheduled_focus);
-        curr = (*curr).next;
-    }
+    let old_focuses: Vec<_> = (*server).input_manager.seats.values().map(|seat| seat.layer_shell.scheduled_focus).collect();
 
     f();
 
-    let mut changed = false;
-    let mut curr = (*seats).next;
-    let mut idx = 0;
-    while curr != seats {
-        let seat = crate::container_of!(curr, Seat, link);
-        if (*seat).layer_shell.scheduled_focus != old_focuses[idx] {
-            changed = true;
-        }
-        idx += 1;
-        curr = (*curr).next;
-    }
+    let changed = (*server)
+        .input_manager
+        .seats
+        .values()
+        .zip(&old_focuses)
+        .any(|(seat, old)| seat.layer_shell.scheduled_focus != *old);
 
     if changed {
         crate::shared::pending().dirty_windowing();
@@ -393,15 +375,10 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
 
     update_scheduled_focus_and_dirty_windowing(server, || {
         if (*wlr_layer_surface).current.keyboard_interactive == ffi::zwlr_layer_surface_v1_keyboard_interactivity_ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND {
-            let seats = &mut (*server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-            let mut curr = (*seats).next;
-            while curr != seats {
-                let next = (*curr).next;
-                let seat = crate::container_of!(curr, Seat, link);
+            for seat in (*server).input_manager.seats.ptrs() {
                 if !matches!((*seat).layer_shell.scheduled_focus, LayerShellSeatFocus::Exclusive(_)) {
                     (*seat).layer_shell.scheduled_focus = LayerShellSeatFocus::NonExclusive((*layer_surface).ref_key);
                 }
-                curr = next;
             }
         }
 
@@ -427,11 +404,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
     let server = (*layer_surface).server;
 
     update_scheduled_focus_and_dirty_windowing(server, || {
-        let seats = &mut (*server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*seats).next;
-        while curr != seats {
-            let next = (*curr).next;
-            let seat = crate::container_of!(curr, Seat, link);
+        for seat in (*server).input_manager.seats.ptrs() {
             if let crate::seat::Focus::LayerSurface(surface) = (*seat).focused {
                 if surface == (*wlr_layer_surface).surface {
                     let wm = &mut *crate::reentry::wm((*seat).server);
@@ -481,7 +454,6 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                     (*seat).layer_shell.scheduled_focus = LayerShellSeatFocus::None;
                 }
             }
-            curr = next;
         }
 
         let wlr_output = (*wlr_layer_surface).output;

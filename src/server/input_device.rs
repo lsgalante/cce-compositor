@@ -350,20 +350,15 @@ unsafe extern "C" fn input_device_assign_to_seat(
         return;
     }
     let server = (*(*device).seat).server;
-    let seats_head = &mut (*server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*seats_head).next;
     let mut found = false;
     let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
-    while curr != seats_head {
-        let next = (*curr).next;
-        let seat = crate::container_of!(curr, Seat, link);
+    for seat in (*server).input_manager.seats.ptrs() {
         let seat_name = std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name((*seat).wlr_seat)).to_string_lossy();
         if seat_name == name_str {
             (*device).assign_to_seat(&mut *crate::reentry::wm(server), seat);
             found = true;
             break;
         }
-        curr = next;
     }
     if !found {
         log::info!("client requested input device be assigned to non-existent seat '{}'", name_str);

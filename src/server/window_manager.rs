@@ -1143,10 +1143,7 @@ impl WindowManager {
 
     pub unsafe fn get_active_resize_dimensions(&self, win_ptr: &Window) -> Option<(u32, u32)> {
         crate::wm_scope!();
-        let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
-        let mut curr_seat = (*seats_list).next;
-        while curr_seat != seats_list {
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if let Some(ref op) = (*seat).op {
                 if op.window == Some(win_ptr.id()) {
                     if let crate::seat::PointerOpType::Resize { edges } = op.op_type {
@@ -1156,17 +1153,13 @@ impl WindowManager {
                     }
                 }
             }
-            curr_seat = (*curr_seat).next;
         }
         None
     }
 
     pub unsafe fn is_window_being_moved(&self, id: crate::window::WindowId) -> bool {
         crate::wm_scope!();
-        let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
-        let mut curr_seat = (*seats_list).next;
-        while curr_seat != seats_list {
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if let Some(ref op) = (*seat).op {
                 if op.window == Some(id) {
                     if let crate::seat::PointerOpType::Move = op.op_type {
@@ -1185,7 +1178,6 @@ impl WindowManager {
                     }
                 }
             }
-            curr_seat = (*curr_seat).next;
         }
         false
     }
@@ -1236,18 +1228,13 @@ impl WindowManager {
         }
 
         let mut focused_window: Option<crate::window::WindowId> = None;
-        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr_seat = (*seats_list).next;
-        while curr_seat != seats_list {
-            let next_seat = (*curr_seat).next;
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if let crate::seat::Focus::Window(id) = (*seat).focused {
                 if self.windows.contains(id) {
                     focused_window = Some(id);
                     break;
                 }
             }
-            curr_seat = next_seat;
         }
 
         // Snapshot outputs and windows into plain data, compute the whole
@@ -1548,11 +1535,7 @@ impl WindowManager {
         }
 
         // If the focused window is no longer visible, refocus
-        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr_seat = (*seats_list).next;
-        while curr_seat != seats_list {
-            let next_seat = (*curr_seat).next;
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             let mut focused_visible = false;
             match (*seat).focused {
                 crate::seat::Focus::Window(id) => {
@@ -1570,7 +1553,6 @@ impl WindowManager {
             if !focused_visible {
                 self.focus_next_visible_window(seat);
             }
-            curr_seat = next_seat;
         }
 
         self.update_status();
@@ -1763,13 +1745,8 @@ impl WindowManager {
         }
 
         // Re-evaluate cursor focus/hover since windows have moved relative to pointers
-        let seats = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr_seat = (*seats).next;
-        while curr_seat != seats {
-            let next_seat = (*curr_seat).next;
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             (*seat).cursor.update_hovered();
-            curr_seat = next_seat;
         }
     }
 
@@ -1832,10 +1809,7 @@ impl WindowManager {
     /// restore.)
     pub unsafe fn focused_window(&self) -> Option<crate::window::WindowId> {
         crate::wm_scope!();
-        let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
-        let mut curr_seat = (*seats_list).next;
-        while curr_seat != seats_list {
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if let crate::seat::Focus::Window(id) = (*seat).focused {
                 if let Some(w) = self.windows.get(id) {
                     if !w.is_overlay_ui() {
@@ -1844,7 +1818,6 @@ impl WindowManager {
                     break;
                 }
             }
-            curr_seat = (*curr_seat).next;
         }
         // Seat focus is on overlay UI (or nothing): the effective focused
         // window is the most recent real one still on screen.
@@ -1861,14 +1834,10 @@ impl WindowManager {
 
     pub unsafe fn focused_layer_surface(&self) -> *mut ffi::wlr_surface {
         crate::wm_scope!();
-        let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
-        let mut curr_seat = (*seats_list).next;
-        while curr_seat != seats_list {
-            let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if let crate::seat::Focus::LayerSurface(s) = (*seat).focused {
                 return s;
             }
-            curr_seat = (*curr_seat).next;
         }
         std::ptr::null_mut()
     }
@@ -1921,13 +1890,7 @@ impl WindowManager {
 
     pub unsafe fn first_seat(&self) -> Option<*mut crate::seat::Seat> {
         crate::wm_scope!();
-        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let curr_seat = (*seats_list).next;
-        if curr_seat != seats_list {
-            Some(crate::container_of!(curr_seat, crate::seat::Seat, link))
-        } else {
-            None
-        }
+        (*self.server).input_manager.seats.ptrs().first().copied()
     }
 
     pub fn record_focus(&mut self, id: crate::window::WindowId) {

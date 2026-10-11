@@ -545,7 +545,12 @@ output: `first_enabled_ptr()`). `ptrs()` is a copied list of addresses
 for the walks not yet converted to borrows; `values()`, `get` and
 `get_mut` borrow. `PendingScreenshot` names its output by id. The
 applied-outputs list `crate::shared::sent().outputs` is still intrusive
-(`Output::link_sent`). Test two outputs with a copy of `cce-shadow` whose
+(`Output::link_sent`). **Seats likewise** (`input_manager.seats`,
+`crate::seat::Seats`, `seat/store.rs`, by `SeatId`, an index into slots
+that are never reused): a seat a client asked to destroy is taken out by
+the manage pass (`Seat::manage_start` returns true) and handed to
+`Seat::destroy`, which takes the box; the deinit takes each in turn.
+`sent().seats` (`Seat::link_sent`) is still intrusive. Test two outputs with a copy of `cce-shadow` whose
 `WLR_HEADLESS_OUTPUTS=1` reads 2.
 
 **A window function that hands the window manager on takes `(wm, id)`,

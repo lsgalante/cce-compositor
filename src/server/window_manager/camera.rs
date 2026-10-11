@@ -172,16 +172,12 @@ impl WindowManager {
             return;
         }
         self.op_frame_pending = false;
-        let seats_list = &mut (*self.server).input_manager.seats as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*seats_list).next;
-        while curr != seats_list {
-            let seat = crate::container_of!(curr, crate::seat::Seat, link);
+        for seat in (*self.server).input_manager.seats.ptrs() {
             if let Some(ref op) = (*seat).op {
                 if let Some(id) = op.window.filter(|&id| self.windows.get(id).map_or(false, |w| !w.closed)) {
                     Window::manage_finish(self, id);
                 }
             }
-            curr = (*curr).next;
         }
         if matches!(self.state, WindowManagerState::Idle) {
             crate::shared::pending().mark_windowing();

@@ -992,6 +992,7 @@ impl Default for Server {
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.min_sizes), crate::min_sizes::MinSizes::default());
             std::ptr::write(&mut (*server.as_mut_ptr()).layer_shell.surfaces, crate::slotmap::SlotMap::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).om.outputs), crate::output::Outputs::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).input_manager.seats), crate::seat::Seats::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).cce_window_management, crate::cce_window_management::CceWindowManagement::new());
             server.assume_init()
