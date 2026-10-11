@@ -8,15 +8,15 @@ impl WindowManager {
     /// True for windows that should appear in the window switcher: mapped,
     /// non-closed, and not one of the desktop-shell surfaces (status bar,
     /// wallpaper, or the switcher's own cce-cloud overlay).
-    pub(crate) unsafe fn is_switchable_window(&self, w: *mut Window) -> bool {
+    pub(crate) fn is_switchable_window(&self, w: &Window) -> bool {
         crate::wm_scope!();
-        if w.is_null() || (*w).closed {
+        if w.closed {
             return false;
         }
-        if !matches!((*w).state, crate::window::WindowState::Mapped) {
+        if !matches!(w.state, crate::window::WindowState::Mapped) {
             return false;
         }
-        match (*w).get_app_id_string().as_deref() {
+        match w.get_app_id_string().as_deref() {
             Some(id) if id.starts_with("cce-status") => false,
             Some("cce-wallpaper") | Some("cce-cloud") | Some("cce-grid") => false,
             _ => true,
@@ -70,12 +70,12 @@ impl WindowManager {
         // focused window — which is the classic alt-tab default.
         let mut ordered: Vec<*mut Window> = Vec::new();
         for w in self.focus_history.iter().filter_map(|&id| self.window(id)) {
-            if self.is_switchable_window(w) && !ordered.contains(&w) {
+            if self.is_switchable_window(&*w) && !ordered.contains(&w) {
                 ordered.push(w);
             }
         }
         for w in self.windows.iter() {
-            if self.is_switchable_window(w) && !ordered.contains(&w) {
+            if self.is_switchable_window(&*w) && !ordered.contains(&w) {
                 ordered.push(w);
             }
         }

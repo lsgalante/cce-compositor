@@ -137,7 +137,7 @@ impl Window {
             // alone: a fading ring is decoration, never a grab.
             let fading_out = !handles_live && self.border_reveal.iter().any(|&a| a > 0.0);
             let handles_on = (handles_live || fading_out)
-                && window_takes_handles(self_ptr)
+                && window_takes_handles(&*self_ptr)
                 && !is_virtual_border
                 && bw > 0
                 && (cw as f64 * sc) >= 12.0
@@ -191,7 +191,7 @@ impl Window {
             // by the same function the hit test uses. `apply` takes unscaled
             // boxes, so the screen-px layout is divided back out (a px of
             // rounding on an invisible catcher is nothing).
-            let buttons = frame_buttons_value(self_ptr);
+            let buttons = frame_buttons_value(&*self_ptr);
             let (centres, disc_r, live) = handle_disc_layout(
                 cw as f64 * sc,
                 ch as f64 * sc,
@@ -371,15 +371,15 @@ impl Window {
 /// roles that are not user-geometry (Popup, Fullscreen, Status), Utility
 /// (self-sizing by definition — the client owns its size), circular windows
 /// (no rectangular ring to hug), and hidden ones.
-pub unsafe fn window_takes_handles(window: *mut Window) -> bool {
+pub fn window_takes_handles(window: &Window) -> bool {
     !matches!(
-        (*window).tiling_mode,
+        window.tiling_mode,
         crate::tiling::TilingMode::Popup
             | crate::tiling::TilingMode::Fullscreen
             | crate::tiling::TilingMode::Status
             | crate::tiling::TilingMode::Utility
-    ) && !(*window).rendering_requested.circular
-        && !(*window).rendering_requested.hidden
+    ) && !window.rendering_requested.circular
+        && !window.rendering_requested.hidden
 }
 
 /// Does this window get the minimize / maximize / float-tile buttons beside
@@ -388,20 +388,20 @@ pub unsafe fn window_takes_handles(window: *mut Window) -> bool {
 /// dock has no business being minimized or tiled from its chrome. Asked by
 /// `draw_borders` and `cursor::get_border_zone` alike, like
 /// [`window_takes_handles`].
-pub unsafe fn window_takes_buttons(window: *mut Window) -> bool {
+pub fn window_takes_buttons(window: &Window) -> bool {
     window_takes_handles(window)
         && matches!(
-            (*window).tiling_mode,
+            window.tiling_mode,
             crate::tiling::TilingMode::Floating | crate::tiling::TilingMode::Tiled
         )
 }
 
 /// The frame shader's `buttons` value for `window`: 0 none, 1 Floating,
 /// 2 Tiled (the toggle's glyph shows the mode a click goes to).
-pub(crate) unsafe fn frame_buttons_value(window: *mut Window) -> f32 {
+pub(crate) fn frame_buttons_value(window: &Window) -> f32 {
     if !window_takes_buttons(window) {
         0.0
-    } else if (*window).tiling_mode == crate::tiling::TilingMode::Tiled {
+    } else if window.tiling_mode == crate::tiling::TilingMode::Tiled {
         2.0
     } else {
         1.0

@@ -241,7 +241,7 @@ impl WindowManager {
                         self.in_render_list((*w).id()),
                         (*w).tiling_mode,
                         (*w).status_edge,
-                        self.is_window_being_moved(w),
+                        self.is_window_being_moved((*w).id()),
                         (*w).rendering_requested.x,
                         (*w).rendering_requested.y,
                         (*w).box_geom.x,
@@ -625,7 +625,7 @@ impl WindowManager {
                             (*best_target).minimized = false;
                         }
                         (*seat).focus(self, crate::seat::Focus::window(best_target));
-                        self.raise_window(best_target);
+                        self.raise_window((*best_target).id());
                         crate::shared::pending().dirty_windowing();
                         if wait {
                             if let Some(tx) = self.pending_ipc_reply.take() {
@@ -894,7 +894,7 @@ impl WindowManager {
                 if let Some(seat) = self.first_seat() {
                     (*seat).focus(self, crate::seat::Focus::window(target));
                 }
-                self.raise_window(target);
+                self.raise_window((*target).id());
                 crate::shared::pending().dirty_windowing();
 
                 // screen = output_origin + (virtual - desk_pan) * zoom

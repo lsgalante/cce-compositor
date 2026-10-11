@@ -672,7 +672,7 @@ impl Cursor {
             && !(*grabbed).is_status_bar()
             && (*grabbed).tiling_mode == crate::tiling::TilingMode::Floating
         {
-            wm.raise_window(grabbed);
+            wm.raise_window((*grabbed).id());
             crate::shared::pending().dirty_windowing();
         }
     }
@@ -841,7 +841,7 @@ impl Cursor {
                         && (*window).tiling_mode != crate::tiling::TilingMode::Fullscreen
                         && (*window).tiling_mode != crate::tiling::TilingMode::Status
                     {
-                        match get_border_zone(window, lx, ly) {
+                        match get_border_zone(&*window, lx, ly) {
                             BorderZone::Resize(edges) => {
                                 self.set_border_hover(wm, window, Some(border_element_for_edges(edges)));
                                 ffi::wlr_seat_pointer_notify_clear_focus((*self.seat).wlr_seat);
@@ -1415,7 +1415,7 @@ pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowMana
                 }
             }
         }
-        let any_other_expanded = wm.any_expanded_status_segment(target_status);
+        let any_other_expanded = wm.any_expanded_status_segment(crate::window::id_of(target_status));
         if any_other_expanded {
             let except = if target_status.is_null() {
                 "-".to_string()

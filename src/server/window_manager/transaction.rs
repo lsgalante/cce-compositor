@@ -298,8 +298,8 @@ impl WindowManager {
         crate::shared::layout().overlay_behavior.hash(&mut hasher);
         for window in self.render_list() {
             (*window).ref_key.hash(&mut hasher);
-            rendered_fullscreen(window).hash(&mut hasher);
-            fullscreen_on_top(self, window).hash(&mut hasher);
+            rendered_fullscreen(&*window).hash(&mut hasher);
+            fullscreen_on_top(self, &*window).hash(&mut hasher);
             (*window).rendering_requested.circular.hash(&mut hasher);
             (*window).rendering_requested.hidden.hash(&mut hasher);
             (*window).tiling_mode.hash(&mut hasher);
@@ -348,9 +348,9 @@ impl WindowManager {
                         // render-list order, burying whichever windows
                         // happened to map before it.
                         crate::shared::scene().layers.bottom.raw()
-                    } else if fullscreen_on_top(self, window) {
+                    } else if fullscreen_on_top(self, &*window) {
                         crate::shared::scene().layers.fullscreen.raw()
-                    } else if rendered_fullscreen(window) {
+                    } else if rendered_fullscreen(&*window) {
                         // Stepped aside for a focused window (alt-tab
                         // out), or in overview: behind every window
                         // but above the grid, which the pass below
@@ -442,7 +442,7 @@ impl WindowManager {
                 focused_popups = if (*window).is_seat_focused() { window } else { focused_popups };
             }
             if !focused_popups.is_null() {
-                self.raise_focused_popups(focused_popups);
+                self.raise_focused_popups((*focused_popups).id());
             }
         }
 
@@ -454,8 +454,8 @@ impl WindowManager {
                 if !w.is_null()
                     && !(*w).closed
                     && matches!((*w).state, crate::window::WindowState::Mapped)
-                    && rendered_fullscreen(w)
-                    && !fullscreen_on_top(self, w)
+                    && rendered_fullscreen(&*w)
+                    && !fullscreen_on_top(self, &*w)
                 {
                     (*w).tree.raise_to_top();
                     (*w).popup_tree.place_above(&(*w).tree);

@@ -233,7 +233,7 @@ impl WindowManager {
         let rect = marquee.rect();
         let mut picked: Vec<crate::window::WindowId> = Vec::new();
         for w in self.windows.iter() {
-            if !self.selectable(w) {
+            if !self.selectable(&*w) {
                 continue;
             }
             let win = (
@@ -288,12 +288,12 @@ impl WindowManager {
     /// `window` is being destroyed: drop it from the list, so the
     /// `selection` query and the highlight stop counting it. The grid going
     /// away takes its images with it.
-    pub unsafe fn selection_forget(&mut self, window: *mut Window) {
+    pub unsafe fn selection_forget(&mut self, id: crate::window::WindowId) {
         let before = self.selection.windows.len();
-        let id = (*window).id();
         self.selection.windows.retain(|&w| w != id);
         let mut changed = self.selection.windows.len() != before;
-        if (*window).is_grid() && !self.selection.desktop_items.is_empty() {
+        let is_grid = self.windows.get(id).is_some_and(|w| w.is_grid());
+        if is_grid && !self.selection.desktop_items.is_empty() {
             self.selection.desktop_items.clear();
             self.selection.items.clear();
             changed = true;
@@ -306,14 +306,14 @@ impl WindowManager {
     /// Windows the band can pick up, and a group move can carry: the ones
     /// with a place on the desk. The same set the overview displacement
     /// considers (`seat::displace_covered`).
-    pub unsafe fn selectable(&self, w: *mut Window) -> bool {
-        if w.is_null() || (*w).closed || (*w).minimized {
+    pub fn selectable(&self, w: &Window) -> bool {
+        if w.closed || w.minimized {
             return false;
         }
-        if !matches!((*w).state, crate::window::WindowState::Mapped) {
+        if !matches!(w.state, crate::window::WindowState::Mapped) {
             return false;
         }
-        if (*w).is_status_bar() || (*w).is_wallpaper() || (*w).is_grid() {
+        if w.is_status_bar() || w.is_wallpaper() || w.is_grid() {
             return false;
         }
         matches!(
@@ -340,7 +340,7 @@ impl WindowManager {
         // (x, y, width, height, corner radius, fill opacity), layout px.
         let mut wanted: Vec<(i32, i32, i32, i32, i32, f32)> = Vec::new();
         for w in self.selection.windows.iter().filter_map(|&id| self.window(id)) {
-            if !self.selectable(w) || (*w).rendering_requested.hidden {
+            if !self.selectable(&*w) || (*w).rendering_requested.hidden {
                 continue;
             }
             let sc = if (*w).scale > 0.0 { (*w).scale } else { 1.0 };

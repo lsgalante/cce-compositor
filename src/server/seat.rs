@@ -452,7 +452,7 @@ impl Seat {
 
         if !window.is_null() {
             if !window.is_null() && (*window).tiling_mode == crate::tiling::TilingMode::Floating {
-                wm.raise_window(window);
+                wm.raise_window((*window).id());
                 crate::shared::pending().dirty_windowing();
             }
         }
@@ -464,7 +464,7 @@ impl Seat {
             // relative to the window and land off-viewport otherwise. The
             // pan no-ops once the window is fully visible.
             if !window.is_null() {
-                self.focus_follow_pan(wm, window);
+                self.focus_follow_pan(wm, (*window).id());
             }
             return;
         }
@@ -528,7 +528,7 @@ impl Seat {
         wm.arm_border_fade();
         if !window.is_null() {
             if !window.is_null() {
-                wm.record_focus(window);
+                wm.record_focus((*window).id());
                 // Focus decides whether a fullscreen window stays on top
                 // (`Window::fullscreen_yields`); restack whenever one is up,
                 // since not every path to here dirties on its own.
@@ -601,7 +601,7 @@ impl Seat {
                     // open at their control and must not yank the camera).
                     let user_focus = wm.startup_input_seen && !(*window).hint_placed;
                     if !is_new || spawn_pan || user_focus {
-                        self.focus_follow_pan(wm, window);
+                        self.focus_follow_pan(wm, (*window).id());
                     }
                 }
 
@@ -885,7 +885,7 @@ impl Seat {
     /// otherwise. Fullscreen pans back onto the desk spot it covers (see
     /// below); popups/overlays are not desk citizens, so other modes no-op,
     /// as do cce-cloud and windows already fully visible.
-    pub unsafe fn focus_follow_pan(&mut self, wm: &mut crate::window_manager::WindowManager, window: *mut crate::window::Window) {
+    pub unsafe fn focus_follow_pan(&mut self, wm: &mut crate::window_manager::WindowManager, id: crate::window::WindowId) {
         if self.suppress_focus_pan {
             return;
         }
@@ -896,16 +896,17 @@ impl Seat {
         if wm.camera_ramp_anim.is_some() {
             return;
         }
+        let Some(window) = wm.windows.get(id) else { return };
         // A fullscreen window that stepped aside was left on the desk
         // (`WindowManager::place_fullscreen_windows`); focusing it brings
         // the camera back to exactly the spot it covers, so it slides in
         // and lands on its output. Not in overview, where the desk is the
         // point and the camera stays put.
-        if !window.is_null() && (*window).is_fullscreen() {
+        if window.is_fullscreen() {
             if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview {
                 return;
             }
-            if let Some((px, py)) = (*window).fullscreen_anchor_pan(wm) {
+            if let Some((px, py)) = window.fullscreen_anchor_pan(wm) {
                 if (wm.desk_pan_x - px).abs() >= 0.5 || (wm.desk_pan_y - py).abs() >= 0.5 {
                     wm.target_desk_pan_x = Some(px);
                     wm.target_desk_pan_y = Some(py);
@@ -914,9 +915,8 @@ impl Seat {
             }
             return;
         }
-        if window.is_null()
-            || !matches!(
-                (*window).tiling_mode,
+        if !matches!(
+                window.tiling_mode,
                 // Utility included: it pans on the virtual surface like any
                 // floating window, so focusing one off-view should bring it in.
                 crate::tiling::TilingMode::Floating
@@ -926,7 +926,7 @@ impl Seat {
         {
             return;
         }
-        let app_id = (*window).get_app_id_string();
+        let app_id = window.get_app_id_string();
         if app_id.as_ref().map(|id| id == "cce-cloud").unwrap_or(false) {
             return;
         }
@@ -940,8 +940,8 @@ impl Seat {
                     target_output = output;
                 }
                 let wlr_box = (*output).sent.box_layout();
-                let wx = (*window).box_geom.x;
-                let wy = (*window).box_geom.y;
+                let wx = window.box_geom.x;
+                let wy = window.box_geom.y;
                 if wx >= wlr_box.x && wx < wlr_box.x + wlr_box.width
                     && wy >= wlr_box.y && wy < wlr_box.y + wlr_box.height
                 {
@@ -957,17 +957,17 @@ impl Seat {
             let viewport_w = wlr_box.width as f64;
             let viewport_h = wlr_box.height as f64;
 
-            let fw = if (*window).box_geom.width > 0 {
-                (*window).box_geom.width as f64
-            } else if (*window).wm_scheduled.dimensions_hint.min_width > 32 {
-                (*window).wm_scheduled.dimensions_hint.min_width as f64
+            let fw = if window.box_geom.width > 0 {
+                window.box_geom.width as f64
+            } else if window.wm_scheduled.dimensions_hint.min_width > 32 {
+                window.wm_scheduled.dimensions_hint.min_width as f64
             } else {
                 800.0
             };
-            let fh = if (*window).box_geom.height > 0 {
-                (*window).box_geom.height as f64
-            } else if (*window).wm_scheduled.dimensions_hint.min_height > 32 {
-                (*window).wm_scheduled.dimensions_hint.min_height as f64
+            let fh = if window.box_geom.height > 0 {
+                window.box_geom.height as f64
+            } else if window.wm_scheduled.dimensions_hint.min_height > 32 {
+                window.wm_scheduled.dimensions_hint.min_height as f64
             } else {
                 600.0
             };
@@ -985,8 +985,8 @@ impl Seat {
             // `WindowManager::pan_to_virtual_rect` applies it to the
             // non-window rects (restore placeholders) from the same place.
             if let Some(target) = crate::policy::camera::pan_into_view(
-                (*window).virtual_x,
-                (*window).virtual_y,
+                window.virtual_x,
+                window.virtual_y,
                 vw_w,
                 vw_h,
                 cam,
@@ -1066,7 +1066,7 @@ impl Seat {
                     (*win).was_tiled = false;
                     (*win).tiling_mode = crate::tiling::TilingMode::Floating;
                     (*win).mode_locked = true;
-                    wm.raise_window(win);
+                    wm.raise_window((*win).id());
                 }
                 
                 match op.op_type {
@@ -1259,7 +1259,8 @@ impl Seat {
     /// reports the maximized state to its client); landing off-grid makes
     /// it Floating, in place. Only windows resolving Floating/Tiled
     /// participate — Popup/Overlay/Status/Fullscreen are untouched.
-    unsafe fn settle_tiling(&mut self, wm: &mut crate::window_manager::WindowManager, win: *mut crate::window::Window) {
+    fn settle_tiling(&mut self, wm: &mut crate::window_manager::WindowManager, id: crate::window::WindowId) {
+        let Some(win) = wm.windows.get(id) else { return };
         let resolved = wm.get_mode_for_window(win);
         if !matches!(
             resolved,
@@ -1270,30 +1271,31 @@ impl Seat {
         // Unscaled params: alignment classifies the resting geometry, the
         // zoom-aware grab distance is irrelevant.
         let sp = crate::shared::layout().snap_params();
-        let (w, h) = match (*win).wm_requested.dimensions {
+        let (w, h) = match win.wm_requested.dimensions {
             // A just-finished resize may not be acked into box_geom yet;
             // the requested size is what the window is about to become.
             Some(d) => (d.width as f64, d.height as f64),
-            None => ((*win).box_geom.width as f64, (*win).box_geom.height as f64),
+            None => (win.box_geom.width as f64, win.box_geom.height as f64),
         };
         let aligned = crate::policy::snap::is_cell_aligned(
-            (*win).virtual_x,
-            (*win).virtual_y,
+            win.virtual_x,
+            win.virtual_y,
             w,
             h,
             &sp,
             1.0,
         );
+        let Some(win) = wm.windows.get_mut(id) else { return };
         if aligned && resolved != crate::tiling::TilingMode::Tiled {
-            (*win).tiling_mode = crate::tiling::TilingMode::Tiled;
-            (*win).mode_locked = true;
+            win.tiling_mode = crate::tiling::TilingMode::Tiled;
+            win.mode_locked = true;
             crate::shared::pending().dirty_windowing();
         } else if !aligned && resolved == crate::tiling::TilingMode::Tiled {
             // Un-tile in place: clearing was_tiled keeps the arrange Exit
             // transition from restoring the old floating geometry.
-            (*win).was_tiled = false;
-            (*win).tiling_mode = crate::tiling::TilingMode::Floating;
-            (*win).mode_locked = true;
+            win.was_tiled = false;
+            win.tiling_mode = crate::tiling::TilingMode::Floating;
+            win.mode_locked = true;
             crate::shared::pending().dirty_windowing();
         }
     }
@@ -1317,7 +1319,7 @@ impl Seat {
                         crate::shared::pending().dirty_windowing();
                     }
                 }
-                self.settle_tiling(wm, win);
+                self.settle_tiling(wm, (*win).id());
                 // A TAP — press+release without meaningful motion — is a
                 // click, not a drag. A drag never focuses the window it
                 // moves or resizes (the press grabs without focusing), but
@@ -1336,7 +1338,7 @@ impl Seat {
                 let dy = (op.y - op.start_y).abs();
                 if dx < 4 && dy < 4 && !op.started_in_overview && !(*win).is_status_bar() {
                     self.focus(wm, Focus::window(win));
-                    self.focus_follow_pan(wm, win);
+                    self.focus_follow_pan(wm, (*win).id());
                 }
             }
             // The windows a group move carried land by the same rule as
@@ -1345,13 +1347,13 @@ impl Seat {
             let group = std::mem::take(&mut self.group_move);
             for &(id, start_vx, start_vy) in group.iter() {
                 let Some(w) = wm.window(id) else { continue };
-                if w == win || !wm.selectable(w) {
+                if w == win || !wm.selectable(&*w) {
                     continue;
                 }
                 if (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
                     continue;
                 }
-                self.settle_tiling(wm, w);
+                self.settle_tiling(wm, (*w).id());
                 crate::shared::pending().dirty_windowing();
             }
             // The images it carried are the grid's to keep: `drop` is its
@@ -1392,7 +1394,7 @@ unsafe fn carry_group_windows(
 ) {
     for &(id, start_vx, start_vy) in group.iter() {
         let Some(w) = wm.window(id) else { continue };
-        if w == grabbed || !wm.selectable(w) {
+        if w == grabbed || !wm.selectable(&*w) {
             continue;
         }
         if gdx == 0.0 && gdy == 0.0 && (*w).virtual_x == start_vx && (*w).virtual_y == start_vy {
@@ -1404,7 +1406,7 @@ unsafe fn carry_group_windows(
             (*w).was_tiled = false;
             (*w).tiling_mode = crate::tiling::TilingMode::Floating;
             (*w).mode_locked = true;
-            wm.raise_window(w);
+            wm.raise_window((*w).id());
         }
         (*w).virtual_x = start_vx + gdx;
         (*w).virtual_y = start_vy + gdy;
@@ -1494,7 +1496,7 @@ unsafe fn displace_covered(
         if (*w).is_status_bar() || (*w).is_wallpaper() || (*w).is_grid() {
             continue;
         }
-        let mode = wm.get_mode_for_window(w);
+        let mode = wm.get_mode_for_window(&*w);
         if mode != crate::tiling::TilingMode::Floating
             && mode != crate::tiling::TilingMode::Tiled
         {

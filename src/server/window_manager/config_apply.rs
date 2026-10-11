@@ -181,7 +181,7 @@ impl WindowManager {
             if !matches!((*w).state, crate::window::WindowState::Mapped) {
                 continue;
             }
-            if self.get_mode_for_window(w) != crate::tiling::TilingMode::Tiled {
+            if self.get_mode_for_window(&*w) != crate::tiling::TilingMode::Tiled {
                 continue;
             }
             let (nx, ny, nw, nh) = crate::policy::cells::remap_block(

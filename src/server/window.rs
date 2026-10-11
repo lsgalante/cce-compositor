@@ -1368,7 +1368,6 @@ impl Window {
     /// hands the window manager on (focus, the overview pan, placement)
     /// and those reach this window through the store.
     pub unsafe fn map(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> Result<(), &'static str> {
-        let Some(ptr) = wm.windows.ptr(id) else { return Err("window gone before map") };
         let this = window_mut!(wm, id, Err("window gone before map"));
         log::debug!("window '{:?}' mapped", this.get_title());
         if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
@@ -1581,12 +1580,12 @@ impl Window {
                 && !this.is_status_bar()
                 && !this.is_wallpaper()
             {
-                let resolved = wm.get_mode_for_window(ptr);
+                let resolved = wm.get_mode_for_window(window_ref!(wm, id, Err("window gone")));
                 if !matches!(
                     resolved,
                     crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay
                 ) {
-                    wm.pan_overview_to_window(ptr);
+                    wm.pan_overview_to_window(id);
                 }
             }
 
@@ -1747,7 +1746,7 @@ impl Window {
         wm.render_list_remove((*window).id());
 
         wm.remove_from_history((*window).id());
-        wm.selection_forget(window);
+        wm.selection_forget((*window).id());
         // Seats and cursors that still name this window (the adjust target,
         // a group move, the border hover) hold its id, which goes stale with
         // the remove below: nothing there to clear.

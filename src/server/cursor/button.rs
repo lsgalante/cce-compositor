@@ -99,7 +99,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             // clicked, and a grab here would swallow the press the "Done"
             // row needs to leave adjust mode — the one control that ends the
             // mode from the bar would be unreachable while it is on.
-            if !clicked_status.is_null() && !wm.is_expanded_status_segment(clicked_status) {
+            if !clicked_status.is_null() && !wm.is_expanded_status_segment(&*clicked_status) {
                 wm.stop_panning_animation();
                 let cursor_x = (*cursor.wlr_cursor).x;
                 let cursor_y = (*cursor.wlr_cursor).y;
@@ -182,7 +182,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 && !(*clicked_win).is_wallpaper()
                 && !clicked_grid;
             let overview_border_zone = if overview_win_valid {
-                get_border_zone(clicked_win, lx, ly)
+                get_border_zone(&*clicked_win, lx, ly)
             } else {
                 BorderZone::None
             };
@@ -213,7 +213,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                         .windows
                         .iter()
                         .filter_map(|&id| wm.window(id))
-                        .filter(|&w| wm.selectable(w))
+                        .filter(|&w| wm.selectable(&*w))
                         .collect();
                     for w in carried {
                         seat.group_move.push(((*w).id(), (*w).virtual_x, (*w).virtual_y));
@@ -222,7 +222,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                                 tiled_anchor = Some(((*w).virtual_x, (*w).virtual_y));
                             }
                         } else if (*w).tiling_mode == crate::tiling::TilingMode::Floating {
-                            wm.raise_window(w);
+                            wm.raise_window((*w).id());
                         }
                     }
                     let ids: Vec<u64> = wm.selection.items.clone();
@@ -286,12 +286,12 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                         .windows
                         .iter()
                         .filter_map(|&id| wm.window(id))
-                        .filter(|&w| w != clicked_win && wm.selectable(w))
+                        .filter(|&w| w != clicked_win && wm.selectable(&*w))
                         .collect();
                     for w in carried {
                         seat.group_move.push(((*w).id(), (*w).virtual_x, (*w).virtual_y));
                         if (*w).tiling_mode == crate::tiling::TilingMode::Floating {
-                            wm.raise_window(w);
+                            wm.raise_window((*w).id());
                         }
                     }
                     // And the selected desktop images, by the same offset.
@@ -496,7 +496,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                         None
                     }
                     crate::config::Action::Resize => {
-                        let edges = get_closest_edges(target_win, lx, ly);
+                        let edges = get_closest_edges(&*target_win, lx, ly);
                         Some(crate::seat::PointerOpType::Resize { edges })
                     }
                     _ => None,
@@ -561,7 +561,7 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             && (*border_target_win).tiling_mode != crate::tiling::TilingMode::Fullscreen
         ) {
             let initial_mode = (*border_target_win).tiling_mode;
-            let zone = get_border_zone(border_target_win, lx, ly);
+            let zone = get_border_zone(&*border_target_win, lx, ly);
             // The window context menu (`scripts/cce-app-menu`, a cce-cloud
             // popup like the desktop menu and cce-grid's item menu). A
             // right-click on a handle disc opens it in either adjust mode;
@@ -1084,8 +1084,8 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
             if (*event).button == 0x110 {
                 if let Some((id, elem)) = cursor.button_press.take() {
                     let win = wm.window(id).filter(|&w| !(*w).closed);
-                    if let Some(win) = win.filter(|&w| get_border_zone(w, lx, ly) == BorderZone::Button(elem)) {
-                        wm.press_window_button(win, elem);
+                    if let Some(win) = win.filter(|&w| get_border_zone(&*w, lx, ly) == BorderZone::Button(elem)) {
+                        wm.press_window_button((*win).id(), elem);
                     }
                     return;
                 }

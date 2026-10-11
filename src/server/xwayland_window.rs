@@ -256,17 +256,14 @@ pub unsafe fn x11_scale_for_surface(
 /// fullscreen overrides its size and survives Wine's withdrawal of the
 /// state (`handle_request_fullscreen`). Its cursor is NOT exempt — see
 /// `x11_scale_for_surface`.
-pub unsafe fn window_is_hidpi_exempt(window: *const crate::window::Window) -> bool {
-    if window.is_null() {
-        return false;
-    }
-    let crate::window::WindowImpl::Xwayland(xwindow) = (*window).impl_type() else {
+pub unsafe fn window_is_hidpi_exempt(window: &crate::window::Window) -> bool {
+    let crate::window::WindowImpl::Xwayland(xwindow) = window.impl_type() else {
         return false;
     };
     if xwindow.is_null() || (*xwindow).xsurface.is_null() {
         return false;
     }
-    let server = (*window).server;
+    let server = window.server;
     if server.is_null() || !crate::shared::layout().xwayland_hidpi || crate::shared::layout().xwayland_hidpi_except.is_empty() {
         return false;
     }
@@ -641,7 +638,7 @@ impl XwaylandWindow {
     /// `xwayland_hidpi_except` is a fullscreen game by definition.
     pub unsafe fn is_wine_maximize(&mut self) -> bool {
         let xs = self.xsurface;
-        if !(*xs).parent.is_null() || window_is_hidpi_exempt(self.window) {
+        if !(*xs).parent.is_null() || window_is_hidpi_exempt(&*self.window) {
             return false;
         }
         let no_title = (*xs).decorations
@@ -976,7 +973,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     // up. It gets the parented treatment: position and size granted, the
     // virtual origin moved with it. Not while the compositor has it
     // fullscreen or tiled: then the size is the compositor's (below).
-    let exempt_self_placed = !has_parent && !is_fullscreen && !is_tiled && window_is_hidpi_exempt(window);
+    let exempt_self_placed = !has_parent && !is_fullscreen && !is_tiled && window_is_hidpi_exempt(&*window);
     // A shy helper window (`Window::is_shy`) is placed by its app, which
     // moves it to track its main window: position and size granted.
     let shy_self_placed = !has_parent && !is_fullscreen && !is_tiled && (*window).is_shy();
@@ -1316,7 +1313,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
     // set it clears it.
     if !fullscreen
         && (*(*xwindow).window).is_fullscreen()
-        && window_is_hidpi_exempt((*xwindow).window)
+        && window_is_hidpi_exempt(&*(*xwindow).window)
     {
         log::info!("XWayland fullscreen request: ignored — the window is hidpi-exempt and fullscreen by the compositor");
         return;
@@ -1346,7 +1343,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
         return;
     }
     crate::shared::pending().dirty_windowing();
-    (*crate::reentry::wm((*(*xwindow).window).server)).apply_client_fullscreen((*xwindow).window, fullscreen);
+    (*crate::reentry::wm((*(*xwindow).window).server)).apply_client_fullscreen((*(*xwindow).window).id(), fullscreen);
 }
 
 unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

@@ -94,7 +94,7 @@ pub unsafe fn grid_node_info(
 /// `window::handle_disc_layout` places the discs for the hit test here,
 /// the catchers in `draw_borders`, and (mirrored in the frame shader) the
 /// drawing, so the zones and the visuals cannot drift.
-pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f64) -> BorderZone {
+pub unsafe fn get_border_zone(window: &crate::window::Window, lx: f64, ly: f64) -> BorderZone {
     // Overview, or Super held (window-adjust mode): the same ring either way.
     if !crate::shared::window_adjust_active() {
         return BorderZone::None;
@@ -107,11 +107,11 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     // that is not drawn is the failure mode this file keeps warning about.
     // The pointer reaches a window's edge through its body, so the band is
     // live by the time it arrives.
-    if !(*window).is_adjust_target() {
+    if !window.is_adjust_target() {
         return BorderZone::None;
     }
 
-    let bw_unscaled = crate::window::border_band_width((*window).rendering_requested.border.width);
+    let bw_unscaled = crate::window::border_band_width(window.rendering_requested.border.width);
     if bw_unscaled <= 0.0 {
         return BorderZone::None;
     }
@@ -122,8 +122,8 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     // what draw_borders draws: overview is zoomed out, and a handle that
     // shrank with the window would be smallest exactly where it is the only
     // way to resize. Keep the two in step.
-    let scale = if (*window).scale > 0.0 { (*window).scale } else { 1.0 };
-    let geom = (*window).box_geom;
+    let scale = if window.scale > 0.0 { window.scale } else { 1.0 };
+    let geom = window.box_geom;
     let rx = lx - geom.x as f64;
     let ry = ly - geom.y as f64;
     let content_w = geom.width as f64 * scale;
@@ -142,7 +142,7 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     // A client popover (set_popover_region) owns its rect outright: the menu
     // reads as in front of the chrome, so nothing under it may grab. Checked
     // before the discs — it beats them.
-    if let Some(r) = (*window).popover_region {
+    if let Some(r) = window.popover_region {
         let (ex, ey) = (r.x as f64 * scale, r.y as f64 * scale);
         let (ew, eh) = (r.width as f64 * scale, r.height as f64 * scale);
         if rx >= ex && rx < ex + ew && ry >= ey && ry < ey + eh {
@@ -156,7 +156,7 @@ pub unsafe fn get_border_zone(window: *mut crate::window::Window, lx: f64, ly: f
     // discs place against the content radius: the widened root plate
     // radius the corner clip uses, on screen.
     let r_in = crate::window::widen_corner_radius(
-        (*window).root_plate_radius_base(),
+        window.root_plate_radius_base(),
         geom.width,
         geom.height,
     ) as f64;
@@ -240,8 +240,8 @@ pub fn get_resize_cursor_name(edges: crate::window::Edges) -> &'static [u8] {
     }
 }
 
-pub unsafe fn get_closest_edges(window: *mut crate::window::Window, lx: f64, ly: f64) -> crate::window::Edges {
-    let geom = (*window).box_geom;
+pub fn get_closest_edges(window: &crate::window::Window, lx: f64, ly: f64) -> crate::window::Edges {
+    let geom = window.box_geom;
     let rx = lx - geom.x as f64;
     let ry = ly - geom.y as f64;
     let w = geom.width as f64;

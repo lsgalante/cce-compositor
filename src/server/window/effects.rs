@@ -340,7 +340,7 @@ impl Window {
             }
             if !w.is_null()
                 && !(*w).closed
-                && window_takes_handles(w)
+                && window_takes_handles(&*w)
                 && (*w).is_adjust_target()
             {
                 let (tx, ty, tw, th) = on_screen(w);
@@ -387,7 +387,7 @@ impl Window {
         // `color_for` paints the hovered zone in hover_color over the full
         // reveal.
         let all_on = crate::shared::window_adjust_active()
-            && window_takes_handles(self as *mut Window)
+            && window_takes_handles(self)
             && self.is_adjust_target();
         for elem in BorderElement::ALL {
             let i = elem.index();

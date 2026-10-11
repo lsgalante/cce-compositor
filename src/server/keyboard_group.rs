@@ -325,7 +325,7 @@ unsafe fn handle_builtin_binding(wm: &mut crate::window_manager::WindowManager, 
         // bindable/forwardable key, and with nothing expanded this arm never
         // fires at all.
         ffi::XKB_KEY_Escape if modifiers == 0 => {
-            if !wm.any_expanded_status_segment(std::ptr::null_mut()) {
+            if !wm.any_expanded_status_segment(None) {
                 return false;
             }
             log::debug!("Escape dismisses the open status menu");

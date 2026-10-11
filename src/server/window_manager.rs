@@ -918,7 +918,7 @@ impl WindowManager {
             let is_status = app_id.as_deref().map_or(false, |id| id.starts_with("cce-status"));
             let is_wallpaper = app_id.as_deref() == Some("cce-wallpaper");
             let visible = !matches!((*w).state, crate::window::WindowState::Closing | crate::window::WindowState::Init);
-            let resolved_mode = self.get_mode_for_window(w);
+            let resolved_mode = self.get_mode_for_window(&*w);
             let overview_eligible = !(*w).minimized
                 && !is_status
                 && !is_wallpaper
@@ -1061,9 +1061,9 @@ impl WindowManager {
     pub fn sent_outputs_compat(&self) {
         crate::wm_scope!();}
 
-    pub unsafe fn get_rule_for_window(&self, win: *mut Window) -> Option<&crate::config::ModeRule> {
+    pub fn get_rule_for_window(&self, win: &Window) -> Option<&crate::config::ModeRule> {
         crate::wm_scope!();
-        self.rule_for((*win).app_id_str(), (*win).title_str())
+        self.rule_for(win.app_id_str(), win.title_str())
     }
 
     /// The first mode rule matching this app_id and title. Borrowed: the
@@ -1074,21 +1074,21 @@ impl WindowManager {
         self.mode_rules.iter().find(|rule| mode_rule_matches(rule, app_id, title))
     }
 
-    pub unsafe fn get_mode_for_window(&self, win: *mut Window) -> crate::tiling::TilingMode {
+    pub fn get_mode_for_window(&self, win: &Window) -> crate::tiling::TilingMode {
         crate::wm_scope!();
-        self.mode_for_window(win, (*win).app_id_str(), || self.get_rule_for_window(win))
+        self.mode_for_window(win, win.app_id_str(), || self.get_rule_for_window(win))
     }
 
     /// `get_mode_for_window` with the app_id already in hand and the mode
     /// rule asked for only if it is needed.
-    unsafe fn mode_for_window<'a>(
+    fn mode_for_window<'a>(
         &'a self,
-        win: *mut Window,
+        win: &Window,
         app_id: Option<&str>,
         rule: impl FnOnce() -> Option<&'a crate::config::ModeRule>,
     ) -> crate::tiling::TilingMode {
         crate::wm_scope!();
-        if (*win).is_status_bar() {
+        if win.is_status_bar() {
             return crate::tiling::TilingMode::Status;
         }
         if app_id == Some("cce-notifier") || app_id == Some("cce-notification-daemon") || app_id == Some("clear-notification-daemon") {
@@ -1098,7 +1098,7 @@ impl WindowManager {
         // app_id heuristic below: a cce-cloud toplevel that flagged itself a popup
         // sizes itself (dmenu-style) instead of taking the overlay dock's
         // full-height fresh slot.
-        if (*win).tiling_mode == crate::tiling::TilingMode::Popup {
+        if win.tiling_mode == crate::tiling::TilingMode::Popup {
             return crate::tiling::TilingMode::Popup;
         }
         if app_id.map_or(false, |id| id.starts_with("cce-cloud")) {
@@ -1107,11 +1107,11 @@ impl WindowManager {
 
 
 
-        if (*win).mode_locked {
-            return (*win).tiling_mode;
+        if win.mode_locked {
+            return win.tiling_mode;
         }
 
-        if (*win).has_parent {
+        if win.has_parent {
             return crate::tiling::TilingMode::Floating;
         }
 
@@ -1154,18 +1154,18 @@ impl WindowManager {
         )
     }
 
-    pub unsafe fn get_active_resize_dimensions(&self, win_ptr: *mut Window) -> Option<(u32, u32)> {
+    pub unsafe fn get_active_resize_dimensions(&self, win_ptr: &Window) -> Option<(u32, u32)> {
         crate::wm_scope!();
         let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
             if let Some(ref op) = (*seat).op {
-                if op.window == crate::window::id_of(win_ptr) {
+                if op.window == Some(win_ptr.id()) {
                     if let crate::seat::PointerOpType::Resize { edges } = op.op_type {
                         let (new_w, new_h) = self.op_resize_size(op, edges);
                         // Same clamp as the seat op (see its Resize arm).
-                        return Some((*win_ptr).wm_scheduled.dimensions_hint.clamp(new_w, new_h));
+                        return Some(win_ptr.wm_scheduled.dimensions_hint.clamp(new_w, new_h));
                     }
                 }
             }
@@ -1174,14 +1174,14 @@ impl WindowManager {
         None
     }
 
-    pub unsafe fn is_window_being_moved(&self, win_ptr: *mut Window) -> bool {
+    pub unsafe fn is_window_being_moved(&self, id: crate::window::WindowId) -> bool {
         crate::wm_scope!();
         let seats_list = &(*self.server).input_manager.seats as *const ffi::wl_list as *const WlList as *mut WlList;
         let mut curr_seat = (*seats_list).next;
         while curr_seat != seats_list {
             let seat = crate::container_of!(curr_seat, crate::seat::Seat, link);
             if let Some(ref op) = (*seat).op {
-                if op.window == crate::window::id_of(win_ptr) {
+                if op.window == Some(id) {
                     if let crate::seat::PointerOpType::Move = op.op_type {
                         return true;
                     }
@@ -1193,7 +1193,7 @@ impl WindowManager {
                     op.op_type,
                     crate::seat::PointerOpType::Move | crate::seat::PointerOpType::GroupMove
                 ) {
-                    if (*seat).group_move.iter().any(|&(w, _, _)| w == (*win_ptr).id()) {
+                    if (*seat).group_move.iter().any(|&(w, _, _)| w == id) {
                         return true;
                     }
                 }
@@ -1211,14 +1211,16 @@ impl WindowManager {
     /// overview enter still flying) owns the camera, and its mid-flight
     /// sample would give a stale target, so the window is left to land
     /// wherever the flight shows it.
-    pub unsafe fn pan_overview_to_window(&mut self, win: *mut Window) {
+    pub unsafe fn pan_overview_to_window(&mut self, id: crate::window::WindowId) {
         crate::wm_scope!(mut);
-        if win.is_null() || self.camera_ramp_anim.is_some() {
+        if self.camera_ramp_anim.is_some() {
             return;
         }
-        let win_w = if (*win).box_geom.width > 0 { (*win).box_geom.width as f64 } else { 800.0 };
-        let win_h = if (*win).box_geom.height > 0 { (*win).box_geom.height as f64 } else { 600.0 };
-        self.pan_to_virtual_rect((*win).virtual_x, (*win).virtual_y, win_w, win_h);
+        let Some(win) = self.windows.get(id) else { return };
+        let win_w = if win.box_geom.width > 0 { win.box_geom.width as f64 } else { 800.0 };
+        let win_h = if win.box_geom.height > 0 { win.box_geom.height as f64 } else { 600.0 };
+        let (vx, vy) = (win.virtual_x, win.virtual_y);
+        self.pan_to_virtual_rect(vx, vy, win_w, win_h);
     }
 
     pub unsafe fn arrange_views(&mut self) {
@@ -1328,10 +1330,10 @@ impl WindowManager {
                 role: (*win_ptr).role(),
                 minimized: (*win_ptr).minimized,
                 closing_or_init: matches!((*win_ptr).state, crate::window::WindowState::Closing | crate::window::WindowState::Init),
-                mode: self.mode_for_window(win_ptr, app_id, || rule),
+                mode: self.mode_for_window(&*win_ptr, app_id, || rule),
                 status_collapsed_len: (*win_ptr).status_collapsed_len,
                 rule_ssd,
-                being_moved: self.is_window_being_moved(win_ptr),
+                being_moved: self.is_window_being_moved((*win_ptr).id()),
                 status_edge: (*win_ptr).status_edge,
                 is_focused: win_ptr == focused_window,
                 box_geom: crate::policy::api::Rect {
@@ -1345,7 +1347,7 @@ impl WindowManager {
                     (*win_ptr).wm_scheduled.dimensions_hint.min_height as i32,
                 ),
                 virtual_pos: ((*win_ptr).virtual_x, (*win_ptr).virtual_y),
-                active_resize: self.get_active_resize_dimensions(win_ptr),
+                active_resize: self.get_active_resize_dimensions(&*win_ptr),
                 ssd: (*win_ptr).wm_requested.ssd,
                 decorations_size: (*win_ptr).measure_decorations(),
                 was_tiled: (*win_ptr).was_tiled,
@@ -1545,7 +1547,7 @@ impl WindowManager {
                     Window::manage_finish(self, (*win_ptr).id());
                 }
                 if matches!((*win_ptr).state, crate::window::WindowState::Mapped)
-                    && !self.is_window_being_moved(win_ptr)
+                    && !self.is_window_being_moved((*win_ptr).id())
                 {
                     let x = (*win_ptr).rendering_requested.x;
                     let y = (*win_ptr).rendering_requested.y;
@@ -1619,7 +1621,7 @@ impl WindowManager {
             if w.is_null() || (*w).closed {
                 continue;
             }
-            let fullscreen = rendered_fullscreen(w)
+            let fullscreen = rendered_fullscreen(&*w)
                 && (*w).was_fullscreen
                 && matches!((*w).state, crate::window::WindowState::Mapped);
             if !fullscreen {
@@ -1897,24 +1899,23 @@ impl WindowManager {
     /// arrange pass recognizes an expanded segment. Shared by the click-away
     /// dismiss (cursor.rs) and the Escape dismiss (keyboard_group.rs) so the
     /// two triggers can never disagree about what counts as open.
-    pub unsafe fn any_expanded_status_segment(&self, except: *mut crate::window::Window) -> bool {
+    pub fn any_expanded_status_segment(&self, except: Option<crate::window::WindowId>) -> bool {
         crate::wm_scope!();
-        self.windows.iter().any(|w| w != except && self.is_expanded_status_segment(w))
+        self.windows.values().any(|w| Some(w.id()) != except && self.is_expanded_status_segment(w))
     }
 
     /// A mapped status segment thicker than the bar — one whose in-surface
     /// menu is open. The thickness IS the signal: the bar grows its own
     /// surface into the menu and shrinks it back on close.
-    pub unsafe fn is_expanded_status_segment(&self, w: *mut crate::window::Window) -> bool {
+    pub fn is_expanded_status_segment(&self, w: &crate::window::Window) -> bool {
         crate::wm_scope!();
         let bar_h = crate::shared::layout().bar_height;
-        !w.is_null()
-            && !(*w).closed
-            && (*w).is_status_bar()
-            && matches!((*w).state, crate::window::WindowState::Mapped)
+        !w.closed
+            && w.is_status_bar()
+            && matches!(w.state, crate::window::WindowState::Mapped)
             && {
-                let bg = (*w).box_geom;
-                let thickness = match (*w).status_edge {
+                let bg = w.box_geom;
+                let thickness = match w.status_edge {
                     crate::policy::arrange::StatusEdge::Left
                     | crate::policy::arrange::StatusEdge::Right => bg.width,
                     _ => bg.height,
@@ -1946,17 +1947,13 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn record_focus(&mut self, window: *mut Window) {
+    pub fn record_focus(&mut self, id: crate::window::WindowId) {
         crate::wm_scope!(mut);
-        if window.is_null() {
-            return;
-        }
         // Overlay UI never enters the history: it takes input while open but
         // must not displace the real window as "most recently focused".
-        if (*window).is_overlay_ui() {
+        if self.windows.get(id).map_or(true, |w| w.is_overlay_ui()) {
             return;
         }
-        let id = (*window).id();
         self.focus_history.retain(|&w| w != id);
         self.focus_history.insert(0, id);
     }
@@ -2110,21 +2107,19 @@ impl WindowManager {
     /// pass (a restack would otherwise drop the popup back to its window),
     /// and popup creation (opening a menu changes nothing the order hash can
     /// see, so it schedules no transaction at all).
-    pub unsafe fn raise_focused_popups(&mut self, window: *mut Window) {
+    pub unsafe fn raise_focused_popups(&mut self, id: crate::window::WindowId) {
         crate::wm_scope!(mut);
-        if window.is_null() || (*window).popup_tree.is_null() {
-            return;
-        }
-        if !(*window).is_seat_focused() {
+        let Some(window) = self.windows.get(id) else { return };
+        if window.popup_tree.is_null() || !window.is_seat_focused() {
             return;
         }
         let wm_layer = crate::shared::scene().layers.wm.raw();
         if wm_layer.is_null()
-            || ffi::river_scene_node_get_parent((*window).popup_tree.node()) != wm_layer
+            || ffi::river_scene_node_get_parent(window.popup_tree.node()) != wm_layer
         {
             return;
         }
-        (*window).popup_tree.raise_to_top();
+        window.popup_tree.raise_to_top();
     }
 
     pub fn in_render_list(&self, id: crate::window::WindowId) -> bool {
@@ -2154,20 +2149,18 @@ impl WindowManager {
         self.rendering_requested.list.iter().filter_map(|&id| self.window(id)).collect()
     }
 
-    pub unsafe fn raise_window(&mut self, window: *mut Window) {
+    pub unsafe fn raise_window(&mut self, id: crate::window::WindowId) {
         crate::wm_scope!(mut);
-        if window.is_null() {
-            return;
-        }
+        let Some(window) = self.windows.get(id) else { return };
         // A shy helper window stays where its app stacked it: beneath.
-        if (*window).is_shy() {
+        if window.is_shy() {
             return;
         }
         // A window that isn't Mapped stays out of the render list — its
         // linking is manage_start's job, and force-inserting a Closing/Init
         // window here would resurrect it for one frame.
-        let id = (*window).id();
-        if self.in_render_list(id) || matches!((*window).state, crate::window::WindowState::Mapped) {
+        let mapped = matches!(window.state, crate::window::WindowState::Mapped);
+        if self.in_render_list(id) || mapped {
             self.render_list_raise(id);
         }
         self.keep_status_bar_on_top();
@@ -2222,18 +2215,19 @@ impl WindowManager {
     /// zcce_window_v1 event still goes out to a window-manager client as before;
     /// until this, that event was the request's only consumer, and nothing in the
     /// session listens for it, so client fullscreen was silently dropped.
-    pub unsafe fn apply_client_fullscreen(&mut self, win: *mut Window, enter: bool) {
+    pub unsafe fn apply_client_fullscreen(&mut self, id: crate::window::WindowId, enter: bool) {
         crate::wm_scope!(mut);
-        if win.is_null() || (*win).closed || (*win).state != crate::window::WindowState::Mapped {
+        let Some(win) = self.windows.get(id) else { return };
+        if win.closed || win.state != crate::window::WindowState::Mapped {
             return;
         }
-        let is_fullscreen = (*win).tiling_mode == crate::tiling::TilingMode::Fullscreen;
+        let is_fullscreen = win.tiling_mode == crate::tiling::TilingMode::Fullscreen;
         if enter == is_fullscreen {
             return;
         }
-        use crate::policy::api::{Compositor, Policy, WindowId};
+        use crate::policy::api::{Compositor, Policy};
         let mut ctx = self.build_action_ctx();
-        ctx.focused = Some(WindowId((*win).ref_key));
+        ctx.focused = Some(id);
         for cmd in crate::policy::actions::DefaultPolicy.action(&ctx, crate::config::Action::Fullscreen, None) {
             self.apply(&cmd);
         }
@@ -2290,17 +2284,19 @@ impl WindowManager {
     /// window. Maximize is the fullscreen toggle — a Tiled window already
     /// reports xdg maximized here, so the step up from it is fullscreen —
     /// and the toggle flips Floating and Tiled exactly as `set-mode` does.
-    pub unsafe fn press_window_button(&mut self, window: *mut Window, elem: crate::window::BorderElement) {
+    pub unsafe fn press_window_button(&mut self, id: crate::window::WindowId, elem: crate::window::BorderElement) {
         crate::wm_scope!(mut);
-        use crate::policy::api::{Command, Compositor, WindowId};
+        use crate::policy::api::{Command, Compositor};
         use crate::window::BorderElement;
+        let Some(window) = self.windows.get(id) else { return };
         if !crate::window::window_takes_buttons(window) {
             return;
         }
+        let tiled = window.tiling_mode == crate::tiling::TilingMode::Tiled;
         match elem {
             BorderElement::Minimize | BorderElement::Maximize => {
                 if let Some(seat) = self.first_seat() {
-                    (*seat).focus(self, crate::seat::Focus::window(window));
+                    (*seat).focus(self, crate::seat::Focus::Window(id));
                 }
                 let action = if elem == BorderElement::Minimize {
                     crate::config::Action::Minimize
@@ -2310,12 +2306,11 @@ impl WindowManager {
                 self.execute_action(&action, None);
             }
             BorderElement::ToggleTile => {
-                let mode = if (*window).tiling_mode == crate::tiling::TilingMode::Tiled {
+                let mode = if tiled {
                     crate::tiling::TilingMode::Floating
                 } else {
                     crate::tiling::TilingMode::Tiled
                 };
-                let id = WindowId((*window).ref_key);
                 self.apply(&Command::SetWindowMode { id, mode, locked: true });
                 self.apply(&Command::Relayout);
             }
@@ -2599,8 +2594,8 @@ unsafe extern "C" fn handle_stream_timer(data: *mut std::ffi::c_void) -> std::os
     0
 }
 
-unsafe fn rendered_fullscreen(window: *mut Window) -> bool {
-    (*window).is_fullscreen() && !(*window).rendering_requested.hidden
+fn rendered_fullscreen(window: &Window) -> bool {
+    window.is_fullscreen() && !window.rendering_requested.hidden
 }
 
 /// A fullscreen window that owns the top of the stack: rendered fullscreen,
@@ -2608,10 +2603,10 @@ unsafe fn rendered_fullscreen(window: *mut Window) -> bool {
 /// not in overview — where it is a slab on the desk like a stepped-aside
 /// one (`place_fullscreen_windows`) and stacks behind every window with
 /// it, so it never hides the windows overview is there to show.
-unsafe fn fullscreen_on_top(wm: &WindowManager, window: *mut Window) -> bool {
+unsafe fn fullscreen_on_top(wm: &WindowManager, window: &Window) -> bool {
     rendered_fullscreen(window)
         && crate::shared::mode() != WindowManagerMode::Overview
-        && !(*window).fullscreen_yields(wm)
+        && !window.fullscreen_yields(wm)
 }
 
 unsafe extern "C" fn handle_clean_exit_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
@@ -2789,7 +2784,7 @@ impl crate::policy::api::Compositor for WindowManager {
                 Command::Raise(id) => {
                     if let Some(win) = self.windows.ptr(id) {
                         if !win.is_null() && !(*win).closed {
-                            self.raise_window(win);
+                            self.raise_window((*win).id());
                         }
                     }
                 }

@@ -453,7 +453,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
             (*window).box_geom.width = new_geometry.width;
             (*window).box_geom.height = new_geometry.height;
         }
-        wm.apply_client_fullscreen(window, true);
+        wm.apply_client_fullscreen((*window).id(), true);
     }
     // Status segments and Utility windows are SELF-sizing: their bounds
     // track their own box, so the committed geometry is adopted as the box.
@@ -502,7 +502,7 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
     // so it schedules no transaction: without this raise a tiled window's
     // menu would stay under the floating plane until some unrelated restack
     // came along. The pass re-applies it from then on.
-    (*crate::reentry::wm((*window).server)).raise_focused_popups(window);
+    (*crate::reentry::wm((*window).server)).raise_focused_popups((*window).id());
 }
 
 unsafe extern "C" fn handle_ack_configure(
@@ -933,7 +933,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
 
     crate::shared::pending().dirty_windowing();
     let enter = ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel);
-    (*crate::reentry::wm((*window).server)).apply_client_fullscreen(window, enter);
+    (*crate::reentry::wm((*window).server)).apply_client_fullscreen((*window).id(), enter);
 }
 
 unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -1157,7 +1157,7 @@ unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_liste
         let mut mode = (*(*decoration).wlr_decoration).requested_mode;
         if mode == ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_NONE {
             let server = (*window).server;
-            let rule_ssd = (*crate::reentry::wm(server)).get_rule_for_window(window).and_then(|r| r.ssd);
+            let rule_ssd = (*crate::reentry::wm(server)).get_rule_for_window(&*window).and_then(|r| r.ssd);
             if let Some(true) = rule_ssd {
                 mode = ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
             } else {

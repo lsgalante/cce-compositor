@@ -7,7 +7,6 @@ use super::*;
 
 impl Window {
     pub unsafe fn try_restore(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
-        let Some(ptr) = wm.windows.ptr(id) else { return };
         let this = window_mut!(wm, id);
         if this.restored {
             return;
@@ -54,7 +53,7 @@ impl Window {
         // so nothing else tries. Where on the desk it was fullscreen is the
         // compositor's to remember, though, not the game's: that alone is
         // taken from its entry (`restore_fullscreen_at`).
-        if crate::xwayland_window::window_is_hidpi_exempt(&*this as *const Window) {
+        if crate::xwayland_window::window_is_hidpi_exempt(this) {
             let app_id = this.get_app_id_string().unwrap_or_default();
             let title = this.get_title_string().unwrap_or_default();
             let program = crate::window_manager::proc_args(this.unreliable_pid()).into_iter().next();
@@ -113,7 +112,7 @@ impl Window {
         // sibling is, at the size it asks for.
         {
             let rule = wm
-                .get_rule_for_window(ptr)
+                .get_rule_for_window(window_ref!(wm, id, ()))
                 .filter(|r| r.title_pattern.is_some())
                 .map(|r| r.over_sibling);
             if let Some(over_sibling) = rule {
@@ -772,12 +771,12 @@ impl Window {
     }
 
     /// The built-in modal list, or a matching `mode_rule` that says `center`.
-    pub(crate) unsafe fn wants_view_center(&self, wm: &crate::window_manager::WindowManager) -> bool {
+    pub(crate) fn wants_view_center(&self, wm: &crate::window_manager::WindowManager) -> bool {
         let app_id = self.get_app_id_string().unwrap_or_default();
         if Self::is_view_centered_modal(&app_id) {
             return true;
         }
-        wm.get_rule_for_window(self as *const Window as *mut Window).map_or(false, |r| r.center)
+        wm.get_rule_for_window(self).map_or(false, |r| r.center)
     }
 
     pub(crate) unsafe fn try_center_on_view(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
