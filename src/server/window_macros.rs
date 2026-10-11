@@ -34,6 +34,16 @@ macro_rules! seat_mut {
     };
 }
 
+/// The cursor of seat `$id`, borrowed from `$wm.seats` as `seat_mut!` does.
+macro_rules! cursor_mut {
+    ($wm:expr, $id:expr) => {
+        cursor_mut!($wm, $id, ())
+    };
+    ($wm:expr, $id:expr, $ret:expr) => {
+        &mut seat_mut!($wm, $id, $ret).cursor
+    };
+}
+
 /// The window manager's output and seat stores as a `crate::ctx::Stores`,
 /// borrowed through their own field places — so it can be taken while a
 /// `window_mut!` borrow of `wm.windows` is live. Unsafe: the borrow is not

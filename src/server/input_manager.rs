@@ -440,6 +440,6 @@ unsafe extern "C" fn handle_pointer_refresh_idle(data: *mut std::ffi::c_void) {
     (*manager).pointer_refresh_idle = std::ptr::null_mut();
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     for seat in wm.seats.ptrs() {
-        (*seat).cursor.refresh_after_scene_change(wm);
+        crate::cursor::Cursor::refresh_after_scene_change(wm, (*seat).cursor.sid);
     }
 }

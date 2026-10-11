@@ -381,7 +381,7 @@ impl LockSurface {
                 }
             }
             if let Some(p) = wm.seats.ptr(seat) {
-                (*p).cursor.update_state(wm);
+                crate::cursor::Cursor::update_state(wm, (*p).cursor.sid);
             }
         }
 
@@ -603,7 +603,7 @@ unsafe extern "C" fn update_focus(data: *mut std::ffi::c_void) {
             crate::seat::Seat::focus(wm, seat, Focus::LockSurface(lock_surface));
         }
         if let Some(p) = wm.seats.ptr(seat) {
-            (*p).cursor.update_state(wm);
+            crate::cursor::Cursor::update_state(wm, (*p).cursor.sid);
         }
     }
 

@@ -61,7 +61,7 @@ impl WindowManager {
         let now = crate::util::msec_timestamp();
         for seat in self.seats.ptrs() {
             if (*seat).op.is_none() {
-                (*seat).cursor.passthrough(self, now);
+                crate::cursor::Cursor::passthrough(self, (*seat).cursor.sid, now);
             }
         }
     }

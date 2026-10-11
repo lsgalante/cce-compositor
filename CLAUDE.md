@@ -669,10 +669,24 @@ beside the window manager is moved out for the call and put back
 (`group_move` / `group_items` / `overview_displaced` around
 `carry_group_windows` and `displace_covered`, which read no seat).
 `op_update` works on a copy of the `Copy` `SeatOp` once it has stored the
-new position. The calls that hand `wm` to a seat's PART still go through
-the seat pointer: `cursor.touch_cancel`, `cursor.op_end_pointer`,
-`relay.focus`, and the cursor's own `wm`-taking methods. The cursor and
-relay inside the seat are the next step.
+new position.
+
+**So does the cursor inside the seat:** every `Cursor` method that took
+`&mut self` beside `&mut wm` (`passthrough`, `op_start_pointer` /
+`op_end_pointer`, `set_border_hover`, the `inject_*` and `touch_*` paths,
+the view-drag / popup-wheel ones, …) is `Cursor::name(wm, sid, ..)`, and
+so are the pointer event handlers `on_motion`, `on_motion_absolute`,
+`on_button`, `on_axis`, `on_swipe_*`, `on_pinch_*`. Inside, `let cursor =
+cursor_mut!(wm, sid);` (or `this`) and `let seat = seat_mut!(wm, sid);` are
+taken where needed and again after each `wm` call. Never hold both: the
+cursor IS a field of the seat; read `seat.cursor` when a statement needs
+both. `Cursor::sid` is the cursor's seat's id (set in `Cursor::init`), and
+the wlroots entry points read only it from the listener
+(`(*container_of!(..)).sid`). Lookups that only need the pointer position
+take it as arguments (`view_drag_target`, `hscroll_shift_target`), and
+`ccectl`'s `for_each_cursor` / `for_each_seat_touch` hand closures a
+`SeatId`. Still on the seat pointer: the input-method relay's `focus`
+(called from `Seat::focus` and `keyboard_enter_or_leave`).
 
 **The render list is a `Vec<WindowId>`** (`wm.rendering_requested.list`,
 bottom of the stack first; since 2026-10-11). It was an intrusive `wl_list`

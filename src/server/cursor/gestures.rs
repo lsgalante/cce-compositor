@@ -32,22 +32,25 @@ pub(crate) fn swipe_focus_vector(binds: &[crate::config::GestureBind], fingers: 
 
 pub(crate) unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let cursor = &mut *crate::container_of!(listener, Cursor, swipe_begin_listener);
+    let sid = (*crate::container_of!(listener, Cursor, swipe_begin_listener)).sid;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    on_swipe_begin(cursor, wm, data, sys);
+    on_swipe_begin(wm, sid, data, sys);
 }
 
 /// `handle_swipe_begin` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
-pub(crate) unsafe fn on_swipe_begin(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+pub(crate) unsafe fn on_swipe_begin(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+    let Some(sptr) = wm.seats.ptr(sid) else { return () };
+    let cptr: *mut Cursor = std::ptr::addr_of_mut!((*sptr).cursor);
+    let _ = cptr;
     let event = data as *mut ffi::wlr_pointer_swipe_begin_event;
 
-    let seat = &mut *cursor.seat;
+    let cursor = cursor_mut!(wm, sid, ());
     let swipe_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
         || cursor.gesture_from_touch;
     if !swipe_enabled {
         return;
     }
-    crate::seat::Seat::handle_activity(wm, seat.id, sys);
+    crate::seat::Seat::handle_activity(wm, sid, sys);
     // A swipe or pinch is deliberate input, like a click or a key: it ends
     // the session-restore settling phase (`WindowManager::startup_input_seen`),
     // so the first focus of a restored window pans to it. Until 2026-09-26
@@ -57,6 +60,7 @@ pub(crate) unsafe fn on_swipe_begin(cursor: &mut Cursor, wm: &mut crate::window_
     // whenever fingers merely rest on the pad.
     wm.startup_input_seen = true;
 
+    let cursor = cursor_mut!(wm, sid, ());
     cursor.gesture_dx = 0.0;
     cursor.gesture_dy = 0.0;
     cursor.gesture_triggered = false;
@@ -68,6 +72,7 @@ pub(crate) unsafe fn on_swipe_begin(cursor: &mut Cursor, wm: &mut crate::window_
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
+        let seat = seat_mut!(wm, sid, ());
         ffi::wlr_pointer_gestures_v1_send_swipe_begin(
             pointer_gestures,
             seat.wlr_seat.ptr(),
@@ -79,22 +84,25 @@ pub(crate) unsafe fn on_swipe_begin(cursor: &mut Cursor, wm: &mut crate::window_
 
 pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let cursor = &mut *crate::container_of!(listener, Cursor, swipe_update_listener);
+    let sid = (*crate::container_of!(listener, Cursor, swipe_update_listener)).sid;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    on_swipe_update(cursor, wm, data, sys);
+    on_swipe_update(wm, sid, data, sys);
 }
 
 /// `handle_swipe_update` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
-pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+pub(crate) unsafe fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+    let Some(sptr) = wm.seats.ptr(sid) else { return () };
+    let cptr: *mut Cursor = std::ptr::addr_of_mut!((*sptr).cursor);
+    let _ = cptr;
     let event = data as *mut ffi::wlr_pointer_swipe_update_event;
 
-    let seat = &mut *cursor.seat;
+    let cursor = cursor_mut!(wm, sid, ());
     let swipe_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
         || cursor.gesture_from_touch;
     if !swipe_enabled {
         return;
     }
-    crate::seat::Seat::handle_activity(wm, seat.id, sys);
+    crate::seat::Seat::handle_activity(wm, sid, sys);
 
     // A step does not end the gesture: the travel restarts from zero at
     // the fire (below), so the fingers can keep going and step focus
@@ -103,6 +111,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
     // (cancelled) end, so they hear nothing more of this swipe. Any other
     // bind (the overview toggle, a spawn) fires once per gesture: after
     // it the swipe is spent and the rest of it is ignored.
+    let cursor = cursor_mut!(wm, sid, ());
     if cursor.swipe_spent {
         return;
     }
@@ -119,6 +128,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
         cursor.gesture_dy
     );
 
+    let seat = seat_mut!(wm, sid, ());
     let wlr_keyboard = seat.wlr_seat.keyboard();
     let modifiers = if !wlr_keyboard.is_null() {
         ffi::wlr_keyboard_get_modifiers(wlr_keyboard) & 0x4d
@@ -132,6 +142,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
     // again rather than running on through the next window. The lean
     // scales with the threshold in force, so it stays a preview of how
     // far the fingers are from the next step.
+    let cursor = cursor_mut!(wm, sid, ());
     let threshold = if cursor.gesture_triggered {
         crate::shared::layout().swipe_repeat_threshold
     } else {
@@ -185,6 +196,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
             !wm.focus_toward_lands(v, &matched_action)
         };
         if dead {
+            let cursor = cursor_mut!(wm, sid, ());
             if cursor.swipe_dead_end != Some(matched_action) {
                 log::info!("Swipe gesture {:?}: no window that way, holding the lean", matched_action);
             }
@@ -201,6 +213,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
 
     if matched_action != crate::config::Action::None {
         log::info!("Swipe gesture matched action: {:?}", matched_action);
+        let cursor = cursor_mut!(wm, sid, ());
         cursor.swipe_dead_end = None;
         // This step's travel, before it restarts below: a focus swipe
         // aims along it (`swipe_focus_vector`).
@@ -238,7 +251,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
             }
             let hovered = hovered.filter(|&id| wm.windows.get(id).is_some_and(|w| !w.is_status_bar() && !w.is_wallpaper()));
             if let Some(id) = hovered {
-                crate::seat::Seat::focus(wm, seat.id, Focus::Window(id));
+                crate::seat::Seat::focus(wm, sid, Focus::Window(id));
             }
         }
 
@@ -273,7 +286,9 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
 
         if first_fire {
             let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
+            let cursor = cursor_mut!(wm, sid, ());
             if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
+                let seat = seat_mut!(wm, sid, ());
                 ffi::wlr_pointer_gestures_v1_send_swipe_end(
                     pointer_gestures,
                     seat.wlr_seat.ptr(),
@@ -302,6 +317,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
         // camera stays put until the bind fires, then jumps (the step's
         // ease is instant then, `advance_camera_animation`). A lean
         // already showing when they were turned off goes back the same way.
+        let cursor = cursor_mut!(wm, sid, ());
         let peek_px = if !cce_core::motion::enabled() {
             0.0
         } else if cursor.gesture_triggered {
@@ -309,6 +325,7 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
         } else {
             crate::shared::layout().swipe_peek_px
         };
+        let cursor = cursor_mut!(wm, sid, ());
         let (dx, dy) = (cursor.gesture_dx, cursor.gesture_dy);
         let want = swipe_lean(dx, dy, navigates, threshold, peek_px, wm.desk_zoom);
         let delta = [want[0] - cursor.swipe_peek[0], want[1] - cursor.swipe_peek[1]];
@@ -325,15 +342,18 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
                 wm.stop_panning_animation();
             }
             wm.queue_pan(delta[0], delta[1]);
+            let cursor = cursor_mut!(wm, sid, ());
             cursor.swipe_peek = want;
         }
     }
 
+    let cursor = cursor_mut!(wm, sid, ());
     if cursor.gesture_triggered {
         return;
     }
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
+        let seat = seat_mut!(wm, sid, ());
         ffi::wlr_pointer_gestures_v1_send_swipe_update(
             pointer_gestures,
             seat.wlr_seat.ptr(),
@@ -346,25 +366,29 @@ pub(crate) unsafe fn on_swipe_update(cursor: &mut Cursor, wm: &mut crate::window
 
 pub(crate) unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let cursor = &mut *crate::container_of!(listener, Cursor, swipe_end_listener);
+    let sid = (*crate::container_of!(listener, Cursor, swipe_end_listener)).sid;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    on_swipe_end(cursor, wm, data, sys);
+    on_swipe_end(wm, sid, data, sys);
 }
 
 /// `handle_swipe_end` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
-pub(crate) unsafe fn on_swipe_end(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+pub(crate) unsafe fn on_swipe_end(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+    let Some(sptr) = wm.seats.ptr(sid) else { return () };
+    let cptr: *mut Cursor = std::ptr::addr_of_mut!((*sptr).cursor);
+    let _ = cptr;
     let event = data as *mut ffi::wlr_pointer_swipe_end_event;
 
-    let seat = &mut *cursor.seat;
+    let cursor = cursor_mut!(wm, sid, ());
     let swipe_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.swipe).unwrap_or(true)
         || cursor.gesture_from_touch;
     if !swipe_enabled {
         return;
     }
-    crate::seat::Seat::handle_activity(wm, seat.id, sys);
+    crate::seat::Seat::handle_activity(wm, sid, sys);
 
     log::info!("handle_swipe_end: cancelled={}", (*event).cancelled);
 
+    let cursor = cursor_mut!(wm, sid, ());
     let fired = std::mem::replace(&mut cursor.gesture_triggered, false);
 
     // Lifted short of a threshold — the first, or the next one after a
@@ -389,7 +413,9 @@ pub(crate) unsafe fn on_swipe_end(cursor: &mut Cursor, wm: &mut crate::window_ma
     }
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
+    let cursor = cursor_mut!(wm, sid, ());
     if !pointer_gestures.is_null() && !cursor.gesture_from_touch {
+        let seat = seat_mut!(wm, sid, ());
         ffi::wlr_pointer_gestures_v1_send_swipe_end(
             pointer_gestures,
             seat.wlr_seat.ptr(),
@@ -448,21 +474,23 @@ pub(crate) unsafe fn run_gesture_action(
 
 pub(crate) unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let cursor = &mut *crate::container_of!(listener, Cursor, pinch_begin_listener);
+    let sid = (*crate::container_of!(listener, Cursor, pinch_begin_listener)).sid;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    on_pinch_begin(cursor, wm, data, sys);
+    on_pinch_begin(wm, sid, data, sys);
 }
 
 /// `handle_pinch_begin` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
-pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+pub(crate) unsafe fn on_pinch_begin(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+    let Some(sptr) = wm.seats.ptr(sid) else { return () };
+    let cptr: *mut Cursor = std::ptr::addr_of_mut!((*sptr).cursor);
+    let _ = cptr;
     let event = data as *mut ffi::wlr_pointer_pinch_begin_event;
 
-    let seat = &mut *cursor.seat;
     let pinch_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
     if !pinch_enabled {
         return;
     }
-    crate::seat::Seat::handle_activity(wm, seat.id, sys);
+    crate::seat::Seat::handle_activity(wm, sid, sys);
     // A swipe or pinch is deliberate input, like a click or a key: it ends
     // the session-restore settling phase (`WindowManager::startup_input_seen`),
     // so the first focus of a restored window pans to it. Until 2026-09-26
@@ -472,6 +500,7 @@ pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_
     // whenever fingers merely rest on the pad.
     wm.startup_input_seen = true;
 
+    let cursor = cursor_mut!(wm, sid, ());
     cursor.gesture_scale = 1.0;
     cursor.gesture_triggered = false;
 
@@ -481,7 +510,9 @@ pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_
     // for the whole gesture. Clients never see a begin, so update/end stay
     // ours too.
     let mut on_background = true;
-    if let Some(result) = crate::shared::scene().at(wm, cursor.x(), cursor.y()) {
+    let cursor = cursor_mut!(wm, sid, ());
+    let (cx, cy) = (cursor.x(), cursor.y());
+    if let Some(result) = crate::shared::scene().at(wm, cx, cy) {
         match result.data {
             SceneNodeDataVal::Window(window_id) => {
                 if let Some(window) = wm.windows.get(window_id) {
@@ -497,18 +528,20 @@ pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_
     }
     if on_background {
         wm.stop_panning_animation();
+        let cursor = cursor_mut!(wm, sid, ());
         cursor.pinch_zoom_active = true;
         cursor.pinch_start_zoom = wm.desk_zoom;
         return;
     }
 
     // A pinch over an app in `touchpad_view_apps` becomes a dolly drag.
-    if cursor.view_drag_pinch_begin(wm) {
+    if crate::cursor::Cursor::view_drag_pinch_begin(wm, sid) {
         return;
     }
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
+        let seat = seat_mut!(wm, sid, ());
         ffi::wlr_pointer_gestures_v1_send_pinch_begin(
             pointer_gestures,
             seat.wlr_seat.ptr(),
@@ -520,22 +553,25 @@ pub(crate) unsafe fn on_pinch_begin(cursor: &mut Cursor, wm: &mut crate::window_
 
 pub(crate) unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let cursor = &mut *crate::container_of!(listener, Cursor, pinch_update_listener);
+    let sid = (*crate::container_of!(listener, Cursor, pinch_update_listener)).sid;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    on_pinch_update(cursor, wm, data, sys);
+    on_pinch_update(wm, sid, data, sys);
 }
 
 /// `handle_pinch_update` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
-pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+pub(crate) unsafe fn on_pinch_update(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+    let Some(sptr) = wm.seats.ptr(sid) else { return () };
+    let cptr: *mut Cursor = std::ptr::addr_of_mut!((*sptr).cursor);
+    let _ = cptr;
     let event = data as *mut ffi::wlr_pointer_pinch_update_event;
 
-    let seat = &mut *cursor.seat;
     let pinch_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
     if !pinch_enabled {
         return;
     }
-    crate::seat::Seat::handle_activity(wm, seat.id, sys);
+    crate::seat::Seat::handle_activity(wm, sid, sys);
 
+    let cursor = cursor_mut!(wm, sid, ());
     if cursor.view_drag_pinch_update((*event).scale) {
         return;
     }
@@ -566,7 +602,9 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
 
     cursor.gesture_scale = (*event).scale;
 
+    let seat = seat_mut!(wm, sid, ());
     let modifiers = gesture_mods(seat);
+    let cursor = cursor_mut!(wm, sid, ());
     let scale = cursor.gesture_scale;
     let bind = gesture_bind("pinch", (*event).fingers, modifiers, |d| pinch_hits(d, scale));
 
@@ -576,6 +614,7 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
 
         let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
         if !pointer_gestures.is_null() {
+            let seat = seat_mut!(wm, sid, ());
             ffi::wlr_pointer_gestures_v1_send_pinch_end(
                 pointer_gestures,
                 seat.wlr_seat.ptr(),
@@ -588,6 +627,7 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
+        let seat = seat_mut!(wm, sid, ());
         ffi::wlr_pointer_gestures_v1_send_pinch_update(
             pointer_gestures,
             seat.wlr_seat.ptr(),
@@ -602,26 +642,29 @@ pub(crate) unsafe fn on_pinch_update(cursor: &mut Cursor, wm: &mut crate::window
 
 pub(crate) unsafe extern "C" fn handle_pinch_end(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let cursor = &mut *crate::container_of!(listener, Cursor, pinch_end_listener);
+    let sid = (*crate::container_of!(listener, Cursor, pinch_end_listener)).sid;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    on_pinch_end(cursor, wm, data, sys);
+    on_pinch_end(wm, sid, data, sys);
 }
 
 /// `handle_pinch_end` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
-pub(crate) unsafe fn on_pinch_end(cursor: &mut Cursor, wm: &mut crate::window_manager::WindowManager, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+pub(crate) unsafe fn on_pinch_end(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
+    let Some(sptr) = wm.seats.ptr(sid) else { return () };
+    let cptr: *mut Cursor = std::ptr::addr_of_mut!((*sptr).cursor);
+    let _ = cptr;
     let event = data as *mut ffi::wlr_pointer_pinch_end_event;
 
-    let seat = &mut *cursor.seat;
     let pinch_enabled = crate::shared::layout().input_config.touchpad.as_ref().and_then(|t| t.gestures.as_ref()).and_then(|g| g.pinch).unwrap_or(true);
     if !pinch_enabled {
         return;
     }
-    crate::seat::Seat::handle_activity(wm, seat.id, sys);
+    crate::seat::Seat::handle_activity(wm, sid, sys);
 
-    if cursor.view_drag_pinch_end(wm) {
+    if crate::cursor::Cursor::view_drag_pinch_end(wm, sid) {
         return;
     }
 
+    let cursor = cursor_mut!(wm, sid, ());
     if cursor.pinch_zoom_active {
         // Camera zoom consumed the whole gesture; clients got no begin, so
         // they get no end. The camera simply stays where the fingers left it.
@@ -636,6 +679,7 @@ pub(crate) unsafe fn on_pinch_end(cursor: &mut Cursor, wm: &mut crate::window_ma
 
     let pointer_gestures = crate::shared::handles().pointer_gestures.ptr();
     if !pointer_gestures.is_null() {
+        let seat = seat_mut!(wm, sid, ());
         ffi::wlr_pointer_gestures_v1_send_pinch_end(
             pointer_gestures,
             seat.wlr_seat.ptr(),

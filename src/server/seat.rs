@@ -348,7 +348,6 @@ impl Seat {
     }
 
     pub unsafe fn detach_device(wm: &mut crate::window_manager::WindowManager, sid: SeatId, device: *mut crate::input_device::InputDevice, sys: &mut crate::ctx::Sys) {
-        let Some(ptr) = wm.seats.ptr(sid) else { return };
         let this = seat_mut!(wm, sid, ());
         ffi::wlr_cursor_detach_input_device(this.cursor.wlr_cursor.ptr(), (*device).wlr_device);
 
@@ -360,7 +359,7 @@ impl Seat {
             if this.touch_devices == 0 && !this.touch_injected {
                 let ids: Vec<i32> = this.cursor.touch_points.keys().copied().collect();
                 for id in ids {
-                    (*ptr).cursor.touch_cancel(wm, id, sys);
+                    crate::cursor::Cursor::touch_cancel(wm, sid, id, sys);
                 }
             }
         }
@@ -1324,7 +1323,6 @@ impl Seat {
     }
 
     pub unsafe fn op_end(wm: &mut crate::window_manager::WindowManager, sid: SeatId) {
-        let Some(ptr) = wm.seats.ptr(sid) else { return };
         let this = seat_mut!(wm, sid, ());
         // Wherever everything sits now is final.
         this.overview_displaced.clear();
@@ -1402,7 +1400,7 @@ impl Seat {
             }
             match op.input {
                 SeatOpInput::Pointer => {
-                    (*ptr).cursor.op_end_pointer(wm);
+                    crate::cursor::Cursor::op_end_pointer(wm, sid);
                 }
             }
         }
@@ -1772,7 +1770,7 @@ unsafe extern "C" fn handle_drag_destroy(
     match seat.drag {
         DragState::None => unreachable!(),
         DragState::Pointer => {
-            seat.cursor.update_state(&mut *crate::reentry::wm(crate::shared::server_ptr()));
+            crate::cursor::Cursor::update_state(&mut *crate::reentry::wm(crate::shared::server_ptr()), seat.cursor.sid);
         }
         DragState::Touch => {}
     }
