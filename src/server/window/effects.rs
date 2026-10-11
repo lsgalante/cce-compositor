@@ -425,14 +425,11 @@ impl Window {
     /// The output a fullscreen window fills: the first enabled output (the
     /// same choice manage/render make).
     pub unsafe fn fullscreen_output(&self) -> *mut crate::output::Output {
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*outputs_list).next;
-        while curr != outputs_list {
-            let out = crate::container_of!(curr, crate::output::Output, link);
+        for output_ptr in (*self.server).om.outputs.ptrs() {
+            let out = output_ptr;
             if (*out).sent.state == crate::output::OutputStateValue::Enabled {
                 return out;
             }
-            curr = (*curr).next;
         }
         std::ptr::null_mut()
     }

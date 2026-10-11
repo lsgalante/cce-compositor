@@ -49,22 +49,18 @@ pub struct OutputManager {
     pub power_manager: *mut ffi::wlr_output_power_manager_v1,
     pub power_manager_set_mode: crate::listener::Listener,
     pub gamma_control_manager: *mut ffi::wlr_gamma_control_manager_v1,
-    pub outputs: ffi::wl_list,
+    pub outputs: crate::output::Outputs,
 }
 
 impl OutputManager {
     /// The layout box `(x, y, w, h)` of every enabled output, as last sent.
     pub unsafe fn enabled_output_boxes(&self) -> Vec<(f64, f64, f64, f64)> {
         let mut boxes = Vec::new();
-        let head = &self.outputs as *const ffi::wl_list as *mut WlList;
-        let mut curr = (*head).next;
-        while curr != head {
-            let output = crate::container_of!(curr, Output, link);
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                let b = (*output).sent.box_layout();
+        for output in self.outputs.values() {
+            if output.sent.state == crate::output::OutputStateValue::Enabled {
+                let b = output.sent.box_layout();
                 boxes.push((b.x as f64, b.y as f64, b.width as f64, b.height as f64));
             }
-            curr = (*curr).next;
         }
         boxes
     }
@@ -109,8 +105,6 @@ impl OutputManager {
             return Err("Failed to create wlr_output_power_manager_v1");
         }
         self.power_manager = power_manager;
-
-        ffi::wl_list_init(&mut self.outputs);
 
         // Add backend new_output listener
         let backend_cast = (*server).backend as *mut crate::server::WlrBackend;
@@ -159,9 +153,8 @@ impl OutputManager {
         let mut rightmost_edge: i32 = 0;
         let mut row_y: i32 = 0;
 
-        let mut link = self.outputs.next;
-        while link != &mut self.outputs as *mut ffi::wl_list {
-            let output = &mut *crate::container_of!(link, Output, link);
+        for output_ptr in self.outputs.ptrs() {
+            let output = &mut *output_ptr;
             if !output.scheduled.auto_layout {
                 let (w, _) = output.scheduled.dimensions();
                 let x = output.scheduled.x + w;
@@ -170,19 +163,16 @@ impl OutputManager {
                     row_y = output.scheduled.y;
                 }
             }
-            link = (*link).next;
         }
 
-        let mut link = self.outputs.next;
-        while link != &mut self.outputs as *mut ffi::wl_list {
-            let output = &mut *crate::container_of!(link, Output, link);
+        for output_ptr in self.outputs.ptrs() {
+            let output = &mut *output_ptr;
             if output.scheduled.auto_layout {
                 output.scheduled.x = rightmost_edge;
                 output.scheduled.y = row_y;
                 let (w, _) = output.scheduled.dimensions();
                 rightmost_edge += w;
             }
-            link = (*link).next;
         }
     }
 
@@ -467,12 +457,10 @@ impl OutputManager {
             return Err("Failed to create configuration v1");
         }
 
-        let mut link = self.outputs.next;
-        while link != &mut self.outputs as *mut ffi::wl_list {
-            let output = &mut *crate::container_of!(link, Output, link);
+        for output_ptr in self.outputs.ptrs() {
+            let output = &mut *output_ptr;
             let wlr_output = output.wlr_output;
             if wlr_output.is_null() {
-                link = (*link).next;
                 continue;
             }
 
@@ -492,7 +480,6 @@ impl OutputManager {
             (*head).state.x = output.current.x;
             (*head).state.y = output.current.y;
 
-            link = (*link).next;
         }
 
         ffi::wlr_output_manager_v1_set_configuration(self.wlr_output_manager, config);
@@ -503,12 +490,10 @@ impl OutputManager {
         let mut max_overlap_area = 0;
         let mut max_overlap_output = std::ptr::null_mut();
 
-        let mut link = self.outputs.next;
-        while link != &mut self.outputs as *mut ffi::wl_list {
-            let output = &mut *crate::container_of!(link, Output, link);
+        for output_ptr in self.outputs.ptrs() {
+            let output = &mut *output_ptr;
             let wlr_output = output.wlr_output;
             if wlr_output.is_null() {
-                link = (*link).next;
                 continue;
             }
 
@@ -516,7 +501,6 @@ impl OutputManager {
             ffi::wlr_output_layout_get_box(self.output_layout, wlr_output, &mut overlap);
             
             if overlap.width <= 0 || overlap.height <= 0 {
-                link = (*link).next;
                 continue;
             }
 
@@ -529,7 +513,6 @@ impl OutputManager {
                 }
             }
 
-            link = (*link).next;
         }
 
         max_overlap_output

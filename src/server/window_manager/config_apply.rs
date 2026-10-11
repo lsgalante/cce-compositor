@@ -210,10 +210,8 @@ impl WindowManager {
             match crate::config::parse_config(&path, self) {
                 Ok(()) => {
                     // Update scales of existing outputs from the newly loaded config
-                    let om_outputs = &mut (*self.server).om.outputs as *mut ffi::wl_list;
-                    let mut link = (*om_outputs).next;
-                    while link != om_outputs {
-                        let output = &mut *crate::container_of!(link, crate::output::Output, link);
+                    for output_ptr in (*self.server).om.outputs.ptrs() {
+                        let output = &mut *output_ptr;
                         let wlr_output = output.wlr_output;
                         if !wlr_output.is_null() {
                             let name_raw = ffi::river_wlr_output_get_name(wlr_output);
@@ -226,7 +224,6 @@ impl WindowManager {
                                 output.scheduled.scale = output_scale;
                             }
                         }
-                        link = (*link).next;
                     }
 
                     self.retile_for_grid_change(old_sp);

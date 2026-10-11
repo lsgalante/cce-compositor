@@ -432,15 +432,11 @@ impl Window {
     /// height)`, the viewport every placement decision is measured against.
     /// Falls back to a 1920x1080 box at the origin before any output is up.
     pub(crate) unsafe fn first_enabled_output_box(&self) -> (f64, f64, f64, f64) {
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-        while curr_out != outputs_list {
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 let b = (*output).sent.box_layout();
                 return (b.x as f64, b.y as f64, b.width as f64, b.height as f64);
             }
-            curr_out = (*curr_out).next;
         }
         (0.0, 0.0, 1920.0, 1080.0)
     }

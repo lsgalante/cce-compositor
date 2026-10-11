@@ -104,10 +104,7 @@ unsafe extern "C" fn handle_new_surface(listener: *mut ffi::wl_listener, data: *
 
     // A layer surface that names no output goes on the first one.
     if (*wlr_layer_surface).output.is_null() {
-        let outputs = &mut (*(*layer_shell).server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let first_node = (*outputs).next;
-        if first_node != outputs {
-            let output = crate::container_of!(first_node, Output, link);
+        if let Some(&output) = (*(*layer_shell).server).om.outputs.ptrs().first() {
             log::info!("layer surface named no output, choosing the first");
             (*wlr_layer_surface).output = (*output).wlr_output;
         } else {
@@ -601,10 +598,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                         let mut output_x = 0;
                         let mut output_y = 0;
                         let mut output_w = 0;
-                        let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                        let mut curr_out = (*outputs_list).next;
-                        while curr_out != outputs_list {
-                            let output = crate::container_of!(curr_out, crate::output::Output, link);
+                        for output in (*server).om.outputs.ptrs() {
                             if (*output).wlr_output == wlr_output {
                                 let wlr_box = (*output).sent.box_layout();
                                 output_x = wlr_box.x;
@@ -612,7 +606,6 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
                                 output_w = wlr_box.width;
                                 break;
                             }
-                            curr_out = (*curr_out).next;
                         }
 
                         let relative_parent_x = px - output_x;

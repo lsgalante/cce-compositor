@@ -98,13 +98,11 @@ impl WindowManager {
         (*self.server).om.auto_layout();
         let mt_auto = mt0.map(|s| s.elapsed().as_micros());
 
-        let outputs = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*outputs).next;
-        while curr != outputs {
-            let next = (*curr).next;
-            let output = crate::container_of!(curr, crate::output::Output, link);
-            (*output).manage_start(self);
-            curr = next;
+        for id in (*self.server).om.outputs.ids() {
+            let Some(output) = (*self.server).om.outputs.ptr(id) else { continue };
+            if (*output).manage_start(self) {
+                drop((*self.server).om.outputs.remove(id));
+            }
         }
 
         let mt_outputs = mt0.map(|s| s.elapsed().as_micros());
@@ -275,15 +273,10 @@ impl WindowManager {
         }
 
         let has_wallpaper = self.windows.values().any(|w| !w.closed && w.is_wallpaper());
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-        while curr_out != outputs_list {
-            let next_out = (*curr_out).next;
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 (*output).background_rect.set_enabled(!has_wallpaper);
             }
-            curr_out = next_out;
         }
 
         self.keep_status_bar_on_top();

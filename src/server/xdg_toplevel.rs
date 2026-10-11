@@ -607,18 +607,11 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         {
             let zoom = crate::policy::background::sanitized_zoom(wm.desk_zoom);
             let (mut ox, mut oy) = (0i32, 0i32);
-            let outputs_list = &(*this.server).om.outputs as *const ffi::wl_list
-                as *mut WlList;
-            let mut curr_out = (*outputs_list).next;
-            while curr_out != outputs_list {
-                let output = crate::container_of!(curr_out, crate::output::Output, link);
-                if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                    let b = (*output).sent.box_layout();
-                    ox = b.x;
-                    oy = b.y;
-                    break;
-                }
-                curr_out = (*curr_out).next;
+            let first = (*this.server).om.outputs.first_enabled_ptr();
+            if !first.is_null() {
+                let b = (*first).sent.box_layout();
+                ox = b.x;
+                oy = b.y;
             }
             if patch.scale > 0.0 {
                 // Rounded like every other virtual->screen placement (the

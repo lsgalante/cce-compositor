@@ -1,5 +1,5 @@
 use crate::ffi;
-use crate::server::{Server, WlList};
+use crate::server::Server;
 use crate::cursor::Cursor;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -899,11 +899,8 @@ impl Seat {
         if app_id.as_ref().map(|id| id == "cce-cloud").unwrap_or(false) {
             return;
         }
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
         let mut target_output: *mut crate::output::Output = std::ptr::null_mut();
-        while curr_out != outputs_list {
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 if target_output.is_null() {
                     target_output = output;
@@ -918,7 +915,6 @@ impl Seat {
                     break;
                 }
             }
-            curr_out = (*curr_out).next;
         }
 
         if !target_output.is_null() {

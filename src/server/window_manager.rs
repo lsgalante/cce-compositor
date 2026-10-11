@@ -708,18 +708,11 @@ impl WindowManager {
     /// placeholders).
     pub unsafe fn pan_to_virtual_rect(&mut self, vx: f64, vy: f64, w: f64, h: f64) {
         crate::wm_scope!(mut);
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-        let mut viewport: Option<ffi::wlr_box> = None;
-        while curr_out != outputs_list {
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                viewport = Some((*output).sent.box_layout());
-                break;
-            }
-            curr_out = (*curr_out).next;
+        let first = (*self.server).om.outputs.first_enabled_ptr();
+        if first.is_null() {
+            return;
         }
-        let Some(viewport) = viewport else { return };
+        let viewport = (*first).sent.box_layout();
         let (vw, vh) = (viewport.width as f64, viewport.height as f64);
         let cam = self.camera();
         if let Some(target) = crate::policy::camera::pan_into_view(vx, vy, w, h, cam, vw, vh) {
@@ -846,10 +839,7 @@ impl WindowManager {
         // First enabled output: the legacy viewport for zooms and View jumps.
         let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
         let (mut first_x, mut first_y) = (0.0, 0.0);
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-        while curr_out != outputs_list {
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 let wlr_box = (*output).sent.box_layout();
                 viewport_w = wlr_box.width as f64;
@@ -858,7 +848,6 @@ impl WindowManager {
                 first_y = wlr_box.y as f64;
                 break;
             }
-            curr_out = (*curr_out).next;
         }
 
         let mut cursor_viewport = Rect {
@@ -1234,18 +1223,13 @@ impl WindowManager {
             }
         }
 
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-
-        let mut active_outputs: Vec<*mut crate::output::Output> = Vec::new();
-        while curr_out != outputs_list {
-            let next_out = (*curr_out).next;
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                active_outputs.push(output);
-            }
-            curr_out = next_out;
-        }
+        let active_outputs: Vec<*mut crate::output::Output> = (*self.server)
+            .om
+            .outputs
+            .ptrs()
+            .into_iter()
+            .filter(|&o| (*o).sent.state == crate::output::OutputStateValue::Enabled)
+            .collect();
 
         if active_outputs.is_empty() {
             return;
@@ -1768,11 +1752,7 @@ impl WindowManager {
         // the seams (stale slivers of the previous zoom level survive — an
         // idle window's old pixels are nobody's damage), so motion forces a
         // full repaint.
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*outputs_list).next;
-        while curr != outputs_list {
-            let next = (*curr).next;
-            let output = crate::container_of!(curr, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 if moved && !(*output).scene_output.is_null() {
                     ffi::river_scene_output_damage_whole((*output).scene_output);
@@ -1780,7 +1760,6 @@ impl WindowManager {
                     ffi::wlr_output_schedule_frame((*output).wlr_output);
                 }
             }
-            curr = next;
         }
 
         // Re-evaluate cursor focus/hover since windows have moved relative to pointers
@@ -1832,11 +1811,7 @@ impl WindowManager {
         }
         // Settling re-enables blur and re-finishes every window; sweep any
         // remaining motion-frame slivers with one full repaint.
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*outputs_list).next;
-        while curr != outputs_list {
-            let next = (*curr).next;
-            let output = crate::container_of!(curr, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 if !(*output).scene_output.is_null() {
                     ffi::river_scene_output_damage_whole((*output).scene_output);
@@ -1844,7 +1819,6 @@ impl WindowManager {
                     ffi::wlr_output_schedule_frame((*output).wlr_output);
                 }
             }
-            curr = next;
         }
     }
 
@@ -2994,15 +2968,10 @@ unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std
 
     if moving {
         (*wm).border_fade_timer.arm(16);
-        let outputs_list = &mut (*(*wm).server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*outputs_list).next;
-        while curr != outputs_list {
-            let next = (*curr).next;
-            let output = crate::container_of!(curr, crate::output::Output, link);
+        for output in (*(*wm).server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 ffi::wlr_output_schedule_frame((*output).wlr_output);
             }
-            curr = next;
         }
     } else {
         (*wm).border_fade_running = false;

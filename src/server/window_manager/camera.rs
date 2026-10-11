@@ -71,14 +71,10 @@ impl WindowManager {
         if self.server.is_null() {
             return best;
         }
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*outputs_list).next;
-        while curr != outputs_list {
-            let output = crate::container_of!(curr, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 best = best.max((*output).current.scale as f64);
             }
-            curr = (*curr).next;
         }
         best
     }
@@ -131,15 +127,10 @@ impl WindowManager {
     /// frame handler). A no-op for an output that already has one pending.
     pub unsafe fn schedule_frame_all_outputs(&mut self) {
         crate::wm_scope!(mut);
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*outputs_list).next;
-        while curr != outputs_list {
-            let next = (*curr).next;
-            let output = crate::container_of!(curr, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 ffi::wlr_output_schedule_frame((*output).wlr_output);
             }
-            curr = next;
         }
     }
 

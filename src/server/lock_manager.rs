@@ -137,11 +137,7 @@ impl LockManager {
         let mut all_outputs_blanked = true;
         let mut all_outputs_rendered_lock_surface = true;
 
-        let outputs_head = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*outputs_head).next;
-        while curr != outputs_head {
-            let next = (*curr).next;
-            let output = crate::container_of!(curr, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             let wlr_output = (*output).wlr_output;
             if !wlr_output.is_null() && ffi::river_wlr_output_get_enabled(wlr_output) {
                 match (*output).lock_render_state {
@@ -158,7 +154,6 @@ impl LockManager {
                     crate::output::LockRenderState::LockSurface => {}
                 }
             }
-            curr = next;
         }
 
         match self.state {
@@ -228,15 +223,10 @@ impl LockManager {
         // last of them completes the lock in `maybe_lock`. With none enabled
         // (the idle timeout darkened them all) there is nothing to wait for,
         // and this call completes it now.
-        let outputs_head = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*outputs_head).next;
-        while curr != outputs_head {
-            let next = (*curr).next;
-            let output = crate::container_of!(curr, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if !(*output).wlr_output.is_null() && ffi::river_wlr_output_get_enabled((*output).wlr_output) {
                 ffi::wlr_output_schedule_frame((*output).wlr_output);
             }
-            curr = next;
         }
         crate::shared::pending().dirty_windowing();
         self.maybe_lock();

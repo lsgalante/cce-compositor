@@ -934,13 +934,10 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                 let mut min_dist = f64::MAX;
                 log::info!("[StatusRelease] Released status window: app_id={}, lx={}, ly={}", app_id, lx, ly);
                 
-                let outputs_list = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                let mut curr_out = (*outputs_list).next;
                 let mut best_output: *mut crate::output::Output = std::ptr::null_mut();
                 let mut min_output_dist = f64::MAX;
                 
-                while curr_out != outputs_list {
-                    let output = crate::container_of!(curr_out, crate::output::Output, link);
+                for output in (*server).om.outputs.ptrs() {
                     if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                         let wlr_box = (*output).sent.box_layout();
                         let ox = wlr_box.x as f64;
@@ -961,7 +958,6 @@ pub(crate) unsafe fn on_button(cursor: &mut Cursor, wm: &mut crate::window_manag
                             best_output = output;
                         }
                     }
-                    curr_out = (*curr_out).next;
                 }
 
                 let mut found_out = false;

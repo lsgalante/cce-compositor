@@ -13,15 +13,11 @@ impl WindowManager {
     pub unsafe fn update_grid_patches(&mut self) {
         crate::wm_scope!(mut);
         let mut out_box: Option<(ffi::wlr_box, f64)> = None;
-        let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-        while curr_out != outputs_list {
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 out_box = Some(((*output).sent.box_layout(), (*output).sent.scale.max(1.0) as f64));
                 break;
             }
-            curr_out = (*curr_out).next;
         }
         let Some((out, out_scale)) = out_box else { return };
         let zoom = crate::policy::background::sanitized_zoom(self.desk_zoom);
@@ -449,15 +445,11 @@ impl WindowManager {
     pub unsafe fn grid_patch_covers_viewport(&self) -> bool {
         crate::wm_scope!();
         let mut out_box: Option<ffi::wlr_box> = None;
-        let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-        while curr_out != outputs_list {
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 out_box = Some((*output).sent.box_layout());
                 break;
             }
-            curr_out = (*curr_out).next;
         }
         let Some(out) = out_box else { return true };
         let zoom = crate::policy::background::sanitized_zoom(self.desk_zoom);

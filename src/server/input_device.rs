@@ -120,11 +120,7 @@ impl InputDevice {
         };
 
         if let Some(name) = output_name {
-            let outputs_head = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
-            let mut curr = (*outputs_head).next;
-            while curr != outputs_head {
-                let next = (*curr).next;
-                let output = crate::container_of!(curr, crate::output::Output, link);
+            for output in (*server).om.outputs.ptrs() {
                 let wlr_output = (*output).wlr_output;
                 if !wlr_output.is_null() {
                     let wlr_name = std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name(wlr_output));
@@ -133,7 +129,6 @@ impl InputDevice {
                         break;
                     }
                 }
-                curr = next;
             }
         }
 

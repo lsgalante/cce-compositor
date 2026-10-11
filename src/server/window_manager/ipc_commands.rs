@@ -413,17 +413,13 @@ impl WindowManager {
                 if let Ok(factor) = parse_finite(parts[1]) {
                     let new_zoom = factor.clamp(0.1, 10.0);
                     let (mut viewport_w, mut viewport_h) = (1920.0, 1080.0);
-                    let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                    let mut curr_out = (*outputs_list).next;
-                    while curr_out != outputs_list {
-                        let output = crate::container_of!(curr_out, crate::output::Output, link);
+                    for output in (*self.server).om.outputs.ptrs() {
                         if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                             let wlr_box = (*output).sent.box_layout();
                             viewport_w = wlr_box.width as f64;
                             viewport_h = wlr_box.height as f64;
                             break;
                         }
-                        curr_out = (*curr_out).next;
                     }
                     let cx = self.desk_pan_x + (viewport_w / 2.0) / self.desk_zoom;
                     let cy = self.desk_pan_y + (viewport_h / 2.0) / self.desk_zoom;
@@ -844,10 +840,7 @@ impl WindowManager {
                 // Enabled output's origin + size (fall back to 1920x1080 @ 0,0).
                 let (mut vp_w, mut vp_h) = (1920.0_f64, 1080.0_f64);
                 let (mut phys_x, mut phys_y) = (0i32, 0i32);
-                let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                let mut curr_out = (*outputs_list).next;
-                while curr_out != outputs_list {
-                    let output = crate::container_of!(curr_out, crate::output::Output, link);
+                for output in (*self.server).om.outputs.ptrs() {
                     if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                         let wlr_box = (*output).sent.box_layout();
                         vp_w = wlr_box.width as f64;
@@ -856,7 +849,6 @@ impl WindowManager {
                         phys_y = wlr_box.y;
                         break;
                     }
-                    curr_out = (*curr_out).next;
                 }
 
                 let w = if target.box_geom.width > 0 { target.box_geom.width as f64 } else { 800.0 };
@@ -923,15 +915,11 @@ impl WindowManager {
 
                         // First enabled output (same walk as center-window).
                         let mut target_out: *mut crate::output::Output = std::ptr::null_mut();
-                        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-                        let mut curr_out = (*outputs_list).next;
-                        while curr_out != outputs_list {
-                            let output = crate::container_of!(curr_out, crate::output::Output, link);
+                        for output in (*self.server).om.outputs.ptrs() {
                             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                                 target_out = output;
                                 break;
                             }
-                            curr_out = (*curr_out).next;
                         }
                         if target_out.is_null() {
                             return "error: no enabled output\n".to_string();
@@ -959,7 +947,7 @@ impl WindowManager {
                         // channel is what tells `handle_ipc_event` not to
                         // answer, so the returned string goes nowhere.
                         self.pending_screenshot = Some(crate::screenshot::PendingScreenshot::new(
-                            target_out,
+                            (*target_out).id,
                             region,
                             path,
                             self.pending_ipc_reply.take(),
@@ -1060,11 +1048,7 @@ impl WindowManager {
                 let as_json = parts.get(1).copied() == Some("--json");
                 let mut out = String::new();
                 let om = &(*self.server).om;
-                let head = &om.outputs as *const ffi::wl_list as *mut ffi::wl_list;
-                let mut link = om.outputs.next;
-                while link != head {
-                    let output = &*crate::container_of!(link, crate::output::Output, link);
-                    link = (*link).next;
+                for output in om.outputs.values() {
                     let wlr_output = output.wlr_output;
                     if wlr_output.is_null() {
                         continue;
@@ -1244,13 +1228,9 @@ impl WindowManager {
                         crate::shared::update_layout(|l| l.background_g = ((parsed_color >> 8) & 0xFF) * 0x01010101);
                         crate::shared::update_layout(|l| l.background_b = (parsed_color & 0xFF) * 0x01010101);
                         unsafe {
-                            let outputs_head = &mut (*self.server).om.outputs as *mut crate::ffi::wl_list as *mut crate::server::WlList;
-                            let mut curr = (*outputs_head).next;
-                            while curr != outputs_head {
-                                let next = (*curr).next;
-                                let output = &mut *crate::container_of!(curr, crate::output::Output, link);
+                            for output_ptr in (*self.server).om.outputs.ptrs() {
+                                let output = &mut *output_ptr;
                                 output.update_background_color();
-                                curr = next;
                             }
                         }
                     }

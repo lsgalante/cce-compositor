@@ -534,6 +534,20 @@ which is what the address-scan liveness checks these replaced
 (`wm.windows.iter().any(|&w| w == p)`) could not rule out. A new holder
 takes an id.
 
+**Outputs have a store too** (since 2026-10-11): `om.outputs` is
+`crate::output::Outputs` (`output/store.rs`), owning every `Output` by
+`OutputId` the way `wm.windows` owns windows. It replaced the intrusive
+`om.outputs` list whose entries freed themselves (`Box::from_raw(self)`)
+from inside `Output::manage_start`; that now returns true for a destroyed
+output and the manage pass removes it from the store. Iteration is in
+creation order, as the list's was (several walks take the first enabled
+output: `first_enabled_ptr()`). `ptrs()` is a copied list of addresses
+for the walks not yet converted to borrows; `values()`, `get` and
+`get_mut` borrow. `PendingScreenshot` names its output by id. The
+applied-outputs list `crate::shared::sent().outputs` is still intrusive
+(`Output::link_sent`). Test two outputs with a copy of `cce-shadow` whose
+`WLR_HEADLESS_OUTPUTS=1` reads 2.
+
 **A window function that hands the window manager on takes `(wm, id)`,
 not `&mut self`** (since 2026-10-11): `Window::map`, `unmap`,
 `set_closing`, `manage_start`, `manage_finish`, `notify_title`,

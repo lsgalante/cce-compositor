@@ -2045,18 +2045,7 @@ impl Window {
         }
 
         let output = if this.is_fullscreen() {
-            let outputs_list = &mut (*this.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-            let mut curr = (*outputs_list).next;
-            let mut found_output = std::ptr::null_mut();
-            while curr != outputs_list {
-                let out = crate::container_of!(curr, crate::output::Output, link);
-                if (*out).sent.state == crate::output::OutputStateValue::Enabled {
-                    found_output = out;
-                    break;
-                }
-                curr = (*curr).next;
-            }
-            found_output
+            (*this.server).om.outputs.first_enabled_ptr()
         } else {
             std::ptr::null_mut()
         };
@@ -2567,18 +2556,7 @@ impl Window {
         let mut content_clip = requested.content_clip;
 
         let output = if self.is_fullscreen() {
-            let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-            let mut curr = (*outputs_list).next;
-            let mut found_output = std::ptr::null_mut();
-            while curr != outputs_list {
-                let out = crate::container_of!(curr, crate::output::Output, link);
-                if (*out).sent.state == crate::output::OutputStateValue::Enabled {
-                    found_output = out;
-                    break;
-                }
-                curr = (*curr).next;
-            }
-            found_output
+            (*self.server).om.outputs.first_enabled_ptr()
         } else {
             std::ptr::null_mut()
         };

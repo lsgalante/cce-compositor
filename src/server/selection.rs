@@ -44,8 +44,6 @@
 //! "nothing here", so a highlight inside the interactive tree would turn a
 //! press on a selected window into a press on the background.
 
-use crate::ffi;
-use crate::server::WlList;
 use crate::window::Window;
 use crate::window_manager::{WindowManager, WindowManagerMode};
 
@@ -150,15 +148,11 @@ impl WindowManager {
     /// Layout box origin of the first enabled output, the one the camera is
     /// measured against (`Window::virtual_to_screen` uses the same).
     unsafe fn selection_output_origin(&self) -> (f64, f64) {
-        let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
-        let mut curr = (*outputs_list).next;
-        while curr != outputs_list {
-            let output = crate::container_of!(curr, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 let b = (*output).sent.box_layout();
                 return (b.x as f64, b.y as f64);
             }
-            curr = (*curr).next;
         }
         (0.0, 0.0)
     }

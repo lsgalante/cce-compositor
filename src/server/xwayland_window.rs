@@ -119,9 +119,7 @@ pub unsafe fn x11_scale(server: *mut crate::server::Server) -> f32 {
         return 1.0;
     }
     let mut current = None;
-    let link = (*server).om.outputs.next;
-    if link != &mut (*server).om.outputs as *mut ffi::wl_list {
-        let output = crate::container_of!(link, crate::output::Output, link);
+    if let Some(&output) = (*server).om.outputs.ptrs().first() {
         let scale = (*output).current.scale;
         if scale > 0.0 {
             current = Some(scale);

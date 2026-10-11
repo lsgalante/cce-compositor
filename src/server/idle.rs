@@ -32,7 +32,7 @@
 
 use crate::ffi;
 use crate::server::{Server};
-use crate::output::{Output, OutputStateValue};
+use crate::output::OutputStateValue;
 
 pub const DEFAULT_SLEEP_COMMAND: &str = "systemctl suspend";
 
@@ -486,12 +486,9 @@ impl IdleManager {
     /// output-power protocol; the next transaction commits it.
     pub unsafe fn set_displays(&mut self, on: bool) {
         let server = &mut *self.server;
-        let head = &mut server.om.outputs as *mut ffi::wl_list;
-        let mut link = (*head).next;
         let mut touched = 0;
-        while link != head {
-            let output = &mut *crate::container_of!(link, Output, link);
-            link = (*link).next;
+        for output_ptr in server.om.outputs.ptrs() {
+            let output = &mut *output_ptr;
             if output.wlr_output.is_null() {
                 continue;
             }

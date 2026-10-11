@@ -2,11 +2,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
+use crate::server::{Server, WlList, wl_list_remove};
 use crate::layer_shell::LayerShellOutput;
 use crate::lock_manager::LockState;
 use crate::util;
 use crate::scene_handle::{SceneBevel, SceneBuffer, SceneRect, SceneTree};
+
+#[path = "output/store.rs"]
+mod store;
+pub use store::Outputs;
+
+/// Names an output in [`Outputs`]. A removed output's id goes stale and
+/// looks up as `None`, never as a later output in the same slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OutputId(pub crate::slotmap::Key);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OutputStateValue {
@@ -154,7 +163,8 @@ pub struct Output {
     pub last_adjust_mode: bool,
     pub layer_shell: LayerShellOutput,
     pub lock_render_state: LockRenderState,
-    pub link: ffi::wl_list,
+    /// This output's id in `om.outputs`, set by `Outputs::insert`.
+    pub id: OutputId,
     pub link_sent: ffi::wl_list,
     pub scheduled: OutputState,
     pub sent: OutputState,
@@ -233,7 +243,10 @@ pub struct Output {
 }
 
 impl Output {
-    pub unsafe fn manage_start(&mut self, wm: &mut crate::window_manager::WindowManager) {
+    /// Apply the scheduled state. Returns true when the output was
+    /// destroyed: the caller takes it out of `om.outputs`, which frees it.
+    #[must_use]
+    pub unsafe fn manage_start(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
         match self.scheduled.state {
             OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
                 assert!(!self.scheduled.mode_none());
@@ -257,17 +270,16 @@ impl Output {
                     // A screenshot parked for this output would never be
                     // taken; dropping it answers the IPC caller with an
                     // error, and no later output at this address inherits it.
-                    if wm.pending_screenshot.as_ref().is_some_and(|s| s.output == self as *mut Output) {
+                    if wm.pending_screenshot.as_ref().is_some_and(|s| s.output == self.id) {
                         wm.pending_screenshot = None;
                     }
 
-                    wl_list_remove(&mut self.link as *mut ffi::wl_list as *mut WlList);
                     wl_list_remove(&mut self.link_sent as *mut ffi::wl_list as *mut WlList);
-
-                    let _ = Box::from_raw(self as *mut Output);
+                    return true;
                 }
             }
         }
+        false
     }
 
     pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, server: *mut Server, wlr_output: *mut ffi::wlr_output) -> Result<(), &'static str> {
@@ -345,7 +357,7 @@ impl Output {
             last_adjust_mode: false,
             layer_shell: LayerShellOutput::default(),
             lock_render_state: LockRenderState::Blanked,
-            link: std::mem::zeroed(),
+            id: OutputId(crate::slotmap::Key { generation: 0, index: u32::MAX }),
             link_sent: std::mem::zeroed(),
             scheduled: initial,
             sent: initial,
@@ -381,13 +393,10 @@ impl Output {
             present: std::mem::zeroed(),
         });
 
-        let raw = Box::into_raw(output);
+        let id = (*server).om.outputs.insert(output);
+        let raw = (*server).om.outputs.ptr(id).ok_or("output gone at creation")?;
         ffi::river_wlr_output_set_data(wlr_output, raw as *mut std::ffi::c_void);
 
-        let list_head = &mut (*server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let link_custom = &mut (*raw).link as *mut ffi::wl_list as *mut WlList;
-        wl_list_insert((*list_head).prev, link_custom);
-        
         ffi::wl_list_init(&mut (*raw).link_sent);
 
         // Add event listeners
@@ -422,7 +431,7 @@ impl Output {
             if wm
                 .pending_screenshot
                 .as_ref()
-                .map(|s| s.output == self as *mut Output)
+                .map(|s| s.output == self.id)
                 .unwrap_or(false)
             {
                 wm.pending_screenshot.take()

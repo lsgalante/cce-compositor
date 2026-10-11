@@ -112,17 +112,13 @@ impl WindowManager {
             return None;
         }
         let (mut out_x, mut out_y) = (0.0, 0.0);
-        let outputs_list = &(*self.server).om.outputs as *const ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-        while curr_out != outputs_list {
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 let wlr_box = (*output).sent.box_layout();
                 out_x = wlr_box.x as f64;
                 out_y = wlr_box.y as f64;
                 break;
             }
-            curr_out = (*curr_out).next;
         }
         let zoom = self.desk_zoom;
         for p in self.restore_placeholders.iter().rev() {
@@ -144,17 +140,13 @@ impl WindowManager {
             return;
         }
         let (mut out_x, mut out_y) = (0, 0);
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-        while curr_out != outputs_list {
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 let wlr_box = (*output).sent.box_layout();
                 out_x = wlr_box.x;
                 out_y = wlr_box.y;
                 break;
             }
-            curr_out = (*curr_out).next;
         }
         let zoom = self.desk_zoom;
         for p in &self.restore_placeholders {

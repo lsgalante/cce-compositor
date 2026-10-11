@@ -49,8 +49,10 @@ const DRM_FORMAT_RGB888: u32 = 0x34324752;
 
 /// A full-output / region capture waiting for the next composited frame.
 pub struct PendingScreenshot {
-    /// The output whose next frame is captured.
-    pub output: *mut crate::output::Output,
+    /// The output whose next frame is captured. An id, so a capture parked
+    /// for an output that is then destroyed cannot be taken by a later
+    /// output allocated at the same address.
+    pub output: crate::output::OutputId,
     /// Crop in output-buffer pixels; `None` captures the whole output.
     pub region: Option<ffi::wlr_box>,
     pub path: PathBuf,
@@ -66,7 +68,7 @@ pub struct PendingScreenshot {
 
 impl PendingScreenshot {
     pub fn new(
-        output: *mut crate::output::Output,
+        output: crate::output::OutputId,
         region: Option<ffi::wlr_box>,
         path: PathBuf,
         reply: Option<Sender<String>>,
@@ -508,7 +510,7 @@ mod tests {
     fn pending_screenshot_answers_exactly_once() {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut shot = PendingScreenshot::new(
-            std::ptr::null_mut(),
+            crate::output::OutputId(crate::slotmap::Key { generation: 0, index: 0 }),
             None,
             PathBuf::from("/tmp/shot.png"),
             Some(tx),
@@ -522,7 +524,7 @@ mod tests {
         // hears an error instead of sitting out its timeout.
         let (tx, rx) = std::sync::mpsc::channel();
         drop(PendingScreenshot::new(
-            std::ptr::null_mut(),
+            crate::output::OutputId(crate::slotmap::Key { generation: 0, index: 0 }),
             None,
             PathBuf::from("/tmp/shot.png"),
             Some(tx),

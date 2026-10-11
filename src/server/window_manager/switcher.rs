@@ -111,10 +111,7 @@ impl WindowManager {
         // -x/-y keeps cce-cloud a layer-shell overlay (omitting both would make
         // it an XDG toplevel, which would not grab keyboard the same way).
         let (mut vp_w, mut origin_x, mut origin_y) = (1920.0_f64, 0i32, 0i32);
-        let outputs_list = &mut (*self.server).om.outputs as *mut ffi::wl_list as *mut WlList;
-        let mut curr_out = (*outputs_list).next;
-        while curr_out != outputs_list {
-            let output = crate::container_of!(curr_out, crate::output::Output, link);
+        for output in (*self.server).om.outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 let wlr_box = (*output).sent.box_layout();
                 vp_w = wlr_box.width as f64;
@@ -122,7 +119,6 @@ impl WindowManager {
                 origin_y = wlr_box.y;
                 break;
             }
-            curr_out = (*curr_out).next;
         }
         // cce-cloud's default logical width is 600; centre it horizontally.
         let x_pos = origin_x + (((vp_w - 600.0) / 2.0).max(0.0)) as i32;

@@ -501,13 +501,9 @@ pub fn parse_config(path: &str, state: &mut crate::window_manager::WindowManager
 
     unsafe {
         if !state.server.is_null() {
-            let outputs_head = &mut (*state.server).om.outputs as *mut crate::ffi::wl_list as *mut crate::server::WlList;
-            let mut curr = (*outputs_head).next;
-            while curr != outputs_head {
-                let next = (*curr).next;
-                let output = &mut *crate::container_of!(curr, crate::output::Output, link);
+            for output_ptr in (*state.server).om.outputs.ptrs() {
+                let output = &mut *output_ptr;
                 output.update_background_color();
-                curr = next;
             }
         }
     }
