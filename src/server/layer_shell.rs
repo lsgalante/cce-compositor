@@ -495,7 +495,7 @@ unsafe fn arrange_output_of(wlr_output: *mut ffi::wlr_output) {
     }
     let output = ffi::river_wlr_output_get_data(wlr_output) as *mut Output;
     if !output.is_null() {
-        (*output).layer_shell.arrange(output);
+        (*output).arrange_layers();
     }
 }
 
@@ -694,7 +694,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
     if wlr.initial_commit() || wlr.committed() != 0 {
         let wm = &mut *crate::reentry::wm(server);
         update_scheduled_focus_and_dirty_windowing(wm, |wm| {
-            (*output).layer_shell.arrange(output);
+            (*output).arrange_layers();
             LayerShell::check_exclusive_focus(&mut wm.seats);
         });
     }
@@ -743,26 +743,34 @@ impl Default for LayerShellOutput {
     }
 }
 
+/// What arranging the layer surfaces reads of their output, copied out so
+/// that the output's `layer_shell` can be borrowed mutably beside it (this
+/// replaced a raw `*mut Output` the methods below dereferenced while a
+/// `&mut` to its `layer_shell` was live).
+#[derive(Clone, Copy)]
+pub struct LayerOutput {
+    /// The scheduled box, layout coordinates.
+    pub scheduled: ffi::wlr_box,
+    /// The box the last manage pass applied.
+    pub sent: ffi::wlr_box,
+    pub state: crate::output::OutputStateValue,
+    /// Which output this is, to pick its surfaces: compared, never
+    /// dereferenced.
+    pub wlr_output: *mut ffi::wlr_output,
+}
+
+fn same_box(a: &ffi::wlr_box, b: &ffi::wlr_box) -> bool {
+    a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height
+}
+
 impl LayerShellOutput {
-    pub unsafe fn arrange(&mut self, output: *mut Output) {
-        let (w, h) = (*output).scheduled.dimensions();
-        let box_geom = ffi::wlr_box {
-            x: (*output).scheduled.x,
-            y: (*output).scheduled.y,
-            width: w,
-            height: h,
-        };
-        self.scheduled.non_exclusive_area = box_geom;
-        self.send_configures(output, true);
-        self.send_configures(output, false);
+    pub fn arrange(&mut self, output: LayerOutput) {
+        self.scheduled.non_exclusive_area = output.scheduled;
+        self.send_configures(&output, true);
+        self.send_configures(&output, false);
 
         let area_changed = match self.sent.non_exclusive_area {
-            Some(sent_box) => {
-                sent_box.x != self.scheduled.non_exclusive_area.x ||
-                sent_box.y != self.scheduled.non_exclusive_area.y ||
-                sent_box.width != self.scheduled.non_exclusive_area.width ||
-                sent_box.height != self.scheduled.non_exclusive_area.height
-            }
+            Some(sent_box) => !same_box(&sent_box, &self.scheduled.non_exclusive_area),
             None => true,
         };
 
@@ -771,14 +779,9 @@ impl LayerShellOutput {
         }
     }
 
-    unsafe fn send_configures(&mut self, output: *mut Output, exclusive: bool) {
-        let (output_width, output_height) = (*output).scheduled.dimensions();
-        let output_box = ffi::wlr_box {
-            x: (*output).scheduled.x,
-            y: (*output).scheduled.y,
-            width: output_width,
-            height: output_height,
-        };
+    fn send_configures(&mut self, output: &LayerOutput, exclusive: bool) {
+        let output_box = output.scheduled;
+        let (output_width, output_height) = (output_box.width, output_box.height);
 
         let layers = [
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND,
@@ -796,12 +799,12 @@ impl LayerShellOutput {
                 // SAFETY: from `stacked`, and nothing below destroys a layer
                 // surface: configuring one only queues an event and moves its
                 // node.
-                let layer_surface = &*layer_surface;
+                let layer_surface = unsafe { &*layer_surface };
                 let wlr = &layer_surface.wlr_layer_surface;
                 if !wlr.is_mapped() && !wlr.initial_commit() {
                     continue;
                 }
-                if wlr.output() != (*output).wlr_output().ptr() {
+                if wlr.output() != output.wlr_output {
                     continue;
                 }
                 if (wlr.exclusive_zone() > 0) != exclusive {
@@ -809,7 +812,11 @@ impl LayerShellOutput {
                 }
 
                 let mut new_area = self.scheduled.non_exclusive_area;
-                ffi::wlr_scene_layer_surface_v1_configure(layer_surface.scene_layer_surface, &output_box, &mut new_area);
+                // SAFETY: the scene helper lives as long as its layer surface
+                // (live, above); both boxes are locals.
+                unsafe {
+                    ffi::wlr_scene_layer_surface_v1_configure(layer_surface.scene_layer_surface, &output_box, &mut new_area);
+                }
 
                 if new_area.width < (output_width / 2) || new_area.height < (output_height / 2) {
                     close_later(layer_surface.ref_key);
@@ -821,8 +828,8 @@ impl LayerShellOutput {
                 layer_surface.popup_tree.set_position(x, y);
 
                 let clip = ffi::wlr_box {
-                    x: -(x - (*output).scheduled.x),
-                    y: -(y - (*output).scheduled.y),
+                    x: -(x - output_box.x),
+                    y: -(y - output_box.y),
                     width: output_width,
                     height: output_height,
                 };
@@ -831,47 +838,20 @@ impl LayerShellOutput {
         }
     }
 
-    pub unsafe fn manage_start(&mut self, output: *mut Output) {
-        let state = (*output).scheduled.state;
+    pub fn manage_start(&mut self, output: LayerOutput) {
         assert!(
-            matches!(state, crate::output::OutputStateValue::Enabled)
-                || matches!(state, crate::output::OutputStateValue::DisabledSoft)
+            matches!(output.state, crate::output::OutputStateValue::Enabled)
+                || matches!(output.state, crate::output::OutputStateValue::DisabledSoft)
         );
 
-        let (w, h) = (*output).scheduled.dimensions();
-        let scheduled_box = ffi::wlr_box {
-            x: (*output).scheduled.x,
-            y: (*output).scheduled.y,
-            width: w,
-            height: h,
-        };
-
-        let (w_sent, h_sent) = (*output).sent.dimensions();
-        let sent_box = ffi::wlr_box {
-            x: (*output).sent.x,
-            y: (*output).sent.y,
-            width: w_sent,
-            height: h_sent,
-        };
-
-        let box_changed = scheduled_box.x != sent_box.x ||
-                          scheduled_box.y != sent_box.y ||
-                          scheduled_box.width != sent_box.width ||
-                          scheduled_box.height != sent_box.height;
-
-        if box_changed {
-            self.scheduled.non_exclusive_area = scheduled_box;
-            self.send_configures(output, true);
-            self.send_configures(output, false);
+        if !same_box(&output.scheduled, &output.sent) {
+            self.scheduled.non_exclusive_area = output.scheduled;
+            self.send_configures(&output, true);
+            self.send_configures(&output, false);
         }
 
         let area_changed = match self.sent.non_exclusive_area {
-            Some(sent_box) => {
-                sent_box.x != self.scheduled.non_exclusive_area.x ||
-                sent_box.y != self.scheduled.non_exclusive_area.y ||
-                sent_box.width != self.scheduled.non_exclusive_area.width ||
-                sent_box.height != self.scheduled.non_exclusive_area.height
-            }
+            Some(sent_box) => !same_box(&sent_box, &self.scheduled.non_exclusive_area),
             None => true,
         };
 

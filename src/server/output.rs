@@ -275,14 +275,29 @@ impl Output {
     /// Apply the scheduled state. Returns true when the output was
     /// destroyed: the caller takes it out of `om.outputs`, which frees it.
     #[must_use]
-    pub unsafe fn manage_start(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
+    /// What arranging its layer surfaces reads of this output.
+    pub fn layer_output(&self) -> crate::layer_shell::LayerOutput {
+        crate::layer_shell::LayerOutput {
+            scheduled: self.scheduled.box_layout(),
+            sent: self.sent.box_layout(),
+            state: self.scheduled.state,
+            wlr_output: self.wlr_output.ptr(),
+        }
+    }
+
+    /// Re-arrange this output's layer surfaces (`LayerShellOutput::arrange`).
+    pub fn arrange_layers(&mut self) {
+        let geometry = self.layer_output();
+        self.layer_shell.arrange(geometry);
+    }
+
+    pub fn manage_start(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
         match self.scheduled.state {
             OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
                 assert!(!self.scheduled.mode_none());
 
-                let self_ptr = self as *mut Output;
-                let layer_shell_ptr = &mut self.layer_shell as *mut LayerShellOutput;
-                (*layer_shell_ptr).manage_start(self_ptr);
+                let geometry = self.layer_output();
+                self.layer_shell.manage_start(geometry);
 
                 self.sent = self.scheduled;
 
