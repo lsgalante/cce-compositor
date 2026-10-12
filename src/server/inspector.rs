@@ -3,7 +3,8 @@ use crate::server::Server;
 use std::collections::HashMap;
 
 pub struct Inspector {
-    pub global: *mut ffi::wl_global,
+    /// Private, so only `init` sets it and `deinit` destroys it.
+    global: crate::wlr::Wlr<ffi::wl_global>,
     pub client_states: HashMap<*mut ffi::wlr_surface, String>,
     pub resources: Vec<*mut ffi::wl_resource>,
 }
@@ -11,7 +12,7 @@ pub struct Inspector {
 impl Inspector {
     pub fn new() -> Self {
         Self {
-            global: std::ptr::null_mut(),
+            global: crate::wlr::Wlr::null(),
             client_states: HashMap::new(),
             resources: Vec::new(),
         }
@@ -21,7 +22,7 @@ impl Inspector {
         self.client_states = HashMap::new();
         self.resources = Vec::new();
 
-        self.global = ffi::wl_global_create(
+        let global = ffi::wl_global_create(
             (*server).wl_server,
             &ffi::zcce_inspector_v1_interface,
             1,
@@ -29,6 +30,8 @@ impl Inspector {
             Some(bind),
         );
 
+        // A live global, destroyed only by `deinit` (before the display).
+        self.global.set(global);
         if self.global.is_null() {
             return Err("Failed to create zcce_inspector_v1 global");
         }
@@ -37,11 +40,8 @@ impl Inspector {
         Ok(())
     }
 
-    pub unsafe fn deinit(&mut self) {
-        if !self.global.is_null() {
-            ffi::wl_global_destroy(self.global);
-            self.global = std::ptr::null_mut();
-        }
+    pub fn deinit(&mut self) {
+        self.global.destroy();
     }
 }
 

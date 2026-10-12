@@ -1062,6 +1062,18 @@ impl Wlr<ffi::wlr_xwayland> {
     }
 }
 
+impl Wlr<ffi::wl_global> {
+    /// Destroy the global and let go of it; nothing when unset.
+    pub fn destroy(&self) {
+        let global = self.take();
+        if !global.is_null() {
+            // SAFETY: the field held it live (`set`'s contract) and has let
+            // go, so this is its only destruction.
+            unsafe { ffi::wl_global_destroy(global) };
+        }
+    }
+}
+
 impl Wlr<ffi::wlr_session> {
     /// Switch to virtual terminal `vt`; false when unset or it failed.
     pub fn change_vt(&self, vt: u32) -> bool {

@@ -137,7 +137,9 @@ use ipc_commands::parse_finite;
 mod config_apply;
 
 pub struct WindowManager {
-    pub global: *mut ffi::wl_global,
+    /// The zcce_window_manager_v1 global; private, so only `init` sets it
+    /// and `deinit` destroys it.
+    global: crate::wlr::Wlr<ffi::wl_global>,
     pub server_destroy: crate::listener::Listener,
     pub state: WindowManagerState,
     pub windows: crate::window::Windows,
@@ -526,7 +528,7 @@ impl WindowManager {
 
     pub unsafe fn init_with_server(&mut self, server: *mut Server) -> Result<(), &'static str> {
         crate::wm_scope!(mut);
-        self.global = std::ptr::null_mut();
+        self.global = crate::wlr::Wlr::null();
         self.state = WindowManagerState::Idle;
         self.windows = crate::window::Windows::new();
         std::ptr::write(&mut self.selection, crate::selection::Selection::default());
@@ -647,7 +649,7 @@ impl WindowManager {
         // Not armed here: `start_stream` arms it when a subscriber appears,
         // and `handle_stream_timer` lets it lapse when the last one leaves.
 
-        self.global = ffi::wl_global_create(
+        let global = ffi::wl_global_create(
             (*server).wl_server,
             &ffi::zcce_window_manager_v1_interface,
             // 7 = set_popover_region on toplevels (the in-surface menu
@@ -660,6 +662,8 @@ impl WindowManager {
             self as *mut WindowManager as *mut _,
             Some(bind),
         );
+        // A live global, destroyed only by `deinit` (before the display).
+        self.global.set(global);
         if self.global.is_null() {
             self.timeout.remove();
             return Err("Failed to create zcce_window_manager_v1 global");
@@ -809,12 +813,9 @@ impl WindowManager {
         self.stream_hub = Some(hub);
     }
 
-    pub unsafe fn deinit(&mut self) {
+    pub fn deinit(&mut self) {
         crate::wm_scope!(mut);
-        if !self.global.is_null() {
-            ffi::wl_global_destroy(self.global);
-            self.global = std::ptr::null_mut();
-        }
+        self.global.destroy();
         // Each source before the fd it watches.
         self.ipc_source.remove();
         self.ipc_wake = None;
