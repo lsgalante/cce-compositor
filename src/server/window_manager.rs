@@ -1951,7 +1951,7 @@ impl WindowManager {
     /// next-visible rule (most recent eligible history entry, else the last
     /// eligible window in window order, else clear focus). This side owns
     /// eligibility (mapped, not minimized, not status/background).
-    pub unsafe fn focus_next_visible_window(&mut self, sid: crate::seat::SeatId) {
+    pub fn focus_next_visible_window(&mut self, sid: crate::seat::SeatId) {
         crate::wm_scope!(mut);
         let eligible = |w: &Window| -> bool {
             if w.closed || w.minimized || !matches!(w.state, crate::window::WindowState::Mapped) {
@@ -1996,8 +1996,7 @@ impl WindowManager {
             self.on_app_exit
         };
         seat_mut!(self, sid).suppress_focus_pan = behavior != crate::config::OnAppExit::FocusPrevious;
-        let focus = next.map_or(crate::seat::Focus::None, crate::seat::Focus::Window);
-        crate::seat::Seat::focus(self, sid, focus);
+        crate::seat::Seat::focus_window(self, sid, next);
         seat_mut!(self, sid).suppress_focus_pan = false;
         if behavior == crate::config::OnAppExit::Overview
             && crate::shared::mode() == WindowManagerMode::Normal
@@ -2230,7 +2229,7 @@ impl WindowManager {
         match elem {
             BorderElement::Minimize | BorderElement::Maximize => {
                 if let Some(seat) = self.first_seat() {
-                    crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::Window(id));
+                    crate::seat::Seat::focus_window(self, (*seat).id, Some(id));
                 }
                 let action = if elem == BorderElement::Minimize {
                     crate::config::Action::Minimize
@@ -2771,7 +2770,7 @@ impl crate::policy::api::Compositor for WindowManager {
                 Command::Focus(id) => {
                     if self.windows.get(id).is_some_and(|w| !w.closed) {
                         if let Some(seat) = self.first_seat() {
-                            crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::Window(id));
+                            crate::seat::Seat::focus_window(self, (*seat).id, Some(id));
                         }
                     }
                 }

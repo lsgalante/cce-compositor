@@ -211,7 +211,7 @@ impl WindowManager {
         self.timeout.arm(0);
     }
 
-    pub unsafe fn notify_configured(&mut self, sys: &mut crate::ctx::Sys) {
+    pub fn notify_configured(&mut self, sys: &mut crate::ctx::Sys) {
         crate::wm_scope!(mut);
         if let WindowManagerState::InflightConfigures(ref mut count) = self.state {
             *count -= 1;
@@ -222,7 +222,7 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn render_start(&mut self, sys: &mut crate::ctx::Sys) {
+    pub fn render_start(&mut self, sys: &mut crate::ctx::Sys) {
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::InflightConfigures(0)) ||
                 (matches!(self.state, WindowManagerState::Idle) && crate::shared::pending().rendering()));
@@ -239,7 +239,7 @@ impl WindowManager {
         self.render_finish(sys);
     }
 
-    pub unsafe fn render_finish(&mut self, sys: &mut crate::ctx::Sys) {
+    pub fn render_finish(&mut self, sys: &mut crate::ctx::Sys) {
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Render));
         self.state = WindowManagerState::Idle;

@@ -822,7 +822,7 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow
     // link), which that lookup read past into the Window's other fields.
     ffi::river_wlr_surface_set_data(surface, this.tree.node() as *mut _);
 
-    let capture_tree = &mut (*this.capture_scene).tree as *mut ffi::wlr_scene_tree;
+    let capture_tree = this.capture_scene.tree();
     let capture_surface = ffi::wlr_scene_surface_create(capture_tree, surface);
     if capture_surface.is_null() {
         log::error!("out of memory creating capture surface");

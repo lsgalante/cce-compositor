@@ -481,6 +481,23 @@ impl Wlr<ffi::wlr_xwayland_surface> {
     }
 }
 
+impl Wlr<ffi::wlr_scene> {
+    /// The scene's root tree; null when unset.
+    pub fn tree(&self) -> *mut ffi::wlr_scene_tree {
+        self.live().map_or(std::ptr::null_mut(), |s| unsafe { std::ptr::addr_of_mut!((*s).tree) })
+    }
+
+    /// Destroy the scene (its root node, and everything under it) and
+    /// leave the field unset.
+    pub fn destroy(&self) {
+        let s = self.take();
+        if !s.is_null() {
+            // The root tree starts with its node (`wlr_scene_tree.node`).
+            unsafe { ffi::wlr_scene_node_destroy(std::ptr::addr_of_mut!((*s).tree) as *mut ffi::wlr_scene_node) }
+        }
+    }
+}
+
 impl Wlr<ffi::wlr_idle_notifier_v1> {
     /// Tell idle clients whether something inhibits idling.
     pub fn set_inhibited(&self, inhibited: bool) {

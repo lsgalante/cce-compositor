@@ -411,7 +411,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
             if let crate::seat::Focus::LayerSurface(surface) = (*seat).focused {
                 if surface == (*wlr_layer_surface).surface {
                     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-                    crate::seat::Seat::focus(wm, (*seat).id, crate::seat::Focus::None);
+                    crate::seat::Seat::focus_window(wm, (*seat).id, None);
                     // cce-cloud surfaces skip the focus_next fallback: the bare
                     // launcher is about to be replaced by whatever it spawned,
                     // and refocusing the old window first would fight the new
@@ -443,7 +443,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                                 // Dismissing chrome, not switching windows:
                                 // the camera stays where the user left it.
                                 (*seat).suppress_focus_pan = true;
-                                crate::seat::Seat::focus(wm, (*seat).id, crate::seat::Focus::Window(id));
+                                crate::seat::Seat::focus_window(wm, (*seat).id, Some(id));
                                 (*seat).suppress_focus_pan = false;
                             }
                         }

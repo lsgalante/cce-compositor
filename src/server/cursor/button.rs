@@ -379,7 +379,7 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
                 {
                     if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
                         if is_cloud_layer(layer_surface) {
-                            crate::seat::Seat::focus(wm, sid, Focus::None);
+                            crate::seat::Seat::focus_window(wm, sid, None);
                             let cursor = cursor_mut!(wm, sid, ());
                             cursor.pressed.insert((*event).button);
                             return;
@@ -487,7 +487,7 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
                 }
                 wm.execute_action(&crate::config::Action::Spawn, Some(&cmd));
 
-                crate::seat::Seat::focus(wm, sid, Focus::None);
+                crate::seat::Seat::focus_window(wm, sid, None);
                 crate::shared::pending().dirty_windowing();
 
                 let cursor = cursor_mut!(wm, sid, ());
@@ -746,7 +746,7 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
                                 this.tiling_mode = crate::tiling::TilingMode::Tiled;
                                 this.mode_locked = true;
                             }
-                            crate::seat::Seat::focus(wm, sid, Focus::Window(id));
+                            crate::seat::Seat::focus_window(wm, sid, Some(id));
                             crate::shared::pending().dirty_windowing();
                             let cursor = cursor_mut!(wm, sid, ());
                             cursor.last_click_time = 0;
@@ -873,7 +873,7 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
                     if let Some(window) = wm.windows.get(window_id) {
                         clicked_something = true;
                         if !window.is_status_bar() && !window.is_wallpaper() {
-                            crate::seat::Seat::focus(wm, sid, Focus::Window(window_id));
+                            crate::seat::Seat::focus_window(wm, sid, Some(window_id));
                         }
                     }
                 }
@@ -896,7 +896,7 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
             if let Some((pvx, pvy, pw, ph)) = wm.placeholder_at(lx, ly) {
                 wm.pan_to_virtual_rect(pvx, pvy, pw, ph);
             } else {
-                crate::seat::Seat::focus(wm, sid, Focus::None);
+                crate::seat::Seat::focus_window(wm, sid, None);
                 crate::shared::pending().dirty_windowing();
             }
         }

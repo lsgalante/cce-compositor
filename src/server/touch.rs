@@ -401,7 +401,7 @@ impl Cursor {
                     SceneNodeDataVal::Window(window_id) => {
                         if let Some(window) = wm.windows.get(window_id) {
                             if !window.is_status_bar() && !window.is_wallpaper() {
-                                crate::seat::Seat::focus(wm, sid, Focus::Window(window_id));
+                                crate::seat::Seat::focus_window(wm, sid, Some(window_id));
                                 seat_mut!(wm, sid, ()).relay.osk.note_touch();
                             }
                         }

@@ -251,7 +251,7 @@ pub(crate) unsafe fn on_swipe_update(wm: &mut crate::window_manager::WindowManag
             }
             let hovered = hovered.filter(|&id| wm.windows.get(id).is_some_and(|w| !w.is_status_bar() && !w.is_wallpaper()));
             if let Some(id) = hovered {
-                crate::seat::Seat::focus(wm, sid, Focus::Window(id));
+                crate::seat::Seat::focus_window(wm, sid, Some(id));
             }
         }
 

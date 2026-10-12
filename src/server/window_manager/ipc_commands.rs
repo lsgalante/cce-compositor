@@ -694,7 +694,7 @@ impl WindowManager {
                         if let Some(w) = self.windows.get_mut(id) {
                             w.minimized = false;
                         }
-                        crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::Window(id));
+                        crate::seat::Seat::focus_window(self, (*seat).id, Some(id));
                         self.raise_window(id);
                         crate::shared::pending().dirty_windowing();
                         if wait {
@@ -938,7 +938,7 @@ impl WindowManager {
                 self.desk_pan_y = center_y - (vp_h / 2.0) / self.desk_zoom;
 
                 if let Some(seat) = self.first_seat() {
-                    crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::Window(target_id));
+                    crate::seat::Seat::focus_window(self, (*seat).id, Some(target_id));
                 }
                 self.raise_window(target_id);
                 crate::shared::pending().dirty_windowing();

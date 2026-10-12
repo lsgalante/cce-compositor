@@ -103,7 +103,7 @@ impl XdgToplevel {
         (*raw).unmap.connect(ffi::river_wlr_surface_get_unmap_signal(surface), handle_unmap);
 
         let surfaces_tree = this.surfaces.tree.raw();
-        let capture_tree = &mut (*this.capture_scene).tree as *mut ffi::wlr_scene_tree;
+        let capture_tree = this.capture_scene.tree();
 
         let scene_xdg = ffi::wlr_scene_xdg_surface_create(surfaces_tree, base);
         if scene_xdg.is_null() {
@@ -506,7 +506,7 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
     let wlr_xdg_popup = data as *mut ffi::wlr_xdg_popup;
-    let capture_node = &mut (*this.capture_scene).tree as *mut ffi::wlr_scene_tree;
+    let capture_node = this.capture_scene.tree();
     if let Err(e) = crate::xdg_popup::XdgPopup::create(
         wlr_xdg_popup,
         this.popup_tree.raw(),
@@ -729,7 +729,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         (radius as f64 * scale) as i32);
     this.sync_backdrop_compress();
 
-    let capture_node = &mut (*this.capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node;
+    let capture_node = this.capture_scene.tree() as *mut ffi::wlr_scene_node;
     let mut geom = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut geom);
     ffi::wlr_scene_subsurface_tree_set_clip(capture_node, &geom);
@@ -1031,7 +1031,7 @@ unsafe extern "C" fn handle_request_move(
             this.mode_locked = true;
         }
         let id = (*toplevel).window;
-        crate::seat::Seat::focus(wm, sid, crate::seat::Focus::Window(id));
+        crate::seat::Seat::focus_window(wm, sid, Some(id));
         wm.stop_panning_animation();
         let cursor = cursor_mut!(wm, sid);
         let (cursor_x, cursor_y) = (cursor.x(), cursor.y());
@@ -1101,7 +1101,7 @@ unsafe extern "C" fn handle_request_resize(
             this.mode_locked = true;
         }
         let id = (*toplevel).window;
-        crate::seat::Seat::focus(wm, sid, crate::seat::Focus::Window(id));
+        crate::seat::Seat::focus_window(wm, sid, Some(id));
         wm.stop_panning_animation();
         let cursor = cursor_mut!(wm, sid);
         let (cursor_x, cursor_y) = (cursor.x(), cursor.y());

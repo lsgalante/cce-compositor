@@ -413,6 +413,21 @@ impl Seat {
         self.wlr_seat.set_capabilities(caps);
     }
 
+    /// Give seat `sid`'s keyboard focus to window `id`, or to nothing:
+    /// [`Seat::focus`] for the targets that carry no pointer.
+    pub fn focus_window(wm: &mut crate::window_manager::WindowManager, sid: SeatId, id: Option<crate::window::WindowId>) {
+        let focus = id.map_or(Focus::None, Focus::Window);
+        // SAFETY: neither `Focus::Window` nor `Focus::None` carries a
+        // pointer, so `focus`'s contract holds.
+        unsafe { Seat::focus(wm, sid, focus) }
+    }
+
+    /// Move seat `sid`'s keyboard focus to `new_focus`.
+    ///
+    /// # Safety
+    /// A `LayerSurface`, `LockSurface` or `OverrideRedirect` focus must name
+    /// a live surface or object. (`Window` and `None` carry nothing to vouch
+    /// for: use [`Seat::focus_window`].)
     pub unsafe fn focus(wm: &mut crate::window_manager::WindowManager, sid: SeatId, new_focus: Focus) {
         // A window that has closed is nothing to focus.
         let wid = match new_focus {
@@ -1401,7 +1416,7 @@ impl Seat {
                 let dx = (op.x - op.start_x).abs();
                 let dy = (op.y - op.start_y).abs();
                 if dx < 4 && dy < 4 && !op.started_in_overview && !wm.windows.get(id).is_some_and(|w| w.is_status_bar()) {
-                    Seat::focus(wm, sid, Focus::Window(id));
+                    Seat::focus_window(wm, sid, Some(id));
                     Seat::focus_follow_pan(wm, sid, id);
                 }
             }

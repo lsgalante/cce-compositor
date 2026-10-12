@@ -538,7 +538,7 @@ pub struct Window {
     /// reaches zero, and the client is waiting on a deadline to exit.
     pub map_fade_step: f32,
     pub popup_tree: SceneTree,
-    pub capture_scene: *mut ffi::wlr_scene,
+    pub capture_scene: crate::wlr::Wlr<ffi::wlr_scene>,
     pub capture_source: *mut ffi::wlr_ext_image_capture_source_v1,
     pub tiling_mode: crate::tiling::TilingMode,
     pub mode_locked: bool,
@@ -952,7 +952,9 @@ impl Window {
             map_fade_target: 1.0,
             map_fade_step: 1.0,
             popup_tree,
-            capture_scene,
+            // SAFETY: created above for this window alone, and destroyed
+            // only through the field (`Window::destroy`).
+            capture_scene: unsafe { crate::wlr::Wlr::from_raw(capture_scene) },
             capture_source: std::ptr::null_mut(),
             tiling_mode: crate::tiling::TilingMode::Floating,
             mode_locked: false,
@@ -1582,7 +1584,7 @@ impl Window {
             if should_focus && !is_grid {
                 let stores = stores!(wm);
                 for seat in stores.seats.ids() {
-                    crate::seat::Seat::focus(wm, seat, crate::seat::Focus::Window(id));
+                    crate::seat::Seat::focus_window(wm, seat, Some(id));
                 }
             }
         }
@@ -1687,7 +1689,7 @@ impl Window {
     /// Destroying`) once its close has run through a transaction: clear the
     /// seats' hold on it, destroy its scene trees, and take it out of the
     /// store.
-    pub unsafe fn destroy(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub fn destroy(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let Some(this) = wm.windows.get(id) else { return };
         assert!(matches!(this.impl_type, WindowImpl::Destroying));
         match this.state {
@@ -1701,7 +1703,7 @@ impl Window {
 
         for sid in wm.seats.ids() {
             if wm.seats.get(sid).is_some_and(|seat| seat.focused == crate::seat::Focus::Window(id)) {
-                crate::seat::Seat::focus(wm, sid, crate::seat::Focus::None);
+                crate::seat::Seat::focus_window(wm, sid, None);
                 wm.focus_next_visible_window(sid);
             }
             let Some(seat) = wm.seats.get_mut(sid) else { continue };
@@ -1719,7 +1721,7 @@ impl Window {
         // Left behind they would both leak and keep a SceneNodeData pointing
         // at this freed window for the next hit test to find.
         this.border.tree.destroy();
-        ffi::wlr_scene_node_destroy(&mut (*this.capture_scene).tree as *mut ffi::wlr_scene_tree as *mut ffi::wlr_scene_node);
+        this.capture_scene.destroy();
 
         wm.render_list_remove(id);
 

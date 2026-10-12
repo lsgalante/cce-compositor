@@ -930,7 +930,7 @@ impl Cursor {
                 {
                     let prev = seat_mut!(wm, sid, ()).suppress_focus_pan;
                     seat_mut!(wm, sid, ()).suppress_focus_pan = true;
-                    crate::seat::Seat::focus(wm, sid, hovered.map_or(crate::seat::Focus::None, crate::seat::Focus::Window));
+                    crate::seat::Seat::focus_window(wm, sid, hovered);
                     seat_mut!(wm, sid, ()).suppress_focus_pan = prev;
                 }
                 let this = cursor_mut!(wm, sid, ());

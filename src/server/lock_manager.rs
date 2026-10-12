@@ -223,7 +223,7 @@ impl LockManager {
         scene.normal_tree.set_enabled(false);
 
         for seat in wm.seats.ids() {
-            crate::seat::Seat::focus(wm, seat, Focus::None);
+            crate::seat::Seat::focus_window(wm, seat, None);
         }
 
         // Each enabled output reports `Blanked` after its next frame, and the
@@ -499,7 +499,7 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
         let server = crate::shared::server_ptr();
         let wm = &mut *crate::reentry::wm(server);
         for seat in wm.seats.ids() {
-            crate::seat::Seat::focus(wm, seat, Focus::None);
+            crate::seat::Seat::focus_window(wm, seat, None);
         }
     } else {
         if manager.state == LockState::Locked {
@@ -534,7 +534,7 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
     let server = crate::shared::server_ptr();
     let wm = &mut *crate::reentry::wm(server);
     for seat in wm.seats.ids() {
-        crate::seat::Seat::focus(wm, seat, Focus::None);
+        crate::seat::Seat::focus_window(wm, seat, None);
     }
 
     handle_destroy(manager.destroy.as_ptr(), std::ptr::null_mut());

@@ -349,7 +349,7 @@ impl Cursor {
         let Some((window, surface, sx, sy, ratio)) = Cursor::view_drag_target(wm, x, y) else { return false };
         // Space must reach the window: give it keyboard focus as a click would.
         if seat_mut!(wm, sid, false).focused != crate::seat::Focus::Window(window) {
-            crate::seat::Seat::focus(wm, sid, crate::seat::Focus::Window(window));
+            crate::seat::Seat::focus_window(wm, sid, Some(window));
         }
         let seat = seat_mut!(wm, sid, false);
         seat.ensure_synthetic_keyboard();
