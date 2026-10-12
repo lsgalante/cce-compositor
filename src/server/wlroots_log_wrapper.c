@@ -1237,3 +1237,38 @@ struct wl_signal *river_wlr_session_get_active_signal(struct wlr_session *sessio
 bool river_wlr_session_get_active(struct wlr_session *session) {
 	return session->active;
 }
+
+/* `ccectl debug-output` (output_hotplug.rs): headless outputs on demand, for
+ * cce-shadow sessions. */
+#include <wlr/backend/headless.h>
+#include <wlr/backend/multi.h>
+
+static void cce_find_headless(struct wlr_backend *backend, void *data) {
+	struct wlr_backend **found = data;
+	if (*found == NULL && wlr_backend_is_headless(backend)) {
+		*found = backend;
+	}
+}
+
+/* A new headless output of width x height on the server's headless backend
+ * (alone, or inside the multi backend autocreate makes); NULL when there is
+ * none. */
+struct wlr_output *cce_headless_add_output(struct wlr_backend *backend, unsigned int width, unsigned int height) {
+	struct wlr_backend *headless = NULL;
+	if (backend == NULL) {
+		return NULL;
+	}
+	if (wlr_backend_is_multi(backend)) {
+		wlr_multi_for_each_backend(backend, cce_find_headless, &headless);
+	} else if (wlr_backend_is_headless(backend)) {
+		headless = backend;
+	}
+	if (headless == NULL) {
+		return NULL;
+	}
+	return wlr_headless_add_output(headless, width, height);
+}
+
+bool cce_output_is_headless(struct wlr_output *output) {
+	return wlr_output_is_headless(output);
+}

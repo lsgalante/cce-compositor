@@ -66,6 +66,8 @@ pub mod ctx;
 pub mod output;
 #[path = "server/output_manager.rs"]
 pub mod output_manager;
+#[path = "server/output_hotplug.rs"]
+pub mod output_hotplug;
 #[path = "server/input_manager.rs"]
 pub mod input_manager;
 #[path = "server/libinput_config.rs"]

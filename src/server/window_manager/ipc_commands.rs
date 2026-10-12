@@ -297,6 +297,9 @@ impl WindowManager {
             // Re-entrancy tally (`reentry.rs`): where code outside the window
             // manager reached it while one of its methods was running.
             // `debug-reentry reset` clears it.
+            "debug-output" => {
+                return crate::output_hotplug::command(&self.outputs, &parts[1..]);
+            }
             "debug-reentry" => {
                 if parts.get(1) == Some(&"reset") {
                     crate::reentry::reset();
