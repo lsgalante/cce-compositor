@@ -6,7 +6,7 @@
 use super::*;
 
 impl WindowManager {
-    pub unsafe fn load_state(&mut self, path: &str) {
+    pub fn load_state(&mut self, path: &str) {
         crate::wm_scope!(mut);
         log::info!("Loading state from {}", path);
         if let Ok(content) = std::fs::read_to_string(path) {
@@ -49,7 +49,7 @@ impl WindowManager {
     /// the desk isn't a void while slow programs load, and the saved camera
     /// has something to be pointed at. Purely visual — placeholders are
     /// scene rects, not windows; focus logic never sees them.
-    pub unsafe fn create_restore_placeholders(&mut self) {
+    pub fn create_restore_placeholders(&mut self) {
         crate::wm_scope!(mut);
         let parent = &crate::shared::scene().layers.wm;
         if parent.is_null() {
@@ -99,7 +99,9 @@ impl WindowManager {
         }
         self.update_restore_placeholders();
         // Sweep leftovers whose programs never came back.
-        self.restore_placeholder_timer = crate::event_source::Timer::on_shared_loop(handle_restore_placeholder_timeout, 0);
+        // SAFETY: `handle_restore_placeholder_timeout` is an entry point that
+        // reads no data (it takes the window manager by place).
+        self.restore_placeholder_timer = unsafe { crate::event_source::Timer::on_shared_loop(handle_restore_placeholder_timeout, 0) };
         self.restore_placeholder_timer.arm(60_000);
     }
 

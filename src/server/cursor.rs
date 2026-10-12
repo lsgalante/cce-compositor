@@ -413,6 +413,13 @@ impl Cursor {
         Ok(())
     }
 
+    /// Disconnect everything and destroy the wlroots cursor and its xcursor
+    /// manager.
+    ///
+    /// # Safety
+    /// Only from the seat's teardown (`Seat::destroy`): code elsewhere hands
+    /// a live seat's `wlr_cursor().ptr()` straight to wlroots, trusting a
+    /// live seat's cursor to be set.
     pub unsafe fn deinit(&mut self) {
         self.motion_listener.disconnect();
         self.motion_absolute_listener.disconnect();
@@ -447,11 +454,13 @@ impl Cursor {
 
         // The cursor first: its state may still hold the manager
         // (`Wlr::set_xcursor`'s contract).
-        if !self.wlr_cursor().is_null() {
-            ffi::wlr_cursor_destroy(self.wlr_cursor().take());
+        let wlr_cursor = self.wlr_cursor().take();
+        if !wlr_cursor.is_null() {
+            ffi::wlr_cursor_destroy(wlr_cursor);
         }
-        if !self.xcursor_manager().is_null() {
-            ffi::wlr_xcursor_manager_destroy(self.xcursor_manager().take());
+        let manager = self.xcursor_manager().take();
+        if !manager.is_null() {
+            ffi::wlr_xcursor_manager_destroy(manager);
         }
         self.wlr_seat().take();
     }
