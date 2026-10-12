@@ -6,7 +6,8 @@ use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
 use crate::seat::Seat;
 
 pub struct InputManager {
-    pub default_seat: *mut Seat,
+    /// The "default" seat, by id (look it up in `wm.seats`).
+    pub default_seat: Option<crate::seat::SeatId>,
     pub devices: crate::registry::Registry<crate::input_device::InputDevice>,
     pub objects: ffi::wl_list, // list of InputManagerObject
     pub global: *mut ffi::wl_global,
@@ -75,11 +76,12 @@ impl InputManager {
         crate::shared::handles().tablet_manager.set(self.tablet_manager);
 
         // Create default seat
-        self.default_seat = Seat::create(server, seats, "default")?;
+        let default_seat = Seat::create(server, seats, "default")?;
+        self.default_seat = Some((*default_seat).id);
         crate::shared::handles().default_seat.set(self.default_seat);
 
         if !(*server).xwayland.is_null() {
-            ffi::wlr_xwayland_set_seat((*server).xwayland, (*self.default_seat).wlr_seat.ptr());
+            ffi::wlr_xwayland_set_seat((*server).xwayland, (*default_seat).wlr_seat.ptr());
         }
 
         self.global = ffi::wl_global_create(
@@ -189,8 +191,8 @@ impl InputManager {
                 Seat::destroy(seat);
             }
         }
-        self.default_seat = std::ptr::null_mut();
-        crate::shared::handles().default_seat.set(std::ptr::null_mut());
+        self.default_seat = None;
+        crate::shared::handles().default_seat.set(None);
         log::info!("[deinit] seats destroyed");
 
         log::info!("[deinit] removing input manager listeners");
@@ -360,12 +362,13 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
 
     log::info!("new input device connected");
 
-    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), &(*crate::reentry::wm(crate::shared::server_ptr())).outputs, im.default_seat, wlr_device, false);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let default_seat = im.default_seat.and_then(|sid| wm.seats.ptr(sid)).unwrap_or(std::ptr::null_mut());
+    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), &wm.outputs, default_seat, wlr_device, false);
     
     let name_ptr = ffi::river_wlr_input_device_get_name(wlr_device);
     if !name_ptr.is_null() {
         let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
-        let wm = &mut (*crate::reentry::wm(crate::shared::server_ptr()));
         for rule in &wm.input_rules {
             if rule.name == "*" || name.contains(&rule.name) {
                 if let Some(factor) = rule.scroll_factor {
@@ -379,11 +382,13 @@ unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mu
     if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD {
         crate::keyboard::Keyboard::create(device);
     } else if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TABLET {
-        let _ = crate::tablet::Tablet::create(crate::shared::server_ptr(), &(*crate::reentry::wm(crate::shared::server_ptr())).outputs, im.default_seat, wlr_device, false);
+        let _ = crate::tablet::Tablet::create(crate::shared::server_ptr(), &wm.outputs, default_seat, wlr_device, false);
     }
 
     // Attach device to the default seat
-    (*im.default_seat).attach_device(device);
+    if let Some(seat) = im.default_seat.and_then(|sid| wm.seats.get_mut(sid)) {
+        seat.attach_device(device);
+    }
 }
 
 unsafe extern "C" fn handle_new_pointer_constraint(_listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -406,7 +411,7 @@ unsafe extern "C" fn handle_new_input_method(listener: *mut ffi::wl_listener, da
     let im = &mut *crate::container_of!(listener, InputManager, new_input_method);
     let input_method = data as *mut ffi::wlr_input_method_v2;
     // Fallback to default seat if input_method.seat has no data set yet
-    let Some(sid) = Seat::id_of((*input_method).seat).or_else(|| im.default_seat.as_ref().map(|s| s.id)) else { return };
+    let Some(sid) = Seat::id_of((*input_method).seat).or(im.default_seat) else { return };
     crate::input_relay::InputRelay::new_input_method(&mut *crate::reentry::wm(crate::shared::server_ptr()), sid, input_method);
 }
 
@@ -419,10 +424,14 @@ unsafe extern "C" fn handle_new_virtual_pointer(listener: *mut ffi::wl_listener,
     let virtual_pointer = (*event).new_pointer;
     let wlr_device = &mut (*virtual_pointer).pointer.base as *mut ffi::wlr_input_device;
 
-    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), &(*crate::reentry::wm(crate::shared::server_ptr())).outputs, im.default_seat, wlr_device, true);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let default_seat = im.default_seat.and_then(|sid| wm.seats.ptr(sid)).unwrap_or(std::ptr::null_mut());
+    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), &wm.outputs, default_seat, wlr_device, true);
 
     // Attach device to the default seat
-    (*im.default_seat).attach_device(device);
+    if let Some(seat) = im.default_seat.and_then(|sid| wm.seats.get_mut(sid)) {
+        seat.attach_device(device);
+    }
 }
 
 unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -436,7 +445,10 @@ unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener
     // Honor the seat the client bound the virtual keyboard to, like input
     // methods do; fall back to the default seat if it carries no Seat data.
     let wm = &*crate::reentry::wm(crate::shared::server_ptr());
-    let seat = Seat::id_of((*virtual_keyboard).seat).and_then(|sid| wm.seats.ptr(sid)).unwrap_or(im.default_seat);
+    let seat = Seat::id_of((*virtual_keyboard).seat).or(im.default_seat).and_then(|sid| wm.seats.ptr(sid)).unwrap_or(std::ptr::null_mut());
+    if seat.is_null() {
+        return;
+    }
 
     let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), &wm.outputs, seat, wlr_device, true);
     crate::keyboard::Keyboard::create(device);

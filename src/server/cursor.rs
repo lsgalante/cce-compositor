@@ -494,8 +494,7 @@ impl Cursor {
 
         // If this cursor belongs to the default seat, update the Xwayland cursor to match the theme.
         let handles = crate::shared::handles();
-        let default_seat = handles.default_seat.get();
-        if !default_seat.is_null() && (*default_seat).id == self.sid {
+        if handles.default_seat.get() == Some(self.sid) {
             if !handles.xwayland.ptr().is_null() {
                 ffi::wlr_xcursor_manager_load(xcursor_manager, 1.0);
                 let wlr_xcursor = ffi::wlr_xcursor_manager_get_xcursor(

@@ -70,7 +70,7 @@ pub struct Handles {
     pub tearing_control: crate::wlr::Wlr<ffi::wlr_tearing_control_manager_v1>,
     /// The "default" seat, once `InputManager::init` has created it (null
     /// while it is being created, and after the deinit).
-    pub default_seat: Cell<*mut crate::seat::Seat>,
+    pub default_seat: Cell<Option<crate::seat::SeatId>>,
 }
 
 thread_local! {
@@ -98,7 +98,7 @@ thread_local! {
             foreign_toplevel_list: crate::wlr::Wlr::null(),
             foreign_toplevel_manager: crate::wlr::Wlr::null(),
             tearing_control: crate::wlr::Wlr::null(),
-            default_seat: Cell::new(std::ptr::null_mut()),
+            default_seat: Cell::new(None),
         },
     });
 }

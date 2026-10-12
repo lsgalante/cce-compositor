@@ -369,16 +369,12 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
         return;
     }
 
-    let default_seat = (*server).input_manager.default_seat;
-    if !default_seat.is_null() {
-        let focused_surf = (*default_seat).wlr_seat.keyboard_focused_surface();
-        if focused_surf == surface {
-            log::info!("xdg activation request ignored: window is already focused");
-            return;
-        }
-    }
-
     let wm = &mut *crate::reentry::wm(server);
+    let default_seat = (*server).input_manager.default_seat.and_then(|sid| wm.seats.get(sid));
+    if default_seat.is_some_and(|seat| seat.wlr_seat.keyboard_focused_surface() == surface) {
+        log::info!("xdg activation request ignored: window is already focused");
+        return;
+    }
     let Some(win) = wm.windows.values().find(|w| w.root_surface() == surface) else {
         return;
     };

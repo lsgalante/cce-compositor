@@ -144,7 +144,7 @@ impl XwaylandOverrideRedirect {
         &self,
         wm: &mut crate::window_manager::WindowManager,
         unlocked: bool,
-        seat: *mut crate::seat::Seat,
+        sid: Option<crate::seat::SeatId>,
     ) {
         if !unlocked {
             return;
@@ -155,11 +155,10 @@ impl XwaylandOverrideRedirect {
         {
             return;
         }
-        if seat.is_null() {
-            return;
-        }
+        let Some(sid) = sid else { return };
+        let Some(focused) = wm.seats.get(sid).map(|seat| seat.focused) else { return };
         let pid = (*self.xsurface).pid;
-        match (*seat).focused {
+        match focused {
             crate::seat::Focus::Window(id) if wm.windows.contains(id) => {
                 let same_client = match wm.windows.get(id).map(|w| w.impl_type()) {
                     Some(crate::window::WindowImpl::Xwayland(xwindow)) => {
@@ -168,7 +167,7 @@ impl XwaylandOverrideRedirect {
                     _ => false,
                 };
                 if same_client {
-                    crate::seat::Seat::keyboard_enter_or_leave(wm, (*seat).id, (*self.xsurface).surface);
+                    crate::seat::Seat::keyboard_enter_or_leave(wm, sid, (*self.xsurface).surface);
                     return;
                 }
                 log::debug!("override redirect (pid {pid}) mapped unfocused: another client holds the keyboard");
@@ -181,7 +180,7 @@ impl XwaylandOverrideRedirect {
                 return;
             }
         }
-        crate::seat::Seat::focus(wm, (*seat).id, crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
+        crate::seat::Seat::focus(wm, sid, crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
     }
 }
 
@@ -300,19 +299,20 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
     (*or).surface_tree.destroy();
 
     let server = crate::shared::server_ptr();
-    let default_seat = (*server).input_manager.default_seat;
-    if !default_seat.is_null() {
-        let wm = &mut *crate::reentry::wm(server);
-        let parent = match (*default_seat).focused {
+    let wm = &mut *crate::reentry::wm(server);
+    if let Some((sid, focused, keyboard_surface)) = (*server).input_manager.default_seat
+        .and_then(|sid| wm.seats.get(sid).map(|seat| (sid, seat.focused, seat.wlr_seat.keyboard_focused_surface())))
+    {
+        let parent = match focused {
             crate::seat::Focus::Window(id) => wm.windows.get(id).map(|w| (w.impl_type(), w.root_surface())),
             _ => None,
         };
         if let Some((crate::window::WindowImpl::Xwayland(xwindow), root_surface)) = parent {
             if !xwindow.is_null()
                 && (*(*xwindow).xsurface).pid == (*(*or).xsurface).pid
-                && (*default_seat).wlr_seat.keyboard_focused_surface() == surface
+                && keyboard_surface == surface
             {
-                crate::seat::Seat::keyboard_enter_or_leave(wm, (*default_seat).id, root_surface);
+                crate::seat::Seat::keyboard_enter_or_leave(wm, sid, root_surface);
             }
         }
     }
