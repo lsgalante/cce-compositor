@@ -682,6 +682,11 @@ impl XwaylandWindow {
             self.xsurface().set_minimized(false);
         }
         self.xsurface().activate(activated);
+        if activated {
+            // Now that X has a focused window, X clients may read the
+            // selections; make them look again (`reassert_selections`).
+            crate::shared::handles().xwayland.reassert_selections();
+        }
     }
 }
 

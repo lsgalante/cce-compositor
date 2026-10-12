@@ -1014,6 +1014,31 @@ impl Wlr<ffi::wlr_idle_notifier_v1> {
 }
 
 impl Wlr<ffi::wlr_xwayland> {
+    /// Hand the XWM its seat again, which re-announces the seat's clipboard
+    /// and primary selections to X (a fresh SetSelectionOwner each).
+    ///
+    /// wlroots refuses an X client's selection request while no Xwayland
+    /// surface has keyboard focus. Copying in a Wayland app makes the XWM the
+    /// X owner at once, and Wine's clipboard manager reads the new owner's
+    /// data right then — refused, so Wine holds an empty clipboard, and
+    /// focusing the Wine window changes no owner, so it never asks again:
+    /// nothing copied in a Wayland app could be pasted into Ubisoft Connect
+    /// (2026-10-12). Re-announced once an X11 window is activated, Wine reads
+    /// it while it may. A no-op while unset or before the XWM is up.
+    pub fn reassert_selections(&self) {
+        if let Some(xwayland) = self.live() {
+            // SAFETY: the field holds a live xwayland; its `seat` is the one
+            // the input manager handed it (`wlr_xwayland_set_seat`, which
+            // wlroots clears when that seat is destroyed) or null.
+            unsafe {
+                let seat = (*xwayland).seat;
+                if !seat.is_null() && !(*xwayland).xwm.is_null() {
+                    ffi::wlr_xwayland_set_seat(xwayland, seat);
+                }
+            }
+        }
+    }
+
     /// A CARDINAL-array property of X window `window` (format 32), at most
     /// `max_words` long, read synchronously over the XWM's own connection;
     /// `None` when unset, before the XWM is up, or when the window, atom or
