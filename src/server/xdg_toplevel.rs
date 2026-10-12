@@ -36,21 +36,21 @@ pub struct XdgToplevel {
     /// restored size.
     pub acked_once: bool,
 
-    pub destroy: crate::listener::Listener,
-    pub ack_configure: crate::listener::Listener,
-    pub map: crate::listener::Listener,
-    pub unmap: crate::listener::Listener,
-    pub commit: crate::listener::Listener,
-    pub new_popup: crate::listener::Listener,
-    pub request_show_window_menu: crate::listener::Listener,
-    pub request_fullscreen: crate::listener::Listener,
-    pub request_maximize: crate::listener::Listener,
-    pub request_minimize: crate::listener::Listener,
-    pub request_move: crate::listener::Listener,
-    pub request_resize: crate::listener::Listener,
-    pub set_parent: crate::listener::Listener,
-    pub set_title: crate::listener::Listener,
-    pub set_app_id: crate::listener::Listener,
+    destroy: crate::listener::Listener,
+    ack_configure: crate::listener::Listener,
+    map: crate::listener::Listener,
+    unmap: crate::listener::Listener,
+    commit: crate::listener::Listener,
+    new_popup: crate::listener::Listener,
+    request_show_window_menu: crate::listener::Listener,
+    request_fullscreen: crate::listener::Listener,
+    request_maximize: crate::listener::Listener,
+    request_minimize: crate::listener::Listener,
+    request_move: crate::listener::Listener,
+    request_resize: crate::listener::Listener,
+    set_parent: crate::listener::Listener,
+    set_title: crate::listener::Listener,
+    set_app_id: crate::listener::Listener,
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
@@ -60,8 +60,8 @@ unsafe impl crate::listener::Anchored for XdgToplevel {}
 
 pub struct XdgDecoration {
     pub wlr_decoration: *mut ffi::wlr_xdg_toplevel_decoration_v1,
-    pub destroy: crate::listener::Listener,
-    pub request_mode: crate::listener::Listener,
+    destroy: crate::listener::Listener,
+    request_mode: crate::listener::Listener,
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,

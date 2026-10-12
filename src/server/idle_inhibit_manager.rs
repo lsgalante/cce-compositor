@@ -7,7 +7,7 @@ use crate::scene_node_data::SceneNodeData;
 
 pub struct IdleInhibitManager {
     pub wlr_manager: *mut ffi::wlr_idle_inhibit_manager_v1,
-    pub new_idle_inhibitor: crate::listener::Listener,
+    new_idle_inhibitor: crate::listener::Listener,
     /// Private: `holders` trusts that a registered inhibitor is live, which
     /// holds only while nothing outside this module can replace or swap it.
     inhibitors: crate::registry::Registry<IdleInhibitor>,
@@ -140,7 +140,7 @@ mod tests {
 pub struct IdleInhibitor {
     pub inhibit_manager: *mut IdleInhibitManager,
     pub wlr_inhibitor: *mut ffi::wlr_idle_inhibitor_v1,
-    pub listen_destroy: crate::listener::Listener,
+    listen_destroy: crate::listener::Listener,
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,

@@ -160,7 +160,7 @@ pub struct WindowManager {
     /// The zcce_window_manager_v1 global; private, so only `init` sets it
     /// and `deinit` destroys it.
     global: crate::wlr::Wlr<ffi::wl_global>,
-    pub server_destroy: crate::listener::Listener,
+    server_destroy: crate::listener::Listener,
     pub state: WindowManagerState,
     pub windows: crate::window::Windows,
     /// Every output, by `OutputId`, and every seat, by `SeatId` — owned

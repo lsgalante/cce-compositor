@@ -20,14 +20,23 @@ pub struct InputDevice {
     pub sid: Option<crate::seat::SeatId>,
     pub wlr_device: *mut ffi::wlr_input_device,
     pub virtual_device: bool,
-    pub destroy_listener: crate::listener::Listener,
+    destroy_listener: crate::listener::Listener,
     pub config: InputDeviceConfig,
     pub destroy_fn: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
     pub destroy_data: *mut std::ffi::c_void,
 
-    pub objects: ffi::wl_list, // list of InputDeviceObject
+    objects: ffi::wl_list, // list of InputDeviceObject
     pub libinput: Option<Box<crate::libinput_device::LibinputDevice>>,
     pub xkb_keyboard: Option<Box<crate::xkb_keyboard::XkbKeyboard>>,
+}
+
+impl InputDevice {
+    /// The head of its `InputDeviceObject`s, for list code in other modules: the field
+    /// itself is private, so safe code elsewhere cannot move or replace a
+    /// linked head.
+    pub(crate) fn objects_head(&mut self) -> *mut ffi::wl_list {
+        &mut self.objects
+    }
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
@@ -38,7 +47,17 @@ unsafe impl crate::listener::Anchored for InputDevice {}
 pub struct InputDeviceObject {
     pub device: *mut InputDevice,
     pub resource: *mut ffi::wl_resource,
-    pub link: ffi::wl_list,
+    link: ffi::wl_list,
+}
+
+impl InputDeviceObject {
+    /// The `InputDeviceObject` whose `link` (in InputDevice::objects) is `link`.
+    ///
+    /// # Safety
+    /// `link` is that field of a live `InputDeviceObject`.
+    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
+        crate::container_of!(link, Self, link)
+    }
 }
 
 impl InputDevice {
@@ -81,11 +100,11 @@ impl InputDevice {
         (*device).destroy_listener.connect(destroy_signal, handle_device_destroy);
 
         if !virtual_device {
-            let config_objects = &mut (*server).input_manager.objects as *mut ffi::wl_list as *mut WlList;
+            let config_objects = (*server).input_manager.objects_head() as *mut WlList;
             let mut curr = (*config_objects).next;
             while curr != config_objects {
                 let next = (*curr).next;
-                let im_obj = crate::container_of!(curr, crate::input_manager::InputManagerObject, link);
+                let im_obj = crate::input_manager::InputManagerObject::from_link(curr);
                 (*device).create_object(server, (*im_obj).resource);
                 curr = next;
             }
@@ -227,11 +246,11 @@ impl InputDevice {
 
         // Connect client-side libinput device if matching exists
         if let Some(ref mut libinput) = self.libinput {
-            let libinput_config_objects = &mut (*server).libinput_config.objects as *mut ffi::wl_list as *mut WlList;
+            let libinput_config_objects = (*server).libinput_config.objects_head() as *mut WlList;
             let mut curr = (*libinput_config_objects).next;
             while curr != libinput_config_objects {
                 let next = (*curr).next;
-                let config_obj = crate::container_of!(curr, crate::libinput_config::LibinputConfigObject, link);
+                let config_obj = crate::libinput_config::LibinputConfigObject::from_link(curr);
                 if ffi::wl_resource_get_client((*config_obj).resource) == client {
                     libinput.create_object((*config_obj).resource);
                 }

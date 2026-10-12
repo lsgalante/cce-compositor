@@ -20,7 +20,7 @@ pub enum SceneNodeDataVal {
 pub struct SceneNodeData {
     pub node: *mut ffi::wlr_scene_node,
     pub data: SceneNodeDataVal,
-    pub destroy: crate::listener::Listener,
+    destroy: crate::listener::Listener,
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,

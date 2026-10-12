@@ -467,10 +467,30 @@ lists. A callback finds its owner one of two ways:
 
 Either check failing means an owner moved after connecting: the callback
 logs `listener …: its owner moved or is gone` and aborts
-(`listener::misrouted`) rather than run on the wrong object. A linked
-`wl_list` HEAD in a movable owner is boxed for the same reason
-(`Seat::keyboard_groups`, `InputRelay::input_popups`); `InputPopup` names
-its seat by id rather than pointing into the relay.
+(`listener::misrouted`) rather than run on the wrong object. A field-routed
+listener must also stay in its field: moved out by a `mem::take` / `swap`
+of the `Listener` itself and kept past its owner's free, its cell names the
+freed field. So every `Listener` field is PRIVATE to its owner's module
+(2026-10-12), where `connect` / `disconnect` are all that is done to one;
+never move one. Every owner's linked `wl_list` HEAD or LINK field is
+private too: other modules go through raw-pointer accessors
+(`XkbConfig::keyboards_head()`, `Keyboard::from_group_link`, ...), which no
+safe code can swap through. A head in a movable owner is boxed
+(`Seat::keyboard_groups`, `InputRelay::input_popups`), which survives a
+move but not a free, so those owners have no safe constructor or drop
+(`InputRelay::new` and `Seats::take` are `unsafe`); `InputPopup` names its
+seat by id rather than pointing into the relay. A `Server` subsystem has no
+`Default` (`XkbConfig`, `LibinputConfig`, `InputManager`, `LockManager`):
+a safe second value is what a `mem::take` needs.
+
+A movable sub-owner's raw pointers need the same care when a teardown finds
+them through the SEAT: `Seat::cursor` and `Seat::relay` are public, so safe
+code can swap them between seats. The text input's destroy handler
+therefore clears it from EVERY seat's relay; the pointer constraint's
+cannot reach the window manager (it runs inside `with_held`), so
+`pointer_constraint::with_held`, the one place `Cursor::constraint` is
+dereferenced, aborts on a cursor whose `sid()` (private, set first thing in
+`init`) is not the seat it was found in.
 
 The `Server` is `std::mem::forget`ten after `deinit` (`run_server.rs`): by
 then the display and every wlroots object are gone, and its subsystems'
@@ -586,9 +606,11 @@ stay public. Anything that changes the shape of a scene subtree is off
 limits inside `Handle::for_each_buffer` (an `unsafe fn` for that reason).
 
 The listener half of the second review's KNOWN GAP (listener-bearing
-structs movable by a safe `mem::swap`) is CLOSED since 2026-10-12: see
-"Listeners are `crate::listener::Listener`". KNOWN GAP still open: wlroots
-user data that names a movable owner by ADDRESS — `wlr_seat.data` (read by
+structs movable by a safe `mem::swap`) is closed since 2026-10-12 for safe
+code OUTSIDE an owner's module: see "Listeners are
+`crate::listener::Listener`". Inside it, moving a `Listener` or list field
+is still possible and still unsound — the rule there is "never". KNOWN GAP
+still open: wlroots user data that names a movable owner by ADDRESS — `wlr_seat.data` (read by
 `Seat::id_of` and the pointer constraint's destroy / node-destroy
 teardown) and `wlr_output.data` (the output configuration apply, the power
 manager, layer-surface arrange, `LockSurface::get_output`). After a safe

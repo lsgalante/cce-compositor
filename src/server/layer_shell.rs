@@ -18,7 +18,7 @@ pub enum LayerShellSeatFocus {
 
 pub struct LayerShell {
     pub wlr_shell: *mut ffi::wlr_layer_shell_v1,
-    pub new_surface: crate::listener::Listener,
+    new_surface: crate::listener::Listener,
 }
 
 impl LayerShell {
@@ -263,11 +263,11 @@ pub struct LayerSurface {
     pub opacity_step: f32,
     pub animation_timer: crate::event_source::Timer,
 
-    pub destroy: crate::listener::Listener,
-    pub map: crate::listener::Listener,
-    pub unmap: crate::listener::Listener,
-    pub commit: crate::listener::Listener,
-    pub new_popup: crate::listener::Listener,
+    destroy: crate::listener::Listener,
+    map: crate::listener::Listener,
+    unmap: crate::listener::Listener,
+    commit: crate::listener::Listener,
+    new_popup: crate::listener::Listener,
     pub parent_offset_applied: bool,
 }
 

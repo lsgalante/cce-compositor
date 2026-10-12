@@ -631,7 +631,7 @@ pub struct Window {
     /// `handle_window_commit` re-arranges only when the segment actually
     /// changed size rather than on every content refresh.
     pub status_commit_size: (i32, i32),
-    pub commit: crate::listener::Listener,
+    commit: crate::listener::Listener,
     pub was_fullscreen: bool,
     /// A fullscreen window drawn on the desk rather than pinned to its
     /// output: stepped aside, or sliding back in under the camera. Set by

@@ -7,7 +7,7 @@ use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
 
 #[repr(C)]
 pub struct InputPopup {
-    pub link: ffi::wl_list,
+    link: ffi::wl_list,
     /// The seat whose relay the popup belongs to. An id, not a relay
     /// pointer: the relay lives inside its seat, which may move.
     pub sid: crate::seat::SeatId,
@@ -15,10 +15,20 @@ pub struct InputPopup {
     /// Watched: wlroots destroys it with the popup surface.
     pub surface_tree: crate::scene_handle::SceneTree,
 
-    pub destroy: crate::listener::Listener,
-    pub map: crate::listener::Listener,
-    pub unmap: crate::listener::Listener,
-    pub commit: crate::listener::Listener,
+    destroy: crate::listener::Listener,
+    map: crate::listener::Listener,
+    unmap: crate::listener::Listener,
+    commit: crate::listener::Listener,
+}
+
+impl InputPopup {
+    /// The `InputPopup` whose `link` (in the relay's popup list) is `link`.
+    ///
+    /// # Safety
+    /// `link` is that field of a live `InputPopup`.
+    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
+        crate::container_of!(link, Self, link)
+    }
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,

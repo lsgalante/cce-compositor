@@ -11,7 +11,7 @@ pub struct InputManager {
     /// Private: a registry another module could replace or swap would stop
     /// matching what the devices' destroy paths remove from it.
     devices: crate::registry::Registry<crate::input_device::InputDevice>,
-    pub objects: ffi::wl_list, // list of InputManagerObject
+    objects: ffi::wl_list, // list of InputManagerObject
     pub global: *mut ffi::wl_global,
     
     pub idle_notifier: *mut ffi::wlr_idle_notifier_v1,
@@ -24,13 +24,22 @@ pub struct InputManager {
     pub text_input_manager: *mut ffi::wlr_text_input_manager_v3,
     pub tablet_manager: *mut ffi::wlr_tablet_manager_v2,
 
-    pub new_input_listener: crate::listener::Listener,
-    pub new_text_input: crate::listener::Listener,
-    pub new_input_method: crate::listener::Listener,
-    pub new_virtual_pointer_listener: crate::listener::Listener,
-    pub new_virtual_keyboard_listener: crate::listener::Listener,
-    pub new_pointer_constraint: crate::listener::Listener,
+    new_input_listener: crate::listener::Listener,
+    new_text_input: crate::listener::Listener,
+    new_input_method: crate::listener::Listener,
+    new_virtual_pointer_listener: crate::listener::Listener,
+    new_virtual_keyboard_listener: crate::listener::Listener,
+    new_pointer_constraint: crate::listener::Listener,
 
+}
+
+impl InputManager {
+    /// The head of its `InputManagerObject`s, for list code in other modules: the field
+    /// itself is private, so safe code elsewhere cannot move or replace a
+    /// linked head.
+    pub(crate) fn objects_head(&mut self) -> *mut ffi::wl_list {
+        &mut self.objects
+    }
 }
 
 // SAFETY: a field of the one `Server`, which only the unsafe `Server::zeroed`
@@ -53,7 +62,17 @@ thread_local! {
 pub struct InputManagerObject {
     pub manager: *mut InputManager,
     pub resource: *mut ffi::wl_resource,
-    pub link: ffi::wl_list,
+    link: ffi::wl_list,
+}
+
+impl InputManagerObject {
+    /// The `InputManagerObject` whose `link` (in InputManager::objects) is `link`.
+    ///
+    /// # Safety
+    /// `link` is that field of a live `InputManagerObject`.
+    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
+        crate::container_of!(link, Self, link)
+    }
 }
 
 impl InputManager {

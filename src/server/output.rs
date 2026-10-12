@@ -266,10 +266,10 @@ pub struct Output {
     /// Label point size actually in use, so a zoom change can re-rasterize.
     pub last_label_px: u32,
 
-    pub destroy: crate::listener::Listener,
-    pub request_state: crate::listener::Listener,
-    pub frame: crate::listener::Listener,
-    pub present: crate::listener::Listener,
+    destroy: crate::listener::Listener,
+    request_state: crate::listener::Listener,
+    frame: crate::listener::Listener,
+    present: crate::listener::Listener,
 }
 
 impl Output {

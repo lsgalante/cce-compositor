@@ -43,7 +43,11 @@ impl Seats {
 
     /// Give up the seat `id` names; dropping or destroying the box frees
     /// it. Its slot stays empty: ids are never reused.
-    pub fn take(&mut self, id: SeatId) -> Option<Box<Seat>> {
+    ///
+    /// # Safety
+    /// The seat has been torn down (`Seat::destroy`): no keyboard group or
+    /// input popup is still linked into the list heads the drop frees.
+    pub unsafe fn take(&mut self, id: SeatId) -> Option<Box<Seat>> {
         // SAFETY: every pointer came from `Box::leak` in `insert`, and
         // leaves the store only here, once.
         self.seats.get_mut(id.0 as usize)?.take().map(|p| unsafe { Box::from_raw(p.as_ptr()) })

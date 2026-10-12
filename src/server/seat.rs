@@ -200,21 +200,21 @@ pub struct Seat {
     /// status topic as the move steps (`carry_group_items`).
     pub group_items: Vec<(u64, f64, f64)>,
 
-    pub request_set_cursor: crate::listener::Listener,
+    request_set_cursor: crate::listener::Listener,
     /// The Xwayland cursor surface currently being shown at 1/`x11_cursor_scale`,
     /// null when the pointer image is anyone else's. See
     /// `handle_x11_cursor_commit` for why an X11 cursor needs shrinking at all.
     pub x11_cursor_surface: *mut ffi::wlr_surface,
     pub x11_cursor_scale: f32,
-    pub x11_cursor_commit: crate::listener::Listener,
-    pub x11_cursor_destroy: crate::listener::Listener,
-    pub request_set_selection: crate::listener::Listener,
-    pub request_start_drag: crate::listener::Listener,
-    pub start_drag: crate::listener::Listener,
-    pub request_set_primary_selection: crate::listener::Listener,
+    x11_cursor_commit: crate::listener::Listener,
+    x11_cursor_destroy: crate::listener::Listener,
+    request_set_selection: crate::listener::Listener,
+    request_start_drag: crate::listener::Listener,
+    start_drag: crate::listener::Listener,
+    request_set_primary_selection: crate::listener::Listener,
 
     pub drag: DragState,
-    pub drag_destroy: crate::listener::Listener,
+    drag_destroy: crate::listener::Listener,
 
     /// This seat's id in `input_manager.seats`, set by `Seats::insert`.
     pub id: SeatId,
@@ -262,6 +262,7 @@ impl Seat {
             _built_by_create: (),
             touch_devices: 0,
             touch_injected: false,
+            // SAFETY: this seat's own relay, dropped only with it.
             relay: crate::input_relay::InputRelay::new(),
             layer_shell: crate::layer_shell::LayerShellSeat::default(),
             keyboard_groups: Box::new(std::mem::zeroed()),
@@ -354,6 +355,8 @@ impl Seat {
         }
 
         ffi::wlr_seat_destroy((*seat).wlr_seat().take());
+        // SAFETY: torn down above: the keyboard groups are gone (asserted)
+        // and the relay's popups went with its input method.
         drop(wm.seats.take(sid));
     }
 
@@ -453,7 +456,7 @@ impl Seat {
             if !keyboard.is_null() {
                 if !(*keyboard).group.is_null() {
                     let keys: Vec<u32> = (*keyboard).pressed.iter().cloned().collect();
-                    crate::server::wl_list_remove(&mut (*keyboard).group_link as *mut ffi::wl_list as *mut crate::server::WlList);
+                    crate::server::wl_list_remove((*keyboard).group_link_ptr() as *mut crate::server::WlList);
                     let seat: *mut Seat = seat_mut!(wm, sid, ());
                     (*(*keyboard).group).unref(seat, &keys);
                     (*keyboard).group = std::ptr::null_mut();
@@ -1846,7 +1849,7 @@ unsafe extern "C" fn handle_drag_destroy(
     match seat.drag {
         DragState::None => unreachable!(),
         DragState::Pointer => {
-            crate::cursor::Cursor::update_state(&mut *crate::reentry::wm(crate::shared::server_ptr()), seat.cursor.sid);
+            crate::cursor::Cursor::update_state(&mut *crate::reentry::wm(crate::shared::server_ptr()), seat.cursor.sid());
         }
         DragState::Touch => {}
     }

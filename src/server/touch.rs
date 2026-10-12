@@ -770,7 +770,7 @@ impl Cursor {
 
     /// Layout coordinates of a touch event's normalized `x, y`, through the
     /// device's output mapping (`map_to_output` / `map_to_region`).
-    unsafe fn touch_layout_coords(&self, touch: *mut ffi::wlr_touch, x: f64, y: f64) -> (f64, f64) {
+    pub(crate) unsafe fn touch_layout_coords(&self, touch: *mut ffi::wlr_touch, x: f64, y: f64) -> (f64, f64) {
         let wlr_device = if touch.is_null() {
             std::ptr::null_mut()
         } else {
@@ -790,43 +790,6 @@ fn output_local((x, y): (f64, f64)) -> (f64, f64) {
         Some(b) => (x - b.x as f64, y - b.y as f64),
         None => (x, y),
     }
-}
-
-pub(crate) unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let seat = listener_seat_ptr!(listener, cursor.touch_down_listener);
-    let event = data as *mut ffi::wlr_touch_down_event;
-    let (lx, ly) = (*seat).cursor.touch_layout_coords((*event).touch, (*event).x, (*event).y);
-    let sid = (*seat).id;
-    crate::cursor::Cursor::touch_down(&mut *crate::reentry::wm(crate::shared::server_ptr()), sid, (*event).touch_id, lx, ly, (*event).time_msec, sys);
-}
-
-pub(crate) unsafe extern "C" fn handle_touch_motion(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let seat = listener_seat_ptr!(listener, cursor.touch_motion_listener);
-    let event = data as *mut ffi::wlr_touch_motion_event;
-    let (lx, ly) = (*seat).cursor.touch_layout_coords((*event).touch, (*event).x, (*event).y);
-    let sid = (*seat).id;
-    crate::cursor::Cursor::touch_motion(&mut *crate::reentry::wm(crate::shared::server_ptr()), sid, (*event).touch_id, lx, ly, (*event).time_msec, sys);
-}
-
-pub(crate) unsafe extern "C" fn handle_touch_up(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = listener_seat!(listener, cursor.touch_up_listener);
-    let event = data as *mut ffi::wlr_touch_up_event;
-    crate::cursor::Cursor::touch_up(&mut *crate::reentry::wm(crate::shared::server_ptr()), sid, (*event).touch_id, (*event).time_msec, sys);
-}
-
-pub(crate) unsafe extern "C" fn handle_touch_cancel(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = listener_seat!(listener, cursor.touch_cancel_listener);
-    let event = data as *mut ffi::wlr_touch_cancel_event;
-    crate::cursor::Cursor::touch_cancel(&mut *crate::reentry::wm(crate::shared::server_ptr()), sid, (*event).touch_id, sys);
-}
-
-pub(crate) unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let seat = listener_seat_ptr!(listener, cursor.touch_frame_listener);
-    (*seat).cursor.touch_frame();
 }
 
 #[cfg(test)]

@@ -22,7 +22,10 @@ pub struct Cursor {
     /// The id of the seat this cursor belongs to, for the `(wm, sid)`
     /// cursor functions. The cursor keeps no pointer to its seat: it is a
     /// field of it, so reaching it through one alongside `wm` aliased.
-    pub sid: crate::seat::SeatId,
+    /// Private, set once by `init`: `pointer_constraint::with_held` trusts
+    /// it to tell a cursor safe code moved into another seat (`pub cursor`)
+    /// from that seat's own.
+    sid: crate::seat::SeatId,
     wlr_cursor: crate::wlr::Wlr<ffi::wlr_cursor>,
     /// The seat's `wlr_seat`, held from `init` to `deinit` (which the seat
     /// runs before it destroys the `wlr_seat`), so the pointer paths reach
@@ -73,16 +76,16 @@ pub struct Cursor {
     /// (not absolute time) picks the frame and every cursor starts at frame 0.
     pub anim_started_msec: u32,
 
-    pub motion_listener: crate::listener::Listener,
-    pub motion_absolute_listener: crate::listener::Listener,
-    pub button_listener: crate::listener::Listener,
-    pub axis_listener: crate::listener::Listener,
-    pub frame_listener: crate::listener::Listener,
+    motion_listener: crate::listener::Listener,
+    motion_absolute_listener: crate::listener::Listener,
+    button_listener: crate::listener::Listener,
+    axis_listener: crate::listener::Listener,
+    frame_listener: crate::listener::Listener,
 
-    pub tablet_tool_axis_listener: crate::listener::Listener,
-    pub tablet_tool_proximity_listener: crate::listener::Listener,
-    pub tablet_tool_tip_listener: crate::listener::Listener,
-    pub tablet_tool_button_listener: crate::listener::Listener,
+    tablet_tool_axis_listener: crate::listener::Listener,
+    tablet_tool_proximity_listener: crate::listener::Listener,
+    tablet_tool_tip_listener: crate::listener::Listener,
+    tablet_tool_button_listener: crate::listener::Listener,
 
     /// Every finger on a touchscreen, by touch id: where it is (layout
     /// coordinates; the drag icon of a touch drag follows it) and where its
@@ -120,22 +123,22 @@ pub struct Cursor {
     /// reached an X11 client at half speed.
     pub grab_scale: f64,
 
-    pub touch_down_listener: crate::listener::Listener,
-    pub touch_motion_listener: crate::listener::Listener,
-    pub touch_up_listener: crate::listener::Listener,
-    pub touch_cancel_listener: crate::listener::Listener,
-    pub touch_frame_listener: crate::listener::Listener,
+    touch_down_listener: crate::listener::Listener,
+    touch_motion_listener: crate::listener::Listener,
+    touch_up_listener: crate::listener::Listener,
+    touch_cancel_listener: crate::listener::Listener,
+    touch_frame_listener: crate::listener::Listener,
 
-    pub swipe_begin_listener: crate::listener::Listener,
-    pub swipe_update_listener: crate::listener::Listener,
-    pub swipe_end_listener: crate::listener::Listener,
+    swipe_begin_listener: crate::listener::Listener,
+    swipe_update_listener: crate::listener::Listener,
+    swipe_end_listener: crate::listener::Listener,
 
-    pub pinch_begin_listener: crate::listener::Listener,
-    pub pinch_update_listener: crate::listener::Listener,
-    pub pinch_end_listener: crate::listener::Listener,
+    pinch_begin_listener: crate::listener::Listener,
+    pinch_update_listener: crate::listener::Listener,
+    pinch_end_listener: crate::listener::Listener,
 
-    pub hold_begin_listener: crate::listener::Listener,
-    pub hold_end_listener: crate::listener::Listener,
+    hold_begin_listener: crate::listener::Listener,
+    hold_end_listener: crate::listener::Listener,
 
     pub gesture_dx: f64,
     pub gesture_dy: f64,
@@ -291,6 +294,11 @@ impl Default for Cursor {
 }
 
 impl Cursor {
+    /// The id of the seat this cursor was made for (`init`).
+    pub fn sid(&self) -> crate::seat::SeatId {
+        self.sid
+    }
+
     /// The seat's pointer constraint (see the field), or null.
     pub fn constraint(&self) -> *mut crate::pointer_constraint::PointerConstraint {
         self.constraint
@@ -328,6 +336,8 @@ impl Cursor {
         seat: *mut Seat,
         output_layout: *mut ffi::wlr_output_layout,
     ) -> Result<(), &'static str> {
+        // First, so even a failed init leaves the cursor naming its seat.
+        self.sid = (*seat).id;
         let wlr_cursor = ffi::wlr_cursor_create();
         if wlr_cursor.is_null() {
             return Err("Failed to create wlr_cursor");
@@ -340,7 +350,6 @@ impl Cursor {
             return Err("Failed to create wlr_xcursor_manager");
         }
 
-        self.sid = (*seat).id;
         self.wlr_cursor().set(wlr_cursor);
         // Released in `deinit`, which `Seat::destroy` runs before it
         // destroys the `wlr_seat`.
@@ -386,15 +395,15 @@ impl Cursor {
 
         self.tablet_tool_button_listener.connect_keyed(ffi::river_wlr_cursor_get_tablet_tool_button_signal(wlr_cursor), handle_tablet_tool_button, sid);
 
-        self.touch_down_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_down_signal(wlr_cursor), crate::touch::handle_touch_down, sid);
+        self.touch_down_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_down_signal(wlr_cursor), handle_touch_down, sid);
 
-        self.touch_motion_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_motion_signal(wlr_cursor), crate::touch::handle_touch_motion, sid);
+        self.touch_motion_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_motion_signal(wlr_cursor), handle_touch_motion, sid);
 
-        self.touch_up_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_up_signal(wlr_cursor), crate::touch::handle_touch_up, sid);
+        self.touch_up_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_up_signal(wlr_cursor), handle_touch_up, sid);
 
-        self.touch_cancel_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_cancel_signal(wlr_cursor), crate::touch::handle_touch_cancel, sid);
+        self.touch_cancel_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_cancel_signal(wlr_cursor), handle_touch_cancel, sid);
 
-        self.touch_frame_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_frame_signal(wlr_cursor), crate::touch::handle_touch_frame, sid);
+        self.touch_frame_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_frame_signal(wlr_cursor), handle_touch_frame, sid);
 
         self.swipe_begin_listener.connect_keyed(ffi::river_wlr_cursor_get_swipe_begin_signal(wlr_cursor), handle_swipe_begin, sid);
 
@@ -1658,6 +1667,46 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
 /// not end the swipe: the travel restarts from zero, and each further
 /// `swipe_repeat_threshold` of travel (default four times the first) steps
 /// again — or back, on a reversal — until the fingers lift.
+
+// Touch: routed by the seat's id, like the pointer listeners above; the
+// gesture logic they feed is in `touch.rs`.
+
+unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
+    let seat = listener_seat_ptr!(listener, cursor.touch_down_listener);
+    let event = data as *mut ffi::wlr_touch_down_event;
+    let (lx, ly) = (*seat).cursor.touch_layout_coords((*event).touch, (*event).x, (*event).y);
+    let sid = (*seat).id;
+    crate::cursor::Cursor::touch_down(&mut *crate::reentry::wm(crate::shared::server_ptr()), sid, (*event).touch_id, lx, ly, (*event).time_msec, sys);
+}
+
+unsafe extern "C" fn handle_touch_motion(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
+    let seat = listener_seat_ptr!(listener, cursor.touch_motion_listener);
+    let event = data as *mut ffi::wlr_touch_motion_event;
+    let (lx, ly) = (*seat).cursor.touch_layout_coords((*event).touch, (*event).x, (*event).y);
+    let sid = (*seat).id;
+    crate::cursor::Cursor::touch_motion(&mut *crate::reentry::wm(crate::shared::server_ptr()), sid, (*event).touch_id, lx, ly, (*event).time_msec, sys);
+}
+
+unsafe extern "C" fn handle_touch_up(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
+    let sid = listener_seat!(listener, cursor.touch_up_listener);
+    let event = data as *mut ffi::wlr_touch_up_event;
+    crate::cursor::Cursor::touch_up(&mut *crate::reentry::wm(crate::shared::server_ptr()), sid, (*event).touch_id, (*event).time_msec, sys);
+}
+
+unsafe extern "C" fn handle_touch_cancel(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
+    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
+    let sid = listener_seat!(listener, cursor.touch_cancel_listener);
+    let event = data as *mut ffi::wlr_touch_cancel_event;
+    crate::cursor::Cursor::touch_cancel(&mut *crate::reentry::wm(crate::shared::server_ptr()), sid, (*event).touch_id, sys);
+}
+
+unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+    let seat = listener_seat_ptr!(listener, cursor.touch_frame_listener);
+    (*seat).cursor.touch_frame();
+}
 
 #[cfg(test)]
 mod tests {

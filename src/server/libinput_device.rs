@@ -8,14 +8,24 @@ use crate::server::WlList;
 pub struct LibinputDevice {
     pub parent_device: *mut InputDevice,
     pub libinput: *mut ffi::libinput_device,
-    pub objects: ffi::wl_list, // list of LibinputDeviceObject
-    pub link: ffi::wl_list,    // link inside LibinputConfig::devices
+    objects: ffi::wl_list, // list of LibinputDeviceObject
+    link: ffi::wl_list,    // link inside LibinputConfig::devices
+}
+
+impl LibinputDevice {
+    /// The `LibinputDevice` whose `link` (in LibinputConfig::devices) is `link`.
+    ///
+    /// # Safety
+    /// `link` is that field of a live `LibinputDevice`.
+    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
+        crate::container_of!(link, Self, link)
+    }
 }
 
 pub struct LibinputDeviceObject {
     pub device: *mut LibinputDevice,
     pub resource: *mut ffi::wl_resource,
-    pub link: ffi::wl_list,
+    link: ffi::wl_list,
 }
 
 impl LibinputDevice {
@@ -32,14 +42,14 @@ impl LibinputDevice {
         ffi::wl_list_init(&mut dev.objects);
         ffi::wl_list_init(&mut dev.link);
 
-        let devices_head = &mut (*server).libinput_config.devices as *mut ffi::wl_list as *mut WlList;
+        let devices_head = (*server).libinput_config.devices_head() as *mut WlList;
         crate::server::wl_list_insert((*devices_head).prev, &mut dev.link as *mut ffi::wl_list as *mut WlList);
 
-        let config_objects = &mut (*server).libinput_config.objects as *mut ffi::wl_list as *mut WlList;
+        let config_objects = (*server).libinput_config.objects_head() as *mut WlList;
         let mut curr = (*config_objects).next;
         while curr != config_objects {
             let next = (*curr).next;
-            let config_obj = crate::container_of!(curr, crate::libinput_config::LibinputConfigObject, link);
+            let config_obj = crate::libinput_config::LibinputConfigObject::from_link(curr);
             dev.create_object((*config_obj).resource);
             curr = next;
         }
@@ -245,11 +255,11 @@ impl LibinputDevice {
         ffi::wl_resource_post_event(config_v1_resource, ffi::RIVER_LIBINPUT_CONFIG_V1_LIBINPUT_DEVICE, resource);
 
         // Send corresponding river input device
-        let input_dev_objects = &mut (*self.parent_device).objects as *mut ffi::wl_list as *mut WlList;
+        let input_dev_objects = (*self.parent_device).objects_head() as *mut WlList;
         let mut curr = (*input_dev_objects).next;
         while curr != input_dev_objects {
             let next = (*curr).next;
-            let input_dev_obj = crate::container_of!(curr, crate::input_device::InputDeviceObject, link);
+            let input_dev_obj = crate::input_device::InputDeviceObject::from_link(curr);
             if ffi::wl_resource_get_client((*input_dev_obj).resource) == client {
                 ffi::wl_resource_post_event(resource, ffi::RIVER_LIBINPUT_DEVICE_V1_INPUT_DEVICE, (*input_dev_obj).resource);
             }

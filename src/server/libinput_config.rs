@@ -6,19 +6,39 @@ use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
 
 pub struct LibinputConfig {
     pub global: *mut ffi::wl_global,
-    pub objects: ffi::wl_list,
-    pub devices: ffi::wl_list,
+    objects: ffi::wl_list,
+    devices: ffi::wl_list,
+}
+
+impl LibinputConfig {
+    /// The head of its `LibinputConfigObject`s, for list code in other modules: the field
+    /// itself is private, so safe code elsewhere cannot move or replace a
+    /// linked head.
+    pub(crate) fn objects_head(&mut self) -> *mut ffi::wl_list {
+        &mut self.objects
+    }
+
+    /// The head of the `LibinputDevice`s, for list code in other modules: the field
+    /// itself is private, so safe code elsewhere cannot move or replace a
+    /// linked head.
+    pub(crate) fn devices_head(&mut self) -> *mut ffi::wl_list {
+        &mut self.devices
+    }
 }
 
 pub struct LibinputConfigObject {
     pub config: *mut LibinputConfig,
     pub resource: *mut ffi::wl_resource,
-    pub link: ffi::wl_list,
+    link: ffi::wl_list,
 }
 
-impl Default for LibinputConfig {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
+impl LibinputConfigObject {
+    /// The `LibinputConfigObject` whose `link` (in LibinputConfig::objects) is `link`.
+    ///
+    /// # Safety
+    /// `link` is that field of a live `LibinputConfigObject`.
+    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
+        crate::container_of!(link, Self, link)
     }
 }
 
@@ -91,7 +111,7 @@ unsafe extern "C" fn bind_libinput_config(
     let mut curr = (*devices_head).next;
     while curr != devices_head {
         let next = (*curr).next;
-        let dev = crate::container_of!(curr, crate::libinput_device::LibinputDevice, link);
+        let dev = crate::libinput_device::LibinputDevice::from_link(curr);
         (*dev).create_object(resource);
         curr = next;
     }

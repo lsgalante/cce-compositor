@@ -58,7 +58,7 @@ impl WindowManager {
         // handles in step with the windows'.
         self.update_status();
         let now = crate::util::msec_timestamp();
-        let idle: Vec<_> = self.seats.values().filter(|seat| seat.op.is_none()).map(|seat| seat.cursor.sid).collect();
+        let idle: Vec<_> = self.seats.values().filter(|seat| seat.op.is_none()).map(|seat| seat.cursor.sid()).collect();
         for sid in idle {
             crate::cursor::Cursor::passthrough(self, sid, now);
         }

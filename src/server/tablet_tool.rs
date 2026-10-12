@@ -24,8 +24,8 @@ pub struct TabletTool {
     pub tilt_x: f64,
     pub tilt_y: f64,
 
-    pub destroy_listener: crate::listener::Listener,
-    pub set_cursor_listener: crate::listener::Listener,
+    destroy_listener: crate::listener::Listener,
+    set_cursor_listener: crate::listener::Listener,
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,

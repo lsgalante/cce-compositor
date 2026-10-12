@@ -8,19 +8,39 @@ pub struct XkbConfig {
     pub global: *mut ffi::wl_global,
     pub context: *mut ffi::xkb_context,
     pub default_keymap: *mut ffi::xkb_keymap,
-    pub objects: ffi::wl_list,
-    pub keyboards: ffi::wl_list,
+    objects: ffi::wl_list,
+    keyboards: ffi::wl_list,
+}
+
+impl XkbConfig {
+    /// The head of its `XkbConfigObject`s, for list code in other modules: the field
+    /// itself is private, so safe code elsewhere cannot move or replace a
+    /// linked head.
+    pub(crate) fn objects_head(&mut self) -> *mut ffi::wl_list {
+        &mut self.objects
+    }
+
+    /// The head of the `XkbKeyboard`s, for list code in other modules: the field
+    /// itself is private, so safe code elsewhere cannot move or replace a
+    /// linked head.
+    pub(crate) fn keyboards_head(&mut self) -> *mut ffi::wl_list {
+        &mut self.keyboards
+    }
 }
 
 pub struct XkbConfigObject {
     pub config: *mut XkbConfig,
     pub resource: *mut ffi::wl_resource,
-    pub link: ffi::wl_list,
+    link: ffi::wl_list,
 }
 
-impl Default for XkbConfig {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
+impl XkbConfigObject {
+    /// The `XkbConfigObject` whose `link` (in XkbConfig::objects) is `link`.
+    ///
+    /// # Safety
+    /// `link` is that field of a live `XkbConfigObject`.
+    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
+        crate::container_of!(link, Self, link)
     }
 }
 
@@ -127,7 +147,7 @@ unsafe extern "C" fn bind_xkb_config(
     let mut curr = (*keyboards_head).next;
     while curr != keyboards_head {
         let next = (*curr).next;
-        let xkb_kbd = crate::container_of!(curr, crate::xkb_keyboard::XkbKeyboard, link);
+        let xkb_kbd = crate::xkb_keyboard::XkbKeyboard::from_link(curr);
         (*xkb_kbd).create_object(resource);
         curr = next;
     }

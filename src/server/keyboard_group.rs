@@ -29,7 +29,7 @@ pub struct KeyboardGroup {
     /// pointer to its seat: the event handlers look it up by this id, and
     /// `unref`'s teardown is handed the seat by its caller.
     pub sid: Option<crate::seat::SeatId>,
-    pub link: ffi::wl_list, // Seat.keyboard_groups
+    link: ffi::wl_list, // Seat.keyboard_groups
     pub virtual_device: bool,
     pub config: KeyboardConfig,
     /// The group's own keyboard. Private: `match_chord` trusts its
@@ -39,9 +39,26 @@ pub struct KeyboardGroup {
     wlr_keyboard: ffi::wlr_keyboard,
     pub modifiers_old: u32,
     pub pressed: HashMap<u32, Press>,
-    pub key_listener: crate::listener::Listener,
-    pub modifiers_listener: crate::listener::Listener,
-    pub keyboards: ffi::wl_list, // list of keyboards in this group
+    key_listener: crate::listener::Listener,
+    modifiers_listener: crate::listener::Listener,
+    keyboards: ffi::wl_list, // list of keyboards in this group
+}
+
+impl KeyboardGroup {
+    /// The head of its `Keyboard`s (by `group_link`), for list code in other modules: the field
+    /// itself is private, so safe code elsewhere cannot move or replace a
+    /// linked head.
+    pub(crate) fn keyboards_head(&mut self) -> *mut ffi::wl_list {
+        &mut self.keyboards
+    }
+
+    /// The `KeyboardGroup` whose `link` (in its seat's `keyboard_groups`) is `link`.
+    ///
+    /// # Safety
+    /// `link` is that field of a live `KeyboardGroup`.
+    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
+        crate::container_of!(link, Self, link)
+    }
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
@@ -282,11 +299,11 @@ impl KeyboardGroup {
             false
         };
 
-        let keyboards_head = &mut (*server).xkb_config.keyboards as *mut ffi::wl_list as *mut crate::server::WlList;
+        let keyboards_head = (*server).xkb_config.keyboards_head() as *mut crate::server::WlList;
         let mut curr = (*keyboards_head).next;
         while curr != keyboards_head {
             let next = (*curr).next;
-            let xkb_kbd = crate::container_of!(curr, crate::xkb_keyboard::XkbKeyboard, link);
+            let xkb_kbd = crate::xkb_keyboard::XkbKeyboard::from_link(curr);
             let parent_dev = (*xkb_kbd).parent_device;
             let kbd = (*parent_dev).destroy_data as *mut crate::keyboard::Keyboard;
             if !kbd.is_null() && (*kbd).group == self as *mut KeyboardGroup {
@@ -372,7 +389,7 @@ unsafe extern "C" fn led_update(wlr_keyboard: *mut ffi::wlr_keyboard, leds: u32)
     let mut curr = (*keyboards_head).next;
     while curr != keyboards_head {
         let next = (*curr).next;
-        let keyboard = crate::container_of!(curr, crate::keyboard::Keyboard, group_link);
+        let keyboard = crate::keyboard::Keyboard::from_group_link(curr);
         ffi::wlr_keyboard_led_update((*keyboard).wlr_keyboard, leds);
         curr = next;
     }

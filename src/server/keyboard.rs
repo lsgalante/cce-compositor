@@ -25,16 +25,31 @@ pub struct KeyboardConfig {
 pub struct Keyboard {
     pub device: *mut InputDevice,
     pub wlr_keyboard: *mut ffi::wlr_keyboard,
-    pub key_listener: crate::listener::Listener,
-    pub modifiers_listener: crate::listener::Listener,
+    key_listener: crate::listener::Listener,
+    modifiers_listener: crate::listener::Listener,
     /// Registered for virtual keyboards only: their keymap arrives from the
     /// client *after* creation (the zwp_virtual_keyboard_v1 keymap request),
     /// so it must be forwarded to the group once it lands.
-    pub keymap_listener: crate::listener::Listener,
+    keymap_listener: crate::listener::Listener,
     pub pressed: HashSet<u32>,
     pub group: *mut KeyboardGroup,
-    pub group_link: ffi::wl_list,
+    group_link: ffi::wl_list,
     pub config: KeyboardConfig,
+}
+
+impl Keyboard {
+    /// Its `group_link` (in `KeyboardGroup::keyboards`), for list code in other modules.
+    pub(crate) fn group_link_ptr(&mut self) -> *mut ffi::wl_list {
+        &mut self.group_link
+    }
+
+    /// The `Keyboard` whose `group_link` (in `KeyboardGroup::keyboards`) is `link`.
+    ///
+    /// # Safety
+    /// `link` is that field of a live `Keyboard`.
+    pub(crate) unsafe fn from_group_link<L>(link: *mut L) -> *mut Self {
+        crate::container_of!(link, Self, group_link)
+    }
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
@@ -147,7 +162,7 @@ impl Keyboard {
             let mut curr = (*seat_groups_head).next;
             while curr != seat_groups_head {
                 let next = (*curr).next;
-                let group = crate::container_of!(curr, KeyboardGroup, link);
+                let group = KeyboardGroup::from_link(curr);
                 // A virtual keyboard's group is private to it (its keymap can
                 // change under it, and its IME grab is disabled) — hardware
                 // keyboards must never join one.
@@ -158,7 +173,7 @@ impl Keyboard {
                 let config_ptr = &mut self.config as *mut KeyboardConfig;
                 if (*group).match_config(config_ptr) {
                     self.group = (*group).ref_group();
-                    let keyboards_head = &mut (*self.group).keyboards as *mut ffi::wl_list as *mut crate::server::WlList;
+                    let keyboards_head = (*self.group).keyboards_head() as *mut crate::server::WlList;
                     crate::server::wl_list_insert(keyboards_head, &mut self.group_link as *mut ffi::wl_list as *mut crate::server::WlList);
                     return;
                 }
@@ -169,7 +184,7 @@ impl Keyboard {
         match KeyboardGroup::create(seat, self.config, (*self.device).virtual_device) {
             Ok(group_ptr) => {
                 self.group = group_ptr;
-                let keyboards_head = &mut (*self.group).keyboards as *mut ffi::wl_list as *mut crate::server::WlList;
+                let keyboards_head = (*self.group).keyboards_head() as *mut crate::server::WlList;
                 crate::server::wl_list_insert(keyboards_head, &mut self.group_link as *mut ffi::wl_list as *mut crate::server::WlList);
             }
             Err(err) => {

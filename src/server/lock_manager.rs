@@ -50,10 +50,10 @@ pub struct LockManager {
     /// is not.
     pub lock_waiters: Option<Vec<std::sync::mpsc::Sender<String>>>,
 
-    pub new_lock: crate::listener::Listener,
-    pub unlock: crate::listener::Listener,
-    pub destroy: crate::listener::Listener,
-    pub new_surface: crate::listener::Listener,
+    new_lock: crate::listener::Listener,
+    unlock: crate::listener::Listener,
+    destroy: crate::listener::Listener,
+    new_surface: crate::listener::Listener,
 }
 
 // SAFETY: a field of the one `Server`, which only the unsafe `Server::zeroed`
@@ -319,8 +319,8 @@ pub struct LockSurface {
 
     pub idle_update_focus: *mut ffi::wl_event_source,
 
-    pub map: crate::listener::Listener,
-    pub surface_destroy: crate::listener::Listener,
+    map: crate::listener::Listener,
+    surface_destroy: crate::listener::Listener,
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
@@ -635,7 +635,7 @@ unsafe extern "C" fn update_focus(data: *mut std::ffi::c_void) {
             crate::seat::Seat::focus(wm, seat, Focus::LockSurface(lock_surface));
         }
         if let Some(p) = wm.seats.ptr(seat) {
-            crate::cursor::Cursor::update_state(wm, (*p).cursor.sid);
+            crate::cursor::Cursor::update_state(wm, (*p).cursor.sid());
         }
     }
 

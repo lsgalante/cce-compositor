@@ -39,17 +39,17 @@ pub struct WlrOutputPowerManagerV1 {
 
 pub struct OutputManager {
     pub first_modeset: bool,
-    pub new_output: crate::listener::Listener,
+    new_output: crate::listener::Listener,
     pub presentation: *mut ffi::wlr_presentation,
     pub xdg_output_manager: *mut ffi::wlr_xdg_output_manager_v1,
     /// The wlr-output-management global: set in `init`, let go in `deinit`
     /// (it dies with the display). Private, because the safe `send_config`
     /// hands configurations to it.
     wlr_output_manager: crate::wlr::Wlr<ffi::wlr_output_manager_v1>,
-    pub manager_apply: crate::listener::Listener,
-    pub manager_test: crate::listener::Listener,
+    manager_apply: crate::listener::Listener,
+    manager_test: crate::listener::Listener,
     pub power_manager: *mut ffi::wlr_output_power_manager_v1,
-    pub power_manager_set_mode: crate::listener::Listener,
+    power_manager_set_mode: crate::listener::Listener,
     pub gamma_control_manager: *mut ffi::wlr_gamma_control_manager_v1,
 }
 

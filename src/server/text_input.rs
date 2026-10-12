@@ -8,10 +8,10 @@ use crate::seat::Seat;
 pub struct TextInput {
     pub wlr_text_input: *mut ffi::wlr_text_input_v3,
 
-    pub enable: crate::listener::Listener,
-    pub commit: crate::listener::Listener,
-    pub disable: crate::listener::Listener,
-    pub destroy: crate::listener::Listener,
+    enable: crate::listener::Listener,
+    commit: crate::listener::Listener,
+    disable: crate::listener::Listener,
+    destroy: crate::listener::Listener,
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
@@ -115,14 +115,21 @@ unsafe extern "C" fn handle_disable(listener: *mut ffi::wl_listener, _data: *mut
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let text_input = crate::listener_owner!(listener, TextInput, destroy);
-    // The seat's side first, if it is still in the store. The text input
-    // itself is unhooked and freed either way: its signals are going.
-    if let Some((wm, sid)) = entry(text_input) {
-        if wm.seats.get(sid).is_some_and(|seat| seat.relay.text_input() == text_input) {
-            crate::input_relay::InputRelay::disable_text_input(wm, sid);
-        }
-        if let Some(seat) = wm.seats.get_mut(sid) {
-            seat.relay.unregister_text_input(text_input);
+    // Off every seat's relay first, not only the one its wlroots seat
+    // names: safe code can move a relay to another seat (`Seat::relay` is
+    // public), and a freed text input left in one is walked by
+    // `Seat::focus`. The text input itself is unhooked and freed either
+    // way: its signals are going.
+    let server = crate::shared::server_ptr();
+    if !server.is_null() {
+        let wm = &mut *crate::reentry::wm(server);
+        for sid in wm.seats.ids() {
+            if wm.seats.get(sid).is_some_and(|seat| seat.relay.text_input() == text_input) {
+                crate::input_relay::InputRelay::disable_text_input(wm, sid);
+            }
+            if let Some(seat) = wm.seats.get_mut(sid) {
+                seat.relay.unregister_text_input(text_input);
+            }
         }
     }
 

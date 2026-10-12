@@ -10,20 +10,20 @@ pub struct XwaylandOverrideRedirect {
     xsurface: crate::wlr::Wlr<ffi::wlr_xwayland_surface>,
     pub surface_tree: crate::scene_handle::SceneTree,
 
-    pub request_configure: crate::listener::Listener,
-    pub destroy: crate::listener::Listener,
-    pub set_override_redirect: crate::listener::Listener,
-    pub associate: crate::listener::Listener,
-    pub dissociate: crate::listener::Listener,
+    request_configure: crate::listener::Listener,
+    destroy: crate::listener::Listener,
+    set_override_redirect: crate::listener::Listener,
+    associate: crate::listener::Listener,
+    dissociate: crate::listener::Listener,
 
-    pub map: crate::listener::Listener,
-    pub unmap: crate::listener::Listener,
+    map: crate::listener::Listener,
+    unmap: crate::listener::Listener,
 
-    pub set_geometry: crate::listener::Listener,
+    set_geometry: crate::listener::Listener,
     /// Re-applies the 1/scale dest size after every commit (the scene's
     /// commit handler resets it) — see `Window`'s commit handler for why a
     /// per-frame pass alone leaves a hit-testing gap.
-    pub commit: crate::listener::Listener,
+    commit: crate::listener::Listener,
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,

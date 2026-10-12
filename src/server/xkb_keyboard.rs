@@ -14,15 +14,25 @@ pub struct XkbKeyboardState {
 
 pub struct XkbKeyboard {
     pub parent_device: *mut InputDevice,
-    pub objects: ffi::wl_list, // list of XkbKeyboardObject
-    pub link: ffi::wl_list,    // link inside XkbConfig::keyboards
+    objects: ffi::wl_list, // list of XkbKeyboardObject
+    link: ffi::wl_list,    // link inside XkbConfig::keyboards
     pub sent: XkbKeyboardState,
+}
+
+impl XkbKeyboard {
+    /// The `XkbKeyboard` whose `link` (in XkbConfig::keyboards) is `link`.
+    ///
+    /// # Safety
+    /// `link` is that field of a live `XkbKeyboard`.
+    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
+        crate::container_of!(link, Self, link)
+    }
 }
 
 pub struct XkbKeyboardObject {
     pub keyboard: *mut XkbKeyboard,
     pub resource: *mut ffi::wl_resource,
-    pub link: ffi::wl_list,
+    link: ffi::wl_list,
 }
 
 impl XkbKeyboard {
@@ -43,14 +53,14 @@ impl XkbKeyboard {
         ffi::wl_list_init(&mut xkb_kbd.objects);
         ffi::wl_list_init(&mut xkb_kbd.link);
 
-        let keyboards_head = &mut (*server).xkb_config.keyboards as *mut ffi::wl_list as *mut WlList;
+        let keyboards_head = (*server).xkb_config.keyboards_head() as *mut WlList;
         crate::server::wl_list_insert((*keyboards_head).prev, &mut xkb_kbd.link as *mut ffi::wl_list as *mut WlList);
 
-        let config_objects = &mut (*server).xkb_config.objects as *mut ffi::wl_list as *mut WlList;
+        let config_objects = (*server).xkb_config.objects_head() as *mut WlList;
         let mut curr = (*config_objects).next;
         while curr != config_objects {
             let next = (*curr).next;
-            let config_obj = crate::container_of!(curr, crate::xkb_config::XkbConfigObject, link);
+            let config_obj = crate::xkb_config::XkbConfigObject::from_link(curr);
             xkb_kbd.create_object((*config_obj).resource);
             curr = next;
         }
@@ -120,11 +130,11 @@ impl XkbKeyboard {
 
         // Pair with input device resource
         let parent_dev = self.parent_device;
-        let input_dev_objects = &mut (*parent_dev).objects as *mut ffi::wl_list as *mut WlList;
+        let input_dev_objects = (*parent_dev).objects_head() as *mut WlList;
         let mut curr = (*input_dev_objects).next;
         while curr != input_dev_objects {
             let next = (*curr).next;
-            let input_dev_obj = crate::container_of!(curr, crate::input_device::InputDeviceObject, link);
+            let input_dev_obj = crate::input_device::InputDeviceObject::from_link(curr);
             if ffi::wl_resource_get_client((*input_dev_obj).resource) == client {
                 ffi::wl_resource_post_event(resource, 1, (*input_dev_obj).resource); // input_device event (opcode 1)
             }

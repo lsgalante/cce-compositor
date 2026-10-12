@@ -10,7 +10,7 @@ pub struct DragIcon {
     wlr_drag_icon: crate::wlr::Wlr<ffi::wlr_drag_icon>,
     /// Watched: wlroots destroys it with the drag icon.
     pub scene_drag_icon: crate::scene_handle::SceneTree,
-    pub destroy: crate::listener::Listener,
+    destroy: crate::listener::Listener,
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,

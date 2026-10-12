@@ -57,12 +57,21 @@ pub fn with_held<R>(
     sid: crate::seat::SeatId,
     f: impl FnOnce(&mut PointerConstraint, &crate::window_manager::WindowManager) -> R,
 ) -> Option<R> {
-    let c = wm.seats.get(sid)?.cursor.constraint();
+    let cursor = &wm.seats.get(sid)?.cursor;
+    // A cursor in a seat it was not made for was moved there by safe code
+    // (`Seat::cursor` is public): the constraint teardown, which finds the
+    // cursor through its seat, would have cleared the wrong one, so what
+    // this one holds may be freed. Stop, as a misrouted listener does.
+    if cursor.sid() != sid {
+        crate::listener::misrouted("cursor (pointer constraint)");
+    }
+    let c = cursor.constraint();
     if c.is_null() {
         return None;
     }
     // SAFETY: `Cursor::constraint` is null or a live constraint
-    // (`set_constraint`'s contract). It is its own allocation, apart from the
+    // (`set_constraint`'s contract), the cursor being its seat's own
+    // (checked above). It is its own allocation, apart from the
     // window manager `f` also gets, and no other reference to it is live:
     // its handlers run only from wlroots signals, and no constraint method
     // raises one — the one that can (`deactivated`, destroying a oneshot

@@ -18,12 +18,12 @@ pub struct InputRelay {
     /// `set_text_input`.
     text_input: *mut TextInput,
 
-    pub input_method_commit: crate::listener::Listener,
-    pub grab_keyboard: crate::listener::Listener,
-    pub input_method_destroy: crate::listener::Listener,
-    pub input_method_new_popup: crate::listener::Listener,
+    input_method_commit: crate::listener::Listener,
+    grab_keyboard: crate::listener::Listener,
+    input_method_destroy: crate::listener::Listener,
+    input_method_new_popup: crate::listener::Listener,
 
-    pub grab_keyboard_destroy: crate::listener::Listener,
+    grab_keyboard_destroy: crate::listener::Listener,
 
     /// The on-screen keyboard following a touched field (`osk.rs`).
     pub osk: crate::osk::Osk,
@@ -58,7 +58,13 @@ impl InputRelay {
     }
 
     /// A relay not yet in place; `init` finishes it.
-    pub fn new() -> Self {
+    ///
+    /// # Safety
+    /// The relay goes into the seat `Seat::create` builds and is dropped
+    /// only with it (`Seats::take`, after `Seat::destroy`): dropping one
+    /// frees its popup list head, so a safe one would let a
+    /// `mem::replace` free the head under live popups.
+    pub unsafe fn new() -> Self {
         InputRelay {
             text_inputs: crate::registry::Registry::new(),
             input_method: std::ptr::null_mut(),
@@ -95,7 +101,7 @@ impl InputRelay {
         unsafe {
             let mut pos = (*head).next;
             while pos != head {
-                out.push(crate::container_of!(pos, crate::input_popup::InputPopup, link));
+                out.push(crate::input_popup::InputPopup::from_link(pos));
                 pos = (*pos).next;
             }
         }

@@ -32,6 +32,13 @@
 //! types are built to rule out: the callback logs and aborts
 //! ([`misrouted`]) rather than run on the wrong object.
 //!
+//! A field-routed listener must also stay in its FIELD while connected.
+//! Moved out (`mem::take` / `replace` / `swap` of the `Listener` itself)
+//! and kept past its owner's free, its cell still names the freed field,
+//! and the route reads freed memory. So every `Listener` field is private
+//! to its owner's module, where `connect` / `disconnect` are all that is
+//! done to one — never move one.
+//!
 //! - `connect` unlinks first, so connecting a listener that is already
 //!   connected moves it rather than linking it into a second list, which
 //!   corrupts both.
@@ -134,7 +141,8 @@ impl Listener {
     /// asserts its objects' signals have no listeners left when it frees
     /// them, so a destroy handler disconnects the struct's listeners.
     /// `self` must be a field of an [`Anchored`] struct, which is where the
-    /// callback will look for it.
+    /// callback will look for it, and must stay in that field until it is
+    /// disconnected: not moved out by `mem::take` / `replace` / `swap`.
     pub unsafe fn connect(&mut self, signal: *mut ffi::wl_signal, notify: Notify) {
         let field = self as *const Listener;
         self.link_into(signal, notify, Owner::Field(field));
@@ -239,9 +247,14 @@ impl Drop for Listener {
 /// Implement it for a type that is reached only through raw pointers, or
 /// that lives in the one `Server` (whose constructor, `Server::zeroed`, is
 /// unsafe for this reason); an owner a store hands out as `&mut` keys its
-/// listeners instead (`connect_keyed`, `listener_id!`). A linked `wl_list`
-/// head or link needs the same of whatever holds it; in a movable owner it
-/// is boxed (`Seat::keyboard_groups`, `InputRelay::input_popups`).
+/// listeners instead (`connect_keyed`, `listener_id!`). Its `Listener`
+/// fields are private, for `connect`'s sake. A linked `wl_list` head or
+/// link needs the same of whatever holds it, and is private too (other
+/// modules use raw-pointer accessors: `*_head()`, `from_link`). In a
+/// movable owner a head is boxed (`Seat::keyboard_groups`,
+/// `InputRelay::input_popups`), and the owner has no safe constructor or
+/// safe drop (`InputRelay::new`, `Seats::take` are unsafe): a box survives
+/// a move, not a free.
 pub unsafe trait Anchored {}
 
 /// A store id a keyed listener records (`connect_keyed`, `listener_id!`).
@@ -365,9 +378,16 @@ mod tests {
         unsafe { ffi::wl_signal_emit_mutable(s, std::ptr::null_mut()) };
     }
 
-    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    // Per thread: libtest runs tests in parallel, and a shared counter let
+    // one test's emits land between another's read and its assert.
+    thread_local! {
+        static CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    fn calls() -> usize {
+        CALLS.with(|c| c.get())
+    }
     unsafe extern "C" fn bump(_l: *mut ffi::wl_listener, _d: *mut std::ffi::c_void) {
-        CALLS.fetch_add(1, Ordering::SeqCst);
+        CALLS.with(|c| c.set(c.get() + 1));
     }
 
     #[test]
@@ -404,9 +424,9 @@ mod tests {
         let mut s = signal();
         let mut a = Box::new(Listener::new());
         unsafe { a.connect(&mut *s, bump) };
-        let before = CALLS.load(Ordering::SeqCst);
+        let before = calls();
         emit(&mut s);
-        assert_eq!(CALLS.load(Ordering::SeqCst), before + 1);
+        assert_eq!(calls(), before + 1);
     }
 
     /// Two owners, each with a listener on its own signal.
@@ -440,10 +460,10 @@ mod tests {
         std::mem::swap(&mut a, &mut b);
         assert_eq!((count(&s1), count(&s2)), (1, 1));
         assert!(a.hook.is_connected() && b.hook.is_connected());
-        let before = CALLS.load(Ordering::SeqCst);
+        let before = calls();
         emit(&mut s1);
         emit(&mut s2);
-        assert_eq!(CALLS.load(Ordering::SeqCst), before + 2);
+        assert_eq!(calls(), before + 2);
         drop(a);
         assert_eq!((count(&s1), count(&s2)), (1, 0));
         drop(b);
@@ -517,9 +537,9 @@ mod tests {
             other.connect(&mut *s, bump);
         }
         SLOT.with(|s| *s.borrow_mut() = Some(l));
-        let before = CALLS.load(Ordering::SeqCst);
+        let before = calls();
         emit(&mut s);
-        assert_eq!(CALLS.load(Ordering::SeqCst), before + 1);
+        assert_eq!(calls(), before + 1);
         assert_eq!(count(&s), 1);
         drop(other);
     }

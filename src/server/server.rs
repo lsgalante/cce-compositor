@@ -306,15 +306,15 @@ pub struct Server {
     pub inspector: crate::inspector::Inspector,
 
     // Event listeners
-    pub renderer_lost: crate::listener::Listener,
-    pub new_xdg_toplevel: crate::listener::Listener,
-    pub new_toplevel_decoration: crate::listener::Listener,
-    pub request_activate: crate::listener::Listener,
-    pub new_tearing_hint: crate::listener::Listener,
-    pub request_set_cursor_shape: crate::listener::Listener,
+    renderer_lost: crate::listener::Listener,
+    new_xdg_toplevel: crate::listener::Listener,
+    new_toplevel_decoration: crate::listener::Listener,
+    request_activate: crate::listener::Listener,
+    new_tearing_hint: crate::listener::Listener,
+    request_set_cursor_shape: crate::listener::Listener,
     // pub toplevel_capture_request: crate::listener::Listener,
-    pub new_xsurface: crate::listener::Listener,
-    pub xwayland_ready: crate::listener::Listener,
+    new_xsurface: crate::listener::Listener,
+    xwayland_ready: crate::listener::Listener,
 }
 
 // SAFETY: there is one, which only the unsafe `Server::zeroed` makes and

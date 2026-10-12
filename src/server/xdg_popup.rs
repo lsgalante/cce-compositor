@@ -33,10 +33,10 @@ pub struct XdgPopup {
     /// coordinates: to tell a map, a move or a resize.
     pub last_box: (i32, i32, i32, i32),
 
-    pub destroy: crate::listener::Listener,
-    pub commit: crate::listener::Listener,
-    pub new_popup: crate::listener::Listener,
-    pub reposition: crate::listener::Listener,
+    destroy: crate::listener::Listener,
+    commit: crate::listener::Listener,
+    new_popup: crate::listener::Listener,
+    reposition: crate::listener::Listener,
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
