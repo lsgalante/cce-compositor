@@ -435,12 +435,10 @@ unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener
 
     // Honor the seat the client bound the virtual keyboard to, like input
     // methods do; fall back to the default seat if it carries no Seat data.
-    let mut seat = ffi::river_wlr_seat_get_data((*virtual_keyboard).seat) as *mut Seat;
-    if seat.is_null() {
-        seat = im.default_seat;
-    }
+    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    let seat = Seat::id_of((*virtual_keyboard).seat).and_then(|sid| wm.seats.ptr(sid)).unwrap_or(im.default_seat);
 
-    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), &(*crate::reentry::wm(crate::shared::server_ptr())).outputs, seat, wlr_device, true);
+    let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), &wm.outputs, seat, wlr_device, true);
     crate::keyboard::Keyboard::create(device);
 
     // Same path a hardware keyboard takes: attach_device puts the keyboard in
@@ -452,7 +450,7 @@ unsafe extern "C" fn handle_pointer_refresh_idle(data: *mut std::ffi::c_void) {
     let manager = data as *mut InputManager;
     (*manager).pointer_refresh_idle = std::ptr::null_mut();
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    for seat in wm.seats.ptrs() {
-        crate::cursor::Cursor::refresh_after_scene_change(wm, (*seat).cursor.sid);
+    for sid in wm.seats.ids() {
+        crate::cursor::Cursor::refresh_after_scene_change(wm, sid);
     }
 }

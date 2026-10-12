@@ -731,8 +731,11 @@ A `KeyboardGroup` (its own allocation, on the seat's `keyboard_groups`
 teardown, which `Seat::destroy` runs after taking the seat out of the
 store (so a store lookup would miss it there). A wlroots callback handed a
 `wlr_seat` turns it into an id with `Seat::id_of(wlr_seat)` and borrows the
-seat from `wm.seats` (the text-input handlers and the new-input-method
-handler do); it does not keep the `river_wlr_seat_get_data` pointer. A
+seat from `wm.seats` (text inputs, the new-input-method handler, the xdg
+move/resize requests, cursor-shape requests, virtual keyboards and the
+tablet tool do); it does not keep the `river_wlr_seat_get_data` pointer.
+The only raw lookups left are `Seat::id_of` itself and the pointer
+constraint's destroy / node-destroy teardown. A
 destroy handler unhooks and frees its own object whether or not the seat
 is still in the store (`text_input::handle_destroy`).
 

@@ -477,9 +477,9 @@ unsafe extern "C" fn handle_request_set_cursor_shape(_listener: *mut ffi::wl_lis
     );
 
     if focused_client == (*event).seat_client {
-        let seat = ffi::river_wlr_seat_get_data(wlr_seat) as *mut crate::seat::Seat;
-        if !seat.is_null() && !shape_name.is_null() {
-            (*seat).cursor.set_xcursor(std::ffi::CStr::from_ptr(shape_name));
+        let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+        if let (Some(seat), false) = (crate::seat::Seat::id_of(wlr_seat).and_then(|sid| wm.seats.get_mut(sid)), shape_name.is_null()) {
+            seat.cursor.set_xcursor(std::ffi::CStr::from_ptr(shape_name));
         }
     }
 }

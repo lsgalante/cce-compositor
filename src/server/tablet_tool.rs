@@ -46,8 +46,7 @@ impl TabletTool {
             return Err("Failed to create wlr_cursor");
         }
 
-        let seat = ffi::river_wlr_seat_get_data(wlr_seat) as *mut Seat;
-        if seat.is_null() {
+        if Seat::id_of(wlr_seat).is_none() {
             ffi::wlr_cursor_destroy(wlr_cursor);
             return Err("Seat data is null");
         }

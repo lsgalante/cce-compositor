@@ -1003,9 +1003,10 @@ unsafe extern "C" fn handle_request_move(
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
     let event = data as *mut ffi::wlr_xdg_toplevel_move_event;
-    let seat = ffi::river_wlr_seat_get_data((*(*event).seat).seat) as *mut crate::seat::Seat;
+    let Some(sid) = crate::seat::Seat::id_of((*(*event).seat).seat) else { return };
+    let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat.ptr()) else { return };
 
-    if ffi::wlr_seat_validate_pointer_grab_serial((*seat).wlr_seat.ptr(), std::ptr::null_mut(), (*event).serial) {
+    if ffi::wlr_seat_validate_pointer_grab_serial(wlr_seat, std::ptr::null_mut(), (*event).serial) {
         let initial_mode = this.tiling_mode;
         // A client's move (a cce-ui window-plate drag) is the bound edit-mode
         // drag in every way that matters: read the Tiled grab BEFORE the
@@ -1028,14 +1029,13 @@ unsafe extern "C" fn handle_request_move(
             this.mode_locked = true;
         }
         let id = (*toplevel).window;
-        crate::seat::Seat::focus(wm, (*seat).id, crate::seat::Focus::Window(id));
+        crate::seat::Seat::focus(wm, sid, crate::seat::Focus::Window(id));
         wm.stop_panning_animation();
-        let cursor = &mut (*seat).cursor;
-        let cursor_x = cursor.wlr_cursor.x();
-        let cursor_y = cursor.wlr_cursor.y();
+        let cursor = cursor_mut!(wm, sid);
+        let (cursor_x, cursor_y) = (cursor.x(), cursor.y());
 
         let this = window_mut!(wm, id);
-        (*seat).op = Some(crate::seat::SeatOp {
+        let op = Some(crate::seat::SeatOp {
             input: crate::seat::SeatOpInput::Pointer,
             start_x: cursor_x as i32,
             start_y: cursor_y as i32,
@@ -1056,11 +1056,9 @@ unsafe extern "C" fn handle_request_move(
             start_pan_y: wm.desk_pan_y,
             started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
         });
-        crate::cursor::Cursor::op_start_pointer(wm, cursor.sid);
-        cursor.set_xcursor(c"grab");
-
-        let this = window_mut!(wm, id);
-        this.wm_scheduled.pointer_move_requested = seat;
+        seat_mut!(wm, sid).op = op;
+        crate::cursor::Cursor::op_start_pointer(wm, sid);
+        cursor_mut!(wm, sid).set_xcursor(c"grab");
         crate::shared::pending().dirty_windowing();
     }
 }
@@ -1082,9 +1080,10 @@ unsafe extern "C" fn handle_request_resize(
         return;
     }
 
-    let seat = ffi::river_wlr_seat_get_data((*(*event).seat).seat) as *mut crate::seat::Seat;
+    let Some(sid) = crate::seat::Seat::id_of((*(*event).seat).seat) else { return };
+    let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat.ptr()) else { return };
 
-    if ffi::wlr_seat_validate_pointer_grab_serial((*seat).wlr_seat.ptr(), std::ptr::null_mut(), (*event).serial) {
+    if ffi::wlr_seat_validate_pointer_grab_serial(wlr_seat, std::ptr::null_mut(), (*event).serial) {
         let initial_mode = this.tiling_mode;
         // As in `handle_request_move`: read the Tiled grab before the
         // un-tile, so a client's edge resize snaps to whole cells like the
@@ -1100,15 +1099,14 @@ unsafe extern "C" fn handle_request_resize(
             this.mode_locked = true;
         }
         let id = (*toplevel).window;
-        crate::seat::Seat::focus(wm, (*seat).id, crate::seat::Focus::Window(id));
+        crate::seat::Seat::focus(wm, sid, crate::seat::Focus::Window(id));
         wm.stop_panning_animation();
-        let cursor = &mut (*seat).cursor;
-        let cursor_x = cursor.wlr_cursor.x();
-        let cursor_y = cursor.wlr_cursor.y();
+        let cursor = cursor_mut!(wm, sid);
+        let (cursor_x, cursor_y) = (cursor.x(), cursor.y());
 
         let edges = crate::window::Edges::from_u32((*event).edges);
         let this = window_mut!(wm, id);
-        (*seat).op = Some(crate::seat::SeatOp {
+        let op = Some(crate::seat::SeatOp {
             input: crate::seat::SeatOpInput::Pointer,
             start_x: cursor_x as i32,
             start_y: cursor_y as i32,
@@ -1131,15 +1129,9 @@ unsafe extern "C" fn handle_request_resize(
             start_pan_y: wm.desk_pan_y,
             started_in_overview: crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview,
         });
-        crate::cursor::Cursor::op_start_pointer(wm, cursor.sid);
-        let cursor_name = crate::cursor::get_resize_cursor_name(edges);
-        cursor.set_xcursor(cursor_name);
-
-        let this = window_mut!(wm, id);
-        this.wm_scheduled.pointer_resize_requested = Some(crate::window::PointerResizeRequest {
-            seat,
-            edges: (*event).edges,
-        });
+        seat_mut!(wm, sid).op = op;
+        crate::cursor::Cursor::op_start_pointer(wm, sid);
+        cursor_mut!(wm, sid).set_xcursor(crate::cursor::get_resize_cursor_name(edges));
         crate::shared::pending().dirty_windowing();
     }
 }

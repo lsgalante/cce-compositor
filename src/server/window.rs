@@ -360,11 +360,6 @@ pub struct ShowWindowMenuRequest {
     pub y: i32,
 }
 
-pub struct PointerResizeRequest {
-    pub seat: *mut crate::seat::Seat,
-    pub edges: u32,
-}
-
 pub struct WmScheduledState {
     pub dimensions_hint: DimensionsHint,
     pub decoration_hint: ffi::zcce_window_v1_decoration_hint,
@@ -373,8 +368,6 @@ pub struct WmScheduledState {
     pub minimize_requested: bool,
     pub dirty_app_id: bool,
     pub dirty_title: bool,
-    pub pointer_move_requested: *mut crate::seat::Seat,
-    pub pointer_resize_requested: Option<PointerResizeRequest>,
 }
 
 pub struct WmSentState {
@@ -1024,8 +1017,6 @@ impl Window {
                 minimize_requested: false,
                 dirty_app_id: false,
                 dirty_title: false,
-                pointer_move_requested: std::ptr::null_mut(),
-                pointer_resize_requested: None,
             },
             wm_sent: WmSentState {
                 dimensions_hint: DimensionsHint { min_width: 0, min_height: 0, max_width: 0, max_height: 0 },
