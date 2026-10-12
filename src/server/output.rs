@@ -552,6 +552,7 @@ impl Output {
                 if !ffi::wlr_output_test_state(self.wlr_output.ptr(), &state) {
                     state.tearing_page_flip = false;
                     self.tearing_test_failed = true;
+                    log::info!("output {:?}: tearing page flip refused, vsync until the request ends", self.id);
                 }
             }
         } else {
