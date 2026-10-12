@@ -1099,6 +1099,61 @@ impl Wlr<ffi::wlr_layer_surface_v1> {
     }
 }
 
+impl Wlr<ffi::wlr_xdg_popup> {
+    /// The popup's xdg surface; null when unset.
+    pub fn base(&self) -> *mut ffi::wlr_xdg_surface {
+        self.live().map_or(std::ptr::null_mut(), |p| unsafe { ffi::river_wlr_xdg_popup_get_base(p) })
+    }
+
+    /// The popup's wl_surface; null when unset.
+    pub fn surface(&self) -> *mut ffi::wlr_surface {
+        let base = self.base();
+        // SAFETY: a live popup's xdg surface is live.
+        if base.is_null() { std::ptr::null_mut() } else { unsafe { ffi::river_wlr_xdg_surface_get_surface(base) } }
+    }
+
+    /// The wl_surface's size; (0, 0) when unset.
+    pub fn surface_size(&self) -> (i32, i32) {
+        let surface = self.surface();
+        if surface.is_null() {
+            return (0, 0);
+        }
+        // SAFETY: a live popup's wl_surface is live.
+        unsafe { (ffi::river_wlr_surface_get_width(surface), ffi::river_wlr_surface_get_height(surface)) }
+    }
+
+    /// Whether this commit is the xdg surface's first.
+    pub fn initial_commit(&self) -> bool {
+        let base = self.base();
+        // SAFETY: as `surface`.
+        !base.is_null() && unsafe { ffi::river_wlr_xdg_surface_get_initial_commit(base) }
+    }
+
+    /// The anchor rectangle, relative to the parent surface; zero when
+    /// unset.
+    pub fn anchor_rect(&self) -> ffi::wlr_box {
+        let mut anchor = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+        if let Some(p) = self.live() {
+            unsafe { ffi::river_wlr_xdg_popup_get_anchor_rect(p, &mut anchor) };
+        }
+        anchor
+    }
+
+    /// Fit the popup into `toplevel_box` (the root surface's coordinates)
+    /// and schedule the configure that tells the client.
+    pub fn unconstrain_and_configure(&self, toplevel_box: &ffi::wlr_box) {
+        if let Some(p) = self.live() {
+            let mut constraint = *toplevel_box;
+            // SAFETY: `constraint` is a local the call only reads; the popup's
+            // xdg surface is live with it.
+            unsafe {
+                ffi::wlr_xdg_popup_unconstrain_from_box(p, &mut constraint);
+                ffi::wlr_xdg_surface_schedule_configure(ffi::river_wlr_xdg_popup_get_base(p));
+            }
+        }
+    }
+}
+
 impl Wlr<ffi::wlr_xdg_toplevel> {
     /// Ask the client to close the toplevel.
     pub fn send_close(&self) {

@@ -318,6 +318,18 @@ impl<K: Kind> Handle<K> {
         }
     }
 
+    /// The scene data of this node or its nearest ancestor that has some,
+    /// copied out; `None` if the node is gone or no ancestor has any.
+    pub fn node_data(&self) -> Option<crate::scene_node_data::SceneNodeDataVal> {
+        let n = self.node();
+        if n.is_null() {
+            return None;
+        }
+        // SAFETY: a non-null `node()` is live, and so are its ancestors and
+        // their data; the value is copied before the borrow ends.
+        unsafe { crate::scene_node_data::SceneNodeData::from_node(n).map(|d| d.data) }
+    }
+
     /// The node's position relative to its parent; `None` if it is gone.
     pub fn position(&self) -> Option<(i32, i32)> {
         let n = self.node();

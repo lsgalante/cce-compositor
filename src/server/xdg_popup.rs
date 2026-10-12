@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
+use crate::scene_node_data::SceneNodeDataVal;
 
 pub struct XdgPopup {
-    pub wlr_popup: *mut ffi::wlr_xdg_popup,
+    /// Private, as every `Wlr` field reachable through `&mut` is; let go
+    /// by the destroy handler.
+    wlr_popup: crate::wlr::Wlr<ffi::wlr_xdg_popup>,
     /// Watched, as is `capture_tree`: wlroots destroys the xdg-surface trees
     /// with the popup.
     pub tree: crate::scene_handle::SceneTree,
@@ -21,6 +24,11 @@ pub struct XdgPopup {
     /// when its destroy signal runs, so nothing can be looked up then. Only
     /// a window's popup asks for a pointer refresh.
     pub under_window: bool,
+    /// Whether the root is a window or a layer surface, found the same way:
+    /// only such a popup is positioned on screen and blurred. (Until
+    /// 2026-10-12 a layer surface's popup was neither, so a bar's tray menu
+    /// never got its first configure.)
+    pub root_is_shell: bool,
     /// Where the popup stood and how big it was at its last commit, layout
     /// coordinates: to tell a map, a move or a resize.
     pub last_box: (i32, i32, i32, i32),
@@ -56,12 +64,15 @@ impl XdgPopup {
             }
         }
 
+        let root_tree = crate::scene_handle::SceneTree::watch(root);
+        let root_kind = root_tree.node_data();
         let popup = Box::into_raw(Box::new(XdgPopup {
-            wlr_popup,
+            wlr_popup: crate::wlr::Wlr::from_raw(wlr_popup),
             tree: crate::scene_handle::SceneTree::watch(tree),
             capture_tree: crate::scene_handle::SceneTree::watch(capture_tree),
-            root_tree: crate::scene_handle::SceneTree::watch(root),
-            under_window: tree_is_window(root),
+            root_tree,
+            under_window: matches!(root_kind, Some(SceneNodeDataVal::Window(_))),
+            root_is_shell: matches!(root_kind, Some(SceneNodeDataVal::Window(_) | SceneNodeDataVal::LayerSurface(_))),
             last_box: (0, 0, 0, 0),
             destroy: std::mem::zeroed(),
             commit: std::mem::zeroed(),
@@ -91,55 +102,45 @@ impl XdgPopup {
 /// The same deferred re-evaluation a toplevel's commit asks for when its
 /// mapping moves (`InputManager::schedule_pointer_refresh`), coalesced and
 /// run once the scene has caught up.
-unsafe fn refresh_pointer_under(popup: *mut XdgPopup) {
+fn refresh_pointer_under(popup: &XdgPopup) {
     let server = crate::shared::server_ptr();
-    if (*popup).under_window && !server.is_null() {
-        (*server).input_manager.schedule_pointer_refresh();
+    if popup.under_window && !server.is_null() {
+        // SAFETY: the shared server is live while the compositor runs, and
+        // scheduling borrows the input manager only to arm a deferred call.
+        unsafe { (*server).input_manager.schedule_pointer_refresh() };
     }
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let popup = crate::container_of!(listener, XdgPopup, destroy);
-    refresh_pointer_under(popup);
+    refresh_pointer_under(&*popup);
 
     (*popup).destroy.disconnect();
     (*popup).commit.disconnect();
     (*popup).new_popup.disconnect();
     (*popup).reposition.disconnect();
 
+    (*popup).wlr_popup.take();
     let _ = Box::from_raw(popup);
 }
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let popup = crate::container_of!(listener, XdgPopup, commit);
-    let base_surface = ffi::river_wlr_xdg_popup_get_base((*popup).wlr_popup);
-    if ffi::river_wlr_xdg_surface_get_initial_commit(base_surface) {
+    if (*popup).wlr_popup.initial_commit() {
         handle_reposition((*popup).reposition.as_ptr(), std::ptr::null_mut());
         return;
     }
-    update_blur(popup, base_surface);
+    update_blur(&*popup);
     // Mapped (its first buffer), moved or resized: what is under the
     // pointer changed. Not on every commit — a refresh sends the client a
     // motion, and an animating menu commits every frame.
-    let surface = ffi::river_wlr_xdg_surface_get_surface(base_surface);
-    let (mut lx, mut ly) = (0, 0);
-    ffi::wlr_scene_node_coords((*popup).tree.node(), &mut lx, &mut ly);
-    let at = (lx, ly, ffi::river_wlr_surface_get_width(surface), ffi::river_wlr_surface_get_height(surface));
+    let (lx, ly) = (*popup).tree.coords().map_or((0, 0), |(x, y, _)| (x, y));
+    let (w, h) = (*popup).wlr_popup.surface_size();
+    let at = (lx, ly, w, h);
     if at != (*popup).last_box {
         (*popup).last_box = at;
-        refresh_pointer_under(popup);
+        refresh_pointer_under(&*popup);
     }
-}
-
-/// Whether a scene tree is a window's, through its node data.
-unsafe fn tree_is_window(tree: *mut ffi::wlr_scene_tree) -> bool {
-    if tree.is_null() {
-        return false;
-    }
-    matches!(
-        crate::scene_node_data::SceneNodeData::from_node(tree as *mut ffi::wlr_scene_node).map(|d| &d.data),
-        Some(crate::scene_node_data::SceneNodeDataVal::Window(_))
-    )
 }
 
 /// Blur behind the popup as behind a window: a translucent menu is frosted
@@ -153,37 +154,13 @@ unsafe fn tree_is_window(tree: *mut ffi::wlr_scene_tree) -> bool {
 /// (cached) blur, which re-bakes on every change beneath a surface stacked
 /// above windows — see `handle_layer_surface_commit`. Sized from the
 /// surface, so it runs every commit: a popup is resized by its configure.
-unsafe fn update_blur(popup: *mut XdgPopup, base_surface: *mut ffi::wlr_xdg_surface) {
-    let server = popup_server(popup);
-    if server.is_null() {
+fn update_blur(popup: &XdgPopup) {
+    if !popup.root_is_shell || popup.wlr_popup.surface().is_null() {
         return;
     }
-    let wlr_surface = ffi::river_wlr_xdg_surface_get_surface(base_surface);
-    if wlr_surface.is_null() {
-        return;
-    }
-    (*popup).tree.enable_blur(crate::shared::layout().window_blur, false, crate::shared::layout().window_backdrop_blur_ignore_transparent, 0, 0, ffi::river_wlr_surface_get_width(wlr_surface), ffi::river_wlr_surface_get_height(wlr_surface), 0);
-}
-
-/// The server a popup belongs to, found through its parent's scene node —
-/// a window or a layer surface. Null when the parent is neither.
-///
-/// The layer arm was missing from the Rust port until 2026-10-12, so a layer
-/// surface's popup (a bar's tray menu) was never positioned nor sent its
-/// first configure (`handle_reposition` returned here), and never mapped.
-unsafe fn popup_server(popup: *mut XdgPopup) -> *mut crate::server::Server {
-    let parent_tree = ffi::river_wlr_scene_tree_get_parent((*popup).tree.raw());
-    if parent_tree.is_null() {
-        return std::ptr::null_mut();
-    }
-    match crate::scene_node_data::SceneNodeData::from_node(parent_tree as *mut ffi::wlr_scene_node) {
-        Some(node_data) => match node_data.data {
-            crate::scene_node_data::SceneNodeDataVal::Window(_)
-            | crate::scene_node_data::SceneNodeDataVal::LayerSurface(_) => crate::shared::server_ptr(),
-            _ => std::ptr::null_mut(),
-        },
-        None => std::ptr::null_mut(),
-    }
+    let (w, h) = popup.wlr_popup.surface_size();
+    let layout = crate::shared::layout();
+    popup.tree.enable_blur(layout.window_blur, false, layout.window_backdrop_blur_ignore_transparent, 0, 0, w, h, 0);
 }
 
 unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -198,6 +175,10 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
 
 unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let popup = crate::container_of!(listener, XdgPopup, reposition);
+    let server = crate::shared::server_ptr();
+    if !(*popup).root_is_shell || server.is_null() {
+        return;
+    }
 
     let mut parent_lx: i32 = 0;
     let mut parent_ly: i32 = 0;
@@ -208,15 +189,9 @@ unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *
 
     ffi::wlr_scene_node_coords(parent_tree as *mut ffi::wlr_scene_node, &mut parent_lx, &mut parent_ly);
 
-    let mut anchor = std::mem::zeroed();
-    ffi::river_wlr_xdg_popup_get_anchor_rect((*popup).wlr_popup, &mut anchor);
+    let mut anchor = (*popup).wlr_popup.anchor_rect();
     anchor.x += parent_lx;
     anchor.y += parent_ly;
-
-    let server = popup_server(popup);
-    if server.is_null() {
-        return;
-    }
 
     let Some(output_box) = (*crate::reentry::wm(server))
         .outputs
@@ -232,14 +207,11 @@ unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *
     // 2026-09-25) shifted the screen up and left by the menu's offset in
     // the window, so a tall submenu slid past the real top edge and the
     // flip decisions were made against the wrong right edge.
-    let mut root_lx: i32 = 0;
-    let mut root_ly: i32 = 0;
-    ffi::wlr_scene_node_coords((*popup).root_tree.node(), &mut root_lx, &mut root_ly);
+    let (root_lx, root_ly) = (*popup).root_tree.coords().map_or((0, 0), |(x, y, _)| (x, y));
 
     let mut constraint = output_box;
     constraint.x -= root_lx;
     constraint.y -= root_ly;
 
-    ffi::wlr_xdg_popup_unconstrain_from_box((*popup).wlr_popup, &mut constraint);
-    ffi::wlr_xdg_surface_schedule_configure(ffi::river_wlr_xdg_popup_get_base((*popup).wlr_popup));
+    (*popup).wlr_popup.unconstrain_and_configure(&constraint);
 }
