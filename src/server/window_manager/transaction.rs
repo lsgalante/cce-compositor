@@ -75,7 +75,7 @@ impl WindowManager {
         self.border_fade_timer.arm(16);
     }
 
-    pub fn manage_start(&mut self, sys: &mut crate::ctx::Sys, input: &mut crate::input_manager::InputManager) {
+    pub fn manage_start(&mut self, sys: &mut crate::ctx::Sys) {
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Idle));
         assert!(crate::shared::pending().windowing());
@@ -124,12 +124,8 @@ impl WindowManager {
         for id in self.seats.ids() {
             if self.seats.get_mut(id).is_some_and(|seat| seat.manage_start()) {
                 // SAFETY: every seat in the store came from `Seat::create`,
-                // and the borrow above has ended; the input manager's
-                // devices are live (its registry's contract).
-                unsafe {
-                    input.release_seat(self, id, sys);
-                    crate::seat::Seat::destroy(self, id);
-                }
+                // and the borrow above has ended.
+                unsafe { crate::seat::Seat::destroy(self, id) };
             }
         }
 

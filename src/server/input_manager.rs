@@ -104,15 +104,17 @@ impl InputManager {
         self.devices.remove(device);
     }
 
-    /// Take every device off seat `sid`, ahead of the manage pass's
-    /// `Seat::destroy`, which asserts the seat's keyboard groups empty (a
-    /// client holding a virtual keyboard on a seat it then destroyed
-    /// crashed the compositor there). `river_input_manager_v1.destroy_seat`
-    /// gives a destroyed seat's devices to the default seat; a virtual
-    /// device is only detached, since the one kind that can sit on another
-    /// seat — a virtual keyboard bound to it — dies with that seat
-    /// (wlroots' `seat_destroy` listener) and would only flash its keymap
-    /// at the default seat's focused client on the way out.
+    /// Take every device off seat `sid`, which a client is destroying
+    /// (`river_input_manager_v1.destroy_seat`): the manage pass's
+    /// `Seat::destroy` asserts the seat's keyboard groups empty (a client
+    /// holding a virtual keyboard on a seat it then destroyed crashed the
+    /// compositor there). The protocol gives a destroyed seat's devices to
+    /// the default seat; a virtual device is only detached, since the one
+    /// kind that can sit on another seat — a virtual keyboard bound to it —
+    /// dies with that seat (wlroots' `seat_destroy` listener) and would only
+    /// flash its keymap at the default seat's focused client on the way
+    /// out. From then on the seat is gone to every attach
+    /// (`Seat::destroying`).
     ///
     /// # Safety
     /// As `register_device`: every registered device is live.
@@ -437,15 +439,26 @@ unsafe extern "C" fn input_manager_destroy_seat(
         return;
     }
 
-    // Skip default seat (which is the first seat in the list)
-    for seat in (*crate::reentry::wm(crate::shared::server_ptr())).seats.ptrs().into_iter().skip(1) {
-        let seat_name = (*seat).wlr_seat().name();
-        if seat_name == name_str {
-            (*seat).destroying = true;
-            crate::shared::pending().dirty_windowing();
-            break;
-        }
+    let server = crate::shared::server_ptr();
+    let sys = &mut crate::ctx::Sys::of(server);
+    let wm = &mut *crate::reentry::wm(server);
+    let input = &mut *std::ptr::addr_of_mut!((*server).input_manager);
+    // Skip default seat (which is the first seat in the list); a seat
+    // already on its way out is gone to a request too.
+    let Some(sid) = wm.seats.ids().into_iter().skip(1).find(|&sid| {
+        wm.seats.get(sid).is_some_and(|seat| !seat.destroying && seat.wlr_seat().name() == name_str)
+    }) else {
+        return;
+    };
+    // Its devices leave it now, from this entry point, rather than in the
+    // manage pass that destroys it: `wlr_seat_destroy` there destroys a
+    // virtual keyboard bound to the seat, whose destroy handler reaches the
+    // input manager, which the pass must not hold borrowed across it.
+    input.release_seat(wm, sid, sys);
+    if let Some(seat) = wm.seats.get_mut(sid) {
+        seat.destroying = true;
     }
+    crate::shared::pending().dirty_windowing();
 }
 
 unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
@@ -537,8 +550,17 @@ unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener
     // Honor the seat the client bound the virtual keyboard to, like input
     // methods do; fall back to the default seat if it carries no Seat data.
     let wm = &*crate::reentry::wm(crate::shared::server_ptr());
-    let seat = Seat::id_of((*virtual_keyboard).seat).or(im.default_seat).and_then(|sid| wm.seats.ptr(sid)).unwrap_or(std::ptr::null_mut());
+    let bound = Seat::id_of((*virtual_keyboard).seat);
+    let seat = bound.or(im.default_seat).and_then(|sid| wm.seats.ptr(sid)).unwrap_or(std::ptr::null_mut());
     if seat.is_null() {
+        return;
+    }
+
+    // Bound to a seat a client is destroying: wlroots destroys the keyboard
+    // with that seat, so it joins none (`InputManager::release_seat`).
+    if (*seat).destroying {
+        let device = crate::input_device::InputDevice::new(crate::shared::server_ptr(), &wm.outputs, std::ptr::null_mut(), wlr_device, true);
+        crate::keyboard::Keyboard::create(device);
         return;
     }
 

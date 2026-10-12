@@ -262,7 +262,6 @@ impl Seat {
             _built_by_create: (),
             touch_devices: 0,
             touch_injected: false,
-            // SAFETY: this seat's own relay, dropped only with it.
             relay: crate::input_relay::InputRelay::new(),
             layer_shell: crate::layer_shell::LayerShellSeat::default(),
             keyboard_groups: Box::new(std::mem::zeroed()),
@@ -293,7 +292,6 @@ impl Seat {
         ffi::wl_list_init(&mut *(*seat).keyboard_groups);
 
         ffi::river_wlr_seat_set_data(wlr_seat, seat as *mut _);
-        (*seat).relay.init();
 
         // Initialize Cursor
         let output_layout = crate::shared::handles().output_layout.ptr();
@@ -355,8 +353,8 @@ impl Seat {
         }
 
         ffi::wlr_seat_destroy((*seat).wlr_seat().take());
-        // SAFETY: torn down above: the keyboard groups are gone (asserted)
-        // and the relay's popups went with its input method.
+        // SAFETY: torn down above: the keyboard groups are gone (asserted).
+        // The relay unlinks any popup still in its head when it drops.
         drop(wm.seats.take(sid));
     }
 
@@ -864,8 +862,8 @@ impl Seat {
     }
 
     /// Returns true when the seat is to be destroyed (a client asked for
-    /// it): the caller hands its devices to the default seat
-    /// (`InputManager::release_seat`), then calls [`Self::destroy`].
+    /// it, and its devices left it then: `InputManager::release_seat`):
+    /// the caller calls [`Self::destroy`].
     #[must_use]
     pub fn manage_start(&mut self) -> bool {
         if self.destroying {

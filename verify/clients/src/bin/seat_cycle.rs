@@ -11,6 +11,9 @@
 //                    us keymap; the compositor attaches it to that seat
 //   key NAME CODE    press and release evdev CODE on NAME's keyboard
 //   drop NAME        destroy NAME's virtual keyboard
+//   doomed NAME      destroy_seat NAME, then (same batch, before the
+//                    compositor's manage pass) a virtual keyboard bound to
+//                    it, with a keymap and a key: one roundtrip for both
 //   sleep MS
 // Each step ends with a roundtrip and prints one line; "seats: ..." lists
 // the wl_seat globals by name at the end, then "done".
@@ -219,7 +222,20 @@ fn main() {
                 kbd.key(now(), code, 0);
                 i += 3;
             }
-            "drop" => {
+            "doomed" => {
+                let name = arg(1);
+                let seat = seat_named(&state, &name).unwrap_or_else(|| panic!("doomed: no seat {name}")).clone();
+                let vm = state.vkbd_manager.clone().expect("no zwp_virtual_keyboard_manager_v1 advertised");
+                manager.destroy_seat(name.clone());
+                let kbd = vm.create_virtual_keyboard(&seat, &qh, ());
+                let (fd, size) = keymap_fd();
+                kbd.keymap(1, fd.as_fd(), size);
+                kbd.key(now(), 30, 1);
+                kbd.key(now(), 30, 0);
+                kbds.insert(name, kbd);
+                i += 2;
+            }
+                        "drop" => {
                 let name = arg(1);
                 if let Some(kbd) = kbds.remove(&name) {
                     kbd.destroy();

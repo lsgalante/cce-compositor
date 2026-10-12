@@ -1376,7 +1376,7 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
     wm.step_camera_frame(frame_target_ns);
     // Likewise the interactive move/resize: one configure + relayout per
     // vblank, for the pointer's latest position.
-    wm.step_op_frame(sys, &mut *std::ptr::addr_of_mut!((*server).input_manager));
+    wm.step_op_frame(sys);
     let render_start = if frame_debug() {
         Some(std::time::Instant::now())
     } else {

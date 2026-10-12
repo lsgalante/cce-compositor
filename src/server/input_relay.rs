@@ -29,6 +29,26 @@ pub struct InputRelay {
     pub osk: crate::osk::Osk,
 }
 
+/// A relay dropped with popups still linked into its head (one swapped
+/// into a seat that is then destroyed, or replaced) unlinks them first, so
+/// a popup's own unlink later never writes into the freed head.
+impl Drop for InputRelay {
+    fn drop(&mut self) {
+        let head = &mut *self.input_popups as *mut ffi::wl_list;
+        // SAFETY: `new` initialised the head, and every link on it is a
+        // live popup's: a popup unlinks itself before it is freed.
+        unsafe {
+            let mut pos = (*head).next;
+            while pos != head {
+                let next = (*pos).next;
+                ffi::wl_list_init(pos);
+                pos = next;
+            }
+            ffi::wl_list_init(head);
+        }
+    }
+}
+
 impl InputRelay {
     /// The enabled text input (see the field), or null.
     pub fn text_input(&self) -> *mut TextInput {
@@ -57,20 +77,12 @@ impl InputRelay {
         self.text_inputs.remove(text_input);
     }
 
-    /// A relay not yet in place; `init` finishes it.
-    ///
-    /// # Safety
-    /// The relay goes into the seat `Seat::create` builds and is dropped
-    /// only with it (`Seats::take`, after `Seat::destroy`): dropping one
-    /// frees its popup list head, so a safe one would let a
-    /// `mem::replace` free the head under live popups.
-    pub unsafe fn new() -> Self {
+    /// A relay with no input method, text inputs or popups.
+    pub fn new() -> Self {
         InputRelay {
             text_inputs: crate::registry::Registry::new(),
             input_method: std::ptr::null_mut(),
-            // SAFETY: a zeroed wl_list is a valid not-yet-initialised head;
-            // `init` initialises it in place.
-            input_popups: Box::new(unsafe { std::mem::zeroed() }),
+            input_popups: Self::empty_head(),
             text_input: std::ptr::null_mut(),
             input_method_commit: crate::listener::Listener::default(),
             grab_keyboard: crate::listener::Listener::default(),
@@ -81,8 +93,13 @@ impl InputRelay {
         }
     }
 
-    pub unsafe fn init(&mut self) {
-        ffi::wl_list_init(&mut *self.input_popups);
+    /// An initialised, empty list head at a heap address of its own.
+    fn empty_head() -> Box<ffi::wl_list> {
+        // SAFETY: a zeroed wl_list is plain data; `wl_list_init` makes it
+        // an empty list pointing at itself, where the box keeps it.
+        let mut head: Box<ffi::wl_list> = Box::new(unsafe { std::mem::zeroed() });
+        unsafe { ffi::wl_list_init(&mut *head) };
+        head
     }
 
     /// The popups' list head, for a popup linking itself in.
@@ -96,8 +113,8 @@ impl InputRelay {
     fn popups(&self) -> Vec<*mut crate::input_popup::InputPopup> {
         let mut out = Vec::new();
         let head = &*self.input_popups as *const ffi::wl_list as *mut ffi::wl_list;
-        // SAFETY: `init` initialised the head in place, and every link on
-        // it is a live popup's (a popup unlinks itself on destroy).
+        // SAFETY: `new` initialised the head, and every link on it is a
+        // live popup's (a popup unlinks itself on destroy).
         unsafe {
             let mut pos = (*head).next;
             while pos != head {

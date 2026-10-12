@@ -477,9 +477,10 @@ private too: other modules go through raw-pointer accessors
 (`XkbConfig::keyboards_head()`, `Keyboard::from_group_link`, ...), which no
 safe code can swap through. A head in a movable owner is boxed
 (`Seat::keyboard_groups`, `InputRelay::input_popups`), which survives a
-move but not a free, so those owners have no safe constructor or drop
-(`InputRelay::new` and `Seats::take` are `unsafe`); `InputPopup` names its
-seat by id rather than pointing into the relay. A `Server` subsystem has no
+move but not a free: `InputRelay`'s `Drop` unlinks any popup still in its
+head, and a seat leaves the store only through the `unsafe`
+`Seats::take`; `InputPopup` names its seat by id rather than pointing into
+the relay. A `Server` subsystem has no
 `Default` (`XkbConfig`, `LibinputConfig`, `InputManager`, `LockManager`):
 a safe second value is what a `mem::take` needs.
 
@@ -491,6 +492,14 @@ cannot reach the window manager (it runs inside `with_held`), so
 `pointer_constraint::with_held`, the one place `Cursor::constraint` is
 dereferenced, aborts on a cursor whose `sid()` (private, set first thing in
 `init`) is not the seat it was found in.
+
+A client's `river_input_manager_v1.destroy_seat` takes the seat's devices
+off it at the request (`InputManager::release_seat`: real ones to the
+default seat, virtual ones to none) and marks it `destroying`, which makes
+it gone to `assign_to_seat` and to a new virtual keyboard bound to it; the
+manage pass then runs `Seat::destroy`. The pass does not take the input
+manager: `wlr_seat_destroy` destroys a virtual keyboard bound to the seat,
+and the device destroy handler reaches the input manager itself.
 
 The `Server` is `std::mem::forget`ten after `deinit` (`run_server.rs`): by
 then the display and every wlroots object are gone, and its subsystems'

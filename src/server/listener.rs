@@ -252,9 +252,9 @@ impl Drop for Listener {
 /// link needs the same of whatever holds it, and is private too (other
 /// modules use raw-pointer accessors: `*_head()`, `from_link`). In a
 /// movable owner a head is boxed (`Seat::keyboard_groups`,
-/// `InputRelay::input_popups`), and the owner has no safe constructor or
-/// safe drop (`InputRelay::new`, `Seats::take` are unsafe): a box survives
-/// a move, not a free.
+/// `InputRelay::input_popups`), which survives a move but not a free: a
+/// relay unlinks its popups when it drops, and a seat leaves the store
+/// only through the unsafe `Seats::take`.
 pub unsafe trait Anchored {}
 
 /// A store id a keyed listener records (`connect_keyed`, `listener_id!`).

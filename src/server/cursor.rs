@@ -1656,18 +1656,6 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
     }
 }
 
-/// A directional swipe bind fires once the accumulated travel (libinput
-/// units) passes `window_manager { swipe_threshold }`
-/// (`WindowManager::swipe_threshold`, default 70). Until then the camera
-/// *peeks*: it pans toward the swipe direction in proportion to the
-/// travel, up to `window_manager { swipe_peek }` screen px
-/// (`WindowManager::swipe_peek_px`, default 60) at the threshold, and
-/// eases back if the fingers lift short of it — so a hesitant
-/// three-finger swipe shows where it would go without going. Firing does
-/// not end the swipe: the travel restarts from zero, and each further
-/// `swipe_repeat_threshold` of travel (default four times the first) steps
-/// again — or back, on a reversal — until the fingers lift.
-
 // Touch: routed by the seat's id, like the pointer listeners above; the
 // gesture logic they feed is in `touch.rs`.
 
@@ -1707,6 +1695,18 @@ unsafe extern "C" fn handle_touch_frame(listener: *mut ffi::wl_listener, _data: 
     let seat = listener_seat_ptr!(listener, cursor.touch_frame_listener);
     (*seat).cursor.touch_frame();
 }
+
+/// A directional swipe bind fires once the accumulated travel (libinput
+/// units) passes `window_manager { swipe_threshold }`
+/// (`WindowManager::swipe_threshold`, default 70). Until then the camera
+/// *peeks*: it pans toward the swipe direction in proportion to the
+/// travel, up to `window_manager { swipe_peek }` screen px
+/// (`WindowManager::swipe_peek_px`, default 60) at the threshold, and
+/// eases back if the fingers lift short of it — so a hesitant
+/// three-finger swipe shows where it would go without going. Firing does
+/// not end the swipe: the travel restarts from zero, and each further
+/// `swipe_repeat_threshold` of travel (default four times the first) steps
+/// again — or back, on a reversal — until the fingers lift.
 
 #[cfg(test)]
 mod tests {

@@ -261,7 +261,6 @@ impl InputDevice {
 }
 
 unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
     let device_ptr = crate::listener_owner!(listener, InputDevice, destroy_listener) as *mut InputDevice;
     let device = &mut *device_ptr;
     
@@ -270,8 +269,11 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
         ffi::river_wlr_input_device_get_type(device.wlr_device)
     );
 
-    // Detach from seat if attached
+    // Detach from seat if attached. Only then are the subsystems borrowed:
+    // a detached virtual keyboard is destroyed inside the manage pass
+    // (`wlr_seat_destroy` of the seat it was bound to), which holds them.
     if let Some(sid) = device.sid {
+        let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
         let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
         crate::seat::Seat::detach_device(wm, sid, device, sys);
         if let Some(seat) = wm.seats.get_mut(sid) {
@@ -382,7 +384,8 @@ unsafe extern "C" fn input_device_assign_to_seat(
     }
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
-    let sid = wm.seats.values().find(|seat| seat.wlr_seat().name() == name_str).map(|seat| seat.id);
+    // A seat a client is destroying is gone already: its devices left it.
+    let sid = wm.seats.values().find(|seat| !seat.destroying && seat.wlr_seat().name() == name_str).map(|seat| seat.id);
     if let Some(sid) = sid {
         (*device).assign_to_seat(wm, Some(sid), sys);
     } else {
