@@ -700,10 +700,14 @@ impl Cursor {
 }
 
 pub(crate) unsafe extern "C" fn handle_view_drag_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let cursor = &mut *(data as *mut Cursor);
-    crate::cursor::Cursor::end_view_drag(&mut *crate::reentry::wm(crate::shared::server_ptr()), cursor.sid, "idle");
-    cursor.end_popup_wheel("idle");
-    cursor.end_hscroll_shift("idle");
+    // The token is the cursor's seat id (`Cursor::init`).
+    let sid = crate::seat::SeatId(data as usize as u32);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    crate::cursor::Cursor::end_view_drag(wm, sid, "idle");
+    if let Some(seat) = wm.seats.get_mut(sid) {
+        seat.cursor.end_popup_wheel("idle");
+        seat.cursor.end_hscroll_shift("idle");
+    }
     0
 }
 

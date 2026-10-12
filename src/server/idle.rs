@@ -216,28 +216,28 @@ fn now_ms() -> u64 {
 impl IdleManager {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
-        self.display_timer = crate::event_source::Timer::add(event_loop, handle_display_timeout, self as *mut IdleManager as *mut _);
+        self.display_timer = crate::event_source::Timer::on_shared_loop(handle_display_timeout, 0);
         if !self.display_timer.is_set() {
             return Err("Failed to create idle display timer");
         }
-        self.sleep_timer = crate::event_source::Timer::add(event_loop, handle_sleep_timeout, self as *mut IdleManager as *mut _);
+        self.sleep_timer = crate::event_source::Timer::on_shared_loop(handle_sleep_timeout, 0);
         if !self.sleep_timer.is_set() {
             self.display_timer.remove();
             return Err("Failed to create idle sleep timer");
         }
-        self.lock_fallback_timer = crate::event_source::Timer::add(event_loop, handle_lock_fallback, self as *mut IdleManager as *mut _);
+        self.lock_fallback_timer = crate::event_source::Timer::on_shared_loop(handle_lock_fallback, 0);
         if !self.lock_fallback_timer.is_set() {
             self.display_timer.remove();
             self.sleep_timer.remove();
             return Err("Failed to create idle lock-fallback timer");
         }
-        self.plan_timer = crate::event_source::Timer::add(event_loop, handle_plan_poll, self as *mut IdleManager as *mut _);
+        self.plan_timer = crate::event_source::Timer::on_shared_loop(handle_plan_poll, 0);
         if !self.plan_timer.is_set() {
             self.display_timer.remove();
             self.sleep_timer.remove();
             return Err("Failed to create idle plan-poll timer");
         }
-        self.lease_timer = crate::event_source::Timer::add(event_loop, handle_lease_expiry, self as *mut IdleManager as *mut _);
+        self.lease_timer = crate::event_source::Timer::on_shared_loop(handle_lease_expiry, 0);
         if !self.lease_timer.is_set() {
             self.display_timer.remove();
             self.sleep_timer.remove();
@@ -735,8 +735,9 @@ unsafe extern "C" fn handle_plan_inotify(_fd: i32, _mask: u32, data: *mut std::f
     0
 }
 
-unsafe extern "C" fn handle_plan_poll(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let idle = &mut *(data as *mut IdleManager);
+unsafe extern "C" fn handle_plan_poll(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    // The server field this timer belongs to; the timer carries no pointer.
+    let idle = &mut *std::ptr::addr_of_mut!((*crate::shared::server_ptr()).idle);
     idle.poll_plan();
     // The directory may exist now: watch it, and stop polling.
     let event_loop = crate::shared::event_loop();
@@ -750,14 +751,16 @@ unsafe extern "C" fn handle_plan_poll(data: *mut std::ffi::c_void) -> std::os::r
     0
 }
 
-unsafe extern "C" fn handle_lease_expiry(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let idle = &mut *(data as *mut IdleManager);
+unsafe extern "C" fn handle_lease_expiry(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    // The server field this timer belongs to; the timer carries no pointer.
+    let idle = &mut *std::ptr::addr_of_mut!((*crate::shared::server_ptr()).idle);
     idle.expire_leases();
     0
 }
 
-unsafe extern "C" fn handle_display_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let idle = &mut *(data as *mut IdleManager);
+unsafe extern "C" fn handle_display_timeout(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    // The server field this timer belongs to; the timer carries no pointer.
+    let idle = &mut *std::ptr::addr_of_mut!((*crate::shared::server_ptr()).idle);
     if !idle.inhibited && !idle.displays_off {
         log::info!("idle: display timeout reached");
         idle.set_displays(&mut (*crate::reentry::wm(crate::shared::server_ptr())).outputs, false);
@@ -765,8 +768,9 @@ unsafe extern "C" fn handle_display_timeout(data: *mut std::ffi::c_void) -> std:
     0
 }
 
-unsafe extern "C" fn handle_sleep_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let idle = &mut *(data as *mut IdleManager);
+unsafe extern "C" fn handle_sleep_timeout(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    // The server field this timer belongs to; the timer carries no pointer.
+    let idle = &mut *std::ptr::addr_of_mut!((*crate::shared::server_ptr()).idle);
     if !idle.inhibited && !idle.sleeping {
         log::info!("idle: sleep timeout reached");
         let server = crate::shared::server_ptr();
@@ -775,8 +779,9 @@ unsafe extern "C" fn handle_sleep_timeout(data: *mut std::ffi::c_void) -> std::o
     0
 }
 
-unsafe extern "C" fn handle_lock_fallback(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let idle = &mut *(data as *mut IdleManager);
+unsafe extern "C" fn handle_lock_fallback(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    // The server field this timer belongs to; the timer carries no pointer.
+    let idle = &mut *std::ptr::addr_of_mut!((*crate::shared::server_ptr()).idle);
     if idle.sleep_after_lock {
         log::warn!("idle: the lock did not complete in {}ms; sleeping anyway (the desktop is already hidden)", LOCK_BEFORE_SLEEP_MS);
         idle.sleep_after_lock = false;

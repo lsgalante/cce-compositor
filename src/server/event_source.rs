@@ -17,9 +17,15 @@
 //! - `remove` is idempotent and leaves the timer unset, and dropping a
 //!   `Timer` removes it, so a struct freed with `Box::from_raw` leaves no
 //!   timer behind to fire into freed memory.
-//! - `Timer` is `repr(transparent)` over the raw pointer, so a zeroed field
-//!   (`std::mem::zeroed()`, `Server::default`'s zero-fill) is a valid unset
-//!   timer.
+//! - A zeroed field (`std::mem::zeroed()`, `Server::default`'s zero-fill)
+//!   is a valid unset timer: a null source and `shared: false`.
+//! - `on_shared_loop` is the safe way to make one: the callback gets an
+//!   integer `token`, never a pointer, and finds what it acts on itself (the
+//!   window manager through `reentry::wm`, a seat by id), so nothing has to
+//!   outlive the timer. Such a timer is on the compositor's own loop, and
+//!   once that loop is shutting down (`Pending::loop_live` false) arming it
+//!   does nothing and removing it only forgets the source, so a field
+//!   dropped after the display goes cannot touch a freed loop.
 
 use crate::ffi;
 
@@ -27,13 +33,36 @@ use crate::ffi;
 /// value is ignored by libwayland for timers.
 pub type TimerFn = unsafe extern "C" fn(data: *mut std::ffi::c_void) -> std::ffi::c_int;
 
-#[repr(transparent)]
-pub struct Timer(*mut ffi::wl_event_source);
+pub struct Timer {
+    source: *mut ffi::wl_event_source,
+    /// On the compositor's own loop (`on_shared_loop`): see the module doc.
+    shared: bool,
+}
 
 impl Timer {
     /// An unset timer: arming it does nothing.
     pub const fn new() -> Self {
-        Timer(std::ptr::null_mut())
+        Timer { source: std::ptr::null_mut(), shared: false }
+    }
+
+    /// A timer on the compositor's event loop that calls `callback(token)`
+    /// when it fires; it starts disarmed. `token` is an integer the callback
+    /// interprets (`0` when it needs none) — never a pointer, so nothing
+    /// has to outlive the timer. Unset if the loop is not running.
+    pub fn on_shared_loop(callback: TimerFn, token: usize) -> Self {
+        let event_loop = crate::shared::event_loop();
+        if event_loop.is_null() || !crate::shared::pending().loop_live() {
+            return Self::new();
+        }
+        // SAFETY: the loop is the live one `Shared::set_server` recorded;
+        // libwayland only hands `token` back to `callback`.
+        let source = unsafe { ffi::wl_event_loop_add_timer(event_loop, Some(callback), token as *mut std::ffi::c_void) };
+        Timer { source, shared: true }
+    }
+
+    /// Whether this timer's loop is gone (a shared one after shutdown).
+    fn loop_gone(&self) -> bool {
+        self.shared && !crate::shared::pending().loop_live()
     }
 
     /// Add a timer to `event_loop` that calls `callback(data)` when it
@@ -50,25 +79,25 @@ impl Timer {
         callback: TimerFn,
         data: *mut std::ffi::c_void,
     ) -> Self {
-        Timer(ffi::wl_event_loop_add_timer(event_loop, Some(callback), data))
+        Timer { source: ffi::wl_event_loop_add_timer(event_loop, Some(callback), data), shared: false }
     }
 
     /// Whether the timer exists (was added and not yet removed).
     pub fn is_set(&self) -> bool {
-        !self.0.is_null()
+        !self.source.is_null()
     }
 
     /// Fire once after `ms` milliseconds, replacing any pending deadline.
     /// `0` disarms. Does nothing on an unset timer.
     pub fn arm(&self, ms: i32) {
-        if self.0.is_null() {
+        if self.source.is_null() || self.loop_gone() {
             return;
         }
         // SAFETY: a non-null source is the one `add` created; only `remove`
         // (and so `drop`) releases it, and it nulls the field when it does.
         // `add`'s contract keeps the event loop alive until then.
         unsafe {
-            ffi::wl_event_source_timer_update(self.0, ms);
+            ffi::wl_event_source_timer_update(self.source, ms);
         }
     }
 
@@ -80,8 +109,8 @@ impl Timer {
     /// Remove the timer from its event loop, if set. Safe to call any
     /// number of times; the timer is left unset.
     pub fn remove(&mut self) {
-        let source = std::mem::replace(&mut self.0, std::ptr::null_mut());
-        if source.is_null() {
+        let source = std::mem::replace(&mut self.source, std::ptr::null_mut());
+        if source.is_null() || self.loop_gone() {
             return;
         }
         // SAFETY: as `arm`; the field is already null, so this is the only
@@ -104,8 +133,8 @@ impl Drop for Timer {
     }
 }
 
-// A zeroed `Timer` must be an unset one.
-const _: () = assert!(std::mem::size_of::<Timer>() == std::mem::size_of::<*mut ffi::wl_event_source>());
+// A zeroed `Timer` must be an unset one: every field is a pointer or a bool,
+// and both are valid all-zero (null, false).
 
 #[cfg(test)]
 mod tests {

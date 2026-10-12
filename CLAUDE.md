@@ -430,6 +430,18 @@ the event loop goes. Assigning a new `Timer` over a set one removes the old
 source. The fd, signal and idle sources (`ipc_source`, `sigchld_source`,
 `pointer_refresh_idle`, …) are still raw pointers.
 
+Since 2026-10-11 every compositor timer is made with the SAFE
+`Timer::on_shared_loop(callback, token)`: the callback gets an integer
+`token` (0, a `SeatId`, a layer surface's slot key), never a pointer, and
+finds what it acts on itself — the window manager through
+`reentry::wm(shared::server_ptr())`, a server field (`idle`,
+`lock_manager`) by place, a seat or layer surface in its store — so there
+is no data pointer to outlive the timer. Such a timer stands down once the
+shared loop shuts down (`Pending::loop_live`): `arm` does nothing and
+`remove` only forgets the source. `Timer::add(loop, cb, data)` stays
+`unsafe` for the unit tests' private loops; do not use it in compositor
+code.
+
 Arming was an FFI call, so every function that re-armed a timer was `unsafe`
 for that alone; with the type, and a fixpoint pass that dropped `unsafe` from
 every function left with no unsafe operation in it, the non-callback

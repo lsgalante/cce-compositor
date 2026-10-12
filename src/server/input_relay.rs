@@ -105,7 +105,7 @@ impl InputRelay {
         let this = &mut seat_mut!(wm, sid).relay;
         assert!(!this.text_input.is_null());
         this.text_input = std::ptr::null_mut();
-        this.osk.field_gone();
+        this.osk.field_gone(sid);
 
         let input_method = this.input_method;
         if !input_method.is_null() {

@@ -428,6 +428,12 @@ impl Pending {
 
     /// The display is about to be destroyed: remove the idle callback and
     /// arm nothing more.
+    /// Whether the compositor's event loop is running: between
+    /// `set_server` and `shutdown`. `Timer`s on it stand down after.
+    pub fn loop_live(&self) -> bool {
+        self.live.get()
+    }
+
     pub fn shutdown(&self) {
         let source = self.idle.replace(std::ptr::null_mut());
         if !source.is_null() && self.live.get() {

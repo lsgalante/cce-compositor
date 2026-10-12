@@ -88,7 +88,7 @@ impl WindowManager {
     /// Record the edge auto-pan velocity (screen px/s) and arm its 16ms tick
     /// when nonzero. A zero velocity just parks: the armed tick sees it and
     /// stops itself without re-arming.
-    pub unsafe fn set_edge_pan_velocity(&mut self, vx: f64, vy: f64) {
+    pub fn set_edge_pan_velocity(&mut self, vx: f64, vy: f64) {
         crate::wm_scope!(mut);
         self.edge_pan_vx = vx;
         self.edge_pan_vy = vy;
@@ -96,8 +96,7 @@ impl WindowManager {
             return;
         }
         if !self.edge_pan_timer.is_set() {
-            let event_loop = crate::shared::event_loop();
-            self.edge_pan_timer = crate::event_source::Timer::add(event_loop, handle_edge_pan_tick, self as *mut WindowManager as *mut _);
+            self.edge_pan_timer = crate::event_source::Timer::on_shared_loop(handle_edge_pan_tick, 0);
         }
         self.edge_pan_timer.arm(16);
     }
@@ -106,7 +105,7 @@ impl WindowManager {
     /// `step_camera_frame` on every output frame, so this schedules a frame
     /// and arms the watchdog timer that keeps frames flowing while the
     /// animation is live. Callers set the targets first.
-    pub unsafe fn start_panning_animation(&mut self) {
+    pub fn start_panning_animation(&mut self) {
         crate::wm_scope!(mut);
         self.camera_anim_active = true;
         if self.anim_last_tick.is_none() {
@@ -114,8 +113,7 @@ impl WindowManager {
         }
         self.schedule_frame_all_outputs();
         if !self.animation_timer.is_set() {
-            let event_loop = crate::shared::event_loop();
-            self.animation_timer = crate::event_source::Timer::add(event_loop, handle_panning_animation_tick, self as *mut WindowManager as *mut _);
+            self.animation_timer = crate::event_source::Timer::on_shared_loop(handle_panning_animation_tick, 0);
         }
         self.animation_timer.arm(CAMERA_WATCHDOG_MS);
     }

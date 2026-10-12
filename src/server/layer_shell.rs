@@ -236,7 +236,11 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
 /// because a layer surface is not in `wm.windows` and there is no list to
 /// sweep.
 unsafe extern "C" fn handle_animation_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let layer_surface = data as *mut LayerSurface;
+    // The token is the surface's key in `wm.layer_surfaces`.
+    let token = data as usize;
+    let key = crate::slotmap::Key { generation: (token >> 32) as u32, index: token as u32 };
+    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    let Some(&layer_surface) = wm.layer_surfaces.get(key) else { return 0 };
 
     let target = (*layer_surface).opacity_target;
     let delta = target - (*layer_surface).opacity;
@@ -290,11 +294,9 @@ impl LayerSurface {
         let timer = if display.is_null() {
             crate::event_source::Timer::new()
         } else {
-            crate::event_source::Timer::add(
-                ffi::wl_display_get_event_loop(display),
-                handle_animation_tick,
-                self as *mut LayerSurface as *mut _,
-            )
+            // The token is the surface's key in `wm.layer_surfaces`.
+            let key = self.ref_key;
+            crate::event_source::Timer::on_shared_loop(handle_animation_tick, ((key.generation as usize) << 32) | key.index as usize)
         };
         if !timer.is_set() {
             log::error!("Failed to create layer surface animation timer");

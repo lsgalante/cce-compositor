@@ -99,8 +99,7 @@ impl WindowManager {
         }
         self.update_restore_placeholders();
         // Sweep leftovers whose programs never came back.
-        let event_loop = crate::shared::event_loop();
-        self.restore_placeholder_timer = crate::event_source::Timer::add(event_loop, handle_restore_placeholder_timeout, self as *mut WindowManager as *mut _);
+        self.restore_placeholder_timer = crate::event_source::Timer::on_shared_loop(handle_restore_placeholder_timeout, 0);
         self.restore_placeholder_timer.arm(60_000);
     }
 

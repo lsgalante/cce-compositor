@@ -22,7 +22,6 @@
 
 use std::time::{Duration, Instant};
 
-use crate::ffi;
 
 /// How long after a touch on a window an activation still counts as the
 /// touch's. A tap that the client sees as a button press (no wl_touch) is
@@ -81,14 +80,14 @@ impl Osk {
     }
 
     /// The seat's text input went away (disabled, destroyed, or focus left).
-    pub unsafe fn field_gone(&mut self) {
+    /// `sid` is the seat this OSK belongs to: the hide timer carries it.
+    pub unsafe fn field_gone(&mut self, sid: crate::seat::SeatId) {
         let display = crate::shared::shared().display();
         if !self.shown_by_us || display.is_null() {
             return;
         }
         if !self.hide_timer.is_set() {
-            let event_loop = ffi::wl_display_get_event_loop(display);
-            self.hide_timer = crate::event_source::Timer::add(event_loop, handle_hide_timer, self as *mut Osk as *mut _);
+            self.hide_timer = crate::event_source::Timer::on_shared_loop(handle_hide_timer, sid.0 as usize);
             if !self.hide_timer.is_set() {
                 log::error!("osk: failed to create the hide timer; hiding now");
                 self.hide_now();
@@ -113,8 +112,12 @@ impl Osk {
 }
 
 unsafe extern "C" fn handle_hide_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let osk = &mut *(data as *mut Osk);
-    osk.hide_now();
+    // The token is the seat id (`field_gone`).
+    let sid = crate::seat::SeatId(data as usize as u32);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    if let Some(seat) = wm.seats.get_mut(sid) {
+        seat.relay.osk.hide_now();
+    }
     0
 }
 

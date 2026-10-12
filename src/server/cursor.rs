@@ -312,19 +312,17 @@ impl Cursor {
 
         // The animated-cursor driver. Created disarmed; `set_xcursor` arms it
         // only for a cursor that actually has more than one frame.
-        let event_loop = crate::shared::event_loop();
-        let anim_timer = crate::event_source::Timer::add(
-            event_loop,
-            handle_xcursor_anim,
-            self as *mut Cursor as *mut _,
-        );
+        // Both timers carry the seat id: the callbacks find the cursor in
+        // the store.
+        let token = self.sid.0 as usize;
+        let anim_timer = crate::event_source::Timer::on_shared_loop(handle_xcursor_anim, token);
         if !anim_timer.is_set() {
             ffi::wlr_xcursor_manager_destroy(self.xcursor_manager.take());
             ffi::wlr_cursor_destroy(self.wlr_cursor.take());
             return Err("Failed to create xcursor animation timer");
         }
         self.anim_timer = anim_timer;
-        self.view_drag_timer = crate::event_source::Timer::add(event_loop, handle_view_drag_timeout, self as *mut Cursor as *mut _);
+        self.view_drag_timer = crate::event_source::Timer::on_shared_loop(handle_view_drag_timeout, token);
 
         // Load default cursor theme
         self.xcursor_manager.load(1.0);
@@ -1576,8 +1574,12 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
 /// `advance_xcursor_frame`; a stopped animation leaves the timer disarmed and
 /// this is not called again until something arms it.
 unsafe extern "C" fn handle_xcursor_anim(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let cursor = &mut *(data as *mut Cursor);
-    cursor.advance_xcursor_frame();
+    // The token is the cursor's seat id (`Cursor::init`).
+    let sid = crate::seat::SeatId(data as usize as u32);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    if let Some(seat) = wm.seats.get_mut(sid) {
+        seat.cursor.advance_xcursor_frame();
+    }
     0
 }
 

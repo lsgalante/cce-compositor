@@ -609,29 +609,28 @@ impl WindowManager {
         self.injected_key_mods = 0;
 
 
-        let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
-        self.timeout = crate::event_source::Timer::add(event_loop, handle_timeout, self as *mut WindowManager as *mut _);
+        self.timeout = crate::event_source::Timer::on_shared_loop(handle_timeout, 0);
         if !self.timeout.is_set() {
             return Err("Failed to create timer event source");
         }
 
         self.ipc_rx = None;
 
-        self.sun_timer = crate::event_source::Timer::add(event_loop, handle_sun_timer, self as *mut WindowManager as *mut _);
+        self.sun_timer = crate::event_source::Timer::on_shared_loop(handle_sun_timer, 0);
         if !self.sun_timer.is_set() {
             self.timeout.remove();
             return Err("Failed to create sun timer event source");
         }
         self.sun_timer.arm(60_000);
 
-        self.clean_exit_timer = crate::event_source::Timer::add(event_loop, handle_clean_exit_timeout, self as *mut WindowManager as *mut _);
+        self.clean_exit_timer = crate::event_source::Timer::on_shared_loop(handle_clean_exit_timeout, 0);
         if !self.clean_exit_timer.is_set() {
             self.timeout.remove();
             return Err("Failed to create clean exit timer event source");
         }
         self.clean_exit_in_progress = false;
 
-        self.border_fade_timer = crate::event_source::Timer::add(event_loop, handle_border_fade_tick, self as *mut WindowManager as *mut _);
+        self.border_fade_timer = crate::event_source::Timer::on_shared_loop(handle_border_fade_tick, 0);
         if !self.border_fade_timer.is_set() {
             self.timeout.remove();
             self.clean_exit_timer.remove();
@@ -639,7 +638,7 @@ impl WindowManager {
         }
         self.border_fade_running = false;
 
-        self.stream_timer = crate::event_source::Timer::add(event_loop, handle_stream_timer, self as *mut WindowManager as *mut _);
+        self.stream_timer = crate::event_source::Timer::on_shared_loop(handle_stream_timer, 0);
         if !self.stream_timer.is_set() {
             self.timeout.remove();
             self.clean_exit_timer.remove();
@@ -974,11 +973,10 @@ impl WindowManager {
     }
 
     /// Poll the held `focus-window --wait` replies in [`SETTLE_POLL_MS`].
-    unsafe fn arm_settle_timer(&mut self) {
+    fn arm_settle_timer(&mut self) {
         crate::wm_scope!(mut);
         if !self.settle_timer.is_set() {
-            let event_loop = crate::shared::event_loop();
-            self.settle_timer = crate::event_source::Timer::add(event_loop, handle_settle_tick, self as *mut WindowManager as *mut _);
+            self.settle_timer = crate::event_source::Timer::on_shared_loop(handle_settle_tick, 0);
         }
         if !self.settle_timer.is_set() {
             // No timer: answer now rather than never.
@@ -992,7 +990,7 @@ impl WindowManager {
 
     /// Answer each `focus-window --wait` whose window has stopped moving
     /// on screen, or has waited [`SETTLE_TIMEOUT_MS`], or has closed.
-    unsafe fn poll_settle_waiters(&mut self) {
+    fn poll_settle_waiters(&mut self) {
         crate::wm_scope!(mut);
         let moving = self.camera_anim_active
             || self.pan_pending != [0.0, 0.0]
@@ -1026,14 +1024,13 @@ impl WindowManager {
     /// in the meantime. The first call after a save arms the timer; later
     /// calls before it fires are absorbed, so a burst of transactions costs
     /// one save at most `SAVE_STATE_DELAY_MS` behind the last change.
-    pub unsafe fn schedule_save_state(&mut self) {
+    pub fn schedule_save_state(&mut self) {
         crate::wm_scope!(mut);
         if self.shutting_down || self.save_state_pending {
             return;
         }
         if !self.save_state_timer.is_set() {
-            let event_loop = crate::shared::event_loop();
-            self.save_state_timer = crate::event_source::Timer::add(event_loop, handle_save_state_timer, self as *mut WindowManager as *mut _);
+            self.save_state_timer = crate::event_source::Timer::on_shared_loop(handle_save_state_timer, 0);
             if !self.save_state_timer.is_set() {
                 log::error!("failed to create the save-state timer; saving synchronously");
                 self.save_state();
@@ -1762,11 +1759,10 @@ impl WindowManager {
     /// (Re)arm the debounce that restores backdrop blur once viewport motion
     /// stops. Called on every motion frame, so continuous panning keeps pushing
     /// the settle out; it only fires `VIEWPORT_SETTLE_MS` after the last motion.
-    unsafe fn arm_viewport_settle_timer(&mut self) {
+    fn arm_viewport_settle_timer(&mut self) {
         crate::wm_scope!(mut);
         if !self.viewport_settle_timer.is_set() {
-            let event_loop = crate::shared::event_loop();
-            self.viewport_settle_timer = crate::event_source::Timer::add(event_loop, handle_viewport_settle_tick, self as *mut WindowManager as *mut _);
+            self.viewport_settle_timer = crate::event_source::Timer::on_shared_loop(handle_viewport_settle_tick, 0);
         }
         self.viewport_settle_timer.arm(VIEWPORT_SETTLE_MS);
     }
@@ -2393,8 +2389,8 @@ pub fn local_day_fraction() -> f64 {
 
 /// Minute tick: the light_source segment's perimeter position depends on the
 /// time of day, so a periodic re-arrange keeps it drifting (~a few px/min).
-unsafe extern "C" fn handle_sun_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let wm = data as *mut WindowManager;
+unsafe extern "C" fn handle_sun_timer(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = crate::reentry::wm(crate::shared::server_ptr());
     if wm.is_null() {
         return 0;
     }
@@ -2403,8 +2399,8 @@ unsafe extern "C" fn handle_sun_timer(data: *mut std::ffi::c_void) -> std::os::r
     0
 }
 
-unsafe extern "C" fn handle_save_state_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let wm = data as *mut WindowManager;
+unsafe extern "C" fn handle_save_state_timer(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = crate::reentry::wm(crate::shared::server_ptr());
     if wm.is_null() {
         return 0;
     }
@@ -2476,8 +2472,8 @@ unsafe extern "C" fn handle_stream_wake(fd: std::os::raw::c_int, _mask: u32, dat
 /// `handle_stream_wake` restarts it when the accept thread adds one. (It
 /// used to re-arm at 200-500 ms forever, a 2-5 Hz idle wakeup for a feature
 /// that is rarely in use.)
-unsafe extern "C" fn handle_stream_timer(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let wm = &mut *(data as *mut WindowManager);
+unsafe extern "C" fn handle_stream_timer(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let idle_rearm = |wm: &WindowManager, ms: i32| {
         wm.stream_timer.arm(ms);
     };
@@ -2555,8 +2551,8 @@ fn fullscreen_on_top(wm: &WindowManager, window: &Window) -> bool {
         && !window.fullscreen_yields(wm)
 }
 
-unsafe extern "C" fn handle_clean_exit_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let wm = data as *mut WindowManager;
+unsafe extern "C" fn handle_clean_exit_timeout(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = crate::reentry::wm(crate::shared::server_ptr());
     if wm.is_null() {
         return 0;
     }
@@ -2565,9 +2561,9 @@ unsafe extern "C" fn handle_clean_exit_timeout(data: *mut std::ffi::c_void) -> s
     0
 }
 
-unsafe extern "C" fn handle_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+unsafe extern "C" fn handle_timeout(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let wm = data as *mut WindowManager;
+    let wm = crate::reentry::wm(crate::shared::server_ptr());
     if wm.is_null() {
         return 0;
     }
@@ -2652,8 +2648,8 @@ const VIEWPORT_SETTLE_MS: i32 = 120;
 
 /// One-shot timer callback: the viewport has been still for `VIEWPORT_SETTLE_MS`,
 /// so restore the blurred render state.
-pub(crate) unsafe extern "C" fn handle_viewport_settle_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let wm = data as *mut WindowManager;
+pub(crate) unsafe extern "C" fn handle_viewport_settle_tick(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = crate::reentry::wm(crate::shared::server_ptr());
     if wm.is_null() {
         return 0;
     }
@@ -2822,9 +2818,9 @@ pub struct RestorePlaceholder {
 
 /// Sweep placeholders whose programs never came back.
 pub(crate) unsafe extern "C" fn handle_restore_placeholder_timeout(
-    data: *mut std::ffi::c_void,
+    _data: *mut std::ffi::c_void,
 ) -> std::os::raw::c_int {
-    let wm = data as *mut WindowManager;
+    let wm = crate::reentry::wm(crate::shared::server_ptr());
     if !wm.is_null() {
         log::info!(
             "[Restore] Sweeping {} placeholder(s) whose windows never mapped",
@@ -2841,8 +2837,8 @@ pub(crate) unsafe extern "C" fn handle_restore_placeholder_timeout(
 /// into window motion. op_update re-derives the velocity and re-arms this
 /// timer, so the loop sustains itself until the op ends or the cursor leaves
 /// the edge bands; then it stops without re-arming.
-pub(crate) unsafe extern "C" fn handle_edge_pan_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let wm = data as *mut WindowManager;
+pub(crate) unsafe extern "C" fn handle_edge_pan_tick(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = crate::reentry::wm(crate::shared::server_ptr());
     if wm.is_null() {
         return 0;
     }
@@ -2890,8 +2886,8 @@ pub struct CameraRampAnim {
 /// damaged, an output that stopped delivering frames) cannot strand it.
 const CAMERA_WATCHDOG_MS: i32 = 50;
 
-pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let wm = data as *mut WindowManager;
+pub(crate) unsafe extern "C" fn handle_panning_animation_tick(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = crate::reentry::wm(crate::shared::server_ptr());
     if wm.is_null() {
         return 0;
     }
@@ -2903,8 +2899,8 @@ pub(crate) unsafe extern "C" fn handle_panning_animation_tick(data: *mut std::ff
 }
 
 /// The `focus-window --wait` poll (`WindowManager::poll_settle_waiters`).
-unsafe extern "C" fn handle_settle_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let wm = data as *mut WindowManager;
+unsafe extern "C" fn handle_settle_tick(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = crate::reentry::wm(crate::shared::server_ptr());
     if !wm.is_null() {
         (*wm).poll_settle_waiters();
     }
@@ -2915,9 +2911,9 @@ unsafe extern "C" fn handle_settle_tick(data: *mut std::ffi::c_void) -> std::os:
 /// in-flight fullscreen-toggle animation — until all of them have settled. Windows at
 /// rest cost one comparison per zone and no repaint, so leaving this running
 /// for the tail of a fade is cheap.
-unsafe extern "C" fn handle_border_fade_tick(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let stores = crate::ctx::Stores::of(crate::shared::server_ptr());
-    let wm = data as *mut WindowManager;
+unsafe extern "C" fn handle_border_fade_tick(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let wm = crate::reentry::wm(crate::shared::server_ptr());
+    let stores = stores!((*wm));
     let mut moving = false;
     for id in (*wm).windows.ids() {
         let Some(window) = (*wm).windows.get_mut(id).filter(|w| !w.closed) else { continue };

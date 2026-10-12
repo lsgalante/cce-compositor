@@ -83,22 +83,13 @@ impl LockManager {
         }
         self.wlr_manager = wlr_manager;
 
-        let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
-        let timer = crate::event_source::Timer::add(
-            event_loop,
-            handle_lock_surfaces_timeout,
-            self as *mut LockManager as *mut _,
-        );
+        let timer = crate::event_source::Timer::on_shared_loop(handle_lock_surfaces_timeout, 0);
         if !timer.is_set() {
             return Err("Failed to create lock surfaces timer");
         }
         self.lock_surfaces_timer = timer;
 
-        let respawn_timer = crate::event_source::Timer::add(
-            event_loop,
-            handle_respawn_timeout,
-            self as *mut LockManager as *mut _,
-        );
+        let respawn_timer = crate::event_source::Timer::on_shared_loop(handle_respawn_timeout, 0);
         if !respawn_timer.is_set() {
             return Err("Failed to create the locker respawn timer");
         }
@@ -409,8 +400,9 @@ impl LockSurface {
     }
 }
 
-unsafe extern "C" fn handle_lock_surfaces_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let manager = &mut *(data as *mut LockManager);
+unsafe extern "C" fn handle_lock_surfaces_timeout(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    // The server field this timer belongs to; the timer carries no pointer.
+    let manager = &mut *std::ptr::addr_of_mut!((*crate::shared::server_ptr()).lock_manager);
     log::error!("waiting for lock surfaces timed out, imperfect frames may be shown");
 
     assert!(manager.state == LockState::WaitingForLockSurfaces);
@@ -433,8 +425,9 @@ unsafe extern "C" fn handle_lock_surfaces_timeout(data: *mut std::ffi::c_void) -
 /// `ext_session_lock_manager_v1.lock()` and `handle_new_lock` hands it the
 /// session that is already locked, so the screen never unlocks across the
 /// gap — the user just gets a prompt back.
-unsafe extern "C" fn handle_respawn_timeout(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let manager = &mut *(data as *mut LockManager);
+unsafe extern "C" fn handle_respawn_timeout(_data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    // The server field this timer belongs to; the timer carries no pointer.
+    let manager = &mut *std::ptr::addr_of_mut!((*crate::shared::server_ptr()).lock_manager);
 
     // The world may have moved while the timer was armed: a locker of the
     // user's own may have attached, or the session may be unlocked. Either
