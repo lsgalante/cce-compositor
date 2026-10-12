@@ -1128,7 +1128,7 @@ impl Window {
                 if xwindow.is_null() {
                     std::ptr::null()
                 } else {
-                    (*(*xwindow).xsurface).title
+                    (*(*xwindow).xsurface.ptr()).title
                 }
             }
             WindowImpl::Destroying => std::ptr::null(),
@@ -1150,7 +1150,7 @@ impl Window {
                 if xwindow.is_null() {
                     std::ptr::null()
                 } else {
-                    (*(*xwindow).xsurface).class
+                    (*(*xwindow).xsurface.ptr()).class
                 }
             }
             WindowImpl::Destroying => std::ptr::null(),
@@ -1192,7 +1192,7 @@ impl Window {
     /// an X11 window named in `xwayland_hidpi_except`.
     pub unsafe fn x11_buffer_scale(&self) -> f64 {
         if let WindowImpl::Xwayland(xwindow) = self.impl_type {
-            let xsurface = if xwindow.is_null() { std::ptr::null() } else { (*xwindow).xsurface as *const _ };
+            let xsurface = if xwindow.is_null() { std::ptr::null() } else { (*xwindow).xsurface.ptr() as *const _ };
             1.0 / crate::xwayland_window::x11_scale_for(xsurface) as f64
         } else {
             1.0
@@ -1229,7 +1229,7 @@ impl Window {
                     if xwindow.is_null() {
                         None
                     } else {
-                        let parent_xsurface = (*(*xwindow).xsurface).parent;
+                        let parent_xsurface = (*xwindow).xsurface.parent();
                         if parent_xsurface.is_null() {
                             None
                         } else {
@@ -1285,7 +1285,7 @@ impl Window {
                     if xwindow.is_null() {
                         0
                     } else {
-                        (*(*xwindow).xsurface).pid
+                        (*xwindow).xsurface.pid()
                     }
                 }
                 WindowImpl::Destroying => 0,
@@ -1324,7 +1324,7 @@ impl Window {
             if xwindow.is_null() || (*xwindow).xsurface.is_null() {
                 return false;
             }
-            let xs = (*xwindow).xsurface;
+            let xs = (*xwindow).xsurface.ptr();
             if !(*xs).parent.is_null() || !(*xs).skip_taskbar || (*xs).hints.is_null() {
                 return false;
             }
@@ -1665,7 +1665,7 @@ impl Window {
             }
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
-                    ffi::wlr_xwayland_surface_close((*xwindow).xsurface);
+                    ffi::wlr_xwayland_surface_close((*xwindow).xsurface.ptr());
                 }
             }
             WindowImpl::Destroying => {}
@@ -1827,7 +1827,7 @@ impl Window {
                 if xwindow.is_null() || (*xwindow).xsurface.is_null() {
                     std::ptr::null_mut()
                 } else {
-                    (*(*xwindow).xsurface).surface
+                    (*xwindow).xsurface.surface()
                 }
             }
             _ => std::ptr::null_mut(),
@@ -2191,10 +2191,10 @@ impl Window {
             }
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
-                    let s = crate::xwayland_window::x11_scale_for((*xwindow).xsurface);
-                    let mut w = crate::xwayland_window::from_x11((*(*xwindow).xsurface).width as i32, s) as u32;
-                    let mut h = crate::xwayland_window::from_x11((*(*xwindow).xsurface).height as i32, s) as u32;
-                    let has_parent = !(*(*xwindow).xsurface).parent.is_null();
+                    let s = crate::xwayland_window::x11_scale_for((*xwindow).xsurface.ptr());
+                    let mut w = crate::xwayland_window::from_x11((*xwindow).xsurface.width() as i32, s) as u32;
+                    let mut h = crate::xwayland_window::from_x11((*xwindow).xsurface.height() as i32, s) as u32;
+                    let has_parent = !(*xwindow).xsurface.parent().is_null();
                     if self.is_wine() && !has_parent && !self.is_fullscreen() {
                         w = w.saturating_sub((crate::xwayland_window::WINE_MARGIN * 2) as u32);
                         h = h.saturating_sub((crate::xwayland_window::WINE_MARGIN * 2) as u32);
@@ -2629,7 +2629,7 @@ impl Window {
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
                     if !(*xwindow).surface_tree.is_null() {
-                        let has_parent = !(*(*xwindow).xsurface).parent.is_null();
+                        let has_parent = !(*xwindow).xsurface.parent().is_null();
                         if self.is_wine() && !has_parent && !self.is_fullscreen() {
                             (*xwindow).surface_tree.set_position(-16, -16);
                         } else {
@@ -2931,14 +2931,14 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
     // speed, every X11 left/top drag at scale 2.
     if let WindowImpl::Xwayland(xwindow) = this.impl_type {
         if !xwindow.is_null() && !(*xwindow).xsurface.is_null() && this.resize_edges.is_some() {
-            let surface = (*(*xwindow).xsurface).surface;
+            let surface = (*xwindow).xsurface.surface();
             if !surface.is_null() {
-                let s = crate::xwayland_window::x11_scale_for((*xwindow).xsurface);
+                let s = crate::xwayland_window::x11_scale_for((*xwindow).xsurface.ptr());
                 let mut w = crate::xwayland_window::from_x11(
                     ffi::river_wlr_surface_get_width(surface), s);
                 let mut h = crate::xwayland_window::from_x11(
                     ffi::river_wlr_surface_get_height(surface), s);
-                let has_parent = !(*(*xwindow).xsurface).parent.is_null();
+                let has_parent = !(*xwindow).xsurface.parent().is_null();
                 if this.is_wine() && !has_parent && !this.is_fullscreen() {
                     w = (w - crate::xwayland_window::WINE_MARGIN * 2).max(0);
                     h = (h - crate::xwayland_window::WINE_MARGIN * 2).max(0);

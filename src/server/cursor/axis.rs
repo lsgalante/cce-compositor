@@ -554,7 +554,7 @@ impl Cursor {
         if or.is_null() || result.surface.is_null() || (*or).xsurface.is_null() {
             return None;
         }
-        let pid = (*(*or).xsurface).pid;
+        let pid = (*or).xsurface.pid();
         let this = cursor_mut!(wm, sid, None);
         let focused = this.wlr_seat.keyboard_focused_surface();
         if focused.is_null() {
@@ -562,7 +562,7 @@ impl Cursor {
         }
         for window in wm.windows.values() {
             let crate::window::WindowImpl::Xwayland(xwindow) = window.impl_type() else { continue };
-            if xwindow.is_null() || (*(*xwindow).xsurface).pid != pid {
+            if xwindow.is_null() || (*xwindow).xsurface.pid() != pid {
                 continue;
             }
             let app_id = window.get_app_id_string().unwrap_or_default();

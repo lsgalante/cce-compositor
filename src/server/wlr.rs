@@ -369,3 +369,87 @@ impl Wlr<ffi::wlr_xcursor_manager> {
         self.live().map_or(std::ptr::null_mut(), |m| unsafe { ffi::wlr_xcursor_manager_get_xcursor(m, name.as_ptr(), scale) })
     }
 }
+
+/// The X11 surface's fields, read through the held pointer. Strings come
+/// back owned (empty when unset); pointers come back raw, for the caller to
+/// vouch for. Writes (`data`, a restored size) stay FFI-side through
+/// `ptr()`.
+macro_rules! xsurface_fields {
+    ($($name:ident: $ty:ty = $zero:expr;)*) => {$(
+        pub fn $name(&self) -> $ty {
+            // SAFETY: the field holds a live surface (`set`'s contract).
+            self.live().map_or($zero, |x| unsafe { (*x).$name })
+        }
+    )*};
+}
+
+impl Wlr<ffi::wlr_xwayland_surface> {
+    xsurface_fields! {
+        window_id: ffi::xcb_window_t = 0;
+        surface: *mut ffi::wlr_surface = std::ptr::null_mut();
+        x: i16 = 0;
+        y: i16 = 0;
+        width: u16 = 0;
+        height: u16 = 0;
+        override_redirect: bool = false;
+        pid: ffi::pid_t = 0;
+        parent: *mut ffi::wlr_xwayland_surface = std::ptr::null_mut();
+        decorations: u32 = 0;
+        hints: *mut ffi::xcb_icccm_wm_hints_t = std::ptr::null_mut();
+        size_hints: *mut ffi::xcb_size_hints_t = std::ptr::null_mut();
+        fullscreen: bool = false;
+        maximized_vert: bool = false;
+        maximized_horz: bool = false;
+        minimized: bool = false;
+        data: *mut std::ffi::c_void = std::ptr::null_mut();
+    }
+
+    pub fn configure(&self, x: i16, y: i16, width: u16, height: u16) {
+        if let Some(x11) = self.live() {
+            unsafe { ffi::wlr_xwayland_surface_configure(x11, x, y, width, height) }
+        }
+    }
+
+    pub fn set_maximized(&self, horizontal: bool, vertical: bool) {
+        if let Some(x) = self.live() {
+            unsafe { ffi::wlr_xwayland_surface_set_maximized(x, horizontal, vertical) }
+        }
+    }
+
+    pub fn set_fullscreen(&self, fullscreen: bool) {
+        if let Some(x) = self.live() {
+            unsafe { ffi::wlr_xwayland_surface_set_fullscreen(x, fullscreen) }
+        }
+    }
+
+    pub fn set_minimized(&self, minimized: bool) {
+        if let Some(x) = self.live() {
+            unsafe { ffi::wlr_xwayland_surface_set_minimized(x, minimized) }
+        }
+    }
+
+    pub fn activate(&self, activated: bool) {
+        if let Some(x) = self.live() {
+            unsafe { ffi::wlr_xwayland_surface_activate(x, activated) }
+        }
+    }
+
+    /// WM_CLASS class, owned; empty when unset.
+    pub fn class(&self) -> String {
+        // SAFETY: the string is the surface's, valid while it lives.
+        self.live().map_or_else(String::new, |x| unsafe { owned_str((*x).class) })
+    }
+
+    /// WM_CLASS instance, owned; empty when unset.
+    pub fn instance(&self) -> String {
+        // SAFETY: as `class`.
+        self.live().map_or_else(String::new, |x| unsafe { owned_str((*x).instance) })
+    }
+
+    /// The window title, owned; empty when unset.
+    pub fn title(&self) -> String {
+        // SAFETY: as `class`.
+        self.live().map_or_else(String::new, |x| unsafe { owned_str((*x).title) })
+    }
+}
+

@@ -1166,7 +1166,7 @@ impl WindowManager {
                                 vx: w.virtual_x,
                                 vy: w.virtual_y,
                                 x11: match w.impl_type() {
-                                    crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => Some((*(*xw).xsurface).window_id),
+                                    crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => Some((*xw).xsurface.window_id()),
                                     _ => None,
                                 },
                                 cell: cell.clone(),

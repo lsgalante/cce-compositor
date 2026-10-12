@@ -242,7 +242,7 @@ impl Scene {
                         {
                             let window = wm.windows.get(id).expect("checked by the guard");
                             let xsurface = match window.impl_type() {
-                                crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*xw).xsurface as *const _,
+                                crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*xw).xsurface.ptr() as *const _,
                                 _ => std::ptr::null(),
                             };
                             let s = crate::xwayland_window::x11_scale_for(xsurface) as f64;
@@ -250,7 +250,7 @@ impl Scene {
                             (s != 1.0).then_some(s / zoom)
                         }
                         SceneNodeDataVal::OverrideRedirect(or) if !or.is_null() => {
-                            let s = crate::xwayland_window::x11_scale_for((*or).xsurface) as f64;
+                            let s = crate::xwayland_window::x11_scale_for((*or).xsurface.ptr()) as f64;
                             (s != 1.0).then_some(s)
                         }
                         _ => None,

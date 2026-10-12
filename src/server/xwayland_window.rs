@@ -9,7 +9,9 @@ use crate::xwayland_override_redirect::XwaylandOverrideRedirect;
 pub struct XwaylandWindow {
     /// The window this X11 surface backs, looked up in `wm.windows`.
     pub window: crate::window::WindowId,
-    pub xsurface: *mut ffi::wlr_xwayland_surface,
+    /// The X11 surface; this window lives no longer than it (freed in its
+    /// destroy handler, or on becoming override-redirect).
+    pub xsurface: crate::wlr::Wlr<ffi::wlr_xwayland_surface>,
     pub surface_tree: crate::scene_handle::SceneTree,
 
     pub destroy: crate::listener::Listener,
@@ -271,7 +273,7 @@ pub fn window_is_hidpi_exempt(window: &crate::window::Window) -> bool {
         if !crate::shared::layout().xwayland_hidpi || crate::shared::layout().xwayland_hidpi_except.is_empty() {
             return false;
         }
-        let xsurface = (*xwindow).xsurface;
+        let xsurface = (*xwindow).xsurface.ptr();
         let text = |p: *const libc::c_char| -> String {
             if p.is_null() { String::new() } else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() }
         };
@@ -387,7 +389,9 @@ impl XwaylandWindow {
 
         let xwindow = Box::new(XwaylandWindow {
             window: id,
-            xsurface,
+            // SAFETY: the window is freed by the surface's destroy handler
+            // (or its override-redirect switch) before the surface goes.
+            xsurface: crate::wlr::Wlr::from_raw(xsurface),
             surface_tree: crate::scene_handle::SceneTree::none(),
             destroy: std::mem::zeroed(),
             request_configure: std::mem::zeroed(),
@@ -443,30 +447,30 @@ impl XwaylandWindow {
     /// `window` is this surface's window, passed in rather than reached
     /// through `self.window`: the caller already holds it.
     pub unsafe fn configure(&mut self, window: &mut Window) -> bool {
-        let has_parent = !(*self.xsurface).parent.is_null();
+        let has_parent = !self.xsurface.parent().is_null();
         // A captionless Wine window is drawn inside a margin (WINE_MARGIN).
         let wine_unframed = window.is_wine() && !has_parent && !window.is_fullscreen();
         let scheduled = &mut window.configure_scheduled;
         let sent = &mut window.configure_sent;
-        let s = x11_scale_for(self.xsurface);
+        let s = x11_scale_for(self.xsurface.ptr());
 
         if scheduled.width == Some(0) {
-            scheduled.width = Some(from_x11((*self.xsurface).width as i32, s) as u32);
+            scheduled.width = Some(from_x11(self.xsurface.width() as i32, s) as u32);
         }
         if scheduled.height == Some(0) {
-            scheduled.height = Some(from_x11((*self.xsurface).height as i32, s) as u32);
+            scheduled.height = Some(from_x11(self.xsurface.height() as i32, s) as u32);
         }
 
         let mut phys_width = if let Some(w) = scheduled.width {
             to_x11(w as i32, s) as u16
         } else {
-            (*self.xsurface).width
+            self.xsurface.width()
         };
 
         let mut phys_height = if let Some(h) = scheduled.height {
             to_x11(h as i32, s) as u16
         } else {
-            (*self.xsurface).height
+            self.xsurface.height()
         };
 
         // X11 root coordinates: see `x11_scale`. Everything sent to X goes
@@ -496,18 +500,18 @@ impl XwaylandWindow {
             self.set_activated(scheduled.activated);
         }
         if scheduled.maximized != sent.maximized {
-            ffi::wlr_xwayland_surface_set_maximized(self.xsurface, scheduled.maximized, scheduled.maximized);
+            self.xsurface.set_maximized(scheduled.maximized, scheduled.maximized);
             self.last_configure = Some(std::time::Instant::now());
             // Wine answers this by maximizing the Win32 window itself; see
             // `absorbs_wine_echo` for what that sets off and how it ends.
             self.wine_max_unconfirmed = scheduled.maximized && self.is_wine_process();
         }
         if scheduled.inform_fullscreen != sent.inform_fullscreen {
-            ffi::wlr_xwayland_surface_set_fullscreen(self.xsurface, scheduled.inform_fullscreen);
+            self.xsurface.set_fullscreen(scheduled.inform_fullscreen);
         }
 
-        let mut width = scheduled.width.unwrap_or(from_x11((*self.xsurface).width as i32, s) as u32);
-        let mut height = scheduled.height.unwrap_or(from_x11((*self.xsurface).height as i32, s) as u32);
+        let mut width = scheduled.width.unwrap_or(from_x11(self.xsurface.width() as i32, s) as u32);
+        let mut height = scheduled.height.unwrap_or(from_x11(self.xsurface.height() as i32, s) as u32);
 
         if wine_unframed {
             if scheduled.width.is_none() {
@@ -534,11 +538,11 @@ impl XwaylandWindow {
     /// started by a relative name (`wine popup.exe` keeps `popup.exe`).
     /// Not cached while the pid is still unknown, so a window read before
     /// _NET_WM_PID arrives is asked again.
-    pub unsafe fn is_wine_process(&mut self) -> bool {
+    pub fn is_wine_process(&mut self) -> bool {
         if let Some(wine) = self.wine_process {
             return wine;
         }
-        let pid = (*self.xsurface).pid;
+        let pid = self.xsurface.pid();
         if pid <= 0 {
             return false;
         }
@@ -554,15 +558,15 @@ impl XwaylandWindow {
     /// This window's key in `min_sizes`: app_id, program (argv[0]) and
     /// title. `None` while any is unknown — a window with no readable
     /// process cannot be told from another program with its app_id.
-    unsafe fn min_size_key(&self, window: &crate::window::Window) -> Option<(String, String, String)> {
+    fn min_size_key(&self, window: &crate::window::Window) -> Option<(String, String, String)> {
         let app_id = window.get_app_id_string()?;
-        let program = crate::window_manager::proc_args((*self.xsurface).pid).into_iter().next()?;
+        let program = crate::window_manager::proc_args(self.xsurface.pid()).into_iter().next()?;
         let title = window.get_title_string().unwrap_or_default();
         Some((app_id, program, title))
     }
 
     /// Persist a learned minimum (logical `width`x`height` at X11 scale `s`).
-    unsafe fn store_min_size(&self, wm: &mut crate::window_manager::WindowManager, width: u32, height: u32, s: f32) {
+    fn store_min_size(&self, wm: &mut crate::window_manager::WindowManager, width: u32, height: u32, s: f32) {
         let Some((app_id, program, title)) = wm.windows.get(self.window).and_then(|w| self.min_size_key(w)) else { return };
         let (w, h) = (to_x11(width as i32, s) as u32, to_x11(height as i32, s) as u32);
         wm.min_sizes.set(&app_id, &program, &title, w, h);
@@ -572,7 +576,7 @@ impl XwaylandWindow {
     /// start learning afresh (`ccectl min-size forget`). The learned value
     /// is the only minimum an X11 window carries here, so the hint's min
     /// goes to 0. Returns what was stored, X11 pixels.
-    pub unsafe fn forget_min_size(&mut self, wm: &mut crate::window_manager::WindowManager) -> Option<(u32, u32)> {
+    pub fn forget_min_size(&mut self, wm: &mut crate::window_manager::WindowManager) -> Option<(u32, u32)> {
         let key = wm.windows.get(self.window).and_then(|w| self.min_size_key(w));
         let stored = key.and_then(|(app_id, program, title)| {
             let min_sizes = &mut wm.min_sizes;
@@ -601,15 +605,15 @@ impl XwaylandWindow {
         // it: the minimum was learned too high, or the app lowered it. Kept
         // unchecked, a stale minimum outlives every restart.
         let (w, h) = (
-            lowered_min(stored_w, (*self.xsurface).width as u32),
-            lowered_min(stored_h, (*self.xsurface).height as u32),
+            lowered_min(stored_w, self.xsurface.width() as u32),
+            lowered_min(stored_h, self.xsurface.height() as u32),
         );
         if (w, h) != (stored_w, stored_h) {
             log::info!("XWayland map: '{}' maps below its stored minimum; lowered to {}x{} (X11 px)", title, w, h);
             wm.min_sizes.set(&app_id, &program, &title, w, h);
         }
         let Some(window) = wm.windows.get_mut(self.window) else { return };
-        let s = x11_scale_for(self.xsurface);
+        let s = x11_scale_for(self.xsurface.ptr());
         let hint = crate::window::DimensionsHint {
             min_width: if w > 0 { from_x11(w as i32, s) as u32 } else { 0 },
             min_height: if h > 0 { from_x11(h as i32, s) as u32 } else { 0 },
@@ -649,11 +653,10 @@ impl XwaylandWindow {
     /// before the request arrives. A window named in
     /// `xwayland_hidpi_except` is a fullscreen game by definition.
     pub unsafe fn is_wine_maximize(&mut self, window: &crate::window::Window) -> bool {
-        let xs = self.xsurface;
-        if !(*xs).parent.is_null() || window_is_hidpi_exempt(window) {
+        if !self.xsurface.parent().is_null() || window_is_hidpi_exempt(window) {
             return false;
         }
-        let no_title = (*xs).decorations
+        let no_title = self.xsurface.decorations()
             & ffi::wlr_xwayland_surface_decorations_WLR_XWAYLAND_SURFACE_DECORATIONS_NO_TITLE as u32
             != 0;
         no_title && self.is_wine_process() && self.motif_hints().map_or(false, |h| motif_allows_maximize(&h))
@@ -684,7 +687,7 @@ impl XwaylandWindow {
             return None;
         }
         // AnyPropertyType; the hints are five CARD32s.
-        let cookie = ffi::xcb_get_property(conn, 0, (*self.xsurface).window_id, atom, 0, 0, 5);
+        let cookie = ffi::xcb_get_property(conn, 0, self.xsurface.window_id(), atom, 0, 0, 5);
         let reply = ffi::xcb_get_property_reply(conn, cookie, std::ptr::null_mut());
         if reply.is_null() {
             return None;
@@ -708,29 +711,29 @@ impl XwaylandWindow {
     }
 
     /// The geometry wlroots currently reports for the X window.
-    pub unsafe fn reported_geom(&self) -> X11Geom {
+    pub fn reported_geom(&self) -> X11Geom {
         X11Geom {
-            x: (*self.xsurface).x,
-            y: (*self.xsurface).y,
-            width: (*self.xsurface).width,
-            height: (*self.xsurface).height,
+            x: self.xsurface.x(),
+            y: self.xsurface.y(),
+            width: self.xsurface.width(),
+            height: self.xsurface.height(),
         }
     }
 
     /// The one path to `wlr_xwayland_surface_configure`: every geometry
     /// handed to X is recorded in `sent_geom` so `needs_configure` can tell
     /// a geometry X has from one the compositor merely mirrored.
-    pub unsafe fn send_configure(&mut self, g: X11Geom) {
-        ffi::wlr_xwayland_surface_configure(self.xsurface, g.x, g.y, g.width, g.height);
+    pub fn send_configure(&mut self, g: X11Geom) {
+        self.xsurface.configure(g.x, g.y, g.width, g.height);
         self.sent_geom = Some(g);
         self.last_configure = Some(std::time::Instant::now());
     }
 
-    pub unsafe fn set_activated(&self, activated: bool) {
-        if activated && (*self.xsurface).minimized {
-            ffi::wlr_xwayland_surface_set_minimized(self.xsurface, false);
+    pub fn set_activated(&self, activated: bool) {
+        if activated && self.xsurface.minimized() {
+            self.xsurface.set_minimized(false);
         }
-        ffi::wlr_xwayland_surface_activate(self.xsurface, activated);
+        self.xsurface.activate(activated);
     }
 }
 
@@ -755,7 +758,7 @@ unsafe fn handle_destroy_impl(wm: &mut crate::window_manager::WindowManager, xwi
     (*xwindow).request_fullscreen.disconnect();
     (*xwindow).request_minimize.disconnect();
 
-    (*(*xwindow).xsurface).data = std::ptr::null_mut();
+    (*(*xwindow).xsurface.ptr()).data = std::ptr::null_mut();
     // Teardown runs whatever happens; the window outlives this object.
     if let Some(this) = wm.windows.get_mut(id) {
         this.impl_destroying();
@@ -770,7 +773,7 @@ unsafe extern "C" fn handle_associate(listener: *mut ffi::wl_listener, _data: *m
 }
 
 unsafe fn handle_associate_impl(xwindow: *mut XwaylandWindow) {
-    let surface = (*(*xwindow).xsurface).surface;
+    let surface = (*xwindow).xsurface.surface();
     if !surface.is_null() {
         (*xwindow).map.connect(ffi::river_wlr_surface_get_map_signal(surface), handle_map);
         (*xwindow).unmap.connect(ffi::river_wlr_surface_get_unmap_signal(surface), handle_unmap);
@@ -797,7 +800,7 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow
     let id = (*xwindow).window;
     let this = window_mut!(wm, id);
     let surfaces_tree = this.surfaces.tree.raw();
-    let surface = (*(*xwindow).xsurface).surface;
+    let surface = (*xwindow).xsurface.surface();
     let surface_tree = ffi::wlr_scene_subsurface_tree_create(surfaces_tree, surface);
     if surface_tree.is_null() {
         log::error!("out of memory creating subsurface tree");
@@ -808,7 +811,7 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow
     }
     (*xwindow).surface_tree = crate::scene_handle::SceneTree::adopt(surface_tree);
 
-    let has_parent = !(*(*xwindow).xsurface).parent.is_null();
+    let has_parent = !(*xwindow).xsurface.parent().is_null();
 
     if this.is_wine() && !has_parent && !this.is_fullscreen() {
         ffi::wlr_scene_node_set_position(surface_tree as *mut ffi::wlr_scene_node, -WINE_MARGIN, -WINE_MARGIN);
@@ -864,7 +867,7 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow
 /// the placement hints own those, and a transient is the one kind of window
 /// `try_restore` refuses to touch.
 unsafe fn place_transient_where_it_asked(wm: &mut crate::window_manager::WindowManager, xwindow: *mut XwaylandWindow) {
-    let xsurface = (*xwindow).xsurface;
+    let xsurface = (*xwindow).xsurface.ptr();
     if (*xsurface).parent.is_null() {
         return;
     }
@@ -909,7 +912,7 @@ unsafe fn place_shy_where_it_is(wm: &mut crate::window_manager::WindowManager, x
     if !this.is_shy() {
         return;
     }
-    let xsurface = (*xwindow).xsurface;
+    let xsurface = (*xwindow).xsurface.ptr();
     let s = x11_scale_for(xsurface);
     let log_x = from_x11((*xsurface).x as i32, s);
     let log_y = from_x11((*xsurface).y as i32, s);
@@ -939,7 +942,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
 
 unsafe fn handle_unmap_impl(wm: &mut crate::window_manager::WindowManager, xwindow: *mut XwaylandWindow) {
     let id = (*xwindow).window;
-    let surface = (*(*xwindow).xsurface).surface;
+    let surface = (*xwindow).xsurface.surface();
     if !surface.is_null() {
         ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
     }
@@ -955,7 +958,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     let this = window_mut!(wm, id);
     let event = data as *mut ffi::wlr_xwayland_surface_configure_event;
 
-    let surface = (*(*xwindow).xsurface).surface;
+    let surface = (*xwindow).xsurface.surface();
     if surface.is_null() || !ffi::river_wlr_surface_is_mapped(surface) {
         (*xwindow).send_configure(X11Geom {
             x: (*event).x,
@@ -966,14 +969,14 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         return;
     }
 
-    let class_ptr = (*(*xwindow).xsurface).class;
+    let class_ptr = (*(*xwindow).xsurface.ptr()).class;
     let class = if class_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("") };
-    let title_ptr = (*(*xwindow).xsurface).title;
+    let title_ptr = (*(*xwindow).xsurface.ptr()).title;
     let title = if title_ptr.is_null() { "" } else { std::ffi::CStr::from_ptr(title_ptr).to_str().unwrap_or("") };
     let is_wine = this.is_wine();
 
-    let has_parent = !(*(*xwindow).xsurface).parent.is_null();
-    let s = x11_scale_for((*xwindow).xsurface);
+    let has_parent = !(*xwindow).xsurface.parent().is_null();
+    let s = x11_scale_for((*xwindow).xsurface.ptr());
     log::info!(
         "XWayland configure request: title='{}' class='{}' has_parent={} is_wine={} event=({}, {}, {}, {}) xsurface=({}, {}, {}, {})",
         title,
@@ -981,7 +984,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
         has_parent,
         is_wine,
         (*event).x, (*event).y, (*event).width, (*event).height,
-        (*(*xwindow).xsurface).x, (*(*xwindow).xsurface).y, (*(*xwindow).xsurface).width, (*(*xwindow).xsurface).height,
+        (*xwindow).xsurface.x(), (*xwindow).xsurface.y(), (*xwindow).xsurface.width(), (*xwindow).xsurface.height(),
     );
 
     let is_tiled = this.wm_requested.tiled != 0
@@ -1202,7 +1205,7 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     let xwindow = crate::container_of!(listener, XwaylandWindow, set_override_redirect);
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    let xsurface = (*xwindow).xsurface;
+    let xsurface = (*xwindow).xsurface.ptr();
     log::info!("xwayland surface set override redirect: val={}", (*xsurface).override_redirect);
     assert!((*xsurface).override_redirect);
 
@@ -1227,7 +1230,7 @@ unsafe extern "C" fn handle_set_size_hints(listener: *mut ffi::wl_listener, _dat
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
-    let size_hints = (*(*xwindow).xsurface).size_hints;
+    let size_hints = (*xwindow).xsurface.size_hints();
     if !size_hints.is_null() {
         let min_width = std::cmp::max(0, (*size_hints).min_width) as u32;
         let min_height = std::cmp::max(0, (*size_hints).min_height) as u32;
@@ -1274,7 +1277,7 @@ unsafe extern "C" fn handle_set_decorations(listener: *mut ffi::wl_listener, _da
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
-    let prefers_csd = ((*(*xwindow).xsurface).decorations
+    let prefers_csd = ((*xwindow).xsurface.decorations()
         & (ffi::wlr_xwayland_surface_decorations_WLR_XWAYLAND_SURFACE_DECORATIONS_NO_BORDER
             | ffi::wlr_xwayland_surface_decorations_WLR_XWAYLAND_SURFACE_DECORATIONS_NO_TITLE) as u32)
         != 0;
@@ -1292,7 +1295,7 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
-    let maximized = (*(*xwindow).xsurface).maximized_vert || (*(*xwindow).xsurface).maximized_horz;
+    let maximized = (*xwindow).xsurface.maximized_vert() || (*xwindow).xsurface.maximized_horz();
     // Wine's echo of a tiled window's maximized state (`absorbs_wine_echo`):
     // the MAXIMIZED it drops while it believes itself fullscreen, and the
     // MAXIMIZED it adds once it has settled — which ends the echo. Neither
@@ -1304,14 +1307,14 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
         );
         if maximized {
             (*xwindow).wine_max_unconfirmed = false;
-        } else if (*(*xwindow).xsurface).fullscreen {
+        } else if (*xwindow).xsurface.fullscreen() {
             // The echo is complete (Wine sends the FULLSCREEN add first)
             // and wlroots has written it into _NET_WM_STATE: FULLSCREEN in
             // place of MAXIMIZED. Wine settles its rect on the tile but does
             // not correct the property until the window next moves, so the
             // compositor's state is written back here. Safe inside the
             // signal: wlroots compared the maximized fields before emitting.
-            let xs = (*xwindow).xsurface;
+            let xs = (*xwindow).xsurface.ptr();
             ffi::wlr_xwayland_surface_set_fullscreen(xs, false);
             ffi::wlr_xwayland_surface_set_maximized(xs, true, true);
             // Wine maximizes once per report, so the echo is over: its
@@ -1341,7 +1344,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
-    let fullscreen = (*(*xwindow).xsurface).fullscreen;
+    let fullscreen = (*xwindow).xsurface.fullscreen();
     log::info!(
         "XWayland fullscreen request: title='{}' fullscreen={}",
         this.get_title_string().unwrap_or_default(),
@@ -1372,11 +1375,11 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
         // FULLSCREEN is taken back out of _NET_WM_STATE; the MAXIMIZED the
         // tile reports then sets off Wine's echo, which is absorbed.
         log::info!("XWayland fullscreen request: a Wine window's own maximize — tiling it instead");
-        ffi::wlr_xwayland_surface_set_fullscreen((*xwindow).xsurface, false);
+        ffi::wlr_xwayland_surface_set_fullscreen((*xwindow).xsurface.ptr(), false);
         // The Win32 window is maximized already, so there is no echo to
         // wait for: MAXIMIZED is written here and marked sent, which keeps
         // `configure` from arming `wine_max_unconfirmed` for it.
-        ffi::wlr_xwayland_surface_set_maximized((*xwindow).xsurface, true, true);
+        ffi::wlr_xwayland_surface_set_maximized((*xwindow).xsurface.ptr(), true, true);
         this.configure_sent.maximized = true;
         (*xwindow).wine_max_unconfirmed = false;
         this.tiling_mode = crate::tiling::TilingMode::Tiled;
@@ -1395,7 +1398,7 @@ unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, da
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
     let event = data as *mut ffi::wlr_xwayland_minimize_event;
-    ffi::wlr_xwayland_surface_set_minimized((*xwindow).xsurface, (*event).minimize);
+    ffi::wlr_xwayland_surface_set_minimized((*xwindow).xsurface.ptr(), (*event).minimize);
     this.wm_scheduled.minimize_requested = true;
     crate::shared::pending().dirty_windowing();
 }

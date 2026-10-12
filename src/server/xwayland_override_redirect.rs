@@ -7,7 +7,8 @@ use crate::xwayland_window::XwaylandWindow;
 
 #[repr(C)]
 pub struct XwaylandOverrideRedirect {
-    pub xsurface: *mut ffi::wlr_xwayland_surface,
+    /// The X11 surface; this object lives no longer than it.
+    pub xsurface: crate::wlr::Wlr<ffi::wlr_xwayland_surface>,
     pub surface_tree: crate::scene_handle::SceneTree,
 
     pub request_configure: crate::listener::Listener,
@@ -41,7 +42,9 @@ impl XwaylandOverrideRedirect {
         );
 
         let override_redirect = Box::new(XwaylandOverrideRedirect {
-            xsurface,
+            // SAFETY: freed by the surface's destroy handler (or its
+            // override-redirect switch) before the surface goes.
+            xsurface: crate::wlr::Wlr::from_raw(xsurface),
             surface_tree: crate::scene_handle::SceneTree::none(),
             request_configure: std::mem::zeroed(),
             destroy: std::mem::zeroed(),
@@ -79,8 +82,8 @@ impl XwaylandOverrideRedirect {
         if self.surface_tree.is_null() {
             return;
         }
-        let s = crate::xwayland_window::x11_scale_for(self.xsurface);
-        self.surface_tree.set_position(crate::xwayland_window::from_x11((*self.xsurface).x as i32, s), crate::xwayland_window::from_x11((*self.xsurface).y as i32, s));
+        let s = crate::xwayland_window::x11_scale_for(self.xsurface.ptr());
+        self.surface_tree.set_position(crate::xwayland_window::from_x11(self.xsurface.x() as i32, s), crate::xwayland_window::from_x11(self.xsurface.y() as i32, s));
     }
 
     /// Draw the physical-pixel X11 buffer at 1/scale. Runs from the
@@ -90,7 +93,7 @@ impl XwaylandOverrideRedirect {
         if self.surface_tree.is_null() {
             return;
         }
-        let s = crate::xwayland_window::x11_scale_for(self.xsurface) as f64;
+        let s = crate::xwayland_window::x11_scale_for(self.xsurface.ptr()) as f64;
         if s == 1.0 {
             return;
         }
@@ -149,32 +152,32 @@ impl XwaylandOverrideRedirect {
         if !unlocked {
             return;
         }
-        if !ffi::wlr_xwayland_surface_override_redirect_wants_focus(self.xsurface)
-            || ffi::wlr_xwayland_surface_icccm_input_model(self.xsurface)
+        if !ffi::wlr_xwayland_surface_override_redirect_wants_focus(self.xsurface.ptr())
+            || ffi::wlr_xwayland_surface_icccm_input_model(self.xsurface.ptr())
                 == ffi::wlr_xwayland_icccm_input_model_WLR_ICCCM_INPUT_MODEL_NONE
         {
             return;
         }
         let Some(sid) = sid else { return };
         let Some(focused) = wm.seats.get(sid).map(|seat| seat.focused) else { return };
-        let pid = (*self.xsurface).pid;
+        let pid = self.xsurface.pid();
         match focused {
             crate::seat::Focus::Window(id) if wm.windows.contains(id) => {
                 let same_client = match wm.windows.get(id).map(|w| w.impl_type()) {
                     Some(crate::window::WindowImpl::Xwayland(xwindow)) => {
-                        !xwindow.is_null() && (*(*xwindow).xsurface).pid == pid
+                        !xwindow.is_null() && (*xwindow).xsurface.pid() == pid
                     }
                     _ => false,
                 };
                 if same_client {
-                    crate::seat::Seat::keyboard_enter_or_leave(wm, sid, (*self.xsurface).surface);
+                    crate::seat::Seat::keyboard_enter_or_leave(wm, sid, self.xsurface.surface());
                     return;
                 }
                 log::debug!("override redirect (pid {pid}) mapped unfocused: another client holds the keyboard");
                 return;
             }
             crate::seat::Focus::None => {}
-            crate::seat::Focus::OverrideRedirect(or) if !or.is_null() && (*(*or).xsurface).pid == pid => {}
+            crate::seat::Focus::OverrideRedirect(or) if !or.is_null() && (*or).xsurface.pid() == pid => {}
             _ => {
                 log::debug!("override redirect (pid {pid}) mapped unfocused: another client holds the keyboard");
                 return;
@@ -208,7 +211,7 @@ unsafe extern "C" fn handle_associate(listener: *mut ffi::wl_listener, _data: *m
 }
 
 unsafe fn handle_associate_impl(or: *mut XwaylandOverrideRedirect) {
-    let surface = (*(*or).xsurface).surface;
+    let surface = (*or).xsurface.surface();
     if !surface.is_null() {
         (*or).map.connect(ffi::river_wlr_surface_get_map_signal(surface), handle_map);
         (*or).unmap.connect(ffi::river_wlr_surface_get_unmap_signal(surface), handle_unmap);
@@ -247,11 +250,11 @@ unsafe fn is_xembed_tray_container(xsurface: *mut ffi::wlr_xwayland_surface) -> 
 unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, server: *mut Server, or: *mut XwaylandOverrideRedirect) {
     // No scene node at all: nothing to draw, hit-test or focus. Unmap
     // copes with the missing tree and the unconnected listeners.
-    if is_xembed_tray_container((*or).xsurface) {
+    if is_xembed_tray_container((*or).xsurface.ptr()) {
         log::debug!("xembed tray container mapped; not shown");
         return;
     }
-    let surface = (*(*or).xsurface).surface;
+    let surface = (*or).xsurface.surface();
     let override_redirect_tree = crate::shared::scene().layers.override_redirect.raw();
 
     let surface_tree = ffi::wlr_scene_subsurface_tree_create(override_redirect_tree, surface);
@@ -274,7 +277,7 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, server:
     (*or).place();
     (*or).apply_x11_scale();
 
-    (*or).set_geometry.connect(&mut (*(*or).xsurface).events.set_geometry, handle_set_geometry);
+    (*or).set_geometry.connect(&mut (*(*or).xsurface.ptr()).events.set_geometry, handle_set_geometry);
     // After the scene's subsurface tree, so this runs after its reset.
     (*or).commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_commit);
 
@@ -291,7 +294,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
     (*or).set_geometry.disconnect();
     (*or).commit.disconnect();
 
-    let surface = (*(*or).xsurface).surface;
+    let surface = (*or).xsurface.surface();
     if !surface.is_null() {
         ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
     }
@@ -309,7 +312,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
         };
         if let Some((crate::window::WindowImpl::Xwayland(xwindow), root_surface)) = parent {
             if !xwindow.is_null()
-                && (*(*xwindow).xsurface).pid == (*(*or).xsurface).pid
+                && (*xwindow).xsurface.pid() == (*or).xsurface.pid()
                 && keyboard_surface == surface
             {
                 crate::seat::Seat::keyboard_enter_or_leave(wm, sid, root_surface);
@@ -332,7 +335,7 @@ unsafe extern "C" fn handle_set_geometry(listener: *mut ffi::wl_listener, _data:
 
 unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, set_override_redirect);
-    let xsurface = (*or).xsurface;
+    let xsurface = (*or).xsurface.ptr();
     log::debug!("xwayland surface unset override redirect");
     assert!(!(*xsurface).override_redirect);
 

@@ -466,7 +466,7 @@ pub unsafe fn window_by_query<'a>(windows: impl Iterator<Item = &'a Window>, que
         }
         if let Some(x11) = x11 {
             return match w.impl_type() {
-                crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*(*xw).xsurface).window_id == x11,
+                crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*xw).xsurface.window_id() == x11,
                 _ => false,
             };
         }

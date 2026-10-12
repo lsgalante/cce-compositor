@@ -82,7 +82,7 @@ impl Focus {
             Focus::LayerSurface(surface) => surface,
             Focus::Window(id) => wm.windows.get(id).map_or(std::ptr::null_mut(), |w| w.root_surface()),
             Focus::LockSurface(lock_surface) => if lock_surface.is_null() { std::ptr::null_mut() } else { (*(*lock_surface).wlr_lock_surface).surface },
-            Focus::OverrideRedirect(or) => if or.is_null() { std::ptr::null_mut() } else { (*(*or).xsurface).surface },
+            Focus::OverrideRedirect(or) => if or.is_null() { std::ptr::null_mut() } else { (*or).xsurface.surface() },
         }
     }
 }
@@ -673,7 +673,7 @@ impl Seat {
                 }
             }
             Focus::OverrideRedirect(or) => {
-                let surface = (*(*or).xsurface).surface;
+                let surface = (*or).xsurface.surface();
                 if !surface.is_null() {
                     let this = seat_mut!(wm, sid, ());
                     let kbd = this.wlr_seat.keyboard();
