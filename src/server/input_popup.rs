@@ -63,7 +63,7 @@ impl InputPopup {
     }
 
     pub unsafe fn update(&mut self, wm: &crate::window_manager::WindowManager) {
-        let text_input = (*self.input_relay).text_input;
+        let text_input = (*self.input_relay).text_input();
         if text_input.is_null() {
             let hidden_tree = crate::shared::scene().hidden_tree.raw();
             ffi::wlr_scene_node_reparent(

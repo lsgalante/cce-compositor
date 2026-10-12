@@ -7,10 +7,14 @@ use crate::seat::Seat;
 
 #[repr(C)]
 pub struct InputRelay {
-    pub text_inputs: crate::registry::Registry<TextInput>,
+    /// Private: walks trust that a registered text input is live.
+    text_inputs: crate::registry::Registry<TextInput>,
     pub input_method: *mut ffi::wlr_input_method_v2,
     pub input_popups: ffi::wl_list,
-    pub text_input: *mut TextInput,
+    /// Null, or the live text input enabled on this seat. Private, because
+    /// safe paths (`Seat::focus`) dereference it: written only through
+    /// `set_text_input`.
+    text_input: *mut TextInput,
 
     pub input_method_commit: crate::listener::Listener,
     pub grab_keyboard: crate::listener::Listener,
@@ -24,6 +28,33 @@ pub struct InputRelay {
 }
 
 impl InputRelay {
+    /// The enabled text input (see the field), or null.
+    pub fn text_input(&self) -> *mut TextInput {
+        self.text_input
+    }
+
+    /// Make `text_input` the seat's enabled one (null for none).
+    ///
+    /// # Safety
+    /// `text_input` is null or registered here (`register_text_input`), and
+    /// its destroy handler clears this before freeing it.
+    pub unsafe fn set_text_input(&mut self, text_input: *mut TextInput) {
+        self.text_input = text_input;
+    }
+
+    /// Register a new text input.
+    ///
+    /// # Safety
+    /// As `Registry::push`: live until `unregister_text_input`, which its
+    /// destroy path runs before freeing it.
+    pub unsafe fn register_text_input(&mut self, text_input: *mut TextInput) {
+        self.text_inputs.push(text_input);
+    }
+
+    pub fn unregister_text_input(&mut self, text_input: *mut TextInput) {
+        self.text_inputs.remove(text_input);
+    }
+
     /// A relay not yet in place; `init` finishes it once it is
     /// (the popup list head must not move after it is initialised).
     pub fn new() -> Self {
@@ -118,7 +149,7 @@ impl InputRelay {
     pub unsafe fn send_input_method_state(wm: &crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
         let Some(seat) = wm.seats.get(sid) else { return };
         let input_method = seat.relay.input_method;
-        let wlr_text_input = (*seat.relay.text_input).wlr_text_input;
+        let wlr_text_input = (*seat.relay.text_input()).wlr_text_input;
 
         let active_features = (*wlr_text_input).active_features;
         let feature_surrounding = ffi::wlr_text_input_v3_features_WLR_TEXT_INPUT_V3_FEATURE_SURROUNDING_TEXT;

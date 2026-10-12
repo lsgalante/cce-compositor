@@ -29,7 +29,7 @@ impl TextInput {
         }));
 
         // Append to seat.relay.text_inputs
-        seat.relay.text_inputs.push(raw);
+        seat.relay.register_text_input(raw);
 
         (*raw).enable.connect(&mut (*wlr_text_input).events.enable, handle_enable);
         (*raw).commit.connect(&mut (*wlr_text_input).events.commit, handle_commit);
@@ -68,12 +68,12 @@ unsafe extern "C" fn handle_enable(listener: *mut ffi::wl_listener, _data: *mut 
         return;
     }
 
-    if !seat.relay.text_input.is_null() && text_input != seat.relay.text_input {
+    if !seat.relay.text_input().is_null() && text_input != seat.relay.text_input() {
         log::error!("client requested to enable more than one text input on a single seat, ignoring request");
         return;
     }
 
-    seat.relay.text_input = text_input;
+    seat.relay.set_text_input(text_input);
     seat.relay.osk.field_active();
 
     let input_method = seat.relay.input_method;
@@ -88,7 +88,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let Some((wm, sid)) = entry(text_input) else { return };
     let Some(seat) = wm.seats.get_mut(sid) else { return };
 
-    if seat.relay.text_input != text_input {
+    if seat.relay.text_input() != text_input {
         log::error!("inactive text input tried to commit an update, client bug?");
         return;
     }
@@ -103,7 +103,7 @@ unsafe extern "C" fn handle_disable(listener: *mut ffi::wl_listener, _data: *mut
     let text_input = crate::container_of!(listener, TextInput, disable);
     let Some((wm, sid)) = entry(text_input) else { return };
 
-    if wm.seats.get(sid).is_some_and(|seat| seat.relay.text_input == text_input) {
+    if wm.seats.get(sid).is_some_and(|seat| seat.relay.text_input() == text_input) {
         crate::input_relay::InputRelay::disable_text_input(wm, sid);
     }
 }
@@ -113,11 +113,11 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     // The seat's side first, if it is still in the store. The text input
     // itself is unhooked and freed either way: its signals are going.
     if let Some((wm, sid)) = entry(text_input) {
-        if wm.seats.get(sid).is_some_and(|seat| seat.relay.text_input == text_input) {
+        if wm.seats.get(sid).is_some_and(|seat| seat.relay.text_input() == text_input) {
             crate::input_relay::InputRelay::disable_text_input(wm, sid);
         }
         if let Some(seat) = wm.seats.get_mut(sid) {
-            seat.relay.text_inputs.remove(text_input);
+            seat.relay.unregister_text_input(text_input);
         }
     }
 

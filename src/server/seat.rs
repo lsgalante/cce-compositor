@@ -426,7 +426,10 @@ impl Seat {
     pub fn focus_window(wm: &mut crate::window_manager::WindowManager, sid: SeatId, id: Option<crate::window::WindowId>) {
         let focus = id.map_or(Focus::None, Focus::Window);
         // SAFETY: neither `Focus::Window` nor `Focus::None` carries a
-        // pointer, so `focus`'s contract holds.
+        // pointer, so `focus`'s contract holds. What its body dereferences
+        // besides the argument is guarded where it is stored: the cursor's
+        // constraint and the relay's text input (private, unsafe setters),
+        // the layer-surface store (`LayerSurfaces`, put only by `create`).
         unsafe { Seat::focus(wm, sid, focus) }
     }
 
@@ -504,7 +507,7 @@ impl Seat {
         // from stealing focus back to a regular window or shell surface.
         if this.focus_requested {
             if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) = this.layer_shell.scheduled_focus {
-                if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
+                if let Some(layer_surface) = wm.layer_surfaces.get(key) {
                     let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
                     if new_focus != Focus::LayerSurface(wlr_surf) {
                         if let Focus::Window(_) | Focus::OverrideRedirect(_) | Focus::None = new_focus {
@@ -853,18 +856,20 @@ impl Seat {
     /// the pointer is over its region (`PointerConstraint::maybe_activate`).
     unsafe fn sync_pointer_constraint(wm: &mut crate::window_manager::WindowManager, sid: SeatId, target_surface: *mut ffi::wlr_surface) {
         let Some(seat) = wm.seats.get_mut(sid) else { return };
-        let current = seat.cursor.constraint;
+        let current = seat.cursor.constraint();
         if !current.is_null() && (*(*current).wlr_constraint).surface != target_surface {
             log::info!("deactivating pointer constraint for surface, keyboard focus lost");
             (*current).deactivate(wm);
-            seat_mut!(wm, sid).cursor.constraint = std::ptr::null_mut();
+            seat_mut!(wm, sid).cursor.set_constraint(std::ptr::null_mut());
         }
         let seat = seat_mut!(wm, sid);
         let constraints = crate::shared::handles().pointer_constraints.ptr();
-        if !target_surface.is_null() && !constraints.is_null() && seat.cursor.constraint.is_null() {
+        if !target_surface.is_null() && !constraints.is_null() && seat.cursor.constraint().is_null() {
             let wlr_constraint = ffi::wlr_pointer_constraints_v1_constraint_for_surface(constraints, target_surface, seat.wlr_seat().ptr());
             if !wlr_constraint.is_null() && !(*wlr_constraint).data.is_null() {
-                seat.cursor.constraint = (*wlr_constraint).data as *mut crate::pointer_constraint::PointerConstraint;
+                // A constraint's data is its `PointerConstraint`, freed by
+                // the destroy handler that clears the cursor's hold first.
+                seat.cursor.set_constraint((*wlr_constraint).data as *mut crate::pointer_constraint::PointerConstraint);
             }
         }
     }
@@ -894,14 +899,14 @@ impl Seat {
 
         match this.layer_shell.sent_focus {
             crate::layer_shell::LayerShellSeatFocus::Exclusive(key) => {
-                if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
+                if let Some(layer_surface) = wm.layer_surfaces.get(key) {
                     let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
                     Seat::focus(wm, sid, Focus::LayerSurface(wlr_surf));
                 }
             }
             crate::layer_shell::LayerShellSeatFocus::NonExclusive(key) => {
                 if !this.focus_requested {
-                    if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
+                    if let Some(layer_surface) = wm.layer_surfaces.get(key) {
                         let wlr_surf = (*(*layer_surface).wlr_layer_surface).surface;
                         Seat::focus(wm, sid, Focus::LayerSurface(wlr_surf));
                     }

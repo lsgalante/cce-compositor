@@ -1015,7 +1015,7 @@ impl Default for Server {
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.last_saved_state_json), None);
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.proc_args_cache), std::collections::HashMap::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.min_sizes), crate::min_sizes::MinSizes::default());
-            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.layer_surfaces), crate::slotmap::SlotMap::new());
+            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.layer_surfaces), crate::layer_shell::LayerSurfaces::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.outputs), crate::output::Outputs::new());
             crate::input_manager::InputManager::init_registry_in_place(std::ptr::addr_of_mut!((*server.as_mut_ptr()).input_manager));
             crate::idle_inhibit_manager::IdleInhibitManager::init_registry_in_place(std::ptr::addr_of_mut!((*server.as_mut_ptr()).idle_inhibit_manager));

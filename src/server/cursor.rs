@@ -31,7 +31,11 @@ pub struct Cursor {
     /// it without going through `seat`.
     wlr_seat: crate::wlr::Wlr<ffi::wlr_seat>,
     xcursor_manager: crate::wlr::Wlr<ffi::wlr_xcursor_manager>,
-    pub constraint: *mut crate::pointer_constraint::PointerConstraint,
+    /// Null, or the live pointer constraint of the seat's focused surface.
+    /// Private, because safe code (`Seat::focus` and the pointer paths)
+    /// dereferences it: written only through `set_constraint`, whose callers
+    /// keep the destroy handler's promise to clear it.
+    constraint: *mut crate::pointer_constraint::PointerConstraint,
 
     /// Trackpad-to-view-drag emulation for the apps `touchpad_view_apps`
     /// names (see `ViewDrag`); `None` while no emulated drag is in progress.
@@ -286,6 +290,20 @@ impl Default for Cursor {
 }
 
 impl Cursor {
+    /// The seat's pointer constraint (see the field), or null.
+    pub fn constraint(&self) -> *mut crate::pointer_constraint::PointerConstraint {
+        self.constraint
+    }
+
+    /// Make `constraint` the seat's pointer constraint (null for none).
+    ///
+    /// # Safety
+    /// `constraint` is null or a live `PointerConstraint` whose destroy
+    /// handler clears this field (`set_constraint(null)`) before freeing it.
+    pub unsafe fn set_constraint(&mut self, constraint: *mut crate::pointer_constraint::PointerConstraint) {
+        self.constraint = constraint;
+    }
+
     /// The `wlr_cursor` hold; private, because a `Wlr` moved or swapped into
     /// another field would be a hold its owner's destroy path never clears.
     pub fn wlr_cursor(&self) -> &crate::wlr::Wlr<ffi::wlr_cursor> {

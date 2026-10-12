@@ -52,8 +52,8 @@ impl PointerConstraint {
         let Some(sid) = Seat::id_of((*wlr_constraint).seat) else { return constraint };
         let Some(seat) = wm.seats.get_mut(sid) else { return constraint };
         let focused = seat.wlr_seat().keyboard_focused_surface();
-        if !focused.is_null() && focused == (*wlr_constraint).surface && seat.cursor.constraint.is_null() {
-            seat.cursor.constraint = constraint;
+        if !focused.is_null() && focused == (*wlr_constraint).surface && seat.cursor.constraint().is_null() {
+            seat.cursor.set_constraint(constraint);
             (*constraint).maybe_activate(wm);
         }
 
@@ -67,7 +67,7 @@ impl PointerConstraint {
 
     pub unsafe fn maybe_activate(&mut self, wm: &crate::window_manager::WindowManager) {
         let Some(seat) = self.seat(wm) else { return };
-        if seat.cursor.constraint != self as *mut Self {
+        if seat.cursor.constraint() != self as *mut Self {
             return;
         }
         if matches!(self.state, PointerConstraintState::Active { .. }) {
@@ -260,8 +260,8 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     constraint.destroy_listener.disconnect();
     constraint.commit_listener.disconnect();
 
-    if !seat.is_null() && (*seat).cursor.constraint == constraint_ptr {
-        (*seat).cursor.constraint = std::ptr::null_mut();
+    if !seat.is_null() && (*seat).cursor.constraint() == constraint_ptr {
+        (*seat).cursor.set_constraint(std::ptr::null_mut());
     }
 
     let _boxed = Box::from_raw(constraint_ptr);
@@ -280,7 +280,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
             }
         }
         PointerConstraintState::Inactive => {
-            if constraint.seat(wm).is_some_and(|seat| seat.cursor.constraint == constraint_ptr) {
+            if constraint.seat(wm).is_some_and(|seat| seat.cursor.constraint() == constraint_ptr) {
                 constraint.maybe_activate(wm);
             }
         }

@@ -377,7 +377,7 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
                 if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) =
                     seat.layer_shell.scheduled_focus
                 {
-                    if let Some(&layer_surface) = wm.layer_surfaces.get(key) {
+                    if let Some(layer_surface) = wm.layer_surfaces.get(key) {
                         if is_cloud_layer(layer_surface) {
                             crate::seat::Seat::focus_window(wm, sid, None);
                             let cursor = cursor_mut!(wm, sid, ());

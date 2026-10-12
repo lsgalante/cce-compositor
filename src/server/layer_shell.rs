@@ -4,7 +4,7 @@
 use std::ffi::CStr;
 use crate::ffi;
 use crate::server::WlList;
-use crate::slotmap::{SlotMap, Key};
+use crate::slotmap::Key;
 use crate::output::Output;
 use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
 use crate::xdg_popup::XdgPopup;
@@ -112,6 +112,28 @@ unsafe extern "C" fn handle_new_surface(_listener: *mut ffi::wl_listener, data: 
     }
 }
 
+/// The window manager's layer surfaces by key: the address of each live
+/// `LayerSurface`, put here by `LayerSurface::create` and taken out by its
+/// destroy handler before the box is freed. A newtype so that only that pair
+/// can change it: safe paths (`Seat::focus`) dereference what they find.
+pub struct LayerSurfaces(crate::slotmap::SlotMap<*mut LayerSurface>);
+
+impl LayerSurfaces {
+    pub fn new() -> Self {
+        LayerSurfaces(crate::slotmap::SlotMap::new())
+    }
+
+    /// The live layer surface `key` names, if any.
+    pub fn get(&self, key: Key) -> Option<*mut LayerSurface> {
+        self.0.get(key).copied()
+    }
+
+    /// Every live layer surface.
+    pub fn iter(&self) -> impl Iterator<Item = *mut LayerSurface> + '_ {
+        self.0.iter().copied()
+    }
+}
+
 pub struct LayerSurface {
     pub ref_key: Key,
     pub wlr_layer_surface: *mut ffi::wlr_layer_surface_v1,
@@ -142,7 +164,7 @@ impl LayerSurface {
     /// `surfaces` is the window manager's layer-surface store.
     pub unsafe fn create(
         wlr_layer_surface: *mut ffi::wlr_layer_surface_v1,
-        surfaces: &mut SlotMap<*mut LayerSurface>,
+        surfaces: &mut LayerSurfaces,
     ) -> Result<*mut Self, &'static str> {
         let layer_tree = crate::shared::scene().layer_surface_tree((*wlr_layer_surface).current.layer);
         let scene_layer_surface = ffi::wlr_scene_layer_surface_v1_create(layer_tree, wlr_layer_surface);
@@ -173,7 +195,7 @@ impl LayerSurface {
             parent_offset_applied: false,
         }));
 
-        let key = surfaces.put(layer_surface);
+        let key = surfaces.0.put(layer_surface);
         (*layer_surface).ref_key = key;
 
         SceneNodeData::attach((*scene_layer_surface).tree as *mut _, SceneNodeDataVal::LayerSurface(layer_surface));
@@ -226,7 +248,7 @@ unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listene
     ffi::river_wlr_surface_set_data((*(*layer_surface).wlr_layer_surface).surface, std::ptr::null_mut());
 
     let server = crate::shared::server_ptr();
-    (*crate::reentry::wm(server)).layer_surfaces.remove((*layer_surface).ref_key);
+    (*crate::reentry::wm(server)).layer_surfaces.0.remove((*layer_surface).ref_key);
     let _ = Box::from_raw(layer_surface);
 }
 
@@ -240,7 +262,7 @@ unsafe extern "C" fn handle_animation_tick(data: *mut std::ffi::c_void) -> std::
     let token = data as usize;
     let key = crate::slotmap::Key { generation: (token >> 32) as u32, index: token as u32 };
     let wm = &*crate::reentry::wm(crate::shared::server_ptr());
-    let Some(&layer_surface) = wm.layer_surfaces.get(key) else { return 0 };
+    let Some(layer_surface) = wm.layer_surfaces.get(key) else { return 0 };
 
     let target = (*layer_surface).opacity_target;
     let delta = target - (*layer_surface).opacity;

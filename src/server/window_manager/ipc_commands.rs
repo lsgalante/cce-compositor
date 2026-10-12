@@ -134,7 +134,7 @@ impl WindowManager {
                 // The same client may own layer surfaces instead of (or as
                 // well as) windows — cce-cloud's launcher is one.
                 let surfaces: Vec<*mut crate::layer_shell::LayerSurface> =
-                    self.layer_surfaces.iter().copied().collect();
+                    self.layer_surfaces.iter().collect();
                 for surface in surfaces {
                     if surface.is_null() {
                         continue;
