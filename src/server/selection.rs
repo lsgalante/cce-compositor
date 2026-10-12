@@ -320,7 +320,7 @@ impl WindowManager {
     /// about to render. Called from `Output::render_and_commit` beside the
     /// grid, so the highlights follow a window through a drag and the camera
     /// through a pan; with nothing selected it is one disabled tree.
-    pub unsafe fn draw_selection(&mut self) {
+    pub fn draw_selection(&mut self) {
         let showing = crate::shared::mode() == WindowManagerMode::Overview
             && crate::shared::lock_state() == crate::lock_manager::LockState::Unlocked
             && (self.selection.marquee.is_some() || self.has_selection());
@@ -379,7 +379,7 @@ impl WindowManager {
 
         if self.selection.tree.is_null() {
             let scene = crate::shared::scene();
-            let tree = crate::scene_handle::SceneTree::create_in(&mut (*scene.wlr_scene).tree);
+            let tree = scene.create_root_child();
             if tree.is_null() {
                 return;
             }
@@ -391,7 +391,6 @@ impl WindowManager {
             self.selection.tree = tree;
         }
         self.selection.tree.set_enabled(true);
-        let tree = self.selection.tree.raw();
 
         let layout = &crate::shared::layout();
         let accent = layout.bevel_focus_color;
@@ -413,8 +412,9 @@ impl WindowManager {
             // wlr_scene_rect colours are premultiplied.
             let color = [accent[0] * fill, accent[1] * fill, accent[2] * fill, fill];
             if used == self.selection.boxes.len() {
-                let rect = crate::scene_handle::SceneRect::create_in(tree, w, h, &color);
-                let bevel = crate::scene_handle::SceneBevel::create_in(tree, w, h, radius, thickness, &layout.bevel_color);
+                let tree = &self.selection.tree;
+                let rect = crate::scene_handle::SceneRect::create(tree, w, h, &color);
+                let bevel = crate::scene_handle::SceneBevel::create(tree, w, h, radius, thickness, &layout.bevel_color);
                 if rect.is_null() || bevel.is_null() {
                     // Dropping them destroys whichever was made.
                     break;

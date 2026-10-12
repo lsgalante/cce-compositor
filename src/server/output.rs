@@ -764,7 +764,7 @@ impl Output {
         // layer-shell Background surface or a wallpaper window replaces the flat
         // colour and keeps the cell lattice.
         if self.grid_backdrop_tree.is_null() {
-            self.grid_backdrop_tree = SceneTree::create_in(crate::shared::scene().layers.background.raw());
+            self.grid_backdrop_tree = SceneTree::create(&crate::shared::scene().layers.background);
             if self.grid_backdrop_tree.is_null() {
                 return;
             }
@@ -781,7 +781,7 @@ impl Output {
         let backdrop_rect = &mut self.grid_backdrop_rect;
         let mut set_backdrop = |w: i32, h: i32, color: &[f32; 4]| {
             if backdrop_rect.is_null() {
-                *backdrop_rect = SceneRect::create_in(backdrop_tree, w, h, color);
+                *backdrop_rect = SceneRect::create(&self.grid_backdrop_tree, w, h, color);
             } else {
                 backdrop_rect.set_size(w, h);
                 backdrop_rect.set_color(color);
@@ -860,7 +860,6 @@ impl Output {
             let len = (lx * lx + ly * ly).sqrt();
             if len > 1e-6 { (lx / len, ly / len) } else { (-0.7071, -0.7071) }
         };
-        let bevel_tree = self.grid_bevel_tree.raw();
         let bevel_pool = &mut self.grid_bevel_pool;
         let mut bevel_idx = 0;
 
@@ -873,7 +872,7 @@ impl Output {
                 bevel_pool[idx].set_size(w, h);
                 idx
             } else {
-                let handle = SceneBevel::create_in(bevel_tree, w, h, 0, 0.0, &layout.bevel_color);
+                let handle = SceneBevel::create(&self.grid_bevel_tree, w, h, 0, 0.0, &layout.bevel_color);
                 if handle.is_null() {
                     return;
                 }
@@ -904,7 +903,7 @@ impl Output {
                 pool[idx].set_color(color);
                 idx
             } else {
-                let handle = SceneRect::create_in(grid_tree, w, h, color);
+                let handle = SceneRect::create(&self.grid_tree, w, h, color);
                 if handle.is_null() {
                     return;
                 }

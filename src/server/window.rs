@@ -833,13 +833,12 @@ impl Window {
         // Every node below is a handle: an early return drops what was made
         // so far, which destroys it. Only the capture scene, a scene root
         // rather than a node, is cleaned up by hand.
-        let hidden_tree = crate::shared::scene().hidden_tree.raw();
-        let tree = SceneTree::create_in(hidden_tree);
+        let tree = SceneTree::create(&crate::shared::scene().hidden_tree);
         if tree.is_null() {
             return Err("Failed to create tree");
         }
 
-        let popup_tree = SceneTree::create_in(hidden_tree);
+        let popup_tree = SceneTree::create(&crate::shared::scene().hidden_tree);
         if popup_tree.is_null() {
             return Err("Failed to create popup_tree");
         }
@@ -896,7 +895,7 @@ impl Window {
         // synced per frame in update_bevel; an empty handle disables the
         // effect rather than failing window creation.
         let bevel_color = [1.0f32, 1.0f32, 1.0f32, 1.0f32];
-        let bevel = SceneBevel::create_in(tree.raw(), 0, 0, 0, 0.0, &bevel_color);
+        let bevel = SceneBevel::create(&tree, 0, 0, 0, 0.0, &bevel_color);
         bevel.set_enabled(false);
 
         // The invisible hit catchers stay in the window tree so pointer
@@ -908,7 +907,7 @@ impl Window {
         let border_top = SceneRect::create(&tree, 0, 0, &clear_color);
         let border_bottom = SceneRect::create(&tree, 0, 0, &clear_color);
 
-        let border_tree = SceneTree::create_in(crate::shared::scene().layers.border_overlay.raw());
+        let border_tree = SceneTree::create(&crate::shared::scene().layers.border_overlay);
         if border_tree.is_null() {
             destroy_capture_scene();
             return Err("Failed to create window border tree");
@@ -1536,7 +1535,6 @@ impl Window {
             }
             let this = window_mut!(wm, id, Err("window gone"));
             let is_grid = this.is_grid();
-            let stores = stores!(wm);
 
             // A WORLD window spawning during overview stays in overview:
             // the camera keeps its zoom and only pans, as little as it

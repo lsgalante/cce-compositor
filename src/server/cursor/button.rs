@@ -16,7 +16,6 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
     let Some(sptr) = wm.seats.ptr(sid) else { return () };
     let cptr: *mut Cursor = std::ptr::addr_of_mut!((*sptr).cursor);
     let _ = cptr;
-    let stores = stores!(wm);
     let event = data as *mut ffi::wlr_pointer_button_event;
     crate::seat::Seat::handle_activity(wm, sid, sys);
     let cursor = cursor_mut!(wm, sid, ());

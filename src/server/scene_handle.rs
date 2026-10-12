@@ -404,6 +404,12 @@ impl SceneBevel {
         }
         Self::adopt(ffi::wlr_scene_bevel_create(parent, width, height, corner_radius, thickness, color.as_ptr()))
     }
+
+    /// A new bevel rim under `parent`; empty if `parent` is gone.
+    pub fn create(parent: &SceneTree, width: i32, height: i32, corner_radius: i32, thickness: f32, color: &[f32; 4]) -> Self {
+        // SAFETY: a non-null `raw()` is a live tree.
+        unsafe { Self::create_in(parent.raw(), width, height, corner_radius, thickness, color) }
+    }
 }
 
 impl SceneShadow {

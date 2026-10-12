@@ -7,7 +7,6 @@ use super::*;
 
 impl Window {
     pub fn try_restore(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
-        let stores = stores!(wm);
         let this = window_mut!(wm, id);
         if this.restored {
             return;
@@ -497,7 +496,6 @@ impl Window {
     }
 
     pub(crate) fn try_hint_placement(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
-        let stores = stores!(wm);
         let this = window_mut!(wm, id);
         let app_id = this.get_app_id_string().unwrap_or_default();
         if app_id.is_empty() {

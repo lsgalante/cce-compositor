@@ -1656,7 +1656,6 @@ impl WindowManager {
     }
 
     pub unsafe fn update_viewport_local(&mut self) {
-        let stores = stores!(self);
         crate::wm_scope!(mut);
         let zoom_changed = self.desk_zoom != self.last_viewport_zoom;
         // A pan counts as motion only once it moves a DEVICE pixel: the

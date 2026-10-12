@@ -167,8 +167,8 @@ impl OutputManager {
                             (crate::shared::layout().background_a as f64 / u32::MAX as f64) as f32,
                         ];
                         if output.background_rect.is_null() {
-                            output.background_rect = SceneRect::create_in(
-                                crate::shared::scene().layers.background.raw(),
+                            output.background_rect = SceneRect::create(
+                                &crate::shared::scene().layers.background,
                                 width,
                                 height,
                                 &color,
@@ -179,13 +179,13 @@ impl OutputManager {
                         }
                         output.background_rect.set_position(output.sent.x, output.sent.y);
                         if output.grid_tree.is_null() {
-                            output.grid_tree = SceneTree::create_in(crate::shared::scene().layers.background.raw());
+                            output.grid_tree = SceneTree::create(&crate::shared::scene().layers.background);
                         }
                         output.grid_tree.set_position(output.sent.x, output.sent.y);
                         output.grid_backdrop_tree.set_position(output.sent.x, output.sent.y);
 
                         if output.adjust_tree.is_null() {
-                            output.adjust_tree = SceneTree::create_in(crate::shared::scene().layers.top.raw());
+                            output.adjust_tree = SceneTree::create(&crate::shared::scene().layers.top);
                         }
                         output.adjust_tree.set_position(output.sent.x, output.sent.y);
                     }

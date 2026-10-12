@@ -240,7 +240,6 @@ impl WindowManager {
     }
 
     pub unsafe fn render_finish(&mut self, sys: &mut crate::ctx::Sys) {
-        let stores = stores!(self);
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Render));
         self.state = WindowManagerState::Idle;

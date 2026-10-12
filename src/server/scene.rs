@@ -41,6 +41,18 @@ pub struct Scene {
 }
 
 impl Scene {
+    /// A new tree directly under the scene's root; empty before `init`.
+    pub fn create_root_child(&self) -> crate::scene_handle::SceneTree {
+        if self.wlr_scene.is_null() {
+            return crate::scene_handle::SceneTree::none();
+        }
+        // SAFETY: the shared `Scene` is set once (`Shared::set_scene`) with
+        // the live `wlr_scene` it keeps until the server tears down, and
+        // only `&Scene` is handed out after that, so the pointer cannot be
+        // swapped underneath.
+        unsafe { crate::scene_handle::SceneTree::create_in(&mut (*self.wlr_scene).tree) }
+    }
+
     pub fn new() -> Self {
         Self {
             wlr_scene: std::ptr::null_mut(),

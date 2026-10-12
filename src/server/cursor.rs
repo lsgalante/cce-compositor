@@ -736,7 +736,6 @@ impl Cursor {
         // edge loses the client.
         let constrained = !constraint.is_null()
             && matches!((*constraint).state, crate::pointer_constraint::PointerConstraintState::Active { .. });
-        let stores = stores!(wm);
         let this = cursor_mut!(wm, sid, ());
         let lx = this.x();
         let ly = this.y();
