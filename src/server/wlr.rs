@@ -982,6 +982,25 @@ impl Wlr<ffi::wlr_xwayland> {
     }
 }
 
+impl Wlr<ffi::wlr_session> {
+    /// Switch to virtual terminal `vt`; false when unset or it failed.
+    pub fn change_vt(&self, vt: u32) -> bool {
+        self.live().is_some_and(|s| unsafe { ffi::wlr_session_change_vt(s, vt) })
+    }
+}
+
+impl Wlr<ffi::wlr_backend> {
+    /// Whether it is the Wayland (nested) backend; false when unset.
+    pub fn is_wl(&self) -> bool {
+        self.live().is_some_and(|b| unsafe { ffi::wlr_backend_is_wl(b) })
+    }
+
+    /// Whether it is the X11 (nested) backend; false when unset.
+    pub fn is_x11(&self) -> bool {
+        self.live().is_some_and(|b| unsafe { ffi::wlr_backend_is_x11(b) })
+    }
+}
+
 /// The layer surface's committed (`current`) state, by value: each reads
 /// zero when unset.
 macro_rules! layer_current {

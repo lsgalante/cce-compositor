@@ -337,7 +337,7 @@ unsafe extern "C" fn xkb_keyboard_set_layout_by_index(
         return;
     }
 
-    let mut modifiers = (*group).wlr_keyboard.modifiers;
+    let mut modifiers = (*group).modifiers();
     modifiers.group = index as u32;
     (*group).process_modifiers(modifiers);
 }
@@ -371,7 +371,7 @@ unsafe extern "C" fn xkb_keyboard_set_layout_by_name(
         return;
     }
 
-    let mut modifiers = (*group).wlr_keyboard.modifiers;
+    let mut modifiers = (*group).modifiers();
     modifiers.group = index;
     (*group).process_modifiers(modifiers);
 }
@@ -402,7 +402,7 @@ unsafe extern "C" fn xkb_keyboard_capslock_enable(
     let caps_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Caps Lock\0".as_ptr() as *const _);
     if caps_idx != ffi::XKB_MOD_INVALID {
         let mask = 1 << caps_idx;
-        let mut modifiers = (*group).wlr_keyboard.modifiers;
+        let mut modifiers = (*group).modifiers();
         modifiers.locked |= mask;
         (*group).process_modifiers(modifiers);
     }
@@ -434,7 +434,7 @@ unsafe extern "C" fn xkb_keyboard_capslock_disable(
     let caps_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Caps Lock\0".as_ptr() as *const _);
     if caps_idx != ffi::XKB_MOD_INVALID {
         let mask = 1 << caps_idx;
-        let mut modifiers = (*group).wlr_keyboard.modifiers;
+        let mut modifiers = (*group).modifiers();
         modifiers.locked &= !mask;
         (*group).process_modifiers(modifiers);
     }
@@ -466,7 +466,7 @@ unsafe extern "C" fn xkb_keyboard_numlock_enable(
     let num_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Num Lock\0".as_ptr() as *const _);
     if num_idx != ffi::XKB_MOD_INVALID {
         let mask = 1 << num_idx;
-        let mut modifiers = (*group).wlr_keyboard.modifiers;
+        let mut modifiers = (*group).modifiers();
         modifiers.locked |= mask;
         (*group).process_modifiers(modifiers);
     }
@@ -498,7 +498,7 @@ unsafe extern "C" fn xkb_keyboard_numlock_disable(
     let num_idx = ffi::xkb_keymap_mod_get_index(keymap, b"Num Lock\0".as_ptr() as *const _);
     if num_idx != ffi::XKB_MOD_INVALID {
         let mask = 1 << num_idx;
-        let mut modifiers = (*group).wlr_keyboard.modifiers;
+        let mut modifiers = (*group).modifiers();
         modifiers.locked &= !mask;
         (*group).process_modifiers(modifiers);
     }

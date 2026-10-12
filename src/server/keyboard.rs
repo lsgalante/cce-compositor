@@ -212,9 +212,9 @@ unsafe extern "C" fn destroy_callback(data: *mut std::ffi::c_void) {
     Keyboard::destroy(data as *mut Keyboard);
 }
 
-unsafe fn should_set_keymap() -> bool {
-    let backend = crate::shared::handles().backend.ptr();
-    ffi::wlr_backend_is_wl(backend) || ffi::wlr_backend_is_x11(backend)
+fn should_set_keymap() -> bool {
+    let backend = &crate::shared::handles().backend;
+    backend.is_wl() || backend.is_x11()
 }
 
 pub fn keysym_is_modifier(sym: u32) -> bool {

@@ -359,7 +359,7 @@ impl Seat {
                 if !keyboard.is_null() {
                     (*keyboard).set_group(self);
                     if !(*keyboard).group.is_null() {
-                        ffi::wlr_seat_set_keyboard(self.wlr_seat().ptr(), &mut (*(*keyboard).group).wlr_keyboard);
+                        ffi::wlr_seat_set_keyboard(self.wlr_seat().ptr(), (*(*keyboard).group).wlr_keyboard_ptr());
                         let focused_surface = self.wlr_seat().keyboard_focused_surface();
                         if !focused_surface.is_null() {
                             self.keyboard_notify_enter(focused_surface);
@@ -815,7 +815,7 @@ impl Seat {
                 // until `Seat::destroy`; the focused surface is wlroots' own
                 // keyboard focus, which it clears when the surface goes.
                 unsafe {
-                    ffi::wlr_seat_set_keyboard(self.wlr_seat().ptr(), &mut (*group).wlr_keyboard);
+                    ffi::wlr_seat_set_keyboard(self.wlr_seat().ptr(), (*group).wlr_keyboard_ptr());
                     let focused = self.wlr_seat().keyboard_focused_surface();
                     if !focused.is_null() {
                         self.keyboard_notify_enter(focused);

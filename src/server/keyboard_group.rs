@@ -32,7 +32,11 @@ pub struct KeyboardGroup {
     pub link: ffi::wl_list, // Seat.keyboard_groups
     pub virtual_device: bool,
     pub config: KeyboardConfig,
-    pub wlr_keyboard: ffi::wlr_keyboard,
+    /// The group's own keyboard. Private: `match_chord` trusts its
+    /// `xkb_state` (null, or the state wlroots made for the keymap it was
+    /// last given), so only `wlr_keyboard_set_keymap` through
+    /// `wlr_keyboard_ptr` may change it.
+    wlr_keyboard: ffi::wlr_keyboard,
     pub modifiers_old: u32,
     pub pressed: HashMap<u32, Press>,
     pub key_listener: crate::listener::Listener,
@@ -41,6 +45,16 @@ pub struct KeyboardGroup {
 }
 
 impl KeyboardGroup {
+    /// The group keyboard's current modifier state.
+    pub fn modifiers(&self) -> ffi::wlr_keyboard_modifiers {
+        self.wlr_keyboard.modifiers
+    }
+
+    /// The group's `wlr_keyboard`, for wlroots calls.
+    pub fn wlr_keyboard_ptr(&mut self) -> *mut ffi::wlr_keyboard {
+        &mut self.wlr_keyboard
+    }
+
     pub unsafe fn create(
         seat: *mut Seat,
         config: KeyboardConfig,
@@ -310,15 +324,15 @@ fn allowed_while_locked(keysym: u32) -> bool {
         )
 }
 
-unsafe fn handle_builtin_binding(wm: &mut crate::window_manager::WindowManager, keysym: u32, modifiers: u32) -> bool {
+fn handle_builtin_binding(wm: &mut crate::window_manager::WindowManager, keysym: u32, modifiers: u32) -> bool {
     match keysym {
         ffi::XKB_KEY_XF86Switch_VT_1..=ffi::XKB_KEY_XF86Switch_VT_12 => {
             log::debug!("switch VT keysym received");
-            let session = crate::shared::handles().session.ptr();
+            let session = &crate::shared::handles().session;
             if !session.is_null() {
                 let vt = keysym - ffi::XKB_KEY_XF86Switch_VT_1 + 1;
                 log::info!("switching to VT {}", vt);
-                ffi::wlr_session_change_vt(session, vt);
+                session.change_vt(vt);
             }
             true
         }
@@ -432,13 +446,13 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
 
         if matched_builtin {
             KeyConsumer::Builtin
-        } else if let Some(kb) = match_cce_keybind(&*wm, xkb_keycode, modifiers, xkb_state)
+        } else if let Some(kb) = match_cce_keybind(&*wm, xkb_keycode, modifiers, group)
             .filter(|kb| !locked || allowed_while_locked(kb.keysym))
         {
             log::debug!("matched CCE monolithic keybind: {:?}", kb);
             KeyConsumer::CceBinding(kb)
         } else if let Some((session, id)) = (!locked)
-            .then(|| match_portal_shortcut(&*wm, xkb_keycode, modifiers, xkb_state))
+            .then(|| match_portal_shortcut(&*wm, xkb_keycode, modifiers, group))
             .flatten()
         {
             log::debug!("matched portal shortcut {} {}", session, id);
@@ -523,29 +537,29 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
     group.send_state(crate::shared::server_ptr());
 }
 
-pub unsafe fn match_cce_keybind(
+pub fn match_cce_keybind(
     wm: &crate::window_manager::WindowManager,
     keycode: u32,
     modifiers: u32,
-    xkb_state: *mut ffi::xkb_state,
+    group: &KeyboardGroup,
 ) -> Option<crate::config::Keybind> {
-    match_chord(keycode, modifiers, xkb_state, |mods, sym| {
+    match_chord(keycode, modifiers, group, |mods, sym| {
         wm.keybinds.iter().find(|kb| kb.mods == mods && kb.keysym == sym).cloned()
     })
 }
 
 /// The portal-bound chords (`global_shortcuts`), matched exactly like the
 /// config keybinds but consulted after them. Returns `(session, id)`.
-pub unsafe fn match_portal_shortcut(
+pub fn match_portal_shortcut(
     wm: &crate::window_manager::WindowManager,
     keycode: u32,
     modifiers: u32,
-    xkb_state: *mut ffi::xkb_state,
+    group: &KeyboardGroup,
 ) -> Option<(String, String)> {
     if wm.portal_shortcuts.is_empty() {
         return None;
     }
-    match_chord(keycode, modifiers, xkb_state, |mods, sym| {
+    match_chord(keycode, modifiers, group, |mods, sym| {
         wm.portal_shortcuts
             .iter()
             .find(|s| s.mods == mods && s.keysym == sym)
@@ -559,42 +573,50 @@ pub unsafe fn match_portal_shortcut(
 /// keysyms of the level the modifiers actually select against the mask with
 /// the consumed modifiers removed (so a bind on a shifted symbol like
 /// `plus` still fires). The first hit wins.
-unsafe fn match_chord<T>(
+fn match_chord<T>(
     keycode: u32,
     modifiers: u32,
-    xkb_state: *mut ffi::xkb_state,
+    group: &KeyboardGroup,
     probe: impl Fn(u32, u32) -> Option<T>,
 ) -> Option<T> {
+    let xkb_state = group.wlr_keyboard.xkb_state;
     if xkb_state.is_null() {
         return None;
     }
-    let keymap = ffi::xkb_state_get_keymap(xkb_state);
-    if keymap.is_null() {
-        return None;
-    }
-    let layout = ffi::xkb_state_key_get_layout(xkb_state, keycode);
+    // SAFETY: a non-null `xkb_state` is the live state wlroots made for the
+    // group keyboard's keymap; only `wlr_keyboard_set_keymap` replaces it,
+    // which needs the group mutably, and it is borrowed here. The keysym
+    // slices live as long as that state's keymap, and `probe` is only handed
+    // their values.
+    unsafe {
+        let keymap = ffi::xkb_state_get_keymap(xkb_state);
+        if keymap.is_null() {
+            return None;
+        }
+        let layout = ffi::xkb_state_key_get_layout(xkb_state, keycode);
 
-    let mut syms_ptr: *const ffi::xkb_keysym_t = std::ptr::null();
-    let num_syms = ffi::xkb_keymap_key_get_syms_by_level(keymap, keycode, layout, 0, &mut syms_ptr);
-    if num_syms > 0 && !syms_ptr.is_null() {
-        let syms = std::slice::from_raw_parts(syms_ptr, num_syms as usize);
-        for &sym in syms {
-            if let Some(hit) = probe(modifiers, sym) {
-                return Some(hit);
+        let mut syms_ptr: *const ffi::xkb_keysym_t = std::ptr::null();
+        let num_syms = ffi::xkb_keymap_key_get_syms_by_level(keymap, keycode, layout, 0, &mut syms_ptr);
+        if num_syms > 0 && !syms_ptr.is_null() {
+            let syms = std::slice::from_raw_parts(syms_ptr, num_syms as usize);
+            for &sym in syms {
+                if let Some(hit) = probe(modifiers, sym) {
+                    return Some(hit);
+                }
             }
         }
-    }
 
-    let level = ffi::xkb_state_key_get_level(xkb_state, keycode, layout);
-    let mut syms_ptr_level: *const ffi::xkb_keysym_t = std::ptr::null();
-    let num_syms_level = ffi::xkb_keymap_key_get_syms_by_level(keymap, keycode, layout, level, &mut syms_ptr_level);
-    if num_syms_level > 0 && !syms_ptr_level.is_null() {
-        let syms = std::slice::from_raw_parts(syms_ptr_level, num_syms_level as usize);
-        let consumed = ffi::xkb_state_key_get_consumed_mods2(xkb_state, keycode, ffi::xkb_consumed_mode_XKB_CONSUMED_MODE_XKB);
-        let modifiers_translated = modifiers & !consumed;
-        for &sym in syms {
-            if let Some(hit) = probe(modifiers_translated, sym) {
-                return Some(hit);
+        let level = ffi::xkb_state_key_get_level(xkb_state, keycode, layout);
+        let mut syms_ptr_level: *const ffi::xkb_keysym_t = std::ptr::null();
+        let num_syms_level = ffi::xkb_keymap_key_get_syms_by_level(keymap, keycode, layout, level, &mut syms_ptr_level);
+        if num_syms_level > 0 && !syms_ptr_level.is_null() {
+            let syms = std::slice::from_raw_parts(syms_ptr_level, num_syms_level as usize);
+            let consumed = ffi::xkb_state_key_get_consumed_mods2(xkb_state, keycode, ffi::xkb_consumed_mode_XKB_CONSUMED_MODE_XKB);
+            let modifiers_translated = modifiers & !consumed;
+            for &sym in syms {
+                if let Some(hit) = probe(modifiers_translated, sym) {
+                    return Some(hit);
+                }
             }
         }
     }
