@@ -85,6 +85,30 @@ impl InputManager {
         self.devices.remove(device);
     }
 
+    /// Take every device off seat `sid`, ahead of the manage pass's
+    /// `Seat::destroy`, which asserts the seat's keyboard groups empty (a
+    /// client holding a virtual keyboard on a seat it then destroyed
+    /// crashed the compositor there). `river_input_manager_v1.destroy_seat`
+    /// gives a destroyed seat's devices to the default seat; a virtual
+    /// device is only detached, since the one kind that can sit on another
+    /// seat — a virtual keyboard bound to it — dies with that seat
+    /// (wlroots' `seat_destroy` listener) and would only flash its keymap
+    /// at the default seat's focused client on the way out.
+    ///
+    /// # Safety
+    /// As `register_device`: every registered device is live.
+    pub unsafe fn release_seat(&mut self, wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, sys: &mut crate::ctx::Sys) {
+        if self.default_seat == Some(sid) {
+            return;
+        }
+        for device in self.devices.ptrs() {
+            if (*device).sid == Some(sid) {
+                let to = if (*device).virtual_device { None } else { self.default_seat };
+                (*device).assign_to_seat(wm, to, sys);
+            }
+        }
+    }
+
     /// Drop every input mapping onto `wlr_output`, which is being destroyed
     /// — the device's own (`map_to_output`, which tablet tools re-apply on
     /// every event) and its seat cursor's, which wlroots never clears and

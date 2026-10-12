@@ -861,8 +861,8 @@ impl Seat {
     }
 
     /// Returns true when the seat is to be destroyed (a client asked for
-    /// it): the caller takes it out of `input_manager.seats` and hands the
-    /// box to [`Self::destroy`].
+    /// it): the caller hands its devices to the default seat
+    /// (`InputManager::release_seat`), then calls [`Self::destroy`].
     #[must_use]
     pub fn manage_start(&mut self) -> bool {
         if self.destroying {

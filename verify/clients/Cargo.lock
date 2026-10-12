@@ -27,6 +27,7 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-misc",
  "wayland-protocols-wlr",
+ "wayland-scanner",
  "x11rb",
  "xkbcommon",
 ]

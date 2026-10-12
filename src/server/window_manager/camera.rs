@@ -163,7 +163,7 @@ impl WindowManager {
     /// pass runs synchronously, as the dirty-idle callback would run it, so
     /// this frame draws the result; with a pass already in flight the dirty
     /// flag queues it, as before.
-    pub fn step_op_frame(&mut self, sys: &mut crate::ctx::Sys) {
+    pub fn step_op_frame(&mut self, sys: &mut crate::ctx::Sys, input: &mut crate::input_manager::InputManager) {
         crate::wm_scope!(mut);
         if !self.op_frame_pending {
             return;
@@ -177,7 +177,7 @@ impl WindowManager {
         }
         if matches!(self.state, WindowManagerState::Idle) {
             crate::shared::pending().mark_windowing();
-            self.manage_start(sys);
+            self.manage_start(sys, input);
         } else {
             crate::shared::pending().dirty_windowing();
         }

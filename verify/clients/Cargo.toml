@@ -64,6 +64,10 @@ path = "src/bin/vptr.rs"
 name = "ime"
 path = "src/bin/ime.rs"
 
+[[bin]]
+name = "seat-cycle"
+path = "src/bin/seat_cycle.rs"
+
 [dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
@@ -72,6 +76,7 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 xkbcommon = "0.8"
 libc = "0.2"
 x11rb = "0.13"
+wayland-scanner = "0.31"
 
 # Deliberately NOT a member of the cce workspace: these are test clients built
 # on demand by verify/ scripts, invisible to ccebuild and `cargo build` at the

@@ -478,13 +478,14 @@ unsafe extern "C" fn handle_idle(_data: *mut std::ffi::c_void) {
     // build its own) would be a second live `&mut` to every subsystem.
     let sys = &mut crate::ctx::Sys::of(server);
     let wm = &mut (*crate::reentry::wm(server));
+    let input = &mut *std::ptr::addr_of_mut!((*server).input_manager);
     if wm.reload_requested {
         wm.reload_requested = false;
-        wm.reload_and_notify(sys, &mut *std::ptr::addr_of_mut!((*server).input_manager));
+        wm.reload_and_notify(sys, input);
     }
     if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
         if pending.windowing() {
-            wm.manage_start(sys);
+            wm.manage_start(sys, input);
         } else if pending.rendering() {
             wm.render_start(sys);
         }
