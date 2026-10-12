@@ -10,7 +10,9 @@ pub struct InputRelay {
     /// Private: walks trust that a registered text input is live.
     text_inputs: crate::registry::Registry<TextInput>,
     pub input_method: *mut ffi::wlr_input_method_v2,
-    pub input_popups: ffi::wl_list,
+    /// The popups' list head, boxed: the relay lives inside its seat, which
+    /// the store hands out as `&mut`, and a head must not move once linked.
+    input_popups: Box<ffi::wl_list>,
     /// Null, or the live text input enabled on this seat. Private, because
     /// safe paths (`Seat::focus`) dereference it: written only through
     /// `set_text_input`.
@@ -55,15 +57,14 @@ impl InputRelay {
         self.text_inputs.remove(text_input);
     }
 
-    /// A relay not yet in place; `init` finishes it once it is
-    /// (the popup list head must not move after it is initialised).
+    /// A relay not yet in place; `init` finishes it.
     pub fn new() -> Self {
         InputRelay {
             text_inputs: crate::registry::Registry::new(),
             input_method: std::ptr::null_mut(),
             // SAFETY: a zeroed wl_list is a valid not-yet-initialised head;
             // `init` initialises it in place.
-            input_popups: unsafe { std::mem::zeroed() },
+            input_popups: Box::new(unsafe { std::mem::zeroed() }),
             text_input: std::ptr::null_mut(),
             input_method_commit: crate::listener::Listener::default(),
             grab_keyboard: crate::listener::Listener::default(),
@@ -75,7 +76,12 @@ impl InputRelay {
     }
 
     pub unsafe fn init(&mut self) {
-        ffi::wl_list_init(&mut self.input_popups);
+        ffi::wl_list_init(&mut *self.input_popups);
+    }
+
+    /// The popups' list head, for a popup linking itself in.
+    pub fn input_popups_head(&mut self) -> *mut ffi::wl_list {
+        &mut *self.input_popups
     }
 
     /// The input-method popups, oldest first, copied out: `InputPopup::update`
@@ -83,7 +89,7 @@ impl InputRelay {
     /// borrow of the relay live.
     fn popups(&self) -> Vec<*mut crate::input_popup::InputPopup> {
         let mut out = Vec::new();
-        let head = &self.input_popups as *const ffi::wl_list as *mut ffi::wl_list;
+        let head = &*self.input_popups as *const ffi::wl_list as *mut ffi::wl_list;
         // SAFETY: `init` initialised the head in place, and every link on
         // it is a live popup's (a popup unlinks itself on destroy).
         unsafe {
@@ -118,10 +124,12 @@ impl InputRelay {
 
         this.input_method = input_method;
 
-        this.input_method_commit.connect(&mut (*input_method).events.commit, handle_input_method_commit);
-        this.grab_keyboard.connect(&mut (*input_method).events.grab_keyboard, handle_input_method_grab_keyboard);
-        this.input_method_destroy.connect(&mut (*input_method).events.destroy, handle_input_method_destroy);
-        this.input_method_new_popup.connect(&mut (*input_method).events.new_popup_surface, handle_input_method_new_popup);
+        // Keyed by the seat id: the relay lives inside its seat, which may
+        // move (`crate::listener`).
+        this.input_method_commit.connect_keyed(&mut (*input_method).events.commit, handle_input_method_commit, sid);
+        this.grab_keyboard.connect_keyed(&mut (*input_method).events.grab_keyboard, handle_input_method_grab_keyboard, sid);
+        this.input_method_destroy.connect_keyed(&mut (*input_method).events.destroy, handle_input_method_destroy, sid);
+        this.input_method_new_popup.connect_keyed(&mut (*input_method).events.new_popup_surface, handle_input_method_new_popup, sid);
 
         // Text inputs are entered whether or not an input method exists
         // (`focus`), so one that arrives late only needs telling about the
@@ -223,7 +231,8 @@ impl InputRelay {
 }
 
 unsafe extern "C" fn handle_input_method_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let relay = crate::container_of!(listener, InputRelay, input_method_commit);
+    let seat = listener_seat_ptr!(listener, relay.input_method_commit);
+    let relay = &mut (*seat).relay as *mut InputRelay;
     let input_method = (*relay).input_method;
 
     if !(*input_method).client_active {
@@ -264,7 +273,8 @@ unsafe extern "C" fn handle_input_method_commit(listener: *mut ffi::wl_listener,
 }
 
 unsafe extern "C" fn handle_input_method_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let relay = crate::container_of!(listener, InputRelay, input_method_destroy);
+    let seat = listener_seat_ptr!(listener, relay.input_method_destroy);
+    let relay = &mut (*seat).relay as *mut InputRelay;
 
     (*relay).input_method_commit.disconnect();
     (*relay).grab_keyboard.disconnect();
@@ -279,25 +289,25 @@ unsafe extern "C" fn handle_input_method_grab_keyboard(
     listener: *mut ffi::wl_listener,
     data: *mut std::ffi::c_void,
 ) {
-    let relay = crate::container_of!(listener, InputRelay, grab_keyboard);
+    let seat: *mut Seat = listener_seat_ptr!(listener, relay.grab_keyboard);
     let keyboard_grab = data as *mut ffi::wlr_input_method_keyboard_grab_v2;
-    let seat = crate::container_of!(relay, Seat, relay);
 
     let active_keyboard = (*seat).wlr_seat().keyboard();
     ffi::wlr_input_method_keyboard_grab_v2_set_keyboard(keyboard_grab, active_keyboard);
 
-    (*relay).grab_keyboard_destroy.connect(ffi::river_wlr_input_method_keyboard_grab_v2_get_destroy_signal(keyboard_grab), handle_input_method_grab_keyboard_destroy);
+    let sid = (*seat).id;
+    (*seat).relay.grab_keyboard_destroy.connect_keyed(ffi::river_wlr_input_method_keyboard_grab_v2_get_destroy_signal(keyboard_grab), handle_input_method_grab_keyboard_destroy, sid);
 }
 
 unsafe extern "C" fn handle_input_method_new_popup(
     listener: *mut ffi::wl_listener,
     data: *mut std::ffi::c_void,
 ) {
-    let relay = crate::container_of!(listener, InputRelay, input_method_new_popup);
+    let sid = listener_seat!(listener, relay.input_method_new_popup);
     let wlr_popup = data as *mut ffi::wlr_input_popup_surface_v2;
 
-    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
-    if let Err(e) = crate::input_popup::InputPopup::create(wm, wlr_popup, relay) {
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    if let Err(e) = crate::input_popup::InputPopup::create(wm, wlr_popup, sid) {
         log::error!("failed to create input popup: {}", e);
     }
 }
@@ -306,7 +316,8 @@ unsafe extern "C" fn handle_input_method_grab_keyboard_destroy(
     listener: *mut ffi::wl_listener,
     _data: *mut std::ffi::c_void,
 ) {
-    let relay = crate::container_of!(listener, InputRelay, grab_keyboard_destroy);
+    let seat = listener_seat_ptr!(listener, relay.grab_keyboard_destroy);
+    let relay = &mut (*seat).relay as *mut InputRelay;
     let input_method = (*relay).input_method;
     let keyboard_grab = (*input_method).keyboard_grab;
     (*relay).grab_keyboard_destroy.disconnect();

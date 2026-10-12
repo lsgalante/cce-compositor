@@ -17,6 +17,17 @@ pub use store::Outputs;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OutputId(pub crate::slotmap::Key);
 
+/// An output's listeners record its id: `wm.outputs` hands outputs out as
+/// `&mut`, so one may move (`crate::listener`).
+impl crate::listener::ListenerKey for OutputId {
+    fn to_key(self) -> u64 {
+        crate::listener::slot_key_bits(self.0)
+    }
+    fn from_key(key: u64) -> Self {
+        OutputId(crate::listener::slot_key_from_bits(key))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OutputStateValue {
     Enabled,
@@ -446,13 +457,16 @@ impl Output {
 
 
         // Add event listeners
-        (*raw).destroy.connect(ffi::river_wlr_output_get_destroy_signal(wlr_output), handle_destroy);
+        // Keyed: `wm.outputs` hands outputs out as `&mut`, so one may move.
+        // The destroy handler disconnects all four before the manage pass
+        // takes the output out of the store.
+        (*raw).destroy.connect_keyed(ffi::river_wlr_output_get_destroy_signal(wlr_output), handle_destroy, id);
 
-        (*raw).request_state.connect(ffi::river_wlr_output_get_request_state_signal(wlr_output), handle_request_state);
+        (*raw).request_state.connect_keyed(ffi::river_wlr_output_get_request_state_signal(wlr_output), handle_request_state, id);
 
-        (*raw).frame.connect(ffi::river_wlr_output_get_frame_signal(wlr_output), handle_frame);
+        (*raw).frame.connect_keyed(ffi::river_wlr_output_get_frame_signal(wlr_output), handle_frame, id);
 
-        (*raw).present.connect(ffi::river_wlr_output_get_present_signal(wlr_output), handle_present);
+        (*raw).present.connect_keyed(ffi::river_wlr_output_get_present_signal(wlr_output), handle_present, id);
 
         (*raw).scheduled.state = OutputStateValue::Enabled;
         let preferred = ffi::wlr_output_preferred_mode(wlr_output);
@@ -1195,8 +1209,22 @@ impl Output {
     }
 }
 
+/// In an output handler: the output whose keyed `$field` listener was
+/// called, as the raw place the store keeps (a handler holds it beside the
+/// window manager, whose store holds raw pointers for exactly that).
+macro_rules! output_of {
+    ($wm:expr, $listener:expr, $field:ident) => {{
+        let oid = crate::listener_id!($listener, $wm.outputs, OutputId, $field);
+        match $wm.outputs.ptr(oid) {
+            Some(output) => output,
+            None => return,
+        }
+    }};
+}
+
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let output = crate::container_of!(listener, Output, destroy);
+    let server = crate::shared::server_ptr();
+    let output = output_of!(*crate::reentry::wm(server), listener, destroy);
 
     log::debug!("Output destroyed");
     crate::xwayland_window::note_output_change();
@@ -1216,11 +1244,8 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     if !(*output).wlr_output.is_null() {
         ffi::river_wlr_output_set_data((*output).wlr_output.ptr(), std::ptr::null_mut());
         // Input devices mapped onto it would keep its address.
-        let server = crate::shared::server_ptr();
-        if !server.is_null() {
-            let wm = &*crate::reentry::wm(server);
-            (*server).input_manager.forget_output(wm, (*output).wlr_output.ptr());
-        }
+        let wm = &*crate::reentry::wm(server);
+        (*server).input_manager.forget_output(wm, (*output).wlr_output.ptr());
     }
 
     (*output).wlr_output.take();
@@ -1233,7 +1258,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 }
 
 unsafe extern "C" fn handle_request_state(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let output = &mut *crate::container_of!(listener, Output, request_state);
+    let output = &mut *output_of!(*crate::reentry::wm(crate::shared::server_ptr()), listener, request_state);
     let event = data as *mut ffi::wlr_output_event_request_state;
 
     // A backend asking for a mode (a nested backend's window resized, a
@@ -1342,12 +1367,12 @@ fn log_render_error(e: &str) {
 
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let output = &mut *crate::container_of!(listener, Output, frame);
+    let server = crate::shared::server_ptr();
+    let wm = &mut *crate::reentry::wm(server);
+    let output = &mut *output_of!(wm, listener, frame);
     // The camera steps here, on the vblank, to where it should be at the
     // instant THIS frame is presented (see WindowManager::step_camera_frame).
     let frame_target_ns = output.predicted_present_ns();
-    let server = crate::shared::server_ptr();
-    let wm = &mut *crate::reentry::wm(server);
     wm.step_camera_frame(frame_target_ns);
     // Likewise the interactive move/resize: one configure + relayout per
     // vblank, for the pointer's latest position.
@@ -1394,8 +1419,8 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
 }
 
 unsafe extern "C" fn handle_present(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let output = &mut *crate::container_of!(listener, Output, present);
     let server = crate::shared::server_ptr();
+    let output = &mut *output_of!(*crate::reentry::wm(server), listener, present);
     let event = data as *mut ffi::wlr_output_event_present;
     if !(*event).presented {
         return;

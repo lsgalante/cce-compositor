@@ -455,6 +455,17 @@ pub use borders::*;
 /// What everything but the window manager's map holds to name a window:
 /// a generational key, so one that outlives its window looks up as gone.
 pub use crate::policy::api::WindowId;
+
+/// A window's listener records its id: `wm.windows` hands windows out as
+/// `&mut`, so one may move (`crate::listener`).
+impl crate::listener::ListenerKey for WindowId {
+    fn to_key(self) -> u64 {
+        crate::listener::slot_key_bits(self.0)
+    }
+    fn from_key(key: u64) -> Self {
+        WindowId(crate::listener::slot_key_from_bits(key))
+    }
+}
 impl Window {
     /// The `capture_scene` hold; private, because a `Wlr` moved or swapped into
     /// another field would be a hold its owner's destroy path never clears.
@@ -1375,12 +1386,7 @@ impl Window {
     /// fade. A function of the id, not a `&mut self` method, because it
     /// hands the window manager on (focus, the overview pan, placement)
     /// and those reach this window through the store.
-    ///
-    /// # Safety
-    /// The window must stay at its store address while it is mapped: the
-    /// commit listener linked here lives inside it, and nothing enforces
-    /// that a `Window` never moves (the KNOWN GAP in CLAUDE.md).
-    pub unsafe fn map(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> Result<(), &'static str> {
+    pub fn map(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> Result<(), &'static str> {
         let this = window_mut!(wm, id, Err("window gone before map"));
         log::debug!("window '{:?}' mapped", this.get_title());
         if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
@@ -1406,11 +1412,11 @@ impl Window {
         let this = window_mut!(wm, id, Err("window gone during placement"));
         let surface = this.root_surface();
         if !surface.is_null() {
-            // SAFETY: this fn's contract (the window does not move), and the
-            // live root surface's commit signal outlives the link, because
-            // the surface's unmap disconnects it first (`Window::unmap`,
-            // whatever the state); `destroy` disconnects too.
-            unsafe { this.commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_window_commit) };
+            // SAFETY: the live root surface's commit signal outlives the
+            // link, because the surface's unmap disconnects it first
+            // (`Window::unmap`, whatever the state); `destroy` disconnects
+            // too, before the window leaves the store the key names it in.
+            unsafe { this.commit.connect_keyed(ffi::river_wlr_surface_get_commit_signal(surface), handle_window_commit, id) };
         }
 
         let app_id = this.get_app_id_string();
@@ -2830,9 +2836,8 @@ unsafe fn get_parent_position_relative_to(
 
 unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let stores = crate::ctx::Stores::of(crate::shared::server_ptr());
-    let window = crate::container_of!(listener, Window, commit);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    let id = (*window).id();
+    let id = crate::listener_id!(listener, wm.windows, WindowId, commit);
     let this = window_mut!(wm, id);
     this.stream_dirty = true;
     let was_status = this.is_status_bar();

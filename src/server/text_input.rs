@@ -59,7 +59,7 @@ unsafe fn entry(text_input: *mut TextInput) -> Option<(&'static mut crate::windo
 }
 
 unsafe extern "C" fn handle_enable(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let text_input = crate::container_of!(listener, TextInput, enable);
+    let text_input = crate::listener_owner!(listener, TextInput, enable);
     let Some((wm, sid)) = entry(text_input) else { return };
     let Some(seat) = wm.seats.get_mut(sid) else { return };
 
@@ -84,7 +84,7 @@ unsafe extern "C" fn handle_enable(listener: *mut ffi::wl_listener, _data: *mut 
 }
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let text_input = crate::container_of!(listener, TextInput, commit);
+    let text_input = crate::listener_owner!(listener, TextInput, commit);
     let Some((wm, sid)) = entry(text_input) else { return };
     let Some(seat) = wm.seats.get_mut(sid) else { return };
 
@@ -100,7 +100,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
 }
 
 unsafe extern "C" fn handle_disable(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let text_input = crate::container_of!(listener, TextInput, disable);
+    let text_input = crate::listener_owner!(listener, TextInput, disable);
     let Some((wm, sid)) = entry(text_input) else { return };
 
     if wm.seats.get(sid).is_some_and(|seat| seat.relay.text_input() == text_input) {
@@ -109,7 +109,7 @@ unsafe extern "C" fn handle_disable(listener: *mut ffi::wl_listener, _data: *mut
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let text_input = crate::container_of!(listener, TextInput, destroy);
+    let text_input = crate::listener_owner!(listener, TextInput, destroy);
     // The seat's side first, if it is still in the store. The text input
     // itself is unhooked and freed either way: its signals are going.
     if let Some((wm, sid)) = entry(text_input) {

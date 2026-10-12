@@ -506,7 +506,7 @@ unsafe extern "C" fn handle_respawn_timeout(_data: *mut std::ffi::c_void) -> std
 }
 
 unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let manager = &mut *crate::container_of!(listener, LockManager, new_lock);
+    let manager = &mut *crate::listener_owner!(listener, LockManager, new_lock);
     let lock = data as *mut ffi::wlr_session_lock_v1;
 
     log::debug!("session lock client made lock request");
@@ -551,7 +551,7 @@ unsafe extern "C" fn handle_new_lock(listener: *mut ffi::wl_listener, data: *mut
 }
 
 unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let manager = &mut *crate::container_of!(listener, LockManager, unlock);
+    let manager = &mut *crate::listener_owner!(listener, LockManager, unlock);
 
     manager.set_state(LockState::Unlocked);
     log::info!("session unlocked");
@@ -578,7 +578,7 @@ unsafe extern "C" fn handle_unlock(listener: *mut ffi::wl_listener, _data: *mut 
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let manager = &mut *crate::container_of!(listener, LockManager, destroy);
+    let manager = &mut *crate::listener_owner!(listener, LockManager, destroy);
 
     log::debug!("ext_session_lock_v1 destroyed");
 
@@ -602,7 +602,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 }
 
 unsafe extern "C" fn handle_surface(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let manager = &mut *crate::container_of!(listener, LockManager, new_surface);
+    let manager = &mut *crate::listener_owner!(listener, LockManager, new_surface);
     let wlr_lock_surface = data as *mut ffi::wlr_session_lock_surface_v1;
 
     log::debug!("new ext_session_lock_surface_v1 created");
@@ -639,7 +639,7 @@ unsafe extern "C" fn update_focus(data: *mut std::ffi::c_void) {
 }
 
 unsafe extern "C" fn handle_lock_surface_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let lock_surface = crate::container_of!(listener, LockSurface, map);
+    let lock_surface = crate::listener_owner!(listener, LockSurface, map);
 
     let output = (*lock_surface).get_output();
     let x = (*output).sent.x;
@@ -662,7 +662,7 @@ unsafe extern "C" fn handle_lock_surface_map(listener: *mut ffi::wl_listener, _d
 }
 
 unsafe extern "C" fn handle_lock_surface_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let lock_surface = crate::container_of!(listener, LockSurface, surface_destroy);
+    let lock_surface = crate::listener_owner!(listener, LockSurface, surface_destroy);
     let server = crate::shared::server_ptr();
     LockSurface::destroy(&mut *crate::reentry::wm(server), lock_surface);
 }

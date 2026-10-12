@@ -349,7 +349,7 @@ unsafe extern "C" fn handle_destroy(
     listener: *mut ffi::wl_listener,
     _data: *mut std::ffi::c_void,
 ) {
-    let tool_ptr = crate::container_of!(listener, TabletTool, destroy_listener) as *mut TabletTool;
+    let tool_ptr = crate::listener_owner!(listener, TabletTool, destroy_listener) as *mut TabletTool;
     let tool = &mut *tool_ptr;
 
     ffi::wlr_cursor_destroy(tool.wlr_cursor().take());
@@ -368,7 +368,7 @@ unsafe extern "C" fn handle_set_cursor(
     listener: *mut ffi::wl_listener,
     data: *mut std::ffi::c_void,
 ) {
-    let tool = &mut *crate::container_of!(listener, TabletTool, set_cursor_listener);
+    let tool = &mut *crate::listener_owner!(listener, TabletTool, set_cursor_listener);
     let event = data as *mut ffi::wlr_tablet_v2_event_cursor;
 
     if tool.allow_set_cursor((*event).seat_client, (*event).serial) {

@@ -362,7 +362,7 @@ unsafe fn river_wlr_seat_get_data_safe(wlr_seat: *mut ffi::wlr_seat) -> *mut Sea
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let constraint_ptr = crate::container_of!(listener, PointerConstraint, destroy_listener) as *mut PointerConstraint;
+    let constraint_ptr = crate::listener_owner!(listener, PointerConstraint, destroy_listener) as *mut PointerConstraint;
     let constraint = &mut *constraint_ptr;
     // The seat through wlroots' pointer, not the store: this also runs while
     // the server tears down, with no window manager to take. The wlroots
@@ -390,7 +390,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, data: *mut 
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let wm = &*crate::reentry::wm(crate::shared::server_ptr());
-    let constraint_ptr = crate::container_of!(listener, PointerConstraint, commit_listener) as *mut PointerConstraint;
+    let constraint_ptr = crate::listener_owner!(listener, PointerConstraint, commit_listener) as *mut PointerConstraint;
     handle_commit_impl(&mut *constraint_ptr, wm, constraint_ptr);
     // The borrow above has ended; a oneshot constraint may go here.
     flush_deactivation(constraint_ptr);
@@ -413,7 +413,7 @@ fn handle_commit_impl(constraint: &mut PointerConstraint, wm: &crate::window_man
 }
 
 unsafe extern "C" fn handle_node_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let constraint_ptr = crate::container_of!(listener, PointerConstraint, node_destroy_listener) as *mut PointerConstraint;
+    let constraint_ptr = crate::listener_owner!(listener, PointerConstraint, node_destroy_listener) as *mut PointerConstraint;
     log::info!("deactivating pointer constraint, scene node destroyed");
     // A scene node goes inside window-manager calls (a window unmapping),
     // so this must not take the window manager: the seat comes from

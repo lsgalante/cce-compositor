@@ -681,7 +681,7 @@ impl XwaylandWindow {
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, destroy);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, destroy);
     handle_destroy_impl(&mut *crate::reentry::wm(crate::shared::server_ptr()), xwindow);
 }
 
@@ -711,7 +711,7 @@ unsafe fn handle_destroy_impl(wm: &mut crate::window_manager::WindowManager, xwi
 }
 
 unsafe extern "C" fn handle_associate(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, associate);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, associate);
     handle_associate_impl(xwindow);
     // An entry point: no window-manager borrow is live.
     (*xwindow).xsurface().map_if_buffered();
@@ -726,7 +726,7 @@ unsafe fn handle_associate_impl(xwindow: *mut XwaylandWindow) {
 }
 
 unsafe extern "C" fn handle_dissociate(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, dissociate);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, dissociate);
     handle_dissociate_impl(&mut *xwindow);
 }
 
@@ -736,7 +736,7 @@ fn handle_dissociate_impl(xwindow: &mut XwaylandWindow) {
 }
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, map);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, map);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     handle_map_impl(wm, xwindow);
 }
@@ -878,7 +878,7 @@ fn place_shy_where_it_is(wm: &mut crate::window_manager::WindowManager, id: Wind
 }
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, unmap);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, unmap);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     handle_unmap_impl(wm, (*xwindow).window);
 }
@@ -926,7 +926,7 @@ fn x11_origin(window: &Window, has_parent: bool, stores: crate::ctx::Stores) -> 
 
 unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let stores = crate::ctx::Stores::of(crate::shared::server_ptr());
-    let xwindow = crate::container_of!(listener, XwaylandWindow, request_configure);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, request_configure);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let id = (*xwindow).window;
     let this = window_mut!(wm, id);
@@ -1176,7 +1176,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
 }
 
 unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, set_override_redirect);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, set_override_redirect);
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let xsurface = (*xwindow).xsurface().ptr();
@@ -1199,7 +1199,7 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
 
 #[allow(dead_code)]
 unsafe extern "C" fn handle_set_size_hints(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, set_size_hints);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, set_size_hints);
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
@@ -1228,14 +1228,14 @@ unsafe extern "C" fn handle_set_size_hints(listener: *mut ffi::wl_listener, _dat
 }
 
 unsafe extern "C" fn handle_set_title(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, set_title);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, set_title);
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     crate::window::Window::notify_title(wm, id);
 }
 
 unsafe extern "C" fn handle_set_class(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, set_class);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, set_class);
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     crate::window::Window::notify_app_id(wm, id);
@@ -1246,7 +1246,7 @@ unsafe extern "C" fn handle_set_parent(_listener: *mut ffi::wl_listener, _data: 
 }
 
 unsafe extern "C" fn handle_set_decorations(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, set_decorations);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, set_decorations);
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
@@ -1264,7 +1264,7 @@ unsafe extern "C" fn handle_set_decorations(listener: *mut ffi::wl_listener, _da
 }
 
 unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, request_maximize);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, request_maximize);
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
@@ -1313,7 +1313,7 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
 }
 
 unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, request_fullscreen);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, request_fullscreen);
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
@@ -1366,7 +1366,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
 }
 
 unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let xwindow = crate::container_of!(listener, XwaylandWindow, request_minimize);
+    let xwindow = crate::listener_owner!(listener, XwaylandWindow, request_minimize);
     let id = (*xwindow).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);

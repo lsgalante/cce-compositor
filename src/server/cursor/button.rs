@@ -6,7 +6,7 @@ use super::*;
 
 pub(crate) unsafe extern "C" fn handle_button(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = (*crate::container_of!(listener, Cursor, button_listener)).sid;
+    let sid = listener_seat!(listener, cursor.button_listener);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_button(wm, sid, &*(data as *const ffi::wlr_pointer_button_event), sys);
 }

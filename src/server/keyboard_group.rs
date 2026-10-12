@@ -375,7 +375,7 @@ unsafe extern "C" fn led_update(wlr_keyboard: *mut ffi::wlr_keyboard, leds: u32)
 
 unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let group = &mut *crate::container_of!(listener, KeyboardGroup, key_listener);
+    let group = &mut *crate::listener_owner!(listener, KeyboardGroup, key_listener);
     let event = data as *mut ffi::wlr_keyboard_key_event;
 
     let xkb_state = group.wlr_keyboard.xkb_state;
@@ -625,7 +625,7 @@ fn match_chord<T>(
 }
 
 unsafe extern "C" fn handle_group_modifiers(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let group = &mut *crate::container_of!(listener, KeyboardGroup, modifiers_listener);
+    let group = &mut *crate::listener_owner!(listener, KeyboardGroup, modifiers_listener);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
 
     group.modifiers_old = ffi::wlr_keyboard_get_modifiers(&mut group.wlr_keyboard);

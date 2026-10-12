@@ -94,7 +94,7 @@ struct Slot {
 }
 
 unsafe extern "C" fn handle_node_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let slot = crate::container_of!(listener, Slot, destroy);
+    let slot = crate::listener_owner!(listener, Slot, destroy);
     (*slot).node = std::ptr::null_mut();
     // wlroots asserts a node's destroy signal has no listeners left once
     // it has been emitted.

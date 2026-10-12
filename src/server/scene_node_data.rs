@@ -72,7 +72,7 @@ impl SceneNodeData {
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let scene_node_data_ptr = crate::container_of!(listener, SceneNodeData, destroy);
+    let scene_node_data_ptr = crate::listener_owner!(listener, SceneNodeData, destroy);
     let mut scene_node_data = Box::from_raw(scene_node_data_ptr);
     scene_node_data.destroy.disconnect();
     if !scene_node_data.node.is_null() {

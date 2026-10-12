@@ -238,7 +238,7 @@ impl InputDevice {
 
 unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let device_ptr = crate::container_of!(listener, InputDevice, destroy_listener) as *mut InputDevice;
+    let device_ptr = crate::listener_owner!(listener, InputDevice, destroy_listener) as *mut InputDevice;
     let device = &mut *device_ptr;
     
     log::debug!(

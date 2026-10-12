@@ -558,7 +558,7 @@ fn validate_config_coordinates(server: *mut Server, config: *mut ffi::wlr_output
 }
 
 unsafe extern "C" fn handle_new_output(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let om = &mut *crate::container_of!(listener, OutputManager, new_output);
+    let om = &mut *crate::listener_owner!(listener, OutputManager, new_output);
     let server = crate::container_of!(om as *mut OutputManager, Server, om);
     let wlr_output = data as *mut ffi::wlr_output;
     log::debug!("new output {:?}", std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name(wlr_output)));
@@ -570,7 +570,7 @@ unsafe extern "C" fn handle_new_output(listener: *mut ffi::wl_listener, data: *m
 }
 
 unsafe extern "C" fn handle_manager_test(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let om = &mut *crate::container_of!(listener, OutputManager, manager_test);
+    let om = &mut *crate::listener_owner!(listener, OutputManager, manager_test);
     let server = crate::container_of!(om as *mut OutputManager, Server, om);
     let config = data as *mut ffi::wlr_output_configuration_v1;
 
@@ -604,7 +604,7 @@ unsafe extern "C" fn handle_manager_test(listener: *mut ffi::wl_listener, data: 
 }
 
 unsafe extern "C" fn handle_manager_apply(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let om = &mut *crate::container_of!(listener, OutputManager, manager_apply);
+    let om = &mut *crate::listener_owner!(listener, OutputManager, manager_apply);
     let server = crate::container_of!(om as *mut OutputManager, Server, om);
     let config = data as *mut ffi::wlr_output_configuration_v1;
 

@@ -2637,7 +2637,7 @@ unsafe extern "C" fn handle_server_destroy(
     listener: *mut ffi::wl_listener,
     _data: *mut std::ffi::c_void,
 ) {
-    let wm = crate::container_of!(listener, WindowManager, server_destroy);
+    let wm = crate::listener_owner!(listener, WindowManager, server_destroy);
     (*wm).deinit();
 }
 

@@ -330,12 +330,12 @@ unsafe extern "C" fn handle_sigchld(_signum: std::os::raw::c_int, _data: *mut st
 }
 
 unsafe extern "C" fn handle_renderer_lost(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let _server = container_of!(listener, Server, renderer_lost);
+    let _server = crate::listener_owner!(listener, Server, renderer_lost);
     log::info!("received GPU reset event");
 }
 
 unsafe extern "C" fn handle_new_xdg_toplevel(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let server = container_of!(listener, Server, new_xdg_toplevel);
+    let server = crate::listener_owner!(listener, Server, new_xdg_toplevel);
     let xdg_toplevel = data as *mut ffi::wlr_xdg_toplevel;
     log::info!("new xdg toplevel surface");
     if let Err(e) = crate::xdg_toplevel::XdgToplevel::create(&mut *crate::reentry::wm(server), xdg_toplevel) {
@@ -346,14 +346,14 @@ unsafe extern "C" fn handle_new_xdg_toplevel(listener: *mut ffi::wl_listener, da
 }
 
 unsafe extern "C" fn handle_new_toplevel_decoration(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let _server = container_of!(listener, Server, new_toplevel_decoration);
+    let _server = crate::listener_owner!(listener, Server, new_toplevel_decoration);
     let decoration = data as *mut ffi::wlr_xdg_toplevel_decoration_v1;
     log::info!("new toplevel decoration");
     crate::xdg_toplevel::XdgDecoration::init(decoration);
 }
 
 unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let server = container_of!(listener, Server, request_activate);
+    let server = crate::listener_owner!(listener, Server, request_activate);
     log::info!("xdg activation request received");
     if data.is_null() {
         return;
@@ -476,12 +476,12 @@ unsafe extern "C" fn handle_request_set_cursor_shape(_listener: *mut ffi::wl_lis
 }
 
 // unsafe extern "C" fn handle_toplevel_capture_request(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-//     let _server = container_of!(listener, Server, toplevel_capture_request);
+//     let _server = crate::listener_owner!(listener, Server, toplevel_capture_request);
 //     log::info!("toplevel capture request");
 // }
 
 unsafe extern "C" fn handle_new_xwayland_surface(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let server = container_of!(listener, Server, new_xsurface);
+    let server = crate::listener_owner!(listener, Server, new_xsurface);
     let wm = &mut *crate::reentry::wm(server);
     let xsurface = data as *mut ffi::wlr_xwayland_surface;
     log::info!("new xwayland surface");
@@ -532,7 +532,7 @@ unsafe extern "C" fn xwayland_global_filter(
 }
 
 unsafe extern "C" fn handle_xwayland_ready(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let server = container_of!(listener, Server, xwayland_ready);
+    let server = crate::listener_owner!(listener, Server, xwayland_ready);
     let xwayland_cast = (*server).xwayland as *mut WlrXwayland;
     if !xwayland_cast.is_null() && !(*xwayland_cast).display_name.is_null() {
         let display_name = std::ffi::CStr::from_ptr((*xwayland_cast).display_name)

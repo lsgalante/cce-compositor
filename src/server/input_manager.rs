@@ -231,9 +231,9 @@ impl InputManager {
         // Destroy all seats
         log::info!("[deinit] destroying seats");
         for id in wm.seats.ids() {
-            if let Some(seat) = wm.seats.take(id) {
+            if let Some(seat) = wm.seats.get(id) {
                 log::info!("[deinit] calling Seat::destroy for {:?}", seat.wlr_seat().ptr());
-                Seat::destroy(seat);
+                Seat::destroy(wm, id);
             }
         }
         self.default_seat = None;
@@ -414,7 +414,7 @@ unsafe extern "C" fn input_manager_destroy_seat(
 }
 
 unsafe extern "C" fn handle_new_input(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let im = &mut *crate::container_of!(listener, InputManager, new_input_listener);
+    let im = &mut *crate::listener_owner!(listener, InputManager, new_input_listener);
     let wlr_device = data as *mut ffi::wlr_input_device;
 
     log::info!("new input device connected");
@@ -454,7 +454,7 @@ unsafe extern "C" fn handle_new_pointer_constraint(_listener: *mut ffi::wl_liste
 }
 
 unsafe extern "C" fn handle_new_text_input(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let _im = crate::container_of!(listener, InputManager, new_text_input);
+    let _im = crate::listener_owner!(listener, InputManager, new_text_input);
     let wlr_text_input = data as *mut ffi::wlr_text_input_v3;
 
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
@@ -465,7 +465,7 @@ unsafe extern "C" fn handle_new_text_input(listener: *mut ffi::wl_listener, data
 }
 
 unsafe extern "C" fn handle_new_input_method(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let im = &mut *crate::container_of!(listener, InputManager, new_input_method);
+    let im = &mut *crate::listener_owner!(listener, InputManager, new_input_method);
     let input_method = data as *mut ffi::wlr_input_method_v2;
     // Fallback to default seat if input_method.seat has no data set yet
     let Some(sid) = Seat::id_of((*input_method).seat).or(im.default_seat) else { return };
@@ -473,7 +473,7 @@ unsafe extern "C" fn handle_new_input_method(listener: *mut ffi::wl_listener, da
 }
 
 unsafe extern "C" fn handle_new_virtual_pointer(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let im = &mut *crate::container_of!(listener, InputManager, new_virtual_pointer_listener);
+    let im = &mut *crate::listener_owner!(listener, InputManager, new_virtual_pointer_listener);
     let event = data as *mut ffi::wlr_virtual_pointer_v1_new_pointer_event;
 
     log::info!("new virtual pointer device connected");
@@ -492,7 +492,7 @@ unsafe extern "C" fn handle_new_virtual_pointer(listener: *mut ffi::wl_listener,
 }
 
 unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let im = &mut *crate::container_of!(listener, InputManager, new_virtual_keyboard_listener);
+    let im = &mut *crate::listener_owner!(listener, InputManager, new_virtual_keyboard_listener);
     let virtual_keyboard = data as *mut ffi::wlr_virtual_keyboard_v1;
 
     log::info!("new virtual keyboard device connected");

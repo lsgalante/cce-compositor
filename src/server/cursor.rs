@@ -365,50 +365,52 @@ impl Cursor {
         self.xcursor_manager().load(1.0);
         self.set_xcursor(c"default");
 
-        // Setup listeners
-        self.motion_listener.connect(ffi::river_wlr_cursor_get_motion_signal(wlr_cursor), handle_motion);
+        // Keyed by the seat id: the seat store hands seats, and so their
+        // cursors, out as `&mut`, so a cursor may move.
+        let sid = self.sid;
+        self.motion_listener.connect_keyed(ffi::river_wlr_cursor_get_motion_signal(wlr_cursor), handle_motion, sid);
 
-        self.motion_absolute_listener.connect(ffi::river_wlr_cursor_get_motion_absolute_signal(wlr_cursor), handle_motion_absolute);
+        self.motion_absolute_listener.connect_keyed(ffi::river_wlr_cursor_get_motion_absolute_signal(wlr_cursor), handle_motion_absolute, sid);
 
-        self.button_listener.connect(ffi::river_wlr_cursor_get_button_signal(wlr_cursor), handle_button);
+        self.button_listener.connect_keyed(ffi::river_wlr_cursor_get_button_signal(wlr_cursor), handle_button, sid);
 
-        self.axis_listener.connect(ffi::river_wlr_cursor_get_axis_signal(wlr_cursor), handle_axis);
+        self.axis_listener.connect_keyed(ffi::river_wlr_cursor_get_axis_signal(wlr_cursor), handle_axis, sid);
 
-        self.frame_listener.connect(ffi::river_wlr_cursor_get_frame_signal(wlr_cursor), handle_frame);
+        self.frame_listener.connect_keyed(ffi::river_wlr_cursor_get_frame_signal(wlr_cursor), handle_frame, sid);
 
-        self.tablet_tool_axis_listener.connect(ffi::river_wlr_cursor_get_tablet_tool_axis_signal(wlr_cursor), handle_tablet_tool_axis);
+        self.tablet_tool_axis_listener.connect_keyed(ffi::river_wlr_cursor_get_tablet_tool_axis_signal(wlr_cursor), handle_tablet_tool_axis, sid);
 
-        self.tablet_tool_proximity_listener.connect(ffi::river_wlr_cursor_get_tablet_tool_proximity_signal(wlr_cursor), handle_tablet_tool_proximity);
+        self.tablet_tool_proximity_listener.connect_keyed(ffi::river_wlr_cursor_get_tablet_tool_proximity_signal(wlr_cursor), handle_tablet_tool_proximity, sid);
 
-        self.tablet_tool_tip_listener.connect(ffi::river_wlr_cursor_get_tablet_tool_tip_signal(wlr_cursor), handle_tablet_tool_tip);
+        self.tablet_tool_tip_listener.connect_keyed(ffi::river_wlr_cursor_get_tablet_tool_tip_signal(wlr_cursor), handle_tablet_tool_tip, sid);
 
-        self.tablet_tool_button_listener.connect(ffi::river_wlr_cursor_get_tablet_tool_button_signal(wlr_cursor), handle_tablet_tool_button);
+        self.tablet_tool_button_listener.connect_keyed(ffi::river_wlr_cursor_get_tablet_tool_button_signal(wlr_cursor), handle_tablet_tool_button, sid);
 
-        self.touch_down_listener.connect(ffi::river_wlr_cursor_get_touch_down_signal(wlr_cursor), crate::touch::handle_touch_down);
+        self.touch_down_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_down_signal(wlr_cursor), crate::touch::handle_touch_down, sid);
 
-        self.touch_motion_listener.connect(ffi::river_wlr_cursor_get_touch_motion_signal(wlr_cursor), crate::touch::handle_touch_motion);
+        self.touch_motion_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_motion_signal(wlr_cursor), crate::touch::handle_touch_motion, sid);
 
-        self.touch_up_listener.connect(ffi::river_wlr_cursor_get_touch_up_signal(wlr_cursor), crate::touch::handle_touch_up);
+        self.touch_up_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_up_signal(wlr_cursor), crate::touch::handle_touch_up, sid);
 
-        self.touch_cancel_listener.connect(ffi::river_wlr_cursor_get_touch_cancel_signal(wlr_cursor), crate::touch::handle_touch_cancel);
+        self.touch_cancel_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_cancel_signal(wlr_cursor), crate::touch::handle_touch_cancel, sid);
 
-        self.touch_frame_listener.connect(ffi::river_wlr_cursor_get_touch_frame_signal(wlr_cursor), crate::touch::handle_touch_frame);
+        self.touch_frame_listener.connect_keyed(ffi::river_wlr_cursor_get_touch_frame_signal(wlr_cursor), crate::touch::handle_touch_frame, sid);
 
-        self.swipe_begin_listener.connect(ffi::river_wlr_cursor_get_swipe_begin_signal(wlr_cursor), handle_swipe_begin);
+        self.swipe_begin_listener.connect_keyed(ffi::river_wlr_cursor_get_swipe_begin_signal(wlr_cursor), handle_swipe_begin, sid);
 
-        self.swipe_update_listener.connect(ffi::river_wlr_cursor_get_swipe_update_signal(wlr_cursor), handle_swipe_update);
+        self.swipe_update_listener.connect_keyed(ffi::river_wlr_cursor_get_swipe_update_signal(wlr_cursor), handle_swipe_update, sid);
 
-        self.swipe_end_listener.connect(ffi::river_wlr_cursor_get_swipe_end_signal(wlr_cursor), handle_swipe_end);
+        self.swipe_end_listener.connect_keyed(ffi::river_wlr_cursor_get_swipe_end_signal(wlr_cursor), handle_swipe_end, sid);
 
-        self.pinch_begin_listener.connect(ffi::river_wlr_cursor_get_pinch_begin_signal(wlr_cursor), handle_pinch_begin);
+        self.pinch_begin_listener.connect_keyed(ffi::river_wlr_cursor_get_pinch_begin_signal(wlr_cursor), handle_pinch_begin, sid);
 
-        self.pinch_update_listener.connect(ffi::river_wlr_cursor_get_pinch_update_signal(wlr_cursor), handle_pinch_update);
+        self.pinch_update_listener.connect_keyed(ffi::river_wlr_cursor_get_pinch_update_signal(wlr_cursor), handle_pinch_update, sid);
 
-        self.pinch_end_listener.connect(ffi::river_wlr_cursor_get_pinch_end_signal(wlr_cursor), handle_pinch_end);
+        self.pinch_end_listener.connect_keyed(ffi::river_wlr_cursor_get_pinch_end_signal(wlr_cursor), handle_pinch_end, sid);
 
-        self.hold_begin_listener.connect(ffi::river_wlr_cursor_get_hold_begin_signal(wlr_cursor), handle_hold_begin);
+        self.hold_begin_listener.connect_keyed(ffi::river_wlr_cursor_get_hold_begin_signal(wlr_cursor), handle_hold_begin, sid);
 
-        self.hold_end_listener.connect(ffi::river_wlr_cursor_get_hold_end_signal(wlr_cursor), handle_hold_end);
+        self.hold_end_listener.connect_keyed(ffi::river_wlr_cursor_get_hold_end_signal(wlr_cursor), handle_hold_end, sid);
 
         Ok(())
     }
@@ -1289,7 +1291,7 @@ impl Cursor {
 
 unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = (*crate::container_of!(listener, Cursor, motion_listener)).sid;
+    let sid = listener_seat!(listener, cursor.motion_listener);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_motion(wm, sid, &*(data as *const ffi::wlr_pointer_motion_event), sys);
 }
@@ -1386,7 +1388,7 @@ pub(crate) fn on_motion(wm: &mut crate::window_manager::WindowManager, sid: crat
 
 unsafe extern "C" fn handle_motion_absolute(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = (*crate::container_of!(listener, Cursor, motion_absolute_listener)).sid;
+    let sid = listener_seat!(listener, cursor.motion_absolute_listener);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_motion_absolute(wm, sid, data, sys);
 }
@@ -1521,12 +1523,11 @@ pub(crate) fn press_dismissals(wm: &mut crate::window_manager::WindowManager, lx
 }
 
 unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let cursor = &*crate::container_of!(listener, Cursor, frame_listener);
-    cursor.wlr_seat().pointer_notify_frame();
+    let seat = listener_seat_ptr!(listener, cursor.frame_listener);
+    (*seat).cursor.wlr_seat().pointer_notify_frame();
 }
 
-/// Animated-xcursor tick. `data` is the `Cursor`, which lives inline in a
-/// `Box::into_raw`'d `Seat` and so never moves. Re-arms itself from
+/// Animated-xcursor tick, for the seat whose id is the token. Re-arms itself from
 /// `advance_xcursor_frame`; a stopped animation leaves the timer disarmed and
 /// this is not called again until something arms it.
 unsafe extern "C" fn handle_xcursor_anim(data: *mut std::ffi::c_void) -> std::os::raw::c_int {
@@ -1541,7 +1542,7 @@ unsafe extern "C" fn handle_xcursor_anim(data: *mut std::ffi::c_void) -> std::os
 
 unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let _cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_axis_listener);
+    let _ = listener_seat!(listener, cursor.tablet_tool_axis_listener);
     let event = data as *mut ffi::wlr_tablet_tool_axis_event;
 
     let wlr_tablet = (*event).tablet;
@@ -1567,11 +1568,11 @@ unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, da
 
 unsafe extern "C" fn handle_tablet_tool_proximity(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_proximity_listener);
+    let seat = listener_seat_ptr!(listener, cursor.tablet_tool_proximity_listener);
     let event = data as *mut ffi::wlr_tablet_tool_proximity_event;
     // A stylus sets its own image (`TabletTool::proximity`); the touch
     // hide must not then block the compositor's next one.
-    cursor.hidden_by_touch = false;
+    (*seat).cursor.hidden_by_touch = false;
 
     let wlr_tablet = (*event).tablet;
     let wlr_device = &mut (*wlr_tablet).base as *mut ffi::wlr_input_device;
@@ -1596,7 +1597,7 @@ unsafe extern "C" fn handle_tablet_tool_proximity(listener: *mut ffi::wl_listene
 
 unsafe extern "C" fn handle_tablet_tool_tip(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let _cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_tip_listener);
+    let _ = listener_seat!(listener, cursor.tablet_tool_tip_listener);
     let event = data as *mut ffi::wlr_tablet_tool_tip_event;
 
     let wlr_tablet = (*event).tablet;
@@ -1622,7 +1623,7 @@ unsafe extern "C" fn handle_tablet_tool_tip(listener: *mut ffi::wl_listener, dat
 
 unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let _cursor = &mut *crate::container_of!(listener, Cursor, tablet_tool_button_listener);
+    let _ = listener_seat!(listener, cursor.tablet_tool_button_listener);
     let event = data as *mut ffi::wlr_tablet_tool_button_event;
 
     let wlr_tablet = (*event).tablet;

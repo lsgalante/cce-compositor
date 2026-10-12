@@ -6,10 +6,10 @@ use super::*;
 
 pub(crate) unsafe extern "C" fn handle_axis(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let cursor = &*crate::container_of!(listener, Cursor, axis_listener);
-    let sid = cursor.sid;
+    let seat = listener_seat_ptr!(listener, cursor.axis_listener);
+    let sid = (*seat).id;
     let event = &*(data as *const ffi::wlr_pointer_axis_event);
-    let device = AxisDevice::of(event, cursor.inject_natural);
+    let device = AxisDevice::of(event, (*seat).cursor.inject_natural);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_axis(wm, sid, event, device, sys);
 }

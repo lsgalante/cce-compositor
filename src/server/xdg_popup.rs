@@ -112,7 +112,7 @@ fn refresh_pointer_under(popup: &XdgPopup) {
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let popup = crate::container_of!(listener, XdgPopup, destroy);
+    let popup = crate::listener_owner!(listener, XdgPopup, destroy);
     refresh_pointer_under(&*popup);
 
     (*popup).destroy.disconnect();
@@ -125,7 +125,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 }
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let popup = crate::container_of!(listener, XdgPopup, commit);
+    let popup = crate::listener_owner!(listener, XdgPopup, commit);
     if (*popup).wlr_popup.initial_commit() {
         handle_reposition((*popup).reposition.as_ptr(), std::ptr::null_mut());
         return;
@@ -164,7 +164,7 @@ fn update_blur(popup: &XdgPopup) {
 }
 
 unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let popup = crate::container_of!(listener, XdgPopup, new_popup);
+    let popup = crate::listener_owner!(listener, XdgPopup, new_popup);
     let wlr_xdg_popup = data as *mut ffi::wlr_xdg_popup;
 
     if let Err(e) = XdgPopup::create(wlr_xdg_popup, (*popup).tree.raw(), (*popup).capture_tree.raw(), (*popup).root_tree.raw()) {
@@ -174,7 +174,7 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
 }
 
 unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let popup = crate::container_of!(listener, XdgPopup, reposition);
+    let popup = crate::listener_owner!(listener, XdgPopup, reposition);
     let server = crate::shared::server_ptr();
     if !(*popup).root_is_shell || server.is_null() {
         return;

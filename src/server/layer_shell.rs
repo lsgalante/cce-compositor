@@ -358,7 +358,7 @@ impl LayerSurface {
 }
 
 unsafe extern "C" fn handle_layer_surface_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let layer_surface = crate::container_of!(listener, LayerSurface, destroy);
+    let layer_surface = crate::listener_owner!(listener, LayerSurface, destroy);
 
     (*layer_surface).wlr_layer_surface.with_namespace(|ns| log::debug!("layer surface {ns:?} destroyed"));
 
@@ -507,7 +507,7 @@ unsafe fn arrange_output_of(wlr_output: *mut ffi::wlr_output) {
 }
 
 unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let layer_surface = crate::container_of!(listener, LayerSurface, map);
+    let layer_surface = crate::listener_owner!(listener, LayerSurface, map);
 
     (*layer_surface).wlr_layer_surface.with_namespace(|ns| log::debug!("layer surface {ns:?} mapped"));
 
@@ -543,7 +543,7 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
 }
 
 unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let layer_surface = crate::container_of!(listener, LayerSurface, unmap);
+    let layer_surface = crate::listener_owner!(listener, LayerSurface, unmap);
 
     (*layer_surface).wlr_layer_surface.with_namespace(|ns| log::debug!("layer surface {ns:?} unmapped"));
 
@@ -605,7 +605,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
 }
 
 unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let layer_surface = crate::container_of!(listener, LayerSurface, commit);
+    let layer_surface = crate::listener_owner!(listener, LayerSurface, commit);
     let wlr = &(*layer_surface).wlr_layer_surface;
     let layer = wlr.layer();
 
@@ -708,7 +708,7 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
 }
 
 unsafe extern "C" fn handle_layer_surface_new_popup(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let layer_surface = crate::container_of!(listener, LayerSurface, new_popup);
+    let layer_surface = crate::listener_owner!(listener, LayerSurface, new_popup);
     let wlr_xdg_popup = data as *mut ffi::wlr_xdg_popup;
 
     if let Err(e) = XdgPopup::create(

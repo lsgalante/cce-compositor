@@ -38,7 +38,7 @@ pub unsafe extern "C" fn handle_new_tearing_hint(_listener: *mut ffi::wl_listene
 /// Emitted (with no data) by the surface commit that changed the current
 /// hint, so `current` is already the new one.
 unsafe extern "C" fn handle_set_hint(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let hint = crate::container_of!(listener, TearingHint, set_hint);
+    let hint = crate::listener_owner!(listener, TearingHint, set_hint);
     let control = (*hint).control;
     let async_hint = (*control).current
         == ffi::wp_tearing_control_v1_presentation_hint_WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC;
@@ -51,7 +51,7 @@ unsafe extern "C" fn handle_set_hint(listener: *mut ffi::wl_listener, _data: *mu
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let hint = crate::container_of!(listener, TearingHint, destroy);
+    let hint = crate::listener_owner!(listener, TearingHint, destroy);
     (*hint).set_hint.disconnect();
     (*hint).destroy.disconnect();
     drop(Box::from_raw(hint));

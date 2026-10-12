@@ -383,7 +383,7 @@ impl XdgToplevel {
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, destroy);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, destroy);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
 
@@ -431,14 +431,14 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 }
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, unmap);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, unmap);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     crate::window::Window::unmap(wm, id);
 }
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, map);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, map);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     if let Err(e) = crate::window::Window::map(wm, id) {
@@ -498,7 +498,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
 }
 
 unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, new_popup);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, new_popup);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
@@ -525,7 +525,7 @@ unsafe extern "C" fn handle_ack_configure(
     listener: *mut ffi::wl_listener,
     data: *mut std::ffi::c_void,
 ) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, ack_configure);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, ack_configure);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
@@ -586,7 +586,7 @@ unsafe extern "C" fn handle_ack_configure(
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
     let stores = crate::ctx::Stores::of(crate::shared::server_ptr());
-    let toplevel = crate::container_of!(listener, XdgToplevel, commit);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, commit);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let id = (*toplevel).window;
     let this = window_mut!(wm, id);
@@ -934,7 +934,7 @@ unsafe extern "C" fn handle_request_show_window_menu(
     listener: *mut ffi::wl_listener,
     data: *mut std::ffi::c_void,
 ) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, request_show_window_menu);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, request_show_window_menu);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
@@ -948,7 +948,7 @@ unsafe extern "C" fn handle_request_show_window_menu(
 }
 
 unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, request_fullscreen);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, request_fullscreen);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
 
@@ -958,7 +958,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
 }
 
 unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, request_maximize);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, request_maximize);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
@@ -983,7 +983,7 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
 }
 
 unsafe extern "C" fn handle_request_minimize(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, request_minimize);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, request_minimize);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
@@ -996,7 +996,7 @@ unsafe extern "C" fn handle_request_move(
     listener: *mut ffi::wl_listener,
     data: *mut std::ffi::c_void,
 ) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, request_move);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, request_move);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
@@ -1065,7 +1065,7 @@ unsafe extern "C" fn handle_request_resize(
     listener: *mut ffi::wl_listener,
     data: *mut std::ffi::c_void,
 ) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, request_resize);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, request_resize);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
@@ -1139,26 +1139,26 @@ unsafe extern "C" fn handle_set_parent(_listener: *mut ffi::wl_listener, _data: 
 }
 
 unsafe extern "C" fn handle_set_title(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, set_title);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, set_title);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     crate::window::Window::notify_title(wm, id);
 }
 
 unsafe extern "C" fn handle_set_app_id(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let toplevel = crate::container_of!(listener, XdgToplevel, set_app_id);
+    let toplevel = crate::listener_owner!(listener, XdgToplevel, set_app_id);
     let id = (*toplevel).window;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     crate::window::Window::notify_app_id(wm, id);
 }
 
 unsafe extern "C" fn handle_decoration_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let decoration = crate::container_of!(listener, XdgDecoration, destroy);
+    let decoration = crate::listener_owner!(listener, XdgDecoration, destroy);
     XdgDecoration::deinit(decoration);
 }
 
 unsafe extern "C" fn handle_decoration_request_mode(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let decoration = crate::container_of!(listener, XdgDecoration, request_mode);
+    let decoration = crate::listener_owner!(listener, XdgDecoration, request_mode);
     
     let base = ffi::river_wlr_xdg_toplevel_get_base((*(*decoration).wlr_decoration).toplevel);
     let toplevel = ffi::river_wlr_xdg_surface_get_data(base) as *mut XdgToplevel;

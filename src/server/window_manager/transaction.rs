@@ -123,11 +123,9 @@ impl WindowManager {
 
         for id in self.seats.ids() {
             if self.seats.get_mut(id).is_some_and(|seat| seat.manage_start()) {
-                if let Some(seat) = self.seats.take(id) {
-                    // SAFETY: the box was just taken out of the store, and
-                    // came from `Seat::create`.
-                    unsafe { crate::seat::Seat::destroy(seat) };
-                }
+                // SAFETY: every seat in the store came from `Seat::create`,
+                // and the borrow above has ended.
+                unsafe { crate::seat::Seat::destroy(self, id) };
             }
         }
 

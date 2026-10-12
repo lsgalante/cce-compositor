@@ -261,7 +261,7 @@ pub fn keysym_is_modifier(sym: u32) -> bool {
 }
 
 unsafe extern "C" fn handle_key(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
-    let keyboard = &mut *crate::container_of!(listener, Keyboard, key_listener);
+    let keyboard = &mut *crate::listener_owner!(listener, Keyboard, key_listener);
     let event = data as *mut ffi::wlr_keyboard_key_event;
 
     if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED {
@@ -288,7 +288,7 @@ unsafe extern "C" fn handle_key(listener: *mut ffi::wl_listener, data: *mut std:
 /// private to this keyboard (see set_group), so its config can be rewritten
 /// in place instead of regrouping.
 unsafe extern "C" fn handle_keymap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let keyboard = &mut *crate::container_of!(listener, Keyboard, keymap_listener);
+    let keyboard = &mut *crate::listener_owner!(listener, Keyboard, keymap_listener);
     let keymap = ffi::river_wlr_keyboard_get_keymap(keyboard.wlr_keyboard);
 
     if !keymap.is_null() {
@@ -315,7 +315,7 @@ unsafe extern "C" fn handle_keymap(listener: *mut ffi::wl_listener, _data: *mut 
 }
 
 unsafe extern "C" fn handle_modifiers(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let keyboard = &mut *crate::container_of!(listener, Keyboard, modifiers_listener);
+    let keyboard = &mut *crate::listener_owner!(listener, Keyboard, modifiers_listener);
 
     if !keyboard.group.is_null() {
         let modifiers = ffi::river_wlr_keyboard_get_modifiers(keyboard.wlr_keyboard);

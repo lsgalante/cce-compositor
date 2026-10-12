@@ -60,7 +60,7 @@ unsafe extern "C" fn handle_destroy(
     listener: *mut ffi::wl_listener,
     _data: *mut std::ffi::c_void,
 ) {
-    let drag_icon_ptr = crate::container_of!(listener, DragIcon, destroy);
+    let drag_icon_ptr = crate::listener_owner!(listener, DragIcon, destroy);
     // Out of every seat's registry, not just the one it was made on: the
     // removal is idempotent, and the registry it sits in must not depend on
     // a seat id anything else could have changed.

@@ -169,7 +169,7 @@ unsafe extern "C" fn handle_new_idle_inhibitor(
     listener: *mut ffi::wl_listener,
     data: *mut std::ffi::c_void,
 ) {
-    let manager = &mut *crate::container_of!(listener, IdleInhibitManager, new_idle_inhibitor);
+    let manager = &mut *crate::listener_owner!(listener, IdleInhibitManager, new_idle_inhibitor);
     let inhibitor = data as *mut ffi::wlr_idle_inhibitor_v1;
 
     if IdleInhibitor::create(inhibitor, manager).is_err() {
@@ -183,7 +183,7 @@ unsafe extern "C" fn handle_inhibitor_destroy(
     listener: *mut ffi::wl_listener,
     _data: *mut std::ffi::c_void,
 ) {
-    let inhibitor = crate::container_of!(listener, IdleInhibitor, listen_destroy);
+    let inhibitor = crate::listener_owner!(listener, IdleInhibitor, listen_destroy);
     IdleInhibitor::destroy(inhibitor);
     let server = crate::shared::server_ptr();
     recount(server, &*crate::reentry::wm(server));

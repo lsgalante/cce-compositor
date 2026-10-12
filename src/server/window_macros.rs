@@ -44,6 +44,35 @@ macro_rules! cursor_mut {
     };
 }
 
+/// In a wlroots callback on a seat, its cursor or its relay: the id of the
+/// seat whose keyed listener at `$($field)+` — a path from the seat,
+/// `cursor.motion_listener` — was called (`crate::listener_id!`, which
+/// aborts if the seat its id names does not hold that listener). Unsafe:
+/// it reaches the window manager through the shared server.
+macro_rules! listener_seat {
+    ($listener:expr, $($field:tt)+) => {
+        crate::listener_id!(
+            $listener,
+            (*crate::reentry::wm(crate::shared::server_ptr())).seats,
+            crate::seat::SeatId,
+            $($field)+
+        )
+    };
+}
+
+/// `listener_seat!` as the seat's raw place in the store, for a callback
+/// that holds the seat beside the window manager (the store keeps raw
+/// pointers for that); returns early if the seat is gone.
+macro_rules! listener_seat_ptr {
+    ($listener:expr, $($field:tt)+) => {{
+        let sid = listener_seat!($listener, $($field)+);
+        match (*crate::reentry::wm(crate::shared::server_ptr())).seats.ptr(sid) {
+            Some(seat) => seat,
+            None => return,
+        }
+    }};
+}
+
 /// The window manager's output and seat stores as a `crate::ctx::Stores`,
 /// borrowed through their own field places — so it can be taken while a
 /// `window_mut!` borrow of `wm.windows` is live. Safe: the borrow is tied

@@ -779,7 +779,7 @@ unsafe extern "C" fn handle_lock_fallback(_data: *mut std::ffi::c_void) -> std::
 }
 
 unsafe extern "C" fn handle_session_active(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let idle = &mut *crate::container_of!(listener, IdleManager, session_active);
+    let idle = &mut *crate::listener_owner!(listener, IdleManager, session_active);
     let server = crate::shared::server_ptr();
     let session = (*server).session;
     if session.is_null() || !ffi::river_wlr_session_get_active(session) {

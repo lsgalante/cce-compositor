@@ -227,7 +227,7 @@ unsafe extern "C" fn handle_request_configure(_listener: *mut ffi::wl_listener, 
 }
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let or = crate::container_of!(listener, XwaylandOverrideRedirect, destroy);
+    let or = crate::listener_owner!(listener, XwaylandOverrideRedirect, destroy);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     wm.unregister_override_redirect(or);
     // Unmap already did this for a mapped window; one destroyed unmapped
@@ -244,7 +244,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 }
 
 unsafe extern "C" fn handle_associate(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let or = crate::container_of!(listener, XwaylandOverrideRedirect, associate);
+    let or = crate::listener_owner!(listener, XwaylandOverrideRedirect, associate);
     handle_associate_impl(or);
     // An entry point: no window-manager borrow is live.
     (*or).xsurface().map_if_buffered();
@@ -259,13 +259,13 @@ unsafe fn handle_associate_impl(or: *mut XwaylandOverrideRedirect) {
 }
 
 unsafe extern "C" fn handle_dissociate(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let or = crate::container_of!(listener, XwaylandOverrideRedirect, dissociate);
+    let or = crate::listener_owner!(listener, XwaylandOverrideRedirect, dissociate);
     (*or).map.disconnect();
     (*or).unmap.disconnect();
 }
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let or = crate::container_of!(listener, XwaylandOverrideRedirect, map);
+    let or = crate::listener_owner!(listener, XwaylandOverrideRedirect, map);
     handle_map_impl(&mut *crate::reentry::wm(crate::shared::server_ptr()), or);
 }
 
@@ -325,7 +325,7 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, or: *mu
 }
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let or = crate::container_of!(listener, XwaylandOverrideRedirect, unmap);
+    let or = crate::listener_owner!(listener, XwaylandOverrideRedirect, unmap);
 
     (*or).set_geometry.disconnect();
     (*or).commit.disconnect();
@@ -361,17 +361,17 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
 }
 
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let or = crate::container_of!(listener, XwaylandOverrideRedirect, commit);
+    let or = crate::listener_owner!(listener, XwaylandOverrideRedirect, commit);
     (*or).apply_x11_scale();
 }
 
 unsafe extern "C" fn handle_set_geometry(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let or = crate::container_of!(listener, XwaylandOverrideRedirect, set_geometry);
+    let or = crate::listener_owner!(listener, XwaylandOverrideRedirect, set_geometry);
     (*or).place();
 }
 
 unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
-    let or = crate::container_of!(listener, XwaylandOverrideRedirect, set_override_redirect);
+    let or = crate::listener_owner!(listener, XwaylandOverrideRedirect, set_override_redirect);
     let xsurface = (*or).xsurface().ptr();
     log::debug!("xwayland surface unset override redirect");
     assert!(!(*xsurface).override_redirect);

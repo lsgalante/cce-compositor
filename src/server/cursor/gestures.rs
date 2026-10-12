@@ -32,7 +32,7 @@ pub(crate) fn swipe_focus_vector(binds: &[crate::config::GestureBind], fingers: 
 
 pub(crate) unsafe extern "C" fn handle_swipe_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = (*crate::container_of!(listener, Cursor, swipe_begin_listener)).sid;
+    let sid = listener_seat!(listener, cursor.swipe_begin_listener);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_swipe_begin(wm, sid, &*(data as *const ffi::wlr_pointer_swipe_begin_event), sys);
 }
@@ -81,7 +81,7 @@ pub(crate) fn on_swipe_begin(wm: &mut crate::window_manager::WindowManager, sid:
 
 pub(crate) unsafe extern "C" fn handle_swipe_update(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = (*crate::container_of!(listener, Cursor, swipe_update_listener)).sid;
+    let sid = listener_seat!(listener, cursor.swipe_update_listener);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_swipe_update(wm, sid, &*(data as *const ffi::wlr_pointer_swipe_update_event), sys);
 }
@@ -353,7 +353,7 @@ pub(crate) fn on_swipe_update(wm: &mut crate::window_manager::WindowManager, sid
 
 pub(crate) unsafe extern "C" fn handle_swipe_end(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = (*crate::container_of!(listener, Cursor, swipe_end_listener)).sid;
+    let sid = listener_seat!(listener, cursor.swipe_end_listener);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_swipe_end(wm, sid, &*(data as *const ffi::wlr_pointer_swipe_end_event), sys);
 }
@@ -458,7 +458,7 @@ pub(crate) fn run_gesture_action(
 
 pub(crate) unsafe extern "C" fn handle_pinch_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = (*crate::container_of!(listener, Cursor, pinch_begin_listener)).sid;
+    let sid = listener_seat!(listener, cursor.pinch_begin_listener);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_pinch_begin(wm, sid, &*(data as *const ffi::wlr_pointer_pinch_begin_event), sys);
 }
@@ -534,7 +534,7 @@ pub(crate) fn on_pinch_begin(wm: &mut crate::window_manager::WindowManager, sid:
 
 pub(crate) unsafe extern "C" fn handle_pinch_update(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = (*crate::container_of!(listener, Cursor, pinch_update_listener)).sid;
+    let sid = listener_seat!(listener, cursor.pinch_update_listener);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_pinch_update(wm, sid, &*(data as *const ffi::wlr_pointer_pinch_update_event), sys);
 }
@@ -614,7 +614,7 @@ pub(crate) fn on_pinch_update(wm: &mut crate::window_manager::WindowManager, sid
 
 pub(crate) unsafe extern "C" fn handle_pinch_end(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let sid = (*crate::container_of!(listener, Cursor, pinch_end_listener)).sid;
+    let sid = listener_seat!(listener, cursor.pinch_end_listener);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     on_pinch_end(wm, sid, &*(data as *const ffi::wlr_pointer_pinch_end_event), sys);
 }
@@ -660,8 +660,8 @@ pub(crate) fn on_pinch_end(wm: &mut crate::window_manager::WindowManager, sid: c
 
 pub(crate) unsafe extern "C" fn handle_hold_begin(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let cursor = crate::container_of!(listener, Cursor, hold_begin_listener);
-    let (sid, wlr_seat) = ((*cursor).sid, (*cursor).wlr_seat().ptr());
+    let seat = listener_seat_ptr!(listener, cursor.hold_begin_listener);
+    let (sid, wlr_seat) = ((*seat).id, (*seat).cursor.wlr_seat().ptr());
     let event = data as *mut ffi::wlr_pointer_hold_begin_event;
 
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
@@ -680,8 +680,8 @@ pub(crate) unsafe extern "C" fn handle_hold_begin(listener: *mut ffi::wl_listene
 
 pub(crate) unsafe extern "C" fn handle_hold_end(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let cursor = crate::container_of!(listener, Cursor, hold_end_listener);
-    let (sid, wlr_seat) = ((*cursor).sid, (*cursor).wlr_seat().ptr());
+    let seat = listener_seat_ptr!(listener, cursor.hold_end_listener);
+    let (sid, wlr_seat) = ((*seat).id, (*seat).cursor.wlr_seat().ptr());
     let event = data as *mut ffi::wlr_pointer_hold_end_event;
 
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
