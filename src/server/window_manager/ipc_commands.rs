@@ -49,7 +49,7 @@ impl WindowManager {
 
                 let region = region_logical.map(|(x, y, w, h)| {
                     // logical → buffer px via the output's effective scale.
-                    let buf_w = target_out.wlr_output.width() as f64;
+                    let buf_w = target_out.wlr_output().width() as f64;
                     let layout_w = target_out.sent.box_layout().width.max(1) as f64;
                     let scale = buf_w / layout_w;
                     ffi::wlr_box {
@@ -74,7 +74,7 @@ impl WindowManager {
                     path,
                     self.pending_ipc_reply.take(),
                 ));
-                target_out.wlr_output.schedule_frame();
+                target_out.wlr_output().schedule_frame();
                 String::new()
             }
             Some(other) => format!("error: unknown screenshot target: {}\n", other),
@@ -1051,11 +1051,11 @@ impl WindowManager {
                 let as_json = parts.get(1).copied() == Some("--json");
                 let mut out = String::new();
                 for output in self.outputs.values() {
-                    let wlr_output = output.wlr_output.ptr();
+                    let wlr_output = output.wlr_output().ptr();
                     if wlr_output.is_null() {
                         continue;
                     }
-                    let name = output.wlr_output.name();
+                    let name = output.wlr_output().name();
                     let (mut mm_w, mut mm_h) = (0i32, 0i32);
                     ffi::river_wlr_output_get_phys_size(wlr_output, &mut mm_w, &mut mm_h);
                     let source = if self.display.contains_key(&format!("mm_w_{}", name)) {
@@ -1159,7 +1159,7 @@ impl WindowManager {
                                 vx: w.virtual_x,
                                 vy: w.virtual_y,
                                 x11: match w.impl_type() {
-                                    crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => Some((*xw).xsurface.window_id()),
+                                    crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => Some((*xw).xsurface().window_id()),
                                     _ => None,
                                 },
                                 cell: cell.clone(),
@@ -1319,7 +1319,7 @@ impl WindowManager {
                             return "error: scroll factor cannot be negative\n".to_string();
                         }
                         let mut found = false;
-                        for device in input.devices.ptrs() {
+                        for device in input.devices() {
                             let name_ptr = ffi::river_wlr_input_device_get_name((*device).wlr_device);
                             if !name_ptr.is_null() {
                                 let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
@@ -1608,9 +1608,9 @@ impl WindowManager {
                     for seat in self.seats.ptrs() {
                         (*seat).ensure_synthetic_keyboard();
                         crate::seat::Seat::handle_activity(self, (*seat).id, sys);
-                        (*seat).wlr_seat.keyboard_notify_key(crate::util::msec_timestamp(), keycode, state);
+                        (*seat).wlr_seat().keyboard_notify_key(crate::util::msec_timestamp(), keycode, state);
                         if let Some(name) = mod_name {
-                            let kb = (*seat).wlr_seat.keyboard();
+                            let kb = (*seat).wlr_seat().keyboard();
                             if !kb.is_null() && !(*kb).keymap.is_null() {
                                 let idx = ffi::xkb_keymap_mod_get_index((*kb).keymap, name.as_ptr() as *const _);
                                 if idx != ffi::XKB_MOD_INVALID {
@@ -1624,7 +1624,7 @@ impl WindowManager {
                                     // real keyboard keeps working mid-injection.
                                     let mut mods = (*kb).modifiers;
                                     mods.depressed |= self.injected_key_mods;
-                                    (*seat).wlr_seat.keyboard_notify_modifiers(&mut mods);
+                                    (*seat).wlr_seat().keyboard_notify_modifiers(&mut mods);
                                 }
                             }
                         }
@@ -1650,8 +1650,8 @@ impl WindowManager {
                         (*seat).ensure_synthetic_keyboard();
                         crate::seat::Seat::handle_activity(self, (*seat).id, sys);
                         let time = crate::util::msec_timestamp();
-                        (*seat).wlr_seat.keyboard_notify_key(time, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
-                        (*seat).wlr_seat.keyboard_notify_key(time + 1, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);
+                        (*seat).wlr_seat().keyboard_notify_key(time, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
+                        (*seat).wlr_seat().keyboard_notify_key(time + 1, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);
                     }
                     "ok\n".to_string()
                 } else {

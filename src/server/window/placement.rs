@@ -197,10 +197,10 @@ impl Window {
                         // be deduplicated against this mirror — see
                         // `xwayland_window::needs_configure`, which also checks
                         // the geometry the compositor has actually sent.
-                        if !xwindow.is_null() && !(*xwindow).xsurface.is_null() {
-                            let s = (*xwindow).xsurface.x11_scale();
-                            (*(*xwindow).xsurface.ptr()).width = crate::xwayland_window::to_x11(saved.width as i32, s) as u16;
-                            (*(*xwindow).xsurface.ptr()).height = crate::xwayland_window::to_x11(saved.height as i32, s) as u16;
+                        if !xwindow.is_null() && !(*xwindow).xsurface().is_null() {
+                            let s = (*xwindow).xsurface().x11_scale();
+                            (*(*xwindow).xsurface().ptr()).width = crate::xwayland_window::to_x11(saved.width as i32, s) as u16;
+                            (*(*xwindow).xsurface().ptr()).height = crate::xwayland_window::to_x11(saved.height as i32, s) as u16;
                         }
                     }
                     _ => {}

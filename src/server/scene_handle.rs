@@ -290,7 +290,14 @@ impl<K: Kind> Handle<K> {
     /// Call `f` on every buffer node under this one (itself included), with
     /// its position relative to this node, in wlroots' order. Does nothing
     /// if the node is gone. Each buffer `f` gets is live for that call.
-    pub fn for_each_buffer<F: FnMut(*mut ffi::wlr_scene_buffer, i32, i32)>(&self, mut f: F) {
+    ///
+    /// # Safety
+    /// `f` must not change the shape of the walked subtree — destroy,
+    /// reparent or restack any node in it, or run anything that can: the
+    /// walk is scenefx's plain `wl_list_for_each`, which reads each visited
+    /// node's link after `f` returns. Changing a buffer's own state (dest
+    /// size, position, opaque region) is fine.
+    pub unsafe fn for_each_buffer<F: FnMut(*mut ffi::wlr_scene_buffer, i32, i32)>(&self, mut f: F) {
         unsafe extern "C" fn trampoline<F: FnMut(*mut ffi::wlr_scene_buffer, i32, i32)>(
             buffer: *mut ffi::wlr_scene_buffer,
             sx: i32,
@@ -305,7 +312,8 @@ impl<K: Kind> Handle<K> {
         let n = self.node();
         if !n.is_null() {
             // SAFETY: a non-null `node()` is a live node; the iterator only
-            // runs during this call, while `f` is borrowed.
+            // runs during this call, while `f` is borrowed, and `f` leaves
+            // the subtree's shape alone (this fn's contract).
             unsafe { ffi::wlr_scene_node_for_each_buffer(n, Some(trampoline::<F>), &mut f as *mut F as *mut std::ffi::c_void) };
         }
     }

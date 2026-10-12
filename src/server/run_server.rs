@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use clap::Parser;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::os::raw::c_char;
 
 use crate::ffi;
@@ -246,41 +246,19 @@ pub fn run_server() {
 
     let child_pgid = if let Some(ref cmd) = startup_command {
         log::info!("running init executable '{}'", cmd);
-        unsafe {
-            match nix::unistd::fork() {
-                Ok(nix::unistd::ForkResult::Child) => {
-                    process::cleanup_child();
-                    std::env::set_var("WAYLAND_DISPLAY", &socket_str);
-
-                    if !args.no_xwayland && !server.xwayland.is_null() {
-                        let xwayland_cast = server.xwayland as *mut server::WlrXwayland;
-                        if !(*xwayland_cast).display_name.is_null() {
-                            let display_name = CStr::from_ptr((*xwayland_cast).display_name)
-                                .to_string_lossy()
-                                .into_owned();
-                            std::env::set_var("DISPLAY", display_name);
-                        }
-                    }
-
-                    let cmd_c = CString::new(cmd.clone()).unwrap();
-                    let sh_c = CString::new("/bin/sh").unwrap();
-                    let c_c = CString::new("-c").unwrap();
-                    let args = [sh_c.as_c_str(), c_c.as_c_str(), cmd_c.as_c_str()];
-                    
-                    let env: Vec<CString> = std::env::vars()
-                        .map(|(k, v)| CString::new(format!("{}={}", k, v)).unwrap())
-                        .collect();
-                    let env_ptrs: Vec<&CStr> = env.iter().map(|s| s.as_c_str()).collect();
-
-                    eprintln!("[execve] target cmd: {}, env WAYLAND_DISPLAY: {:?}", cmd, std::env::var("WAYLAND_DISPLAY"));
-                    let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
-                    std::process::exit(1);
-                }
-                Ok(nix::unistd::ForkResult::Parent { child }) => Some(child),
-                Err(_) => {
-                    log::error!("failed to fork child process");
-                    None
-                }
+        let display = if args.no_xwayland { String::new() } else { crate::shared::handles().xwayland.display_name() };
+        let mut env: Vec<(&str, &str)> = vec![("WAYLAND_DISPLAY", &socket_str)];
+        if !display.is_empty() {
+            env.push(("DISPLAY", &display));
+        }
+        eprintln!("[execve] target cmd: {}, env WAYLAND_DISPLAY: {:?}", cmd, socket_str);
+        // The child leads its own session (`cleanup_child`'s setsid), so
+        // its pid is the process group the guard signals on the way out.
+        match process::spawn_sh(cmd, &env) {
+            Ok(child) => Some(child),
+            Err(e) => {
+                log::error!("failed to fork child process: {}", e);
+                None
             }
         }
     } else {

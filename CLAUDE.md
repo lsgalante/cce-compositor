@@ -500,14 +500,31 @@ The same pattern as `Timer`, for wlroots objects (`wlr.rs`): `Wlr<T>` is
 `from_raw` are the `unsafe` step (the object must stay live until the field
 lets go: `take`, another `set`, or drop), and the methods are SAFE and no-op
 (or return null / 0 / false) when unset. Fields on it: `Seat::wlr_seat`,
-`Cursor::{wlr_cursor, xcursor_manager, wlr_seat}`, `TabletTool::wlr_cursor`,
-`Output::wlr_output`, and every `shared::Handles` field but `default_seat`.
+`Cursor::{wlr_cursor, xcursor_manager, wlr_seat}`,
+`TabletTool::{wlr_cursor, xcursor_manager}`, `Output::{wlr_output,
+scene_output}`, `XdgToplevel::wlr_toplevel`, the X11 windows' `xsurface`,
+`Window::capture_scene`, `OutputManager`'s output-management global, and
+every `shared::Handles` field but `default_seat`.
 `Cursor::wlr_seat` is a SECOND hold on the seat's `wlr_seat`, taken in
 `Cursor::init` and released in `Cursor::deinit` (which `Seat::destroy` runs
 before it destroys the `wlr_seat`), so pointer paths reach the seat without
 `(*self.seat)`. An owner's destroy path frees through `take()`
-(`wlr_seat_destroy(seat.wlr_seat.take())`); the output's destroy handler
+(`wlr_seat_destroy(seat.wlr_seat().take())`); the output's destroy handler
 `take()`s before wlroots frees it.
+
+Since 2026-10-12 every `Wlr` field reachable through `&mut` is PRIVATE and
+read through a same-named accessor (`seat.wlr_seat()`, `output.wlr_output()`,
+`xwindow.xsurface()`): a `mem::swap` or `replace` from another module would
+move a hold where its owner's destroy path cannot clear it, so a public one
+is a soundness hole, not a style choice. Inside the defining module use the
+field directly where a split borrow needs it. The same goes for anything a
+safe function trusts — a registry (`InputManager::devices()`,
+`IdleInhibitManager`'s inhibitors), a raw field a SAFETY note cites
+(`LockManager::lock`, `XdgToplevel::decoration`, `Scene::wlr_scene`): make it
+private, with an `unsafe` setter if other modules must write it. Every shared
+`Handles` and `Scene` value is reached through `&'static`, so its fields may
+stay public. Anything that changes the shape of a scene subtree is off
+limits inside `Handle::for_each_buffer` (an `unsafe fn` for that reason).
 
 Only calls whose other arguments are values (or another `Wlr`) are wrapped:
 a call that also passes a raw surface, device or keyboard pointer stays an

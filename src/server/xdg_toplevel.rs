@@ -20,7 +20,7 @@ pub struct XdgToplevel {
     pub window: crate::window::WindowId,
     /// This surface's wlroots toplevel; the `XdgToplevel` is freed in its
     /// destroy handler, before the toplevel goes.
-    pub wlr_toplevel: crate::wlr::Wlr<ffi::wlr_xdg_toplevel>,
+    wlr_toplevel: crate::wlr::Wlr<ffi::wlr_xdg_toplevel>,
     /// The live decoration object, or null: `XdgDecoration::init` sets it
     /// and `deinit` clears it. Private, because the safe `configure` trusts
     /// it.
@@ -60,6 +60,12 @@ pub struct XdgDecoration {
 }
 
 impl XdgToplevel {
+    /// The `wlr_toplevel` hold; private, because a `Wlr` moved or swapped into
+    /// another field would be a hold its owner's destroy path never clears.
+    pub fn wlr_toplevel(&self) -> &crate::wlr::Wlr<ffi::wlr_xdg_toplevel> {
+        &self.wlr_toplevel
+    }
+
     pub unsafe fn create(
     wm: &mut crate::window_manager::WindowManager,
         wlr_toplevel: *mut ffi::wlr_xdg_toplevel,
@@ -105,7 +111,7 @@ impl XdgToplevel {
         (*raw).unmap.connect(ffi::river_wlr_surface_get_unmap_signal(surface), handle_unmap);
 
         let surfaces_tree = this.surfaces.tree.raw();
-        let capture_tree = this.capture_scene.tree();
+        let capture_tree = this.capture_scene().tree();
 
         let scene_xdg = ffi::wlr_scene_xdg_surface_create(surfaces_tree, base);
         if scene_xdg.is_null() {
@@ -275,14 +281,14 @@ impl XdgToplevel {
             }
         }
 
-        self.wlr_toplevel.set_activated(scheduled.activated);
-        self.wlr_toplevel.set_tiled(scheduled.tiled,
+        self.wlr_toplevel().set_activated(scheduled.activated);
+        self.wlr_toplevel().set_tiled(scheduled.tiled,
         );
-        self.wlr_toplevel.set_wm_capabilities(scheduled.capabilities,
+        self.wlr_toplevel().set_wm_capabilities(scheduled.capabilities,
         );
-        self.wlr_toplevel.set_maximized(scheduled.maximized);
-        self.wlr_toplevel.set_fullscreen(scheduled.inform_fullscreen);
-        self.wlr_toplevel.set_resizing(scheduled.resizing);
+        self.wlr_toplevel().set_maximized(scheduled.maximized);
+        self.wlr_toplevel().set_fullscreen(scheduled.inform_fullscreen);
+        self.wlr_toplevel().set_resizing(scheduled.resizing);
         
         if !self.decoration.is_null() {
             let mode = ffi::wlr_xdg_toplevel_decoration_v1_mode_WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
@@ -293,7 +299,7 @@ impl XdgToplevel {
         }
 
         if scheduled.bounds.width != sent.bounds.width || scheduled.bounds.height != sent.bounds.height {
-            self.wlr_toplevel.set_bounds(scheduled.bounds.width as i32, scheduled.bounds.height as i32);
+            self.wlr_toplevel().set_bounds(scheduled.bounds.width as i32, scheduled.bounds.height as i32);
         }
 
         let width = if let Some(w) = scheduled.width {
@@ -319,7 +325,7 @@ impl XdgToplevel {
             );
         }
 
-        let configure_serial = self.wlr_toplevel.set_size(width as i32, height as i32);
+        let configure_serial = self.wlr_toplevel().set_size(width as i32, height as i32);
 
         window.configure_sent = window.configure_scheduled.clone();
         window.configure_sent.width = Some(width);
@@ -401,7 +407,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     (*toplevel).set_title.disconnect();
     (*toplevel).set_app_id.disconnect();
 
-    let base = (*toplevel).wlr_toplevel.base();
+    let base = (*toplevel).wlr_toplevel().base();
     ffi::river_wlr_xdg_surface_set_data(base, std::ptr::null_mut());
     let surface = ffi::river_wlr_xdg_surface_get_surface(base);
     ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
@@ -437,12 +443,12 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     if let Err(e) = crate::window::Window::map(wm, id) {
         log::error!("Window map failed: {}", e);
-        let client = ffi::wl_resource_get_client((*(*toplevel).wlr_toplevel.ptr()).resource);
+        let client = ffi::wl_resource_get_client((*(*toplevel).wlr_toplevel().ptr()).resource);
         ffi::wl_client_post_no_memory(client);
         return;
     }
 
-    let base = (*toplevel).wlr_toplevel.base();
+    let base = (*toplevel).wlr_toplevel().base();
     let mut new_geometry = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
     (*toplevel).geometry = new_geometry;
@@ -454,7 +460,7 @@ unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std
     // but that next commit will be the fullscreen one, so seed the box with
     // the size the window mapped at, or leaving fullscreen restores an
     // output-sized window.
-    if ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel.ptr()) {
+    if ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel().ptr()) {
         let id = (*toplevel).window;
         let this = window_mut!(wm, id);
         if this.box_geom.width <= 0 && this.box_geom.height <= 0 && new_geometry.width > 0 && new_geometry.height > 0 {
@@ -497,7 +503,7 @@ unsafe extern "C" fn handle_new_popup(listener: *mut ffi::wl_listener, data: *mu
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let this = window_mut!(wm, id);
     let wlr_xdg_popup = data as *mut ffi::wlr_xdg_popup;
-    let capture_node = this.capture_scene.tree();
+    let capture_node = this.capture_scene().tree();
     if let Err(e) = crate::xdg_popup::XdgPopup::create(
         wlr_xdg_popup,
         this.popup_tree.raw(),
@@ -545,7 +551,7 @@ unsafe extern "C" fn handle_ack_configure(
         _ => {}
     }
 
-    let base = (*toplevel).wlr_toplevel.base();
+    let base = (*toplevel).wlr_toplevel().base();
     let mut new_geometry = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
     (*toplevel).geometry = new_geometry;
@@ -631,7 +637,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene());
         crate::shared::pending().dirty_windowing();
     }
-    let base = (*toplevel).wlr_toplevel.base();
+    let base = (*toplevel).wlr_toplevel().base();
     let old_geometry = (*toplevel).geometry;
     let mut new_geometry = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut new_geometry);
@@ -719,7 +725,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         (radius as f64 * scale) as i32);
     this.sync_backdrop_compress();
 
-    let capture_node = this.capture_scene.tree() as *mut ffi::wlr_scene_node;
+    let capture_node = this.capture_scene().tree() as *mut ffi::wlr_scene_node;
     let mut geom = std::mem::zeroed();
     ffi::river_wlr_xdg_surface_get_geometry(base, &mut geom);
     ffi::wlr_scene_subsurface_tree_set_clip(capture_node, &geom);
@@ -728,7 +734,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let mut min_h = 0;
     let mut max_w = 0;
     let mut max_h = 0;
-    ffi::river_wlr_xdg_toplevel_get_requested_min_max_size((*toplevel).wlr_toplevel.ptr(), &mut min_w, &mut min_h, &mut max_w, &mut max_h);
+    ffi::river_wlr_xdg_toplevel_get_requested_min_max_size((*toplevel).wlr_toplevel().ptr(), &mut min_w, &mut min_h, &mut max_w, &mut max_h);
 
     this.set_dimensions_hint(crate::window::DimensionsHint {
         min_width: min_w as u32,
@@ -947,7 +953,7 @@ unsafe extern "C" fn handle_request_fullscreen(listener: *mut ffi::wl_listener, 
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
 
     crate::shared::pending().dirty_windowing();
-    let enter = ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel.ptr());
+    let enter = ffi::river_wlr_xdg_toplevel_get_requested_fullscreen((*toplevel).wlr_toplevel().ptr());
     wm.apply_client_fullscreen(id, enter);
 }
 
@@ -964,7 +970,7 @@ unsafe extern "C" fn handle_request_maximize(listener: *mut ffi::wl_listener, _d
         return;
     }
 
-    if ffi::river_wlr_xdg_toplevel_get_requested_maximized((*toplevel).wlr_toplevel.ptr()) {
+    if ffi::river_wlr_xdg_toplevel_get_requested_maximized((*toplevel).wlr_toplevel().ptr()) {
         this.tiling_mode = crate::tiling::TilingMode::Tiled;
         this.mode_locked = true;
         this.wm_scheduled.maximize_requested = crate::window::MaximizeRequest::Maximize;
@@ -996,7 +1002,7 @@ unsafe extern "C" fn handle_request_move(
     let this = window_mut!(wm, id);
     let event = data as *mut ffi::wlr_xdg_toplevel_move_event;
     let Some(sid) = crate::seat::Seat::id_of((*(*event).seat).seat) else { return };
-    let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat.ptr()) else { return };
+    let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat().ptr()) else { return };
 
     if ffi::wlr_seat_validate_pointer_grab_serial(wlr_seat, std::ptr::null_mut(), (*event).serial) {
         let initial_mode = this.tiling_mode;
@@ -1073,7 +1079,7 @@ unsafe extern "C" fn handle_request_resize(
     }
 
     let Some(sid) = crate::seat::Seat::id_of((*(*event).seat).seat) else { return };
-    let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat.ptr()) else { return };
+    let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat().ptr()) else { return };
 
     if ffi::wlr_seat_validate_pointer_grab_serial(wlr_seat, std::ptr::null_mut(), (*event).serial) {
         let initial_mode = this.tiling_mode;

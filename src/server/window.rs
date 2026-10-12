@@ -456,6 +456,12 @@ pub use borders::*;
 /// a generational key, so one that outlives its window looks up as gone.
 pub use crate::policy::api::WindowId;
 impl Window {
+    /// The `capture_scene` hold; private, because a `Wlr` moved or swapped into
+    /// another field would be a hold its owner's destroy path never clears.
+    pub fn capture_scene(&self) -> &crate::wlr::Wlr<ffi::wlr_scene> {
+        &self.capture_scene
+    }
+
     pub fn id(&self) -> WindowId {
         WindowId(self.ref_key)
     }
@@ -534,7 +540,7 @@ pub struct Window {
     /// reaches zero, and the client is waiting on a deadline to exit.
     pub map_fade_step: f32,
     pub popup_tree: SceneTree,
-    pub capture_scene: crate::wlr::Wlr<ffi::wlr_scene>,
+    capture_scene: crate::wlr::Wlr<ffi::wlr_scene>,
     pub capture_source: *mut ffi::wlr_ext_image_capture_source_v1,
     pub tiling_mode: crate::tiling::TilingMode,
     pub mode_locked: bool,
@@ -1115,14 +1121,14 @@ impl Window {
                 if toplevel.is_null() {
                     std::ptr::null()
                 } else {
-                    ffi::river_wlr_xdg_toplevel_get_title((*toplevel).wlr_toplevel.ptr())
+                    ffi::river_wlr_xdg_toplevel_get_title((*toplevel).wlr_toplevel().ptr())
                 }
             }
             WindowImpl::Xwayland(xwindow) => {
                 if xwindow.is_null() {
                     std::ptr::null()
                 } else {
-                    (*(*xwindow).xsurface.ptr()).title
+                    (*(*xwindow).xsurface().ptr()).title
                 }
             }
             WindowImpl::Destroying => std::ptr::null(),
@@ -1137,14 +1143,14 @@ impl Window {
                 if toplevel.is_null() {
                     std::ptr::null()
                 } else {
-                    ffi::river_wlr_xdg_toplevel_get_app_id((*toplevel).wlr_toplevel.ptr())
+                    ffi::river_wlr_xdg_toplevel_get_app_id((*toplevel).wlr_toplevel().ptr())
                 }
             }
             WindowImpl::Xwayland(xwindow) => {
                 if xwindow.is_null() {
                     std::ptr::null()
                 } else {
-                    (*(*xwindow).xsurface.ptr()).class
+                    (*(*xwindow).xsurface().ptr()).class
                 }
             }
             WindowImpl::Destroying => std::ptr::null(),
@@ -1190,7 +1196,7 @@ impl Window {
                 // SAFETY: as `Window::get_title`: `impl_type` names this window's
                 // live implementation (`set_impl`'s contract), and an impl's wlroots
                 // objects outlive it.
-                1.0 / unsafe { (*xwindow).xsurface.x11_scale() } as f64
+                1.0 / unsafe { (*xwindow).xsurface().x11_scale() } as f64
             }
             // SAFETY: `x11_scale_for` takes a null surface (no exemption).
             WindowImpl::Xwayland(_) => 1.0 / unsafe { crate::xwayland_window::x11_scale_for(std::ptr::null()) } as f64,
@@ -1214,7 +1220,7 @@ impl Window {
         match self.impl_type {
             // SAFETY: as `Window::get_title`: `impl_type` names this
             // window's live implementation (`set_impl`'s contract).
-            WindowImpl::Xwayland(xwindow) if !xwindow.is_null() => Some(unsafe { (*xwindow).xsurface.window_id() }),
+            WindowImpl::Xwayland(xwindow) if !xwindow.is_null() => Some(unsafe { (*xwindow).xsurface().window_id() }),
             _ => None,
         }
     }
@@ -1231,7 +1237,7 @@ impl Window {
                     if toplevel.is_null() {
                         None
                     } else {
-                        let wlr_parent = ffi::river_wlr_xdg_toplevel_get_parent((*toplevel).wlr_toplevel.ptr());
+                        let wlr_parent = ffi::river_wlr_xdg_toplevel_get_parent((*toplevel).wlr_toplevel().ptr());
                         if wlr_parent.is_null() {
                             None
                         } else {
@@ -1249,7 +1255,7 @@ impl Window {
                     if xwindow.is_null() {
                         None
                     } else {
-                        let parent_xsurface = (*xwindow).xsurface.parent();
+                        let parent_xsurface = (*xwindow).xsurface().parent();
                         if parent_xsurface.is_null() {
                             None
                         } else {
@@ -1278,7 +1284,7 @@ impl Window {
                     if toplevel.is_null() {
                         0
                     } else {
-                        let base = (*toplevel).wlr_toplevel.base();
+                        let base = (*toplevel).wlr_toplevel().base();
                         let surface = ffi::river_wlr_xdg_surface_get_surface(base);
                         if surface.is_null() {
                             0
@@ -1305,7 +1311,7 @@ impl Window {
                     if xwindow.is_null() {
                         0
                     } else {
-                        (*xwindow).xsurface.pid()
+                        (*xwindow).xsurface().pid()
                     }
                 }
                 WindowImpl::Destroying => 0,
@@ -1341,10 +1347,10 @@ impl Window {
             let WindowImpl::Xwayland(xwindow) = self.impl_type else {
                 return false;
             };
-            if xwindow.is_null() || (*xwindow).xsurface.is_null() {
+            if xwindow.is_null() || (*xwindow).xsurface().is_null() {
                 return false;
             }
-            let xs = (*xwindow).xsurface.ptr();
+            let xs = (*xwindow).xsurface().ptr();
             if !(*xs).parent.is_null() || !(*xs).skip_taskbar || (*xs).hints.is_null() {
                 return false;
             }
@@ -1681,8 +1687,8 @@ impl Window {
         // live implementation (`set_impl`'s contract).
         unsafe {
             match self.impl_type {
-                WindowImpl::Toplevel(toplevel) if !toplevel.is_null() => (*toplevel).wlr_toplevel.send_close(),
-                WindowImpl::Xwayland(xwindow) if !xwindow.is_null() => (*xwindow).xsurface.close(),
+                WindowImpl::Toplevel(toplevel) if !toplevel.is_null() => (*toplevel).wlr_toplevel().send_close(),
+                WindowImpl::Xwayland(xwindow) if !xwindow.is_null() => (*xwindow).xsurface().close(),
                 _ => {}
             }
         }
@@ -1724,7 +1730,7 @@ impl Window {
         // Left behind they would both leak and keep a SceneNodeData pointing
         // at this freed window for the next hit test to find.
         this.border.tree.destroy();
-        this.capture_scene.destroy();
+        this.capture_scene().destroy();
 
         wm.render_list_remove(id);
 
@@ -1837,15 +1843,15 @@ impl Window {
                 if toplevel.is_null() {
                     std::ptr::null_mut()
                 } else {
-                    let base = (*toplevel).wlr_toplevel.base();
+                    let base = (*toplevel).wlr_toplevel().base();
                     ffi::river_wlr_xdg_surface_get_surface(base)
                 }
             }
             WindowImpl::Xwayland(xwindow) => {
-                if xwindow.is_null() || (*xwindow).xsurface.is_null() {
+                if xwindow.is_null() || (*xwindow).xsurface().is_null() {
                     std::ptr::null_mut()
                 } else {
-                    (*xwindow).xsurface.surface()
+                    (*xwindow).xsurface().surface()
                 }
             }
             _ => std::ptr::null_mut(),
@@ -2209,10 +2215,10 @@ impl Window {
             }
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
-                    let s = (*xwindow).xsurface.x11_scale();
-                    let mut w = crate::xwayland_window::from_x11((*xwindow).xsurface.width() as i32, s) as u32;
-                    let mut h = crate::xwayland_window::from_x11((*xwindow).xsurface.height() as i32, s) as u32;
-                    let has_parent = !(*xwindow).xsurface.parent().is_null();
+                    let s = (*xwindow).xsurface().x11_scale();
+                    let mut w = crate::xwayland_window::from_x11((*xwindow).xsurface().width() as i32, s) as u32;
+                    let mut h = crate::xwayland_window::from_x11((*xwindow).xsurface().height() as i32, s) as u32;
+                    let has_parent = !(*xwindow).xsurface().parent().is_null();
                     if self.is_wine() && !has_parent && !self.is_fullscreen() {
                         w = w.saturating_sub((crate::xwayland_window::WINE_MARGIN * 2) as u32);
                         h = h.saturating_sub((crate::xwayland_window::WINE_MARGIN * 2) as u32);
@@ -2550,7 +2556,7 @@ impl Window {
                 // X11 window is its own allocation, apart from `self`.
                 let xwindow = unsafe { &mut *xwindow };
                 if !xwindow.surface_tree.is_null() {
-                    let has_parent = !xwindow.xsurface.parent().is_null();
+                    let has_parent = !xwindow.xsurface().parent().is_null();
                     if self.is_wine() && !has_parent && !self.is_fullscreen() {
                         xwindow.surface_tree.set_position(-16, -16);
                     } else {
@@ -2731,7 +2737,9 @@ impl Window {
 /// briefly at the old zoom, which restore corrects.
 fn scale_surface_buffers(tree: &SceneTree, scale_x: f64, scale_y: f64, pin: bool) {
     let ancestor = tree.node();
-    tree.for_each_buffer(|buffer, _sx, _sy| {
+    // SAFETY: the closure only sets each buffer's dest size, position and
+    // opaque region; it destroys, reparents and restacks nothing.
+    unsafe { tree.for_each_buffer(|buffer, _sx, _sy| {
         // SAFETY: `buffer` is live for this call (`for_each_buffer`), and so
         // are its surface and the scene nodes between it and `ancestor`,
         // the tree being walked.
@@ -2768,7 +2776,7 @@ fn scale_surface_buffers(tree: &SceneTree, scale_x: f64, scale_y: f64, pin: bool
             // axis.
             ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, scale_x.min(scale_y));
         }
-    });
+    }) };
 }
 
 /// A surface buffer's visible extent for the scaling passes: `(width,
@@ -2832,15 +2840,15 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
     // whole window-width to the left and made it track the pointer at double
     // speed, every X11 left/top drag at scale 2.
     if let WindowImpl::Xwayland(xwindow) = this.impl_type {
-        if !xwindow.is_null() && !(*xwindow).xsurface.is_null() && this.resize_edges.is_some() {
-            let surface = (*xwindow).xsurface.surface();
+        if !xwindow.is_null() && !(*xwindow).xsurface().is_null() && this.resize_edges.is_some() {
+            let surface = (*xwindow).xsurface().surface();
             if !surface.is_null() {
-                let s = (*xwindow).xsurface.x11_scale();
+                let s = (*xwindow).xsurface().x11_scale();
                 let mut w = crate::xwayland_window::from_x11(
                     ffi::river_wlr_surface_get_width(surface), s);
                 let mut h = crate::xwayland_window::from_x11(
                     ffi::river_wlr_surface_get_height(surface), s);
-                let has_parent = !(*xwindow).xsurface.parent().is_null();
+                let has_parent = !(*xwindow).xsurface().parent().is_null();
                 if this.is_wine() && !has_parent && !this.is_fullscreen() {
                     w = (w - crate::xwayland_window::WINE_MARGIN * 2).max(0);
                     h = (h - crate::xwayland_window::WINE_MARGIN * 2).max(0);

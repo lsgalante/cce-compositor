@@ -149,7 +149,7 @@ impl LockManager {
         let mut all_outputs_rendered_lock_surface = true;
 
         for output in outputs.values() {
-            if output.wlr_output.enabled() {
+            if output.wlr_output().enabled() {
                 match output.lock_render_state {
                     crate::output::LockRenderState::PendingUnlock
                     | crate::output::LockRenderState::Unlocked
@@ -234,8 +234,8 @@ impl LockManager {
         // (the idle timeout darkened them all) there is nothing to wait for,
         // and this call completes it now.
         for output in wm.outputs.values() {
-            if !output.wlr_output.is_null() && output.wlr_output.enabled() {
-                output.wlr_output.schedule_frame();
+            if !output.wlr_output().is_null() && output.wlr_output().enabled() {
+                output.wlr_output().schedule_frame();
             }
         }
         crate::shared::pending().dirty_windowing();

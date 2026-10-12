@@ -67,7 +67,7 @@ impl InputDevice {
         ffi::wl_list_init(&mut (*device).objects);
 
         // Insert into InputManager::devices
-        (*server).input_manager.devices.push_front(device);
+        (*server).input_manager.register_device(device);
 
         ffi::river_wlr_input_device_set_data(wlr_device, device as *mut _);
 
@@ -125,7 +125,7 @@ impl InputDevice {
 
         if let Some(name) = output_name {
             for output in outputs.ptrs() {
-                let wlr_output = (*output).wlr_output.ptr();
+                let wlr_output = (*output).wlr_output().ptr();
                 if !wlr_output.is_null() {
                     let wlr_name = std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name(wlr_output));
                     if wlr_name == name {
@@ -294,7 +294,7 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
     device.destroy_listener.disconnect();
 
     // Remove from InputManager::devices
-    (*crate::shared::server_ptr()).input_manager.devices.remove(device_ptr);
+    (*crate::shared::server_ptr()).input_manager.unregister_device(device_ptr);
 
     // Free wrapper memory
     let _boxed = Box::from_raw(device_ptr);
@@ -358,7 +358,7 @@ unsafe extern "C" fn input_device_assign_to_seat(
     }
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
-    let sid = wm.seats.values().find(|seat| seat.wlr_seat.name() == name_str).map(|seat| seat.id);
+    let sid = wm.seats.values().find(|seat| seat.wlr_seat().name() == name_str).map(|seat| seat.id);
     if let Some(sid) = sid {
         (*device).assign_to_seat(wm, Some(sid), sys);
     } else {
@@ -454,7 +454,7 @@ unsafe extern "C" fn input_device_map_to_output(
         ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TABLET => {
             let wm = &*crate::reentry::wm(crate::shared::server_ptr());
             if let Some(seat) = (*device).sid.and_then(|sid| wm.seats.get(sid)) {
-                ffi::wlr_cursor_map_input_to_output(seat.cursor.wlr_cursor.ptr(), (*device).wlr_device, wlr_output);
+                ffi::wlr_cursor_map_input_to_output(seat.cursor.wlr_cursor().ptr(), (*device).wlr_device, wlr_output);
             }
         }
         _ => {}
@@ -505,7 +505,7 @@ unsafe extern "C" fn input_device_map_to_rectangle(
             let wm = &*crate::reentry::wm(crate::shared::server_ptr());
             if let Some(seat) = (*device).sid.and_then(|sid| wm.seats.get(sid)) {
                 ffi::wlr_cursor_map_input_to_region(
-                    seat.cursor.wlr_cursor.ptr(),
+                    seat.cursor.wlr_cursor().ptr(),
                     (*device).wlr_device,
                     &mut (*device).config.map_to_rectangle,
                 );

@@ -127,6 +127,7 @@ enum wlr_output_adaptive_sync_status river_wlr_output_get_adaptive_sync_status(s
 
 bool river_wlr_output_get_enabled(struct wlr_output *output);
 struct wlr_output_mode *river_wlr_output_get_current_mode(struct wlr_output *output);
+bool river_wlr_output_has_mode(struct wlr_output *output, const struct wlr_output_mode *mode);
 int32_t river_wlr_output_get_width(struct wlr_output *output);
 int32_t river_wlr_output_get_height(struct wlr_output *output);
 int32_t river_wlr_output_get_refresh(struct wlr_output *output);

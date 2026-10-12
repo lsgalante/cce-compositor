@@ -126,7 +126,7 @@ impl WindowManager {
         crate::wm_scope!(mut);
         for output in self.outputs.values() {
             if output.sent.state == crate::output::OutputStateValue::Enabled {
-                output.wlr_output.schedule_frame();
+                output.wlr_output().schedule_frame();
             }
         }
     }

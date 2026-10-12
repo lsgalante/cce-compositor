@@ -29,7 +29,12 @@
 //!   ([`crate::shared::Handles`]) be `Wlr`s too.
 //!
 //! It is not `Clone`: a second copy of the pointer would be a second hold
-//! the owner's destroy path does not know to clear.
+//! the owner's destroy path does not know to clear. For the same reason a
+//! `Wlr` field reachable through `&mut` is PRIVATE, read through a
+//! same-named accessor (`seat.wlr_seat()`): a `mem::swap` or `replace` from
+//! another module would move the hold where the destroy path cannot see it.
+//! The shared handles are only ever reached through `&'static`, so they
+//! stay public fields.
 
 use crate::ffi;
 use std::cell::Cell;
@@ -342,6 +347,12 @@ impl Wlr<ffi::wlr_output> {
         self.live().map_or(std::ptr::null_mut(), |o| unsafe { ffi::river_wlr_output_get_current_mode(o) })
     }
 
+    /// Whether `mode` is one of this output's own modes (compared only, never
+    /// read); false when unset.
+    pub fn has_mode(&self, mode: *const ffi::wlr_output_mode) -> bool {
+        self.live().is_some_and(|o| unsafe { ffi::river_wlr_output_has_mode(o, mode) })
+    }
+
     /// Whether adaptive sync is on (as last committed).
     pub fn adaptive_sync_enabled(&self) -> bool {
         self.live().is_some_and(|o| unsafe {
@@ -587,6 +598,20 @@ impl Wlr<ffi::wlr_scene> {
         if !s.is_null() {
             // The root tree starts with its node (`wlr_scene_tree.node`).
             unsafe { ffi::wlr_scene_node_destroy(std::ptr::addr_of_mut!((*s).tree) as *mut ffi::wlr_scene_node) }
+        }
+    }
+}
+
+impl Wlr<ffi::wlr_output_manager_v1> {
+    /// Make `config` the current output configuration clients see; the
+    /// manager takes it. Destroyed instead when the field is unset.
+    ///
+    /// # Safety
+    /// `config` is a live configuration that nothing else owns.
+    pub unsafe fn set_configuration(&self, config: *mut ffi::wlr_output_configuration_v1) {
+        match self.live() {
+            Some(m) => ffi::wlr_output_manager_v1_set_configuration(m, config),
+            None => ffi::wlr_output_configuration_v1_destroy(config),
         }
     }
 }

@@ -165,8 +165,11 @@ pub struct RenderingState {
 }
 
 pub struct Output {
-    pub wlr_output: crate::wlr::Wlr<ffi::wlr_output>,
-    pub scene_output: crate::wlr::Wlr<ffi::wlr_scene_output>,
+    /// Private (read it with `wlr_output()`): a `Wlr` moved or swapped into
+    /// another field would be a hold the destroy path does not clear.
+    wlr_output: crate::wlr::Wlr<ffi::wlr_output>,
+    /// Private, as `wlr_output` (read it with `scene_output()`).
+    scene_output: crate::wlr::Wlr<ffi::wlr_scene_output>,
     pub background_rect: SceneRect,
     pub grid_tree: SceneTree,
     /// The grid's backdrop (gap colour, or the Solid spec's colour), kept in
@@ -259,6 +262,16 @@ pub struct Output {
 }
 
 impl Output {
+    /// The output's wlroots object; unset once it is destroyed.
+    pub fn wlr_output(&self) -> &crate::wlr::Wlr<ffi::wlr_output> {
+        &self.wlr_output
+    }
+
+    /// The output's scene output; unset once it is destroyed.
+    pub fn scene_output(&self) -> &crate::wlr::Wlr<ffi::wlr_scene_output> {
+        &self.scene_output
+    }
+
     /// Apply the scheduled state. Returns true when the output was
     /// destroyed: the caller takes it out of `om.outputs`, which frees it.
     #[must_use]
@@ -1221,16 +1234,18 @@ unsafe extern "C" fn handle_request_state(listener: *mut ffi::wl_listener, data:
     let output = &mut *crate::container_of!(listener, Output, request_state);
     let event = data as *mut ffi::wlr_output_event_request_state;
 
-    let committed: u32 = std::mem::transmute((*(*event).state).committed);
-    // mode field is bit 1 (mode)
-    if committed & 1 != 0 {
-        if !(*(*event).state).mode.is_null() {
-            output.scheduled.mode = OutputMode::standard((*(*event).state).mode);
+    // A backend asking for a mode (a nested backend's window resized, a
+    // headless output reconfigured). Until 2026-10-12 this tested bit 0,
+    // WLR_OUTPUT_STATE_BUFFER, so every such request was ignored.
+    let state = &*(*event).state;
+    if state.committed & ffi::wlr_output_state_field_WLR_OUTPUT_STATE_MODE != 0 {
+        if state.mode_type == ffi::wlr_output_state_mode_type_WLR_OUTPUT_STATE_MODE_FIXED && !state.mode.is_null() {
+            output.scheduled.mode = OutputMode::standard(state.mode);
         } else {
             output.scheduled.mode = OutputMode::Custom {
-                width: (*(*event).state).custom_mode.width,
-                height: (*(*event).state).custom_mode.height,
-                refresh: (*(*event).state).custom_mode.refresh,
+                width: state.custom_mode.width,
+                height: state.custom_mode.height,
+                refresh: state.custom_mode.refresh,
             };
         }
     }

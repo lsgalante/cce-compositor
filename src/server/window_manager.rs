@@ -872,8 +872,8 @@ impl WindowManager {
             cursor_x = seat.cursor.x();
             cursor_y = seat.cursor.y();
             let wlr_output = crate::output_manager::output_at(cursor_x, cursor_y);
-            if let Some(output) = self.outputs.values().find(|o| !wlr_output.is_null() && o.wlr_output.is(wlr_output)) {
-                let output_box = output.wlr_output.layout_box();
+            if let Some(output) = self.outputs.values().find(|o| !wlr_output.is_null() && o.wlr_output().is(wlr_output)) {
+                let output_box = output.wlr_output().layout_box();
                 cursor_viewport = Rect {
                     x: output_box.x,
                     y: output_box.y,
@@ -1738,10 +1738,10 @@ impl WindowManager {
         // full repaint.
         for output in self.outputs.values() {
             if output.sent.state == crate::output::OutputStateValue::Enabled {
-                if moved && !output.scene_output.is_null() {
-                    output.scene_output.damage_whole();
+                if moved && !output.scene_output().is_null() {
+                    output.scene_output().damage_whole();
                 } else {
-                    output.wlr_output.schedule_frame();
+                    output.wlr_output().schedule_frame();
                 }
             }
         }
@@ -1793,10 +1793,10 @@ impl WindowManager {
         // remaining motion-frame slivers with one full repaint.
         for output in self.outputs.values() {
             if output.sent.state == crate::output::OutputStateValue::Enabled {
-                if !output.scene_output.is_null() {
-                    output.scene_output.damage_whole();
+                if !output.scene_output().is_null() {
+                    output.scene_output().damage_whole();
                 } else {
-                    output.wlr_output.schedule_frame();
+                    output.wlr_output().schedule_frame();
                 }
             }
         }
@@ -2943,7 +2943,7 @@ unsafe extern "C" fn handle_border_fade_tick(_data: *mut std::ffi::c_void) -> st
         (*wm).border_fade_timer.arm(16);
         for output in (*wm).outputs.values() {
             if output.sent.state == crate::output::OutputStateValue::Enabled {
-                output.wlr_output.schedule_frame();
+                output.wlr_output().schedule_frame();
             }
         }
     } else {

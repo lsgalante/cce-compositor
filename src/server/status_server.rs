@@ -617,7 +617,7 @@ pub unsafe fn build_status_update(wm: &crate::window_manager::WindowManager) -> 
     let seat_ptr = wm.first_seat().unwrap_or(std::ptr::null_mut());
     let mut super_pressed = false;
     if !seat_ptr.is_null() {
-        let wlr_keyboard = (*seat_ptr).wlr_seat.keyboard();
+        let wlr_keyboard = (*seat_ptr).wlr_seat().keyboard();
         if !wlr_keyboard.is_null() {
             let modifiers = crate::ffi::wlr_keyboard_get_modifiers(wlr_keyboard);
             super_pressed = modifiers & 0x40 != 0;

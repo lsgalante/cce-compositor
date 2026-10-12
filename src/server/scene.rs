@@ -211,12 +211,23 @@ impl Scene {
                     // through it — while a click ON an item reaches the client
                     // that owns it. The parameter stays for the callers that
                     // must never see the grid at all.
+                    // Each retry switches a window's tree off; finding one
+                    // already switched off again means the hit is not under
+                    // that tree (its popups and border segments carry the
+                    // same id) and a retry would return it forever.
+                    if disabled.contains(&window.id()) {
+                        result = None;
+                        break;
+                    }
                     if !include_grid && window.is_grid() {
                         window.tree.set_enabled(false);
                         disabled.push(window.id());
                         continue;
                     }
-                    if window.rendering_requested.circular {
+                    // Only the window's own content is clipped to the circle:
+                    // a popup or a border segment (separate trees, tagged
+                    // with the same window) is a hit wherever it is drawn.
+                    if window.rendering_requested.circular && scene_node_data.node == window.tree.node() {
                         // Check if outside the circle
                         let w = window.box_geom.width as f64 * window.scale;
                         let h = window.box_geom.height as f64 * window.scale;
@@ -255,7 +266,7 @@ impl Scene {
                         {
                             let window = wm.windows.get(id).expect("checked by the guard");
                             let xsurface = match window.impl_type() {
-                                crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*xw).xsurface.ptr() as *const _,
+                                crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*xw).xsurface().ptr() as *const _,
                                 _ => std::ptr::null(),
                             };
                             let s = crate::xwayland_window::x11_scale_for(xsurface) as f64;
@@ -263,7 +274,7 @@ impl Scene {
                             (s != 1.0).then_some(s / zoom)
                         }
                         SceneNodeDataVal::OverrideRedirect(or) if !or.is_null() => {
-                            let s = (*or).xsurface.x11_scale() as f64;
+                            let s = (*or).xsurface().x11_scale() as f64;
                             (s != 1.0).then_some(s)
                         }
                         _ => None,

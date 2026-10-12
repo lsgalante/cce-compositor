@@ -15,11 +15,11 @@ pub enum TabletToolMode {
 
 pub struct TabletTool {
     pub wp_tool: *mut ffi::wlr_tablet_v2_tablet_tool,
-    pub wlr_cursor: crate::wlr::Wlr<ffi::wlr_cursor>,
+    wlr_cursor: crate::wlr::Wlr<ffi::wlr_cursor>,
     /// The tool's own theme for `wlr_cursor`'s pencil: the cursor keeps the
     /// manager it was last given, and the seat's dies with the seat (a
     /// client's `destroy_seat`) while a tool may still be showing it.
-    pub xcursor_manager: crate::wlr::Wlr<ffi::wlr_xcursor_manager>,
+    xcursor_manager: crate::wlr::Wlr<ffi::wlr_xcursor_manager>,
     pub mode: TabletToolMode,
     pub tilt_x: f64,
     pub tilt_y: f64,
@@ -29,6 +29,18 @@ pub struct TabletTool {
 }
 
 impl TabletTool {
+    /// The `wlr_cursor` hold; private, because a `Wlr` moved or swapped into
+    /// another field would be a hold its owner's destroy path never clears.
+    pub fn wlr_cursor(&self) -> &crate::wlr::Wlr<ffi::wlr_cursor> {
+        &self.wlr_cursor
+    }
+
+    /// The `xcursor_manager` hold; private, because a `Wlr` moved or swapped into
+    /// another field would be a hold its owner's destroy path never clears.
+    pub fn xcursor_manager(&self) -> &crate::wlr::Wlr<ffi::wlr_xcursor_manager> {
+        &self.xcursor_manager
+    }
+
     pub unsafe fn get(
         wlr_seat: *mut ffi::wlr_seat,
         wlr_tool: *mut ffi::wlr_tablet_tool,
@@ -92,11 +104,11 @@ impl TabletTool {
     }
 
     pub fn cursor_x(&self) -> f64 {
-        self.wlr_cursor.x()
+        self.wlr_cursor().x()
     }
 
     pub fn cursor_y(&self) -> f64 {
-        self.wlr_cursor.y()
+        self.wlr_cursor().y()
     }
 
     pub unsafe fn allow_set_cursor(
@@ -134,14 +146,14 @@ impl TabletTool {
 
     pub unsafe fn attach(&mut self, tablet: *mut Tablet) {
         let dev = (*(*tablet).device).wlr_device;
-        ffi::wlr_cursor_attach_input_device(self.wlr_cursor.ptr(), dev);
-        ffi::wlr_cursor_map_input_to_output(self.wlr_cursor.ptr(), dev, (*(*tablet).device).config.map_to_output);
-        ffi::wlr_cursor_map_input_to_region(self.wlr_cursor.ptr(), dev, &mut (*(*tablet).device).config.map_to_rectangle as *mut _);
+        ffi::wlr_cursor_attach_input_device(self.wlr_cursor().ptr(), dev);
+        ffi::wlr_cursor_map_input_to_output(self.wlr_cursor().ptr(), dev, (*(*tablet).device).config.map_to_output);
+        ffi::wlr_cursor_map_input_to_region(self.wlr_cursor().ptr(), dev, &mut (*(*tablet).device).config.map_to_rectangle as *mut _);
     }
 
     pub unsafe fn detach(&mut self, tablet: *mut Tablet) {
         let dev = (*(*tablet).device).wlr_device;
-        ffi::wlr_cursor_detach_input_device(self.wlr_cursor.ptr(), dev);
+        ffi::wlr_cursor_detach_input_device(self.wlr_cursor().ptr(), dev);
     }
 
     pub unsafe fn axis(&mut self, wm: &crate::window_manager::WindowManager, tablet: *mut Tablet, event: *mut ffi::wlr_tablet_tool_axis_event) {
@@ -164,11 +176,11 @@ impl TabletTool {
                 ffi::wlr_tablet_tool_type_WLR_TABLET_TOOL_TYPE_TOTEM => {
                     let warp_x = if has_x { (*event).x } else { f64::NAN };
                     let warp_y = if has_y { (*event).y } else { f64::NAN };
-                    ffi::wlr_cursor_warp_absolute(self.wlr_cursor.ptr(), (*(*tablet).device).wlr_device, warp_x, warp_y);
+                    ffi::wlr_cursor_warp_absolute(self.wlr_cursor().ptr(), (*(*tablet).device).wlr_device, warp_x, warp_y);
                 }
                 ffi::wlr_tablet_tool_type_WLR_TABLET_TOOL_TYPE_LENS |
                 ffi::wlr_tablet_tool_type_WLR_TABLET_TOOL_TYPE_MOUSE => {
-                    ffi::wlr_cursor_move(self.wlr_cursor.ptr(), (*(*tablet).device).wlr_device, (*event).dx, (*event).dy);
+                    ffi::wlr_cursor_move(self.wlr_cursor().ptr(), (*(*tablet).device).wlr_device, (*event).dx, (*event).dy);
                 }
                 _ => {}
             }
@@ -236,7 +248,7 @@ impl TabletTool {
             self.attach(tablet);
 
             ffi::wlr_cursor_warp_absolute(
-                self.wlr_cursor.ptr(),
+                self.wlr_cursor().ptr(),
                 (*(*tablet).device).wlr_device,
                 (*event).x,
                 (*event).y,
@@ -244,13 +256,13 @@ impl TabletTool {
 
             // SAFETY: both are the tool's; `handle_destroy` destroys the
             // cursor before the manager.
-            self.wlr_cursor.set_xcursor(&self.xcursor_manager, c"pencil");
+            self.wlr_cursor().set_xcursor(&self.xcursor_manager(), c"pencil");
 
             self.passthrough(wm, tablet);
             self.detach(tablet);
         } else {
             ffi::wlr_tablet_v2_tablet_tool_notify_proximity_out(self.wp_tool);
-            self.wlr_cursor.unset_image();
+            self.wlr_cursor().unset_image();
         }
     }
 
@@ -326,7 +338,7 @@ impl TabletTool {
             }
         } else {
             // SAFETY: as in `proximity`.
-            self.wlr_cursor.set_xcursor(&self.xcursor_manager, c"pencil");
+            self.wlr_cursor().set_xcursor(&self.xcursor_manager(), c"pencil");
         }
 
         ffi::wlr_tablet_v2_tablet_tool_notify_proximity_out(self.wp_tool);
@@ -340,8 +352,8 @@ unsafe extern "C" fn handle_destroy(
     let tool_ptr = crate::container_of!(listener, TabletTool, destroy_listener) as *mut TabletTool;
     let tool = &mut *tool_ptr;
 
-    ffi::wlr_cursor_destroy(tool.wlr_cursor.take());
-    let manager = tool.xcursor_manager.take();
+    ffi::wlr_cursor_destroy(tool.wlr_cursor().take());
+    let manager = tool.xcursor_manager().take();
     if !manager.is_null() {
         ffi::wlr_xcursor_manager_destroy(manager);
     }
@@ -361,7 +373,7 @@ unsafe extern "C" fn handle_set_cursor(
 
     if tool.allow_set_cursor((*event).seat_client, (*event).serial) {
         ffi::wlr_cursor_set_surface(
-            tool.wlr_cursor.ptr(),
+            tool.wlr_cursor().ptr(),
             (*event).surface,
             (*event).hotspot_x,
             (*event).hotspot_y,

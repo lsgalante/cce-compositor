@@ -8,10 +8,20 @@ use crate::scene_node_data::SceneNodeData;
 pub struct IdleInhibitManager {
     pub wlr_manager: *mut ffi::wlr_idle_inhibit_manager_v1,
     pub new_idle_inhibitor: crate::listener::Listener,
-    pub inhibitors: crate::registry::Registry<IdleInhibitor>,
+    /// Private: `holders` trusts that a registered inhibitor is live, which
+    /// holds only while nothing outside this module can replace or swap it.
+    inhibitors: crate::registry::Registry<IdleInhibitor>,
 }
 
 impl IdleInhibitManager {
+    /// Write an empty registry into a zero-filled manager (`Server::default`).
+    ///
+    /// # Safety
+    /// As `InputManager::init_registry_in_place`.
+    pub unsafe fn init_registry_in_place(this: *mut Self) {
+        std::ptr::write(std::ptr::addr_of_mut!((*this).inhibitors), crate::registry::Registry::new());
+    }
+
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
         let wlr_manager = ffi::wlr_idle_inhibit_v1_create((*server).wl_server);
         if wlr_manager.is_null() {

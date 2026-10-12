@@ -42,7 +42,10 @@ pub struct OutputManager {
     pub new_output: crate::listener::Listener,
     pub presentation: *mut ffi::wlr_presentation,
     pub xdg_output_manager: *mut ffi::wlr_xdg_output_manager_v1,
-    pub wlr_output_manager: *mut ffi::wlr_output_manager_v1,
+    /// The wlr-output-management global: set in `init`, let go in `deinit`
+    /// (it dies with the display). Private, because the safe `send_config`
+    /// hands configurations to it.
+    wlr_output_manager: crate::wlr::Wlr<ffi::wlr_output_manager_v1>,
     pub manager_apply: crate::listener::Listener,
     pub manager_test: crate::listener::Listener,
     pub power_manager: *mut ffi::wlr_output_power_manager_v1,
@@ -91,7 +94,9 @@ impl OutputManager {
         if wlr_output_manager.is_null() {
             return Err("Failed to create wlr_output_manager_v1");
         }
-        self.wlr_output_manager = wlr_output_manager;
+        // SAFETY: the global lives until the display goes, and `deinit`
+        // lets go of it before that.
+        self.wlr_output_manager.set(wlr_output_manager);
 
         let power_manager = ffi::wlr_output_power_manager_v1_create((*server).wl_server);
         if power_manager.is_null() {
@@ -104,7 +109,7 @@ impl OutputManager {
         self.new_output.connect(&mut (*backend_cast).events.new_output, handle_new_output);
 
         // Add apply/test listeners
-        let manager_cast = self.wlr_output_manager as *mut WlrOutputManagerV1;
+        let manager_cast = wlr_output_manager as *mut WlrOutputManagerV1;
         
         self.manager_apply.connect(&mut (*manager_cast).events.apply, handle_manager_apply);
 
@@ -122,6 +127,7 @@ impl OutputManager {
         self.manager_test.disconnect();
         self.power_manager_set_mode.disconnect();
         self.new_output.disconnect();
+        self.wlr_output_manager.take();
 
         // Let go of the shared handle first: `Wlr::set`'s promise is that
         // the layout outlives the field's hold on it.
@@ -139,12 +145,12 @@ impl OutputManager {
             assert!(output.sent.state != OutputStateValue::Destroying);
             output.rendering_current = output.rendering_requested;
 
-            let wlr_output = output.wlr_output.ptr();
+            let wlr_output = output.wlr_output().ptr();
             if !wlr_output.is_null() {
                 match output.sent.state {
                     OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
-                        output.scene_output.set_position(output.sent.x, output.sent.y);
-                        crate::shared::handles().output_layout.add(&output.wlr_output, output.sent.x, output.sent.y);
+                        output.scene_output().set_position(output.sent.x, output.sent.y);
+                        crate::shared::handles().output_layout.add(&output.wlr_output(), output.sent.x, output.sent.y);
                         if let Some(lock_surface) = lock.lock_surface_from_output(output) {
                             // SAFETY: a lock surface `lock_surface_from_output`
                             // finds is live.
@@ -182,7 +188,7 @@ impl OutputManager {
                         output.adjust_tree.set_position(output.sent.x, output.sent.y);
                     }
                     OutputStateValue::DisabledHard => {
-                        crate::shared::handles().output_layout.remove(&output.wlr_output);
+                        crate::shared::handles().output_layout.remove(&output.wlr_output());
                         // All of them, rims and labels included: until
                         // 2026-10-10 this path left grid_bevel_tree and
                         // cell_label_tree naming children that died with
@@ -200,11 +206,11 @@ impl OutputManager {
         let mut need_modeset = false;
         for id in crate::shared::sent().outputs.ids() {
             let Some(output) = outputs.get(id) else { continue };
-            if output.wlr_output.is_null() {
+            if output.wlr_output().is_null() {
                 continue;
             }
 
-            let wlr_enabled = output.wlr_output.enabled();
+            let wlr_enabled = output.wlr_output().enabled();
             match output.sent.state {
                 OutputStateValue::Enabled => {
                     if !wlr_enabled {
@@ -223,15 +229,15 @@ impl OutputManager {
 
             match output.sent.mode {
                 OutputMode::Standard { mode, .. } => {
-                    if mode != output.wlr_output.current_mode() {
+                    if mode != output.wlr_output().current_mode() {
                         need_modeset = true;
                         break;
                     }
                 }
                 OutputMode::Custom { width, height, refresh } => {
-                    if width != output.wlr_output.width() 
-                        || height != output.wlr_output.height() 
-                        || refresh != output.wlr_output.refresh() {
+                    if width != output.wlr_output().width() 
+                        || height != output.wlr_output().height() 
+                        || refresh != output.wlr_output().refresh() {
                         need_modeset = true;
                         break;
                     }
@@ -251,7 +257,7 @@ impl OutputManager {
                 break;
             }
 
-            if output.sent.adaptive_sync != output.wlr_output.adaptive_sync_enabled() {
+            if output.sent.adaptive_sync != output.wlr_output().adaptive_sync_enabled() {
                 need_modeset = true;
                 break;
             }
@@ -267,11 +273,11 @@ impl OutputManager {
                 .outputs
                 .ids()
                 .into_iter()
-                .filter(|&id| outputs.get(id).is_some_and(|o| !o.wlr_output.is_null()))
+                .filter(|&id| outputs.get(id).is_some_and(|o| !o.wlr_output().is_null()))
                 .collect();
             // SAFETY: each state's output is the live wlr_output its store
-            // entry holds (`Wlr`), with that output's own modes in its sent
-            // state (`OutputMode::standard`); every state is initialised
+            // entry holds (`Wlr`); `modeset` passes a fixed mode only when
+            // it is that output's own (`Wlr::has_mode`); every state is initialised
             // before use and finished on every path out, as is the
             // swapchain manager; the backend handle and each store output's
             // scene output are live.
@@ -294,17 +300,17 @@ impl OutputManager {
 
         for id in crate::shared::sent().outputs.ids() {
             let Some(output) = outputs.get_mut(id) else { continue };
-            if output.wlr_output.is_null() {
+            if output.wlr_output().is_null() {
                 continue;
             }
 
             match output.sent.state {
                 OutputStateValue::Enabled => {
-                    assert!(output.wlr_output.enabled());
-                    output.wlr_output.schedule_frame();
+                    assert!(output.wlr_output().enabled());
+                    output.wlr_output().schedule_frame();
                 }
                 OutputStateValue::DisabledSoft | OutputStateValue::DisabledHard => {
-                    assert!(!output.wlr_output.enabled());
+                    assert!(!output.wlr_output().enabled());
                     output.lock_render_state = crate::output::LockRenderState::Blanked;
                     if output.sent.state == OutputStateValue::DisabledHard {
                         crate::shared::sent().outputs.remove(output.id);
@@ -330,13 +336,22 @@ impl OutputManager {
         let mut states_vec: Vec<ffi::wlr_backend_output_state> = ids
             .iter()
             .filter_map(|&id| outputs.get(id))
-            .map(|output| ffi::wlr_backend_output_state { output: output.wlr_output.ptr(), base: std::mem::zeroed() })
+            .map(|output| ffi::wlr_backend_output_state { output: output.wlr_output().ptr(), base: std::mem::zeroed() })
             .collect();
 
         for (state, &id) in states_vec.iter_mut().zip(ids) {
             ffi::wlr_output_state_init(&mut state.base);
             if let Some(output) = outputs.get(id) {
-                output.sent.apply_modeset(&mut state.base);
+                // A fixed mode goes to wlroots only if it is one of this
+                // output's own: `OutputState` is plain data any code can copy
+                // between outputs. Anything else is asked for by its size.
+                let mut sent = output.sent;
+                if let OutputMode::Standard { mode, width, height, refresh } = sent.mode {
+                    if !output.wlr_output().has_mode(mode) {
+                        sent.mode = OutputMode::Custom { width, height, refresh };
+                    }
+                }
+                sent.apply_modeset(&mut state.base);
             }
         }
 
@@ -363,8 +378,8 @@ impl OutputManager {
                 swapchain: sc,
                 ..std::mem::zeroed()
             };
-            if !ffi::wlr_scene_output_build_state(output.scene_output.ptr(), &mut state.base, &options) {
-                log::error!("failed to render scene for {:?}", output.wlr_output.name());
+            if !ffi::wlr_scene_output_build_state(output.scene_output().ptr(), &mut state.base, &options) {
+                log::error!("failed to render scene for {:?}", output.wlr_output().name());
             }
         }
 
@@ -418,7 +433,7 @@ impl OutputManager {
             }
 
             for output in outputs.values() {
-                let wlr_output = output.wlr_output.ptr();
+                let wlr_output = output.wlr_output().ptr();
                 if wlr_output.is_null() {
                     continue;
                 }
@@ -441,7 +456,7 @@ impl OutputManager {
 
             }
 
-            ffi::wlr_output_manager_v1_set_configuration(self.wlr_output_manager, config);
+            self.wlr_output_manager.set_configuration(config);
             Ok(())
         }
     }
@@ -492,10 +507,10 @@ impl crate::output::Outputs {
     pub fn max_overlap_output(&self, box_: &ffi::wlr_box) -> Option<&Output> {
         let mut best: Option<(&Output, i32)> = None;
         for output in self.values() {
-            if output.wlr_output.is_null() {
+            if output.wlr_output().is_null() {
                 continue;
             }
-            let layout_box = output.wlr_output.layout_box();
+            let layout_box = output.wlr_output().layout_box();
             if layout_box.width <= 0 || layout_box.height <= 0 {
                 continue;
             }

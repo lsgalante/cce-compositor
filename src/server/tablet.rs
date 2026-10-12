@@ -20,7 +20,7 @@ impl Tablet {
             return Err("Tablet manager is null");
         }
 
-        let wp_tablet = ffi::wlr_tablet_create(tablet_manager, (*seat).wlr_seat.ptr(), wlr_device);
+        let wp_tablet = ffi::wlr_tablet_create(tablet_manager, (*seat).wlr_seat().ptr(), wlr_device);
         if wp_tablet.is_null() {
             return Err("Failed to create wp_tablet");
         }

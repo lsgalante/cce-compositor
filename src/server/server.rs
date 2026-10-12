@@ -366,7 +366,7 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
 
     let wm = &mut *crate::reentry::wm(server);
     let default_seat = (*server).input_manager.default_seat.and_then(|sid| wm.seats.get(sid));
-    if default_seat.is_some_and(|seat| seat.wlr_seat.keyboard_focused_surface() == surface) {
+    if default_seat.is_some_and(|seat| seat.wlr_seat().keyboard_focused_surface() == surface) {
         log::info!("xdg activation request ignored: window is already focused");
         return;
     }
@@ -1017,8 +1017,8 @@ impl Default for Server {
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.min_sizes), crate::min_sizes::MinSizes::default());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.layer_surfaces), crate::slotmap::SlotMap::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.outputs), crate::output::Outputs::new());
-            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).input_manager.devices), crate::registry::Registry::new());
-            std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).idle_inhibit_manager.inhibitors), crate::registry::Registry::new());
+            crate::input_manager::InputManager::init_registry_in_place(std::ptr::addr_of_mut!((*server.as_mut_ptr()).input_manager));
+            crate::idle_inhibit_manager::IdleInhibitManager::init_registry_in_place(std::ptr::addr_of_mut!((*server.as_mut_ptr()).idle_inhibit_manager));
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.seats), crate::seat::Seats::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.cce_window_management), crate::cce_window_management::CceWindowManagement::new());

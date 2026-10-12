@@ -221,7 +221,7 @@ unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *
     let Some(output_box) = (*crate::reentry::wm(server))
         .outputs
         .max_overlap_output(&anchor)
-        .map(|output| output.wlr_output.layout_box())
+        .map(|output| output.wlr_output().layout_box())
     else {
         return;
     };

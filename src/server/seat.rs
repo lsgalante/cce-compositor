@@ -84,7 +84,7 @@ impl Focus {
             Focus::LayerSurface(surface) => surface,
             Focus::Window(id) => wm.windows.get(id).map_or(std::ptr::null_mut(), |w| w.root_surface()),
             Focus::LockSurface(lock_surface) => if lock_surface.is_null() { std::ptr::null_mut() } else { (*lock_surface).surface() },
-            Focus::OverrideRedirect(or) => if or.is_null() { std::ptr::null_mut() } else { (*or).xsurface.surface() },
+            Focus::OverrideRedirect(or) => if or.is_null() { std::ptr::null_mut() } else { (*or).xsurface().surface() },
         }
     }
 }
@@ -98,7 +98,7 @@ pub enum DragState {
 }
 
 pub struct Seat {
-    pub wlr_seat: crate::wlr::Wlr<ffi::wlr_seat>,
+    wlr_seat: crate::wlr::Wlr<ffi::wlr_seat>,
     pub cursor: Cursor,
     pub focused: Focus,
     /// Touchscreens attached to this seat. The seat offers the touch
@@ -171,6 +171,12 @@ pub struct Seat {
 }
 
 impl Seat {
+    /// The `wlr_seat` hold; private, because a `Wlr` moved or swapped into
+    /// another field would be a hold its owner's destroy path never clears.
+    pub fn wlr_seat(&self) -> &crate::wlr::Wlr<ffi::wlr_seat> {
+        &self.wlr_seat
+    }
+
     /// The id of the seat a `wlr_seat` belongs to, from the user data
     /// `Seat::create` gave it; `None` for a null `wlr_seat` or one without
     /// a seat. For wlroots callbacks that are handed a `wlr_seat`: look
@@ -286,7 +292,7 @@ impl Seat {
             (*seat).drag_destroy.disconnect();
         }
 
-        ffi::wlr_seat_destroy((*seat).wlr_seat.take());
+        ffi::wlr_seat_destroy((*seat).wlr_seat().take());
         let _boxed = Box::from_raw(seat);
     }
 
@@ -339,8 +345,8 @@ impl Seat {
                 if !keyboard.is_null() {
                     (*keyboard).set_group(self);
                     if !(*keyboard).group.is_null() {
-                        ffi::wlr_seat_set_keyboard(self.wlr_seat.ptr(), &mut (*(*keyboard).group).wlr_keyboard);
-                        let focused_surface = self.wlr_seat.keyboard_focused_surface();
+                        ffi::wlr_seat_set_keyboard(self.wlr_seat().ptr(), &mut (*(*keyboard).group).wlr_keyboard);
+                        let focused_surface = self.wlr_seat().keyboard_focused_surface();
                         if !focused_surface.is_null() {
                             self.keyboard_notify_enter(focused_surface);
                         }
@@ -348,17 +354,17 @@ impl Seat {
                 }
             }
             ffi::wlr_input_device_type_WLR_INPUT_DEVICE_POINTER => {
-                ffi::wlr_cursor_attach_input_device(self.cursor.wlr_cursor.ptr(), (*device).wlr_device);
+                ffi::wlr_cursor_attach_input_device(self.cursor.wlr_cursor().ptr(), (*device).wlr_device);
             }
             ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH | ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TABLET => {
                 if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH {
                     self.touch_devices += 1;
                 }
-                ffi::wlr_cursor_attach_input_device(self.cursor.wlr_cursor.ptr(), (*device).wlr_device);
+                ffi::wlr_cursor_attach_input_device(self.cursor.wlr_cursor().ptr(), (*device).wlr_device);
                 if !(*device).config.map_to_output.is_null() {
-                    ffi::wlr_cursor_map_input_to_output(self.cursor.wlr_cursor.ptr(), (*device).wlr_device, (*device).config.map_to_output);
+                    ffi::wlr_cursor_map_input_to_output(self.cursor.wlr_cursor().ptr(), (*device).wlr_device, (*device).config.map_to_output);
                 }
-                ffi::wlr_cursor_map_input_to_region(self.cursor.wlr_cursor.ptr(), (*device).wlr_device, &mut (*device).config.map_to_rectangle);
+                ffi::wlr_cursor_map_input_to_region(self.cursor.wlr_cursor().ptr(), (*device).wlr_device, &mut (*device).config.map_to_rectangle);
             }
             _ => {}
         }
@@ -367,7 +373,7 @@ impl Seat {
 
     pub unsafe fn detach_device(wm: &mut crate::window_manager::WindowManager, sid: SeatId, device: *mut crate::input_device::InputDevice, sys: &mut crate::ctx::Sys) {
         let this = seat_mut!(wm, sid, ());
-        ffi::wlr_cursor_detach_input_device(this.cursor.wlr_cursor.ptr(), (*device).wlr_device);
+        ffi::wlr_cursor_detach_input_device(this.cursor.wlr_cursor().ptr(), (*device).wlr_device);
 
         let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device);
         if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH {
@@ -403,7 +409,7 @@ impl Seat {
     pub fn handle_activity(wm: &mut crate::window_manager::WindowManager, sid: SeatId, sys: &mut crate::ctx::Sys) {
         let this = seat_mut!(wm, sid, ());
         sys.idle.on_activity(&mut wm.outputs);
-        this.wlr_seat.notify_idle_activity();
+        this.wlr_seat().notify_idle_activity();
     }
 
     pub fn update_capabilities(&mut self) {
@@ -412,7 +418,7 @@ impl Seat {
         if self.touch_devices > 0 || self.touch_injected {
             caps |= ffi::wl_seat_capability_WL_SEAT_CAPABILITY_TOUCH;
         }
-        self.wlr_seat.set_capabilities(caps);
+        self.wlr_seat().set_capabilities(caps);
     }
 
     /// Give seat `sid`'s keyboard focus to window `id`, or to nothing:
@@ -428,9 +434,17 @@ impl Seat {
     ///
     /// # Safety
     /// A `LayerSurface`, `LockSurface` or `OverrideRedirect` focus must name
-    /// a live surface or object. (`Window` and `None` carry nothing to vouch
-    /// for: use [`Seat::focus_window`].)
+    /// a live surface or object, and a `LayerSurface` one must be the layer
+    /// surface's ROOT wl_surface: its unmap clears the focus by comparing
+    /// the root, so a popup's or subsurface's would outlive it. (`Window`
+    /// and `None` carry nothing to vouch for: use [`Seat::focus_window`].)
     pub unsafe fn focus(wm: &mut crate::window_manager::WindowManager, sid: SeatId, new_focus: Focus) {
+        if let Focus::LayerSurface(s) = new_focus {
+            debug_assert!(
+                s.is_null() || !ffi::wlr_layer_surface_v1_try_from_wlr_surface(s).is_null(),
+                "Seat::focus: a LayerSurface focus must be the layer's root surface"
+            );
+        }
         // A window that has closed is nothing to focus.
         let wid = match new_focus {
             Focus::Window(id) => wm.windows.get(id).map(|_| id),
@@ -519,15 +533,15 @@ impl Seat {
         match this.focused {
             Focus::None => {}
             Focus::LayerSurface(_) | Focus::Window(_) | Focus::LockSurface(_) | Focus::OverrideRedirect(_) => {
-                this.wlr_seat.keyboard_notify_clear_focus();
-                let focused_client = this.wlr_seat.pointer_focused_client();
+                this.wlr_seat().keyboard_notify_clear_focus();
+                let focused_client = this.wlr_seat().pointer_focused_client();
                 // Keep pointer focus through an active implicit grab (held
                 // client-notified button): clicking a window changes focus,
                 // and dropping pointer focus here orphans the grab until the
                 // next in-surface motion re-enters — a press-then-leave drag
                 // (cursor straight out of the window) lost its target.
                 if !focused_client.is_null() && this.cursor.notified_pressed.is_empty() {
-                    this.wlr_seat.pointer_notify_clear_focus();
+                    this.wlr_seat().pointer_notify_clear_focus();
                 }
             }
         }
@@ -556,11 +570,11 @@ impl Seat {
             Focus::LayerSurface(surface) => {
                 if !surface.is_null() {
                     let this = seat_mut!(wm, sid, ());
-                    let kbd = this.wlr_seat.keyboard();
+                    let kbd = this.wlr_seat().keyboard();
                     if !kbd.is_null() {
                         let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
                         ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat.ptr(),
+                            this.wlr_seat().ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -568,7 +582,7 @@ impl Seat {
                         );
                     } else {
                         ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat.ptr(),
+                            this.wlr_seat().ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -583,7 +597,7 @@ impl Seat {
                 if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                     if result.surface == surface {
                         let this = seat_mut!(wm, sid, ());
-                        ffi::wlr_seat_pointer_notify_enter(this.wlr_seat.ptr(), surface, result.sx, result.sy);
+                        ffi::wlr_seat_pointer_notify_enter(this.wlr_seat().ptr(), surface, result.sx, result.sy);
                     }
                 }
             }
@@ -625,11 +639,11 @@ impl Seat {
                     .map_or(std::ptr::null_mut(), |w| w.root_surface());
                 if !surface.is_null() {
                     let this = seat_mut!(wm, sid, ());
-                    let kbd = this.wlr_seat.keyboard();
+                    let kbd = this.wlr_seat().keyboard();
                     if !kbd.is_null() {
                         let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
                         ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat.ptr(),
+                            this.wlr_seat().ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -637,7 +651,7 @@ impl Seat {
                         );
                     } else {
                         ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat.ptr(),
+                            this.wlr_seat().ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -650,7 +664,7 @@ impl Seat {
                     if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                         if result.surface == surface {
                             let this = seat_mut!(wm, sid, ());
-                            ffi::wlr_seat_pointer_notify_enter(this.wlr_seat.ptr(), surface, result.sx, result.sy);
+                            ffi::wlr_seat_pointer_notify_enter(this.wlr_seat().ptr(), surface, result.sx, result.sy);
                         }
                     }
                 }
@@ -659,11 +673,11 @@ impl Seat {
                 let surface = (*lock_surface).surface();
                 if !surface.is_null() {
                     let this = seat_mut!(wm, sid, ());
-                    let kbd = this.wlr_seat.keyboard();
+                    let kbd = this.wlr_seat().keyboard();
                     if !kbd.is_null() {
                         let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
                         ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat.ptr(),
+                            this.wlr_seat().ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -671,7 +685,7 @@ impl Seat {
                         );
                     } else {
                         ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat.ptr(),
+                            this.wlr_seat().ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -684,20 +698,20 @@ impl Seat {
                     if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
                         if result.surface == surface {
                             let this = seat_mut!(wm, sid, ());
-                            ffi::wlr_seat_pointer_notify_enter(this.wlr_seat.ptr(), surface, result.sx, result.sy);
+                            ffi::wlr_seat_pointer_notify_enter(this.wlr_seat().ptr(), surface, result.sx, result.sy);
                         }
                     }
                 }
             }
             Focus::OverrideRedirect(or) => {
-                let surface = (*or).xsurface.surface();
+                let surface = (*or).xsurface().surface();
                 if !surface.is_null() {
                     let this = seat_mut!(wm, sid, ());
-                    let kbd = this.wlr_seat.keyboard();
+                    let kbd = this.wlr_seat().keyboard();
                     if !kbd.is_null() {
                         let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
                         ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat.ptr(),
+                            this.wlr_seat().ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -705,7 +719,7 @@ impl Seat {
                         );
                     } else {
                         ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat.ptr(),
+                            this.wlr_seat().ptr(),
                             surface,
                             std::ptr::null_mut(),
                             0,
@@ -737,7 +751,7 @@ impl Seat {
     /// A real keyboard always wins — this is a no-op the moment the seat has
     /// one, so a normal session never reaches the creation path.
     pub unsafe fn ensure_synthetic_keyboard(&mut self) -> bool {
-        if !self.wlr_seat.keyboard().is_null() {
+        if !self.wlr_seat().keyboard().is_null() {
             return true;
         }
 
@@ -762,8 +776,8 @@ impl Seat {
                 self.synthetic_keyboard = group;
                 // set_keyboard is what pushes the keymap out to every bound
                 // client; the enter re-announces focus with it in place.
-                ffi::wlr_seat_set_keyboard(self.wlr_seat.ptr(), &mut (*group).wlr_keyboard);
-                let focused = self.wlr_seat.keyboard_focused_surface();
+                ffi::wlr_seat_set_keyboard(self.wlr_seat().ptr(), &mut (*group).wlr_keyboard);
+                let focused = self.wlr_seat().keyboard_focused_surface();
                 if !focused.is_null() {
                     self.keyboard_notify_enter(focused);
                 }
@@ -781,7 +795,7 @@ impl Seat {
         if wlr_surface.is_null() {
             return;
         }
-        let kbd = self.wlr_seat.keyboard();
+        let kbd = self.wlr_seat().keyboard();
         if !kbd.is_null() {
             let group_ptr = ffi::river_wlr_keyboard_get_data(kbd) as *mut crate::keyboard_group::KeyboardGroup;
             if !group_ptr.is_null() {
@@ -804,7 +818,7 @@ impl Seat {
                 }
                 let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
                 ffi::wlr_seat_keyboard_notify_enter(
-                    self.wlr_seat.ptr(),
+                    self.wlr_seat().ptr(),
                     wlr_surface,
                     buffer.as_mut_ptr(),
                     count,
@@ -814,7 +828,7 @@ impl Seat {
             }
         }
         ffi::wlr_seat_keyboard_notify_enter(
-            self.wlr_seat.ptr(),
+            self.wlr_seat().ptr(),
             wlr_surface,
             std::ptr::null_mut(),
             0,
@@ -827,7 +841,7 @@ impl Seat {
         if !target_surface.is_null() {
             this.keyboard_notify_enter(target_surface);
         } else {
-            this.wlr_seat.keyboard_notify_clear_focus();
+            this.wlr_seat().keyboard_notify_clear_focus();
         }
         crate::input_relay::InputRelay::focus(wm, sid, target_surface);
         Seat::sync_pointer_constraint(wm, sid, target_surface);
@@ -848,7 +862,7 @@ impl Seat {
         let seat = seat_mut!(wm, sid);
         let constraints = crate::shared::handles().pointer_constraints.ptr();
         if !target_surface.is_null() && !constraints.is_null() && seat.cursor.constraint.is_null() {
-            let wlr_constraint = ffi::wlr_pointer_constraints_v1_constraint_for_surface(constraints, target_surface, seat.wlr_seat.ptr());
+            let wlr_constraint = ffi::wlr_pointer_constraints_v1_constraint_for_surface(constraints, target_surface, seat.wlr_seat().ptr());
             if !wlr_constraint.is_null() && !(*wlr_constraint).data.is_null() {
                 seat.cursor.constraint = (*wlr_constraint).data as *mut crate::pointer_constraint::PointerConstraint;
             }
@@ -1654,7 +1668,7 @@ unsafe extern "C" fn handle_request_set_cursor(
     let seat = &mut *crate::container_of!(listener, Seat, request_set_cursor);
     let event = data as *mut ffi::wlr_seat_pointer_request_set_cursor_event;
     
-    let focused_client = seat.wlr_seat.pointer_focused_client();
+    let focused_client = seat.wlr_seat().pointer_focused_client();
     
     let event_client = ffi::river_wlr_seat_client_get_client((*event).seat_client);
 
@@ -1676,7 +1690,7 @@ unsafe extern "C" fn handle_request_set_cursor(
         // at 1/scale, the way the window's own buffer already is
         // (`Window::x11_buffer_scale`), and put the hotspot in the same units.
         let scale = if is_xwayland_client(crate::shared::server_ptr(), event_client) {
-            crate::xwayland_window::x11_scale_for_surface(seat.wlr_seat.pointer_focused_surface())
+            crate::xwayland_window::x11_scale_for_surface(seat.wlr_seat().pointer_focused_surface())
         } else {
             1.0
         };
@@ -1696,7 +1710,7 @@ unsafe extern "C" fn handle_request_set_cursor(
             ((*event).hotspot_x, (*event).hotspot_y)
         };
         ffi::wlr_cursor_set_surface(
-            seat.cursor.wlr_cursor.ptr(),
+            seat.cursor.wlr_cursor().ptr(),
             (*event).surface,
             hotspot_x,
             hotspot_y,
@@ -1747,7 +1761,7 @@ unsafe extern "C" fn handle_request_set_selection(
 ) {
     let seat = &mut *crate::container_of!(listener, Seat, request_set_selection);
     let event = data as *mut ffi::wlr_seat_request_set_selection_event;
-    ffi::wlr_seat_set_selection(seat.wlr_seat.ptr(), (*event).source, (*event).serial);
+    ffi::wlr_seat_set_selection(seat.wlr_seat().ptr(), (*event).source, (*event).serial);
 }
 
 unsafe extern "C" fn handle_request_start_drag(
@@ -1759,14 +1773,14 @@ unsafe extern "C" fn handle_request_start_drag(
 
     assert!(seat.drag == DragState::None);
 
-    if ffi::wlr_seat_validate_pointer_grab_serial(seat.wlr_seat.ptr(), (*event).origin, (*event).serial) {
-        ffi::wlr_seat_start_pointer_drag(seat.wlr_seat.ptr(), (*event).drag, (*event).serial);
+    if ffi::wlr_seat_validate_pointer_grab_serial(seat.wlr_seat().ptr(), (*event).origin, (*event).serial) {
+        ffi::wlr_seat_start_pointer_drag(seat.wlr_seat().ptr(), (*event).drag, (*event).serial);
         return;
     }
 
     let mut point: *mut ffi::wlr_touch_point = std::ptr::null_mut();
-    if ffi::wlr_seat_validate_touch_grab_serial(seat.wlr_seat.ptr(), (*event).origin, (*event).serial, &mut point) {
-        ffi::wlr_seat_start_touch_drag(seat.wlr_seat.ptr(), (*event).drag, (*event).serial, point);
+    if ffi::wlr_seat_validate_touch_grab_serial(seat.wlr_seat().ptr(), (*event).origin, (*event).serial, &mut point) {
+        ffi::wlr_seat_start_touch_drag(seat.wlr_seat().ptr(), (*event).drag, (*event).serial, point);
         return;
     }
 
@@ -1836,6 +1850,6 @@ unsafe extern "C" fn handle_request_set_primary_selection(
 ) {
     let seat = &mut *crate::container_of!(listener, Seat, request_set_primary_selection);
     let event = data as *mut ffi::wlr_seat_request_set_primary_selection_event;
-    ffi::wlr_seat_set_primary_selection(seat.wlr_seat.ptr(), (*event).source, (*event).serial);
+    ffi::wlr_seat_set_primary_selection(seat.wlr_seat().ptr(), (*event).source, (*event).serial);
 }
 

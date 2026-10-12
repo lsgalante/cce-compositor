@@ -181,6 +181,18 @@ struct wlr_output_mode *river_wlr_output_get_current_mode(struct wlr_output *out
 	return output->current_mode;
 }
 
+/* Whether `mode` is one of `output`'s own modes; `mode` is only compared,
+ * never read. */
+bool river_wlr_output_has_mode(struct wlr_output *output, const struct wlr_output_mode *mode) {
+	struct wlr_output_mode *m;
+	wl_list_for_each(m, &output->modes, link) {
+		if (m == mode) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void river_wlr_output_get_phys_size(struct wlr_output *output, int32_t *width_mm, int32_t *height_mm) {
 	*width_mm = output->phys_width;
 	*height_mm = output->phys_height;

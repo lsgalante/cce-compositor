@@ -51,7 +51,7 @@ impl PointerConstraint {
 
         let Some(sid) = Seat::id_of((*wlr_constraint).seat) else { return constraint };
         let Some(seat) = wm.seats.get_mut(sid) else { return constraint };
-        let focused = seat.wlr_seat.keyboard_focused_surface();
+        let focused = seat.wlr_seat().keyboard_focused_surface();
         if !focused.is_null() && focused == (*wlr_constraint).surface && seat.cursor.constraint.is_null() {
             seat.cursor.constraint = constraint;
             (*constraint).maybe_activate(wm);
@@ -159,7 +159,7 @@ impl PointerConstraint {
             let warp_lx = lx as f64 + sx / scale;
             let warp_ly = ly as f64 + sy / scale;
 
-            if !seat.cursor.wlr_cursor.warp(warp_lx, warp_ly) {
+            if !seat.cursor.wlr_cursor().warp(warp_lx, warp_ly) {
                 log::info!("deactivating pointer constraint, could not warp cursor");
                 self.deactivate(wm);
                 return;
@@ -217,11 +217,11 @@ impl PointerConstraint {
                 let sx = (*self.wlr_constraint).current.cursor_hint.x;
                 let sy = (*self.wlr_constraint).current.cursor_hint.y;
                 let scale = self.surface_scale(node);
-                seat.cursor.wlr_cursor.warp(lx as f64 + sx / scale, ly as f64 + sy / scale);
+                seat.cursor.wlr_cursor().warp(lx as f64 + sx / scale, ly as f64 + sy / scale);
                 // Through the field, which is unset once `Seat::destroy`
                 // has taken it: `wlr_seat_destroy` destroys the seat's
                 // constraints, and this runs from their destroy handler.
-                seat.wlr_seat.pointer_warp(sx, sy);
+                seat.wlr_seat().pointer_warp(sx, sy);
             }
         }
     }

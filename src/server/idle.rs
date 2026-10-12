@@ -485,7 +485,7 @@ impl IdleManager {
     pub fn set_displays(&mut self, outputs: &mut crate::output::Outputs, on: bool) {
         let mut touched = 0;
         for output in outputs.values_mut() {
-            if output.wlr_output.is_null() {
+            if output.wlr_output().is_null() {
                 continue;
             }
             if on {

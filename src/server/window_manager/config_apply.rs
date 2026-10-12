@@ -7,7 +7,7 @@ use super::*;
 impl WindowManager {
     pub unsafe fn apply_input_rules(&mut self, input: &mut crate::input_manager::InputManager) {
         crate::wm_scope!(mut);
-        for device in input.devices.ptrs() {
+        for device in input.devices() {
             let name_ptr = ffi::river_wlr_input_device_get_name((*device).wlr_device);
             if !name_ptr.is_null() {
                 let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
@@ -24,7 +24,7 @@ impl WindowManager {
 
     pub unsafe fn apply_input_config(&mut self, input: &mut crate::input_manager::InputManager) {
         crate::wm_scope!(mut);
-        for device in input.devices.ptrs() {
+        for device in input.devices() {
             if let Some(ref mut libinput) = (*device).libinput {
                 libinput.apply_config(&crate::shared::layout().input_config);
             }
@@ -39,7 +39,7 @@ impl WindowManager {
         crate::wm_scope!(mut);
         let (rate, delay) = crate::shared::layout().input_config.repeat_info();
         let mut count = 0;
-        for device in input.devices.ptrs() {
+        for device in input.devices() {
             if !(*device).virtual_device
                 && ffi::river_wlr_input_device_get_type((*device).wlr_device) == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD
             {
@@ -161,9 +161,9 @@ impl WindowManager {
                 Ok(()) => {
                     // Update scales of existing outputs from the newly loaded config
                     for output in self.outputs.values_mut() {
-                        let wlr_output = output.wlr_output.ptr();
+                        let wlr_output = output.wlr_output().ptr();
                         if !wlr_output.is_null() {
-                            let name = output.wlr_output.name();
+                            let name = output.wlr_output().name();
                             let scale_key = format!("scale_{}", name);
                             let output_scale = self.display.get(&scale_key)
                                 .map(|&s| s as f32)

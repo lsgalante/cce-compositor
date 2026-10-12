@@ -45,7 +45,7 @@ impl WindowManager {
         crate::wm_scope!(mut);
         let mut held = self.injected_super_held;
         for seat in self.seats.values() {
-            let kb = seat.wlr_seat.keyboard();
+            let kb = seat.wlr_seat().keyboard();
             if !kb.is_null() && (ffi::wlr_keyboard_get_modifiers(kb) & ffi::wlr_keyboard_modifier_WLR_MODIFIER_LOGO) != 0 {
                 held = true;
             }

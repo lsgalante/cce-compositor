@@ -18,7 +18,7 @@ impl TextInput {
     pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, wlr_text_input: *mut ffi::wlr_text_input_v3) -> Result<(), &'static str> {
         let Some(sid) = Seat::id_of((*wlr_text_input).seat) else { return Err("Seat is null") };
         let Some(seat) = wm.seats.get_mut(sid) else { return Err("Seat is gone") };
-        log::debug!("new text input on seat {}", seat.wlr_seat.name());
+        log::debug!("new text input on seat {}", seat.wlr_seat().name());
 
         let raw = Box::into_raw(Box::new(TextInput {
             wlr_text_input,

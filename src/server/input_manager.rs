@@ -8,7 +8,9 @@ use crate::seat::Seat;
 pub struct InputManager {
     /// The "default" seat, by id (look it up in `wm.seats`).
     pub default_seat: Option<crate::seat::SeatId>,
-    pub devices: crate::registry::Registry<crate::input_device::InputDevice>,
+    /// Private: a registry another module could replace or swap would stop
+    /// matching what the devices' destroy paths remove from it.
+    devices: crate::registry::Registry<crate::input_device::InputDevice>,
     pub objects: ffi::wl_list, // list of InputManagerObject
     pub global: *mut ffi::wl_global,
     
@@ -55,6 +57,34 @@ impl Default for InputManager {
 }
 
 impl InputManager {
+    /// Write an empty device registry into a zero-filled manager
+    /// (`Server::default`), whose registry bytes are not yet a valid `Vec`.
+    ///
+    /// # Safety
+    /// `this` points at an `InputManager` whose `devices` field has not been
+    /// initialised; it is overwritten without being dropped.
+    pub unsafe fn init_registry_in_place(this: *mut Self) {
+        std::ptr::write(std::ptr::addr_of_mut!((*this).devices), crate::registry::Registry::new());
+    }
+
+    /// Every registered input device, copied out (a walk may destroy one).
+    pub fn devices(&self) -> Vec<*mut crate::input_device::InputDevice> {
+        self.devices.ptrs()
+    }
+
+    /// Register a new device, at the front (as the list's head inserts did).
+    ///
+    /// # Safety
+    /// As `Registry::push`: `device` is live until `unregister_device`,
+    /// which its destroy path runs before freeing it.
+    pub unsafe fn register_device(&mut self, device: *mut crate::input_device::InputDevice) {
+        self.devices.push_front(device);
+    }
+
+    pub fn unregister_device(&mut self, device: *mut crate::input_device::InputDevice) {
+        self.devices.remove(device);
+    }
+
     /// Drop every input mapping onto `wlr_output`, which is being destroyed
     /// — the device's own (`map_to_output`, which tablet tools re-apply on
     /// every event) and its seat cursor's, which wlroots never clears and
@@ -72,7 +102,7 @@ impl InputManager {
             }
             (*dev).config.map_to_output = std::ptr::null_mut();
             if let Some(seat) = (*dev).sid.and_then(|sid| wm.seats.get(sid)) {
-                ffi::wlr_cursor_map_input_to_output(seat.cursor.wlr_cursor.ptr(), (*dev).wlr_device, std::ptr::null_mut());
+                ffi::wlr_cursor_map_input_to_output(seat.cursor.wlr_cursor().ptr(), (*dev).wlr_device, std::ptr::null_mut());
             }
         }
     }
@@ -103,7 +133,7 @@ impl InputManager {
         crate::shared::handles().default_seat.set(self.default_seat);
 
         if !(*server).xwayland.is_null() {
-            ffi::wlr_xwayland_set_seat((*server).xwayland, (*default_seat).wlr_seat.ptr());
+            ffi::wlr_xwayland_set_seat((*server).xwayland, (*default_seat).wlr_seat().ptr());
         }
 
         self.global = ffi::wl_global_create(
@@ -209,7 +239,7 @@ impl InputManager {
         log::info!("[deinit] destroying seats");
         for id in wm.seats.ids() {
             if let Some(seat) = wm.seats.take(id) {
-                log::info!("[deinit] calling Seat::destroy for {:?}", seat.wlr_seat.ptr());
+                log::info!("[deinit] calling Seat::destroy for {:?}", seat.wlr_seat().ptr());
                 Seat::destroy(seat);
             }
         }
@@ -352,7 +382,7 @@ unsafe extern "C" fn input_manager_create_seat(
 
     // Check if seat already exists
     let exists = (*crate::reentry::wm(crate::shared::server_ptr())).seats.values().any(|seat| {
-        std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name(seat.wlr_seat.ptr())).to_string_lossy() == name_str
+        std::ffi::CStr::from_ptr(ffi::river_wlr_seat_get_name(seat.wlr_seat().ptr())).to_string_lossy() == name_str
     });
 
     if !exists {
@@ -381,7 +411,7 @@ unsafe extern "C" fn input_manager_destroy_seat(
 
     // Skip default seat (which is the first seat in the list)
     for seat in (*crate::reentry::wm(crate::shared::server_ptr())).seats.ptrs().into_iter().skip(1) {
-        let seat_name = (*seat).wlr_seat.name();
+        let seat_name = (*seat).wlr_seat().name();
         if seat_name == name_str {
             (*seat).destroying = true;
             crate::shared::pending().dirty_windowing();

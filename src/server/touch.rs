@@ -267,7 +267,7 @@ impl Cursor {
             if lock_ok
                 && !result.surface.is_null()
                 && !crate::shared::window_adjust_active()
-                && ffi::wlr_surface_accepts_touch(result.surface, seat.wlr_seat.ptr())
+                && ffi::wlr_surface_accepts_touch(result.surface, seat.wlr_seat().ptr())
             {
                 // The implicit grab's frame (see the button path): the
                 // surface's scene buffer may be drawn scaled, so map through
@@ -416,7 +416,7 @@ impl Cursor {
                     _ => {}
                 }
                 ffi::wlr_seat_touch_notify_down(
-                    seat_mut!(wm, sid, ()).wlr_seat.ptr(),
+                    seat_mut!(wm, sid, ()).wlr_seat().ptr(),
                     result.surface,
                     time_msec,
                     id,
@@ -440,7 +440,7 @@ impl Cursor {
         match route {
             TouchRoute::Claimed => Cursor::claim_motion(wm, sid, time_msec, sys),
             TouchRoute::Client { origin, scale } => {
-                this.wlr_seat.touch_notify_motion(time_msec, id, (lx - origin.0) * scale, (ly - origin.1) * scale);
+                this.wlr_seat().touch_notify_motion(time_msec, id, (lx - origin.0) * scale, (ly - origin.1) * scale);
                 // A touch drag's icon follows the finger.
                 this.update_drag_icons();
             }
@@ -488,7 +488,7 @@ impl Cursor {
                 // touch's (`osk.rs`).
                 Cursor::note_touch_for_osk(wm, sid, point.lx, point.ly);
                 let this = cursor_mut!(wm, sid, ());
-                this.wlr_seat.touch_notify_up(time_msec, id);
+                this.wlr_seat().touch_notify_up(time_msec, id);
             }
             TouchRoute::Pointer { start, pressed: false, .. } => {
                 // A tap.
@@ -513,7 +513,7 @@ impl Cursor {
         let Some(point) = this.touch_points.remove(&id) else { return };
         match point.route {
             TouchRoute::Claimed => Cursor::claim_lift(wm, sid, id, point, crate::util::msec_timestamp(), true, sys),
-            TouchRoute::Client { .. } => this.wlr_seat.touch_cancel_point(id),
+            TouchRoute::Client { .. } => this.wlr_seat().touch_cancel_point(id),
             TouchRoute::Pointer { pressed: true, .. } => Cursor::inject_button(wm, sid, BTN_LEFT, false, sys),
             TouchRoute::Pointer { pressed: false, .. } | TouchRoute::Ignored => {}
         }
@@ -523,9 +523,9 @@ impl Cursor {
         // The emulated pointer frames each of its own events; only touch
         // clients are waiting on this one.
         if self.touch_points.values().any(|p| matches!(p.route, TouchRoute::Client { .. }))
-            || self.wlr_seat.touch_num_points() > 0
+            || self.wlr_seat().touch_num_points() > 0
         {
-            self.wlr_seat.touch_notify_frame();
+            self.wlr_seat().touch_notify_frame();
         }
     }
 
@@ -542,7 +542,7 @@ impl Cursor {
             let point = this.touch_points.get_mut(&id).unwrap();
             let route = std::mem::replace(&mut point.route, TouchRoute::Claimed);
             match route {
-                TouchRoute::Client { .. } => this.wlr_seat.touch_cancel_point(id),
+                TouchRoute::Client { .. } => this.wlr_seat().touch_cancel_point(id),
                 TouchRoute::Pointer { pressed: true, .. } => Cursor::inject_button(wm, sid, BTN_LEFT, false, sys),
                 _ => {}
             }
@@ -594,7 +594,7 @@ impl Cursor {
                     EdgeProgress::NotEdge => Cursor::edge_release(wm, sid, time_msec, sys),
                     EdgeProgress::Fire => {
                         this.touch_claim = Claim::Edge { id, edge, start, fired: true };
-                        let mods = gesture_mods(&seat_mut!(wm, sid, ()).wlr_seat);
+                        let mods = gesture_mods(&seat_mut!(wm, sid, ()).wlr_seat());
                         if let Some((action, command)) = gesture_bind("edge", 1, mods, |d| d == edge.name()) {
                             log::info!("touch: edge_{} fired {action:?}", edge.name());
                             run_gesture_action(wm, action, command.as_deref());
@@ -734,7 +734,7 @@ impl Cursor {
             (Edge::Top, ly - y0 < EDGE_ZONE && beyond_is_empty(lx, y0 - 1.0)),
             (Edge::Bottom, y1 - ly <= EDGE_ZONE && beyond_is_empty(lx, y1 + 1.0)),
         ];
-        let mods = gesture_mods(&self.wlr_seat);
+        let mods = gesture_mods(&self.wlr_seat());
         candidates
             .into_iter()
             .filter(|&(_, near)| near)
@@ -753,7 +753,7 @@ impl Cursor {
 
     /// Fire a pinch bind if the spread has gone far enough; once per gesture.
     fn touch_pinch(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, fingers: u32, scale: f64) -> MultiKind {
-        let mods = gesture_mods(&seat_mut!(wm, sid, MultiKind::Undecided).wlr_seat);
+        let mods = gesture_mods(&seat_mut!(wm, sid, MultiKind::Undecided).wlr_seat());
         match gesture_bind("pinch", fingers, mods, |d| pinch_hits(d, scale)) {
             Some((action, command)) => {
                 log::info!("touch: pinch fired {action:?}");
@@ -774,7 +774,7 @@ impl Cursor {
         };
         let mut lx = 0.0;
         let mut ly = 0.0;
-        ffi::wlr_cursor_absolute_to_layout_coords(self.wlr_cursor.ptr(), wlr_device, x, y, &mut lx, &mut ly);
+        ffi::wlr_cursor_absolute_to_layout_coords(self.wlr_cursor().ptr(), wlr_device, x, y, &mut lx, &mut ly);
         (lx, ly)
     }
 }
