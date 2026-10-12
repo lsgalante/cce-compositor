@@ -144,7 +144,7 @@ impl LockManager {
     /// state waits for. Returns true when this call completed it: the
     /// caller then tells the idle manager (`IdleManager::on_locked`).
     #[must_use]
-    pub unsafe fn maybe_lock(&mut self, outputs: &crate::output::Outputs) -> bool {
+    pub fn maybe_lock(&mut self, outputs: &crate::output::Outputs) -> bool {
         let mut all_outputs_blanked = true;
         let mut all_outputs_rendered_lock_surface = true;
 
@@ -186,10 +186,12 @@ impl LockManager {
         false
     }
 
-    pub unsafe fn send_locked(&mut self) {
+    pub fn send_locked(&mut self) {
         log::info!("session locked");
         if !self.lock.is_null() {
-            ffi::wlr_session_lock_v1_send_locked(self.lock);
+            // SAFETY: a non-null `lock` is live (the field's invariant: set
+            // by `handle_new_lock`, cleared by the lock's destroy handler).
+            unsafe { ffi::wlr_session_lock_v1_send_locked(self.lock) };
         }
         self.set_state(LockState::Locked);
         for tx in self.lock_waiters.take().unwrap_or_default() {
@@ -215,7 +217,7 @@ impl LockManager {
     /// when the lock completed at once (no output to wait for), as
     /// [`Self::maybe_lock`] does.
     #[must_use]
-    pub unsafe fn lock_now(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
+    pub fn lock_now(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
         if self.state != LockState::Unlocked {
             return false;
         }
@@ -384,9 +386,7 @@ impl LockSurface {
                     crate::seat::Seat::focus(wm, seat, new_focus);
                 }
             }
-            if let Some(p) = wm.seats.ptr(seat) {
-                crate::cursor::Cursor::update_state(wm, (*p).cursor.sid);
-            }
+            crate::cursor::Cursor::update_state(wm, seat);
         }
 
         if !(*lock_surface).idle_update_focus.is_null() {
@@ -397,6 +397,10 @@ impl LockSurface {
         (*lock_surface).surface_destroy.disconnect();
 
         ffi::river_wlr_surface_set_data((*(*lock_surface).wlr_lock_surface).surface, std::ptr::null_mut());
+        // wlroots unlinks the lock surface only after this destroy handler:
+        // a walk of the lock's surfaces before then (another lock surface's
+        // own destroy, `lock_surface_from_output`) must not find this box.
+        (*(*lock_surface).wlr_lock_surface).data = std::ptr::null_mut();
 
         let _ = Box::from_raw(lock_surface);
     }
@@ -413,11 +417,17 @@ impl LockSurface {
         unsafe { ffi::river_wlr_output_get_data((*self.wlr_lock_surface).output) as *mut crate::output::Output }
     }
 
-    pub unsafe fn configure(&self) {
+    pub fn configure(&self) {
         let mut width: i32 = 0;
         let mut height: i32 = 0;
-        ffi::wlr_output_effective_resolution((*self.wlr_lock_surface).output, &mut width, &mut height);
-        ffi::wlr_session_lock_surface_v1_configure(self.wlr_lock_surface, width as u32, height as u32);
+        // SAFETY: the wlroots lock surface outlives this LockSurface (freed
+        // in its destroy handler; the private field is set once, by
+        // `create`), and so does the output it is on: wlroots destroys an
+        // output's lock surface with the output.
+        unsafe {
+            ffi::wlr_output_effective_resolution((*self.wlr_lock_surface).output, &mut width, &mut height);
+            ffi::wlr_session_lock_surface_v1_configure(self.wlr_lock_surface, width as u32, height as u32);
+        }
     }
 }
 

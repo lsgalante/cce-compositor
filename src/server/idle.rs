@@ -527,7 +527,7 @@ impl IdleManager {
     /// `ccectl idle sleep`): a sleep used to run with the session unlocked,
     /// so the desktop was there for whoever woke the machine. A lid close is
     /// logind's sleep, not ours, and is covered by `sleep_lock`.
-    pub unsafe fn lock_then_sleep(
+    pub fn lock_then_sleep(
         &mut self,
         wm: &mut crate::window_manager::WindowManager,
         lock: &mut crate::lock_manager::LockManager,
@@ -627,7 +627,7 @@ impl IdleManager {
     }
 
     /// `ccectl idle …` — see `cce_ctl.rs` for the surface.
-    pub unsafe fn ipc(
+    pub fn ipc(
         &mut self,
         wm: &mut crate::window_manager::WindowManager,
         lock: &mut crate::lock_manager::LockManager,
