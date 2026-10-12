@@ -377,6 +377,16 @@ impl Wlr<ffi::wlr_cursor> {
 }
 
 impl Wlr<ffi::wlr_output> {
+    /// The panel's physical size in mm, as the output reports it (EDID, or
+    /// a configured `size_mm`); (0, 0) when unset or unknown.
+    pub fn phys_size(&self) -> (i32, i32) {
+        let (mut w, mut h) = (0, 0);
+        if let Some(o) = self.live() {
+            unsafe { ffi::river_wlr_output_get_phys_size(o, &mut w, &mut h) };
+        }
+        (w, h)
+    }
+
     /// Whether committing `state` would succeed (a TEST_ONLY commit);
     /// false when unset.
     pub fn test_state(&self, state: &OutputStateBuf) -> bool {

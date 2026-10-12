@@ -82,7 +82,7 @@ impl WindowManager {
     
     }
 
-    pub unsafe fn process_ipc_command(&mut self, cmd: &str, sys: &mut crate::ctx::Sys, input: &mut crate::input_manager::InputManager) -> String {
+    pub fn process_ipc_command(&mut self, cmd: &str, sys: &mut crate::ctx::Sys, input: &mut crate::input_manager::InputManager) -> String {
         crate::wm_scope!(mut);
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
@@ -139,8 +139,11 @@ impl WindowManager {
                     if surface.is_null() {
                         continue;
                     }
-                    if (*surface).client_pid() == pid {
-                        (*surface).start_fade(0.0, ms);
+                    // SAFETY: an entry of the layer-surface store is live
+                    // (`LayerSurfaces`), and nothing else borrows it here.
+                    let layer = unsafe { &mut *surface };
+                    if layer.client_pid() == pid {
+                        layer.start_fade(0.0, ms);
                         faded = true;
                     }
                 }
@@ -209,11 +212,16 @@ impl WindowManager {
                         continue;
                     }
                     out.push_str(&format!("[{}]\n", name));
-                    ffi::wlr_scene_node_for_each_buffer(
-                        tree as *mut ffi::wlr_scene_node,
-                        Some(dump_iter),
-                        &mut out as *mut String as *mut std::ffi::c_void,
-                    );
+                    // SAFETY: a non-null tree of the shared scene is live;
+                    // `dump_iter` only reads each buffer it is handed and
+                    // appends to `out`, which outlives the walk.
+                    unsafe {
+                        ffi::wlr_scene_node_for_each_buffer(
+                            tree as *mut ffi::wlr_scene_node,
+                            Some(dump_iter),
+                            &mut out as *mut String as *mut std::ffi::c_void,
+                        )
+                    };
                 }
                 return out;
             }
@@ -267,11 +275,18 @@ impl WindowManager {
                     ("whole-tree", win.tree.node()),
                 ] {
                     out.push_str(&format!("[{}]\n", name));
-                    ffi::wlr_scene_node_for_each_buffer(
-                        node,
-                        Some(dump_iter),
-                        &mut out as *mut String as *mut std::ffi::c_void,
-                    );
+                    if node.is_null() {
+                        continue;
+                    }
+                    // SAFETY: a non-null handle node is live; `dump_iter`
+                    // only reads and appends to `out`.
+                    unsafe {
+                        ffi::wlr_scene_node_for_each_buffer(
+                            node,
+                            Some(dump_iter),
+                            &mut out as *mut String as *mut std::ffi::c_void,
+                        )
+                    };
                 }
                 return out;
             }
@@ -299,8 +314,10 @@ impl WindowManager {
                 );
                 for w in self.windows.values() {
                     let cfg = match w.impl_type() {
+                        // SAFETY: as `Window::get_title`: `impl_type` names
+                        // the window's live implementation.
                         crate::window::WindowImpl::Toplevel(t) if !t.is_null() => {
-                            format!("{:?}", (*t).configure_state)
+                            format!("{:?}", unsafe { &(*t).configure_state })
                         }
                         _ => "-".to_string(),
                     };
@@ -878,7 +895,10 @@ impl WindowManager {
                         if xw.is_null() {
                             return "error: window not found\n".to_string();
                         }
-                        match (*xw).forget_min_size(self) {
+                        // SAFETY: as `Window::get_title`: `impl_type` names
+                        // the window's live implementation, in its own
+                        // allocation beside the window manager.
+                        match unsafe { (*xw).forget_min_size(self) } {
                             Some((w, h)) => format!("ok forgot {}x{}\n", w, h),
                             None => "ok none stored\n".to_string(),
                         }
@@ -1054,8 +1074,7 @@ impl WindowManager {
                         continue;
                     }
                     let name = output.wlr_output().name();
-                    let (mut mm_w, mut mm_h) = (0i32, 0i32);
-                    ffi::river_wlr_output_get_phys_size(wlr_output, &mut mm_w, &mut mm_h);
+                    let (mm_w, mm_h) = output.wlr_output().phys_size();
                     let source = if self.display.contains_key(&format!("mm_w_{}", name)) {
                         "configured"
                     } else if mm_w > 0 && mm_h > 0 {
@@ -1157,7 +1176,8 @@ impl WindowManager {
                                 vx: w.virtual_x,
                                 vy: w.virtual_y,
                                 x11: match w.impl_type() {
-                                    crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => Some((*xw).xsurface().window_id()),
+                                    // SAFETY: as `Window::get_title`.
+                                    crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => Some(unsafe { (*xw).xsurface().window_id() }),
                                     _ => None,
                                 },
                                 cell: cell.clone(),
@@ -1318,11 +1338,15 @@ impl WindowManager {
                         }
                         let mut found = false;
                         for device in input.devices() {
-                            let name_ptr = ffi::river_wlr_input_device_get_name((*device).wlr_device);
+                            // SAFETY: a registered input device is live
+                            // (`InputManager::devices`), and so is its wlroots
+                            // device and the name it owns.
+                            let device = unsafe { &mut *device };
+                            let name_ptr = unsafe { ffi::river_wlr_input_device_get_name(device.wlr_device) };
                             if !name_ptr.is_null() {
-                                let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy();
+                                let name = unsafe { std::ffi::CStr::from_ptr(name_ptr) }.to_string_lossy();
                                 if device_name == "*" || name.contains(device_name) {
-                                    (*device).config.scroll_factor = factor;
+                                    device.config.scroll_factor = factor;
                                     found = true;
                                 }
                             }
@@ -1596,35 +1620,33 @@ impl WindowManager {
                         ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
                     };
                     // evdev → real xkb modifier name (left/right pairs).
-                    let mod_name: Option<&[u8]> = match keycode {
-                        42 | 54 => Some(b"Shift\0"),
-                        29 | 97 => Some(b"Control\0"),
-                        56 | 100 => Some(b"Mod1\0"),
-                        125 | 126 => Some(b"Mod4\0"),
+                    let mod_name: Option<&std::ffi::CStr> = match keycode {
+                        42 | 54 => Some(c"Shift"),
+                        29 | 97 => Some(c"Control"),
+                        56 | 100 => Some(c"Mod1"),
+                        125 | 126 => Some(c"Mod4"),
                         _ => None,
                     };
-                    for seat in self.seats.ptrs() {
-                        (*seat).ensure_synthetic_keyboard();
-                        crate::seat::Seat::handle_activity(self, (*seat).id, sys);
-                        (*seat).wlr_seat().keyboard_notify_key(crate::util::msec_timestamp(), keycode, state);
-                        if let Some(name) = mod_name {
-                            let kb = (*seat).wlr_seat().keyboard();
-                            if !kb.is_null() && !(*kb).keymap.is_null() {
-                                let idx = ffi::xkb_keymap_mod_get_index((*kb).keymap, name.as_ptr() as *const _);
-                                if idx != ffi::XKB_MOD_INVALID {
-                                    let mask = 1u32 << idx;
-                                    if pressed {
-                                        self.injected_key_mods |= mask;
-                                    } else {
-                                        self.injected_key_mods &= !mask;
-                                    }
-                                    // Injected mask OR'd over the device's live state, so a
-                                    // real keyboard keeps working mid-injection.
-                                    let mut mods = (*kb).modifiers;
-                                    mods.depressed |= self.injected_key_mods;
-                                    (*seat).wlr_seat().keyboard_notify_modifiers(&mut mods);
-                                }
-                            }
+                    for sid in self.seats.ids() {
+                        if let Some(seat) = self.seats.get_mut(sid) {
+                            seat.ensure_synthetic_keyboard();
+                        }
+                        crate::seat::Seat::handle_activity(self, sid, sys);
+                        let Some(seat) = self.seats.get(sid) else { continue };
+                        seat.wlr_seat().keyboard_notify_key(crate::util::msec_timestamp(), keycode, state);
+                        let Some(idx) = mod_name.and_then(|name| seat.wlr_seat().keyboard_mod_index(name)) else { continue };
+                        let mask = 1u32 << idx;
+                        if pressed {
+                            self.injected_key_mods |= mask;
+                        } else {
+                            self.injected_key_mods &= !mask;
+                        }
+                        // Injected mask OR'd over the device's live state, so a
+                        // real keyboard keeps working mid-injection.
+                        let Some(seat) = self.seats.get(sid) else { continue };
+                        if let Some(mut mods) = seat.wlr_seat().keyboard_modifier_state() {
+                            mods.depressed |= self.injected_key_mods;
+                            seat.wlr_seat().keyboard_notify_modifiers(&mods);
                         }
                     }
                     // The compositor's own Super state (window-adjust mode)
@@ -1641,15 +1663,18 @@ impl WindowManager {
             "keypress" | "key-press" => {
                 if parts.len() < 2 { return "error: usage: keypress <keycode>\n".to_string(); }
                 if let Ok(keycode) = parts[1].parse::<u32>() {
-                    for seat in self.seats.ptrs() {
+                    for sid in self.seats.ids() {
                         // A backend with no keyboard device leaves clients
                         // without a keymap, and a keymap-less client drops
                         // every key we notify. Attach one first.
-                        (*seat).ensure_synthetic_keyboard();
-                        crate::seat::Seat::handle_activity(self, (*seat).id, sys);
+                        if let Some(seat) = self.seats.get_mut(sid) {
+                            seat.ensure_synthetic_keyboard();
+                        }
+                        crate::seat::Seat::handle_activity(self, sid, sys);
+                        let Some(seat) = self.seats.get(sid) else { continue };
                         let time = crate::util::msec_timestamp();
-                        (*seat).wlr_seat().keyboard_notify_key(time, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
-                        (*seat).wlr_seat().keyboard_notify_key(time + 1, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);
+                        seat.wlr_seat().keyboard_notify_key(time, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED);
+                        seat.wlr_seat().keyboard_notify_key(time + 1, keycode, ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED);
                     }
                     "ok\n".to_string()
                 } else {
