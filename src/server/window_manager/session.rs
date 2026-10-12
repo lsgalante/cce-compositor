@@ -51,7 +51,7 @@ impl WindowManager {
     /// scene rects, not windows; focus logic never sees them.
     pub unsafe fn create_restore_placeholders(&mut self) {
         crate::wm_scope!(mut);
-        let parent = crate::shared::scene().layers.wm.raw();
+        let parent = &crate::shared::scene().layers.wm;
         if parent.is_null() {
             return;
         }
@@ -75,12 +75,12 @@ impl WindowManager {
             for c in color.iter_mut() {
                 *c *= 0.25;
             }
-            let rect = ffi::wlr_scene_rect_create(parent, entry.width as i32, entry.height as i32, color.as_ptr());
+            let rect = crate::scene_handle::SceneRect::create(parent, entry.width as i32, entry.height as i32, &color);
             if rect.is_null() {
                 continue;
             }
             self.restore_placeholders.push(RestorePlaceholder {
-                rect: crate::scene_handle::SceneRect::adopt(rect),
+                rect,
                 app_id: entry.app_id.clone(),
                 title: entry.title.clone(),
                 vx: entry.virtual_x,
@@ -467,7 +467,7 @@ impl WindowManager {
     /// The windows the exit already closed would otherwise vanish from the
     /// next state snapshot (`save_state` runs every transaction), and with
     /// them from the next login: they are remembered as `exit_orphans`.
-    pub unsafe fn cancel_clean_exit(&mut self) {
+    pub fn cancel_clean_exit(&mut self) {
         crate::wm_scope!(mut);
         if !self.clean_exit_in_progress {
             return;
@@ -508,7 +508,8 @@ impl WindowManager {
 
         // A restart-compositor that stalled must not leave its flag behind
         // for the next plain logout to act on.
-        let user = std::env::var("USER").unwrap_or_else(|_| format!("uid{}", libc::getuid()));
+        // SAFETY: getuid has no preconditions and cannot fail.
+        let user = std::env::var("USER").unwrap_or_else(|_| format!("uid{}", unsafe { libc::getuid() }));
         let _ = std::fs::remove_file(cce_core::ipc::ctl::restart_flag(&user));
 
         let held_by = remaining.join(", ");

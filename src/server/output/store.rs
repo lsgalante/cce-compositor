@@ -95,13 +95,6 @@ impl Outputs {
         self.values().find(|o| o.sent.state == super::OutputStateValue::Enabled)
     }
 
-    /// The oldest output whose applied state is Enabled, or null.
-    pub fn first_enabled_ptr(&self) -> *mut Output {
-        self.values()
-            .find(|o| o.sent.state == super::OutputStateValue::Enabled)
-            .map_or(std::ptr::null_mut(), |o| o as *const Output as *mut Output)
-    }
-
     /// Layout box of the first enabled output — `(x, y, width, height)`,
     /// the viewport placement is measured against; 1920x1080 at the origin
     /// before any output is up.

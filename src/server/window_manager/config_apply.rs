@@ -109,7 +109,7 @@ impl WindowManager {
     /// box happens to touch. A window under an active seat op is left
     /// alone — the op owns its geometry until release. No-op when the
     /// geometry is unchanged.
-    pub unsafe fn retile_for_grid_change(&mut self, old: crate::policy::snap::SnapParams) {
+    pub fn retile_for_grid_change(&mut self, old: crate::policy::snap::SnapParams) {
         crate::wm_scope!(mut);
         let new = crate::shared::layout().snap_params();
         if old.cell_w == new.cell_w
@@ -119,7 +119,7 @@ impl WindowManager {
         {
             return;
         }
-        let op_win = self.first_seat().and_then(|s| (*s).op.as_ref().and_then(|op| op.window));
+        let op_win = self.seats.values().next().and_then(|s| s.op.as_ref().and_then(|op| op.window));
         for id in self.windows.ids() {
             if Some(id) == op_win {
                 continue;
@@ -152,7 +152,7 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn reload_config(&mut self, sys: &mut crate::ctx::Sys, input: &mut crate::input_manager::InputManager) -> Result<(), String> {
+    pub fn reload_config(&mut self, sys: &mut crate::ctx::Sys, input: &mut crate::input_manager::InputManager) -> Result<(), String> {
         crate::wm_scope!(mut);
         if let Some(path) = crate::config::default_config_path() {
             let old_sp = crate::shared::layout().snap_params();

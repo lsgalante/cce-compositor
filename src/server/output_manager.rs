@@ -131,9 +131,6 @@ impl OutputManager {
         }
     }
 
-    pub fn output_at(&mut self, lx: f64, ly: f64) -> *mut ffi::wlr_output {
-        output_at(lx, ly)
-    }
 
     pub fn commit_output_state(&mut self, lock: &crate::lock_manager::LockManager, outputs: &mut crate::output::Outputs) {
 
@@ -466,12 +463,11 @@ impl crate::output::Outputs {
         boxes
     }
 
-    pub unsafe fn auto_layout(&self) {
+    pub fn auto_layout(&mut self) {
         let mut rightmost_edge: i32 = 0;
         let mut row_y: i32 = 0;
 
-        for output_ptr in self.ptrs() {
-            let output = &mut *output_ptr;
+        for output in self.values() {
             if !output.scheduled.auto_layout {
                 let (w, _) = output.scheduled.dimensions();
                 let x = output.scheduled.x + w;
@@ -482,8 +478,7 @@ impl crate::output::Outputs {
             }
         }
 
-        for output_ptr in self.ptrs() {
-            let output = &mut *output_ptr;
+        for output in self.values_mut() {
             if output.scheduled.auto_layout {
                 output.scheduled.x = rightmost_edge;
                 output.scheduled.y = row_y;
@@ -493,35 +488,25 @@ impl crate::output::Outputs {
         }
     }
 
-    pub unsafe fn max_overlap_output(&self, box_: *const ffi::wlr_box) -> *mut ffi::wlr_output {
-        let mut max_overlap_area = 0;
-        let mut max_overlap_output = std::ptr::null_mut();
-
-        for output_ptr in self.ptrs() {
-            let output = &mut *output_ptr;
-            let wlr_output = output.wlr_output.ptr();
-            if wlr_output.is_null() {
+    /// The output whose layout box overlaps `box_` the most, if any does.
+    pub fn max_overlap_output(&self, box_: &ffi::wlr_box) -> Option<&Output> {
+        let mut best: Option<(&Output, i32)> = None;
+        for output in self.values() {
+            if output.wlr_output.is_null() {
                 continue;
             }
-
-            let overlap = output.wlr_output.layout_box();
-            
-            if overlap.width <= 0 || overlap.height <= 0 {
+            let layout_box = output.wlr_output.layout_box();
+            if layout_box.width <= 0 || layout_box.height <= 0 {
                 continue;
             }
-
-            let mut dest: ffi::wlr_box = std::mem::zeroed();
-            if ffi::wlr_box_intersection(&mut dest, &overlap, box_) {
-                let overlap_area = dest.width * dest.height;
-                if overlap_area > max_overlap_area {
-                    max_overlap_area = overlap_area;
-                    max_overlap_output = wlr_output;
+            if let Some(overlap) = crate::wlr::box_intersection(&layout_box, box_) {
+                let area = overlap.width * overlap.height;
+                if best.map_or(true, |(_, a)| area > a) {
+                    best = Some((output, area));
                 }
             }
-
         }
-
-        max_overlap_output
+        best.map(|(output, _)| output)
     }
 }
 

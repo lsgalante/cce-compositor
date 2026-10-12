@@ -99,31 +99,24 @@ unsafe extern "C" fn inspector_register_client(
     (*inspector).client_states.entry(surface).or_insert_with(String::new);
 }
 
-unsafe fn create_memfd_with_data(name: &str, data: &[u8]) -> Option<(std::os::raw::c_int, u32)> {
+/// A memfd holding `data`, rewound to its start: the raw fd (whoever sends
+/// it closes it) and the length.
+fn create_memfd_with_data(name: &str, data: &[u8]) -> Option<(std::os::raw::c_int, u32)> {
+    use std::io::{Seek, Write};
+    use std::os::fd::{FromRawFd, IntoRawFd};
     let c_name = std::ffi::CString::new(name).ok()?;
-    let fd = libc::memfd_create(c_name.as_ptr(), libc::MFD_CLOEXEC);
+    // SAFETY: a NUL-terminated name and value flags; the result is a new fd
+    // or -1.
+    let fd = unsafe { libc::memfd_create(c_name.as_ptr(), libc::MFD_CLOEXEC) };
     if fd < 0 {
         return None;
     }
-    let mut written = 0;
-    while written < data.len() {
-        let res = libc::write(
-            fd,
-            data.as_ptr().add(written) as *const _,
-            data.len() - written,
-        );
-        if res < 0 {
-            let err = *libc::__errno_location();
-            if err == libc::EINTR {
-                continue;
-            }
-            libc::close(fd);
-            return None;
-        }
-        written += res as usize;
-    }
-    libc::lseek(fd, 0, libc::SEEK_SET);
-    Some((fd, data.len() as u32))
+    // SAFETY: `fd` was just created, and nothing else owns it. On an error
+    // below the file closes it.
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    file.write_all(data).ok()?;
+    file.rewind().ok()?;
+    Some((file.into_raw_fd(), data.len() as u32))
 }
 
 unsafe extern "C" fn inspector_update_state(

@@ -218,10 +218,13 @@ unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *
         return;
     }
 
-    let wlr_output = (*crate::reentry::wm(server)).outputs.max_overlap_output(&anchor);
-    if wlr_output.is_null() {
+    let Some(output_box) = (*crate::reentry::wm(server))
+        .outputs
+        .max_overlap_output(&anchor)
+        .map(|output| output.wlr_output.layout_box())
+    else {
         return;
-    }
+    };
 
     // The box goes to wlroots in the ROOT surface's coordinates. For a
     // top-level menu the parent is the root; for a submenu it is the
@@ -233,8 +236,7 @@ unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *
     let mut root_ly: i32 = 0;
     ffi::wlr_scene_node_coords((*popup).root_tree.node(), &mut root_lx, &mut root_ly);
 
-    let mut constraint = std::mem::zeroed();
-    ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut constraint);
+    let mut constraint = output_box;
     constraint.x -= root_lx;
     constraint.y -= root_ly;
 

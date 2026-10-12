@@ -468,7 +468,7 @@ impl WindowManager {
         // that stepped aside or sits on the desk in overview, and not behind
         // the lock screen. A hint change alone runs no transaction, so
         // `tearing.rs` asks for a render pass to land here.
-        let mut tearing: Vec<*mut crate::output::Output> = Vec::new();
+        let mut tearing: Vec<crate::output::OutputId> = Vec::new();
         if crate::shared::layout().allow_tearing && crate::shared::unlocked() {
             for window in self.windows.values() {
                 if !window.closed
@@ -478,12 +478,12 @@ impl WindowManager {
                         == ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_ASYNC
                 {
                     let stores = stores!(self);
-                    tearing.push(window.fullscreen_output(stores));
+                    tearing.extend(window.fullscreen_output(stores).map(|o| o.id));
                 }
             }
         }
         for output in self.outputs.values_mut() {
-            let wanted = tearing.contains(&(output as *mut crate::output::Output));
+            let wanted = tearing.contains(&output.id);
             if output.rendering_requested.tearing != wanted {
                 log::info!("output {:?}: tearing {}", output.id, if wanted { "on" } else { "off" });
             }

@@ -455,10 +455,6 @@ pub use borders::*;
 /// What everything but the window manager's map holds to name a window:
 /// a generational key, so one that outlives its window looks up as gone.
 pub use crate::policy::api::WindowId;
-pub(crate) unsafe fn clock_gettime(clk_id: libc::clockid_t, tp: &mut libc::timespec) -> libc::c_int {
-    libc::clock_gettime(clk_id, tp)
-}
-
 impl Window {
     pub fn id(&self) -> WindowId {
         WindowId(self.ref_key)
@@ -759,17 +755,14 @@ impl Window {
     /// on its output — where focusing it pans back to, so a window that
     /// stepped aside slides in and lands pinned without a jump. `None`
     /// without an output to fill.
-    pub unsafe fn fullscreen_anchor_pan(&self, wm: &crate::window_manager::WindowManager) -> Option<(f64, f64)> {
+    pub fn fullscreen_anchor_pan(&self, wm: &crate::window_manager::WindowManager) -> Option<(f64, f64)> {
         let stores = stores!(wm);
-        let output = self.fullscreen_output(stores);
-        if output.is_null() {
-            return None;
-        }
+        let output = self.fullscreen_output(stores)?;
         let zoom = wm.desk_zoom.max(0.01);
         let (first_x, first_y, _, _) = self.first_enabled_output_box(stores);
         Some((
-            self.virtual_x - ((*output).sent.x as f64 - first_x) / zoom,
-            self.virtual_y - ((*output).sent.y as f64 - first_y) / zoom,
+            self.virtual_x - (output.sent.x as f64 - first_x) / zoom,
+            self.virtual_y - (output.sent.y as f64 - first_y) / zoom,
         ))
     }
 
@@ -781,7 +774,7 @@ impl Window {
     /// that focus pans (`Seat::focus_follow_pan`). Not in overview or under
     /// a camera flight, where the window is a slab on the desk anyway and
     /// the camera is not the enter's to move.
-    unsafe fn pan_to_restored_fullscreen_spot(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    fn pan_to_restored_fullscreen_spot(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         if crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
             || wm.camera_ramp_anim.is_some()
             || window_ref!(wm, id, ()).fullscreen_yields(wm)
@@ -1212,6 +1205,16 @@ impl Window {
             // SAFETY: as `Window::get_title`: `impl_type` names this
             // window's live implementation (`set_impl`'s contract).
             WindowImpl::Toplevel(toplevel) if !toplevel.is_null() => Some(unsafe { (*toplevel).geometry }),
+            _ => None,
+        }
+    }
+
+    /// An X11 window's X window id; `None` for any other kind of window.
+    pub fn x11_window_id(&self) -> Option<u32> {
+        match self.impl_type {
+            // SAFETY: as `Window::get_title`: `impl_type` names this
+            // window's live implementation (`set_impl`'s contract).
+            WindowImpl::Xwayland(xwindow) if !xwindow.is_null() => Some(unsafe { (*xwindow).xsurface.window_id() }),
             _ => None,
         }
     }
@@ -1849,7 +1852,7 @@ impl Window {
         } }
     }
 
-    pub unsafe fn get_decorations_size(&self) -> (i32, i32) {
+    pub fn get_decorations_size(&self) -> (i32, i32) {
         if self.wm_requested.ssd {
             return (0, 0);
         }
@@ -1859,41 +1862,33 @@ impl Window {
     /// Raw client-side decoration size (surface minus geometry), regardless
     /// of the current SSD setting. Callers that honor SSD gate on it
     /// themselves.
-    pub unsafe fn measure_decorations(&self) -> (i32, i32) {
+    pub fn measure_decorations(&self) -> (i32, i32) {
         let surface = self.root_surface();
         if surface.is_null() {
             return (0, 0);
         }
-        let surf_w = ffi::river_wlr_surface_get_width(surface);
-        let surf_h = ffi::river_wlr_surface_get_height(surface);
-        
-        let (geom_w, geom_h) = match self.impl_type {
-            WindowImpl::Toplevel(toplevel) => {
-                if toplevel.is_null() {
-                    (surf_w, surf_h)
-                } else {
-                    ((*toplevel).geometry.width, (*toplevel).geometry.height)
-                }
-            }
-            _ => (surf_w, surf_h),
-        };
-        
+        // SAFETY: a non-null `root_surface` is the window's live surface.
+        let (surf_w, surf_h) = unsafe { (ffi::river_wlr_surface_get_width(surface), ffi::river_wlr_surface_get_height(surface)) };
+        let (geom_w, geom_h) = self.toplevel_geometry().map_or((surf_w, surf_h), |g| (g.width, g.height));
+
         let dec_w = (surf_w - geom_w).max(0);
         let dec_h = (surf_h - geom_h).max(0);
         (dec_w, dec_h)
     }
 
-    pub unsafe fn send_frame_done(&self) {
+    pub fn send_frame_done(&self) {
         assert_eq!(self.state, WindowState::Mapped);
-        if !matches!(self.impl_type, WindowImpl::Destroying) {
-            let mut now = std::mem::zeroed();
-            clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
-            let now_ffi = ffi::timespec {
-                tv_sec: now.tv_sec as _,
-                tv_nsec: now.tv_nsec as _,
-            };
-            ffi::wlr_surface_send_frame_done(self.root_surface(), &now_ffi);
+        let surface = self.root_surface();
+        if surface.is_null() {
+            return;
         }
+        let now = crate::util::timestamp();
+        let now_ffi = ffi::timespec {
+            tv_sec: now.tv_sec as _,
+            tv_nsec: now.tv_nsec as _,
+        };
+        // SAFETY: a non-null `root_surface` is the window's live surface.
+        unsafe { ffi::wlr_surface_send_frame_done(surface, &now_ffi) };
     }
 
     pub unsafe fn manage_start(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
@@ -2038,13 +2033,15 @@ impl Window {
             ffi::wlr_foreign_toplevel_handle_v1_set_activated(this.wlr_toplevel_handle, activated);
         }
 
-        let output = if this.is_fullscreen() {
-            stores!(wm).outputs.first_enabled_ptr()
+        // Where the output it fills sits, and its size, read now: the
+        // animation start below takes the window manager.
+        let fs_output = if this.is_fullscreen() {
+            wm.outputs.first_enabled().map(|o| (o.sent.x, o.sent.y, o.sent.dimensions()))
         } else {
-            std::ptr::null_mut()
+            None
         };
 
-        let new_fullscreen = !output.is_null();
+        let new_fullscreen = fs_output.is_some();
         if new_fullscreen && !this.was_fullscreen {
             if this.box_geom.width > 0 && this.box_geom.height > 0 {
                 Window::start_fs_anim(wm, id);
@@ -2067,7 +2064,10 @@ impl Window {
                 let restored_spot = this.restore_fullscreen_at.take();
                 let (vx, vy) = match restored_spot {
                     Some(spot) => spot,
-                    None => window_ref!(wm, id, false).screen_to_virtual(wm, (*output).sent.x, (*output).sent.y),
+                    None => {
+                        let (ox, oy) = fs_output.map_or((0, 0), |(x, y, _)| (x, y));
+                        window_ref!(wm, id, false).screen_to_virtual(wm, ox, oy)
+                    }
                 };
                 let this = window_mut!(wm, id, false);
                 this.virtual_x = vx;
@@ -2106,8 +2106,7 @@ impl Window {
         }
 
         let this = window_mut!(wm, id, false);
-        let (width, height) = if !output.is_null() {
-            let (w, h) = (*output).sent.dimensions();
+        let (width, height) = if let Some((_, _, (w, h))) = fs_output {
             if this.configure_sent.width != Some(w as u32) || this.configure_sent.height != Some(h as u32) {
                 this.configure_scheduled.width = Some(w as u32);
                 this.configure_scheduled.height = Some(h as u32);
@@ -2606,7 +2605,7 @@ impl Window {
         scale_surface_buffers(&self.popup_tree, eff_scale, eff_scale, false);
     }
 
-    pub unsafe fn render_viewport_update(&mut self, stores: crate::ctx::Stores) {
+    pub fn render_viewport_update(&mut self, stores: crate::ctx::Stores) {
         let requested = &self.rendering_requested;
         let enabled = !requested.hidden && (matches!(self.state, WindowState::Mapped) || matches!(self.state, WindowState::Closing));
 
@@ -2702,9 +2701,8 @@ impl Window {
             }
 
             if self.fs_on_desk && self.fs_anim.is_none() {
-                let output = self.fullscreen_output(stores);
-                if !output.is_null() {
-                    let (w, h) = (*output).sent.dimensions();
+                if let Some(output) = self.fullscreen_output(stores) {
+                    let (w, h) = output.sent.dimensions();
                     self.size_fullscreen_background(w as i32, h as i32);
                 }
             }

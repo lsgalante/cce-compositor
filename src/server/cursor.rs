@@ -60,7 +60,7 @@ pub struct Cursor {
     /// for every static cursor, which is the overwhelmingly common case, and
     /// the timer then stays disarmed and costs nothing. It borrows from
     /// `xcursor_manager`'s theme, so it MUST be cleared before that manager is
-    /// destroyed (see `set_theme`) and whenever anything else takes over this
+    /// destroyed (`deinit` stops it first) and whenever anything else takes over this
     /// seat's cursor image (a client surface). Tablet tools are not such a
     /// case: each drives its own `wlr_cursor`, never the seat's.
     pub anim_timer: crate::event_source::Timer,
@@ -480,57 +480,6 @@ impl Cursor {
         }
     }
 
-    pub unsafe fn set_theme(
-        &mut self,
-        theme: *const std::os::raw::c_char,
-        size: u32,
-    ) -> Result<(), &'static str> {
-        let size = if size == 0 { 24 } else { size };
-
-        let xcursor_manager = ffi::wlr_xcursor_manager_create(theme, size);
-        if xcursor_manager.is_null() {
-            return Err("Failed to create wlr_xcursor_manager");
-        }
-
-        // If this cursor belongs to the default seat, update the Xwayland cursor to match the theme.
-        let handles = crate::shared::handles();
-        if handles.default_seat.get() == Some(self.sid) {
-            if !handles.xwayland.ptr().is_null() {
-                ffi::wlr_xcursor_manager_load(xcursor_manager, 1.0);
-                let wlr_xcursor = ffi::wlr_xcursor_manager_get_xcursor(
-                    xcursor_manager,
-                    b"default\0".as_ptr() as *const _,
-                    1.0,
-                );
-                if !wlr_xcursor.is_null() && (*wlr_xcursor).image_count > 0 {
-                    let image = *(*wlr_xcursor).images;
-                    if !image.is_null() {
-                        let buffer = ffi::wlr_xcursor_image_get_buffer(image);
-                        ffi::wlr_xwayland_set_cursor(
-                            handles.xwayland.ptr(),
-                            buffer,
-                            (*image).hotspot_x as i32,
-                            (*image).hotspot_y as i32,
-                        );
-                    }
-                }
-            }
-        }
-
-        // Before the old theme is freed: a running animation holds a pointer
-        // into its images.
-        self.stop_xcursor_animation();
-
-        if !self.xcursor_manager.is_null() {
-            ffi::wlr_xcursor_manager_destroy(self.xcursor_manager.take());
-        }
-        self.xcursor_manager.set(xcursor_manager);
-
-        self.xcursor_manager.load(1.0);
-        self.set_xcursor(c"default");
-
-        Ok(())
-    }
 
     pub fn set_xcursor(&mut self, name: &std::ffi::CStr) {
         if self.hidden_by_touch {
@@ -577,7 +526,7 @@ impl Cursor {
         // restarting here would re-arm the timer sooner than the frame delay
         // and pin the animation on frame 0 for as long as the mouse moves.
         // The pointer is stable per (theme, name, scale) for the manager's
-        // lifetime, and `set_theme` stops the animation before freeing the old
+        // lifetime, and `deinit` stops the animation before freeing the
         // manager, so a stale pointer can never compare equal.
         if !xcursor.is_null() && xcursor == self.anim_xcursor {
             return;

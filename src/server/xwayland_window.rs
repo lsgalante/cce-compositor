@@ -1044,9 +1044,8 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
             // second. So the request is answered with at most the output's
             // logical box, kept on that output: the whole root becomes the
             // whole screen, which is what the game meant.
-            let out = this.fullscreen_output(stores);
-            if !out.is_null() {
-                let ob = (*out).sent.box_layout();
+            if let Some(out) = this.fullscreen_output(stores) {
+                let ob = out.sent.box_layout();
                 let (ox, oy, ow, oh) = (ob.x, ob.y, ob.width, ob.height);
                 ew = from_x11(ew, s).min(ow).max(1);
                 eh = from_x11(eh, s).min(oh).max(1);

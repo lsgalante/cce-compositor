@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList};
+use crate::server::Server;
 use std::hash::{Hash, Hasher};
 
 pub use crate::window::Window;
@@ -457,7 +457,7 @@ pub fn point_in_view_regions(regions: &[[f64; 4]], x: f64, y: f64) -> bool {
 /// app_id. Only the first form is unambiguous for an app with several
 /// windows, which is why a client that publishes per-window state should
 /// use it.
-pub unsafe fn window_by_query<'a>(windows: impl Iterator<Item = &'a Window>, query: &str) -> Option<crate::window::WindowId> {
+pub fn window_by_query<'a>(windows: impl Iterator<Item = &'a Window>, query: &str) -> Option<crate::window::WindowId> {
     let x11 = query.strip_prefix("x11:").and_then(|v| v.parse::<u32>().ok());
     let id = query.parse::<u32>().ok();
     windows.into_iter().find(|w| {
@@ -465,10 +465,7 @@ pub unsafe fn window_by_query<'a>(windows: impl Iterator<Item = &'a Window>, que
             return false;
         }
         if let Some(x11) = x11 {
-            return match w.impl_type() {
-                crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*xw).xsurface.window_id() == x11,
-                _ => false,
-            };
+            return w.x11_window_id() == Some(x11);
         }
         if let Some(id) = id {
             return w.ref_key.index == id;
@@ -719,13 +716,10 @@ impl WindowManager {
     /// Focus-follow camera rules for a bare virtual rect — the same minimal
     /// pan-into-view windows get, for things that are not windows (restore
     /// placeholders).
-    pub unsafe fn pan_to_virtual_rect(&mut self, vx: f64, vy: f64, w: f64, h: f64) {
+    pub fn pan_to_virtual_rect(&mut self, vx: f64, vy: f64, w: f64, h: f64) {
         crate::wm_scope!(mut);
-        let first = self.outputs.first_enabled_ptr();
-        if first.is_null() {
-            return;
-        }
-        let viewport = (*first).sent.box_layout();
+        let Some(first) = self.outputs.first_enabled() else { return };
+        let viewport = first.sent.box_layout();
         let (vw, vh) = (viewport.width as f64, viewport.height as f64);
         let cam = self.camera();
         if let Some(target) = crate::policy::camera::pan_into_view(vx, vy, w, h, cam, vw, vh) {
@@ -1202,7 +1196,7 @@ impl WindowManager {
     /// overview enter still flying) owns the camera, and its mid-flight
     /// sample would give a stale target, so the window is left to land
     /// wherever the flight shows it.
-    pub unsafe fn pan_overview_to_window(&mut self, id: crate::window::WindowId) {
+    pub fn pan_overview_to_window(&mut self, id: crate::window::WindowId) {
         crate::wm_scope!(mut);
         if self.camera_ramp_anim.is_some() {
             return;
@@ -1586,7 +1580,7 @@ impl WindowManager {
     /// `manage_finish` saves `virtual_x/y` as the restore position on the
     /// entering transition (and sets the first desk spot there), which
     /// this would overwrite.
-    unsafe fn place_fullscreen_windows(&mut self) {
+    fn place_fullscreen_windows(&mut self) {
         let stores = stores!(self);
         crate::wm_scope!(mut);
         let zoom = self.desk_zoom;
@@ -1622,9 +1616,9 @@ impl WindowManager {
                 if on_desk {
                     Some((true, Some(w.virtual_to_screen(self, w.virtual_x, w.virtual_y)), None))
                 } else {
-                    let output = w.fullscreen_output(stores);
-                    let spot = (!output.is_null())
-                        .then(|| w.screen_to_virtual(self, (*output).sent.x, (*output).sent.y));
+                    let spot = w
+                        .fullscreen_output(stores)
+                        .map(|output| w.screen_to_virtual(self, output.sent.x, output.sent.y));
                     Some((false, None, spot))
                 }
             };
@@ -2320,7 +2314,7 @@ impl WindowManager {
 
     /// Reload the config and say how it went (a desktop notification): the
     /// `reload` action, run from the pending-work idle callback.
-    pub unsafe fn reload_and_notify(&mut self, sys: &mut crate::ctx::Sys, input: &mut crate::input_manager::InputManager) {
+    pub fn reload_and_notify(&mut self, sys: &mut crate::ctx::Sys, input: &mut crate::input_manager::InputManager) {
         crate::wm_scope!(mut);
         match self.reload_config(sys, input) {
             Ok(()) => {

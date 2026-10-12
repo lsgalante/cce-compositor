@@ -408,7 +408,7 @@ impl WindowManager {
     /// Hand a frame callback to every grid client with a patch it has not
     /// rendered yet, whether or not the scene thinks its surface is visible
     /// — see the call site in the output frame handler.
-    pub unsafe fn send_frame_done_to_grid_clients_awaiting_patch(&self) {
+    pub fn send_frame_done_to_grid_clients_awaiting_patch(&self) {
         crate::wm_scope!();
         for w in self.windows.values() {
             if w.closed || !w.is_grid() {

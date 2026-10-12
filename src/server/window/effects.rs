@@ -406,8 +406,8 @@ impl Window {
 
     /// The output a fullscreen window fills: the first enabled output (the
     /// same choice manage/render make).
-    pub fn fullscreen_output(&self, stores: crate::ctx::Stores) -> *mut crate::output::Output {
-        stores.outputs.first_enabled_ptr()
+    pub fn fullscreen_output<'a>(&self, stores: crate::ctx::Stores<'a>) -> Option<&'a crate::output::Output> {
+        stores.outputs.first_enabled()
     }
 
     /// Arms the fullscreen-toggle animation at the window's current on-screen
@@ -452,7 +452,7 @@ impl Window {
     /// fullscreen, else the arranged position at the last configured size —
     /// so it tracks the client's asynchronous resize instead of freezing a
     /// stale goal on the first frame.
-    pub unsafe fn step_fs_anim(&mut self, stores: crate::ctx::Stores) -> bool {
+    pub fn step_fs_anim(&mut self, stores: crate::ctx::Stores) -> bool {
         let Some(mut anim) = self.fs_anim else {
             return false;
         };
@@ -463,12 +463,11 @@ impl Window {
         }
 
         let (tx, ty, tw, th) = if self.is_fullscreen() {
-            let output = self.fullscreen_output(stores);
-            if output.is_null() {
+            let Some(output) = self.fullscreen_output(stores) else {
                 self.fs_anim = None;
                 return true;
-            }
-            let (w, h) = (*output).sent.dimensions();
+            };
+            let (w, h) = output.sent.dimensions();
             if self.fs_on_desk {
                 // Toggled in overview: it grows into its slab on the desk
                 // (`place_fullscreen_windows`), not over the whole output.
@@ -479,7 +478,7 @@ impl Window {
                     h as f64 * self.scale,
                 )
             } else {
-                ((*output).sent.x as f64, (*output).sent.y as f64, w as f64, h as f64)
+                (output.sent.x as f64, output.sent.y as f64, w as f64, h as f64)
             }
         } else {
             let w = self.configure_sent.width.map(|w| w as i32).unwrap_or(self.box_geom.width);

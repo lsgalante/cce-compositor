@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::WlList;
 use crate::window::Window;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,17 +155,6 @@ impl XdgToplevel {
         Ok(())
     }
 
-    pub unsafe fn destroy_popups(&self) {
-        let base = self.wlr_toplevel.base();
-        let list_head = ffi::river_wlr_xdg_surface_get_popups(base) as *mut WlList;
-        let mut curr = (*list_head).next;
-        while curr != list_head {
-            let next = (*curr).next;
-            let popup = crate::container_of!(curr, ffi::wlr_xdg_popup, link);
-            ffi::wl_resource_destroy((*popup).resource);
-            curr = next;
-        }
-    }
 
     /// `window` is this surface's window, passed in rather than reached
     /// through `self.window`: the caller already holds it.
@@ -613,9 +601,8 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         {
             let zoom = crate::policy::background::sanitized_zoom(wm.desk_zoom);
             let (mut ox, mut oy) = (0i32, 0i32);
-            let first = stores.outputs.first_enabled_ptr();
-            if !first.is_null() {
-                let b = (*first).sent.box_layout();
+            if let Some(first) = stores.outputs.first_enabled() {
+                let b = first.sent.box_layout();
                 ox = b.x;
                 oy = b.y;
             }

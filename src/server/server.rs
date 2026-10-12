@@ -249,11 +249,6 @@ pub unsafe fn wl_list_remove(elm: *mut WlList) {
     (*elm).next = std::ptr::null_mut();
 }
 
-pub unsafe fn wl_list_remove_and_reinit(elm: *mut WlList) {
-    wl_list_remove(elm);
-    (*elm).prev = elm;
-    (*elm).next = elm;
-}
 
 pub struct Server {
     pub wl_server: *mut ffi::wl_display,

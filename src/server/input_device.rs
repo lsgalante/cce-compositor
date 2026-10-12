@@ -159,16 +159,6 @@ impl InputDevice {
         }
     }
 
-    pub unsafe fn active_mapping(&self) -> ffi::wlr_box {
-        let mut mapping = self.config.map_to_rectangle;
-        if !ffi::wlr_box_empty(&mapping) {
-            return mapping;
-        }
-        if !self.config.map_to_output.is_null() {
-            ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), self.config.map_to_output, &mut mapping);
-        }
-        mapping
-    }
 
     pub unsafe fn create_object(&mut self, server: *mut crate::server::Server, im_v1_resource: *mut ffi::wl_resource) {
         if self.virtual_device {
