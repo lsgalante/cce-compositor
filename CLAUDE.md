@@ -662,8 +662,12 @@ Each subsystem gets what it needs another way:
   runs the activity path, so the config reload and the IPC device commands
   take it as a parameter of its own.
 - A subsystem method never takes a `Sys` that contains it.
-- `Window`'s drawing code takes the read-only `Stores` (`wm.stores()`,
-  `stores!(wm)` beside a `window_mut!` borrow).
+- `Window`'s drawing code takes the read-only `Stores` (`stores!(wm)`: a
+  safe borrow of the two store fields, tied to `wm` and disjoint from a
+  `window_mut!` borrow; take it again after any call that needs `&mut wm`
+  — the untied `wm.stores()` was removed 2026-10-11, it had hidden 13
+  borrows held across `&mut wm` calls). `Stores::of(server)` remains for
+  the few wlroots entry points that hold no window manager.
 - The `reload` *action* is deferred to the pending-work idle callback
   (`reload_requested`), which holds a `Sys`; the on-screen keyboard spawns
   through `process::spawn_shell`, not `execute_action`. Each of those two
