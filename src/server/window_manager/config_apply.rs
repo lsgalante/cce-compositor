@@ -47,7 +47,8 @@ impl WindowManager {
                 if !keyboard.is_null() {
                     count += 1;
                     if (*keyboard).config.repeat_rate != rate || (*keyboard).config.repeat_delay != delay {
-                        (*keyboard).set_repeat_info(rate, delay);
+                        let seat = (*device).sid.and_then(|sid| self.seats.ptr(sid)).unwrap_or(std::ptr::null_mut());
+                        (*keyboard).set_repeat_info(seat, rate, delay);
                     }
                 }
             }

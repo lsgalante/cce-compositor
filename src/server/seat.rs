@@ -329,13 +329,13 @@ impl Seat {
     }
 
     pub unsafe fn attach_device(&mut self, device: *mut crate::input_device::InputDevice) {
-        (*device).seat = self;
+        (*device).sid = Some(self.id);
         let dev_type = ffi::river_wlr_input_device_get_type((*device).wlr_device);
         match dev_type {
             ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD => {
                 let keyboard = (*device).destroy_data as *mut crate::keyboard::Keyboard;
                 if !keyboard.is_null() {
-                    (*keyboard).set_group();
+                    (*keyboard).set_group(self);
                     if !(*keyboard).group.is_null() {
                         ffi::wlr_seat_set_keyboard(self.wlr_seat.ptr(), &mut (*(*keyboard).group).wlr_keyboard);
                         let focused_surface = self.wlr_seat.keyboard_focused_surface();

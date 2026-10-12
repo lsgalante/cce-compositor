@@ -234,8 +234,9 @@ impl TabletTool {
                 (*event).y,
             );
 
-            let xcursor_manager = &(*(*(*tablet).device).seat).cursor.xcursor_manager;
-            self.wlr_cursor.set_xcursor(xcursor_manager, c"pencil");
+            if let Some(seat) = (*(*tablet).device).sid.and_then(|sid| wm.seats.get(sid)) {
+                self.wlr_cursor.set_xcursor(&seat.cursor.xcursor_manager, c"pencil");
+            }
 
             self.passthrough(wm, tablet);
             self.detach(tablet);
@@ -316,8 +317,9 @@ impl TabletTool {
                 return;
             }
         } else {
-            let xcursor_manager = &(*(*(*tablet).device).seat).cursor.xcursor_manager;
-            self.wlr_cursor.set_xcursor(xcursor_manager, c"pencil");
+            if let Some(seat) = (*(*tablet).device).sid.and_then(|sid| wm.seats.get(sid)) {
+                self.wlr_cursor.set_xcursor(&seat.cursor.xcursor_manager, c"pencil");
+            }
         }
 
         ffi::wlr_tablet_v2_tablet_tool_notify_proximity_out(self.wp_tool);

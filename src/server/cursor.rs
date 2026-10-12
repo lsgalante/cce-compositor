@@ -1595,16 +1595,17 @@ unsafe extern "C" fn handle_tablet_tool_axis(listener: *mut ffi::wl_listener, da
     if device.is_null() {
         return;
     }
-    let seat = (*device).seat;
+    let Some(sid) = (*device).sid else { return };
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    crate::seat::Seat::handle_activity(wm, (*seat).id, sys);
+    crate::seat::Seat::handle_activity(wm, sid, sys);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
     if tablet.is_null() {
         return;
     }
 
-    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat.ptr(), (*event).tool) {
+    let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat.ptr()) else { return };
+    if let Ok(tool) = crate::tablet_tool::TabletTool::get(wlr_seat, (*event).tool) {
         (*tool).axis(wm, tablet, event);
     }
 }
@@ -1623,16 +1624,17 @@ unsafe extern "C" fn handle_tablet_tool_proximity(listener: *mut ffi::wl_listene
     if device.is_null() {
         return;
     }
-    let seat = (*device).seat;
+    let Some(sid) = (*device).sid else { return };
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    crate::seat::Seat::handle_activity(wm, (*seat).id, sys);
+    crate::seat::Seat::handle_activity(wm, sid, sys);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
     if tablet.is_null() {
         return;
     }
 
-    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat.ptr(), (*event).tool) {
+    let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat.ptr()) else { return };
+    if let Ok(tool) = crate::tablet_tool::TabletTool::get(wlr_seat, (*event).tool) {
         (*tool).proximity(wm, tablet, event);
     }
 }
@@ -1648,16 +1650,17 @@ unsafe extern "C" fn handle_tablet_tool_tip(listener: *mut ffi::wl_listener, dat
     if device.is_null() {
         return;
     }
-    let seat = (*device).seat;
+    let Some(sid) = (*device).sid else { return };
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    crate::seat::Seat::handle_activity(wm, (*seat).id, sys);
+    crate::seat::Seat::handle_activity(wm, sid, sys);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
     if tablet.is_null() {
         return;
     }
 
-    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat.ptr(), (*event).tool) {
+    let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat.ptr()) else { return };
+    if let Ok(tool) = crate::tablet_tool::TabletTool::get(wlr_seat, (*event).tool) {
         (*tool).tip(wm, tablet, event);
     }
 }
@@ -1673,16 +1676,17 @@ unsafe extern "C" fn handle_tablet_tool_button(listener: *mut ffi::wl_listener, 
     if device.is_null() {
         return;
     }
-    let seat = (*device).seat;
+    let Some(sid) = (*device).sid else { return };
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    crate::seat::Seat::handle_activity(wm, (*seat).id, sys);
+    crate::seat::Seat::handle_activity(wm, sid, sys);
 
     let tablet = (*device).destroy_data as *mut crate::tablet::Tablet;
     if tablet.is_null() {
         return;
     }
 
-    if let Ok(tool) = crate::tablet_tool::TabletTool::get((*seat).wlr_seat.ptr(), (*event).tool) {
+    let Some(wlr_seat) = wm.seats.get(sid).map(|seat| seat.wlr_seat.ptr()) else { return };
+    if let Ok(tool) = crate::tablet_tool::TabletTool::get(wlr_seat, (*event).tool) {
         (*tool).button(wm, tablet, event);
     }
 }

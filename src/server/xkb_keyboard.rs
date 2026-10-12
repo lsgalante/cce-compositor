@@ -294,7 +294,9 @@ unsafe extern "C" fn xkb_keyboard_set_keymap(
 
     let kbd = (*keyboard).destroy_data as *mut crate::keyboard::Keyboard;
     if !kbd.is_null() {
-        (*kbd).set_keymap((*keymap_struct).xkb_keymap);
+        let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+        let seat = (*keyboard).sid.and_then(|sid| wm.seats.ptr(sid)).unwrap_or(std::ptr::null_mut());
+        (*kbd).set_keymap(seat, (*keymap_struct).xkb_keymap);
     }
 }
 

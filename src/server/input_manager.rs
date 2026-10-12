@@ -174,10 +174,10 @@ impl InputManager {
         // so they do not attempt to access a freed seat during backend destruction.
         log::info!("[deinit] detaching devices");
         for device in self.devices.ptrs() {
-            if !(*device).seat.is_null() {
+            if let Some(sid) = (*device).sid {
                 log::info!("[deinit] detaching device from seat");
-                crate::seat::Seat::detach_device(wm, (*(*device).seat).id, device, sys);
-                (*device).seat = std::ptr::null_mut();
+                crate::seat::Seat::detach_device(wm, sid, device, sys);
+                (*device).sid = None;
             }
         }
 

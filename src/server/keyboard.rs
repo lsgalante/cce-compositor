@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
+use crate::seat::Seat;
 use crate::input_device::InputDevice;
 use crate::keyboard_group::KeyboardGroup;
 use std::collections::HashSet;
@@ -125,9 +126,13 @@ impl Keyboard {
         let _boxed = Box::from_raw(keyboard);
     }
 
-    pub unsafe fn set_group(&mut self) {
+    /// Put the keyboard in a group of `seat` (its device's seat); nothing
+    /// without one.
+    pub unsafe fn set_group(&mut self, seat: *mut Seat) {
         assert!(self.group.is_null());
-        let seat = (*self.device).seat;
+        if seat.is_null() {
+            return;
+        }
 
         if !(*self.device).virtual_device {
             let seat_groups_head = &mut (*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
@@ -165,7 +170,7 @@ impl Keyboard {
         }
     }
 
-    pub unsafe fn set_repeat_info(&mut self, rate: i32, delay: i32) {
+    pub unsafe fn set_repeat_info(&mut self, seat: *mut Seat, rate: i32, delay: i32) {
         assert!(!(*self.device).virtual_device);
         self.config.repeat_rate = rate;
         self.config.repeat_delay = delay;
@@ -175,10 +180,10 @@ impl Keyboard {
             (*self.group).unref(&keys);
             self.group = std::ptr::null_mut();
         }
-        self.set_group();
+        self.set_group(seat);
     }
 
-    pub unsafe fn set_keymap(&mut self, keymap: *mut ffi::xkb_keymap) {
+    pub unsafe fn set_keymap(&mut self, seat: *mut Seat, keymap: *mut ffi::xkb_keymap) {
         assert!(!(*self.device).virtual_device);
         if should_set_keymap() {
             ffi::wlr_keyboard_set_keymap(self.wlr_keyboard, keymap);
@@ -196,7 +201,7 @@ impl Keyboard {
             (*self.group).unref(&keys);
             self.group = std::ptr::null_mut();
         }
-        self.set_group();
+        self.set_group(seat);
     }
 }
 

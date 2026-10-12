@@ -735,7 +735,11 @@ seat from `wm.seats` (text inputs, the new-input-method handler, the xdg
 move/resize requests, cursor-shape requests, virtual keyboards and the
 tablet tool do); it does not keep the `river_wlr_seat_get_data` pointer.
 The only raw lookups left are `Seat::id_of` itself and the pointer
-constraint's destroy / node-destroy teardown. A
+constraint's destroy / node-destroy teardown. An `InputDevice` holds its seat
+as `sid: Option<SeatId>` (set by `Seat::attach_device`, cleared on
+detach); `Keyboard::set_group(seat)` takes the seat pointer from its caller
+(`attach_device` passes itself; the repeat-info / keymap paths look it up
+in the store at their entry point). A
 destroy handler unhooks and frees its own object whether or not the seat
 is still in the store (`text_input::handle_destroy`).
 

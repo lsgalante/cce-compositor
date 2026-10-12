@@ -12,7 +12,9 @@ pub struct InputDeviceConfig {
 }
 
 pub struct InputDevice {
-    pub seat: *mut Seat,
+    /// The seat the device is attached to (`Seat::attach_device`), by id:
+    /// look it up in `wm.seats`.
+    pub sid: Option<crate::seat::SeatId>,
     pub wlr_device: *mut ffi::wlr_input_device,
     pub virtual_device: bool,
     pub destroy_listener: crate::listener::Listener,
@@ -43,7 +45,7 @@ impl InputDevice {
     ) -> *mut Self {
 
         let device = Box::into_raw(Box::new(Self {
-            seat,
+            sid: if seat.is_null() { None } else { Some((*seat).id) },
             wlr_device,
             virtual_device,
             destroy_listener: std::mem::zeroed(),
@@ -134,23 +136,23 @@ impl InputDevice {
         device
     }
 
-    pub unsafe fn assign_to_seat(&mut self, wm: &mut crate::window_manager::WindowManager, new_seat: *mut Seat, sys: &mut crate::ctx::Sys) {
-        let old_seat = self.seat;
+    pub unsafe fn assign_to_seat(&mut self, wm: &mut crate::window_manager::WindowManager, new_seat: Option<crate::seat::SeatId>, sys: &mut crate::ctx::Sys) {
+        let old_seat = self.sid;
         if old_seat == new_seat {
             return;
         }
-        if !old_seat.is_null() {
-            crate::seat::Seat::detach_device(wm, (*old_seat).id, self, sys);
+        if let Some(old) = old_seat {
+            crate::seat::Seat::detach_device(wm, old, self, sys);
         }
-        self.seat = new_seat;
-        if !new_seat.is_null() {
-            (*new_seat).attach_device(self);
+        self.sid = new_seat;
+        if let Some(seat) = new_seat.and_then(|sid| wm.seats.get_mut(sid)) {
+            seat.attach_device(self);
         }
-        if !old_seat.is_null() {
-            (*old_seat).update_capabilities();
+        if let Some(seat) = old_seat.and_then(|sid| wm.seats.get_mut(sid)) {
+            seat.update_capabilities();
         }
-        if !new_seat.is_null() {
-            (*new_seat).update_capabilities();
+        if let Some(seat) = new_seat.and_then(|sid| wm.seats.get_mut(sid)) {
+            seat.update_capabilities();
         }
     }
 
@@ -252,9 +254,12 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
     );
 
     // Detach from seat if attached
-    if !device.seat.is_null() {
-        crate::seat::Seat::detach_device(&mut *crate::reentry::wm(crate::shared::server_ptr()), (*device.seat).id, device, sys);
-        (*device.seat).update_capabilities();
+    if let Some(sid) = device.sid {
+        let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+        crate::seat::Seat::detach_device(wm, sid, device, sys);
+        if let Some(seat) = wm.seats.get_mut(sid) {
+            seat.update_capabilities();
+        }
     }
 
     // Free objects and set inert
@@ -349,18 +354,12 @@ unsafe extern "C" fn input_device_assign_to_seat(
     if name.is_null() {
         return;
     }
-    let server = crate::shared::server_ptr();
-    let mut found = false;
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy();
-    for seat in (*crate::reentry::wm(server)).seats.ptrs() {
-        let seat_name = (*seat).wlr_seat.name();
-        if seat_name == name_str {
-            (*device).assign_to_seat(&mut *crate::reentry::wm(server), seat, sys);
-            found = true;
-            break;
-        }
-    }
-    if !found {
+    let sid = wm.seats.values().find(|seat| seat.wlr_seat.name() == name_str).map(|seat| seat.id);
+    if let Some(sid) = sid {
+        (*device).assign_to_seat(wm, Some(sid), sys);
+    } else {
         log::info!("client requested input device be assigned to non-existent seat '{}'", name_str);
     }
 }
@@ -388,7 +387,9 @@ unsafe extern "C" fn input_device_set_repeat_info(
     if dev_type == ffi::wlr_input_device_type_WLR_INPUT_DEVICE_KEYBOARD {
         let keyboard = (*device).destroy_data as *mut crate::keyboard::Keyboard;
         if !keyboard.is_null() {
-            (*keyboard).set_repeat_info(rate, delay);
+            let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+            let seat = (*device).sid.and_then(|sid| wm.seats.ptr(sid)).unwrap_or(std::ptr::null_mut());
+            (*keyboard).set_repeat_info(seat, rate, delay);
         }
     }
 }
@@ -449,9 +450,9 @@ unsafe extern "C" fn input_device_map_to_output(
     match dev_type {
         ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH |
         ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TABLET => {
-            if !(*device).seat.is_null() {
-                let cursor = &mut (*(*device).seat).cursor;
-                ffi::wlr_cursor_map_input_to_output(cursor.wlr_cursor.ptr(), (*device).wlr_device, wlr_output);
+            let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+            if let Some(seat) = (*device).sid.and_then(|sid| wm.seats.get(sid)) {
+                ffi::wlr_cursor_map_input_to_output(seat.cursor.wlr_cursor.ptr(), (*device).wlr_device, wlr_output);
             }
         }
         _ => {}
@@ -499,10 +500,10 @@ unsafe extern "C" fn input_device_map_to_rectangle(
     match dev_type {
         ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TOUCH |
         ffi::wlr_input_device_type_WLR_INPUT_DEVICE_TABLET => {
-            if !(*device).seat.is_null() {
-                let cursor = &mut (*(*device).seat).cursor;
+            let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+            if let Some(seat) = (*device).sid.and_then(|sid| wm.seats.get(sid)) {
                 ffi::wlr_cursor_map_input_to_region(
-                    cursor.wlr_cursor.ptr(),
+                    seat.cursor.wlr_cursor.ptr(),
                     (*device).wlr_device,
                     &mut (*device).config.map_to_rectangle,
                 );
