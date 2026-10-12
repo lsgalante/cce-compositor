@@ -442,7 +442,7 @@ impl WindowManager {
     /// or wherever the camera has come to rest beyond the latched patch
     /// (a union that did not fit the buffer cap). True with no grid client
     /// at all: that case is the arrange plan's `grid_cells_enabled`.
-    pub unsafe fn grid_patch_covers_viewport(&self) -> bool {
+    pub fn grid_patch_covers_viewport(&self) -> bool {
         crate::wm_scope!();
         let mut out_box: Option<ffi::wlr_box> = None;
         for output in self.outputs.values() {

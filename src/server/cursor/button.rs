@@ -16,7 +16,7 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
     let Some(sptr) = wm.seats.ptr(sid) else { return () };
     let cptr: *mut Cursor = std::ptr::addr_of_mut!((*sptr).cursor);
     let _ = cptr;
-    let stores = wm.stores();
+    let stores = stores!(wm);
     let event = data as *mut ffi::wlr_pointer_button_event;
     crate::seat::Seat::handle_activity(wm, sid, sys);
     let cursor = cursor_mut!(wm, sid, ());
@@ -198,6 +198,7 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
             // canvas itself as if it were a window.
             let overview_win_valid = clicked.is_some_and(|w| !w.is_status_bar() && !w.is_wallpaper())
                 && !clicked_grid;
+            let stores = stores!(wm);
             let overview_border_zone = match clicked {
                 Some(w) if overview_win_valid => get_border_zone(w, stores, lx, ly),
                 _ => BorderZone::None,
@@ -628,6 +629,7 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
             let id = border_id;
             let this = window_mut!(wm, id);
             let initial_mode = this.tiling_mode;
+            let stores = stores!(wm);
             let zone = get_border_zone(window_ref!(wm, id, ()), stores, lx, ly);
             // The window context menu (`scripts/cce-app-menu`, a cce-cloud
             // popup like the desktop menu and cce-grid's item menu). A
@@ -1173,6 +1175,7 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
         if cursor.pressed.remove(&(*event).button) {
             if (*event).button == 0x110 {
                 if let Some((id, elem)) = cursor.button_press.take() {
+                    let stores = stores!(wm);
                     let still_on_it = wm
                         .windows
                         .get(id)

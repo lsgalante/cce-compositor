@@ -1075,7 +1075,7 @@ impl WindowManager {
                     let st = output.sent;
                     let enabled = matches!(st.state, crate::output::OutputStateValue::Enabled);
                     let (pw, ph, refresh) = match st.mode {
-                        crate::output::OutputMode::Standard(m) if !m.is_null() => ((*m).width, (*m).height, (*m).refresh),
+                        crate::output::OutputMode::Standard { width, height, refresh, .. } => (width, height, refresh),
                         crate::output::OutputMode::Custom { width, height, refresh } => (width, height, refresh),
                         _ => (0, 0, 0),
                     };

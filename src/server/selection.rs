@@ -147,7 +147,7 @@ impl Default for Selection {
 impl WindowManager {
     /// Layout box origin of the first enabled output, the one the camera is
     /// measured against (`Window::virtual_to_screen` uses the same).
-    unsafe fn selection_output_origin(&self) -> (f64, f64) {
+    fn selection_output_origin(&self) -> (f64, f64) {
         for output in self.outputs.values() {
             if output.sent.state == crate::output::OutputStateValue::Enabled {
                 let b = output.sent.box_layout();
@@ -157,14 +157,14 @@ impl WindowManager {
         (0.0, 0.0)
     }
 
-    pub unsafe fn layout_to_virtual(&self, lx: f64, ly: f64) -> (f64, f64) {
+    pub fn layout_to_virtual(&self, lx: f64, ly: f64) -> (f64, f64) {
         let (cam, _, _) = self.layout_camera();
         let zoom = cam.zoom.max(0.01);
         let (ox, oy) = self.selection_output_origin();
         (cam.pan_x + (lx - ox) / zoom, cam.pan_y + (ly - oy) / zoom)
     }
 
-    pub unsafe fn virtual_to_layout(&self, vx: f64, vy: f64) -> (f64, f64) {
+    pub fn virtual_to_layout(&self, vx: f64, vy: f64) -> (f64, f64) {
         let (cam, _, _) = self.layout_camera();
         let (ox, oy) = self.selection_output_origin();
         (ox + (vx - cam.pan_x) * cam.zoom, oy + (vy - cam.pan_y) * cam.zoom)
@@ -209,7 +209,7 @@ impl WindowManager {
 
     /// Arm a drag-selection at a background press. Nothing is selected or
     /// drawn until the pointer travels (`selection_motion`).
-    pub unsafe fn selection_press(&mut self, lx: f64, ly: f64) {
+    pub fn selection_press(&mut self, lx: f64, ly: f64) {
         self.selection.anchor = Some(self.layout_to_virtual(lx, ly));
         self.selection.marquee = None;
     }
@@ -217,7 +217,7 @@ impl WindowManager {
     /// The pointer moved with the press held. `travelled` is whether it has
     /// left the click threshold; once it has, the band is up for the rest of
     /// the press even if the pointer comes back to where it started.
-    pub unsafe fn selection_motion(&mut self, lx: f64, ly: f64, travelled: bool) {
+    pub fn selection_motion(&mut self, lx: f64, ly: f64, travelled: bool) {
         let Some(anchor) = self.selection.anchor else { return };
         if self.selection.marquee.is_none() && !travelled {
             return;

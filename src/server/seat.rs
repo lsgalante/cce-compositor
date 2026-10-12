@@ -962,7 +962,7 @@ impl Seat {
             return;
         }
         let mut target_output: *mut crate::output::Output = std::ptr::null_mut();
-        for output in wm.stores().outputs.ptrs() {
+        for output in stores!(wm).outputs.ptrs() {
             if (*output).sent.state == crate::output::OutputStateValue::Enabled {
                 if target_output.is_null() {
                     target_output = output;

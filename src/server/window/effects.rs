@@ -295,8 +295,8 @@ impl Window {
     /// render stack while overlapping it on screen — where it would cover
     /// the target's handles. Windows under the target are left alone; they
     /// hide nothing.
-    pub unsafe fn adjust_dim_wanted(&self, wm: &crate::window_manager::WindowManager) -> bool {
-        let stores = wm.stores();
+    pub fn adjust_dim_wanted(&self, wm: &crate::window_manager::WindowManager) -> bool {
+        let stores = stores!(wm);
         if !crate::shared::window_adjust_active()
             || self.closed
             || self.tiling_mode != crate::tiling::TilingMode::Floating
@@ -336,7 +336,7 @@ impl Window {
     /// Advance the overlap dim one tick toward where `adjust_dim_wanted`
     /// says it should rest, applying the opacity as it goes. Returns true
     /// while still in motion, like `step_border_fade`.
-    pub unsafe fn step_adjust_dim(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> bool {
+    pub fn step_adjust_dim(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> bool {
         let target = if window_ref!(wm, id, false).adjust_dim_wanted(wm) { 1.0 } else { 0.0 };
         let this = window_mut!(wm, id, false);
         let delta = target - this.adjust_dim;

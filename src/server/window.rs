@@ -761,7 +761,7 @@ impl Window {
     /// stepped aside slides in and lands pinned without a jump. `None`
     /// without an output to fill.
     pub unsafe fn fullscreen_anchor_pan(&self, wm: &crate::window_manager::WindowManager) -> Option<(f64, f64)> {
-        let stores = wm.stores();
+        let stores = stores!(wm);
         let output = self.fullscreen_output(stores);
         if output.is_null() {
             return None;
@@ -1552,6 +1552,7 @@ impl Window {
             // would be unreachable-by-click and unswitchable-away for
             // keyboard input).
             if should_focus && !is_grid {
+                let stores = stores!(wm);
                 for seat in stores.seats.ids() {
                     crate::seat::Seat::focus(wm, seat, crate::seat::Focus::Window(id));
                 }
@@ -1763,8 +1764,8 @@ impl Window {
     /// that origin, or `None` when no resize is armed. The anchoring outlives
     /// the seat op by one commit — the last configure is usually still in
     /// flight at release — so the first commit after the op disarms it.
-    pub unsafe fn anchor_resize_commit(wm: &mut crate::window_manager::WindowManager, id: WindowId, committed_w: i32, committed_h: i32) -> Option<(i32, i32)> {
-        let stores = wm.stores();
+    pub fn anchor_resize_commit(wm: &mut crate::window_manager::WindowManager, id: WindowId, committed_w: i32, committed_h: i32) -> Option<(i32, i32)> {
+        let stores = stores!(wm);
         let this = window_mut!(wm, id, None);
         let edges = this.resize_edges?;
         let resize_active = this.resize_op_active(stores);

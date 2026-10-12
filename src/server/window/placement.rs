@@ -7,7 +7,7 @@ use super::*;
 
 impl Window {
     pub unsafe fn try_restore(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
-        let stores = wm.stores();
+        let stores = stores!(wm);
         let this = window_mut!(wm, id);
         if this.restored {
             return;
@@ -261,6 +261,7 @@ impl Window {
             // along, and stays where it was put — cce-data-editor parked
             // left of the first column came back mid-view every login.
             if this.tiling_mode == crate::tiling::TilingMode::Floating && !this.minimized {
+                let stores = stores!(wm);
                 let (_, _, vp_w, vp_h) = this.first_enabled_output_box(stores);
                 let cam = crate::policy::camera::Camera {
                     pan_x: wm.desk_pan_x,
@@ -356,7 +357,7 @@ impl Window {
     }
 
     pub(crate) unsafe fn apply_sibling_centering(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
-        let stores = wm.stores();
+        let stores = stores!(wm);
         let this = window_mut!(wm, id);
         let app_id = this.get_app_id_string().unwrap_or_default();
         let Some(sibling) = window_ref!(wm, id, ()).find_sibling(wm, &app_id) else {
@@ -443,8 +444,8 @@ impl Window {
     /// more the window stepped a pixel back and forth between a commit and
     /// the next arrange — a twitch on every resize step at overview zoom,
     /// and a one-pixel hop on grab and release.
-    pub unsafe fn virtual_to_screen(&self, wm: &crate::window_manager::WindowManager, vx: f64, vy: f64) -> (i32, i32) {
-        let stores = wm.stores();
+    pub fn virtual_to_screen(&self, wm: &crate::window_manager::WindowManager, vx: f64, vy: f64) -> (i32, i32) {
+        let stores = stores!(wm);
         let (cam, _, _) = wm.layout_camera();
         let (out_x, out_y, _, _) = self.first_enabled_output_box(stores);
         (
@@ -458,8 +459,8 @@ impl Window {
     /// SCREEN origin, but the arrange pass places a floating window from its
     /// VIRTUAL one, so a screen origin written on its own survives exactly
     /// until the next transaction and is then recomputed away.
-    pub unsafe fn screen_to_virtual(&self, wm: &crate::window_manager::WindowManager, sx: i32, sy: i32) -> (f64, f64) {
-        let stores = wm.stores();
+    pub fn screen_to_virtual(&self, wm: &crate::window_manager::WindowManager, sx: i32, sy: i32) -> (f64, f64) {
+        let stores = stores!(wm);
         let (cam, _, _) = wm.layout_camera();
         let zoom = cam.zoom.max(0.01);
         let (out_x, out_y, _, _) = self.first_enabled_output_box(stores);
@@ -489,7 +490,7 @@ impl Window {
     }
 
     pub(crate) unsafe fn try_hint_placement(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
-        let stores = wm.stores();
+        let stores = stores!(wm);
         let this = window_mut!(wm, id);
         let app_id = this.get_app_id_string().unwrap_or_default();
         if app_id.is_empty() {
@@ -529,6 +530,7 @@ impl Window {
             return;
         }
 
+        let stores = stores!(wm);
         let (phys_x, phys_y, vp_w, vp_h) = this.first_enabled_output_box(stores);
 
         let zoom = wm.desk_zoom.max(0.01);
@@ -644,7 +646,7 @@ impl Window {
     /// opens filling four squares, at the corner of the invocation square that
     /// leaves it clear of its neighbours.
     pub(crate) unsafe fn place_on_invocation_cell(wm: &mut crate::window_manager::WindowManager, id: WindowId, app_id: &str, hx: f64, hy: f64) {
-        let stores = wm.stores();
+        let stores = stores!(wm);
         let this = window_mut!(wm, id);
         let sp = crate::shared::layout().snap_params();
         if sp.cell_w <= 0.5 || sp.cell_h <= 0.5 {
@@ -820,7 +822,7 @@ impl Window {
     /// The centering itself, split out so the self-sizing commit path can redo
     /// it once the client's real size lands.
     pub(crate) unsafe fn apply_view_centering(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
-        let stores = wm.stores();
+        let stores = stores!(wm);
         let this = window_mut!(wm, id);
         if this.satellite {
             Window::apply_sibling_centering(wm, id);

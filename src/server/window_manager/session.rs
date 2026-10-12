@@ -106,7 +106,7 @@ impl WindowManager {
 
     /// The restore placeholder under a layout-space point, as its virtual
     /// rect `(vx, vy, w, h)`. Topmost (latest-created) wins on overlap.
-    pub unsafe fn placeholder_at(&self, lx: f64, ly: f64) -> Option<(f64, f64, f64, f64)> {
+    pub fn placeholder_at(&self, lx: f64, ly: f64) -> Option<(f64, f64, f64, f64)> {
         crate::wm_scope!();
         if self.restore_placeholders.is_empty() {
             return None;
@@ -134,7 +134,7 @@ impl WindowManager {
     }
 
     /// Keep placeholders tracking the camera, same transform as windows.
-    pub unsafe fn update_restore_placeholders(&mut self) {
+    pub fn update_restore_placeholders(&mut self) {
         crate::wm_scope!(mut);
         if self.restore_placeholders.is_empty() {
             return;

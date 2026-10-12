@@ -46,13 +46,13 @@ macro_rules! cursor_mut {
 
 /// The window manager's output and seat stores as a `crate::ctx::Stores`,
 /// borrowed through their own field places — so it can be taken while a
-/// `window_mut!` borrow of `wm.windows` is live. Unsafe: the borrow is not
-/// tied to `wm` (see `WindowManager::stores`).
+/// `window_mut!` borrow of `wm.windows` is live. Safe: the borrow is tied
+/// to `wm`, so take it again after any call that needs `&mut wm`.
 macro_rules! stores {
     ($wm:expr) => {
         crate::ctx::Stores {
-            outputs: &*std::ptr::addr_of!($wm.outputs),
-            seats: &*std::ptr::addr_of!($wm.seats),
+            outputs: &$wm.outputs,
+            seats: &$wm.seats,
         }
     };
 }

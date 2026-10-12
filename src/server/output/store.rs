@@ -103,10 +103,7 @@ impl Outputs {
     pub fn first_enabled_box(&self) -> (f64, f64, f64, f64) {
         match self.values().find(|o| o.sent.state == super::OutputStateValue::Enabled) {
             Some(o) => {
-                // SAFETY: a stored output's modes point into its live
-                // wlr_output; the destroy handler resets them to None before
-                // the wlr_output goes.
-                let b = unsafe { o.sent.box_layout() };
+                let b = o.sent.box_layout();
                 (b.x as f64, b.y as f64, b.width as f64, b.height as f64)
             }
             None => (0.0, 0.0, 1920.0, 1080.0),

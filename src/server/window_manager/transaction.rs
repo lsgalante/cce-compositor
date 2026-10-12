@@ -240,7 +240,7 @@ impl WindowManager {
     }
 
     pub unsafe fn render_finish(&mut self, sys: &mut crate::ctx::Sys) {
-        let stores = self.stores();
+        let stores = stores!(self);
         crate::wm_scope!(mut);
         assert!(matches!(self.state, WindowManagerState::Render));
         self.state = WindowManagerState::Idle;
@@ -304,6 +304,7 @@ impl WindowManager {
         self.rendering_requested.order_hash = new_order_hash;
         for &id in &order {
             let Some(window) = self.windows.get_mut(id) else { continue };
+            let stores = stores!(self);
             window.render_finish(stores);
             let Some(window) = self.windows.get(id) else { continue };
             if reorder {
@@ -421,6 +422,7 @@ impl WindowManager {
                 }
                 // Last, so an open menu clears the plane it was just
                 // stacked behind (`raise_focused_popups`).
+                let stores = stores!(self);
                 focused_popups = if window.is_seat_focused(stores) { Some(window.id()) } else { focused_popups };
             }
             if let Some(id) = focused_popups {
@@ -476,6 +478,7 @@ impl WindowManager {
                     && window.presentation_hint()
                         == ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_ASYNC
                 {
+                    let stores = stores!(self);
                     tearing.push(window.fullscreen_output(stores));
                 }
             }

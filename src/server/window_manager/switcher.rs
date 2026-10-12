@@ -38,7 +38,7 @@ impl WindowManager {
     /// `backwards` is the super+shift+tab direction: it cycles the highlight
     /// the other way, and opening with it lands on the least-recently-used
     /// window instead of the previously focused one.
-    pub unsafe fn launch_window_switcher(&mut self, backwards: bool) {
+    pub fn launch_window_switcher(&mut self, backwards: bool) {
         crate::wm_scope!(mut);
         let cycle_line: &[u8] = if backwards {
             b"__cce_switcher_prev__\n"

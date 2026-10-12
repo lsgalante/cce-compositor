@@ -232,7 +232,7 @@ impl OutputManager {
             }
 
             match output.sent.mode {
-                OutputMode::Standard(mode) => {
+                OutputMode::Standard { mode, .. } => {
                     if mode != ffi::river_wlr_output_get_current_mode(wlr_output) {
                         need_modeset = true;
                         break;
@@ -443,7 +443,7 @@ impl OutputManager {
 /// manager owns (`wm.outputs`).
 impl crate::output::Outputs {
     /// The layout box `(x, y, w, h)` of every enabled output, as last sent.
-    pub unsafe fn enabled_output_boxes(&self) -> Vec<(f64, f64, f64, f64)> {
+    pub fn enabled_output_boxes(&self) -> Vec<(f64, f64, f64, f64)> {
         let mut boxes = Vec::new();
         for output in self.values() {
             if output.sent.state == crate::output::OutputStateValue::Enabled {

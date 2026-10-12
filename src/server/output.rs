@@ -27,7 +27,15 @@ pub enum OutputStateValue {
 
 #[derive(Debug, Clone, Copy)]
 pub enum OutputMode {
-    Standard(*mut ffi::wlr_output_mode),
+    /// One of the output's own modes, with its size copied out when it was
+    /// chosen (`OutputMode::standard`): a `wlr_output_mode` never changes,
+    /// and the copy lets the layout box be computed without the pointer.
+    Standard {
+        mode: *mut ffi::wlr_output_mode,
+        width: i32,
+        height: i32,
+        refresh: i32,
+    },
     Custom {
         width: i32,
         height: i32,
@@ -48,6 +56,16 @@ pub struct OutputState {
     pub auto_layout: bool,
 }
 
+impl OutputMode {
+    /// One of a live output's modes.
+    ///
+    /// # Safety
+    /// `mode` is a live `wlr_output_mode`.
+    pub unsafe fn standard(mode: *mut ffi::wlr_output_mode) -> Self {
+        OutputMode::Standard { mode, width: (*mode).width, height: (*mode).height, refresh: (*mode).refresh }
+    }
+}
+
 impl OutputState {
     pub fn mode_none(&self) -> bool {
         matches!(self.mode, OutputMode::None)
@@ -56,7 +74,7 @@ impl OutputState {
     pub unsafe fn from_head_state(state: *const ffi::wlr_output_head_v1_state) -> Self {
         assert!((*state).enabled);
         let mode = if !(*state).mode.is_null() {
-            OutputMode::Standard((*state).mode)
+            OutputMode::standard((*state).mode)
         } else {
             OutputMode::Custom {
                 width: (*state).custom_mode.width,
@@ -81,9 +99,9 @@ impl OutputState {
         }
     }
 
-    pub unsafe fn dimensions(&self) -> (i32, i32) {
+    pub fn dimensions(&self) -> (i32, i32) {
         let (mut w, mut h) = match self.mode {
-            OutputMode::Standard(mode) => ((*mode).width, (*mode).height),
+            OutputMode::Standard { width, height, .. } => (width, height),
             OutputMode::Custom { width, height, .. } => (width, height),
             OutputMode::None => (0, 0),
         };
@@ -96,7 +114,7 @@ impl OutputState {
         )
     }
 
-    pub unsafe fn box_layout(&self) -> ffi::wlr_box {
+    pub fn box_layout(&self) -> ffi::wlr_box {
         let (w, h) = self.dimensions();
         ffi::wlr_box {
             x: self.x,
@@ -119,7 +137,7 @@ impl OutputState {
         }
         self.apply_no_modeset(wlr_state);
         match self.mode {
-            OutputMode::Standard(mode) => {
+            OutputMode::Standard { mode, .. } => {
                 ffi::wlr_output_state_set_mode(wlr_state, mode);
             }
             OutputMode::Custom { width, height, refresh } => {
@@ -409,7 +427,7 @@ impl Output {
         (*raw).scheduled.state = OutputStateValue::Enabled;
         let preferred = ffi::wlr_output_preferred_mode(wlr_output);
         if !preferred.is_null() {
-            (*raw).scheduled.mode = OutputMode::Standard(preferred);
+            (*raw).scheduled.mode = OutputMode::standard(preferred);
         } else {
             (*raw).scheduled.mode = OutputMode::Custom { width: 1280, height: 720, refresh: 0 };
         }
@@ -652,7 +670,7 @@ impl Output {
         self.background_rect.set_color(&color);
     }
 
-    pub unsafe fn draw_adjust_overlay(&mut self, wm: &crate::window_manager::WindowManager) {
+    pub fn draw_adjust_overlay(&mut self, wm: &crate::window_manager::WindowManager) {
         if self.adjust_tree.is_null() {
             return;
         }
@@ -1201,7 +1219,7 @@ unsafe extern "C" fn handle_request_state(listener: *mut ffi::wl_listener, data:
     // mode field is bit 1 (mode)
     if committed & 1 != 0 {
         if !(*(*event).state).mode.is_null() {
-            output.scheduled.mode = OutputMode::Standard((*(*event).state).mode);
+            output.scheduled.mode = OutputMode::standard((*(*event).state).mode);
         } else {
             output.scheduled.mode = OutputMode::Custom {
                 width: (*(*event).state).custom_mode.width,

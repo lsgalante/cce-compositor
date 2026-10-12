@@ -736,7 +736,7 @@ impl Cursor {
         // edge loses the client.
         let constrained = !constraint.is_null()
             && matches!((*constraint).state, crate::pointer_constraint::PointerConstraintState::Active { .. });
-        let stores = wm.stores();
+        let stores = stores!(wm);
         let this = cursor_mut!(wm, sid, ());
         let lx = this.x();
         let ly = this.y();
@@ -848,6 +848,7 @@ impl Cursor {
                         && mode != crate::tiling::TilingMode::Fullscreen
                         && mode != crate::tiling::TilingMode::Status
                     {
+                        let stores = stores!(wm);
                         let zone = wm.windows.get(window_id).map_or(BorderZone::None, |w| get_border_zone(w, stores, lx, ly));
                         match zone {
                             BorderZone::Resize(edges) => {

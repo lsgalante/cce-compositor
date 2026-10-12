@@ -1588,7 +1588,7 @@ impl WindowManager {
     /// entering transition (and sets the first desk spot there), which
     /// this would overwrite.
     unsafe fn place_fullscreen_windows(&mut self) {
-        let stores = self.stores();
+        let stores = stores!(self);
         crate::wm_scope!(mut);
         let zoom = self.desk_zoom;
         let mut spot_moved = false;
@@ -1656,7 +1656,7 @@ impl WindowManager {
     }
 
     pub unsafe fn update_viewport_local(&mut self) {
-        let stores = self.stores();
+        let stores = stores!(self);
         crate::wm_scope!(mut);
         let zoom_changed = self.desk_zoom != self.last_viewport_zoom;
         // A pan counts as motion only once it moves a DEVICE pixel: the
@@ -1713,6 +1713,7 @@ impl WindowManager {
             ffi::river_scene_set_blur_frozen(scene, true);
             for window in self.windows.values_mut() {
                 {
+                    let stores = stores!(self);
                     window.render_viewport_update(stores);
                 }
             }
@@ -1724,6 +1725,7 @@ impl WindowManager {
             // suppressed and let the settle timer decide when the gesture ended.
             for window in self.windows.values_mut() {
                 {
+                    let stores = stores!(self);
                     window.render_viewport_update(stores);
                 }
             }
@@ -1731,6 +1733,7 @@ impl WindowManager {
             // Stationary viewport: hold the finished, blurred state.
             for window in self.windows.values_mut() {
                 {
+                    let stores = stores!(self);
                     window.render_finish(stores);
                 }
             }
@@ -1774,7 +1777,7 @@ impl WindowManager {
     /// positions are already final from the last motion frame's arrange pass, so
     /// this only flips each window back to its finished (blur-on) render.
     unsafe fn finish_viewport_settle(&mut self) {
-        let stores = self.stores();
+        let stores = stores!(self);
         crate::wm_scope!(mut);
         if !self.viewport_is_active {
             return;
@@ -1899,19 +1902,6 @@ impl WindowManager {
     pub fn first_seat(&self) -> Option<*mut crate::seat::Seat> {
         crate::wm_scope!();
         self.seats.ptrs().first().copied()
-    }
-
-    /// The output and seat stores, through the server pointer until the
-    /// window manager is itself handed them (RFC step 4). The borrow is not
-    /// tied to `self`: take it before borrowing a window from `windows`.
-    ///
-    /// # Safety
-    /// As [`crate::ctx::Stores::of`].
-    pub unsafe fn stores<'a>(&self) -> crate::ctx::Stores<'a> {
-        crate::ctx::Stores {
-            outputs: &*std::ptr::addr_of!(self.outputs),
-            seats: &*std::ptr::addr_of!(self.seats),
-        }
     }
 
     pub fn record_focus(&mut self, id: crate::window::WindowId) {
@@ -2061,7 +2051,7 @@ impl WindowManager {
     /// and popup creation (opening a menu changes nothing the order hash can
     /// see, so it schedules no transaction at all).
     pub unsafe fn raise_focused_popups(&mut self, id: crate::window::WindowId) {
-        let stores = self.stores();
+        let stores = stores!(self);
         crate::wm_scope!(mut);
         let Some(window) = self.windows.get(id) else { return };
         if window.popup_tree.is_null() || !window.is_seat_focused(stores) {
