@@ -589,12 +589,6 @@ impl Wlr<ffi::wlr_pointer_constraint_v1> {
             unsafe { ffi::wlr_pointer_constraint_v1_send_activated(c) }
         }
     }
-
-    pub fn send_deactivated(&self) {
-        if let Some(c) = self.live() {
-            unsafe { ffi::wlr_pointer_constraint_v1_send_deactivated(c) }
-        }
-    }
 }
 
 fn opt_ptr(s: Option<&CStr>) -> *const std::ffi::c_char {
@@ -685,6 +679,16 @@ gesture_sends! {
     send_pinch_begin(fingers: u32) => wlr_pointer_gestures_v1_send_pinch_begin;
     send_pinch_update(dx: f64, dy: f64, scale: f64, rotation: f64) => wlr_pointer_gestures_v1_send_pinch_update;
     send_pinch_end(cancelled: bool) => wlr_pointer_gestures_v1_send_pinch_end;
+}
+
+impl Wlr<ffi::wlr_relative_pointer_manager_v1> {
+    /// Relative motion to every relative-pointer client of `seat` (deltas
+    /// in layout px, accelerated and raw).
+    pub fn send_relative_motion(&self, seat: &Wlr<ffi::wlr_seat>, time_usec: u64, dx: f64, dy: f64, unaccel_dx: f64, unaccel_dy: f64) {
+        if let (Some(m), Some(s)) = (self.live(), seat.live()) {
+            unsafe { ffi::wlr_relative_pointer_manager_v1_send_relative_motion(m, s, time_usec, dx, dy, unaccel_dx, unaccel_dy) }
+        }
+    }
 }
 
 impl Wlr<ffi::wlr_output_layout> {

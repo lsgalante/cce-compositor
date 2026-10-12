@@ -1047,8 +1047,8 @@ impl Cursor {
         this.wlr_seat().pointer_notify_frame();
     }
 
-    pub unsafe fn inject_motion_by(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, dx: f64, dy: f64, sys: &mut crate::ctx::Sys) {
-        let mut ev = ffi::wlr_pointer_motion_event {
+    pub fn inject_motion_by(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, dx: f64, dy: f64, sys: &mut crate::ctx::Sys) {
+        let ev = ffi::wlr_pointer_motion_event {
             pointer: std::ptr::null_mut(),
             time_msec: crate::util::msec_timestamp(),
             delta_x: dx,
@@ -1056,28 +1056,24 @@ impl Cursor {
             unaccel_dx: dx,
             unaccel_dy: dy,
         };
-        on_motion(wm, sid,
-            &mut ev as *mut ffi::wlr_pointer_motion_event as *mut std::ffi::c_void,
-         sys);
+        on_motion(wm, sid, &ev, sys);
         let this = cursor_mut!(wm, sid, ());
         this.wlr_seat().pointer_notify_frame();
     }
 
-    pub unsafe fn inject_button(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, button: u32, pressed: bool, sys: &mut crate::ctx::Sys) {
+    pub fn inject_button(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, button: u32, pressed: bool, sys: &mut crate::ctx::Sys) {
         let state = if pressed {
             ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_PRESSED
         } else {
             ffi::wl_pointer_button_state_WL_POINTER_BUTTON_STATE_RELEASED
         };
-        let mut ev = ffi::wlr_pointer_button_event {
+        let ev = ffi::wlr_pointer_button_event {
             pointer: std::ptr::null_mut(),
             time_msec: crate::util::msec_timestamp(),
             button,
             state,
         };
-        on_button(wm, sid,
-            &mut ev as *mut ffi::wlr_pointer_button_event as *mut std::ffi::c_void,
-         sys);
+        on_button(wm, sid, &ev, sys);
         let this = cursor_mut!(wm, sid, ());
         this.wlr_seat().pointer_notify_frame();
     }
@@ -1286,15 +1282,14 @@ unsafe extern "C" fn handle_motion(listener: *mut ffi::wl_listener, data: *mut s
     let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
     let sid = (*crate::container_of!(listener, Cursor, motion_listener)).sid;
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    on_motion(wm, sid, data, sys);
+    on_motion(wm, sid, &*(data as *const ffi::wlr_pointer_motion_event), sys);
 }
 
 /// `handle_motion` with the window manager passed in; `ccectl`'s injection calls this from inside `process_ipc_command`, with its `self`.
-pub(crate) unsafe fn on_motion(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, data: *mut std::ffi::c_void, sys: &mut crate::ctx::Sys) {
-    let Some(sptr) = wm.seats.ptr(sid) else { return () };
-    let cptr: *mut Cursor = std::ptr::addr_of_mut!((*sptr).cursor);
-    let _ = cptr;
-    let event = data as *mut ffi::wlr_pointer_motion_event;
+pub(crate) fn on_motion(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, event: &ffi::wlr_pointer_motion_event, sys: &mut crate::ctx::Sys) {
+    if wm.seats.get(sid).is_none() {
+        return;
+    }
     // Pointer input is activity for the idle timeouts and the idle-notify
     // clients. Injected events (`ccectl pointer-*`) arrive here too, and
     // count: a script driving the pointer is someone using the desk.
@@ -1314,23 +1309,19 @@ pub(crate) unsafe fn on_motion(wm: &mut crate::window_manager::WindowManager, si
     
     cursor.unhide_after_touch();
 
-    let mut dx = (*event).delta_x;
-    let mut dy = (*event).delta_y;
+    let mut dx = event.delta_x;
+    let mut dy = event.delta_y;
 
     // Relative motion goes out before any constraint applies: a client
     // that locked the pointer (a game) steers by exactly these deltas.
-    let relative = crate::shared::handles().relative_pointer.ptr();
-    if !relative.is_null() {
-        ffi::wlr_relative_pointer_manager_v1_send_relative_motion(
-            relative,
-            cursor.wlr_seat().ptr(),
-            (*event).time_msec as u64 * 1000,
-            (*event).delta_x,
-            (*event).delta_y,
-            (*event).unaccel_dx,
-            (*event).unaccel_dy,
-        );
-    }
+    crate::shared::handles().relative_pointer.send_relative_motion(
+        cursor.wlr_seat(),
+        event.time_msec as u64 * 1000,
+        event.delta_x,
+        event.delta_y,
+        event.unaccel_dx,
+        event.unaccel_dy,
+    );
     let (cx, cy) = (cursor.x(), cursor.y());
     if let crate::pointer_constraint::MotionUnder::Locked =
         crate::pointer_constraint::constrain_motion(wm, sid, cx, cy, &mut dx, &mut dy)
@@ -1372,7 +1363,7 @@ pub(crate) unsafe fn on_motion(wm: &mut crate::window_manager::WindowManager, si
         return;
     }
 
-    crate::cursor::Cursor::passthrough(wm, sid, (*event).time_msec);
+    crate::cursor::Cursor::passthrough(wm, sid, event.time_msec);
 
     if let (Some(s), Some(m), Some(h), Some(d)) = (t_start, t_move, t_hovered, t_drag) {
         let total = s.elapsed().as_micros();
@@ -1413,18 +1404,14 @@ pub(crate) unsafe fn on_motion_absolute(wm: &mut crate::window_manager::WindowMa
     ffi::wlr_cursor_absolute_to_layout_coords(cursor.wlr_cursor().ptr(), wlr_device, (*event).x, (*event).y, &mut lx, &mut ly);
     let (cx, cy) = (cursor.x(), cursor.y());
     let (mut dx, mut dy) = (lx - cx, ly - cy);
-    let relative = crate::shared::handles().relative_pointer.ptr();
-    if !relative.is_null() {
-        ffi::wlr_relative_pointer_manager_v1_send_relative_motion(
-            relative,
-            cursor.wlr_seat().ptr(),
-            (*event).time_msec as u64 * 1000,
-            dx,
-            dy,
-            dx,
-            dy,
-        );
-    }
+    crate::shared::handles().relative_pointer.send_relative_motion(
+        cursor.wlr_seat(),
+        (*event).time_msec as u64 * 1000,
+        dx,
+        dy,
+        dx,
+        dy,
+    );
     if let crate::pointer_constraint::MotionUnder::Locked =
         crate::pointer_constraint::constrain_motion(wm, sid, cx, cy, &mut dx, &mut dy)
     {
@@ -1485,7 +1472,7 @@ pub(crate) unsafe fn layer_takes_click_focus(layer_surface: *mut crate::layer_sh
 /// lands outside of. Shared by a pointer press (`handle_button`) and a
 /// touch that goes to a client as touch (`handle_touch_down`); an
 /// emulated touch arrives as a pointer press and runs it there.
-pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowManager, lx: f64, ly: f64) {
+pub(crate) fn press_dismissals(wm: &mut crate::window_manager::WindowManager, lx: f64, ly: f64) {
     // Click-away-close for in-surface status menus: if any status
     // segment is expanded (menu open) and this press did not land on it,
     // push a one-shot dismiss over the status socket. The line carries
@@ -1523,10 +1510,7 @@ pub(crate) unsafe fn press_dismissals(wm: &mut crate::window_manager::WindowMana
     // the bridge closes the popup it opened. The tray bridge's own
     // containers have no scene tree, so they never count as showing.
     {
-        let or_showing = wm
-            .override_redirects
-            .iter()
-            .any(|&or| !or.is_null() && !(*or).surface_tree.is_null());
+        let or_showing = wm.any_override_redirect_showing();
         if or_showing {
             let on_x11 = match crate::shared::scene().at(wm, lx, ly) {
                 Some(result) => match result.data {

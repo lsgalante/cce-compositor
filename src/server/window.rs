@@ -1979,7 +1979,7 @@ impl Window {
         }
     }
 
-    pub unsafe fn manage_finish(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> bool {
+    pub fn manage_finish(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> bool {
         let this = window_mut!(wm, id, false);
         if matches!(this.impl_type, WindowImpl::Destroying) {
             assert_eq!(this.state, WindowState::Closing);
@@ -2123,22 +2123,27 @@ impl Window {
         };
 
         let stores = stores!(wm);
-        let track_configure = match this.impl_type {
-            WindowImpl::Toplevel(toplevel) => {
-                if toplevel.is_null() {
-                    false
-                } else {
-                    (*toplevel).configure(this)
+        // SAFETY: as `Window::get_title`: `impl_type` names this window's
+        // live implementation (`set_impl`'s contract), an allocation apart
+        // from the window itself.
+        let track_configure = unsafe {
+            match this.impl_type {
+                WindowImpl::Toplevel(toplevel) => {
+                    if toplevel.is_null() {
+                        false
+                    } else {
+                        (*toplevel).configure(this)
+                    }
                 }
-            }
-            WindowImpl::Xwayland(xwindow) => {
-                if xwindow.is_null() {
-                    false
-                } else {
-                    (*xwindow).configure(this, stores)
+                WindowImpl::Xwayland(xwindow) => {
+                    if xwindow.is_null() {
+                        false
+                    } else {
+                        (*xwindow).configure(this, stores)
+                    }
                 }
+                WindowImpl::Destroying => unreachable!(),
             }
-            WindowImpl::Destroying => unreachable!(),
         };
 
         if track_configure && matches!(this.state, WindowState::Mapped) {

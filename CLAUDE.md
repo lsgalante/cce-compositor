@@ -526,6 +526,17 @@ private, with an `unsafe` setter if other modules must write it. Every shared
 stay public. Anything that changes the shape of a scene subtree is off
 limits inside `Handle::for_each_buffer` (an `unsafe fn` for that reason).
 
+KNOWN GAP (2026-10-12, second review): structs that embed a LINKED
+`wl_listener` (`Listener` fields) or a `wl_list` head — `Seat`, `Cursor`,
+`Window`, `Output`, the shell objects — must never move once linked, and
+nothing enforces it: safe code holding two `&mut` of the same type can
+`mem::swap` them and corrupt the signal lists. Every listener-bearing
+struct lives in a `Box` at a fixed address by convention only. The fix is
+structural (box or pin each `Listener`, and re-derive the owner through
+listener data instead of `container_of!`), not a per-field privacy pass;
+until then, do not add SAFETY claims that would also need "and it never
+moved". `Seat::keyboard_groups` is boxed for that reason.
+
 Only calls whose other arguments are values (or another `Wlr`) are wrapped:
 a call that also passes a raw surface, device or keyboard pointer stays an
 FFI call through `.ptr()`, because that pointer is the caller's to vouch for.

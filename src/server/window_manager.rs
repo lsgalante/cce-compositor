@@ -229,7 +229,9 @@ pub struct WindowManager {
     /// Live override-redirect X11 surfaces (menus, tooltips, combo lists),
     /// so the per-frame pass can re-apply their 1/scale dest size — the
     /// scene's own commit listener resets it on every commit.
-    pub override_redirects: Vec<*mut XwaylandOverrideRedirect>,
+    /// Private: `any_override_redirect_showing` trusts that a registered
+    /// one is live.
+    override_redirects: crate::registry::Registry<XwaylandOverrideRedirect>,
     pub display: std::collections::HashMap<String, f64>,
     pub input_rules: Vec<crate::config::InputDeviceConfigRule>,
     pub last_status_update: std::cell::RefCell<Option<crate::status_server::StatusUpdate>>,
@@ -570,7 +572,7 @@ impl WindowManager {
         self.last_window_states = Vec::new();
         self.exit_orphans = Vec::new();
         self.last_saved_windows = Vec::new();
-        self.override_redirects = Vec::new();
+        self.override_redirects = crate::registry::Registry::new();
         self.pending_placements = Vec::new();
         self.shutting_down = false;
         crate::shared::set_layout(crate::config::Layout::default());
@@ -2002,6 +2004,30 @@ impl WindowManager {
         }
     }
 
+    /// Register a new override-redirect window.
+    ///
+    /// # Safety
+    /// As `Registry::push`: live until `unregister_override_redirect`, which
+    /// its destroy (and override-redirect switch) runs before freeing it.
+    pub unsafe fn register_override_redirect(&mut self, or: *mut XwaylandOverrideRedirect) {
+        self.override_redirects.push(or);
+    }
+
+    pub fn unregister_override_redirect(&mut self, or: *mut XwaylandOverrideRedirect) {
+        self.override_redirects.remove(or);
+    }
+
+    /// Every registered override-redirect window, copied out.
+    pub fn override_redirects(&self) -> Vec<*mut XwaylandOverrideRedirect> {
+        self.override_redirects.ptrs()
+    }
+
+    /// Whether any override-redirect window is showing (has a scene tree).
+    pub fn any_override_redirect_showing(&self) -> bool {
+        // SAFETY: a registered one is live (`register_override_redirect`).
+        self.override_redirects.ptrs().into_iter().any(|or| !or.is_null() && unsafe { !(*or).surface_tree.is_null() })
+    }
+
     pub fn keep_status_bar_on_top(&mut self) {
         crate::wm_scope!(mut);
         let status_bar_windows: Vec<crate::window::WindowId> = self
@@ -2214,7 +2240,7 @@ impl WindowManager {
     /// window. Maximize is the fullscreen toggle — a Tiled window already
     /// reports xdg maximized here, so the step up from it is fullscreen —
     /// and the toggle flips Floating and Tiled exactly as `set-mode` does.
-    pub unsafe fn press_window_button(&mut self, id: crate::window::WindowId, elem: crate::window::BorderElement) {
+    pub fn press_window_button(&mut self, id: crate::window::WindowId, elem: crate::window::BorderElement) {
         crate::wm_scope!(mut);
         use crate::policy::api::{Command, Compositor};
         use crate::window::BorderElement;
@@ -2225,8 +2251,9 @@ impl WindowManager {
         let tiled = window.tiling_mode == crate::tiling::TilingMode::Tiled;
         match elem {
             BorderElement::Minimize | BorderElement::Maximize => {
-                if let Some(seat) = self.first_seat() {
-                    crate::seat::Seat::focus_window(self, (*seat).id, Some(id));
+                let first = self.seats.values().next().map(|seat| seat.id);
+                if let Some(sid) = first {
+                    crate::seat::Seat::focus_window(self, sid, Some(id));
                 }
                 let action = if elem == BorderElement::Minimize {
                     crate::config::Action::Minimize

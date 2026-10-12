@@ -119,8 +119,16 @@ unsafe extern "C" fn handle_new_surface(_listener: *mut ffi::wl_listener, data: 
 pub struct LayerSurfaces(crate::slotmap::SlotMap<*mut LayerSurface>);
 
 impl LayerSurfaces {
-    pub fn new() -> Self {
-        LayerSurfaces(crate::slotmap::SlotMap::new())
+    /// Write an empty store into a zero-filled window manager
+    /// (`Server::default`). The only way to make one: with no public
+    /// constructor, safe code has no second store to swap in for the live
+    /// one, so `create`/destroy stay its only writers.
+    ///
+    /// # Safety
+    /// `this` points at an uninitialised store; it is overwritten without
+    /// being dropped.
+    pub unsafe fn init_in_place(this: *mut Self) {
+        std::ptr::write(this, LayerSurfaces(crate::slotmap::SlotMap::new()));
     }
 
     /// The live layer surface `key` names, if any.

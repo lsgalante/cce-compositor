@@ -11,8 +11,6 @@ pub struct DragIcon {
     /// Watched: wlroots destroys it with the drag icon.
     pub scene_drag_icon: crate::scene_handle::SceneTree,
     pub destroy: crate::listener::Listener,
-    /// The seat whose cursor's registry holds it (`Cursor::drag_icons`).
-    sid: crate::seat::SeatId,
 }
 
 impl DragIcon {
@@ -30,7 +28,6 @@ impl DragIcon {
             wlr_drag_icon: crate::wlr::Wlr::from_raw(wlr_drag_icon),
             scene_drag_icon: crate::scene_handle::SceneTree::watch(scene_drag_icon),
             destroy: std::mem::zeroed(),
-            sid: cursor.sid,
         }));
 
         (*raw).update_position(cursor);
@@ -64,9 +61,12 @@ unsafe extern "C" fn handle_destroy(
     _data: *mut std::ffi::c_void,
 ) {
     let drag_icon_ptr = crate::container_of!(listener, DragIcon, destroy);
+    // Out of every seat's registry, not just the one it was made on: the
+    // removal is idempotent, and the registry it sits in must not depend on
+    // a seat id anything else could have changed.
     let server = crate::shared::server_ptr();
     if !server.is_null() {
-        if let Some(seat) = (*crate::reentry::wm(server)).seats.get_mut((*drag_icon_ptr).sid) {
+        for seat in (*crate::reentry::wm(server)).seats.values_mut() {
             seat.cursor.unregister_drag_icon(drag_icon_ptr);
         }
     }

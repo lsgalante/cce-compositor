@@ -267,9 +267,9 @@ impl Cursor {
             if lock_ok
                 && !result.surface.is_null()
                 && !crate::shared::window_adjust_active()
+                && !seat.wlr_seat().is_null()
                 // SAFETY: the surface the hit test just found is live, and a
-                // seat in the store holds its live wlr_seat (set at create,
-                // taken only in `Seat::destroy`).
+                // non-null seat field holds its live wlr_seat.
                 && unsafe { ffi::wlr_surface_accepts_touch(result.surface, seat.wlr_seat().ptr()) }
             {
                 // The implicit grab's frame (see the button path): the
@@ -530,7 +530,7 @@ impl Cursor {
     /// Take every finger already down for a gesture: clients hear
     /// `wl_touch.cancel`, and a pointer finger that never pressed is simply
     /// dropped (the reason the press waits).
-    unsafe fn claim_all(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, sys: &mut crate::ctx::Sys) {
+    fn claim_all(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, sys: &mut crate::ctx::Sys) {
         let this = cursor_mut!(wm, sid, ());
         let ids: Vec<i32> = this.touch_points.keys().copied().collect();
         for id in ids {

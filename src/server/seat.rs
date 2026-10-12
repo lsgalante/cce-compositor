@@ -123,8 +123,9 @@ pub struct Seat {
     pub layer_shell: crate::layer_shell::LayerShellSeat,
     /// The keyboard groups on this seat (`KeyboardGroup::link`). Private,
     /// and `Seat` can only be built by `create`, which initialises it, so
-    /// every `Seat` holds a valid list head (`keyboard_groups_head`).
-    keyboard_groups: ffi::wl_list,
+    /// every `Seat` holds a valid list head (`keyboard_groups_head`). Boxed,
+    /// so the head keeps its address if the `Seat` value is moved.
+    keyboard_groups: Box<ffi::wl_list>,
     /// A device-less keyboard group, created on demand by
     /// [`Seat::ensure_synthetic_keyboard`] when the backend supplies no
     /// keyboard at all. Null on any seat that has a real one.
@@ -223,7 +224,7 @@ impl Seat {
             touch_injected: false,
             relay: crate::input_relay::InputRelay::new(),
             layer_shell: crate::layer_shell::LayerShellSeat::default(),
-            keyboard_groups: std::mem::zeroed(),
+            keyboard_groups: Box::new(std::mem::zeroed()),
             synthetic_keyboard: std::ptr::null_mut(),
             modifiers_old: 0,
             op: None,
@@ -248,7 +249,7 @@ impl Seat {
         }));
         let seat = seats.ptr(id).ok_or("seat gone at creation")?;
 
-        ffi::wl_list_init(&mut (*seat).keyboard_groups);
+        ffi::wl_list_init(&mut *(*seat).keyboard_groups);
 
         ffi::river_wlr_seat_set_data(wlr_seat, seat as *mut _);
         (*seat).relay.init();
@@ -289,7 +290,7 @@ impl Seat {
         }
 
         // Verify keyboard_groups is empty
-        let groups_head = &mut (*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
+        let groups_head = &mut *(*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
         assert_eq!((*groups_head).next, groups_head);
 
         crate::shared::sent().seats.remove((*seat).id);
@@ -774,10 +775,14 @@ impl Seat {
     /// The keyboard-group list head: valid for as long as the seat lives
     /// (initialised by `create`), for `KeyboardGroup` to link into.
     pub fn keyboard_groups_head(&mut self) -> *mut ffi::wl_list {
-        &mut self.keyboard_groups
+        &mut *self.keyboard_groups
     }
 
     pub fn ensure_synthetic_keyboard(&mut self) -> bool {
+        // An unset seat field (a seat being destroyed) has nowhere to put one.
+        if self.wlr_seat().is_null() {
+            return false;
+        }
         if !self.wlr_seat().keyboard().is_null() {
             return true;
         }
@@ -891,7 +896,7 @@ impl Seat {
             return;
         }
         let lost = crate::pointer_constraint::with_held(wm, sid, |c, wm| {
-            let lost = c.wlr_constraint().surface() != target_surface;
+            let lost = c.surface() != target_surface;
             if lost {
                 log::info!("deactivating pointer constraint for surface, keyboard focus lost");
                 c.deactivate(wm);
@@ -997,7 +1002,7 @@ impl Seat {
     /// otherwise. Fullscreen pans back onto the desk spot it covers (see
     /// below); popups/overlays are not desk citizens, so other modes no-op,
     /// as do cce-cloud and windows already fully visible.
-    pub unsafe fn focus_follow_pan(wm: &mut crate::window_manager::WindowManager, sid: SeatId, id: crate::window::WindowId) {
+    pub fn focus_follow_pan(wm: &mut crate::window_manager::WindowManager, sid: SeatId, id: crate::window::WindowId) {
         let this = seat_mut!(wm, sid, ());
         if this.suppress_focus_pan {
             return;
@@ -1043,26 +1048,26 @@ impl Seat {
         if app_id.as_ref().map(|id| id == "cce-cloud").unwrap_or(false) {
             return;
         }
-        let mut target_output: *mut crate::output::Output = std::ptr::null_mut();
-        for output in stores!(wm).outputs.ptrs() {
-            if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                if target_output.is_null() {
-                    target_output = output;
+        // The box of the output the window sits on, else the first enabled.
+        let mut target_box: Option<ffi::wlr_box> = None;
+        for output in wm.outputs.values() {
+            if output.sent.state == crate::output::OutputStateValue::Enabled {
+                let wlr_box = output.sent.box_layout();
+                if target_box.is_none() {
+                    target_box = Some(wlr_box);
                 }
-                let wlr_box = (*output).sent.box_layout();
                 let wx = window.box_geom.x;
                 let wy = window.box_geom.y;
                 if wx >= wlr_box.x && wx < wlr_box.x + wlr_box.width
                     && wy >= wlr_box.y && wy < wlr_box.y + wlr_box.height
                 {
-                    target_output = output;
+                    target_box = Some(wlr_box);
                     break;
                 }
             }
         }
 
-        if !target_output.is_null() {
-            let wlr_box = (*target_output).sent.box_layout();
+        if let Some(wlr_box) = target_box {
             let viewport_w = wlr_box.width as f64;
             let viewport_h = wlr_box.height as f64;
 
@@ -1440,7 +1445,7 @@ impl Seat {
         }
     }
 
-    pub unsafe fn op_end(wm: &mut crate::window_manager::WindowManager, sid: SeatId) {
+    pub fn op_end(wm: &mut crate::window_manager::WindowManager, sid: SeatId) {
         let this = seat_mut!(wm, sid, ());
         // Wherever everything sits now is final.
         this.overview_displaced.clear();

@@ -65,7 +65,7 @@ impl XwaylandOverrideRedirect {
         });
 
         let raw = Box::into_raw(override_redirect);
-        wm.override_redirects.push(raw);
+        wm.register_override_redirect(raw);
 
         (*raw).request_configure.connect(&mut (*xsurface).events.request_configure, handle_request_configure);
         (*raw).destroy.connect(&mut (*xsurface).events.destroy, handle_destroy);
@@ -227,7 +227,7 @@ unsafe extern "C" fn handle_request_configure(_listener: *mut ffi::wl_listener, 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, destroy);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    wm.override_redirects.retain(|&p| p != or);
+    wm.unregister_override_redirect(or);
     // Unmap already did this for a mapped window; one destroyed unmapped
     // (or never mapped) has had no chance to.
     drop_seat_focus(wm, or);
@@ -398,7 +398,7 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     // back by the XEmbed bridge and remapped as a managed window;
     // `verify/clients` `or-flip` reproduces it).
     let wm = &mut *crate::reentry::wm(server);
-    wm.override_redirects.retain(|&p| p != or);
+    wm.unregister_override_redirect(or);
     drop_seat_focus(wm, or);
     (*or).request_configure.disconnect();
     (*or).destroy.disconnect();

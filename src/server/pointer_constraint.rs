@@ -21,9 +21,16 @@ pub struct PointerConstraint {
     /// every deactivation, disconnect it first), which the safe methods
     /// below rely on.
     state: PointerConstraintState,
-    pub destroy_listener: crate::listener::Listener,
-    pub commit_listener: crate::listener::Listener,
-    pub node_destroy_listener: crate::listener::Listener,
+    /// A deactivation whose `deactivated` event is still to be sent. Sending
+    /// it can DESTROY the constraint (a ONESHOT one: wlroots destroys it
+    /// inside `wlr_pointer_constraint_v1_send_deactivated`, and the destroy
+    /// handler frees this box), so no method sends it while `self` is
+    /// borrowed: `flush_deactivation` does, after every borrow has ended.
+    deactivation_due: bool,
+    // Private, as `state`'s invariant and the destroy path rely on them.
+    destroy_listener: crate::listener::Listener,
+    commit_listener: crate::listener::Listener,
+    node_destroy_listener: crate::listener::Listener,
 }
 
 /// Whether a pointer constraint may hold the pointer now: in normal mode
@@ -34,9 +41,14 @@ pub fn applies_now() -> bool {
     crate::shared::mode() == crate::window_manager::WindowManagerMode::Normal && !crate::shared::window_adjust_active()
 }
 
-/// Run `f` on seat `sid`'s pointer constraint, if it holds one.
+/// Run `f` on seat `sid`'s pointer constraint, if it holds one, then send
+/// any deactivation `f` caused (which may free the constraint).
+///
+/// `wm` is taken mutably and handed to `f` shared, so `f` cannot reach
+/// `with_held` (or `PendingDeactivation`-style sends) again: no second
+/// `&mut` to the constraint can exist.
 pub fn with_held<R>(
-    wm: &crate::window_manager::WindowManager,
+    wm: &mut crate::window_manager::WindowManager,
     sid: crate::seat::SeatId,
     f: impl FnOnce(&mut PointerConstraint, &crate::window_manager::WindowManager) -> R,
 ) -> Option<R> {
@@ -47,9 +59,30 @@ pub fn with_held<R>(
     // SAFETY: `Cursor::constraint` is null or a live constraint
     // (`set_constraint`'s contract). It is its own allocation, apart from the
     // window manager `f` also gets, and no other reference to it is live:
-    // its handlers run only from wlroots signals, which nothing in a
-    // constraint method raises synchronously.
-    Some(f(unsafe { &mut *c }, wm))
+    // its handlers run only from wlroots signals, and no constraint method
+    // raises one — the one that can (`deactivated`, destroying a oneshot
+    // constraint) is deferred to `flush_deactivation`, after `f`'s borrow.
+    let r = f(unsafe { &mut *c }, wm);
+    // SAFETY: `f` has returned; nothing borrows the constraint.
+    unsafe { flush_deactivation(c) };
+    Some(r)
+}
+
+/// Send `c`'s pending `deactivated` event, if any. For a ONESHOT constraint
+/// wlroots then destroys it, and the destroy handler frees `c`: callers must
+/// not touch `c` afterwards.
+///
+/// # Safety
+/// `c` is a live constraint, and no reference to it is live.
+unsafe fn flush_deactivation(c: *mut PointerConstraint) {
+    if !(*c).deactivation_due {
+        return;
+    }
+    (*c).deactivation_due = false;
+    let wlr = (*c).wlr_constraint.ptr();
+    if !wlr.is_null() {
+        ffi::wlr_pointer_constraint_v1_send_deactivated(wlr);
+    }
 }
 
 /// What a pointer motion does under seat `sid`'s constraint.
@@ -64,7 +97,7 @@ pub enum MotionUnder {
 /// (`lx`, `ly`): deactivate it where it no longer applies, report a lock,
 /// or clamp the motion to a confining region.
 pub fn constrain_motion(
-    wm: &crate::window_manager::WindowManager,
+    wm: &mut crate::window_manager::WindowManager,
     sid: crate::seat::SeatId,
     lx: f64,
     ly: f64,
@@ -98,6 +131,7 @@ impl PointerConstraint {
             // inside wlroots' destroy of the constraint.
             wlr_constraint: crate::wlr::Wlr::from_raw(wlr_constraint),
             state: PointerConstraintState::Inactive,
+            deactivation_due: false,
             destroy_listener: crate::listener::Listener::default(),
             commit_listener: crate::listener::Listener::default(),
             node_destroy_listener: crate::listener::Listener::default(),
@@ -122,9 +156,9 @@ impl PointerConstraint {
         constraint
     }
 
-    /// The wlroots constraint.
-    pub fn wlr_constraint(&self) -> &crate::wlr::Wlr<ffi::wlr_pointer_constraint_v1> {
-        &self.wlr_constraint
+    /// The constrained surface (for comparing).
+    pub fn surface(&self) -> *mut ffi::wlr_surface {
+        self.wlr_constraint.surface()
     }
 
     /// Whether it holds the pointer now.
@@ -138,6 +172,11 @@ impl PointerConstraint {
     }
 
     pub fn maybe_activate(&mut self, wm: &crate::window_manager::WindowManager) {
+        // A deactivation not yet sent goes first: re-activating now would
+        // reach the client before it.
+        if self.deactivation_due {
+            return;
+        }
         let Some(seat) = self.seat(wm) else { return };
         if seat.cursor.constraint() != self as *mut Self {
             return;
@@ -210,7 +249,8 @@ impl PointerConstraint {
 
         self.state = PointerConstraintState::Inactive;
         self.node_destroy_listener.disconnect();
-        self.wlr_constraint.send_deactivated();
+        // Sent by `flush_deactivation` once nothing borrows `self`.
+        self.deactivation_due = true;
     }
 
     pub fn update_state(&mut self, wm: &crate::window_manager::WindowManager) {
@@ -321,12 +361,14 @@ unsafe fn river_wlr_seat_get_data_safe(wlr_seat: *mut ffi::wlr_seat) -> *mut Sea
     }
 }
 
-unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
+unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let constraint_ptr = crate::container_of!(listener, PointerConstraint, destroy_listener) as *mut PointerConstraint;
     let constraint = &mut *constraint_ptr;
     // The seat through wlroots' pointer, not the store: this also runs while
-    // the server tears down, with no window manager to take.
-    let seat = river_wlr_seat_get_data_safe((*constraint.wlr_constraint.ptr()).seat);
+    // the server tears down, with no window manager to take. The wlroots
+    // constraint is the signal's data.
+    let wlr_constraint = data as *mut ffi::wlr_pointer_constraint_v1;
+    let seat = if wlr_constraint.is_null() { std::ptr::null_mut() } else { river_wlr_seat_get_data_safe((*wlr_constraint).seat) };
 
     if constraint.is_active() {
         if !seat.is_null() {
@@ -349,8 +391,12 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
 unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let wm = &*crate::reentry::wm(crate::shared::server_ptr());
     let constraint_ptr = crate::container_of!(listener, PointerConstraint, commit_listener) as *mut PointerConstraint;
-    let constraint = &mut *constraint_ptr;
+    handle_commit_impl(&mut *constraint_ptr, wm, constraint_ptr);
+    // The borrow above has ended; a oneshot constraint may go here.
+    flush_deactivation(constraint_ptr);
+}
 
+fn handle_commit_impl(constraint: &mut PointerConstraint, wm: &crate::window_manager::WindowManager, constraint_ptr: *mut PointerConstraint) {
     match constraint.state {
         PointerConstraintState::Active { sx, sy, .. } => {
             if !constraint.wlr_constraint.region_contains(sx, sy) {
@@ -372,6 +418,9 @@ unsafe extern "C" fn handle_node_destroy(listener: *mut ffi::wl_listener, _data:
     // A scene node goes inside window-manager calls (a window unmapping),
     // so this must not take the window manager: the seat comes from
     // wlroots' pointer.
-    let seat = river_wlr_seat_get_data_safe((*(*constraint_ptr).wlr_constraint.ptr()).seat);
+    let wlr = (*constraint_ptr).wlr_constraint.ptr();
+    let seat = if wlr.is_null() { std::ptr::null_mut() } else { river_wlr_seat_get_data_safe((*wlr).seat) };
     (*constraint_ptr).deactivate_with(seat.as_ref());
+    // The borrow above has ended; a oneshot constraint may go here.
+    flush_deactivation(constraint_ptr);
 }

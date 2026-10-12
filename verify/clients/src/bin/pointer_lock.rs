@@ -6,7 +6,8 @@
 //   mapped | locked | unlocked | confined | unconfined
 //   enter <sx> <sy> | motion <sx> <sy> | leave | relative <dx> <dy> (running sums)
 //
-// Args: --mode lock|confine  --app-id ID  --size WxH
+// Args: --mode lock|confine  --app-id ID  --size WxH  --oneshot (a
+// ONESHOT lifetime: wlroots destroys the constraint when it deactivates).
 
 use std::io::Write;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
@@ -189,10 +190,12 @@ fn main() {
     let mut mode = "lock".to_string();
     let mut app_id = "test.pointerlock".to_string();
     let mut size = (600, 400);
+    let mut oneshot = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--mode" => mode = args.next().unwrap(),
+            "--oneshot" => oneshot = true,
             "--app-id" => app_id = args.next().unwrap(),
             "--size" => {
                 let s = args.next().unwrap();
@@ -240,7 +243,11 @@ fn main() {
         if mapped && !constrained {
             if let (Some(pointer), Some(constraints)) = (state.pointer.clone(), state.constraints.clone()) {
                 constrained = true;
-                let lifetime = zwp_pointer_constraints_v1::Lifetime::Persistent;
+                let lifetime = if oneshot {
+                    zwp_pointer_constraints_v1::Lifetime::Oneshot
+                } else {
+                    zwp_pointer_constraints_v1::Lifetime::Persistent
+                };
                 if mode == "confine" {
                     constraints.confine_pointer(&surface, &pointer, None, lifetime, &qh, ());
                 } else {

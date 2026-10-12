@@ -514,7 +514,7 @@ impl Output {
                 window.scale_only_render_finish();
             }
         }
-        for &or in wm.override_redirects.iter() {
+        for or in wm.override_redirects() {
             if !or.is_null() {
                 (*or).apply_x11_scale();
             }
