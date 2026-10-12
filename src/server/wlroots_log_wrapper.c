@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #define _POSIX_C_SOURCE 199309L
+#include <wlr/render/wlr_texture.h>
 #include <assert.h>
 #include <math.h>
 #include <stdarg.h>
@@ -690,6 +691,11 @@ uint32_t river_wlr_surface_current_seq(struct wlr_surface *surface) {
 void river_wlr_surface_get_buffer_size(struct wlr_surface *surface, int *width, int *height) {
 	*width = surface->current.buffer_width;
 	*height = surface->current.buffer_height;
+}
+
+void river_wlr_texture_get_size(struct wlr_texture *texture, uint32_t *width, uint32_t *height) {
+	*width = texture->width;
+	*height = texture->height;
 }
 
 struct wlr_keyboard *river_wlr_input_method_keyboard_grab_v2_get_keyboard(struct wlr_input_method_keyboard_grab_v2 *grab) {

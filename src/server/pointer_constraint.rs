@@ -218,7 +218,10 @@ impl PointerConstraint {
                 let sy = (*self.wlr_constraint).current.cursor_hint.y;
                 let scale = self.surface_scale(node);
                 seat.cursor.wlr_cursor.warp(lx as f64 + sx / scale, ly as f64 + sy / scale);
-                ffi::wlr_seat_pointer_warp(seat.wlr_seat.ptr(), sx, sy);
+                // Through the field, which is unset once `Seat::destroy`
+                // has taken it: `wlr_seat_destroy` destroys the seat's
+                // constraints, and this runs from their destroy handler.
+                seat.wlr_seat.pointer_warp(sx, sy);
             }
         }
     }

@@ -464,7 +464,6 @@ impl Pending {
 /// The idle callback: run the manage pass if one is wanted, else the render
 /// pass, when the window manager is between transactions.
 unsafe extern "C" fn handle_idle(_data: *mut std::ffi::c_void) {
-    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
     let pending = pending();
     // wayland frees an idle source once it has run.
     pending.idle.set(std::ptr::null_mut());
@@ -472,10 +471,13 @@ unsafe extern "C" fn handle_idle(_data: *mut std::ffi::c_void) {
     if server.is_null() {
         return;
     }
+    // One `Sys` for the whole callback: a second one (the reload used to
+    // build its own) would be a second live `&mut` to every subsystem.
+    let sys = &mut crate::ctx::Sys::of(server);
     let wm = &mut (*crate::reentry::wm(server));
     if wm.reload_requested {
         wm.reload_requested = false;
-        wm.reload_and_notify(&mut crate::ctx::Sys::of(server), &mut *std::ptr::addr_of_mut!((*server).input_manager));
+        wm.reload_and_notify(sys, &mut *std::ptr::addr_of_mut!((*server).input_manager));
     }
     if matches!(wm.state, crate::window_manager::WindowManagerState::Idle) {
         if pending.windowing() {

@@ -169,6 +169,14 @@ impl Wlr<ffi::wlr_seat> {
         self.live().map_or(std::ptr::null_mut(), |s| unsafe { ffi::river_wlr_seat_get_keyboard_focused_surface(s) })
     }
 
+    /// Move the pointer within its focused surface to (`sx`, `sy`), telling
+    /// the client (a pointer constraint's cursor hint).
+    pub fn pointer_warp(&self, sx: f64, sy: f64) {
+        if let Some(s) = self.live() {
+            unsafe { ffi::wlr_seat_pointer_warp(s, sx, sy) }
+        }
+    }
+
     pub fn pointer_notify_frame(&self) {
         if let Some(s) = self.live() {
             unsafe { ffi::wlr_seat_pointer_notify_frame(s) }

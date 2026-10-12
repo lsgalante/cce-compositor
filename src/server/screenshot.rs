@@ -184,6 +184,17 @@ unsafe fn read_texture(texture: *mut ffi::wlr_texture, w: i32, h: i32) -> Option
         log::warn!("screenshot: unsupported read format {format:#x}");
         return None;
     };
+    // Read exactly the w x h the buffer is sized for. An empty src_box means
+    // the whole texture, which is NOT always w x h: a surface whose newest
+    // buffer failed to upload keeps its older, possibly larger texture
+    // while its buffer size already says the new one, and wlroots would
+    // write the whole old texture past the end of `data`.
+    let (mut tw, mut th) = (0u32, 0u32);
+    ffi::river_wlr_texture_get_size(texture, &mut tw, &mut th);
+    if (tw as i64) < w as i64 || (th as i64) < h as i64 {
+        log::warn!("screenshot: texture {tw}x{th} smaller than the {w}x{h} asked for");
+        return None;
+    }
     let mut data = vec![0u8; (w as usize) * (h as usize) * bpp];
     let options = ffi::wlr_texture_read_pixels_options {
         data: data.as_mut_ptr() as *mut std::ffi::c_void,
@@ -191,7 +202,7 @@ unsafe fn read_texture(texture: *mut ffi::wlr_texture, w: i32, h: i32) -> Option
         stride: (w as u32) * bpp as u32,
         dst_x: 0,
         dst_y: 0,
-        src_box: std::mem::zeroed(), // empty = full texture
+        src_box: ffi::wlr_box { x: 0, y: 0, width: w, height: h },
     };
     if !ffi::wlr_texture_read_pixels(texture, &options) {
         return None;
