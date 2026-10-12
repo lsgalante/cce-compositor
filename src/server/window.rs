@@ -679,8 +679,11 @@ pub struct Window {
     pub margin_y: i32,
     pub last_decor_w: i32,
     pub last_decor_h: i32,
-    pub foreign_toplevel_handle: *mut ffi::wlr_ext_foreign_toplevel_handle_v1,
-    pub wlr_toplevel_handle: *mut ffi::wlr_foreign_toplevel_handle_v1,
+    /// The window's entries in the two foreign-toplevel lists (taskbars),
+    /// from its first manage until its unmap or destroy. Private, as every
+    /// `Wlr` field.
+    foreign_toplevel_handle: crate::wlr::Wlr<ffi::wlr_ext_foreign_toplevel_handle_v1>,
+    wlr_toplevel_handle: crate::wlr::Wlr<ffi::wlr_foreign_toplevel_handle_v1>,
     pub csd_buffer_size_bug: bool,
     pub status_edge: StatusEdge,
 }
@@ -1060,8 +1063,8 @@ impl Window {
             margin_y: 0,
             last_decor_w: 0,
             last_decor_h: 0,
-            foreign_toplevel_handle: std::ptr::null_mut(),
-            wlr_toplevel_handle: std::ptr::null_mut(),
+            foreign_toplevel_handle: crate::wlr::Wlr::null(),
+            wlr_toplevel_handle: crate::wlr::Wlr::null(),
             csd_buffer_size_bug: false,
             status_edge: StatusEdge::Unspecified,
         });
@@ -1639,7 +1642,7 @@ impl Window {
         }
     }
 
-    pub unsafe fn unmap(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub fn unmap(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let this = window_mut!(wm, id);
         log::debug!("window '{:?}' unmapped", this.get_title());
         if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
@@ -1678,14 +1681,8 @@ impl Window {
         crate::shared::pending().dirty_windowing();
 
         let this = window_mut!(wm, id);
-        if !this.foreign_toplevel_handle.is_null() {
-            ffi::wlr_ext_foreign_toplevel_handle_v1_destroy(this.foreign_toplevel_handle);
-            this.foreign_toplevel_handle = std::ptr::null_mut();
-        }
-        if !this.wlr_toplevel_handle.is_null() {
-            ffi::wlr_foreign_toplevel_handle_v1_destroy(this.wlr_toplevel_handle);
-            this.wlr_toplevel_handle = std::ptr::null_mut();
-        }
+        this.foreign_toplevel_handle.destroy();
+        this.wlr_toplevel_handle.destroy();
 
 
     }
@@ -1740,6 +1737,11 @@ impl Window {
         // at this freed window for the next hit test to find.
         this.border.tree.destroy();
         this.capture_scene().destroy();
+        // A window destroyed before its unmap (one that never mapped, but
+        // was managed once) still holds its foreign-toplevel entries: left,
+        // they stay in every taskbar as ghosts.
+        this.foreign_toplevel_handle.destroy();
+        this.wlr_toplevel_handle.destroy();
 
         wm.render_list_remove(id);
 
@@ -1906,8 +1908,7 @@ impl Window {
         unsafe { ffi::wlr_surface_send_frame_done(surface, &now_ffi) };
     }
 
-    pub unsafe fn manage_start(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
-        let Some(ptr) = wm.windows.ptr(id) else { return };
+    pub fn manage_start(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let this = window_mut!(wm, id);
         match this.state {
             WindowState::Init => {}
@@ -1972,36 +1973,7 @@ impl Window {
                     }
 
                     let this = window_mut!(wm, id);
-                    if this.foreign_toplevel_handle.is_null() {
-                        let list = crate::shared::handles().foreign_toplevel_list.ptr();
-                        let title = this.get_title();
-                        let app_id = this.get_app_id();
-                        let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
-                            title,
-                            app_id,
-                        };
-                        let handle = ffi::wlr_ext_foreign_toplevel_handle_v1_create(list, &state);
-                        if !handle.is_null() {
-                            this.foreign_toplevel_handle = handle;
-                            (*handle).data = ptr as *mut _;
-                        }
-                    }
-
-                    if this.wlr_toplevel_handle.is_null() {
-                        let manager = crate::shared::handles().foreign_toplevel_manager.ptr();
-                        let handle = ffi::wlr_foreign_toplevel_handle_v1_create(manager);
-                        if !handle.is_null() {
-                            this.wlr_toplevel_handle = handle;
-                            let title = this.get_title();
-                            if !title.is_null() {
-                                ffi::wlr_foreign_toplevel_handle_v1_set_title(handle, title);
-                            }
-                            let app_id = this.get_app_id();
-                            if !app_id.is_null() {
-                                ffi::wlr_foreign_toplevel_handle_v1_set_app_id(handle, app_id);
-                            }
-                        }
-                    }
+                    this.create_foreign_toplevel_handles();
                 }
             }
         }
@@ -2044,9 +2016,7 @@ impl Window {
             }
         }
 
-        if !this.wlr_toplevel_handle.is_null() {
-            ffi::wlr_foreign_toplevel_handle_v1_set_activated(this.wlr_toplevel_handle, activated);
-        }
+        this.wlr_toplevel_handle.set_activated(activated);
 
         // Where the output it fills sits, and its size, read now: the
         // animation start below takes the window manager.
@@ -2267,7 +2237,7 @@ impl Window {
         }
     }
 
-    pub unsafe fn notify_title(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub fn notify_title(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let this = window_mut!(wm, id);
         this.wm_scheduled.dirty_title = true;
         Window::try_restore(wm, id);
@@ -2286,25 +2256,10 @@ impl Window {
         }
 
         let this = window_mut!(wm, id);
-        if !this.foreign_toplevel_handle.is_null() {
-            let title = this.get_title();
-            let app_id = this.get_app_id();
-            let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
-                title,
-                app_id,
-            };
-            ffi::wlr_ext_foreign_toplevel_handle_v1_update_state(this.foreign_toplevel_handle, &state);
-        }
-
-        if !this.wlr_toplevel_handle.is_null() {
-            let title = this.get_title();
-            if !title.is_null() {
-                ffi::wlr_foreign_toplevel_handle_v1_set_title(this.wlr_toplevel_handle, title);
-            }
-        }
+        this.publish_foreign_toplevel(true, false);
     }
 
-    pub unsafe fn notify_app_id(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub fn notify_app_id(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let this = window_mut!(wm, id);
         this.wm_scheduled.dirty_app_id = true;
         let app_id_str = this.get_app_id_string();
@@ -2315,21 +2270,53 @@ impl Window {
         crate::shared::pending().dirty_windowing();
 
         let this = window_mut!(wm, id);
-        if !this.foreign_toplevel_handle.is_null() {
-            let title = this.get_title();
-            let app_id = this.get_app_id();
-            let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
-                title,
-                app_id,
-            };
-            ffi::wlr_ext_foreign_toplevel_handle_v1_update_state(this.foreign_toplevel_handle, &state);
-        }
+        this.publish_foreign_toplevel(false, true);
+    }
 
-        if !this.wlr_toplevel_handle.is_null() {
-            let app_id = this.get_app_id();
-            if !app_id.is_null() {
-                ffi::wlr_foreign_toplevel_handle_v1_set_app_id(this.wlr_toplevel_handle, app_id);
+    /// Enter the window in both foreign-toplevel lists, once (its first
+    /// manage), with its title and app id as they are.
+    fn create_foreign_toplevel_handles(&mut self) {
+        let title = self.c_str_at(self.get_title());
+        let app_id = self.c_str_at(self.get_app_id());
+        if self.foreign_toplevel_handle.is_null() {
+            let list = crate::shared::handles().foreign_toplevel_list.ptr();
+            if !list.is_null() {
+                let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state {
+                    title: title.map_or(std::ptr::null(), |s| s.as_ptr()),
+                    app_id: app_id.map_or(std::ptr::null(), |s| s.as_ptr()),
+                };
+                // SAFETY: the shared list is live while set; the handle is
+                // new, held only here, and destroyed through the field (on
+                // unmap or destroy) before the window goes.
+                unsafe { self.foreign_toplevel_handle.set(ffi::wlr_ext_foreign_toplevel_handle_v1_create(list, &state)) };
             }
+        }
+        if self.wlr_toplevel_handle.is_null() {
+            let manager = crate::shared::handles().foreign_toplevel_manager.ptr();
+            if !manager.is_null() {
+                // SAFETY: as above, for the wlr-foreign-toplevel manager.
+                unsafe { self.wlr_toplevel_handle.set(ffi::wlr_foreign_toplevel_handle_v1_create(manager)) };
+                if let Some(title) = title {
+                    self.wlr_toplevel_handle.set_title(title);
+                }
+                if let Some(app_id) = app_id {
+                    self.wlr_toplevel_handle.set_app_id(app_id);
+                }
+            }
+        }
+    }
+
+    /// Tell the foreign-toplevel lists the window's title (`title`) and/or
+    /// app id (`app_id`) changed.
+    fn publish_foreign_toplevel(&self, title: bool, app_id: bool) {
+        let t = self.c_str_at(self.get_title());
+        let a = self.c_str_at(self.get_app_id());
+        self.foreign_toplevel_handle.update_state(t, a);
+        if let (true, Some(t)) = (title, t) {
+            self.wlr_toplevel_handle.set_title(t);
+        }
+        if let (true, Some(a)) = (app_id, a) {
+            self.wlr_toplevel_handle.set_app_id(a);
         }
     }
 

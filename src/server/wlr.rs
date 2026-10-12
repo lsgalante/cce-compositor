@@ -587,6 +587,56 @@ impl Wlr<ffi::wlr_pointer_constraint_v1> {
     }
 }
 
+fn opt_ptr(s: Option<&CStr>) -> *const std::ffi::c_char {
+    s.map_or(std::ptr::null(), CStr::as_ptr)
+}
+
+impl Wlr<ffi::wlr_ext_foreign_toplevel_handle_v1> {
+    /// Publish the toplevel's title and app id (wlroots copies both).
+    pub fn update_state(&self, title: Option<&CStr>, app_id: Option<&CStr>) {
+        if let Some(h) = self.live() {
+            let state = ffi::wlr_ext_foreign_toplevel_handle_v1_state { title: opt_ptr(title), app_id: opt_ptr(app_id) };
+            unsafe { ffi::wlr_ext_foreign_toplevel_handle_v1_update_state(h, &state) }
+        }
+    }
+
+    /// Destroy the handle and leave the field unset.
+    pub fn destroy(&self) {
+        let h = self.take();
+        if !h.is_null() {
+            unsafe { ffi::wlr_ext_foreign_toplevel_handle_v1_destroy(h) }
+        }
+    }
+}
+
+impl Wlr<ffi::wlr_foreign_toplevel_handle_v1> {
+    pub fn set_title(&self, title: &CStr) {
+        if let Some(h) = self.live() {
+            unsafe { ffi::wlr_foreign_toplevel_handle_v1_set_title(h, title.as_ptr()) }
+        }
+    }
+
+    pub fn set_app_id(&self, app_id: &CStr) {
+        if let Some(h) = self.live() {
+            unsafe { ffi::wlr_foreign_toplevel_handle_v1_set_app_id(h, app_id.as_ptr()) }
+        }
+    }
+
+    pub fn set_activated(&self, activated: bool) {
+        if let Some(h) = self.live() {
+            unsafe { ffi::wlr_foreign_toplevel_handle_v1_set_activated(h, activated) }
+        }
+    }
+
+    /// Destroy the handle and leave the field unset.
+    pub fn destroy(&self) {
+        let h = self.take();
+        if !h.is_null() {
+            unsafe { ffi::wlr_foreign_toplevel_handle_v1_destroy(h) }
+        }
+    }
+}
+
 impl Wlr<ffi::wlr_output_layout> {
     /// Put `output` in the layout at (`x`, `y`), or move it there.
     pub fn add(&self, output: &Wlr<ffi::wlr_output>, x: i32, y: i32) {

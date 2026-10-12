@@ -7,7 +7,9 @@
 //   axis <h|v> <value> | axis-stop <h|v> | axis-source <n> | frame
 //   kbd-enter | kbd-leave | key <code> <pressed|released>
 //   mods <depressed> <latched> <locked> <group>
-// Args: --app-id ID  --size WxH
+// Args: --app-id ID  --size WxH  --exit-unmapped SECS (ack the first
+// configure but never attach a buffer, then quit after SECS: a toplevel the
+// compositor manages but that never maps).
 
 use std::io::Write;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
@@ -162,10 +164,12 @@ fn make_buffer(shm: &wl_shm::WlShm, w: i32, h: i32, qh: &QueueHandle<State>) -> 
 fn main() {
     let mut app_id = "test.inputprobe".to_string();
     let mut size = (600, 400);
+    let mut exit_unmapped: Option<f64> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--app-id" => app_id = args.next().unwrap(),
+            "--exit-unmapped" => exit_unmapped = Some(args.next().unwrap().parse().unwrap()),
             "--size" => {
                 let s = args.next().unwrap();
                 let (w, h) = s.split_once('x').expect("size is WxH");
@@ -190,6 +194,25 @@ fn main() {
     toplevel.set_app_id(app_id);
     toplevel.set_title("input-probe".into());
     surface.commit();
+
+    if let Some(secs) = exit_unmapped {
+        while !state.needs_buffer {
+            queue.blocking_dispatch(&mut state).unwrap();
+        }
+        say("configured");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs_f64(secs);
+        while std::time::Instant::now() < end {
+            let _ = queue.dispatch_pending(&mut state);
+            let _ = conn.flush();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        toplevel.destroy();
+        xdg.destroy();
+        surface.destroy();
+        let _ = conn.flush();
+        say("exit");
+        return;
+    }
 
     let mut mapped = false;
     while !state.closed {
