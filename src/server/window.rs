@@ -722,7 +722,7 @@ impl Window {
     /// (`virtual_x/y`, kept in step with the camera while it is on top), so
     /// the camera pans away from it like any other window rather than
     /// leaving it fixed behind the screen.
-    pub unsafe fn fullscreen_yields(&self, wm: &crate::window_manager::WindowManager) -> bool {
+    pub fn fullscreen_yields(&self, wm: &crate::window_manager::WindowManager) -> bool {
         let me = self.id();
         for w in wm.focus_history.iter().filter_map(|&id| wm.windows.get(id)) {
             if w.id() == me {
@@ -1202,85 +1202,95 @@ impl Window {
 
     /// The window this one is a transient of (an xdg parent, or X11
     /// WM_TRANSIENT_FOR), if it has one.
-    pub unsafe fn get_parent(&self) -> Option<WindowId> {
-        match self.impl_type {
-            WindowImpl::Toplevel(toplevel) => {
-                if toplevel.is_null() {
-                    None
-                } else {
-                    let wlr_parent = ffi::river_wlr_xdg_toplevel_get_parent((*toplevel).wlr_toplevel);
-                    if wlr_parent.is_null() {
+    pub fn get_parent(&self) -> Option<WindowId> {
+        // SAFETY: as `Window::get_title`: `impl_type` names the window's live
+        // implementation (`set_impl`'s contract), and an impl's wlroots
+        // objects outlive it.
+        unsafe {
+            match self.impl_type {
+                WindowImpl::Toplevel(toplevel) => {
+                    if toplevel.is_null() {
                         None
                     } else {
-                        let base = ffi::river_wlr_xdg_toplevel_get_base(wlr_parent);
-                        let parent_xdg = ffi::river_wlr_xdg_surface_get_data(base) as *mut crate::xdg_toplevel::XdgToplevel;
-                        if parent_xdg.is_null() {
+                        let wlr_parent = ffi::river_wlr_xdg_toplevel_get_parent((*toplevel).wlr_toplevel);
+                        if wlr_parent.is_null() {
                             None
                         } else {
-                            Some((*parent_xdg).window)
-                        }
-                    }
-                }
-            }
-            WindowImpl::Xwayland(xwindow) => {
-                if xwindow.is_null() {
-                    None
-                } else {
-                    let parent_xsurface = (*(*xwindow).xsurface).parent;
-                    if parent_xsurface.is_null() {
-                        None
-                    } else {
-                        let parent_data = (*parent_xsurface).data;
-                        if parent_data.is_null() {
-                            None
-                        } else {
-                            let parent_xwindow = parent_data as *mut crate::xwayland_window::XwaylandWindow;
-                            Some((*parent_xwindow).window)
-                        }
-                    }
-                }
-            }
-            WindowImpl::Destroying => None,
-        }
-    }
-
-    pub unsafe fn unreliable_pid(&self) -> i32 {
-        match self.impl_type {
-            WindowImpl::Toplevel(toplevel) => {
-                if toplevel.is_null() {
-                    0
-                } else {
-                    let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
-                    let surface = ffi::river_wlr_xdg_surface_get_surface(base);
-                    if surface.is_null() {
-                        0
-                    } else {
-                        let res = ffi::river_wlr_surface_get_resource(surface);
-                        if res.is_null() {
-                            0
-                        } else {
-                            let client = ffi::wl_resource_get_client(res);
-                            if client.is_null() {
-                                0
+                            let base = ffi::river_wlr_xdg_toplevel_get_base(wlr_parent);
+                            let parent_xdg = ffi::river_wlr_xdg_surface_get_data(base) as *mut crate::xdg_toplevel::XdgToplevel;
+                            if parent_xdg.is_null() {
+                                None
                             } else {
-                                let mut pid = 0;
-                                let mut uid = 0;
-                                let mut gid = 0;
-                                ffi::wl_client_get_credentials(client, &mut pid, &mut uid, &mut gid);
-                                pid
+                                Some((*parent_xdg).window)
                             }
                         }
                     }
                 }
-            }
-            WindowImpl::Xwayland(xwindow) => {
-                if xwindow.is_null() {
-                    0
-                } else {
-                    (*(*xwindow).xsurface).pid
+                WindowImpl::Xwayland(xwindow) => {
+                    if xwindow.is_null() {
+                        None
+                    } else {
+                        let parent_xsurface = (*(*xwindow).xsurface).parent;
+                        if parent_xsurface.is_null() {
+                            None
+                        } else {
+                            let parent_data = (*parent_xsurface).data;
+                            if parent_data.is_null() {
+                                None
+                            } else {
+                                let parent_xwindow = parent_data as *mut crate::xwayland_window::XwaylandWindow;
+                                Some((*parent_xwindow).window)
+                            }
+                        }
+                    }
                 }
+                WindowImpl::Destroying => None,
             }
-            WindowImpl::Destroying => 0,
+        }
+    }
+
+    pub fn unreliable_pid(&self) -> i32 {
+        // SAFETY: as `Window::get_title`: `impl_type` names the window's live
+        // implementation (`set_impl`'s contract), and an impl's wlroots
+        // objects outlive it.
+        unsafe {
+            match self.impl_type {
+                WindowImpl::Toplevel(toplevel) => {
+                    if toplevel.is_null() {
+                        0
+                    } else {
+                        let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
+                        let surface = ffi::river_wlr_xdg_surface_get_surface(base);
+                        if surface.is_null() {
+                            0
+                        } else {
+                            let res = ffi::river_wlr_surface_get_resource(surface);
+                            if res.is_null() {
+                                0
+                            } else {
+                                let client = ffi::wl_resource_get_client(res);
+                                if client.is_null() {
+                                    0
+                                } else {
+                                    let mut pid = 0;
+                                    let mut uid = 0;
+                                    let mut gid = 0;
+                                    ffi::wl_client_get_credentials(client, &mut pid, &mut uid, &mut gid);
+                                    pid
+                                }
+                            }
+                        }
+                    }
+                }
+                WindowImpl::Xwayland(xwindow) => {
+                    if xwindow.is_null() {
+                        0
+                    } else {
+                        (*(*xwindow).xsurface).pid
+                    }
+                }
+                WindowImpl::Destroying => 0,
+            }
         }
     }
 
@@ -1304,20 +1314,25 @@ impl Window {
     /// everything. So it is left to the client: no saved-state restore, its
     /// own position honoured at map and on request, never focused, never
     /// raised, stacked at the bottom.
-    pub unsafe fn is_shy(&self) -> bool {
-        let WindowImpl::Xwayland(xwindow) = self.impl_type else {
-            return false;
-        };
-        if xwindow.is_null() || (*xwindow).xsurface.is_null() {
-            return false;
+    pub fn is_shy(&self) -> bool {
+        // SAFETY: as `Window::get_title`: `impl_type` names the window's live
+        // implementation (`set_impl`'s contract), and an impl's wlroots
+        // objects outlive it.
+        unsafe {
+            let WindowImpl::Xwayland(xwindow) = self.impl_type else {
+                return false;
+            };
+            if xwindow.is_null() || (*xwindow).xsurface.is_null() {
+                return false;
+            }
+            let xs = (*xwindow).xsurface;
+            if !(*xs).parent.is_null() || !(*xs).skip_taskbar || (*xs).hints.is_null() {
+                return false;
+            }
+            let hints = (*xs).hints;
+            let input_flag = ffi::xcb_icccm_wm_t_XCB_ICCCM_WM_HINT_INPUT as i32;
+            (*hints).flags & input_flag != 0 && (*hints).input == 0
         }
-        let xs = (*xwindow).xsurface;
-        if !(*xs).parent.is_null() || !(*xs).skip_taskbar || (*xs).hints.is_null() {
-            return false;
-        }
-        let hints = (*xs).hints;
-        let input_flag = ffi::xcb_icccm_wm_t_XCB_ICCCM_WM_HINT_INPUT as i32;
-        (*hints).flags & input_flag != 0 && (*hints).input == 0
     }
 
     /// The window maps: placement, the status edge, focus and the open

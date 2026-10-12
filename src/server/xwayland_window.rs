@@ -257,26 +257,31 @@ pub unsafe fn x11_scale_for_surface(surface: *mut ffi::wlr_surface) -> f32 {
 /// fullscreen overrides its size and survives Wine's withdrawal of the
 /// state (`handle_request_fullscreen`). Its cursor is NOT exempt — see
 /// `x11_scale_for_surface`.
-pub unsafe fn window_is_hidpi_exempt(window: &crate::window::Window) -> bool {
-    let crate::window::WindowImpl::Xwayland(xwindow) = window.impl_type() else {
-        return false;
-    };
-    if xwindow.is_null() || (*xwindow).xsurface.is_null() {
-        return false;
+pub fn window_is_hidpi_exempt(window: &crate::window::Window) -> bool {
+    // SAFETY: as `Window::get_title`: `impl_type` names the window's live
+    // implementation (`set_impl`'s contract), and an impl's wlroots
+    // objects outlive it.
+    unsafe {
+        let crate::window::WindowImpl::Xwayland(xwindow) = window.impl_type() else {
+            return false;
+        };
+        if xwindow.is_null() || (*xwindow).xsurface.is_null() {
+            return false;
+        }
+        if !crate::shared::layout().xwayland_hidpi || crate::shared::layout().xwayland_hidpi_except.is_empty() {
+            return false;
+        }
+        let xsurface = (*xwindow).xsurface;
+        let text = |p: *const libc::c_char| -> String {
+            if p.is_null() { String::new() } else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() }
+        };
+        hidpi_exempt(
+            &crate::shared::layout().xwayland_hidpi_except,
+            &text((*xsurface).class),
+            &text((*xsurface).instance),
+            &text((*xsurface).title),
+        )
     }
-    if !crate::shared::layout().xwayland_hidpi || crate::shared::layout().xwayland_hidpi_except.is_empty() {
-        return false;
-    }
-    let xsurface = (*xwindow).xsurface;
-    let text = |p: *const libc::c_char| -> String {
-        if p.is_null() { String::new() } else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() }
-    };
-    hidpi_exempt(
-        &crate::shared::layout().xwayland_hidpi_except,
-        &text((*xsurface).class),
-        &text((*xsurface).instance),
-        &text((*xsurface).title),
-    )
 }
 
 /// Whether `exe` (a `/proc/<pid>/exe` target) is Wine's loader, which every

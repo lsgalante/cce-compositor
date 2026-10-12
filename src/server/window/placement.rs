@@ -6,7 +6,7 @@
 use super::*;
 
 impl Window {
-    pub unsafe fn try_restore(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub fn try_restore(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let stores = stores!(wm);
         let this = window_mut!(wm, id);
         if this.restored {
@@ -179,28 +179,33 @@ impl Window {
             this.rendering_sent.width = saved.width;
             this.rendering_sent.height = saved.height;
 
-            match this.impl_type {
-                WindowImpl::Toplevel(toplevel) => {
-                    if !toplevel.is_null() {
-                        (*toplevel).geometry.width = saved.width as i32;
-                        (*toplevel).geometry.height = saved.height as i32;
+            // SAFETY: as `Window::get_title`: `impl_type` names the window's live
+            // implementation (`set_impl`'s contract), and its wlroots surface
+            // outlives it.
+            unsafe {
+                match this.impl_type {
+                    WindowImpl::Toplevel(toplevel) => {
+                        if !toplevel.is_null() {
+                            (*toplevel).geometry.width = saved.width as i32;
+                            (*toplevel).geometry.height = saved.height as i32;
+                        }
                     }
-                }
-                WindowImpl::Xwayland(xwindow) => {
-                    // This pre-writes the wlroots mirror so `render_finish`
-                    // reports the saved size from the first frame; X itself
-                    // is still at the window's natural size until the
-                    // arrange pass configures it. That configure must not
-                    // be deduplicated against this mirror — see
-                    // `xwayland_window::needs_configure`, which also checks
-                    // the geometry the compositor has actually sent.
-                    if !xwindow.is_null() && !(*xwindow).xsurface.is_null() {
-                        let s = crate::xwayland_window::x11_scale_for((*xwindow).xsurface);
-                        (*(*xwindow).xsurface).width = crate::xwayland_window::to_x11(saved.width as i32, s) as u16;
-                        (*(*xwindow).xsurface).height = crate::xwayland_window::to_x11(saved.height as i32, s) as u16;
+                    WindowImpl::Xwayland(xwindow) => {
+                        // This pre-writes the wlroots mirror so `render_finish`
+                        // reports the saved size from the first frame; X itself
+                        // is still at the window's natural size until the
+                        // arrange pass configures it. That configure must not
+                        // be deduplicated against this mirror — see
+                        // `xwayland_window::needs_configure`, which also checks
+                        // the geometry the compositor has actually sent.
+                        if !xwindow.is_null() && !(*xwindow).xsurface.is_null() {
+                            let s = crate::xwayland_window::x11_scale_for((*xwindow).xsurface);
+                            (*(*xwindow).xsurface).width = crate::xwayland_window::to_x11(saved.width as i32, s) as u16;
+                            (*(*xwindow).xsurface).height = crate::xwayland_window::to_x11(saved.height as i32, s) as u16;
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
 
             // A restored non-Floating mode is EXPLICIT state, and has to be
@@ -346,7 +351,7 @@ impl Window {
     /// Centre a satellite over its sibling. Like `try_center_on_view` this
     /// owns the POSITION only, and latches a redo for the commit that
     /// brings the window's real size (`pending_view_center`).
-    pub(crate) unsafe fn try_center_on_sibling(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub(crate) fn try_center_on_sibling(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let this = window_mut!(wm, id);
         if !this.satellite {
             return;
@@ -356,7 +361,7 @@ impl Window {
         Window::apply_sibling_centering(wm, id);
     }
 
-    pub(crate) unsafe fn apply_sibling_centering(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub(crate) fn apply_sibling_centering(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let stores = stores!(wm);
         let this = window_mut!(wm, id);
         let app_id = this.get_app_id_string().unwrap_or_default();
@@ -474,13 +479,15 @@ impl Window {
     /// render pass's size and is only filled in once a frame has been drawn
     /// (or by `try_restore` from the saved geometry), so a first-ever launch
     /// falls back to the client's committed toplevel geometry.
-    pub(crate) unsafe fn mapped_size_hint(&self) -> (f64, f64) {
+    pub(crate) fn mapped_size_hint(&self) -> (f64, f64) {
         if self.box_geom.width > 0 && self.box_geom.height > 0 {
             return (self.box_geom.width as f64, self.box_geom.height as f64);
         }
         if let WindowImpl::Toplevel(toplevel) = self.impl_type {
             if !toplevel.is_null() {
-                let g = (*toplevel).geometry;
+                // SAFETY: as `get_title`: `impl_type` names this window's
+                // live implementation (`set_impl`'s contract).
+                let g = unsafe { (*toplevel).geometry };
                 if g.width > 0 && g.height > 0 {
                     return (g.width as f64, g.height as f64);
                 }
@@ -489,7 +496,7 @@ impl Window {
         (400.0, 400.0)
     }
 
-    pub(crate) unsafe fn try_hint_placement(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub(crate) fn try_hint_placement(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let stores = stores!(wm);
         let this = window_mut!(wm, id);
         let app_id = this.get_app_id_string().unwrap_or_default();
@@ -572,7 +579,7 @@ impl Window {
     /// - Session restore is exempt. A restored layout is a layout the user
     ///   arranged and saved, and mapping order is arbitrary, so nudging there
     ///   would rearrange a deliberate desktop at every login.
-    pub(crate) unsafe fn avoid_tiled_overlap(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub(crate) fn avoid_tiled_overlap(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let this = window_mut!(wm, id);
         if this.session_restored || this.tiling_mode != crate::tiling::TilingMode::Tiled {
             return;
@@ -645,7 +652,7 @@ impl Window {
     /// measured in whole squares: a window last seen filling four squares
     /// opens filling four squares, at the corner of the invocation square that
     /// leaves it clear of its neighbours.
-    pub(crate) unsafe fn place_on_invocation_cell(wm: &mut crate::window_manager::WindowManager, id: WindowId, app_id: &str, hx: f64, hy: f64) {
+    pub(crate) fn place_on_invocation_cell(wm: &mut crate::window_manager::WindowManager, id: WindowId, app_id: &str, hx: f64, hy: f64) {
         let stores = stores!(wm);
         let this = window_mut!(wm, id);
         let sp = crate::shared::layout().snap_params();
@@ -775,7 +782,7 @@ impl Window {
         wm.get_rule_for_window(self).map_or(false, |r| r.center)
     }
 
-    pub(crate) unsafe fn try_center_on_view(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub(crate) fn try_center_on_view(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         if !window_ref!(wm, id, ()).wants_view_center(wm) {
             return;
         }
@@ -821,7 +828,7 @@ impl Window {
 
     /// The centering itself, split out so the self-sizing commit path can redo
     /// it once the client's real size lands.
-    pub(crate) unsafe fn apply_view_centering(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub(crate) fn apply_view_centering(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let stores = stores!(wm);
         let this = window_mut!(wm, id);
         if this.satellite {
@@ -847,7 +854,7 @@ impl Window {
     /// Redo a latched view-centering now that a self-sizing modal's real
     /// geometry has arrived. One-shot: a later commit (or a user dragging the
     /// window) must not snap it back to the middle.
-    pub unsafe fn take_pending_view_center(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    pub fn take_pending_view_center(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
         let this = window_mut!(wm, id);
         if !this.pending_view_center || this.box_geom.width <= 0 || this.box_geom.height <= 0 {
             return;

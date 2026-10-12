@@ -2093,7 +2093,7 @@ impl WindowManager {
         self.rendering_requested.list.iter().copied().filter(|&id| self.windows.contains(id)).collect()
     }
 
-    pub unsafe fn raise_window(&mut self, id: crate::window::WindowId) {
+    pub fn raise_window(&mut self, id: crate::window::WindowId) {
         crate::wm_scope!(mut);
         let Some(window) = self.windows.get(id) else { return };
         // A shy helper window stays where its app stacked it: beneath.
@@ -2550,7 +2550,7 @@ fn rendered_fullscreen(window: &Window) -> bool {
 /// not in overview — where it is a slab on the desk like a stepped-aside
 /// one (`place_fullscreen_windows`) and stacks behind every window with
 /// it, so it never hides the windows overview is there to show.
-unsafe fn fullscreen_on_top(wm: &WindowManager, window: &Window) -> bool {
+fn fullscreen_on_top(wm: &WindowManager, window: &Window) -> bool {
     rendered_fullscreen(window)
         && crate::shared::mode() != WindowManagerMode::Overview
         && !window.fullscreen_yields(wm)

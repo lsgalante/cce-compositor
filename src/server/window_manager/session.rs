@@ -187,7 +187,7 @@ impl WindowManager {
         self.restore_placeholder_timer.remove();
     }
 
-    pub unsafe fn save_state(&mut self) {
+    pub fn save_state(&mut self) {
         crate::wm_scope!(mut);
         if self.shutting_down {
             return;

@@ -1455,7 +1455,7 @@ impl Seat {
 /// a grab by an image) is skipped, it is placed by its own arm. Untouched
 /// until that offset is something: the release of a tap runs through here
 /// too, and must not un-tile them.
-unsafe fn carry_group_windows(
+fn carry_group_windows(
     wm: &mut crate::window_manager::WindowManager,
     group: &[(crate::window::WindowId, f64, f64)],
     grabbed: Option<crate::window::WindowId>,

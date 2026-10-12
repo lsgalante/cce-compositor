@@ -298,9 +298,7 @@ pub fn run_server() {
     }
 
     log::info!("shutting down server");
-    unsafe {
-        server.wm.save_state();
-    }
+    server.wm.save_state();
     server.wm.shutting_down = true;
     std::mem::drop(_guard);
     server.deinit();
