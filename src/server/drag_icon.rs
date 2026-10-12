@@ -6,57 +6,51 @@ use crate::cursor::Cursor;
 
 #[repr(C)]
 pub struct DragIcon {
-    pub wlr_drag_icon: *mut ffi::wlr_drag_icon,
+    /// The wlroots icon; the destroy handler takes it before the box goes.
+    wlr_drag_icon: crate::wlr::Wlr<ffi::wlr_drag_icon>,
     /// Watched: wlroots destroys it with the drag icon.
     pub scene_drag_icon: crate::scene_handle::SceneTree,
     pub destroy: crate::listener::Listener,
+    /// The seat whose cursor's registry holds it (`Cursor::drag_icons`).
+    sid: crate::seat::SeatId,
 }
 
 impl DragIcon {
     pub unsafe fn create(
         wlr_drag_icon: *mut ffi::wlr_drag_icon,
-        cursor: *mut Cursor,
+        cursor: &mut Cursor,
     ) -> Result<(), &'static str> {
-        
         let scene_drag_icon = ffi::wlr_scene_drag_icon_create(crate::shared::scene().drag_icons.raw(), wlr_drag_icon);
         if scene_drag_icon.is_null() {
             return Err("Failed to create scene drag icon");
         }
 
-        let drag_icon = Box::new(Self {
-            wlr_drag_icon,
+        let raw = Box::into_raw(Box::new(Self {
+            // SAFETY: the destroy handler takes it before the box goes.
+            wlr_drag_icon: crate::wlr::Wlr::from_raw(wlr_drag_icon),
             scene_drag_icon: crate::scene_handle::SceneTree::watch(scene_drag_icon),
             destroy: std::mem::zeroed(),
-        });
-        let raw = Box::into_raw(drag_icon);
+            sid: cursor.sid,
+        }));
 
-        ffi::river_scene_node_set_data(
-            scene_drag_icon as *mut ffi::wlr_scene_node,
-            raw as *mut std::ffi::c_void,
-        );
-
-        let drag_icon_ref = &mut *raw;
-        drag_icon_ref.update_position(cursor);
-
-        drag_icon_ref.destroy.connect(&mut (*wlr_drag_icon).events.destroy as *mut ffi::wl_signal, handle_destroy);
+        (*raw).update_position(cursor);
+        (*raw).destroy.connect(&mut (*wlr_drag_icon).events.destroy as *mut ffi::wl_signal, handle_destroy);
+        // Registered until the destroy handler unregisters it, before the
+        // box is freed.
+        cursor.register_drag_icon(raw);
 
         Ok(())
     }
 
-    pub unsafe fn update_position(&mut self, cursor: *mut Cursor) {
-        let grab_type = ffi::river_wlr_drag_get_grab_type((*self.wlr_drag_icon).drag);
-        match grab_type {
-            ffi::wlr_drag_grab_type_WLR_DRAG_GRAB_KEYBOARD => {
-                // unreachable
-            }
+    /// Follow what drives the drag: the cursor, or the touch point.
+    pub fn update_position(&mut self, cursor: &Cursor) {
+        match self.wlr_drag_icon.grab_type() {
             ffi::wlr_drag_grab_type_WLR_DRAG_GRAB_KEYBOARD_POINTER => {
-                let x = (*cursor).x();
-                let y = (*cursor).y();
-                self.scene_drag_icon.set_position(x as i32, y as i32);
+                self.scene_drag_icon.set_position(cursor.x() as i32, cursor.y() as i32);
             }
             ffi::wlr_drag_grab_type_WLR_DRAG_GRAB_KEYBOARD_TOUCH => {
-                let touch_id = ffi::river_wlr_drag_get_touch_id((*self.wlr_drag_icon).drag);
-                if let Some(&crate::cursor::TouchPoint { lx, ly, .. }) = (*cursor).touch_points.get(&touch_id) {
+                let touch_id = self.wlr_drag_icon.touch_id();
+                if let Some(&crate::cursor::TouchPoint { lx, ly, .. }) = cursor.touch_points.get(&touch_id) {
                     self.scene_drag_icon.set_position(lx as i32, ly as i32);
                 }
             }
@@ -70,6 +64,13 @@ unsafe extern "C" fn handle_destroy(
     _data: *mut std::ffi::c_void,
 ) {
     let drag_icon_ptr = crate::container_of!(listener, DragIcon, destroy);
+    let server = crate::shared::server_ptr();
+    if !server.is_null() {
+        if let Some(seat) = (*crate::reentry::wm(server)).seats.get_mut((*drag_icon_ptr).sid) {
+            seat.cursor.unregister_drag_icon(drag_icon_ptr);
+        }
+    }
     let mut drag_icon = Box::from_raw(drag_icon_ptr);
     drag_icon.destroy.disconnect();
+    drag_icon.wlr_drag_icon.take();
 }

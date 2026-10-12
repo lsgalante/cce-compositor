@@ -647,6 +647,23 @@ impl Wlr<ffi::wlr_foreign_toplevel_handle_v1> {
     }
 }
 
+impl Wlr<ffi::wlr_drag_icon> {
+    /// How its drag is driven (`wlr_drag_grab_type`); keyboard when unset.
+    pub fn grab_type(&self) -> ffi::wlr_drag_grab_type {
+        // SAFETY: a live icon's drag outlives it (wlroots destroys the icon
+        // inside the drag's destroy).
+        self.live().map_or(ffi::wlr_drag_grab_type_WLR_DRAG_GRAB_KEYBOARD, |i| unsafe {
+            ffi::river_wlr_drag_get_grab_type((*i).drag)
+        })
+    }
+
+    /// The touch point driving a touch drag.
+    pub fn touch_id(&self) -> i32 {
+        // SAFETY: as `grab_type`.
+        self.live().map_or(0, |i| unsafe { ffi::river_wlr_drag_get_touch_id((*i).drag) })
+    }
+}
+
 impl Wlr<ffi::wlr_output_layout> {
     /// Put `output` in the layout at (`x`, `y`), or move it there.
     pub fn add(&self, output: &Wlr<ffi::wlr_output>, x: i32, y: i32) {

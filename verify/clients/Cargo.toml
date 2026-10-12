@@ -44,6 +44,10 @@ path = "src/bin/layer_popup.rs"
 name = "input-probe"
 path = "src/bin/input_probe.rs"
 
+[[bin]]
+name = "dnd-source"
+path = "src/bin/dnd_source.rs"
+
 [dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }

@@ -1,8 +1,6 @@
 use crate::ffi;
 use crate::seat::{Seat, Focus};
-use crate::server::{WlList};
 use crate::scene_node_data::SceneNodeDataVal;
-use crate::drag_icon::DragIcon;
 use std::collections::{HashMap, HashSet};
 
 pub use crate::touch::{TouchPoint, TouchRoute};
@@ -36,6 +34,8 @@ pub struct Cursor {
     /// dereferences it: written only through `set_constraint`, whose callers
     /// keep the destroy handler's promise to clear it.
     constraint: *mut crate::pointer_constraint::PointerConstraint,
+    /// The icons this seat's drags show; private, as every registry.
+    drag_icons: crate::registry::Registry<crate::drag_icon::DragIcon>,
 
     /// Trackpad-to-view-drag emulation for the apps `touchpad_view_apps`
     /// names (see `ViewDrag`); `None` while no emulated drag is in progress.
@@ -219,6 +219,7 @@ impl Default for Cursor {
             wlr_seat: crate::wlr::Wlr::null(),
             xcursor_manager: crate::wlr::Wlr::null(),
             constraint: std::ptr::null_mut(),
+            drag_icons: crate::registry::Registry::new(),
             anim_timer: crate::event_source::Timer::new(),
             anim_xcursor: std::ptr::null_mut(),
             anim_started_msec: 0,
@@ -493,23 +494,26 @@ impl Cursor {
         Cursor::update_state(wm, sid);
     }
 
-    pub unsafe fn update_drag_icons(&mut self) {
-        let drag_icons_tree = crate::shared::scene().drag_icons.raw();
-        let children_head = ffi::river_scene_tree_get_children(drag_icons_tree) as *mut WlList;
-        let mut curr = (*children_head).next;
-        while curr != children_head {
-            let next = (*curr).next;
-            let node = ffi::river_scene_node_from_children_link(curr as *mut ffi::wl_list);
-            let drag_icon_raw = ffi::river_scene_node_get_data(node) as *mut DragIcon;
-            if !drag_icon_raw.is_null() {
-                let drag_icon = &mut *drag_icon_raw;
-                let drag_seat = ffi::river_wlr_drag_get_seat((*drag_icon.wlr_drag_icon).drag);
-                if drag_seat == self.wlr_seat().ptr() {
-                    drag_icon.update_position(self);
-                }
-            }
-            curr = next;
+    /// Move this seat's drag icons to follow what drives their drags.
+    pub fn update_drag_icons(&mut self) {
+        for icon in self.drag_icons.ptrs() {
+            // SAFETY: a registered icon is live (`register_drag_icon`'s
+            // contract), its own allocation apart from this cursor.
+            unsafe { (*icon).update_position(self) };
         }
+    }
+
+    /// Register a drag icon this seat's drag shows.
+    ///
+    /// # Safety
+    /// As `Registry::push`: live until `unregister_drag_icon`, which its
+    /// destroy handler runs before freeing it.
+    pub unsafe fn register_drag_icon(&mut self, icon: *mut crate::drag_icon::DragIcon) {
+        self.drag_icons.push(icon);
+    }
+
+    pub fn unregister_drag_icon(&mut self, icon: *mut crate::drag_icon::DragIcon) {
+        self.drag_icons.remove(icon);
     }
 
 
@@ -1014,7 +1018,7 @@ impl Cursor {
     /// op-update-or-passthrough, mirroring `handle_motion`). `wlr_cursor_warp` takes
     /// layout pixels — `wlr_cursor_warp_absolute` is 0..1-normalized, which is the
     /// bug the old `pointer-move-to` had.
-    pub unsafe fn inject_motion_to(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, x: f64, y: f64, sys: &mut crate::ctx::Sys) {
+    pub fn inject_motion_to(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, x: f64, y: f64, sys: &mut crate::ctx::Sys) {
         let this = cursor_mut!(wm, sid, ());
         this.unhide_after_touch();
         Cursor::warp_to(wm, sid, x, y, sys);
@@ -1022,7 +1026,7 @@ impl Cursor {
 
     /// `inject_motion_to` without bringing a touch-hidden cursor back: the
     /// emulated pointer of a touch (`TouchRoute::Pointer`) moves this way.
-    pub(crate) unsafe fn warp_to(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, x: f64, y: f64, sys: &mut crate::ctx::Sys) {
+    pub(crate) fn warp_to(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, x: f64, y: f64, sys: &mut crate::ctx::Sys) {
         crate::seat::Seat::handle_activity(wm, sid, sys);
         let this = cursor_mut!(wm, sid, ());
         this.wlr_cursor().warp(x, y);
@@ -1040,7 +1044,7 @@ impl Cursor {
         // Real devices terminate every motion batch with a frame; sctk-based clients
         // queue pointer events until they see one.
         let this = cursor_mut!(wm, sid, ());
-        handle_frame(this.frame_listener.as_ptr(), std::ptr::null_mut());
+        this.wlr_seat().pointer_notify_frame();
     }
 
     pub unsafe fn inject_motion_by(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, dx: f64, dy: f64, sys: &mut crate::ctx::Sys) {
@@ -1056,7 +1060,7 @@ impl Cursor {
             &mut ev as *mut ffi::wlr_pointer_motion_event as *mut std::ffi::c_void,
          sys);
         let this = cursor_mut!(wm, sid, ());
-        handle_frame(this.frame_listener.as_ptr(), std::ptr::null_mut());
+        this.wlr_seat().pointer_notify_frame();
     }
 
     pub unsafe fn inject_button(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, button: u32, pressed: bool, sys: &mut crate::ctx::Sys) {
@@ -1075,7 +1079,7 @@ impl Cursor {
             &mut ev as *mut ffi::wlr_pointer_button_event as *mut std::ffi::c_void,
          sys);
         let this = cursor_mut!(wm, sid, ());
-        handle_frame(this.frame_listener.as_ptr(), std::ptr::null_mut());
+        this.wlr_seat().pointer_notify_frame();
     }
 
     /// Wheel scroll; positive `dy` scrolls down (content up), matching a real wheel.
@@ -1112,10 +1116,11 @@ impl Cursor {
              sys);
         }
         let this = cursor_mut!(wm, sid, ());
-        handle_frame(this.frame_listener.as_ptr(), std::ptr::null_mut());
         // Every libinput axis event is followed by a frame; clients
         // (Xwayland among them) deliver only on the frame, and wlroots
-        // asserts if a later axis event changes source within one.
+        // asserts if a later axis event changes source within one. One
+        // frame: this also called the frame handler first, until
+        // 2026-10-12, so every injected scroll ended in two.
         this.wlr_seat().pointer_notify_frame();
     }
 
