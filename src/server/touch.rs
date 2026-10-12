@@ -739,7 +739,7 @@ impl Cursor {
     }
 
     /// One stage of a touchscreen swipe, through the touchpad's handling.
-    unsafe fn touch_swipe(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, stage: &str, fingers: u32, dx: f64, dy: f64, sys: &mut crate::ctx::Sys) {
+    fn touch_swipe(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, stage: &str, fingers: u32, dx: f64, dy: f64, sys: &mut crate::ctx::Sys) {
         let this = cursor_mut!(wm, sid, ());
         this.gesture_from_touch = true;
         Cursor::inject_swipe_stage(wm, sid, stage, fingers, dx, dy, sys);

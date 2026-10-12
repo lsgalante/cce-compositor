@@ -664,6 +664,29 @@ impl Wlr<ffi::wlr_drag_icon> {
     }
 }
 
+/// The pointer-gestures sends: each takes the seat by its `Wlr` and values
+/// only, and does nothing when either is unset.
+macro_rules! gesture_sends {
+    ($($name:ident($($arg:ident: $ty:ty),*) => $ffi:ident;)*) => {
+        impl Wlr<ffi::wlr_pointer_gestures_v1> {$(
+            pub fn $name(&self, seat: &Wlr<ffi::wlr_seat>, time_msec: u32, $($arg: $ty),*) {
+                if let (Some(g), Some(s)) = (self.live(), seat.live()) {
+                    unsafe { ffi::$ffi(g, s, time_msec, $($arg),*) }
+                }
+            }
+        )*}
+    };
+}
+
+gesture_sends! {
+    send_swipe_begin(fingers: u32) => wlr_pointer_gestures_v1_send_swipe_begin;
+    send_swipe_update(dx: f64, dy: f64) => wlr_pointer_gestures_v1_send_swipe_update;
+    send_swipe_end(cancelled: bool) => wlr_pointer_gestures_v1_send_swipe_end;
+    send_pinch_begin(fingers: u32) => wlr_pointer_gestures_v1_send_pinch_begin;
+    send_pinch_update(dx: f64, dy: f64, scale: f64, rotation: f64) => wlr_pointer_gestures_v1_send_pinch_update;
+    send_pinch_end(cancelled: bool) => wlr_pointer_gestures_v1_send_pinch_end;
+}
+
 impl Wlr<ffi::wlr_output_layout> {
     /// Put `output` in the layout at (`x`, `y`), or move it there.
     pub fn add(&self, output: &Wlr<ffi::wlr_output>, x: i32, y: i32) {

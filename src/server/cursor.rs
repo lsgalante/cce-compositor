@@ -1162,20 +1162,20 @@ impl Cursor {
     /// pointer-gestures forward to clients headlessly.
     /// One stage of a pinch, for a test that paces the updates itself:
     /// `stage` is "begin", "update" (with `scale`/`rotation`) or "end".
-    pub unsafe fn inject_pinch_stage(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, stage: &str, scale: f64, rotation: f64, sys: &mut crate::ctx::Sys) {
+    pub fn inject_pinch_stage(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, stage: &str, scale: f64, rotation: f64, sys: &mut crate::ctx::Sys) {
         let time = crate::util::msec_timestamp();
         match stage {
             "begin" => {
-                let mut ev = ffi::wlr_pointer_pinch_begin_event { pointer: std::ptr::null_mut(), time_msec: time, fingers: 2 };
-                on_pinch_begin(wm, sid, &mut ev as *mut _ as *mut std::ffi::c_void, sys);
+                let ev = ffi::wlr_pointer_pinch_begin_event { pointer: std::ptr::null_mut(), time_msec: time, fingers: 2 };
+                on_pinch_begin(wm, sid, &ev, sys);
             }
             "update" => {
-                let mut ev = ffi::wlr_pointer_pinch_update_event { pointer: std::ptr::null_mut(), time_msec: time, fingers: 2, dx: 0.0, dy: 0.0, scale, rotation };
-                on_pinch_update(wm, sid, &mut ev as *mut _ as *mut std::ffi::c_void, sys);
+                let ev = ffi::wlr_pointer_pinch_update_event { pointer: std::ptr::null_mut(), time_msec: time, fingers: 2, dx: 0.0, dy: 0.0, scale, rotation };
+                on_pinch_update(wm, sid, &ev, sys);
             }
             _ => {
-                let mut ev = ffi::wlr_pointer_pinch_end_event { pointer: std::ptr::null_mut(), time_msec: time, cancelled: false };
-                on_pinch_end(wm, sid, &mut ev as *mut _ as *mut std::ffi::c_void, sys);
+                let ev = ffi::wlr_pointer_pinch_end_event { pointer: std::ptr::null_mut(), time_msec: time, cancelled: false };
+                on_pinch_end(wm, sid, &ev, sys);
             }
         }
         let this = cursor_mut!(wm, sid, ());
@@ -1185,23 +1185,23 @@ impl Cursor {
     /// One stage of a touchpad swipe, paced by the caller (`pointer-swipe
     /// begin <fingers> | update <dx> <dy> | end`): what lets a shadow hold
     /// a swipe short of its threshold and read the camera's peek back.
-    pub unsafe fn inject_swipe_stage(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, stage: &str, fingers: u32, dx: f64, dy: f64, sys: &mut crate::ctx::Sys) {
+    pub fn inject_swipe_stage(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, stage: &str, fingers: u32, dx: f64, dy: f64, sys: &mut crate::ctx::Sys) {
         let this = cursor_mut!(wm, sid, ());
         let time = crate::util::msec_timestamp();
         match stage {
             "begin" => {
                 this.inject_swipe_fingers = fingers;
-                let mut ev = ffi::wlr_pointer_swipe_begin_event { pointer: std::ptr::null_mut(), time_msec: time, fingers };
-                on_swipe_begin(wm, sid, &mut ev as *mut _ as *mut std::ffi::c_void, sys);
+                let ev = ffi::wlr_pointer_swipe_begin_event { pointer: std::ptr::null_mut(), time_msec: time, fingers };
+                on_swipe_begin(wm, sid, &ev, sys);
             }
             "update" => {
                 let fingers = this.inject_swipe_fingers;
-                let mut ev = ffi::wlr_pointer_swipe_update_event { pointer: std::ptr::null_mut(), time_msec: time, fingers, dx, dy };
-                on_swipe_update(wm, sid, &mut ev as *mut _ as *mut std::ffi::c_void, sys);
+                let ev = ffi::wlr_pointer_swipe_update_event { pointer: std::ptr::null_mut(), time_msec: time, fingers, dx, dy };
+                on_swipe_update(wm, sid, &ev, sys);
             }
             _ => {
-                let mut ev = ffi::wlr_pointer_swipe_end_event { pointer: std::ptr::null_mut(), time_msec: time, cancelled: false };
-                on_swipe_end(wm, sid, &mut ev as *mut _ as *mut std::ffi::c_void, sys);
+                let ev = ffi::wlr_pointer_swipe_end_event { pointer: std::ptr::null_mut(), time_msec: time, cancelled: false };
+                on_swipe_end(wm, sid, &ev, sys);
             }
         }
         let this = cursor_mut!(wm, sid, ());
@@ -1212,61 +1212,53 @@ impl Cursor {
     /// that together move the gesture centre by (`dx`, `dy`), end. Drives
     /// the gesture-bind table (`swipe3_left` in input.kdl) headlessly;
     /// the pointer-gestures forward to clients runs too.
-    pub unsafe fn inject_swipe(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, fingers: u32, dx: f64, dy: f64, steps: u32, sys: &mut crate::ctx::Sys) {
+    pub fn inject_swipe(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, fingers: u32, dx: f64, dy: f64, steps: u32, sys: &mut crate::ctx::Sys) {
         let time = crate::util::msec_timestamp();
-        let mut begin = ffi::wlr_pointer_swipe_begin_event {
+        let begin = ffi::wlr_pointer_swipe_begin_event {
             pointer: std::ptr::null_mut(),
             time_msec: time,
             fingers,
         };
-        on_swipe_begin(wm, sid,
-            &mut begin as *mut ffi::wlr_pointer_swipe_begin_event as *mut std::ffi::c_void,
-         sys);
+        on_swipe_begin(wm, sid, &begin, sys);
         let this = cursor_mut!(wm, sid, ());
         this.wlr_seat().pointer_notify_frame();
         let steps = steps.max(1);
         for i in 1..=steps {
-            let mut update = ffi::wlr_pointer_swipe_update_event {
+            let update = ffi::wlr_pointer_swipe_update_event {
                 pointer: std::ptr::null_mut(),
                 time_msec: time + i,
                 fingers,
                 dx: dx / steps as f64,
                 dy: dy / steps as f64,
             };
-            on_swipe_update(wm, sid,
-                &mut update as *mut ffi::wlr_pointer_swipe_update_event as *mut std::ffi::c_void,
-             sys);
+            on_swipe_update(wm, sid, &update, sys);
             let this = cursor_mut!(wm, sid, ());
             this.wlr_seat().pointer_notify_frame();
         }
-        let mut end = ffi::wlr_pointer_swipe_end_event {
+        let end = ffi::wlr_pointer_swipe_end_event {
             pointer: std::ptr::null_mut(),
             time_msec: time + steps + 1,
             cancelled: false,
         };
-        on_swipe_end(wm, sid,
-            &mut end as *mut ffi::wlr_pointer_swipe_end_event as *mut std::ffi::c_void,
-         sys);
+        on_swipe_end(wm, sid, &end, sys);
         let this = cursor_mut!(wm, sid, ());
         this.wlr_seat().pointer_notify_frame();
     }
 
-    pub unsafe fn inject_pinch(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, scale: f64, rotation: f64, steps: u32, sys: &mut crate::ctx::Sys) {
+    pub fn inject_pinch(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, scale: f64, rotation: f64, steps: u32, sys: &mut crate::ctx::Sys) {
         let time = crate::util::msec_timestamp();
-        let mut begin = ffi::wlr_pointer_pinch_begin_event {
+        let begin = ffi::wlr_pointer_pinch_begin_event {
             pointer: std::ptr::null_mut(),
             time_msec: time,
             fingers: 2,
         };
-        on_pinch_begin(wm, sid,
-            &mut begin as *mut ffi::wlr_pointer_pinch_begin_event as *mut std::ffi::c_void,
-         sys);
+        on_pinch_begin(wm, sid, &begin, sys);
         let this = cursor_mut!(wm, sid, ());
         this.wlr_seat().pointer_notify_frame();
         let steps = steps.max(1);
         for i in 1..=steps {
             let t = i as f64 / steps as f64;
-            let mut update = ffi::wlr_pointer_pinch_update_event {
+            let update = ffi::wlr_pointer_pinch_update_event {
                 pointer: std::ptr::null_mut(),
                 time_msec: time + i,
                 fingers: 2,
@@ -1275,20 +1267,16 @@ impl Cursor {
                 scale: 1.0 + (scale - 1.0) * t,
                 rotation: rotation * t,
             };
-            on_pinch_update(wm, sid,
-                &mut update as *mut ffi::wlr_pointer_pinch_update_event as *mut std::ffi::c_void,
-             sys);
+            on_pinch_update(wm, sid, &update, sys);
             let this = cursor_mut!(wm, sid, ());
             this.wlr_seat().pointer_notify_frame();
         }
-        let mut end = ffi::wlr_pointer_pinch_end_event {
+        let end = ffi::wlr_pointer_pinch_end_event {
             pointer: std::ptr::null_mut(),
             time_msec: time + steps + 1,
             cancelled: false,
         };
-        on_pinch_end(wm, sid,
-            &mut end as *mut ffi::wlr_pointer_pinch_end_event as *mut std::ffi::c_void,
-         sys);
+        on_pinch_end(wm, sid, &end, sys);
         let this = cursor_mut!(wm, sid, ());
         this.wlr_seat().pointer_notify_frame();
     }
