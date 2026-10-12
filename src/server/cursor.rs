@@ -308,7 +308,9 @@ impl Cursor {
     ///
     /// # Safety
     /// `constraint` is null or a live `PointerConstraint` whose destroy
-    /// handler clears this field (`set_constraint(null)`) before freeing it.
+    /// handler clears this field (`set_constraint(null)`) before freeing it
+    /// — except inside `Seat::destroy`, which clears it itself before
+    /// `wlr_seat_destroy` destroys the seat's constraints.
     pub unsafe fn set_constraint(&mut self, constraint: *mut crate::pointer_constraint::PointerConstraint) {
         self.constraint = constraint;
     }

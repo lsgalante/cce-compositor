@@ -39,12 +39,14 @@ impl LayerShell {
     /// Schedule keyboard focus for the topmost mapped exclusive layer
     /// surface on every seat, or clear an exclusive focus none claims.
     ///
-    /// A surface queued for closing (`close_later`) is passed over, and a
-    /// scheduled focus naming one is dropped: it is still mapped until the
-    /// idle callback closes it, and before the close was deferred it went
-    /// inside the arrange that found it too large, so it never held focus.
-    /// Focused in between, its close would take the keyboard from the
-    /// window and fire the app-exit camera reaction.
+    /// A surface queued for closing (`close_later`: too large for its
+    /// output, or its output went away) is passed over, and a scheduled
+    /// focus naming one is dropped: it is still mapped until the idle
+    /// callback closes it. An oversized one never held focus (before the
+    /// close was deferred it went inside the arrange that found it too
+    /// large); one whose output went away may hold it, and its close's
+    /// unmap refocuses. Focused in between, its close would take the
+    /// keyboard from the window and fire the app-exit camera reaction.
     pub fn check_exclusive_focus(seats: &mut crate::seat::Seats) {
         let layers = [
             ffi::zwlr_layer_shell_v1_layer_ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,

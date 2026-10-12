@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `ccectl debug-output add WxH | remove NAME`: plug and unplug HEADLESS
+//! `ccectl debug-output add | remove NAME`: plug and unplug HEADLESS
 //! outputs, so a cce-shadow session (headless backend, which otherwise
 //! keeps its outputs for life) can exercise output hotplug: the destroy
-//! path a monitor unplug takes. Any other kind of output is refused, so it
-//! cannot touch a real session's monitors.
+//! path a monitor unplug takes. Refused without a headless backend, and for
+//! any other kind of output, so it cannot touch a real session's monitors.
+//! An added output comes up 1280x720, the mode `Output::create` gives one
+//! with no preferred mode.
 //!
 //! The change runs from an idle callback, an entry point of its own:
 //! adding or destroying an output emits wlroots signals whose handlers take
@@ -14,7 +16,7 @@ use crate::ffi;
 use std::cell::RefCell;
 
 enum Op {
-    Add(u32, u32),
+    Add,
     Remove(String),
 }
 
@@ -23,7 +25,7 @@ thread_local! {
     static OPS: RefCell<Vec<Op>> = const { RefCell::new(Vec::new()) };
 }
 
-const USAGE: &str = "error: usage: debug-output add WxH | remove NAME\n";
+const USAGE: &str = "error: usage: debug-output add | remove NAME\n";
 
 /// The headless output named `name`, if one is in `outputs`.
 fn headless_named(outputs: &crate::output::Outputs, name: &str) -> Result<*mut ffi::wlr_output, String> {
@@ -44,12 +46,12 @@ fn headless_named(outputs: &crate::output::Outputs, name: &str) -> Result<*mut f
 /// this dispatch, and replies.
 pub fn command(outputs: &crate::output::Outputs, args: &[&str]) -> String {
     let op = match args {
-        ["add", size] => {
-            let parsed = size.split_once('x').and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)));
-            match parsed {
-                Some((w, h)) if w > 0 && h > 0 => Op::Add(w, h),
-                _ => return USAGE.to_string(),
+        ["add"] => {
+            // SAFETY: the server's backend, live for the server's life.
+            if !unsafe { ffi::cce_backend_has_headless(crate::shared::handles().backend.ptr()) } {
+                return "error: no headless backend (debug-output is for cce-shadow sessions)\n".to_string();
             }
+            Op::Add
         }
         ["remove", name] => match headless_named(outputs, name) {
             Ok(_) => Op::Remove(name.to_string()),
@@ -81,8 +83,8 @@ unsafe extern "C" fn run(_data: *mut std::ffi::c_void) {
     }
     for op in ops {
         match op {
-            Op::Add(w, h) => {
-                let output = ffi::cce_headless_add_output(crate::shared::handles().backend.ptr(), w, h);
+            Op::Add => {
+                let output = ffi::cce_headless_add_output(crate::shared::handles().backend.ptr(), 1280, 720);
                 if output.is_null() {
                     log::warn!("debug-output add: no headless backend");
                 }

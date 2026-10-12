@@ -644,8 +644,9 @@ handler forgets it on every layer surface on it (`layer_shell::output_gone`,
 for the deferred close. Before 2026-10-12 a surface left on an unplugged
 output read the freed `wlr_output` on its next commit or unmap: the unmap's
 arrange segfaulted the compositor in a shadow with poisoned frees.
-`ccectl debug-output add WxH | remove NAME` plugs and unplugs headless
-outputs (refused for any other kind), so a shadow can exercise this.
+`ccectl debug-output add | remove NAME` plugs and unplugs headless outputs
+(1280x720; refused without a headless backend and for any other kind of
+output), so a shadow can exercise this.
 
 Only calls whose other arguments are values (or another `Wlr`) are wrapped:
 a call that also passes a raw surface, device or keyboard pointer stays an

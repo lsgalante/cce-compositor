@@ -338,6 +338,10 @@ impl Seat {
             (*seat).drag_destroy.disconnect();
         }
 
+        // The seat's constraints die inside `wlr_seat_destroy`, and their
+        // destroy handler finds no seat by then (its hold is taken): let go
+        // of the one the cursor holds first, so it never names a freed one.
+        (*seat).cursor.set_constraint(std::ptr::null_mut());
         ffi::wlr_seat_destroy((*seat).wlr_seat().take());
         // SAFETY: torn down above: the keyboard groups are gone (asserted).
         // The relay unlinks any popup still in its head when it drops.
@@ -871,9 +875,10 @@ impl Seat {
         }
 
         // A layer surface queued for closing (too large for an output the
-        // pass just resized) takes no focus on its way out: the manage pass
-        // arranges outputs (which queues it) before seats, with no
-        // `check_exclusive_focus` in between to drop it (fourth review).
+        // pass just resized, or its output went away) takes no focus on its
+        // way out: the manage pass arranges outputs (which queues it) before
+        // seats, with no `check_exclusive_focus` in between to drop it
+        // (fourth review).
         if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) | crate::layer_shell::LayerShellSeatFocus::NonExclusive(key) = this.layer_shell.sent_focus {
             if crate::layer_shell::closing(key) {
                 this.layer_shell.scheduled_focus = crate::layer_shell::LayerShellSeatFocus::None;

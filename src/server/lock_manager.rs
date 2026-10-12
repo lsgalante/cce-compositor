@@ -315,8 +315,8 @@ impl LockManager {
 pub struct LockSurface {
     /// Watched: wlroots destroys it with the lock surface.
     pub tree: crate::scene_handle::SceneTree,
-    /// Set once, by `create`; private because the safe `get_output` trusts
-    /// it.
+    /// Set once, by `create`; private because the safe `wlr_output`,
+    /// `surface` and `configure` trust it.
     wlr_lock_surface: *mut ffi::wlr_session_lock_surface_v1,
     pub lock: *mut ffi::wlr_session_lock_v1,
     pub manager: *mut LockManager,
@@ -429,7 +429,7 @@ impl LockSurface {
 
     /// The lock surface's wl_surface.
     pub fn surface(&self) -> *mut ffi::wlr_surface {
-        // SAFETY: as `get_output`.
+        // SAFETY: as `wlr_output`.
         unsafe { (*self.wlr_lock_surface).surface }
     }
 

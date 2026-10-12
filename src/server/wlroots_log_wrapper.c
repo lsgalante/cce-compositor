@@ -1250,10 +1250,7 @@ static void cce_find_headless(struct wlr_backend *backend, void *data) {
 	}
 }
 
-/* A new headless output of width x height on the server's headless backend
- * (alone, or inside the multi backend autocreate makes); NULL when there is
- * none. */
-struct wlr_output *cce_headless_add_output(struct wlr_backend *backend, unsigned int width, unsigned int height) {
+static struct wlr_backend *cce_headless_of(struct wlr_backend *backend) {
 	struct wlr_backend *headless = NULL;
 	if (backend == NULL) {
 		return NULL;
@@ -1263,6 +1260,18 @@ struct wlr_output *cce_headless_add_output(struct wlr_backend *backend, unsigned
 	} else if (wlr_backend_is_headless(backend)) {
 		headless = backend;
 	}
+	return headless;
+}
+
+bool cce_backend_has_headless(struct wlr_backend *backend) {
+	return cce_headless_of(backend) != NULL;
+}
+
+/* A new headless output of width x height on the server's headless backend
+ * (alone, or inside the multi backend autocreate makes); NULL when there is
+ * none. */
+struct wlr_output *cce_headless_add_output(struct wlr_backend *backend, unsigned int width, unsigned int height) {
+	struct wlr_backend *headless = cce_headless_of(backend);
 	if (headless == NULL) {
 		return NULL;
 	}

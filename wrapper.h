@@ -123,6 +123,7 @@ struct wl_signal *river_wlr_output_get_present_signal(struct wlr_output *output)
 const char *river_wlr_output_get_name(struct wlr_output *output);
 struct wlr_output *cce_headless_add_output(struct wlr_backend *backend, unsigned int width, unsigned int height);
 bool cce_output_is_headless(struct wlr_output *output);
+bool cce_backend_has_headless(struct wlr_backend *backend);
 struct wl_signal *river_wlr_session_get_active_signal(struct wlr_session *session);
 bool river_wlr_session_get_active(struct wlr_session *session);
 enum wlr_output_adaptive_sync_status river_wlr_output_get_adaptive_sync_status(struct wlr_output *output);

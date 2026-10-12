@@ -360,9 +360,7 @@ impl PointerConstraint {
         let (lx, ly) = self.active_node_coords().map_or((0, 0), |(x, y, _)| (x, y));
         let scale = self.surface_scale();
         seat.cursor.wlr_cursor().warp(lx as f64 + sx / scale, ly as f64 + sy / scale);
-        // Through the field, which is unset once `Seat::destroy` has taken
-        // it: `wlr_seat_destroy` destroys the seat's constraints, and this
-        // runs from their destroy handler.
+        // Through the field: a no-op if the seat has let go of it.
         seat.wlr_seat().pointer_warp(sx, sy);
     }
 }
