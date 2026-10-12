@@ -256,8 +256,15 @@ impl LabelCache {
     /// Look up (or rasterize) a label. `None` means "cannot draw this" — no
     /// font, or an unrasterizable string — and is cached too, so a missing
     /// font costs one lookup per label rather than a filesystem scan.
+    ///
+    /// Rasterized at the whole pixel size it is cached under: at the
+    /// fractional size of the first request, a label drawn mid zoom-flight
+    /// (13.4 px) was what the cache handed back at rest (12.6 px, the same
+    /// key), so what the labels looked like depended on how the camera had
+    /// got there.
     pub fn get(&mut self, text: &str, px: f32) -> Option<&Label> {
-        let key = (text.to_string(), px.round() as u32);
+        let px = px.round();
+        let key = (text.to_string(), px as u32);
         self.entries
             .entry(key)
             .or_insert_with(|| rasterize(text, px))
@@ -267,8 +274,10 @@ impl LabelCache {
     /// The grid square at (col, row) — `policy::cells::square_label` — at
     /// `px`; the name is only formatted on a miss.
     pub fn get_square(&mut self, col: i32, row: i32, px: f32) -> Option<&Label> {
+        // At the whole size it is cached under, as `get`.
+        let px = px.round();
         self.squares
-            .entry((col, row, px.round() as u32))
+            .entry((col, row, px as u32))
             .or_insert_with(|| rasterize(&crate::policy::cells::square_label(col, row), px))
             .as_ref()
     }
