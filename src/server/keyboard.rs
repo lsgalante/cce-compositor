@@ -264,7 +264,7 @@ unsafe extern "C" fn handle_key(listener: *mut ffi::wl_listener, data: *mut std:
         }
         // First deliberate input ends the session-restore settling phase
         // (see the focus gate in Window::map).
-        if !keyboard.group.is_null() && !(*keyboard.group).seat.is_null() {
+        if !keyboard.group.is_null() && (*keyboard.group).sid.is_some() {
             (*crate::reentry::wm(crate::shared::server_ptr())).startup_input_seen = true;
         }
     }
@@ -313,8 +313,7 @@ unsafe extern "C" fn handle_modifiers(listener: *mut ffi::wl_listener, _data: *m
         let modifiers = ffi::river_wlr_keyboard_get_modifiers(keyboard.wlr_keyboard);
         (*keyboard.group).process_modifiers(*modifiers);
         
-        let seat = (*keyboard.group).seat;
-        if !seat.is_null() && !crate::shared::server_ptr().is_null() {
+        if (*keyboard.group).sid.is_some() && !crate::shared::server_ptr().is_null() {
             let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
             wm.update_status();
             wm.refresh_adjust_held();

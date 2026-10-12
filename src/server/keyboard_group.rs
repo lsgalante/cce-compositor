@@ -25,7 +25,12 @@ pub struct Press {
 
 pub struct KeyboardGroup {
     pub ref_count: u32,
+    /// The owning seat, for the teardown in `unref` (which `Seat::destroy`
+    /// runs after taking the seat out of its store). The event handlers
+    /// find the seat by `sid` instead.
     pub seat: *mut Seat,
+    /// The owning seat's id; `None` without one.
+    pub sid: Option<crate::seat::SeatId>,
     pub link: ffi::wl_list, // Seat.keyboard_groups
     pub virtual_device: bool,
     pub config: KeyboardConfig,
@@ -46,6 +51,7 @@ impl KeyboardGroup {
         let mut group = Box::new(Self {
             ref_count: 1,
             seat,
+            sid: if seat.is_null() { None } else { Some((*seat).id) },
             link: std::mem::zeroed(),
             virtual_device,
             config,
@@ -223,11 +229,12 @@ impl KeyboardGroup {
         ffi::wlr_keyboard_set_keymap(&mut self.wlr_keyboard, keymap);
     }
 
-    pub unsafe fn get_input_method_grab(&self) -> *mut ffi::wlr_input_method_keyboard_grab_v2 {
+    pub unsafe fn get_input_method_grab(&self, wm: &crate::window_manager::WindowManager) -> *mut ffi::wlr_input_method_keyboard_grab_v2 {
         if self.virtual_device {
             return std::ptr::null_mut();
         }
-        let input_method = (*self.seat).relay.input_method;
+        let Some(seat) = self.sid.and_then(|sid| wm.seats.get(sid)) else { return std::ptr::null_mut() };
+        let input_method = seat.relay.input_method;
         if !input_method.is_null() {
             return (*input_method).keyboard_grab;
         }
@@ -367,8 +374,9 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
     // Keys are activity for the idle timeouts (and the idle-notify clients)
     // exactly as pointer events are; before 2026-09-16 only tablet, touch
     // and gestures counted, so idle-notify clients never saw a key.
-    if !group.seat.is_null() {
-        crate::seat::Seat::handle_activity(wm, (*group.seat).id, sys);
+    let sid = group.sid;
+    if let Some(sid) = sid {
+        crate::seat::Seat::handle_activity(wm, sid, sys);
     }
 
     // A real key press ends an emulated view drag (see `cursor::ViewDrag`):
@@ -376,23 +384,18 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
     // and a key pressed on top of that reaches the app as a chord nobody
     // asked for. The drag's own synthetic Space goes straight to the seat and
     // never passes through here.
-    if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
-        && !group.seat.is_null()
-        && (*group.seat).cursor.view_drag.is_some()
-    {
-        crate::cursor::Cursor::end_view_drag(wm, (*group.seat).cursor.sid, "key");
-    }
-    if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
-        && !group.seat.is_null()
-        && (*group.seat).cursor.popup_wheel.is_some()
-    {
-        (*group.seat).cursor.end_popup_wheel("key");
-    }
-    if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
-        && !group.seat.is_null()
-        && (*group.seat).cursor.hscroll_shift.is_some()
-    {
-        (*group.seat).cursor.end_hscroll_shift("key");
+    if let (Some(sid), true) = (sid, (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED) {
+        if wm.seats.get(sid).is_some_and(|seat| seat.cursor.view_drag.is_some()) {
+            crate::cursor::Cursor::end_view_drag(wm, sid, "key");
+        }
+        if let Some(seat) = wm.seats.get_mut(sid) {
+            if seat.cursor.popup_wheel.is_some() {
+                seat.cursor.end_popup_wheel("key");
+            }
+            if seat.cursor.hscroll_shift.is_some() {
+                seat.cursor.end_hscroll_shift("key");
+            }
+        }
     }
 
     let consumer: KeyConsumer = if (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED {
@@ -440,7 +443,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
         {
             log::debug!("matched portal shortcut {} {}", session, id);
             KeyConsumer::PortalShortcut { session, id }
-        } else if !locked && !group.get_input_method_grab().is_null() {
+        } else if !locked && !group.get_input_method_grab(wm).is_null() {
             // Never while locked: an input method would read the password.
             KeyConsumer::ImGrab
         } else {
@@ -493,7 +496,7 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             }
         }
         KeyConsumer::ImGrab => {
-            let grab = group.get_input_method_grab();
+            let grab = group.get_input_method_grab(wm);
             if !grab.is_null() {
                 ffi::wlr_input_method_keyboard_grab_v2_set_keyboard(grab, &mut group.wlr_keyboard);
                 ffi::wlr_input_method_keyboard_grab_v2_send_key(grab, (*event).time_msec, (*event).keycode, (*event).state);
@@ -503,14 +506,16 @@ unsafe extern "C" fn handle_group_key(listener: *mut ffi::wl_listener, data: *mu
             // Overlay AND Popup: desktop chrome (docks, the cce-cloud
             // launcher) stays keyboard-interactive in overview — only world
             // windows (spatial thumbnails) have their presses eaten.
-            let is_overlay_mode = (*group.seat).focus_is_chrome(wm);
+            let seat = sid.and_then(|sid| wm.seats.get(sid));
+            let is_overlay_mode = seat.is_some_and(|seat| seat.focus_is_chrome(wm));
 
-            if crate::shared::mode() != crate::window_manager::WindowManagerMode::Overview
-                || is_overlay_mode
-                || (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
-            {
-                ffi::wlr_seat_set_keyboard((*group.seat).wlr_seat.ptr(), &mut group.wlr_keyboard);
-                (*group.seat).wlr_seat.keyboard_notify_key((*event).time_msec, (*event).keycode, (*event).state);
+            if let Some(seat) = seat.filter(|_| {
+                crate::shared::mode() != crate::window_manager::WindowManagerMode::Overview
+                    || is_overlay_mode
+                    || (*event).state == ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
+            }) {
+                ffi::wlr_seat_set_keyboard(seat.wlr_seat.ptr(), &mut group.wlr_keyboard);
+                seat.wlr_seat.keyboard_notify_key((*event).time_msec, (*event).keycode, (*event).state);
             }
         }
     }
@@ -599,22 +604,23 @@ unsafe fn match_chord<T>(
 
 unsafe extern "C" fn handle_group_modifiers(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let group = &mut *crate::container_of!(listener, KeyboardGroup, modifiers_listener);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
 
     group.modifiers_old = ffi::wlr_keyboard_get_modifiers(&mut group.wlr_keyboard);
 
-    let grab = group.get_input_method_grab();
+    let grab = group.get_input_method_grab(wm);
     if !grab.is_null() {
         ffi::wlr_input_method_keyboard_grab_v2_set_keyboard(grab, &mut group.wlr_keyboard);
         ffi::wlr_input_method_keyboard_grab_v2_send_modifiers(grab, &mut group.wlr_keyboard.modifiers);
-    } else {
-        ffi::wlr_seat_set_keyboard((*group.seat).wlr_seat.ptr(), &mut group.wlr_keyboard);
-        (*group.seat).wlr_seat.keyboard_notify_modifiers(&mut group.wlr_keyboard.modifiers);
+    } else if let Some(seat) = group.sid.and_then(|sid| wm.seats.get(sid)) {
+        ffi::wlr_seat_set_keyboard(seat.wlr_seat.ptr(), &mut group.wlr_keyboard);
+        seat.wlr_seat.keyboard_notify_modifiers(&group.wlr_keyboard.modifiers);
     }
     // Window-adjust mode (Super held) reads the seat keyboard's mask, which
     // is this group's — the DEVICE keyboard has no keymap on the DRM
     // backend (see keyboard::should_set_keymap), so its own modifiers
     // signal never fires there; this one does for every real key.
-    (*crate::reentry::wm(crate::shared::server_ptr())).refresh_adjust_held();
+    wm.refresh_adjust_held();
 
     group.send_state(crate::shared::server_ptr());
 }

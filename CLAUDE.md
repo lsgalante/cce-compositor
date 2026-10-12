@@ -690,6 +690,11 @@ take it as arguments (`view_drag_target`, `hscroll_shift_target`), and
 take `(wm, sid)`. Its popups are repositioned from a copied list
 (`InputRelay::popups`) with no relay borrow live, because
 `InputPopup::update` reads the relay back through its own pointer.
+A `KeyboardGroup` (its own allocation, on the seat's `keyboard_groups`
+`wl_list`) finds its seat by `sid` in the key and modifier handlers and
+`get_input_method_grab(wm)`; its raw `seat` is kept only for `unref`'s
+teardown, which `Seat::destroy` runs after taking the seat out of the
+store (so a store lookup would miss it there).
 
 **The render list is a `Vec<WindowId>`** (`wm.rendering_requested.list`,
 bottom of the stack first; since 2026-10-11). It was an intrusive `wl_list`
