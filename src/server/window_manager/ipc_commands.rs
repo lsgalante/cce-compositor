@@ -886,21 +886,13 @@ impl WindowManager {
                         if out.is_empty() { "none\n".to_string() } else { out }
                     }
                     "forget" if parts.len() >= 3 => {
-                        let Some(target) = self.find_window_id(&parts[2..].join(" ")).and_then(|id| self.windows.get(id)) else {
+                        let Some(id) = self.find_window_id(&parts[2..].join(" ")) else {
                             return "error: window not found\n".to_string();
                         };
-                        let crate::window::WindowImpl::Xwayland(xw) = target.impl_type() else {
-                            return "error: not an X11 window; only those have a learned minimum\n".to_string();
-                        };
-                        if xw.is_null() {
-                            return "error: window not found\n".to_string();
-                        }
-                        // SAFETY: as `Window::get_title`: `impl_type` names
-                        // the window's live implementation, in its own
-                        // allocation beside the window manager.
-                        match unsafe { (*xw).forget_min_size(self) } {
-                            Some((w, h)) => format!("ok forgot {}x{}\n", w, h),
-                            None => "ok none stored\n".to_string(),
+                        match crate::xwayland_window::XwaylandWindow::forget_min_size(self, id) {
+                            Ok(Some((w, h))) => format!("ok forgot {}x{}\n", w, h),
+                            Ok(None) => "ok none stored\n".to_string(),
+                            Err(e) => format!("error: {e}\n"),
                         }
                     }
                     "forget-entry" if parts.len() == 3 => {

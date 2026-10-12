@@ -272,9 +272,6 @@ impl Output {
         &self.scene_output
     }
 
-    /// Apply the scheduled state. Returns true when the output was
-    /// destroyed: the caller takes it out of `om.outputs`, which frees it.
-    #[must_use]
     /// What arranging its layer surfaces reads of this output.
     pub fn layer_output(&self) -> crate::layer_shell::LayerOutput {
         crate::layer_shell::LayerOutput {
@@ -291,6 +288,9 @@ impl Output {
         self.layer_shell.arrange(geometry);
     }
 
+    /// Apply the scheduled state. Returns true when the output was
+    /// destroyed: the caller takes it out of `om.outputs`, which frees it.
+    #[must_use]
     pub fn manage_start(&mut self, wm: &mut crate::window_manager::WindowManager) -> bool {
         match self.scheduled.state {
             OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {

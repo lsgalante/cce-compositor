@@ -165,9 +165,7 @@ pub fn run_server() {
     }
 
     if let Some(state_path) = crate::config::default_state_path() {
-        unsafe {
-            server.wm.load_state(&state_path);
-        }
+        server.wm.load_state(&state_path);
     }
 
     process::setup();

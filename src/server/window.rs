@@ -1375,7 +1375,12 @@ impl Window {
     /// fade. A function of the id, not a `&mut self` method, because it
     /// hands the window manager on (focus, the overview pan, placement)
     /// and those reach this window through the store.
-    pub fn map(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> Result<(), &'static str> {
+    ///
+    /// # Safety
+    /// The window must stay at its store address while it is mapped: the
+    /// commit listener linked here lives inside it, and nothing enforces
+    /// that a `Window` never moves (the KNOWN GAP in CLAUDE.md).
+    pub unsafe fn map(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> Result<(), &'static str> {
         let this = window_mut!(wm, id, Err("window gone before map"));
         log::debug!("window '{:?}' mapped", this.get_title());
         if this.get_app_id_string().map_or(false, |id| id.starts_with("cce-status")) {
@@ -1401,10 +1406,10 @@ impl Window {
         let this = window_mut!(wm, id, Err("window gone during placement"));
         let surface = this.root_surface();
         if !surface.is_null() {
-            // SAFETY: the window stays at its store address until `destroy`,
-            // which disconnects; the live root surface's commit signal
-            // outlives the link, because the surface's unmap disconnects it
-            // first (`Window::unmap`, whatever the state).
+            // SAFETY: this fn's contract (the window does not move), and the
+            // live root surface's commit signal outlives the link, because
+            // the surface's unmap disconnects it first (`Window::unmap`,
+            // whatever the state); `destroy` disconnects too.
             unsafe { this.commit.connect(ffi::river_wlr_surface_get_commit_signal(surface), handle_window_commit) };
         }
 

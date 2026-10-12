@@ -536,16 +536,31 @@ impl XwaylandWindow {
     /// start learning afresh (`ccectl min-size forget`). The learned value
     /// is the only minimum an X11 window carries here, so the hint's min
     /// goes to 0. Returns what was stored, X11 pixels.
-    pub fn forget_min_size(&mut self, wm: &mut crate::window_manager::WindowManager) -> Option<(u32, u32)> {
-        let key = wm.windows.get(self.window).and_then(|w| self.min_size_key(w));
+    /// Drop X11 window `id`'s learned minimum, and the minimum it is held
+    /// to now; returns the stored size, `Err` when `id` is not a live X11
+    /// window. A function of the id, not a `&mut self` method: the key is
+    /// read through the window, whose title reaches this same object
+    /// through its implementation pointer, so no `&mut` to it may be live
+    /// across that read (it was, until the fourth review, 2026-10-12).
+    pub fn forget_min_size(wm: &mut crate::window_manager::WindowManager, id: WindowId) -> Result<Option<(u32, u32)>, &'static str> {
+        let window = wm.windows.get(id).ok_or("window not found")?;
+        let WindowImpl::Xwayland(xwindow) = window.impl_type() else {
+            return Err("not an X11 window; only those have a learned minimum");
+        };
+        if xwindow.is_null() {
+            return Err("window not found");
+        }
+        // SAFETY (both blocks): as `Window::get_title`: `impl_type` names
+        // the window's live implementation; each borrow ends with its block.
+        let key = unsafe { (*xwindow).min_size_key(window) };
         let stored = key.and_then(|(app_id, program, title)| {
             let min_sizes = &mut wm.min_sizes;
             let stored = min_sizes.get(&app_id, &program, &title);
             min_sizes.set(&app_id, &program, &title, 0, 0);
             stored
         });
-        self.refusals = [None, None];
-        if let Some(window) = wm.windows.get_mut(self.window) {
+        unsafe { (*xwindow).refusals = [None, None] };
+        if let Some(window) = wm.windows.get_mut(id) {
             let hint = crate::window::DimensionsHint {
                 min_width: 0,
                 min_height: 0,
@@ -553,7 +568,7 @@ impl XwaylandWindow {
             };
             window.set_dimensions_hint(hint);
         }
-        stored
+        Ok(stored)
     }
 
     /// Hand the window the minimum a previous run learned, before its first

@@ -864,6 +864,17 @@ impl Seat {
             return;
         }
 
+        // A layer surface queued for closing (too large for an output the
+        // pass just resized) takes no focus on its way out: the manage pass
+        // arranges outputs (which queues it) before seats, with no
+        // `check_exclusive_focus` in between to drop it (fourth review).
+        if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) | crate::layer_shell::LayerShellSeatFocus::NonExclusive(key) = this.layer_shell.sent_focus {
+            if crate::layer_shell::closing(key) {
+                this.layer_shell.scheduled_focus = crate::layer_shell::LayerShellSeatFocus::None;
+                crate::shared::pending().dirty_windowing();
+                return;
+            }
+        }
         match this.layer_shell.sent_focus {
             crate::layer_shell::LayerShellSeatFocus::Exclusive(key) => {
                 let root = wm.layer_surfaces.root_surface(key);

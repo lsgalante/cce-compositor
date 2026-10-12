@@ -123,7 +123,7 @@ thread_local! {
 }
 
 /// Whether layer surface `key` is queued for closing.
-fn closing(key: Key) -> bool {
+pub(crate) fn closing(key: Key) -> bool {
     OVERSIZED.with(|o| o.borrow().contains(&key))
 }
 
