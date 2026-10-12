@@ -619,6 +619,7 @@ impl Server {
                 return Err("Failed to create fx_renderer");
             }
             self.renderer = renderer;
+            crate::shared::handles().renderer.set(renderer);
 
             let compositor = ffi::wlr_compositor_create(wl_server, 6, renderer);
             if compositor.is_null() {
@@ -963,6 +964,7 @@ impl Server {
                 ffi::wlr_session_destroy(self.session);
             }
             log::info!("[deinit] destroying renderer");
+            crate::shared::handles().renderer.take();
             ffi::wlr_renderer_destroy(self.renderer);
             log::info!("[deinit] destroying allocator");
             ffi::wlr_allocator_destroy(self.allocator);

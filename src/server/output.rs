@@ -469,10 +469,9 @@ impl Output {
     /// Draw and commit a frame. Ok(true) when a frame was committed — the
     /// caller then advances the lock-render state ([`Self::note_lock_state`]);
     /// Ok(false) when nothing needed drawing.
-    pub unsafe fn render_and_commit(
+    pub fn render_and_commit(
         &mut self,
         wm: &mut crate::window_manager::WindowManager,
-        renderer: *mut ffi::wlr_renderer,
     ) -> Result<bool, &'static str> {
         // Update grid node positions and parameters first, which marks the scene output as damaged if changed
         self.draw_grid(wm);
@@ -517,7 +516,7 @@ impl Output {
             }
         }
 
-        if pending_shot.is_none() && !ffi::wlr_scene_output_needs_frame(self.scene_output.ptr()) {
+        if pending_shot.is_none() && !self.scene_output.needs_frame() {
             return Ok(false);
         }
 
@@ -531,7 +530,9 @@ impl Output {
         }
         for or in wm.override_redirects() {
             if !or.is_null() {
-                (*or).apply_x11_scale();
+                // SAFETY: a registered override-redirect window is live
+                // (`register_override_redirect`), and nothing else borrows it.
+                unsafe { (*or).apply_x11_scale() };
             }
         }
 
@@ -572,23 +573,27 @@ impl Output {
                     window.tree.is_enabled(),
                 );
                 if let Ok(tag) = std::ffi::CString::new(app) {
-                    ffi::river_scene_shadow_dbg(window.shadow.raw(), tag.as_ptr());
-                    ffi::river_scene_ovdbg_dump(
-                        window.tree.node(),
-                        tag.as_ptr(),
-                    );
+                    // SAFETY: each handle's node is live or null, and a null
+                    // one is skipped; the tag is a NUL-terminated local.
+                    unsafe {
+                        if !window.shadow.is_null() {
+                            ffi::river_scene_shadow_dbg(window.shadow.raw(), tag.as_ptr());
+                        }
+                        if !window.tree.is_null() {
+                            ffi::river_scene_ovdbg_dump(window.tree.node(), tag.as_ptr());
+                        }
+                    }
                 }
             }
         }
         }
 
-        let mut state = std::mem::zeroed();
-        ffi::wlr_output_state_init(&mut state);
-        
-        self.current.apply_no_modeset(&mut state);
+        // Finished when it drops, on every path out.
+        let mut state = crate::wlr::OutputStateBuf::new();
+        state.set_scale(self.current.scale);
+        state.set_transform(self.current.transform);
 
-        if !ffi::wlr_scene_output_build_state(self.scene_output.ptr(), &mut state, std::ptr::null()) {
-            ffi::wlr_output_state_finish(&mut state);
+        if !self.scene_output.build_state(&mut state) {
             return Err("Failed to build scene state");
         }
 
@@ -596,9 +601,9 @@ impl Output {
             // The test is an atomic TEST_ONLY commit; once it has said no for
             // this episode, asking again every frame just taxes the game.
             if !self.tearing_test_failed {
-                state.tearing_page_flip = true;
-                if !ffi::wlr_output_test_state(self.wlr_output.ptr(), &state) {
-                    state.tearing_page_flip = false;
+                state.set_tearing_page_flip(true);
+                if !self.wlr_output.test_state(&state) {
+                    state.set_tearing_page_flip(false);
                     self.tearing_test_failed = true;
                     log::info!("output {:?}: tearing page flip refused, vsync until the request ends", self.id);
                 }
@@ -607,8 +612,7 @@ impl Output {
             self.tearing_test_failed = false;
         }
 
-        if !ffi::wlr_output_commit_state(self.wlr_output.ptr(), &state) {
-            ffi::wlr_output_state_finish(&mut state);
+        if !self.wlr_output.commit_state(&state) {
             // The damage this frame carried is still pending (only a
             // successful commit clears it), but nothing else asks for
             // another frame: a refused commit (the panel's EBUSY bursts)
@@ -621,21 +625,25 @@ impl Output {
         // Read the just-committed frame back while the state's buffer is
         // still alive; encode/notify happen on a worker thread.
         if let Some(mut shot) = pending_shot {
-            if state.buffer.is_null() {
+            let renderer = crate::shared::handles().renderer.ptr();
+            if state.buffer().is_null() || renderer.is_null() {
                 log::warn!("screenshot: output state has no buffer");
                 shot.reply_err("screenshot: output state has no buffer");
             } else {
-                crate::screenshot::capture_state_buffer(
-                    renderer,
-                    state.buffer,
-                    self.wlr_output.width(),
-                    self.wlr_output.height(),
-                    shot,
-                );
+                // SAFETY: the renderer is the shared handle's, live until the
+                // deinit lets go of it; the buffer is the committed state's,
+                // live until `state` drops below.
+                unsafe {
+                    crate::screenshot::capture_state_buffer(
+                        renderer,
+                        state.buffer(),
+                        self.wlr_output.width(),
+                        self.wlr_output.height(),
+                        shot,
+                    );
+                }
             }
         }
-
-        ffi::wlr_output_state_finish(&mut state);
 
         Ok(true)
     }
@@ -1349,7 +1357,7 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
     } else {
         None
     };
-    match output.render_and_commit(wm, (*server).renderer) {
+    match output.render_and_commit(wm) {
         Ok(true) => output.note_lock_state(&*sys.lock),
         Ok(false) => {}
         Err(e) => log_render_error(e),

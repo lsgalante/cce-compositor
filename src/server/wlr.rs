@@ -377,6 +377,17 @@ impl Wlr<ffi::wlr_cursor> {
 }
 
 impl Wlr<ffi::wlr_output> {
+    /// Whether committing `state` would succeed (a TEST_ONLY commit);
+    /// false when unset.
+    pub fn test_state(&self, state: &OutputStateBuf) -> bool {
+        self.live().is_some_and(|o| unsafe { ffi::wlr_output_test_state(o, &state.0) })
+    }
+
+    /// Commit `state`; false when unset or refused.
+    pub fn commit_state(&self, state: &OutputStateBuf) -> bool {
+        self.live().is_some_and(|o| unsafe { ffi::wlr_output_commit_state(o, &state.0) })
+    }
+
     pub fn name(&self) -> String {
         // SAFETY: the name is the output's, valid while it lives.
         self.live().map_or_else(String::new, |o| unsafe { owned_str(ffi::river_wlr_output_get_name(o)) })
@@ -876,7 +887,71 @@ impl Wlr<ffi::wlr_output_layout> {
     }
 }
 
+/// A `wlr_output_state` that is initialised when made and finished when
+/// dropped. Its state is private: only the setters below and
+/// `Wlr<wlr_scene_output>::build_state` fill it, so the buffer and the rest
+/// a commit reads are wlroots' own, never a pointer safe code forged.
+pub struct OutputStateBuf(ffi::wlr_output_state);
+
+impl OutputStateBuf {
+    pub fn new() -> Self {
+        // SAFETY: an all-zero state is what `wlr_output_state_init` starts
+        // from (it zeroes it, then sets up the damage region); the state
+        // holds no pointer to itself, so it may move once made.
+        unsafe {
+            let mut state: ffi::wlr_output_state = std::mem::zeroed();
+            ffi::wlr_output_state_init(&mut state);
+            OutputStateBuf(state)
+        }
+    }
+
+    pub fn set_scale(&mut self, scale: f32) {
+        // SAFETY: an initialised state; the setter only writes its fields.
+        unsafe { ffi::wlr_output_state_set_scale(&mut self.0, scale) }
+    }
+
+    pub fn set_transform(&mut self, transform: ffi::wl_output_transform) {
+        // SAFETY: as `set_scale`.
+        unsafe { ffi::wlr_output_state_set_transform(&mut self.0, transform) }
+    }
+
+    /// Ask for a tearing (async) page flip.
+    pub fn set_tearing_page_flip(&mut self, tearing: bool) {
+        self.0.tearing_page_flip = tearing;
+    }
+
+    /// The buffer `build_state` attached; null before. Live until this
+    /// state is dropped.
+    pub fn buffer(&self) -> *mut ffi::wlr_buffer {
+        self.0.buffer
+    }
+}
+
+impl Default for OutputStateBuf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for OutputStateBuf {
+    fn drop(&mut self) {
+        // SAFETY: initialised in `new`, finished once here.
+        unsafe { ffi::wlr_output_state_finish(&mut self.0) }
+    }
+}
+
 impl Wlr<ffi::wlr_scene_output> {
+    /// Whether the output has damage (or a frame was asked for).
+    pub fn needs_frame(&self) -> bool {
+        self.live().is_some_and(|s| unsafe { ffi::wlr_scene_output_needs_frame(s) })
+    }
+
+    /// Render the scene into `state` for this output; false when unset or
+    /// it failed.
+    pub fn build_state(&self, state: &mut OutputStateBuf) -> bool {
+        self.live().is_some_and(|s| unsafe { ffi::wlr_scene_output_build_state(s, &mut state.0, std::ptr::null()) })
+    }
+
     /// Damage the whole output, so its next frame repaints everything.
     pub fn damage_whole(&self) {
         if let Some(s) = self.live() {
