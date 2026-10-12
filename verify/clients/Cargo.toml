@@ -32,6 +32,10 @@ path = "src/bin/or_flip.rs"
 name = "pointer-lock"
 path = "src/bin/pointer_lock.rs"
 
+[[bin]]
+name = "or-focus"
+path = "src/bin/or_focus.rs"
+
 [dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }

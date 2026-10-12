@@ -43,7 +43,8 @@ impl XwaylandOverrideRedirect {
 
         let override_redirect = Box::new(XwaylandOverrideRedirect {
             // SAFETY: freed by the surface's destroy handler (or its
-            // override-redirect switch) before the surface goes.
+            // override-redirect switch) before the surface goes — after
+            // `drop_seat_focus`, so no seat focus names it once it is gone.
             xsurface: crate::wlr::Wlr::from_raw(xsurface),
             surface_tree: crate::scene_handle::SceneTree::none(),
             request_configure: std::mem::zeroed(),
@@ -187,6 +188,32 @@ impl XwaylandOverrideRedirect {
     }
 }
 
+/// Drop every seat's keyboard focus on `or`, before it can go. An
+/// override-redirect window only takes focus from nothing (or from another
+/// of its client's), so nothing is where focus goes back to. A seat that
+/// kept it would hold a freed object: the next override-redirect map
+/// (`focus_if_desired`) and any new text input (`Focus::surface`) read it.
+/// `Seat::focus` never dereferences the focus it replaces; when it declines
+/// the change (an exclusive layer surface waiting for focus) the field is
+/// cleared directly, so this cannot be blocked.
+fn drop_seat_focus(wm: &mut crate::window_manager::WindowManager, or: *mut XwaylandOverrideRedirect) {
+    let held = |wm: &crate::window_manager::WindowManager, sid| {
+        wm.seats.get(sid).is_some_and(|s: &crate::seat::Seat| s.focused == crate::seat::Focus::OverrideRedirect(or))
+    };
+    for sid in wm.seats.ids() {
+        if !held(wm, sid) {
+            continue;
+        }
+        crate::seat::Seat::focus_window(wm, sid, None);
+        if held(wm, sid) {
+            if let Some(seat) = wm.seats.get_mut(sid) {
+                seat.wlr_seat.keyboard_notify_clear_focus();
+                seat.focused = crate::seat::Focus::None;
+            }
+        }
+    }
+}
+
 unsafe extern "C" fn handle_request_configure(_listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let event = data as *mut ffi::wlr_xwayland_surface_configure_event;
     ffi::wlr_xwayland_surface_configure((*event).surface, (*event).x, (*event).y, (*event).width, (*event).height);
@@ -194,7 +221,11 @@ unsafe extern "C" fn handle_request_configure(_listener: *mut ffi::wl_listener, 
 
 unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, destroy);
-    (*crate::reentry::wm(crate::shared::server_ptr())).override_redirects.retain(|&p| p != or);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    wm.override_redirects.retain(|&p| p != or);
+    // Unmap already did this for a mapped window; one destroyed unmapped
+    // (or never mapped) has had no chance to.
+    drop_seat_focus(wm, or);
 
     (*or).request_configure.disconnect();
     (*or).destroy.disconnect();
@@ -303,6 +334,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
 
     let server = crate::shared::server_ptr();
     let wm = &mut *crate::reentry::wm(server);
+    drop_seat_focus(wm, or);
     if let Some((sid, focused, keyboard_surface)) = (*server).input_manager.default_seat
         .and_then(|sid| wm.seats.get(sid).map(|seat| (sid, seat.focused, seat.wlr_seat.keyboard_focused_surface())))
     {
@@ -362,6 +394,7 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     // `verify/clients` `or-flip` reproduces it).
     let wm = &mut *crate::reentry::wm(server);
     wm.override_redirects.retain(|&p| p != or);
+    drop_seat_focus(wm, or);
     (*or).request_configure.disconnect();
     (*or).destroy.disconnect();
     (*or).associate.disconnect();
