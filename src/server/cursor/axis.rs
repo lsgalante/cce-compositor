@@ -381,7 +381,7 @@ impl Cursor {
     /// `reason` names what ended it — "lift", "idle", "motion", "button",
     /// "key", "ctrl" or "pinch" — so a stall reported later is diagnosable
     /// from the session log alone.
-    pub unsafe fn end_view_drag(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, reason: &str) {
+    pub fn end_view_drag(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, reason: &str) {
         let this = cursor_mut!(wm, sid, ());
         let Some(d) = this.view_drag.take() else { return };
         log::info!("[ViewDrag] end reason={} button={:#x} from_pinch={} at surface ({:.0}, {:.0})", reason, d.button, d.from_pinch, d.sx, d.sy);
@@ -470,7 +470,7 @@ impl Cursor {
         true
     }
 
-    pub unsafe fn view_drag_pinch_end(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) -> bool {
+    pub fn view_drag_pinch_end(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) -> bool {
         let this = cursor_mut!(wm, sid, false);
         if matches!(&this.view_drag, Some(d) if d.from_pinch) {
             Cursor::end_view_drag(wm, sid, "lift");

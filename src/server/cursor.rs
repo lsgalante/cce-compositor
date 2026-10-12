@@ -469,7 +469,7 @@ impl Cursor {
         // It is only changed on mapping, click, touch, or shortcut focus transitions.
     }
 
-    pub unsafe fn update_state(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
+    pub fn update_state(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
         crate::pointer_constraint::with_held(wm, sid, |c, wm| c.update_state(wm));
         let this = cursor_mut!(wm, sid, ());
         this.update_hovered();
@@ -486,7 +486,7 @@ impl Cursor {
     /// owns the pointer during a drag/resize op and `op_end_pointer` restores
     /// focus itself; an implicit client grab is already handled inside
     /// `passthrough`.
-    pub unsafe fn refresh_after_scene_change(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
+    pub fn refresh_after_scene_change(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
         if seat_mut!(wm, sid, ()).op.is_some() {
             return;
         }
@@ -670,7 +670,7 @@ impl Cursor {
         }
     }
 
-    pub unsafe fn op_end_pointer(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
+    pub fn op_end_pointer(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
         let this = cursor_mut!(wm, sid, ());
         if this.pressed.is_empty() {
             log::debug!("entering cursor mode passthrough");
@@ -717,7 +717,7 @@ impl Cursor {
         wm.arm_border_fade();
     }
 
-    pub unsafe fn passthrough(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, time_msec: u32) {
+    pub fn passthrough(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, time_msec: u32) {
         // A pointer constraint takes hold once the pointer is over its
         // region (river does this here too).
         crate::pointer_constraint::with_held(wm, sid, |c, wm| c.maybe_activate(wm));
@@ -932,7 +932,10 @@ impl Cursor {
 
             if !result.surface.is_null() {
                 let this = cursor_mut!(wm, sid, ());
-                ffi::wlr_seat_pointer_notify_enter(this.wlr_seat().ptr(), result.surface, result.sx, result.sy);
+                // SAFETY: the surface the hit test above just returned: what
+                // ran since (hover and adjust-target bookkeeping, timer arms)
+                // dispatches no client, so nothing has destroyed it.
+                unsafe { this.wlr_seat().pointer_notify_enter(result.surface, result.sx, result.sy) };
                 this.wlr_seat().pointer_notify_motion(time_msec, result.sx, result.sy);
                 return;
             }
@@ -952,7 +955,9 @@ impl Cursor {
             if let Some((surface, sx, sy)) = grid_surface_at(wm, lx, ly) {
                 log::debug!("[drag] focus -> grid at ({lx:.0}, {ly:.0})");
                 let this = cursor_mut!(wm, sid, ());
-                ffi::wlr_seat_pointer_notify_enter(this.wlr_seat().ptr(), surface, sx, sy);
+                // SAFETY: `grid_surface_at` just returned the mapped grid
+                // window's root surface, live as long as the window.
+                unsafe { this.wlr_seat().pointer_notify_enter(surface, sx, sy) };
                 this.wlr_seat().pointer_notify_motion(time_msec, sx, sy);
                 return;
             }

@@ -41,12 +41,11 @@ impl WindowManager {
     /// place, so the ring lands on the window under a still pointer the
     /// moment the key goes down and the app gets its hover back when it
     /// comes up. A drag in progress is left alone — it ends on release.
-    pub unsafe fn refresh_adjust_held(&mut self) {
+    pub fn refresh_adjust_held(&mut self) {
         crate::wm_scope!(mut);
         let mut held = self.injected_super_held;
         for seat in self.seats.values() {
-            let kb = seat.wlr_seat().keyboard();
-            if !kb.is_null() && (ffi::wlr_keyboard_get_modifiers(kb) & ffi::wlr_keyboard_modifier_WLR_MODIFIER_LOGO) != 0 {
+            if seat.wlr_seat().keyboard_modifiers() & ffi::wlr_keyboard_modifier_WLR_MODIFIER_LOGO != 0 {
                 held = true;
             }
         }
@@ -59,10 +58,9 @@ impl WindowManager {
         // handles in step with the windows'.
         self.update_status();
         let now = crate::util::msec_timestamp();
-        for seat in self.seats.ptrs() {
-            if (*seat).op.is_none() {
-                crate::cursor::Cursor::passthrough(self, (*seat).cursor.sid, now);
-            }
+        let idle: Vec<_> = self.seats.values().filter(|seat| seat.op.is_none()).map(|seat| seat.cursor.sid).collect();
+        for sid in idle {
+            crate::cursor::Cursor::passthrough(self, sid, now);
         }
     }
 
