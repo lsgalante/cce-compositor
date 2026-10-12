@@ -316,6 +316,12 @@ impl Sent {
         self.output_config.replace(std::ptr::null_mut())
     }
 
+    /// Hold the configuration a client applied until the commit that
+    /// answers it (`take_output_config`).
+    ///
+    /// # Safety
+    /// `config` is null or a live configuration the compositor owns: whoever
+    /// takes it answers it and destroys it.
     pub fn set_output_config(&self, config: *mut ffi::wlr_output_configuration_v1) {
         self.output_config.set(config);
     }

@@ -613,7 +613,7 @@ impl Output {
     /// After a committed frame: what the lock screen should show on this
     /// output next, from the lock manager's state. The present handler
     /// completes each pending state and lets the lock manager re-check.
-    pub unsafe fn note_lock_state(&mut self, lock: &crate::lock_manager::LockManager) {
+    pub fn note_lock_state(&mut self, lock: &crate::lock_manager::LockManager) {
         match lock.state {
             LockState::Unlocked => {
                 if self.lock_render_state != LockRenderState::Unlocked {

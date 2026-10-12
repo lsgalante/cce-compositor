@@ -322,6 +322,20 @@ impl Wlr<ffi::wlr_output> {
         self.live().is_some_and(|o| unsafe { ffi::river_wlr_output_get_enabled(o) })
     }
 
+    /// The current mode (one of the output's own), or null: unset, or a
+    /// custom mode.
+    pub fn current_mode(&self) -> *mut ffi::wlr_output_mode {
+        self.live().map_or(std::ptr::null_mut(), |o| unsafe { ffi::river_wlr_output_get_current_mode(o) })
+    }
+
+    /// Whether adaptive sync is on (as last committed).
+    pub fn adaptive_sync_enabled(&self) -> bool {
+        self.live().is_some_and(|o| unsafe {
+            ffi::river_wlr_output_get_adaptive_sync_status(o)
+                == ffi::wlr_output_adaptive_sync_status_WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED
+        })
+    }
+
     /// Refresh rate in mHz; 0 when unknown or unset.
     pub fn refresh(&self) -> i32 {
         self.live().map_or(0, |o| unsafe { ffi::river_wlr_output_get_refresh(o) })
@@ -464,6 +478,15 @@ impl Wlr<ffi::wlr_xwayland_surface> {
     pub fn title(&self) -> String {
         // SAFETY: as `class`.
         self.live().map_or_else(String::new, |x| unsafe { owned_str((*x).title) })
+    }
+}
+
+impl Wlr<ffi::wlr_idle_notifier_v1> {
+    /// Tell idle clients whether something inhibits idling.
+    pub fn set_inhibited(&self, inhibited: bool) {
+        if let Some(n) = self.live() {
+            unsafe { ffi::wlr_idle_notifier_v1_set_inhibited(n, inhibited) }
+        }
     }
 }
 

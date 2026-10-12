@@ -35,10 +35,15 @@ impl IdleInhibitManager {
 
     /// Who holds a live inhibitor, for [`publish`]. Every inhibitor is
     /// visited (no early exit): two apps holding one are both reported.
-    pub unsafe fn holders(&self, wm: &crate::window_manager::WindowManager) -> Vec<String> {
+    pub fn holders(&self, wm: &crate::window_manager::WindowManager) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
 
-        for inhibitor in self.inhibitors.ptrs() {
+        // SAFETY: an inhibitor is in the registry from `create` until
+        // `destroy` takes it out, before freeing it, on its wlroots
+        // inhibitor's destroy — which wlroots emits before the surface it
+        // inhibits goes. A surface's scene data lives as long as its scene
+        // node, which a layer surface destroys before itself.
+        for inhibitor in self.inhibitors.ptrs() { unsafe {
 
             let surface = (*(*inhibitor).wlr_inhibitor).surface;
             if let Some(node_data) = SceneNodeData::from_surface(surface) {
@@ -61,7 +66,7 @@ impl IdleInhibitManager {
                     names.push(name);
                 }
             }
-        }
+        } }
 
         names
     }
@@ -70,21 +75,19 @@ impl IdleInhibitManager {
 /// Hand a recount ([`IdleInhibitManager::holders`]) to the idle notifier,
 /// whose inhibited flag clients see, and to the idle manager, which holds
 /// its timers while anyone inhibits and names them in `ccectl idle status`.
-pub unsafe fn publish(
+pub fn publish(
     names: Vec<String>,
-    notifier: *mut ffi::wlr_idle_notifier_v1,
+    notifier: &crate::wlr::Wlr<ffi::wlr_idle_notifier_v1>,
     idle: &mut crate::idle::IdleManager,
 ) {
-    if !notifier.is_null() {
-        ffi::wlr_idle_notifier_v1_set_inhibited(notifier, !names.is_empty());
-    }
+    notifier.set_inhibited(!names.is_empty());
     idle.set_inhibitors(names);
 }
 
 /// Recount and publish, from an entry point.
 unsafe fn recount(server: *mut Server, wm: &crate::window_manager::WindowManager) {
     let names = (*server).idle_inhibit_manager.holders(wm);
-    publish(names, (*server).input_manager.idle_notifier, &mut (*server).idle);
+    publish(names, &crate::shared::handles().idle_notifier, &mut (*server).idle);
 }
 
 /// What the status line calls one inhibitor: a window's app id, its title

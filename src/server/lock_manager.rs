@@ -106,24 +106,32 @@ impl LockManager {
         self.new_lock.disconnect();
     }
 
-    pub unsafe fn lock_surface_from_output(
+    pub fn lock_surface_from_output(
         &self,
-        output: *mut crate::output::Output,
+        output: *const crate::output::Output,
     ) -> Option<*mut LockSurface> {
         if self.lock.is_null() {
             return None;
         }
 
-        let surfaces_head = &mut (*self.lock).surfaces as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*surfaces_head).next;
-        while curr != surfaces_head {
-            let next = (*curr).next;
-            let wlr_lock_surface = crate::container_of!(curr, ffi::wlr_session_lock_surface_v1, link);
-            let lock_surface = (*wlr_lock_surface).data as *mut LockSurface;
-            if !lock_surface.is_null() && (*lock_surface).get_output() == output {
-                return Some(lock_surface);
+        // SAFETY: a non-null `lock` is live: `handle_new_lock` sets it and
+        // the lock's destroy handler clears it. Its surfaces list holds its
+        // live lock surfaces; each one's data is null until
+        // `LockSurface::create` sets it, and the LockSurface is freed only
+        // in the surface's destroy handler, after which wlroots unlinks the
+        // surface before anything of ours runs again.
+        unsafe {
+            let surfaces_head = &mut (*self.lock).surfaces as *mut ffi::wl_list as *mut WlList;
+            let mut curr = (*surfaces_head).next;
+            while curr != surfaces_head {
+                let next = (*curr).next;
+                let wlr_lock_surface = crate::container_of!(curr, ffi::wlr_session_lock_surface_v1, link);
+                let lock_surface = (*wlr_lock_surface).data as *mut LockSurface;
+                if !lock_surface.is_null() && (*lock_surface).get_output() as *const _ == output {
+                    return Some(lock_surface);
+                }
+                curr = next;
             }
-            curr = next;
         }
 
         None
@@ -388,8 +396,10 @@ impl LockSurface {
         let _ = Box::from_raw(lock_surface);
     }
 
-    pub unsafe fn get_output(&self) -> *mut crate::output::Output {
-        ffi::river_wlr_output_get_data((*self.wlr_lock_surface).output) as *mut crate::output::Output
+    pub fn get_output(&self) -> *mut crate::output::Output {
+        // SAFETY: the wlroots lock surface outlives this LockSurface (freed
+        // in its destroy handler), and so does the output it is on.
+        unsafe { ffi::river_wlr_output_get_data((*self.wlr_lock_surface).output) as *mut crate::output::Output }
     }
 
     pub unsafe fn configure(&self) {

@@ -490,14 +490,14 @@ impl WindowManager {
             output.rendering_requested.tearing = wanted;
         }
 
-        sys.om.commit_output_state(sys.lock, &self.outputs);
+        sys.om.commit_output_state(sys.lock, &mut self.outputs);
 
         for seat in self.seats.values_mut() {
             seat.cursor.update_hovered();
         }
 
         let holders = sys.inhibit.holders(self);
-        crate::idle_inhibit_manager::publish(holders, crate::shared::handles().idle_notifier.ptr(), sys.idle);
+        crate::idle_inhibit_manager::publish(holders, &crate::shared::handles().idle_notifier, sys.idle);
 
         log::debug!("finished committing transaction");
         self.debug_check_unlinked_status("render_finish end");

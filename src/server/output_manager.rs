@@ -145,11 +145,10 @@ impl OutputManager {
         output_at(lx, ly)
     }
 
-    pub unsafe fn commit_output_state(&mut self, lock: &crate::lock_manager::LockManager, outputs: &crate::output::Outputs) {
+    pub fn commit_output_state(&mut self, lock: &crate::lock_manager::LockManager, outputs: &mut crate::output::Outputs) {
 
         for id in crate::shared::sent().outputs.ids() {
-            let Some(output_ptr) = outputs.ptr(id) else { continue };
-            let output = &mut *output_ptr;
+            let Some(output) = outputs.get_mut(id) else { continue };
             assert!(output.sent.state != OutputStateValue::Destroying);
             output.rendering_current = output.rendering_requested;
 
@@ -157,10 +156,16 @@ impl OutputManager {
             if !wlr_output.is_null() {
                 match output.sent.state {
                     OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
-                        ffi::wlr_scene_output_set_position(output.scene_output, output.sent.x, output.sent.y);
-                        ffi::wlr_output_layout_add(self.output_layout, wlr_output, output.sent.x, output.sent.y);
-                        if let Some(lock_surface) = lock.lock_surface_from_output(output) {
-                            (*lock_surface).tree.set_position(output.sent.x, output.sent.y);
+                        // SAFETY: an output in the store has its live scene
+                        // output (destroyed only on its way out); the layout
+                        // lives from `init` to `deinit`, and a lock surface
+                        // `lock_surface_from_output` finds is live.
+                        unsafe {
+                            ffi::wlr_scene_output_set_position(output.scene_output, output.sent.x, output.sent.y);
+                            ffi::wlr_output_layout_add(self.output_layout, wlr_output, output.sent.x, output.sent.y);
+                            if let Some(lock_surface) = lock.lock_surface_from_output(output) {
+                                (*lock_surface).tree.set_position(output.sent.x, output.sent.y);
+                            }
                         }
 
                         let (width, height) = output.sent.dimensions();
@@ -194,7 +199,8 @@ impl OutputManager {
                         output.adjust_tree.set_position(output.sent.x, output.sent.y);
                     }
                     OutputStateValue::DisabledHard => {
-                        ffi::wlr_output_layout_remove(self.output_layout, wlr_output);
+                        // SAFETY: as above.
+                        unsafe { ffi::wlr_output_layout_remove(self.output_layout, wlr_output) };
                         // All of them, rims and labels included: until
                         // 2026-10-10 this path left grid_bevel_tree and
                         // cell_label_tree naming children that died with
@@ -211,10 +217,8 @@ impl OutputManager {
 
         let mut need_modeset = false;
         for id in crate::shared::sent().outputs.ids() {
-            let Some(output_ptr) = outputs.ptr(id) else { continue };
-            let output = &mut *output_ptr;
-            let wlr_output = output.wlr_output.ptr();
-            if wlr_output.is_null() {
+            let Some(output) = outputs.get(id) else { continue };
+            if output.wlr_output.is_null() {
                 continue;
             }
 
@@ -237,7 +241,7 @@ impl OutputManager {
 
             match output.sent.mode {
                 OutputMode::Standard { mode, .. } => {
-                    if mode != ffi::river_wlr_output_get_current_mode(wlr_output) {
+                    if mode != output.wlr_output.current_mode() {
                         need_modeset = true;
                         break;
                     }
@@ -265,9 +269,7 @@ impl OutputManager {
                 break;
             }
 
-            let wlr_adaptive = ffi::river_wlr_output_get_adaptive_sync_status(wlr_output)
-                == ffi::wlr_output_adaptive_sync_status_WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED;
-            if output.sent.adaptive_sync != wlr_adaptive {
+            if output.sent.adaptive_sync != output.wlr_output.adaptive_sync_enabled() {
                 need_modeset = true;
                 break;
             }
@@ -277,87 +279,40 @@ impl OutputManager {
         if need_modeset {
             log::debug!("committing output state requires modeset");
 
-            let mut states_vec = Vec::new();
-            for id in crate::shared::sent().outputs.ids() {
-                let Some(output_ptr) = outputs.ptr(id) else { continue };
-                let output = &mut *output_ptr;
-                let wlr_output = output.wlr_output.ptr();
-                if wlr_output.is_null() {
-                    continue;
-                }
-
-                states_vec.push(ffi::wlr_backend_output_state {
-                    output: wlr_output,
-                    base: std::mem::zeroed(),
-                });
-
-            }
-
-            for state in &mut states_vec {
-                ffi::wlr_output_state_init(&mut state.base);
-                let output = &mut *(ffi::river_wlr_output_get_data(state.output) as *mut Output);
-                output.sent.apply_modeset(&mut state.base);
-            }
-
-            let mut swapchain_manager = std::mem::zeroed();
-            ffi::wlr_output_swapchain_manager_init(&mut swapchain_manager, crate::shared::handles().backend.ptr());
-
-            if !ffi::wlr_output_swapchain_manager_prepare(
-                &mut swapchain_manager,
-                states_vec.as_ptr(),
-                states_vec.len(),
-            ) {
-                log::error!("failed to prepare new output configuration");
+            // The outputs in the order their states are built, so each state
+            // finds its output without going back through wlroots.
+            let ids: Vec<crate::output::OutputId> = crate::shared::sent()
+                .outputs
+                .ids()
+                .into_iter()
+                .filter(|&id| outputs.get(id).is_some_and(|o| !o.wlr_output.is_null()))
+                .collect();
+            // SAFETY: each state's output is the live wlr_output its store
+            // entry holds (`Wlr`), with that output's own modes in its sent
+            // state (`OutputMode::standard`); every state is initialised
+            // before use and finished on every path out, as is the
+            // swapchain manager; the backend handle and each store output's
+            // scene output are live.
+            let committed = unsafe { self.modeset(outputs, &ids) };
+            if !committed {
                 self.modeset_failed(outputs);
-                for state in &mut states_vec {
-                    ffi::wlr_output_state_finish(&mut state.base);
-                }
-                ffi::wlr_output_swapchain_manager_finish(&mut swapchain_manager);
                 return;
             }
-
-            for state in &mut states_vec {
-                let output = &mut *(ffi::river_wlr_output_get_data(state.output) as *mut Output);
-                let sc = ffi::wlr_output_swapchain_manager_get_swapchain(&mut swapchain_manager, state.output);
-                let options = ffi::wlr_scene_output_state_options {
-                    swapchain: sc,
-                    ..std::mem::zeroed()
-                };
-                if !ffi::wlr_scene_output_build_state(output.scene_output, &mut state.base, &options) {
-                    log::error!("failed to render scene for {:?}", std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name(state.output)));
-                }
-            }
-
-            if !ffi::wlr_backend_commit(crate::shared::handles().backend.ptr(), states_vec.as_ptr(), states_vec.len()) {
-                log::error!("failed to commit new output configuration");
-                self.modeset_failed(outputs);
-                for state in &mut states_vec {
-                    ffi::wlr_output_state_finish(&mut state.base);
-                }
-                ffi::wlr_output_swapchain_manager_finish(&mut swapchain_manager);
-                return;
-            }
-
-            self.first_modeset = false;
-            ffi::wlr_output_swapchain_manager_apply(&mut swapchain_manager);
-
-            for state in &mut states_vec {
-                ffi::wlr_output_state_finish(&mut state.base);
-            }
-            ffi::wlr_output_swapchain_manager_finish(&mut swapchain_manager);
         }
 
         let config = crate::shared::sent().take_output_config();
         if !config.is_null() {
-            ffi::wlr_output_configuration_v1_send_succeeded(config);
-            ffi::wlr_output_configuration_v1_destroy(config);
+            // SAFETY: the configuration a client applied, ours to answer and
+            // free (`Sent::set_output_config`).
+            unsafe {
+                ffi::wlr_output_configuration_v1_send_succeeded(config);
+                ffi::wlr_output_configuration_v1_destroy(config);
+            }
         }
 
         for id in crate::shared::sent().outputs.ids() {
-            let Some(output_ptr) = outputs.ptr(id) else { continue };
-            let output = &mut *output_ptr;
-            let wlr_output = output.wlr_output.ptr();
-            if wlr_output.is_null() {
+            let Some(output) = outputs.get_mut(id) else { continue };
+            if output.wlr_output.is_null() {
                 continue;
             }
 
@@ -383,7 +338,67 @@ impl OutputManager {
         let _ = self.send_config(outputs);
     }
 
-    pub unsafe fn modeset_failed(&mut self, outputs: &crate::output::Outputs) {
+    /// The modeset half of `commit_output_state`: build each output's new
+    /// state, give it a swapchain, render it, and commit them all at once.
+    /// Whether the backend took it.
+    ///
+    /// # Safety
+    /// Every id names a store output with a live `wlr_output`.
+    unsafe fn modeset(&mut self, outputs: &crate::output::Outputs, ids: &[crate::output::OutputId]) -> bool {
+        let mut states_vec: Vec<ffi::wlr_backend_output_state> = ids
+            .iter()
+            .filter_map(|&id| outputs.get(id))
+            .map(|output| ffi::wlr_backend_output_state { output: output.wlr_output.ptr(), base: std::mem::zeroed() })
+            .collect();
+
+        for (state, &id) in states_vec.iter_mut().zip(ids) {
+            ffi::wlr_output_state_init(&mut state.base);
+            if let Some(output) = outputs.get(id) {
+                output.sent.apply_modeset(&mut state.base);
+            }
+        }
+
+        let mut swapchain_manager = std::mem::zeroed();
+        ffi::wlr_output_swapchain_manager_init(&mut swapchain_manager, crate::shared::handles().backend.ptr());
+
+        let finish = |states_vec: &mut Vec<ffi::wlr_backend_output_state>, swapchain_manager: &mut ffi::wlr_output_swapchain_manager| {
+            for state in states_vec.iter_mut() {
+                ffi::wlr_output_state_finish(&mut state.base);
+            }
+            ffi::wlr_output_swapchain_manager_finish(swapchain_manager);
+        };
+
+        if !ffi::wlr_output_swapchain_manager_prepare(&mut swapchain_manager, states_vec.as_ptr(), states_vec.len()) {
+            log::error!("failed to prepare new output configuration");
+            finish(&mut states_vec, &mut swapchain_manager);
+            return false;
+        }
+
+        for (state, &id) in states_vec.iter_mut().zip(ids) {
+            let Some(output) = outputs.get(id) else { continue };
+            let sc = ffi::wlr_output_swapchain_manager_get_swapchain(&mut swapchain_manager, state.output);
+            let options = ffi::wlr_scene_output_state_options {
+                swapchain: sc,
+                ..std::mem::zeroed()
+            };
+            if !ffi::wlr_scene_output_build_state(output.scene_output, &mut state.base, &options) {
+                log::error!("failed to render scene for {:?}", output.wlr_output.name());
+            }
+        }
+
+        if !ffi::wlr_backend_commit(crate::shared::handles().backend.ptr(), states_vec.as_ptr(), states_vec.len()) {
+            log::error!("failed to commit new output configuration");
+            finish(&mut states_vec, &mut swapchain_manager);
+            return false;
+        }
+
+        self.first_modeset = false;
+        ffi::wlr_output_swapchain_manager_apply(&mut swapchain_manager);
+        finish(&mut states_vec, &mut swapchain_manager);
+        true
+    }
+
+    pub fn modeset_failed(&mut self, outputs: &mut crate::output::Outputs) {
 
         if self.first_modeset {
             log::error!("initial modeset failed, exiting river");
@@ -393,52 +408,60 @@ impl OutputManager {
 
         let config = crate::shared::sent().take_output_config();
         if !config.is_null() {
-            ffi::wlr_output_configuration_v1_send_failed(config);
-            ffi::wlr_output_configuration_v1_destroy(config);
+            // SAFETY: the configuration a client applied, ours to answer and
+            // free (`Sent::set_output_config`).
+            unsafe {
+                ffi::wlr_output_configuration_v1_send_failed(config);
+                ffi::wlr_output_configuration_v1_destroy(config);
+            }
         }
 
         for id in crate::shared::sent().outputs.ids() {
-            let Some(output_ptr) = outputs.ptr(id) else { continue };
-            let output = &mut *output_ptr;
+            let Some(output) = outputs.get_mut(id) else { continue };
             output.scheduled = output.current;
             output.sent = output.current;
         }
         crate::shared::pending().dirty_windowing();
     }
 
-    pub unsafe fn send_config(&mut self, outputs: &crate::output::Outputs) -> Result<(), &'static str> {
-        let config = ffi::wlr_output_configuration_v1_create();
-        if config.is_null() {
-            return Err("Failed to create configuration v1");
-        }
-
-        for output_ptr in outputs.ptrs() {
-            let output = &mut *output_ptr;
-            let wlr_output = output.wlr_output.ptr();
-            if wlr_output.is_null() {
-                continue;
+    pub fn send_config(&mut self, outputs: &crate::output::Outputs) -> Result<(), &'static str> {
+        // SAFETY: the configuration is created here and either handed to
+        // the live output manager (created in `init`) or destroyed; each
+        // head is made for a store output's live wlr_output and filled in
+        // before the handoff.
+        unsafe {
+            let config = ffi::wlr_output_configuration_v1_create();
+            if config.is_null() {
+                return Err("Failed to create configuration v1");
             }
 
-            let head = ffi::wlr_output_configuration_head_v1_create(config, wlr_output);
-            if head.is_null() {
-                ffi::wlr_output_configuration_v1_destroy(config);
-                return Err("Failed to create configuration head");
+            for output in outputs.values() {
+                let wlr_output = output.wlr_output.ptr();
+                if wlr_output.is_null() {
+                    continue;
+                }
+
+                let head = ffi::wlr_output_configuration_head_v1_create(config, wlr_output);
+                if head.is_null() {
+                    ffi::wlr_output_configuration_v1_destroy(config);
+                    return Err("Failed to create configuration head");
+                }
+
+                (*head).state.enabled = match output.current.state {
+                    OutputStateValue::Enabled | OutputStateValue::DisabledSoft => true,
+                    OutputStateValue::DisabledHard => false,
+                    OutputStateValue::Destroying => unreachable!(),
+                };
+                (*head).state.scale = output.current.scale;
+                (*head).state.transform = output.current.transform;
+                (*head).state.x = output.current.x;
+                (*head).state.y = output.current.y;
+
             }
 
-            (*head).state.enabled = match output.current.state {
-                OutputStateValue::Enabled | OutputStateValue::DisabledSoft => true,
-                OutputStateValue::DisabledHard => false,
-                OutputStateValue::Destroying => unreachable!(),
-            };
-            (*head).state.scale = output.current.scale;
-            (*head).state.transform = output.current.transform;
-            (*head).state.x = output.current.x;
-            (*head).state.y = output.current.y;
-
+            ffi::wlr_output_manager_v1_set_configuration(self.wlr_output_manager, config);
+            Ok(())
         }
-
-        ffi::wlr_output_manager_v1_set_configuration(self.wlr_output_manager, config);
-        Ok(())
     }
 
 }
