@@ -3,7 +3,6 @@
 
 use crate::ffi;
 use crate::seat::Seat;
-use crate::server::{WlList, wl_list_insert, wl_list_remove};
 
 pub struct InputDeviceConfig {
     pub scroll_factor: f64,
@@ -25,17 +24,18 @@ pub struct InputDevice {
     pub destroy_fn: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
     pub destroy_data: *mut std::ffi::c_void,
 
-    objects: ffi::wl_list, // list of InputDeviceObject
+    /// Its protocol objects (one per bound input-manager client). Private:
+    /// walks trust that a registered object is live; the device's destroy
+    /// handler lets go of them all.
+    objects: crate::registry::Registry<InputDeviceObject>,
     pub libinput: Option<Box<crate::libinput_device::LibinputDevice>>,
     pub xkb_keyboard: Option<Box<crate::xkb_keyboard::XkbKeyboard>>,
 }
 
 impl InputDevice {
-    /// The head of its `InputDeviceObject`s, for list code in other modules: the field
-    /// itself is private, so safe code elsewhere cannot move or replace a
-    /// linked head.
-    pub(crate) fn objects_head(&mut self) -> *mut ffi::wl_list {
-        &mut self.objects
+    /// Its protocol objects, copied out.
+    pub(crate) fn objects(&self) -> Vec<*mut InputDeviceObject> {
+        self.objects.ptrs()
     }
 }
 
@@ -45,19 +45,10 @@ impl InputDevice {
 unsafe impl crate::listener::Anchored for InputDevice {}
 
 pub struct InputDeviceObject {
+    /// Null once the device is gone (its destroy handler): the object is
+    /// inert.
     pub device: *mut InputDevice,
     pub resource: *mut ffi::wl_resource,
-    link: ffi::wl_list,
-}
-
-impl InputDeviceObject {
-    /// The `InputDeviceObject` whose `link` (in InputDevice::objects) is `link`.
-    ///
-    /// # Safety
-    /// `link` is that field of a live `InputDeviceObject`.
-    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
-        crate::container_of!(link, Self, link)
-    }
 }
 
 impl InputDevice {
@@ -83,12 +74,10 @@ impl InputDevice {
             },
             destroy_fn: None,
             destroy_data: std::ptr::null_mut(),
-            objects: std::mem::zeroed(),
+            objects: crate::registry::Registry::new(),
             libinput: None,
             xkb_keyboard: None,
         }));
-
-        ffi::wl_list_init(&mut (*device).objects);
 
         // Insert into InputManager::devices
         (*server).input_manager.register_device(device);
@@ -100,13 +89,8 @@ impl InputDevice {
         (*device).destroy_listener.connect(destroy_signal, handle_device_destroy);
 
         if !virtual_device {
-            let config_objects = (*server).input_manager.objects_head() as *mut WlList;
-            let mut curr = (*config_objects).next;
-            while curr != config_objects {
-                let next = (*curr).next;
-                let im_obj = crate::input_manager::InputManagerObject::from_link(curr);
+            for im_obj in (*server).input_manager.objects() {
                 (*device).create_object(server, (*im_obj).resource);
-                curr = next;
             }
 
             let handle = if ffi::wlr_input_device_is_libinput(wlr_device) {
@@ -216,7 +200,6 @@ impl InputDevice {
         let obj = Box::into_raw(Box::new(InputDeviceObject {
             device: self,
             resource,
-            link: std::mem::zeroed(),
         }));
 
         ffi::wl_resource_set_implementation(
@@ -226,9 +209,9 @@ impl InputDevice {
             Some(handle_device_object_destroy),
         );
 
-        // Insert into self.objects
-        let list_head = &mut self.objects as *mut ffi::wl_list as *mut WlList;
-        wl_list_insert(list_head, &mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+        // At the front, as the list's head insert did; unregistered by its
+        // destroy handler or the device's.
+        self.objects.push_front(obj);
 
         // Send input_device event to the manager resource
         ffi::wl_resource_post_event(im_v1_resource, 1, resource); // opcode 1 is input_device in river_input_manager_v1
@@ -246,15 +229,10 @@ impl InputDevice {
 
         // Connect client-side libinput device if matching exists
         if let Some(ref mut libinput) = self.libinput {
-            let libinput_config_objects = (*server).libinput_config.objects_head() as *mut WlList;
-            let mut curr = (*libinput_config_objects).next;
-            while curr != libinput_config_objects {
-                let next = (*curr).next;
-                let config_obj = crate::libinput_config::LibinputConfigObject::from_link(curr);
+            for config_obj in (*server).libinput_config.objects() {
                 if ffi::wl_resource_get_client((*config_obj).resource) == client {
                     libinput.create_object((*config_obj).resource);
                 }
-                curr = next;
             }
         }
     }
@@ -282,14 +260,10 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
     }
 
     // Free objects and set inert
-    let objects_head = &mut device.objects as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*objects_head).next;
-    while curr != objects_head {
-        let next = (*curr).next;
-        let obj = crate::container_of!(curr, InputDeviceObject, link);
-
-        wl_list_remove(curr);
-        ffi::wl_list_init(curr as *mut ffi::wl_list);
+    for obj in device.objects.ptrs() {
+        device.objects.remove(obj);
+        // Inert from here: its destroy handler finds no device.
+        (*obj).device = std::ptr::null_mut();
 
         ffi::wl_resource_post_event((*obj).resource, 0); // removed event
 
@@ -299,8 +273,6 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
             obj as *mut _,
             Some(handle_device_object_destroy),
         );
-
-        curr = next;
     }
 
     if let Some(mut libinput) = device.libinput.take() {
@@ -329,7 +301,9 @@ unsafe extern "C" fn handle_device_destroy(listener: *mut ffi::wl_listener, _dat
 unsafe extern "C" fn handle_device_object_destroy(resource: *mut ffi::wl_resource) {
     let obj = ffi::wl_resource_get_user_data(resource) as *mut InputDeviceObject;
     if !obj.is_null() {
-        wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+        if !(*obj).device.is_null() {
+            (*(*obj).device).objects.remove(obj);
+        }
         let _ = Box::from_raw(obj);
     }
 }

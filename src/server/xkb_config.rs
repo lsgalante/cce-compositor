@@ -2,53 +2,59 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
+use crate::server::Server;
 
 pub struct XkbConfig {
     pub global: *mut ffi::wl_global,
     pub context: *mut ffi::xkb_context,
     pub default_keymap: *mut ffi::xkb_keymap,
-    objects: ffi::wl_list,
-    keyboards: ffi::wl_list,
+    /// Private registries: walks trust that what is registered is live
+    /// (each unregisters before it is freed).
+    objects: crate::registry::Registry<XkbConfigObject>,
+    keyboards: crate::registry::Registry<crate::xkb_keyboard::XkbKeyboard>,
 }
 
 impl XkbConfig {
-    /// The head of its `XkbConfigObject`s, for list code in other modules: the field
-    /// itself is private, so safe code elsewhere cannot move or replace a
-    /// linked head.
-    pub(crate) fn objects_head(&mut self) -> *mut ffi::wl_list {
-        &mut self.objects
+    /// Write empty registries into a zero-filled config (`Server::zeroed`),
+    /// whose registry bytes are not yet valid `Vec`s.
+    ///
+    /// # Safety
+    /// `this` points at an `XkbConfig` whose registries have not been
+    /// initialised; they are overwritten without being dropped.
+    pub unsafe fn init_registries_in_place(this: *mut Self) {
+        std::ptr::write(std::ptr::addr_of_mut!((*this).objects), crate::registry::Registry::new());
+        std::ptr::write(std::ptr::addr_of_mut!((*this).keyboards), crate::registry::Registry::new());
     }
 
-    /// The head of the `XkbKeyboard`s, for list code in other modules: the field
-    /// itself is private, so safe code elsewhere cannot move or replace a
-    /// linked head.
-    pub(crate) fn keyboards_head(&mut self) -> *mut ffi::wl_list {
-        &mut self.keyboards
+    /// Its protocol objects (one per bound client), copied out.
+    pub(crate) fn objects(&self) -> Vec<*mut XkbConfigObject> {
+        self.objects.ptrs()
+    }
+
+    /// The xkb keyboards, copied out.
+    pub(crate) fn keyboards(&self) -> Vec<*mut crate::xkb_keyboard::XkbKeyboard> {
+        self.keyboards.ptrs()
+    }
+
+    /// # Safety
+    /// As `Registry::push`: live until `unregister_keyboard`, which its
+    /// `deinit` runs before it is freed.
+    pub(crate) unsafe fn register_keyboard(&mut self, keyboard: *mut crate::xkb_keyboard::XkbKeyboard) {
+        self.keyboards.push(keyboard);
+    }
+
+    pub(crate) fn unregister_keyboard(&mut self, keyboard: *mut crate::xkb_keyboard::XkbKeyboard) {
+        self.keyboards.remove(keyboard);
     }
 }
 
 pub struct XkbConfigObject {
     pub config: *mut XkbConfig,
     pub resource: *mut ffi::wl_resource,
-    link: ffi::wl_list,
-}
-
-impl XkbConfigObject {
-    /// The `XkbConfigObject` whose `link` (in XkbConfig::objects) is `link`.
-    ///
-    /// # Safety
-    /// `link` is that field of a live `XkbConfigObject`.
-    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
-        crate::container_of!(link, Self, link)
-    }
 }
 
 impl XkbConfig {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        ffi::wl_list_init(&mut self.objects);
-        ffi::wl_list_init(&mut self.keyboards);
-
         let context = ffi::xkb_context_new(ffi::xkb_context_flags_XKB_CONTEXT_NO_FLAGS);
         if context.is_null() {
             return Err("Failed to create xkb_context");
@@ -93,13 +99,9 @@ impl XkbConfig {
             self.global = std::ptr::null_mut();
         }
 
-        let objects_head = &mut self.objects as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*objects_head).next;
-        while curr != objects_head {
-            let next = (*curr).next;
-            let obj = crate::container_of!(curr, XkbConfigObject, link);
+        for obj in self.objects.ptrs() {
+            // Its destroy handler unregisters and frees it.
             ffi::wl_resource_destroy((*obj).resource);
-            curr = next;
         }
 
         if !self.default_keymap.is_null() {
@@ -130,7 +132,6 @@ unsafe extern "C" fn bind_xkb_config(
     let obj = Box::into_raw(Box::new(XkbConfigObject {
         config,
         resource,
-        link: std::mem::zeroed(),
     }));
 
     ffi::wl_resource_set_implementation(
@@ -140,23 +141,19 @@ unsafe extern "C" fn bind_xkb_config(
         Some(handle_object_destroy),
     );
 
-    let list_head = &mut (*config).objects as *mut ffi::wl_list as *mut WlList;
-    wl_list_insert((*list_head).prev, &mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+    // Unregistered by its destroy handler before it is freed.
+    (*config).objects.push(obj);
 
-    let keyboards_head = &mut (*config).keyboards as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*keyboards_head).next;
-    while curr != keyboards_head {
-        let next = (*curr).next;
-        let xkb_kbd = crate::xkb_keyboard::XkbKeyboard::from_link(curr);
+    for xkb_kbd in (*config).keyboards() {
         (*xkb_kbd).create_object(resource);
-        curr = next;
     }
 }
 
 unsafe extern "C" fn handle_object_destroy(resource: *mut ffi::wl_resource) {
     let obj = ffi::wl_resource_get_user_data(resource) as *mut XkbConfigObject;
     if !obj.is_null() {
-        wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+        // The config is a server field, live for the server's life.
+        (*(*obj).config).objects.remove(obj);
         let _ = Box::from_raw(obj);
     }
 }
@@ -195,8 +192,7 @@ unsafe extern "C" fn xkb_config_stop(_client: *mut ffi::wl_client, resource: *mu
         return;
     }
 
-    wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
-    ffi::wl_list_init(&mut (*obj).link);
+    (*(*obj).config).objects.remove(obj);
 
     ffi::wl_resource_post_event(resource, 0); // finished event
 

@@ -2,12 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{WlList};
 use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
 
-#[repr(C)]
 pub struct InputPopup {
-    link: ffi::wl_list,
     /// The seat whose relay the popup belongs to. An id, not a relay
     /// pointer: the relay lives inside its seat, which may move.
     pub sid: crate::seat::SeatId,
@@ -21,16 +18,6 @@ pub struct InputPopup {
     commit: crate::listener::Listener,
 }
 
-impl InputPopup {
-    /// The `InputPopup` whose `link` (in the relay's popup list) is `link`.
-    ///
-    /// # Safety
-    /// `link` is that field of a live `InputPopup`.
-    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
-        crate::container_of!(link, Self, link)
-    }
-}
-
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
 // after its listeners are gone, and reached only through raw pointers: no safe
 // API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
@@ -42,10 +29,9 @@ impl InputPopup {
         wlr_popup: *mut ffi::wlr_input_popup_surface_v2,
         sid: crate::seat::SeatId,
     ) -> Result<(), &'static str> {
-        let Some(seat) = wm.seats.get_mut(sid) else {
+        if wm.seats.get(sid).is_none() {
             return Err("input popup for a seat that is gone");
-        };
-        let popups_list = seat.relay.input_popups_head() as *mut WlList;
+        }
         let hidden_tree = crate::shared::scene().hidden_tree.raw();
 
         let surface_tree = ffi::wlr_scene_subsurface_tree_create(hidden_tree, (*wlr_popup).surface);
@@ -53,8 +39,7 @@ impl InputPopup {
             return Err("Failed to create subsurface tree for input popup");
         }
 
-        let mut input_popup = Box::new(InputPopup {
-            link: std::mem::zeroed(),
+        let input_popup = Box::new(InputPopup {
             sid,
             wlr_popup,
             surface_tree: crate::scene_handle::SceneTree::watch(surface_tree),
@@ -64,12 +49,12 @@ impl InputPopup {
             commit: std::mem::zeroed(),
         });
 
-        ffi::wl_list_init(&mut input_popup.link);
-
         let raw = Box::into_raw(input_popup);
 
         // Append to the relay's popups.
-        crate::server::wl_list_insert((*popups_list).prev, &mut (*raw).link as *mut ffi::wl_list as *mut WlList);
+        if let Some(seat) = wm.seats.get_mut(sid) {
+            seat.relay.register_popup(raw);
+        }
 
         (*raw).destroy.connect(&mut (*wlr_popup).events.destroy, handle_destroy);
         (*raw).map.connect(ffi::river_wlr_surface_get_map_signal((*wlr_popup).surface), handle_map);
@@ -185,7 +170,13 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     (*input_popup).unmap.disconnect();
     (*input_popup).commit.disconnect();
 
-    ffi::wl_list_remove(&mut (*input_popup).link);
+    // Out of whichever relay holds it — not only its seat's: safe code can
+    // swap two seats' relays. Found without the window manager: popups go
+    // inside `wlr_seat_destroy` (with their input method), which runs in
+    // the manage pass.
+    for seat in crate::seat::live_places() {
+        (*seat).relay.unregister_popup(input_popup);
+    }
 
     let _ = Box::from_raw(input_popup);
 }

@@ -36,6 +36,14 @@ thread_local! {
     static PLACES: RefCell<Vec<NonNull<Seat>>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Every live seat's place, copied out, found without the store: for
+/// teardown that must reach every seat with no window manager (an input
+/// popup leaving whichever relay holds it). Dereferencing one is the
+/// caller's business, under [`place_holding`]'s rule.
+pub fn live_places() -> Vec<*mut Seat> {
+    PLACES.with(|places| places.borrow().iter().map(|p| p.as_ptr()).collect())
+}
+
 /// The place of the live seat that holds `wlr_seat` (null: `None`), found
 /// without the store: for code that runs inside window-manager calls and
 /// so must not read window-manager memory. `None` too while the seat tears
@@ -81,12 +89,11 @@ impl Seats {
     }
 
     /// Give up the seat `id` names; dropping or destroying the box frees
-    /// it. Its slot stays empty: ids are never reused.
-    ///
-    /// # Safety
-    /// The seat has been torn down (`Seat::destroy`): no keyboard group is
-    /// still linked into the list head the drop frees.
-    pub unsafe fn take(&mut self, id: SeatId) -> Option<Box<Seat>> {
+    /// it. Its slot stays empty: ids are never reused. `Seat::destroy`
+    /// tears the seat down first; a seat dropped without that leaks its
+    /// wlroots objects but leaves nothing dangling (it holds registries,
+    /// not linked list heads, and nothing names it by address).
+    pub fn take(&mut self, id: SeatId) -> Option<Box<Seat>> {
         let p = self.seats.get_mut(id.0 as usize)?.take()?;
         PLACES.with(|places| places.borrow_mut().retain(|&q| q != p));
         // SAFETY: every pointer came from `Box::leak` in `insert`, and

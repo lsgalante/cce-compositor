@@ -472,15 +472,20 @@ listener must also stay in its field: moved out by a `mem::take` / `swap`
 of the `Listener` itself and kept past its owner's free, its cell names the
 freed field. So every `Listener` field is PRIVATE to its owner's module
 (2026-10-12), where `connect` / `disconnect` are all that is done to one;
-never move one. Every owner's linked `wl_list` HEAD or LINK field is
-private too: other modules go through raw-pointer accessors
-(`XkbConfig::keyboards_head()`, `Keyboard::from_group_link`, ...), which no
-safe code can swap through. A head in a movable owner is boxed
-(`Seat::keyboard_groups`, `InputRelay::input_popups`), which survives a
-move but not a free: `InputRelay`'s `Drop` unlinks any popup still in its
-head, and a seat leaves the store only through the `unsafe`
-`Seats::take`; `InputPopup` names its seat by id rather than pointing into
-the relay. A `Server` subsystem has no
+never move one. No compositor struct holds a linked `wl_list` any more
+(2026-10-12): the last ones — keyboard groups and their keyboards, relay
+input popups, and the input-manager / input-device / xkb / libinput
+protocol-object and device lists, once left alone as hardware-only — are
+`crate::registry::Registry`s, which a move or a swap cannot corrupt. An
+object registers when it is made and unregisters before it is freed; a
+protocol object keeps a pointer to its owner, nulled when the owner dies
+(the object is then inert). Teardown that may run inside window-manager
+calls reaches every seat with `seat::live_places` (an input popup leaves
+whichever relay holds it, a keyboard group whichever seat holds it: safe
+code can swap two seats' contents). wlroots' own lists (lock
+surfaces, configuration heads, xdg popups) stay `wl_list`s, only walked.
+`InputPopup` names its seat by id rather than pointing into the relay.
+A `Server` subsystem has no
 `Default` (`XkbConfig`, `LibinputConfig`, `InputManager`, `LockManager`):
 a safe second value is what a `mem::take` needs.
 
@@ -885,12 +890,13 @@ take it as arguments (`view_drag_target`, `hscroll_shift_target`), and
 take `(wm, sid)`. Its popups are repositioned from a copied list
 (`InputRelay::popups`) with no relay borrow live, because
 `InputPopup::update` reads the relay back through its own pointer.
-A `KeyboardGroup` (its own allocation, on the seat's `keyboard_groups`
-`wl_list`) finds its seat by `sid` in the key and modifier handlers and
+A `KeyboardGroup` (its own allocation, in the seat's `keyboard_groups`
+registry) finds its seat by `sid` in the key and modifier handlers and
 `get_input_method_grab(wm)`; it keeps no seat pointer: `unref(seat, ..)`
 is handed the seat by its caller (`Seat::destroy` passes the seat it is
 tearing down, still in the store; `Keyboard::destroy` passes null,
-the device having been detached first). A wlroots callback handed a
+the device having been detached first; the last unref takes the group out
+of every seat's registry, `seat::live_places`). A wlroots callback handed a
 `wlr_seat` turns it into an id with `wm.seats.find(wlr_seat)` (the seat
 that holds it) and borrows the seat from `wm.seats` (text inputs, the
 new-input-method handler, the xdg move/resize requests, cursor-shape

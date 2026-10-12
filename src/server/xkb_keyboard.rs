@@ -3,7 +3,6 @@
 
 use crate::ffi;
 use crate::input_device::InputDevice;
-use crate::server::WlList;
 
 pub struct XkbKeyboardState {
     pub layout_index: Option<u32>,
@@ -14,25 +13,16 @@ pub struct XkbKeyboardState {
 
 pub struct XkbKeyboard {
     pub parent_device: *mut InputDevice,
-    objects: ffi::wl_list, // list of XkbKeyboardObject
-    link: ffi::wl_list,    // link inside XkbConfig::keyboards
+    /// Its protocol objects (one per bound client). Private: walks trust
+    /// that a registered object is live; `deinit` lets go of them all.
+    objects: crate::registry::Registry<XkbKeyboardObject>,
     pub sent: XkbKeyboardState,
 }
 
-impl XkbKeyboard {
-    /// The `XkbKeyboard` whose `link` (in XkbConfig::keyboards) is `link`.
-    ///
-    /// # Safety
-    /// `link` is that field of a live `XkbKeyboard`.
-    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
-        crate::container_of!(link, Self, link)
-    }
-}
-
 pub struct XkbKeyboardObject {
+    /// Null once the keyboard is gone (`deinit`): the object is inert.
     pub keyboard: *mut XkbKeyboard,
     pub resource: *mut ffi::wl_resource,
-    link: ffi::wl_list,
 }
 
 impl XkbKeyboard {
@@ -40,8 +30,7 @@ impl XkbKeyboard {
     ) -> Box<Self> {
         let mut xkb_kbd = Box::new(Self {
             parent_device,
-            objects: std::mem::zeroed(),
-            link: std::mem::zeroed(),
+            objects: crate::registry::Registry::new(),
             sent: XkbKeyboardState {
                 layout_index: None,
                 layout_name: None,
@@ -50,33 +39,22 @@ impl XkbKeyboard {
             },
         });
 
-        ffi::wl_list_init(&mut xkb_kbd.objects);
-        ffi::wl_list_init(&mut xkb_kbd.link);
+        // The box's contents stay put while the box moves; `deinit`
+        // unregisters it before the box is dropped.
+        (*server).xkb_config.register_keyboard(&mut *xkb_kbd);
 
-        let keyboards_head = (*server).xkb_config.keyboards_head() as *mut WlList;
-        crate::server::wl_list_insert((*keyboards_head).prev, &mut xkb_kbd.link as *mut ffi::wl_list as *mut WlList);
-
-        let config_objects = (*server).xkb_config.objects_head() as *mut WlList;
-        let mut curr = (*config_objects).next;
-        while curr != config_objects {
-            let next = (*curr).next;
-            let config_obj = crate::xkb_config::XkbConfigObject::from_link(curr);
+        for config_obj in (*server).xkb_config.objects() {
             xkb_kbd.create_object((*config_obj).resource);
-            curr = next;
         }
 
         xkb_kbd
     }
 
     pub unsafe fn deinit(&mut self) {
-        let objects_head = &mut self.objects as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*objects_head).next;
-        while curr != objects_head {
-            let next = (*curr).next;
-            let obj = crate::container_of!(curr, XkbKeyboardObject, link);
-
-            crate::server::wl_list_remove(curr);
-            ffi::wl_list_init(curr as *mut ffi::wl_list);
+        for obj in self.objects.ptrs() {
+            self.objects.remove(obj);
+            // Inert from here: its destroy handler finds no keyboard.
+            (*obj).keyboard = std::ptr::null_mut();
 
             ffi::wl_resource_post_event((*obj).resource, 0); // removed event
 
@@ -86,11 +64,12 @@ impl XkbKeyboard {
                 obj as *mut _,
                 Some(handle_xkb_keyboard_object_destroy),
             );
-
-            curr = next;
         }
 
-        crate::server::wl_list_remove(&mut self.link as *mut ffi::wl_list as *mut WlList);
+        let server = crate::shared::server_ptr();
+        if !server.is_null() {
+            (*server).xkb_config.unregister_keyboard(self);
+        }
     }
 
     pub unsafe fn create_object(&mut self, config_v1_resource: *mut ffi::wl_resource) {
@@ -112,7 +91,6 @@ impl XkbKeyboard {
         let obj = Box::into_raw(Box::new(XkbKeyboardObject {
             keyboard: self,
             resource,
-            link: std::mem::zeroed(),
         }));
 
         ffi::wl_resource_set_implementation(
@@ -122,23 +100,19 @@ impl XkbKeyboard {
             Some(handle_xkb_keyboard_object_destroy),
         );
 
-        let list_head = &mut self.objects as *mut ffi::wl_list as *mut WlList;
-        crate::server::wl_list_insert(list_head, &mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+        // At the front, as the list's head insert did; unregistered by its
+        // destroy handler or by `deinit`.
+        self.objects.push_front(obj);
 
         // Send xkb_keyboard event to config_v1
         ffi::wl_resource_post_event(config_v1_resource, 1, resource); // opcode 1: xkb_keyboard
 
         // Pair with input device resource
         let parent_dev = self.parent_device;
-        let input_dev_objects = (*parent_dev).objects_head() as *mut WlList;
-        let mut curr = (*input_dev_objects).next;
-        while curr != input_dev_objects {
-            let next = (*curr).next;
-            let input_dev_obj = crate::input_device::InputDeviceObject::from_link(curr);
+        for input_dev_obj in (*parent_dev).objects() {
             if ffi::wl_resource_get_client((*input_dev_obj).resource) == client {
                 ffi::wl_resource_post_event(resource, 1, (*input_dev_obj).resource); // input_device event (opcode 1)
             }
-            curr = next;
         }
 
         // Send current cached state to client
@@ -175,11 +149,7 @@ impl XkbKeyboard {
         numlock: bool,
     ) {
         let sent = &mut self.sent;
-        let objects_head = &mut self.objects as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*objects_head).next;
-        while curr != objects_head {
-            let next = (*curr).next;
-            let obj = crate::container_of!(curr, XkbKeyboardObject, link);
+        for obj in self.objects.ptrs() {
             let resource = (*obj).resource;
             let version = ffi::wl_resource_get_version(resource);
 
@@ -234,8 +204,6 @@ impl XkbKeyboard {
             if send_done && version >= 2 {
                 ffi::wl_resource_post_event(resource, 7); // done event
             }
-
-            curr = next;
         }
 
         sent.layout_index = Some(layout_index);
@@ -248,7 +216,9 @@ impl XkbKeyboard {
 unsafe extern "C" fn handle_xkb_keyboard_object_destroy(resource: *mut ffi::wl_resource) {
     let obj = ffi::wl_resource_get_user_data(resource) as *mut XkbKeyboardObject;
     if !obj.is_null() {
-        crate::server::wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+        if !(*obj).keyboard.is_null() {
+            (*(*obj).keyboard).objects.remove(obj);
+        }
         let _ = Box::from_raw(obj);
     }
 }

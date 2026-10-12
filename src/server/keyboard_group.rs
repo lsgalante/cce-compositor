@@ -29,7 +29,6 @@ pub struct KeyboardGroup {
     /// pointer to its seat: the event handlers look it up by this id, and
     /// `unref`'s teardown is handed the seat by its caller.
     pub sid: Option<crate::seat::SeatId>,
-    link: ffi::wl_list, // Seat.keyboard_groups
     pub virtual_device: bool,
     pub config: KeyboardConfig,
     /// The group's own keyboard. Private: `match_chord` trusts its
@@ -41,23 +40,30 @@ pub struct KeyboardGroup {
     pub pressed: HashMap<u32, Press>,
     key_listener: crate::listener::Listener,
     modifiers_listener: crate::listener::Listener,
-    keyboards: ffi::wl_list, // list of keyboards in this group
+    /// The keyboards in this group. Private: walks trust that a registered
+    /// keyboard is live (it unregisters before it leaves the group or is
+    /// freed).
+    keyboards: crate::registry::Registry<crate::keyboard::Keyboard>,
 }
 
 impl KeyboardGroup {
-    /// The head of its `Keyboard`s (by `group_link`), for list code in other modules: the field
-    /// itself is private, so safe code elsewhere cannot move or replace a
-    /// linked head.
-    pub(crate) fn keyboards_head(&mut self) -> *mut ffi::wl_list {
-        &mut self.keyboards
+    /// Its keyboards, copied out.
+    pub(crate) fn keyboards(&self) -> Vec<*mut crate::keyboard::Keyboard> {
+        self.keyboards.ptrs()
     }
 
-    /// The `KeyboardGroup` whose `link` (in its seat's `keyboard_groups`) is `link`.
+    /// Add `keyboard` to the group.
     ///
     /// # Safety
-    /// `link` is that field of a live `KeyboardGroup`.
-    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
-        crate::container_of!(link, Self, link)
+    /// As `Registry::push`: `keyboard` is live until `unregister_keyboard`,
+    /// which it runs before it leaves the group or is freed.
+    pub(crate) unsafe fn register_keyboard(&mut self, keyboard: *mut crate::keyboard::Keyboard) {
+        // At the front, as the list's head insert did.
+        self.keyboards.push_front(keyboard);
+    }
+
+    pub(crate) fn unregister_keyboard(&mut self, keyboard: *mut crate::keyboard::Keyboard) {
+        self.keyboards.remove(keyboard);
     }
 }
 
@@ -82,10 +88,9 @@ impl KeyboardGroup {
         config: KeyboardConfig,
         virtual_device: bool,
     ) -> Result<*mut Self, &'static str> {
-        let mut group = Box::new(Self {
+        let group = Box::new(Self {
             ref_count: 1,
             sid: if seat.is_null() { None } else { Some((*seat).id) },
-            link: std::mem::zeroed(),
             virtual_device,
             config,
             wlr_keyboard: std::mem::zeroed(),
@@ -93,17 +98,13 @@ impl KeyboardGroup {
             pressed: HashMap::new(),
             key_listener: std::mem::zeroed(),
             modifiers_listener: std::mem::zeroed(),
-            keyboards: std::mem::zeroed(),
+            keyboards: crate::registry::Registry::new(),
         });
 
-        ffi::wl_list_init(&mut group.keyboards);
-        ffi::wl_list_init(&mut group.link);
-
-        // Add to seat.keyboard_groups
-        let seat_groups_head = (*seat).keyboard_groups_head() as *mut crate::server::WlList;
-        crate::server::wl_list_insert((*seat_groups_head).prev, &mut group.link as *mut ffi::wl_list as *mut crate::server::WlList);
-
         let group_ptr = Box::into_raw(group);
+        if !seat.is_null() {
+            (*seat).register_keyboard_group(group_ptr);
+        }
 
         ffi::river_wlr_keyboard_init(
             &mut (*group_ptr).wlr_keyboard,
@@ -140,6 +141,10 @@ impl KeyboardGroup {
     /// group's seat, from the caller (null when there is none to hand the
     /// active keyboard over on: wlroots then clears it from the seat as the
     /// keyboard finishes).
+    ///
+    /// # Safety
+    /// `seat` is null or live, and no reference to a seat is live: the last
+    /// unref takes the group out of every seat's registry by place.
     pub unsafe fn unref(&mut self, seat: *mut Seat, to_release: &[u32]) {
         for &keycode in to_release {
             let mut event = ffi::wlr_keyboard_key_event {
@@ -156,19 +161,21 @@ impl KeyboardGroup {
             return;
         }
 
-        crate::server::wl_list_remove(&mut self.link as *mut ffi::wl_list as *mut crate::server::WlList);
+        // Out of whichever seat's registry holds it — not only the seat
+        // handed in, which its caller found by slot: safe code can swap two
+        // seats' contents. Found without the window manager, which device
+        // teardown may be inside.
+        for place in crate::seat::live_places() {
+            (*place).unregister_keyboard_group(self);
+        }
         self.key_listener.disconnect();
         self.modifiers_listener.disconnect();
 
         // If the currently active keyboard of a seat is destroyed, we need to set a new active keyboard.
         if !seat.is_null() && (*seat).wlr_seat().keyboard() == &mut self.wlr_keyboard as *mut ffi::wlr_keyboard {
-            let seat_groups_head = (*seat).keyboard_groups_head() as *mut crate::server::WlList;
-            let first_node = (*seat_groups_head).next;
-            if first_node != seat_groups_head {
-                let other_group = crate::container_of!(first_node, KeyboardGroup, link);
-                ffi::wlr_seat_set_keyboard((*seat).wlr_seat().ptr(), &mut (*other_group).wlr_keyboard);
-            } else {
-                ffi::wlr_seat_set_keyboard((*seat).wlr_seat().ptr(), std::ptr::null_mut());
+            match (*seat).keyboard_groups().first() {
+                Some(&other_group) => ffi::wlr_seat_set_keyboard((*seat).wlr_seat().ptr(), &mut (*other_group).wlr_keyboard),
+                None => ffi::wlr_seat_set_keyboard((*seat).wlr_seat().ptr(), std::ptr::null_mut()),
             }
         }
 
@@ -299,17 +306,12 @@ impl KeyboardGroup {
             false
         };
 
-        let keyboards_head = (*server).xkb_config.keyboards_head() as *mut crate::server::WlList;
-        let mut curr = (*keyboards_head).next;
-        while curr != keyboards_head {
-            let next = (*curr).next;
-            let xkb_kbd = crate::xkb_keyboard::XkbKeyboard::from_link(curr);
+        for xkb_kbd in (*server).xkb_config.keyboards() {
             let parent_dev = (*xkb_kbd).parent_device;
             let kbd = (*parent_dev).destroy_data as *mut crate::keyboard::Keyboard;
             if !kbd.is_null() && (*kbd).group == self as *mut KeyboardGroup {
                 (*xkb_kbd).send_state(layout_index, layout_name, capslock, numlock);
             }
-            curr = next;
         }
     }
 }
@@ -385,13 +387,8 @@ unsafe extern "C" fn led_update(wlr_keyboard: *mut ffi::wlr_keyboard, leds: u32)
         return;
     }
 
-    let keyboards_head = &mut (*group).keyboards as *mut ffi::wl_list as *mut crate::server::WlList;
-    let mut curr = (*keyboards_head).next;
-    while curr != keyboards_head {
-        let next = (*curr).next;
-        let keyboard = crate::keyboard::Keyboard::from_group_link(curr);
+    for keyboard in (*group).keyboards() {
         ffi::wlr_keyboard_led_update((*keyboard).wlr_keyboard, leds);
-        curr = next;
     }
 }
 

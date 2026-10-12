@@ -10,9 +10,9 @@ pub struct InputRelay {
     /// Private: walks trust that a registered text input is live.
     text_inputs: crate::registry::Registry<TextInput>,
     pub input_method: *mut ffi::wlr_input_method_v2,
-    /// The popups' list head, boxed: the relay lives inside its seat, which
-    /// the store hands out as `&mut`, and a head must not move once linked.
-    input_popups: Box<ffi::wl_list>,
+    /// Private: walks trust that a registered popup is live (its destroy
+    /// handler unregisters it before freeing it).
+    input_popups: crate::registry::Registry<crate::input_popup::InputPopup>,
     /// Null, or the live text input enabled on this seat. Private, because
     /// safe paths (`Seat::focus`) dereference it: written only through
     /// `set_text_input`.
@@ -27,26 +27,6 @@ pub struct InputRelay {
 
     /// The on-screen keyboard following a touched field (`osk.rs`).
     pub osk: crate::osk::Osk,
-}
-
-/// A relay dropped with popups still linked into its head (one swapped
-/// into a seat that is then destroyed, or replaced) unlinks them first, so
-/// a popup's own unlink later never writes into the freed head.
-impl Drop for InputRelay {
-    fn drop(&mut self) {
-        let head = &mut *self.input_popups as *mut ffi::wl_list;
-        // SAFETY: `new` initialised the head, and every link on it is a
-        // live popup's: a popup unlinks itself before it is freed.
-        unsafe {
-            let mut pos = (*head).next;
-            while pos != head {
-                let next = (*pos).next;
-                ffi::wl_list_init(pos);
-                pos = next;
-            }
-            ffi::wl_list_init(head);
-        }
-    }
 }
 
 impl InputRelay {
@@ -82,7 +62,7 @@ impl InputRelay {
         InputRelay {
             text_inputs: crate::registry::Registry::new(),
             input_method: std::ptr::null_mut(),
-            input_popups: Self::empty_head(),
+            input_popups: crate::registry::Registry::new(),
             text_input: std::ptr::null_mut(),
             input_method_commit: crate::listener::Listener::default(),
             grab_keyboard: crate::listener::Listener::default(),
@@ -93,36 +73,24 @@ impl InputRelay {
         }
     }
 
-    /// An initialised, empty list head at a heap address of its own.
-    fn empty_head() -> Box<ffi::wl_list> {
-        // SAFETY: a zeroed wl_list is plain data; `wl_list_init` makes it
-        // an empty list pointing at itself, where the box keeps it.
-        let mut head: Box<ffi::wl_list> = Box::new(unsafe { std::mem::zeroed() });
-        unsafe { ffi::wl_list_init(&mut *head) };
-        head
+    /// Register a new input-method popup.
+    ///
+    /// # Safety
+    /// As `Registry::push`: live until `unregister_popup`, which its destroy
+    /// handler runs before freeing it.
+    pub unsafe fn register_popup(&mut self, popup: *mut crate::input_popup::InputPopup) {
+        self.input_popups.push(popup);
     }
 
-    /// The popups' list head, for a popup linking itself in.
-    pub fn input_popups_head(&mut self) -> *mut ffi::wl_list {
-        &mut *self.input_popups
+    pub fn unregister_popup(&mut self, popup: *mut crate::input_popup::InputPopup) {
+        self.input_popups.remove(popup);
     }
 
     /// The input-method popups, oldest first, copied out: `InputPopup::update`
     /// reads the relay back through its own pointer, so it runs with no
     /// borrow of the relay live.
     fn popups(&self) -> Vec<*mut crate::input_popup::InputPopup> {
-        let mut out = Vec::new();
-        let head = &*self.input_popups as *const ffi::wl_list as *mut ffi::wl_list;
-        // SAFETY: `new` initialised the head, and every link on it is a
-        // live popup's (a popup unlinks itself on destroy).
-        unsafe {
-            let mut pos = (*head).next;
-            while pos != head {
-                out.push(crate::input_popup::InputPopup::from_link(pos));
-                pos = (*pos).next;
-            }
-        }
-        out
+        self.input_popups.ptrs()
     }
 
     /// Reposition every input-method popup (the field or the window moved).

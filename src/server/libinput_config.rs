@@ -2,51 +2,57 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
+use crate::server::Server;
 
 pub struct LibinputConfig {
     pub global: *mut ffi::wl_global,
-    objects: ffi::wl_list,
-    devices: ffi::wl_list,
+    /// Private registries: walks trust that what is registered is live
+    /// (each unregisters before it is freed).
+    objects: crate::registry::Registry<LibinputConfigObject>,
+    devices: crate::registry::Registry<crate::libinput_device::LibinputDevice>,
 }
 
 impl LibinputConfig {
-    /// The head of its `LibinputConfigObject`s, for list code in other modules: the field
-    /// itself is private, so safe code elsewhere cannot move or replace a
-    /// linked head.
-    pub(crate) fn objects_head(&mut self) -> *mut ffi::wl_list {
-        &mut self.objects
+    /// Write empty registries into a zero-filled config (`Server::zeroed`),
+    /// whose registry bytes are not yet valid `Vec`s.
+    ///
+    /// # Safety
+    /// `this` points at a `LibinputConfig` whose registries have not been
+    /// initialised; they are overwritten without being dropped.
+    pub unsafe fn init_registries_in_place(this: *mut Self) {
+        std::ptr::write(std::ptr::addr_of_mut!((*this).objects), crate::registry::Registry::new());
+        std::ptr::write(std::ptr::addr_of_mut!((*this).devices), crate::registry::Registry::new());
     }
 
-    /// The head of the `LibinputDevice`s, for list code in other modules: the field
-    /// itself is private, so safe code elsewhere cannot move or replace a
-    /// linked head.
-    pub(crate) fn devices_head(&mut self) -> *mut ffi::wl_list {
-        &mut self.devices
+    /// Its protocol objects (one per bound client), copied out.
+    pub(crate) fn objects(&self) -> Vec<*mut LibinputConfigObject> {
+        self.objects.ptrs()
+    }
+
+    /// The libinput devices, copied out.
+    pub(crate) fn devices(&self) -> Vec<*mut crate::libinput_device::LibinputDevice> {
+        self.devices.ptrs()
+    }
+
+    /// # Safety
+    /// As `Registry::push`: live until `unregister_device`, which its
+    /// `deinit` runs before it is freed.
+    pub(crate) unsafe fn register_device(&mut self, device: *mut crate::libinput_device::LibinputDevice) {
+        self.devices.push(device);
+    }
+
+    pub(crate) fn unregister_device(&mut self, device: *mut crate::libinput_device::LibinputDevice) {
+        self.devices.remove(device);
     }
 }
 
 pub struct LibinputConfigObject {
     pub config: *mut LibinputConfig,
     pub resource: *mut ffi::wl_resource,
-    link: ffi::wl_list,
-}
-
-impl LibinputConfigObject {
-    /// The `LibinputConfigObject` whose `link` (in LibinputConfig::objects) is `link`.
-    ///
-    /// # Safety
-    /// `link` is that field of a live `LibinputConfigObject`.
-    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
-        crate::container_of!(link, Self, link)
-    }
 }
 
 impl LibinputConfig {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        ffi::wl_list_init(&mut self.objects);
-        ffi::wl_list_init(&mut self.devices);
-
         self.global = ffi::wl_global_create(
             (*server).wl_server,
             &ffi::river_libinput_config_v1_interface,
@@ -67,13 +73,9 @@ impl LibinputConfig {
             self.global = std::ptr::null_mut();
         }
 
-        let objects_head = &mut self.objects as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*objects_head).next;
-        while curr != objects_head {
-            let next = (*curr).next;
-            let obj = crate::container_of!(curr, LibinputConfigObject, link);
+        for obj in self.objects.ptrs() {
+            // Its destroy handler unregisters and frees it.
             ffi::wl_resource_destroy((*obj).resource);
-            curr = next;
         }
     }
 }
@@ -94,7 +96,6 @@ unsafe extern "C" fn bind_libinput_config(
     let obj = Box::into_raw(Box::new(LibinputConfigObject {
         config,
         resource,
-        link: std::mem::zeroed(),
     }));
 
     ffi::wl_resource_set_implementation(
@@ -104,23 +105,19 @@ unsafe extern "C" fn bind_libinput_config(
         Some(handle_object_destroy),
     );
 
-    let list_head = &mut (*config).objects as *mut ffi::wl_list as *mut WlList;
-    wl_list_insert((*list_head).prev, &mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+    // Unregistered by its destroy handler before it is freed.
+    (*config).objects.push(obj);
 
-    let devices_head = &mut (*config).devices as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*devices_head).next;
-    while curr != devices_head {
-        let next = (*curr).next;
-        let dev = crate::libinput_device::LibinputDevice::from_link(curr);
+    for dev in (*config).devices() {
         (*dev).create_object(resource);
-        curr = next;
     }
 }
 
 unsafe extern "C" fn handle_object_destroy(resource: *mut ffi::wl_resource) {
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputConfigObject;
     if !obj.is_null() {
-        wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+        // The config is a server field, live for the server's life.
+        (*(*obj).config).objects.remove(obj);
         let _ = Box::from_raw(obj);
     }
 }
@@ -156,8 +153,7 @@ unsafe extern "C" fn libinput_config_stop(_client: *mut ffi::wl_client, resource
         return;
     }
 
-    wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
-    ffi::wl_list_init(&mut (*obj).link);
+    (*(*obj).config).objects.remove(obj);
 
     ffi::wl_resource_post_event(resource, 0); // finished event
 

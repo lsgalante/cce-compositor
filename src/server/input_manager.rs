@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server, WlList, wl_list_insert, wl_list_remove};
+use crate::server::Server;
 use crate::seat::Seat;
 
 pub struct InputManager {
@@ -11,7 +11,9 @@ pub struct InputManager {
     /// Private: a registry another module could replace or swap would stop
     /// matching what the devices' destroy paths remove from it.
     devices: crate::registry::Registry<crate::input_device::InputDevice>,
-    objects: ffi::wl_list, // list of InputManagerObject
+    /// Its protocol objects (one per bound client). Private: walks trust
+    /// that a registered object is live (its destroy handler unregisters it).
+    objects: crate::registry::Registry<InputManagerObject>,
     pub global: *mut ffi::wl_global,
     
     pub idle_notifier: *mut ffi::wlr_idle_notifier_v1,
@@ -34,11 +36,9 @@ pub struct InputManager {
 }
 
 impl InputManager {
-    /// The head of its `InputManagerObject`s, for list code in other modules: the field
-    /// itself is private, so safe code elsewhere cannot move or replace a
-    /// linked head.
-    pub(crate) fn objects_head(&mut self) -> *mut ffi::wl_list {
-        &mut self.objects
+    /// Its protocol objects, copied out.
+    pub(crate) fn objects(&self) -> Vec<*mut InputManagerObject> {
+        self.objects.ptrs()
     }
 }
 
@@ -62,28 +62,19 @@ thread_local! {
 pub struct InputManagerObject {
     pub manager: *mut InputManager,
     pub resource: *mut ffi::wl_resource,
-    link: ffi::wl_list,
-}
-
-impl InputManagerObject {
-    /// The `InputManagerObject` whose `link` (in InputManager::objects) is `link`.
-    ///
-    /// # Safety
-    /// `link` is that field of a live `InputManagerObject`.
-    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
-        crate::container_of!(link, Self, link)
-    }
 }
 
 impl InputManager {
-    /// Write an empty device registry into a zero-filled manager
-    /// (`Server::zeroed`), whose registry bytes are not yet a valid `Vec`.
+    /// Write empty registries into a zero-filled manager
+    /// (`Server::zeroed`), whose registry bytes are not yet valid `Vec`s.
     ///
     /// # Safety
-    /// `this` points at an `InputManager` whose `devices` field has not been
-    /// initialised; it is overwritten without being dropped.
+    /// `this` points at an `InputManager` whose `devices` and `objects`
+    /// have not been initialised; they are overwritten without being
+    /// dropped.
     pub unsafe fn init_registry_in_place(this: *mut Self) {
         std::ptr::write(std::ptr::addr_of_mut!((*this).devices), crate::registry::Registry::new());
+        std::ptr::write(std::ptr::addr_of_mut!((*this).objects), crate::registry::Registry::new());
     }
 
     /// Every registered input device, copied out (a walk may destroy one).
@@ -154,8 +145,6 @@ impl InputManager {
 
     pub unsafe fn init(&mut self, server: *mut Server, seats: &mut crate::seat::Seats) -> Result<(), &'static str> {
         let wl_server = (*server).wl_server;
-
-        ffi::wl_list_init(&mut self.objects);
 
         self.idle_notifier = ffi::wlr_idle_notifier_v1_create(wl_server);
         crate::shared::handles().idle_notifier.set(self.idle_notifier);
@@ -245,13 +234,9 @@ impl InputManager {
             self.global = std::ptr::null_mut();
         }
 
-        let objects_head = &mut self.objects as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*objects_head).next;
-        while curr != objects_head {
-            let next = (*curr).next;
-            let obj = crate::container_of!(curr, InputManagerObject, link);
+        for obj in self.objects.ptrs() {
+            // Its destroy handler unregisters and frees it.
             ffi::wl_resource_destroy((*obj).resource);
-            curr = next;
         }
 
         // Detach all devices from their seats and set their seat pointer to null
@@ -304,7 +289,6 @@ unsafe extern "C" fn bind_input_manager(
     let obj = Box::into_raw(Box::new(InputManagerObject {
         manager: im,
         resource,
-        link: std::mem::zeroed(),
     }));
 
     ffi::wl_resource_set_implementation(
@@ -314,8 +298,8 @@ unsafe extern "C" fn bind_input_manager(
         Some(handle_manager_object_destroy),
     );
 
-    let list_head = &mut (*im).objects as *mut ffi::wl_list as *mut WlList;
-    wl_list_insert((*list_head).prev, &mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+    // Unregistered by its destroy handler before it is freed.
+    (*im).objects.push(obj);
 
     // Send existing devices to the client
     for device in (*im).devices.ptrs() {
@@ -328,7 +312,8 @@ unsafe extern "C" fn bind_input_manager(
 unsafe extern "C" fn handle_manager_object_destroy(resource: *mut ffi::wl_resource) {
     let obj = ffi::wl_resource_get_user_data(resource) as *mut InputManagerObject;
     if !obj.is_null() {
-        wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+        // The manager is a server field, live for the server's life.
+        (*(*obj).manager).objects.remove(obj);
         let _ = Box::from_raw(obj);
     }
 }
@@ -368,8 +353,7 @@ unsafe extern "C" fn input_manager_stop(
         return;
     }
 
-    wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
-    ffi::wl_list_init(&mut (*obj).link);
+    (*(*obj).manager).objects.remove(obj);
 
     ffi::wl_resource_post_event(resource, 0); // finished event
 

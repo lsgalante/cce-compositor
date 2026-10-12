@@ -1041,6 +1041,8 @@ impl Server {
             crate::layer_shell::LayerSurfaces::init_in_place(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.layer_surfaces));
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.outputs), crate::output::Outputs::new());
             crate::input_manager::InputManager::init_registry_in_place(std::ptr::addr_of_mut!((*server.as_mut_ptr()).input_manager));
+            crate::xkb_config::XkbConfig::init_registries_in_place(std::ptr::addr_of_mut!((*server.as_mut_ptr()).xkb_config));
+            crate::libinput_config::LibinputConfig::init_registries_in_place(std::ptr::addr_of_mut!((*server.as_mut_ptr()).libinput_config));
             crate::idle_inhibit_manager::IdleInhibitManager::init_registry_in_place(std::ptr::addr_of_mut!((*server.as_mut_ptr()).idle_inhibit_manager));
             std::ptr::write(std::ptr::addr_of_mut!((*server.as_mut_ptr()).wm.seats), crate::seat::Seats::new());
             std::ptr::write(&mut (*server.as_mut_ptr()).inspector, crate::inspector::Inspector::new());

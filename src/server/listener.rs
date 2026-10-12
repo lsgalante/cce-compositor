@@ -248,13 +248,10 @@ impl Drop for Listener {
 /// that lives in the one `Server` (whose constructor, `Server::zeroed`, is
 /// unsafe for this reason); an owner a store hands out as `&mut` keys its
 /// listeners instead (`connect_keyed`, `listener_id!`). Its `Listener`
-/// fields are private, for `connect`'s sake. A linked `wl_list` head or
-/// link needs the same of whatever holds it, and is private too (other
-/// modules use raw-pointer accessors: `*_head()`, `from_link`). In a
-/// movable owner a head is boxed (`Seat::keyboard_groups`,
-/// `InputRelay::input_popups`), which survives a move but not a free: a
-/// relay unlinks its popups when it drops, and a seat leaves the store
-/// only through the unsafe `Seats::take`.
+/// fields are private, for `connect`'s sake. The compositor's own
+/// collections of objects are `Registry`s, which a move cannot corrupt;
+/// none of its structs holds a linked `wl_list` (wlroots' lists are only
+/// walked).
 pub unsafe trait Anchored {}
 
 /// A store id a keyed listener records (`connect_keyed`, `listener_id!`).

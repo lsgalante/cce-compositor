@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! [`Registry`]: the objects of one kind that are alive, for an owner to
-//! walk — input devices, protocol resources, keyboard groups, inhibitors.
+//! walk — input devices, protocol resources, keyboard groups and their
+//! keyboards, input popups, xkb and libinput devices, inhibitors. Every
+//! collection the compositor itself owns is one (since 2026-10-12).
 //!
 //! It replaced intrusive `wl_list`s threaded through a `link` field in each
 //! object and walked with `container_of!`. An object still allocates and

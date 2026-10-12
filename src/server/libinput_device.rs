@@ -3,29 +3,19 @@
 
 use crate::ffi;
 use crate::input_device::InputDevice;
-use crate::server::WlList;
 
 pub struct LibinputDevice {
     pub parent_device: *mut InputDevice,
     pub libinput: *mut ffi::libinput_device,
-    objects: ffi::wl_list, // list of LibinputDeviceObject
-    link: ffi::wl_list,    // link inside LibinputConfig::devices
-}
-
-impl LibinputDevice {
-    /// The `LibinputDevice` whose `link` (in LibinputConfig::devices) is `link`.
-    ///
-    /// # Safety
-    /// `link` is that field of a live `LibinputDevice`.
-    pub(crate) unsafe fn from_link<L>(link: *mut L) -> *mut Self {
-        crate::container_of!(link, Self, link)
-    }
+    /// Its protocol objects (one per bound client). Private: walks trust
+    /// that a registered object is live; `deinit` lets go of them all.
+    objects: crate::registry::Registry<LibinputDeviceObject>,
 }
 
 pub struct LibinputDeviceObject {
+    /// Null once the device is gone (`deinit`): the object is inert.
     pub device: *mut LibinputDevice,
     pub resource: *mut ffi::wl_resource,
-    link: ffi::wl_list,
 }
 
 impl LibinputDevice {
@@ -35,23 +25,15 @@ impl LibinputDevice {
         let mut dev = Box::new(Self {
             parent_device,
             libinput: handle,
-            objects: std::mem::zeroed(),
-            link: std::mem::zeroed(),
+            objects: crate::registry::Registry::new(),
         });
 
-        ffi::wl_list_init(&mut dev.objects);
-        ffi::wl_list_init(&mut dev.link);
+        // The box's contents stay put while the box moves; `deinit`
+        // unregisters it before the box is dropped.
+        (*server).libinput_config.register_device(&mut *dev);
 
-        let devices_head = (*server).libinput_config.devices_head() as *mut WlList;
-        crate::server::wl_list_insert((*devices_head).prev, &mut dev.link as *mut ffi::wl_list as *mut WlList);
-
-        let config_objects = (*server).libinput_config.objects_head() as *mut WlList;
-        let mut curr = (*config_objects).next;
-        while curr != config_objects {
-            let next = (*curr).next;
-            let config_obj = crate::libinput_config::LibinputConfigObject::from_link(curr);
+        for config_obj in (*server).libinput_config.objects() {
             dev.create_object((*config_obj).resource);
-            curr = next;
         }
 
         dev
@@ -195,27 +177,20 @@ impl LibinputDevice {
     }
 
     pub unsafe fn deinit(&mut self) {
-        let objects_head = &mut self.objects as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*objects_head).next;
-        while curr != objects_head {
-            let next = (*curr).next;
-            let obj = crate::container_of!(curr, LibinputDeviceObject, link);
-
-            crate::server::wl_list_remove(curr);
+        for obj in self.objects.ptrs() {
+            self.objects.remove(obj);
             ffi::wl_resource_post_event((*obj).resource, ffi::RIVER_LIBINPUT_DEVICE_V1_REMOVED);
 
             // Mark the object as inert by setting device to NULL, but do NOT set the resource's
             // implementation to NULL or free the `obj` memory here. Let handle_device_object_destroy
             // do the cleanup when the resource is eventually destroyed by the client/server.
             (*obj).device = std::ptr::null_mut();
-
-            // Re-initialize the link so it doesn't point to the freed self.objects list.
-            ffi::wl_list_init(&mut (*obj).link);
-
-            curr = next;
         }
 
-        crate::server::wl_list_remove(&mut self.link as *mut ffi::wl_list as *mut WlList);
+        let server = crate::shared::server_ptr();
+        if !server.is_null() {
+            (*server).libinput_config.unregister_device(self);
+        }
     }
 
     pub unsafe fn create_object(&mut self, config_v1_resource: *mut ffi::wl_resource) {
@@ -237,7 +212,6 @@ impl LibinputDevice {
         let obj = Box::into_raw(Box::new(LibinputDeviceObject {
             device: self,
             resource,
-            link: std::mem::zeroed(),
         }));
 
         ffi::wl_resource_set_implementation(
@@ -247,23 +221,18 @@ impl LibinputDevice {
             Some(handle_device_object_destroy),
         );
 
-        let objects_head = &mut self.objects as *mut ffi::wl_list as *mut WlList;
-        let link_ptr = &mut (*obj).link as *mut ffi::wl_list as *mut WlList;
-        crate::server::wl_list_insert(objects_head, link_ptr);
+        // At the front, as the list's head insert did; unregistered by its
+        // destroy handler or by `deinit`.
+        self.objects.push_front(obj);
 
         // Send libinput_device event
         ffi::wl_resource_post_event(config_v1_resource, ffi::RIVER_LIBINPUT_CONFIG_V1_LIBINPUT_DEVICE, resource);
 
         // Send corresponding river input device
-        let input_dev_objects = (*self.parent_device).objects_head() as *mut WlList;
-        let mut curr = (*input_dev_objects).next;
-        while curr != input_dev_objects {
-            let next = (*curr).next;
-            let input_dev_obj = crate::input_device::InputDeviceObject::from_link(curr);
+        for input_dev_obj in (*self.parent_device).objects() {
             if ffi::wl_resource_get_client((*input_dev_obj).resource) == client {
                 ffi::wl_resource_post_event(resource, ffi::RIVER_LIBINPUT_DEVICE_V1_INPUT_DEVICE, (*input_dev_obj).resource);
             }
-            curr = next;
         }
 
         // SendEvents support and defaults
@@ -426,7 +395,7 @@ unsafe extern "C" fn handle_device_object_destroy(resource: *mut ffi::wl_resourc
     let obj = ffi::wl_resource_get_user_data(resource) as *mut LibinputDeviceObject;
     if !obj.is_null() {
         if !(*obj).device.is_null() {
-            crate::server::wl_list_remove(&mut (*obj).link as *mut ffi::wl_list as *mut WlList);
+            (*(*obj).device).objects.remove(obj);
         }
         let _ = Box::from_raw(obj);
     }
@@ -490,16 +459,11 @@ unsafe fn make_result(
 }
 
 unsafe fn broadcast_update(dev: *mut LibinputDevice, opcode: u32, arg: u32) {
-    let objects_head = &mut (*dev).objects as *mut ffi::wl_list as *mut WlList;
-    let mut curr = (*objects_head).next;
-    while curr != objects_head {
-        let next = (*curr).next;
-        let obj = crate::container_of!(curr, LibinputDeviceObject, link);
+    for obj in (*dev).objects.ptrs() {
         ffi::wl_resource_post_event((*obj).resource, opcode, arg);
         if ffi::wl_resource_get_version((*obj).resource) >= 2 {
             ffi::wl_resource_post_event((*obj).resource, ffi::RIVER_LIBINPUT_DEVICE_V1_DONE);
         }
-        curr = next;
     }
 }
 
@@ -667,16 +631,11 @@ unsafe extern "C" fn device_set_calibration_matrix(
             data: current.as_mut_ptr() as *mut _,
         };
 
-        let objects_head = &mut (*dev).objects as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*objects_head).next;
-        while curr != objects_head {
-            let next = (*curr).next;
-            let dest_obj = crate::container_of!(curr, LibinputDeviceObject, link);
+        for dest_obj in (*dev).objects.ptrs() {
             ffi::wl_resource_post_event((*dest_obj).resource, ffi::RIVER_LIBINPUT_DEVICE_V1_CALIBRATION_MATRIX_CURRENT, &mut arr as *mut _);
             if ffi::wl_resource_get_version((*dest_obj).resource) >= 2 {
                 ffi::wl_resource_post_event((*dest_obj).resource, ffi::RIVER_LIBINPUT_DEVICE_V1_DONE);
             }
-            curr = next;
         }
     }
 }
@@ -735,16 +694,11 @@ unsafe extern "C" fn device_set_accel_speed(
             data: &current as *const f64 as *mut _,
         };
 
-        let objects_head = &mut (*dev).objects as *mut ffi::wl_list as *mut WlList;
-        let mut curr = (*objects_head).next;
-        while curr != objects_head {
-            let next = (*curr).next;
-            let dest_obj = crate::container_of!(curr, LibinputDeviceObject, link);
+        for dest_obj in (*dev).objects.ptrs() {
             ffi::wl_resource_post_event((*dest_obj).resource, ffi::RIVER_LIBINPUT_DEVICE_V1_ACCEL_SPEED_CURRENT, &mut arr as *mut _);
             if ffi::wl_resource_get_version((*dest_obj).resource) >= 2 {
                 ffi::wl_resource_post_event((*dest_obj).resource, ffi::RIVER_LIBINPUT_DEVICE_V1_DONE);
             }
-            curr = next;
         }
     }
 }

@@ -33,23 +33,7 @@ pub struct Keyboard {
     keymap_listener: crate::listener::Listener,
     pub pressed: HashSet<u32>,
     pub group: *mut KeyboardGroup,
-    group_link: ffi::wl_list,
     pub config: KeyboardConfig,
-}
-
-impl Keyboard {
-    /// Its `group_link` (in `KeyboardGroup::keyboards`), for list code in other modules.
-    pub(crate) fn group_link_ptr(&mut self) -> *mut ffi::wl_list {
-        &mut self.group_link
-    }
-
-    /// The `Keyboard` whose `group_link` (in `KeyboardGroup::keyboards`) is `link`.
-    ///
-    /// # Safety
-    /// `link` is that field of a live `Keyboard`.
-    pub(crate) unsafe fn from_group_link<L>(link: *mut L) -> *mut Self {
-        crate::container_of!(link, Self, group_link)
-    }
 }
 
 // SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
@@ -89,7 +73,6 @@ impl Keyboard {
             keymap_listener: std::mem::zeroed(),
             pressed: HashSet::new(),
             group: std::ptr::null_mut(),
-            group_link: std::mem::zeroed(),
             config: KeyboardConfig {
                 keymap,
                 repeat_rate,
@@ -97,7 +80,6 @@ impl Keyboard {
             },
         }));
 
-        ffi::wl_list_init(&mut (*keyboard).group_link);
         ffi::river_wlr_keyboard_set_data(wlr_keyboard, keyboard as *mut _);
 
 
@@ -138,6 +120,9 @@ impl Keyboard {
         // seat to hand the active keyboard over on.
         if !(*keyboard).group.is_null() {
             let keys: Vec<u32> = (*keyboard).pressed.iter().cloned().collect();
+            // Out of the group first: a group other keyboards keep alive
+            // would otherwise walk this one, freed, on its next LED update.
+            (*(*keyboard).group).unregister_keyboard(keyboard);
             (*(*keyboard).group).unref(std::ptr::null_mut(), &keys);
             (*keyboard).group = std::ptr::null_mut();
         }
@@ -158,34 +143,26 @@ impl Keyboard {
         }
 
         if !(*self.device).virtual_device {
-            let seat_groups_head = (*seat).keyboard_groups_head() as *mut crate::server::WlList;
-            let mut curr = (*seat_groups_head).next;
-            while curr != seat_groups_head {
-                let next = (*curr).next;
-                let group = KeyboardGroup::from_link(curr);
+            for group in (*seat).keyboard_groups() {
                 // A virtual keyboard's group is private to it (its keymap can
                 // change under it, and its IME grab is disabled) — hardware
                 // keyboards must never join one.
                 if (*group).virtual_device {
-                    curr = next;
                     continue;
                 }
                 let config_ptr = &mut self.config as *mut KeyboardConfig;
                 if (*group).match_config(config_ptr) {
                     self.group = (*group).ref_group();
-                    let keyboards_head = (*self.group).keyboards_head() as *mut crate::server::WlList;
-                    crate::server::wl_list_insert(keyboards_head, &mut self.group_link as *mut ffi::wl_list as *mut crate::server::WlList);
+                    (*self.group).register_keyboard(self);
                     return;
                 }
-                curr = next;
             }
         }
 
         match KeyboardGroup::create(seat, self.config, (*self.device).virtual_device) {
             Ok(group_ptr) => {
                 self.group = group_ptr;
-                let keyboards_head = (*self.group).keyboards_head() as *mut crate::server::WlList;
-                crate::server::wl_list_insert(keyboards_head, &mut self.group_link as *mut ffi::wl_list as *mut crate::server::WlList);
+                (*self.group).register_keyboard(self);
             }
             Err(err) => {
                 log::error!("failed to create KeyboardGroup: {}", err);
@@ -199,7 +176,7 @@ impl Keyboard {
         self.config.repeat_delay = delay;
         if !self.group.is_null() {
             let keys: Vec<u32> = self.pressed.iter().cloned().collect();
-            crate::server::wl_list_remove(&mut self.group_link as *mut ffi::wl_list as *mut crate::server::WlList);
+            (*self.group).unregister_keyboard(self);
             (*self.group).unref(seat, &keys);
             self.group = std::ptr::null_mut();
         }
@@ -220,7 +197,7 @@ impl Keyboard {
         }
         if !self.group.is_null() {
             let keys: Vec<u32> = self.pressed.iter().cloned().collect();
-            crate::server::wl_list_remove(&mut self.group_link as *mut ffi::wl_list as *mut crate::server::WlList);
+            (*self.group).unregister_keyboard(self);
             (*self.group).unref(seat, &keys);
             self.group = std::ptr::null_mut();
         }

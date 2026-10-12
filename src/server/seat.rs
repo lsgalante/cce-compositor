@@ -4,7 +4,7 @@ use crate::cursor::Cursor;
 
 #[path = "seat/store.rs"]
 mod store;
-pub use store::{place_holding, Seats};
+pub use store::{live_places, place_holding, Seats};
 
 /// Names a seat in [`Seats`]: an index into its slots, which are never
 /// reused.
@@ -161,11 +161,9 @@ pub struct Seat {
     pub touch_injected: bool,
     pub relay: crate::input_relay::InputRelay,
     pub layer_shell: crate::layer_shell::LayerShellSeat,
-    /// The keyboard groups on this seat (`KeyboardGroup::link`). Private,
-    /// and `Seat` can only be built by `create`, which initialises it, so
-    /// every `Seat` holds a valid list head (`keyboard_groups_head`). Boxed,
-    /// so the head keeps its address if the `Seat` value is moved.
-    keyboard_groups: Box<ffi::wl_list>,
+    /// The keyboard groups on this seat. Private: walks trust that a
+    /// registered group is live (its last `unref` unregisters it).
+    keyboard_groups: crate::registry::Registry<crate::keyboard_group::KeyboardGroup>,
     /// A device-less keyboard group, created on demand by
     /// [`Seat::ensure_synthetic_keyboard`] when the backend supplies no
     /// keyboard at all. Null on any seat that has a real one.
@@ -248,7 +246,7 @@ impl Seat {
             touch_injected: false,
             relay: crate::input_relay::InputRelay::new(),
             layer_shell: crate::layer_shell::LayerShellSeat::default(),
-            keyboard_groups: Box::new(std::mem::zeroed()),
+            keyboard_groups: crate::registry::Registry::new(),
             synthetic_keyboard: std::ptr::null_mut(),
             modifiers_old: 0,
             op: None,
@@ -272,8 +270,6 @@ impl Seat {
             focus_requested: false,
         }));
         let seat = seats.ptr(id).ok_or("seat gone at creation")?;
-
-        ffi::wl_list_init(&mut *(*seat).keyboard_groups);
 
         // No user data on the `wlr_seat`: a callback handed one finds its
         // seat as the one that holds it (`Seats::find`), which a safe swap
@@ -321,9 +317,9 @@ impl Seat {
             (*group).unref(seat, &[]);
         }
 
-        // Verify keyboard_groups is empty
-        let groups_head = &mut *(*seat).keyboard_groups as *mut ffi::wl_list as *mut crate::server::WlList;
-        assert_eq!((*groups_head).next, groups_head);
+        // Every keyboard group is gone: devices left at the request
+        // (`InputManager::release_seat`) or deinit, the synthetic one above.
+        assert!((*seat).keyboard_groups.is_empty());
 
         crate::shared::sent().seats.remove((*seat).id);
 
@@ -343,8 +339,6 @@ impl Seat {
         // of the one the cursor holds first, so it never names a freed one.
         (*seat).cursor.set_constraint(std::ptr::null_mut());
         ffi::wlr_seat_destroy((*seat).wlr_seat().take());
-        // SAFETY: torn down above: the keyboard groups are gone (asserted).
-        // The relay unlinks any popup still in its head when it drops.
         drop(wm.seats.take(sid));
     }
 
@@ -444,7 +438,7 @@ impl Seat {
             if !keyboard.is_null() {
                 if !(*keyboard).group.is_null() {
                     let keys: Vec<u32> = (*keyboard).pressed.iter().cloned().collect();
-                    crate::server::wl_list_remove((*keyboard).group_link_ptr() as *mut crate::server::WlList);
+                    (*(*keyboard).group).unregister_keyboard(keyboard);
                     let seat: *mut Seat = seat_mut!(wm, sid, ());
                     (*(*keyboard).group).unref(seat, &keys);
                     (*keyboard).group = std::ptr::null_mut();
@@ -678,6 +672,24 @@ impl Seat {
         }
     }
 
+    /// Its keyboard groups, oldest first, copied out (a walk may free one).
+    pub fn keyboard_groups(&self) -> Vec<*mut crate::keyboard_group::KeyboardGroup> {
+        self.keyboard_groups.ptrs()
+    }
+
+    /// Register a new keyboard group of this seat.
+    ///
+    /// # Safety
+    /// As `Registry::push`: `group` is live until `unregister_keyboard_group`,
+    /// which its last `KeyboardGroup::unref` runs before freeing it.
+    pub unsafe fn register_keyboard_group(&mut self, group: *mut crate::keyboard_group::KeyboardGroup) {
+        self.keyboard_groups.push(group);
+    }
+
+    pub fn unregister_keyboard_group(&mut self, group: *mut crate::keyboard_group::KeyboardGroup) {
+        self.keyboard_groups.remove(group);
+    }
+
     /// Give this seat a keyboard if the backend never supplied one, so that
     /// synthetic keys have somewhere to land. Returns false only when no
     /// keymap is configured, leaving nothing worth attaching.
@@ -694,12 +706,6 @@ impl Seat {
     ///
     /// A real keyboard always wins — this is a no-op the moment the seat has
     /// one, so a normal session never reaches the creation path.
-    /// The keyboard-group list head: valid for as long as the seat lives
-    /// (initialised by `create`), for `KeyboardGroup` to link into.
-    pub fn keyboard_groups_head(&mut self) -> *mut ffi::wl_list {
-        &mut *self.keyboard_groups
-    }
-
     pub fn ensure_synthetic_keyboard(&mut self) -> bool {
         // An unset seat field (a seat being destroyed) has nowhere to put one.
         if self.wlr_seat().is_null() {
@@ -725,9 +731,8 @@ impl Seat {
             repeat_rate: crate::keyboard::DEFAULT_REPEAT_RATE,
             repeat_delay: crate::keyboard::DEFAULT_REPEAT_DELAY,
         };
-        // SAFETY: `self` came from `Seat::create` (the only way to build
-        // one), so its keyboard-group list is initialised, as
-        // `KeyboardGroup::create` needs; the keymap is the live default one.
+        // SAFETY: `self` is a live seat, as `KeyboardGroup::create` needs;
+        // the keymap is the live default one.
         match unsafe { crate::keyboard_group::KeyboardGroup::create(self, config, true) } {
             Ok(group) => {
                 self.synthetic_keyboard = group;
