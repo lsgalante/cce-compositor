@@ -8,10 +8,12 @@
 //! themselves (`Box::from_raw(self)`) from inside their own manage pass.
 //!
 //! Each output sits in its own heap allocation, which never moves while the
-//! output lives: its listeners and its `wlr_output`'s `data` hold its
-//! address. The store keeps those allocations as raw pointers, not `Box`es,
-//! for the same reason the window store does: a `Box` asserts unique access
-//! that the addresses wlroots hands back would violate.
+//! output lives. The store keeps those allocations as raw pointers, not
+//! `Box`es, for the same reason the window store does. Nothing outside names
+//! an output by that address: its listeners are keyed by id, and a wlroots
+//! callback handed a `wlr_output` finds the output that holds it
+//! ([`Outputs::find`]; the `wlr_output`'s own `data` is unused), which a
+//! safe swap of two outputs' contents cannot misdirect.
 //!
 //! Iteration is in CREATION order, as the list's was: several walks take
 //! the first enabled output, and a slot map alone would put a hot-plugged

@@ -575,8 +575,10 @@ created as globals but never wired in the Rust port, so clients (games,
 - While a constraint is active, `passthrough` skips the border band
   (resize/move handles inside the window edge): a confined pointer pressed
   against the edge must stay the client's.
-- The node-destroy and destroy handlers reach the seat through wlroots'
-  pointer, not the store (a scene node dies inside window-manager calls).
+- The node-destroy and destroy handlers reach the seat with
+  `seat::place_holding` (the live seat holding the constraint's
+  `wlr_seat`), not the store: a scene node dies inside window-manager
+  calls, and a oneshot constraint inside `with_held`.
 - Test: scratchpad-style `verify/clients` `pointer-lock --mode lock|confine`
   prints locked/unlocked/confined/unconfined, motion, leave and running
   relative sums.
@@ -618,16 +620,32 @@ The listener half of the second review's KNOWN GAP (listener-bearing
 structs movable by a safe `mem::swap`) is closed since 2026-10-12 for safe
 code OUTSIDE an owner's module: see "Listeners are
 `crate::listener::Listener`". Inside it, moving a `Listener` or list field
-is still possible and still unsound — the rule there is "never". KNOWN GAP
-still open: wlroots user data that names a movable owner by ADDRESS — `wlr_seat.data` (read by
-`Seat::id_of` and the pointer constraint's destroy / node-destroy
-teardown) and `wlr_output.data` (the output configuration apply, the power
-manager, layer-surface arrange, `LockSurface::get_output`). After a safe
-swap of two seats or outputs those read the other one, or freed memory once
-its slot is freed. The fix is to store the id there; the constraint
-teardown deliberately avoids the window manager (it runs inside its calls),
-so it needs a store lookup that touches no window-manager memory first. Do
-not add SAFETY claims that need "and the seat/output never moved".
+is still possible and still unsound — the rule there is "never".
+
+The other half — wlroots user data naming a movable owner by ADDRESS
+(`wlr_seat.data`, `wlr_output.data`), which after a safe swap of two seats
+or outputs named the other one, or freed memory once its slot was freed —
+is closed since 2026-10-12 by storing NOTHING there. A callback handed a
+`wlr_seat` or `wlr_output` finds the seat or output that HOLDS it:
+`wm.seats.find(wlr_seat)`, `wm.outputs.find(wlr_output)`. The hold is a
+private `Wlr` field that moves with its owner, so a swap cannot misdirect
+the search, and an owner tearing down has already let go of it (`None`).
+Code that cannot read window-manager memory (the pointer constraint's
+destroy / node-destroy teardown, inside `with_held` and `wlr_seat_destroy`)
+uses `seat::place_holding`, a scan of a per-thread registry of live seat
+places kept by `Seats::insert` / `take`. Do not put an owner's address (or
+an id that needs the store to mean anything) back into a movable owner's
+wlroots user data, and do not add SAFETY claims that need "and the
+seat/output never moved".
+
+wlroots does not follow a layer surface's output: the output's destroy
+handler forgets it on every layer surface on it (`layer_shell::output_gone`,
+`Wlr::forget_output`; readers treat a null output as none) and queues them
+for the deferred close. Before 2026-10-12 a surface left on an unplugged
+output read the freed `wlr_output` on its next commit or unmap: the unmap's
+arrange segfaulted the compositor in a shadow with poisoned frees.
+`ccectl debug-output add WxH | remove NAME` plugs and unplugs headless
+outputs (refused for any other kind), so a shadow can exercise this.
 
 Only calls whose other arguments are values (or another `Wlr`) are wrapped:
 a call that also passes a raw surface, device or keyboard pointer stays an
@@ -872,12 +890,12 @@ A `KeyboardGroup` (its own allocation, on the seat's `keyboard_groups`
 is handed the seat by its caller (`Seat::destroy` passes the seat it is
 tearing down, still in the store; `Keyboard::destroy` passes null,
 the device having been detached first). A wlroots callback handed a
-`wlr_seat` turns it into an id with `Seat::id_of(wlr_seat)` and borrows the
-seat from `wm.seats` (text inputs, the new-input-method handler, the xdg
-move/resize requests, cursor-shape requests, virtual keyboards and the
-tablet tool do); it does not keep the `river_wlr_seat_get_data` pointer.
-The only raw lookups left are `Seat::id_of` itself and the pointer
-constraint's destroy / node-destroy teardown. An `InputDevice` holds its seat
+`wlr_seat` turns it into an id with `wm.seats.find(wlr_seat)` (the seat
+that holds it) and borrows the seat from `wm.seats` (text inputs, the
+new-input-method handler, the xdg move/resize requests, cursor-shape
+requests, virtual keyboards and pointer constraints do). The one lookup
+outside the store is `seat::place_holding`, for the pointer constraint's
+destroy / node-destroy teardown. An `InputDevice` holds its seat
 as `sid: Option<SeatId>` (set by `Seat::attach_device`, cleared on
 detach); `Keyboard::set_group(seat)` takes the seat pointer from its caller
 (`attach_device` passes itself; the repeat-info / keymap paths look it up
