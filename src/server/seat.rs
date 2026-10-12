@@ -397,7 +397,6 @@ impl Seat {
     }
 
     pub unsafe fn focus(wm: &mut crate::window_manager::WindowManager, sid: SeatId, new_focus: Focus) {
-        let Some(ptr) = wm.seats.ptr(sid) else { return };
         // A window that has closed is nothing to focus.
         let wid = match new_focus {
             Focus::Window(id) => wm.windows.get(id).map(|_| id),
@@ -683,7 +682,7 @@ impl Seat {
             }
         }
         let target_surface = new_focus.surface(wm);
-        (*ptr).relay.focus(wm, target_surface);
+        crate::input_relay::InputRelay::focus(wm, sid, target_surface);
     }
 
     /// Give this seat a keyboard if the backend never supplied one, so that
@@ -789,14 +788,13 @@ impl Seat {
     }
 
     pub unsafe fn keyboard_enter_or_leave(wm: &mut crate::window_manager::WindowManager, sid: SeatId, target_surface: *mut ffi::wlr_surface) {
-        let Some(ptr) = wm.seats.ptr(sid) else { return };
         let this = seat_mut!(wm, sid, ());
         if !target_surface.is_null() {
             this.keyboard_notify_enter(target_surface);
         } else {
             this.wlr_seat.keyboard_notify_clear_focus();
         }
-        (*ptr).relay.focus(wm, target_surface);
+        crate::input_relay::InputRelay::focus(wm, sid, target_surface);
     }
 
     /// Returns true when the seat is to be destroyed (a client asked for

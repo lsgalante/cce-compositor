@@ -685,8 +685,11 @@ the wlroots entry points read only it from the listener
 (`(*container_of!(..)).sid`). Lookups that only need the pointer position
 take it as arguments (`view_drag_target`, `hscroll_shift_target`), and
 `ccectl`'s `for_each_cursor` / `for_each_seat_touch` hand closures a
-`SeatId`. Still on the seat pointer: the input-method relay's `focus`
-(called from `Seat::focus` and `keyboard_enter_or_leave`).
+`SeatId`. The input-method relay is the same: `InputRelay::focus`,
+`disable_text_input`, `send_input_method_state` and `new_input_method`
+take `(wm, sid)`. Its popups are repositioned from a copied list
+(`InputRelay::popups`) with no relay borrow live, because
+`InputPopup::update` reads the relay back through its own pointer.
 
 **The render list is a `Vec<WindowId>`** (`wm.rendering_requested.list`,
 bottom of the stack first; since 2026-10-11). It was an intrusive `wl_list`

@@ -50,56 +50,78 @@ impl InputRelay {
         ffi::wl_list_init(&mut self.input_popups);
     }
 
-    pub unsafe fn new_input_method(&mut self, wm: &crate::window_manager::WindowManager, input_method: *mut ffi::wlr_input_method_v2) {
-        let seat = crate::container_of!(self, Seat, relay);
-        let seat_name = (*seat).wlr_seat.name();
-        log::debug!("new input method on seat {}", seat_name);
+    /// The input-method popups, oldest first, copied out: `InputPopup::update`
+    /// reads the relay back through its own pointer, so it runs with no
+    /// borrow of the relay live.
+    fn popups(&self) -> Vec<*mut crate::input_popup::InputPopup> {
+        let mut out = Vec::new();
+        let head = &self.input_popups as *const ffi::wl_list as *mut ffi::wl_list;
+        // SAFETY: `init` initialised the head in place, and every link on
+        // it is a live popup's (a popup unlinks itself on destroy).
+        unsafe {
+            let mut pos = (*head).next;
+            while pos != head {
+                out.push(crate::container_of!(pos, crate::input_popup::InputPopup, link));
+                pos = (*pos).next;
+            }
+        }
+        out
+    }
 
-        if !self.input_method.is_null() {
+    /// Reposition every input-method popup (the field or the window moved).
+    unsafe fn update_popups(wm: &crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
+        let Some(seat) = wm.seats.get(sid) else { return };
+        for popup in seat.relay.popups() {
+            (*popup).update(wm);
+        }
+    }
+
+    pub unsafe fn new_input_method(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, input_method: *mut ffi::wlr_input_method_v2) {
+        let seat = seat_mut!(wm, sid);
+        let seat_name = seat.wlr_seat.name();
+        log::debug!("new input method on seat {}", seat_name);
+        let this = &mut seat.relay;
+
+        if !this.input_method.is_null() {
             log::info!("seat {} already has an input method", seat_name);
             ffi::wlr_input_method_v2_send_unavailable(input_method);
             return;
         }
 
-        self.input_method = input_method;
+        this.input_method = input_method;
 
-        self.input_method_commit.connect(&mut (*input_method).events.commit, handle_input_method_commit);
-        self.grab_keyboard.connect(&mut (*input_method).events.grab_keyboard, handle_input_method_grab_keyboard);
-        self.input_method_destroy.connect(&mut (*input_method).events.destroy, handle_input_method_destroy);
-        self.input_method_new_popup.connect(&mut (*input_method).events.new_popup_surface, handle_input_method_new_popup);
+        this.input_method_commit.connect(&mut (*input_method).events.commit, handle_input_method_commit);
+        this.grab_keyboard.connect(&mut (*input_method).events.grab_keyboard, handle_input_method_grab_keyboard);
+        this.input_method_destroy.connect(&mut (*input_method).events.destroy, handle_input_method_destroy);
+        this.input_method_new_popup.connect(&mut (*input_method).events.new_popup_surface, handle_input_method_new_popup);
 
         // Text inputs are entered whether or not an input method exists
         // (`focus`), so one that arrives late only needs telling about the
         // field already enabled.
-        if !self.text_input.is_null() {
+        if !this.text_input.is_null() {
             ffi::wlr_input_method_v2_send_activate(input_method);
-            self.send_input_method_state(wm);
+            InputRelay::send_input_method_state(wm, sid);
         }
     }
 
-    pub unsafe fn disable_text_input(&mut self, wm: &mut crate::window_manager::WindowManager) {
-        assert!(!self.text_input.is_null());
-        self.text_input = std::ptr::null_mut();
-        self.osk.field_gone();
+    pub unsafe fn disable_text_input(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
+        let this = &mut seat_mut!(wm, sid).relay;
+        assert!(!this.text_input.is_null());
+        this.text_input = std::ptr::null_mut();
+        this.osk.field_gone();
 
-        if !self.input_method.is_null() {
-            let mut pos = self.input_popups.next;
-            let head_ptr = &self.input_popups as *const ffi::wl_list;
-            while pos != head_ptr as *mut ffi::wl_list {
-                let next_pos = (*pos).next;
-                let popup = crate::container_of!(pos, crate::input_popup::InputPopup, link);
-                (*popup).update(wm);
-                pos = next_pos;
-            }
-
-            ffi::wlr_input_method_v2_send_deactivate(self.input_method);
-            ffi::wlr_input_method_v2_send_done(self.input_method);
+        let input_method = this.input_method;
+        if !input_method.is_null() {
+            InputRelay::update_popups(wm, sid);
+            ffi::wlr_input_method_v2_send_deactivate(input_method);
+            ffi::wlr_input_method_v2_send_done(input_method);
         }
     }
 
-    pub unsafe fn send_input_method_state(&mut self, wm: &crate::window_manager::WindowManager) {
-        let input_method = self.input_method;
-        let wlr_text_input = (*self.text_input).wlr_text_input;
+    pub unsafe fn send_input_method_state(wm: &crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
+        let Some(seat) = wm.seats.get(sid) else { return };
+        let input_method = seat.relay.input_method;
+        let wlr_text_input = (*seat.relay.text_input).wlr_text_input;
 
         let active_features = (*wlr_text_input).active_features;
         let feature_surrounding = ffi::wlr_text_input_v3_features_WLR_TEXT_INPUT_V3_FEATURE_SURROUNDING_TEXT;
@@ -127,14 +149,7 @@ impl InputRelay {
             );
         }
 
-        let mut pos = self.input_popups.next;
-        let head_ptr = &self.input_popups as *const ffi::wl_list;
-        while pos != head_ptr as *mut ffi::wl_list {
-            let next_pos = (*pos).next;
-            let popup = crate::container_of!(pos, crate::input_popup::InputPopup, link);
-            (*popup).update(wm);
-            pos = next_pos;
-        }
+        InputRelay::update_popups(wm, sid);
 
         ffi::wlr_input_method_v2_send_done(input_method);
     }
@@ -144,10 +159,11 @@ impl InputRelay {
     /// entered — whether or not an input method is running. river entered
     /// them only with one, but then no client ever enabled a field, and the
     /// on-screen keyboard (`osk.rs`) is driven by exactly that enable.
-    pub unsafe fn focus(&mut self, wm: &mut crate::window_manager::WindowManager, new_focus: *mut ffi::wlr_surface) {
+    pub unsafe fn focus(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, new_focus: *mut ffi::wlr_surface) {
+        let this = &mut seat_mut!(wm, sid).relay;
         // Send leave events. A text input already on the new surface keeps
         // it: a refocus of the same surface is not a leave.
-        for text_input in self.text_inputs.ptrs() {
+        for text_input in this.text_inputs.ptrs() {
             let focused = (*(*text_input).wlr_text_input).focused_surface;
             if !focused.is_null() && focused != new_focus {
                 ffi::wlr_text_input_v3_send_leave((*text_input).wlr_text_input);
@@ -155,18 +171,19 @@ impl InputRelay {
         }
 
         // Clear the enabled text input unless its surface kept focus
-        if !self.text_input.is_null() {
-            let focused = (*(*self.text_input).wlr_text_input).focused_surface;
+        if !this.text_input.is_null() {
+            let focused = (*(*this.text_input).wlr_text_input).focused_surface;
             if focused.is_null() || focused != new_focus {
-                self.disable_text_input(wm);
+                InputRelay::disable_text_input(wm, sid);
             }
         }
 
         if new_focus.is_null() {
             return;
         }
+        let this = &mut seat_mut!(wm, sid).relay;
         let new_client = ffi::wl_resource_get_client(ffi::river_wlr_surface_get_resource(new_focus));
-        for text_input in self.text_inputs.ptrs() {
+        for text_input in this.text_inputs.ptrs() {
             let wlr_text_input = (*text_input).wlr_text_input;
             if (*wlr_text_input).focused_surface.is_null()
                 && ffi::wl_resource_get_client((*wlr_text_input).resource) == new_client

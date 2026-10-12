@@ -88,7 +88,7 @@ unsafe extern "C" fn handle_enable(listener: *mut ffi::wl_listener, _data: *mut 
     let input_method = (*seat).relay.input_method;
     if !input_method.is_null() {
         ffi::wlr_input_method_v2_send_activate(input_method);
-        (*seat).relay.send_input_method_state(wm);
+        crate::input_relay::InputRelay::send_input_method_state(wm, (*seat).id);
     }
 }
 
@@ -107,7 +107,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
     (*seat).relay.osk.field_active();
     if !(*seat).relay.input_method.is_null() {
-        (*seat).relay.send_input_method_state(wm);
+        crate::input_relay::InputRelay::send_input_method_state(wm, (*seat).id);
     }
 }
 
@@ -119,7 +119,7 @@ unsafe extern "C" fn handle_disable(listener: *mut ffi::wl_listener, _data: *mut
     }
 
     if (*seat).relay.text_input == text_input {
-        (*seat).relay.disable_text_input(&mut *crate::reentry::wm(crate::shared::server_ptr()));
+        crate::input_relay::InputRelay::disable_text_input(&mut *crate::reentry::wm(crate::shared::server_ptr()), (*seat).id);
     }
 }
 
@@ -131,7 +131,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     }
 
     if (*seat).relay.text_input == text_input {
-        (*seat).relay.disable_text_input(&mut *crate::reentry::wm(crate::shared::server_ptr()));
+        crate::input_relay::InputRelay::disable_text_input(&mut *crate::reentry::wm(crate::shared::server_ptr()), (*seat).id);
     }
 
     (*text_input).enable.disconnect();
