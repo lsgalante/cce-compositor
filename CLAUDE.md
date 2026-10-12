@@ -322,6 +322,22 @@ own `target/`, invisible to ccebuild), built on demand by the drivers:
   by the XEmbed bridge did exactly this and took the live session down. The
   compositor surviving a run is the assertion.
 
+- **`vptr`** — drives the pointer through `zwlr_virtual_pointer_v1`
+  (`move DX DY`, `abs X Y`, `press|release|click B`, `scroll DY`, `sleep MS`,
+  each step ending in a frame). The compositor attaches the device to the
+  seat's `wlr_cursor`, so its events arrive on the cursor's motion / button /
+  axis / frame LISTENERS (`handle_motion` and kin) — the path hardware takes,
+  and the one `ccectl pointer-*` skips: it calls the `on_*` functions
+  directly. Pair it with `input-probe` to see what the client received.
+- **`ime`** — an input method (`zwp_input_method_v2`): `--commit TEXT`
+  commits to the focused field on its first activation, `--popup` maps an
+  input popup, `--grab SECS` grabs the keyboard and releases it,
+  `--exit-after SECS`. With a GTK entry focused (`zenity --entry`, clicked
+  so GTK enables text-input-v3, `vkey hold` running for a keyboard) it
+  drives the whole relay (`input_relay.rs`) and `input_popup.rs`: it prints
+  `activate`, `committed hello`, `popup-rect …`, `grab-keymap`,
+  `grab-released`, and zenity prints the committed text on Return.
+
 `./verify/popup-constrain-test` drives `popup-nest` to prove submenus are
 fitted to the real screen (`xdg_popup.rs::handle_reposition`): a tall
 submenu low in the window slides up to fit, and one near the right edge
@@ -718,8 +734,8 @@ manager's devices, the idle inhibitors, a seat relay's text inputs. Still
 `wl_list`s: the keyboard groups, the xkb and libinput device and
 protocol-object lists, and the relay's input-method popups — every one of
 those runs only for real hardware, a client of the river input-config
-protocols (none in this workspace), or an input method, which no shadow
-test reaches. wlroots' own lists stay `wl_list`s: C owns them. A container
+protocols (none in this workspace), or an input method (since 2026-10-12
+the `ime` verify client is one, so the relay's popups can be tested). wlroots' own lists stay `wl_list`s: C owns them. A container
 that is zero-filled (`Server::default`, a `Default` returning
 `mem::zeroed()`) must WRITE each registry before the value is assumed
 initialised: a zeroed `Vec` is invalid.
