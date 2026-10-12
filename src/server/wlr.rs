@@ -275,6 +275,17 @@ impl Wlr<ffi::wlr_seat> {
         }
     }
 
+    /// A finger lands on `surface` at surface (`sx`, `sy`).
+    ///
+    /// # Safety
+    /// `surface` is a live wl_surface.
+    pub unsafe fn touch_notify_down(&self, surface: *mut ffi::wlr_surface, time_msec: u32, touch_id: i32, sx: f64, sy: f64) -> u32 {
+        match self.live() {
+            Some(s) => ffi::wlr_seat_touch_notify_down(s, surface, time_msec, touch_id, sx, sy),
+            None => 0,
+        }
+    }
+
     pub fn touch_notify_motion(&self, time_msec: u32, touch_id: i32, sx: f64, sy: f64) {
         if let Some(s) = self.live() {
             unsafe { ffi::wlr_seat_touch_notify_motion(s, time_msec, touch_id, sx, sy) }

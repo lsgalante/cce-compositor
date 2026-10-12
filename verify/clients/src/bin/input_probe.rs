@@ -7,6 +7,8 @@
 //   axis <h|v> <value> | axis-stop <h|v> | axis-source <n> | frame
 //   kbd-enter | kbd-leave | key <code> <pressed|released>
 //   mods <depressed> <latched> <locked> <group>
+//   touch-down <id> <sx> <sy> | touch-motion <id> <sx> <sy> | touch-up <id>
+//   | touch-cancel
 // Args: --app-id ID  --size WxH  --exit-unmapped SECS (ack the first
 // configure but never attach a buffer, then quit after SECS: a toplevel the
 // compositor manages but that never maps).
@@ -15,7 +17,7 @@ use std::io::Write;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use wayland_client::{
     delegate_noop,
-    protocol::{wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface},
+    protocol::{wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface, wl_touch},
     Connection, Dispatch, QueueHandle, WEnum,
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
@@ -27,6 +29,7 @@ struct State {
     wm_base: Option<xdg_wm_base::XdgWmBase>,
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    touch: Option<wl_touch::WlTouch>,
     needs_buffer: bool,
     closed: bool,
 }
@@ -122,6 +125,18 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
     }
 }
 
+impl Dispatch<wl_touch::WlTouch, ()> for State {
+    fn event(_: &mut Self, _: &wl_touch::WlTouch, event: wl_touch::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        match event {
+            wl_touch::Event::Down { id, x, y, .. } => say(&format!("touch-down {id} {x:.0} {y:.0}")),
+            wl_touch::Event::Motion { id, x, y, .. } => say(&format!("touch-motion {id} {x:.0} {y:.0}")),
+            wl_touch::Event::Up { id, .. } => say(&format!("touch-up {id}")),
+            wl_touch::Event::Cancel => say("touch-cancel"),
+            _ => {}
+        }
+    }
+}
+
 impl Dispatch<wl_seat::WlSeat, ()> for State {
     fn event(state: &mut Self, seat: &wl_seat::WlSeat, event: wl_seat::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
         if let wl_seat::Event::Capabilities { capabilities: WEnum::Value(caps) } = event {
@@ -130,6 +145,9 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
             }
             if caps.contains(wl_seat::Capability::Keyboard) && state.keyboard.is_none() {
                 state.keyboard = Some(seat.get_keyboard(qh, ()));
+            }
+            if caps.contains(wl_seat::Capability::Touch) && state.touch.is_none() {
+                state.touch = Some(seat.get_touch(qh, ()));
             }
         }
     }
