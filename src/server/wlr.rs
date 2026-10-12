@@ -601,6 +601,33 @@ impl Wlr<ffi::wlr_xwayland_surface> {
         })
     }
 
+    /// Map the associated surface if it already holds a buffer; a no-op
+    /// when it is mapped, has none, or is unassociated.
+    ///
+    /// wlroots maps an X11 surface on the first commit AFTER the XWM pairs
+    /// it with its X window (`xwayland_surface_handle_commit`). The Wayland
+    /// and X connections are separate, so Xwayland's first commit can land
+    /// before the pairing; a window that draws once and never commits again
+    /// (a static dialog, a Wine helper) then stays unmapped for good while
+    /// X reports it mapped — about one X11 window in ten created while
+    /// another was closing (2026-10-12). Called once the map listener is
+    /// connected, this does what that missed commit would have.
+    pub fn map_if_buffered(&self) {
+        let surface = self.surface();
+        if surface.is_null() {
+            return;
+        }
+        // SAFETY: a live surface's `surface` is null or the wl_surface it is
+        // associated with, which carries the Xwayland role that maps on a
+        // buffered commit.
+        unsafe {
+            if ffi::wlr_surface_has_buffer(surface) && !ffi::river_wlr_surface_is_mapped(surface) {
+                log::info!("xwayland surface {} held a buffer before it was paired; mapping it", self.window_id());
+                ffi::wlr_surface_map(surface);
+            }
+        }
+    }
+
     /// Forget the associated `wlr_surface`'s data pointer (nothing while
     /// unassociated).
     pub fn clear_surface_data(&self) {

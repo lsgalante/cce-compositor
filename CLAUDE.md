@@ -1044,6 +1044,16 @@ children, and re-enabling the output crashed in `draw_grid`'s
   legacy X11 tray icon, which X must have mapped for the icon to draw but
   which is shown in the status bar instead (`cce-status-interface`'s
   `cce-xembed-tray`).
+  **An X11 surface that already holds a buffer is mapped when it is paired**
+  (`Wlr::map_if_buffered`, from both `associate` handlers and the create
+  paths; since 2026-10-12). wlroots maps an Xwayland surface only on a
+  commit AFTER the XWM pairs it with its X window, and the Wayland and X
+  connections race: about one X11 window in ten created while another was
+  closing had committed its only buffer first, and a window that never
+  commits again (a static dialog, a Wine helper) stayed invisible for good
+  while X reported it mapped. The rescue logs `held a buffer before it was
+  paired`. `verify/clients` `x11-place --mode plain|shy`, spawned in a loop
+  with overlapping exits, reproduces it.
   An override-redirect window never takes the keyboard from ANOTHER client
   (`focus_if_desired`): it gets it only when the seat holds nothing or a
   window/popup of its own process. wlroots' `override_redirect_wants_focus`

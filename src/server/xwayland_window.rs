@@ -394,6 +394,9 @@ impl XwaylandWindow {
             handle_associate_impl(raw);
             if ffi::river_wlr_surface_is_mapped((*xsurface).surface) {
                 handle_map_impl(wm, raw);
+            } else {
+                // Through the listener just connected.
+                (*raw).xsurface().map_if_buffered();
             }
         }
 
@@ -694,6 +697,7 @@ unsafe fn handle_destroy_impl(wm: &mut crate::window_manager::WindowManager, xwi
 unsafe extern "C" fn handle_associate(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, associate);
     handle_associate_impl(xwindow);
+    (*xwindow).xsurface().map_if_buffered();
 }
 
 unsafe fn handle_associate_impl(xwindow: *mut XwaylandWindow) {
