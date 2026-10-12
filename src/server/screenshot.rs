@@ -306,7 +306,7 @@ pub unsafe fn capture_state_buffer(
 /// surface's buffer is the canvas, subsurfaces composite at their offsets.
 /// Works for windows outside the visible viewport (their last committed
 /// buffers persist), but needs the client to have committed at least once.
-pub unsafe fn capture_window(window: &crate::window::Window, path: PathBuf) -> Result<String, String> {
+pub fn capture_window(window: &crate::window::Window, path: PathBuf) -> Result<String, String> {
     let (canvas, bw, bh) = capture_window_rgba(window)?;
     let reply = path.display().to_string();
     spawn_encode(canvas, bw as u32, bh as u32, path);
@@ -316,11 +316,20 @@ pub unsafe fn capture_window(window: &crate::window::Window, path: PathBuf) -> R
 /// The readback+composite half of [`capture_window`], PNG-free: returns the
 /// tightly packed RGBA canvas and its pixel dimensions. Also the frame source
 /// for the window-stream server.
-pub unsafe fn capture_window_rgba(window: &crate::window::Window) -> Result<(Vec<u8>, i32, i32), String> {
+pub fn capture_window_rgba(window: &crate::window::Window) -> Result<(Vec<u8>, i32, i32), String> {
     let root = window.root_surface();
     if root.is_null() {
         return Err("window has no surface".to_string());
     }
+    // SAFETY: `root` is the window's live root surface (`root_surface`);
+    // the surfaces `wlr_surface_for_each_surface` collects are its live
+    // subsurface tree, which cannot change before the loop below is done
+    // (no client is dispatched in between), and each texture is its
+    // surface's own.
+    unsafe { capture_surface_tree(root) }
+}
+
+unsafe fn capture_surface_tree(root: *mut ffi::wlr_surface) -> Result<(Vec<u8>, i32, i32), String> {
     let (mut bw, mut bh) = (0i32, 0i32);
     ffi::river_wlr_surface_get_buffer_size(root, &mut bw, &mut bh);
     if bw <= 0 || bh <= 0 {

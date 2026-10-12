@@ -54,15 +54,19 @@ pub struct OutputManager {
 /// The output at (or nearest to) a layout point, through the shared
 /// output layout: for code with no output manager in hand. Null before the
 /// layout exists or while it holds no output.
-pub unsafe fn output_at(lx: f64, ly: f64) -> *mut ffi::wlr_output {
+pub fn output_at(lx: f64, ly: f64) -> *mut ffi::wlr_output {
     let layout = crate::shared::handles().output_layout.ptr();
     if layout.is_null() {
         return std::ptr::null_mut();
     }
     let mut output_lx: f64 = 0.0;
     let mut output_ly: f64 = 0.0;
-    ffi::wlr_output_layout_closest_point(layout, std::ptr::null_mut(), lx, ly, &mut output_lx, &mut output_ly);
-    ffi::wlr_output_layout_output_at(layout, output_lx, output_ly)
+    // SAFETY: the shared handle holds the live output layout (`Wlr::set`'s
+    // contract); a null reference output means any output.
+    unsafe {
+        ffi::wlr_output_layout_closest_point(layout, std::ptr::null_mut(), lx, ly, &mut output_lx, &mut output_ly);
+        ffi::wlr_output_layout_output_at(layout, output_lx, output_ly)
+    }
 }
 
 impl OutputManager {
@@ -137,7 +141,7 @@ impl OutputManager {
         }
     }
 
-    pub unsafe fn output_at(&mut self, lx: f64, ly: f64) -> *mut ffi::wlr_output {
+    pub fn output_at(&mut self, lx: f64, ly: f64) -> *mut ffi::wlr_output {
         output_at(lx, ly)
     }
 
@@ -383,7 +387,7 @@ impl OutputManager {
 
         if self.first_modeset {
             log::error!("initial modeset failed, exiting river");
-            ffi::wl_display_terminate(crate::shared::shared().display());
+            crate::shared::shared().terminate_display();
             return;
         }
 

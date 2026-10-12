@@ -845,7 +845,7 @@ impl WindowManager {
     /// Snapshot for `Policy::action`: seat- and scene-dependent facts
     /// (cursor output, hovered window, focus) resolved up front, the
     /// arrange-pass convention.
-    unsafe fn build_action_ctx(&mut self) -> crate::policy::api::ActionCtx {
+    fn build_action_ctx(&mut self) -> crate::policy::api::ActionCtx {
         crate::wm_scope!(mut);
         use crate::policy::api::{ActionCtx, ActionWindow, Rect, WindowId};
 
@@ -873,14 +873,13 @@ impl WindowManager {
         let (mut cursor_x, mut cursor_y) = (0.0, 0.0);
         let mut hovered = None;
         let mut focused = None;
-        if let Some(seat) = self.first_seat() {
+        if let Some(seat) = self.seats.values().next() {
             has_cursor = true;
-            cursor_x = (*seat).cursor.x();
-            cursor_y = (*seat).cursor.y();
+            cursor_x = seat.cursor.x();
+            cursor_y = seat.cursor.y();
             let wlr_output = crate::output_manager::output_at(cursor_x, cursor_y);
-            if !wlr_output.is_null() {
-                let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-                ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut output_box);
+            if let Some(output) = self.outputs.values().find(|o| !wlr_output.is_null() && o.wlr_output.is(wlr_output)) {
+                let output_box = output.wlr_output.layout_box();
                 cursor_viewport = Rect {
                     x: output_box.x,
                     y: output_box.y,
@@ -1545,15 +1544,16 @@ impl WindowManager {
         }
 
         // If the focused window is no longer visible, refocus
-        for seat in self.seats.ptrs() {
-            let focused_visible = match (*seat).focused {
+        for sid in self.seats.ids() {
+            let Some(seat) = self.seats.get(sid) else { continue };
+            let focused_visible = match seat.focused {
                 crate::seat::Focus::Window(id) => self.windows.get(id).map_or(false, |w| {
                     !w.closed && !w.minimized && matches!(w.state, crate::window::WindowState::Mapped)
                 }),
                 _ => true,
             };
             if !focused_visible {
-                self.focus_next_visible_window(seat);
+                self.focus_next_visible_window(sid);
             }
         }
 
@@ -1951,7 +1951,7 @@ impl WindowManager {
     /// next-visible rule (most recent eligible history entry, else the last
     /// eligible window in window order, else clear focus). This side owns
     /// eligibility (mapped, not minimized, not status/background).
-    pub unsafe fn focus_next_visible_window(&mut self, seat: *mut crate::seat::Seat) {
+    pub unsafe fn focus_next_visible_window(&mut self, sid: crate::seat::SeatId) {
         crate::wm_scope!(mut);
         let eligible = |w: &Window| -> bool {
             if w.closed || w.minimized || !matches!(w.state, crate::window::WindowState::Mapped) {
@@ -1984,7 +1984,7 @@ impl WindowManager {
         // Chrome departing is not an app exit: dismissing the cce-cloud
         // launcher (Popup) or an Overlay dock must never fire the camera
         // reaction — those close as part of using them.
-        let departing_chrome = match (*seat).focused {
+        let departing_chrome = match seat_mut!(self, sid).focused {
             crate::seat::Focus::Window(id) => self.windows.get(id).map_or(false, |w| {
                 matches!(w.tiling_mode, crate::tiling::TilingMode::Popup | crate::tiling::TilingMode::Overlay)
             }),
@@ -1995,13 +1995,10 @@ impl WindowManager {
         } else {
             self.on_app_exit
         };
-        (*seat).suppress_focus_pan = behavior != crate::config::OnAppExit::FocusPrevious;
-        if let Some(next) = next {
-            crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::Window(next));
-        } else {
-            crate::seat::Seat::focus(self, (*seat).id, crate::seat::Focus::None);
-        }
-        (*seat).suppress_focus_pan = false;
+        seat_mut!(self, sid).suppress_focus_pan = behavior != crate::config::OnAppExit::FocusPrevious;
+        let focus = next.map_or(crate::seat::Focus::None, crate::seat::Focus::Window);
+        crate::seat::Seat::focus(self, sid, focus);
+        seat_mut!(self, sid).suppress_focus_pan = false;
         if behavior == crate::config::OnAppExit::Overview
             && crate::shared::mode() == WindowManagerMode::Normal
         {
@@ -2131,7 +2128,7 @@ impl WindowManager {
     /// lands on the empty desktop there, and the pointer was not aimed at
     /// anything: the focused window is what the user was working in, so
     /// the keyed exit takes over. Enter is the toggle's own.
-    pub unsafe fn overview_action_for_gesture(&mut self) -> crate::config::Action {
+    pub fn overview_action_for_gesture(&mut self) -> crate::config::Action {
         crate::wm_scope!(mut);
         if crate::shared::mode() != WindowManagerMode::Overview {
             return crate::config::Action::OverviewEnter;
@@ -2152,7 +2149,7 @@ impl WindowManager {
     /// zcce_window_v1 event still goes out to a window-manager client as before;
     /// until this, that event was the request's only consumer, and nothing in the
     /// session listens for it, so client fullscreen was silently dropped.
-    pub unsafe fn apply_client_fullscreen(&mut self, id: crate::window::WindowId, enter: bool) {
+    pub fn apply_client_fullscreen(&mut self, id: crate::window::WindowId, enter: bool) {
         crate::wm_scope!(mut);
         let Some(win) = self.windows.get(id) else { return };
         if win.closed || win.state != crate::window::WindowState::Mapped {
@@ -2178,7 +2175,7 @@ impl WindowManager {
     /// no focused window in the focus ring there is no ray, so `fallback`
     /// (the four-way action the swipe was bound to) runs instead, for its
     /// entry rule.
-    pub unsafe fn focus_toward(&mut self, v: (f64, f64), fallback: &crate::config::Action) {
+    pub fn focus_toward(&mut self, v: (f64, f64), fallback: &crate::config::Action) {
         crate::wm_scope!(mut);
         use crate::policy::api::Compositor;
         self.stop_panning_animation();
@@ -2202,7 +2199,7 @@ impl WindowManager {
     /// of the policy without applying anything or touching the camera. A
     /// directional focus with nowhere to go is an empty command list on
     /// both paths, and the legacy arms do nothing with it either.
-    pub unsafe fn focus_toward_lands(&mut self, v: Option<(f64, f64)>, action: &crate::config::Action) -> bool {
+    pub fn focus_toward_lands(&mut self, v: Option<(f64, f64)>, action: &crate::config::Action) -> bool {
         crate::wm_scope!(mut);
         use crate::policy::api::Policy;
         let ctx = self.build_action_ctx();
@@ -2255,7 +2252,7 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn execute_action(&mut self, action: &crate::config::Action, command: Option<&str>) {
+    pub fn execute_action(&mut self, action: &crate::config::Action, command: Option<&str>) {
         crate::wm_scope!(mut);
         use crate::config::Action;
         self.stop_panning_animation();
@@ -2362,9 +2359,9 @@ impl WindowManager {
     }
 
     /// The window the first seat's keyboard focus is on, while it lives.
-    pub unsafe fn seat_focused_window_id(&self) -> Option<crate::window::WindowId> {
-        let seat = self.first_seat()?;
-        match (*seat).focused {
+    pub fn seat_focused_window_id(&self) -> Option<crate::window::WindowId> {
+        let seat = self.seats.values().next()?;
+        match seat.focused {
             crate::seat::Focus::Window(id) if self.windows.contains(id) => Some(id),
             _ => None,
         }
@@ -2718,8 +2715,9 @@ impl crate::policy::api::Compositor for WindowManager {
                 }
                 Command::StopPanAnimation => self.stop_panning_animation(),
                 Command::FocusNextVisible => {
-                    if let Some(seat) = self.first_seat() {
-                        self.focus_next_visible_window(seat);
+                    let first = self.seats.values().next().map(|s| s.id);
+                    if let Some(sid) = first {
+                        self.focus_next_visible_window(sid);
                     }
                 }
                 Command::Raise(id) => {

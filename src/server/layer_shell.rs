@@ -448,7 +448,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                             }
                         }
                     } else if !is_cce_cloud {
-                        wm.focus_next_visible_window(seat);
+                        wm.focus_next_visible_window((*seat).id);
                     }
                 }
             }

@@ -56,41 +56,14 @@ impl WindowManager {
         count
     }
 
-    pub unsafe fn spawn_startup_program(&mut self, prog: crate::config::StartupConfig) {
+    pub fn spawn_startup_program(&mut self, prog: crate::config::StartupConfig) {
         crate::wm_scope!(mut);
         log::info!("spawning startup program: {}", prog.exec);
-        let cmd = prog.exec.clone();
-        match nix::unistd::fork() {
-            Ok(nix::unistd::ForkResult::Child) => {
-                crate::process::cleanup_child();
-
-                if !crate::shared::handles().xwayland.ptr().is_null() {
-                    let xwayland_cast = crate::shared::handles().xwayland.ptr() as *mut crate::server::WlrXwayland;
-                    if !(*xwayland_cast).display_name.is_null() {
-                        let display_name = std::ffi::CStr::from_ptr((*xwayland_cast).display_name)
-                            .to_string_lossy()
-                            .into_owned();
-                        std::env::set_var("DISPLAY", display_name);
-                    }
-                }
-
-                let env: Vec<std::ffi::CString> = std::env::vars()
-                    .map(|(k, v)| std::ffi::CString::new(format!("{}={}", k, v)).unwrap())
-                    .collect();
-                let env_ptrs: Vec<&std::ffi::CStr> = env.iter().map(|s| s.as_c_str()).collect();
-                let sh_c = std::ffi::CString::new("/bin/sh").unwrap();
-                let c_c = std::ffi::CString::new("-c").unwrap();
-                let cmd_c = std::ffi::CString::new(cmd).unwrap();
-                let args = [sh_c.as_c_str(), c_c.as_c_str(), cmd_c.as_c_str()];
-                let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
-                std::process::exit(1);
-            }
-            Ok(nix::unistd::ForkResult::Parent { child }) => {
-                self.startup_pids.push((prog, child));
-            }
-            Err(e) => {
-                log::error!("failed to fork child for startup program: {}", e);
-            }
+        let display = crate::shared::handles().xwayland.display_name();
+        let env: &[(&str, &str)] = if display.is_empty() { &[] } else { &[("DISPLAY", &display)] };
+        match crate::process::spawn_sh(&prog.exec, env) {
+            Ok(child) => self.startup_pids.push((prog, child)),
+            Err(e) => log::error!("failed to fork child for startup program: {}", e),
         }
     }
 

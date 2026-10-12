@@ -438,18 +438,8 @@ unsafe extern "C" fn handle_respawn_timeout(_data: *mut std::ffi::c_void) -> std
 
     let cmd = cce_lock_cmd();
     log::info!("starting the locker: {}", cmd);
-    match nix::unistd::fork() {
-        Ok(nix::unistd::ForkResult::Child) => {
-            crate::process::cleanup_child();
-            let sh = std::ffi::CString::new("/bin/sh").unwrap();
-            let dash_c = std::ffi::CString::new("-c").unwrap();
-            let cmd_c = std::ffi::CString::new(cmd)
-                .unwrap_or_else(|_| std::ffi::CString::new("true").unwrap());
-            let args = [sh.as_c_str(), dash_c.as_c_str(), cmd_c.as_c_str()];
-            let _ = nix::unistd::execv(&sh, &args);
-            std::process::exit(1);
-        }
-        Ok(nix::unistd::ForkResult::Parent { .. }) => {
+    match crate::process::spawn_sh(&cmd, &[]) {
+        Ok(_) => {
             // Arm the NEXT step as a "did it take?" check, and let
             // `handle_new_lock` cancel it when the new locker binds. A
             // forked child proves nothing: the likeliest real failure is a

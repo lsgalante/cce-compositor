@@ -511,25 +511,13 @@ impl IdleManager {
 
     /// Run the sleep command (`sh -c`), detached; the server's SIGCHLD
     /// handler reaps it.
-    pub unsafe fn sleep_now(&mut self) {
+    pub fn sleep_now(&mut self) {
         let cmd = self.sleep_command().to_string();
         log::info!("idle: sleeping via `{}`", cmd);
         self.sleeping = true;
-        match nix::unistd::fork() {
-            Ok(nix::unistd::ForkResult::Child) => {
-                crate::process::cleanup_child();
-                let sh = std::ffi::CString::new("/bin/sh").unwrap();
-                let dash_c = std::ffi::CString::new("-c").unwrap();
-                let cmd_c = std::ffi::CString::new(cmd).unwrap_or_else(|_| std::ffi::CString::new("true").unwrap());
-                let args = [sh.as_c_str(), dash_c.as_c_str(), cmd_c.as_c_str()];
-                let _ = nix::unistd::execv(&sh, &args);
-                std::process::exit(1);
-            }
-            Ok(nix::unistd::ForkResult::Parent { .. }) => {}
-            Err(e) => {
-                log::error!("idle: failed to fork for sleep command: {}", e);
-                self.sleeping = false;
-            }
+        if let Err(e) = crate::process::spawn_sh(&cmd, &[]) {
+            log::error!("idle: failed to fork for sleep command: {}", e);
+            self.sleeping = false;
         }
     }
 
@@ -560,7 +548,7 @@ impl IdleManager {
     }
 
     /// The session finished locking (`LockManager::send_locked`).
-    pub unsafe fn on_locked(&mut self) {
+    pub fn on_locked(&mut self) {
         if self.sleep_after_lock {
             self.sleep_after_lock = false;
             self.lock_fallback_timer.arm(0);

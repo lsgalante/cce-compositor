@@ -374,7 +374,7 @@ impl Cursor {
 
     /// Arm the on-screen keyboard (`osk.rs`) when the finger is on an
     /// app's window — not the board itself, a layer surface, nor the bar.
-    unsafe fn note_touch_for_osk(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, lx: f64, ly: f64) {
+    fn note_touch_for_osk(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, lx: f64, ly: f64) {
         let Some(result) = crate::shared::scene().at(wm, lx, ly) else { return };
         if let SceneNodeDataVal::Window(window_id) = result.data {
             if let Some(window) = wm.windows.get(window_id) {
@@ -755,7 +755,7 @@ impl Cursor {
     }
 
     /// Fire a pinch bind if the spread has gone far enough; once per gesture.
-    unsafe fn touch_pinch(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, fingers: u32, scale: f64) -> MultiKind {
+    fn touch_pinch(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, fingers: u32, scale: f64) -> MultiKind {
         let mods = gesture_mods(&seat_mut!(wm, sid, MultiKind::Undecided).wlr_seat);
         match gesture_bind("pinch", fingers, mods, |d| pinch_hits(d, scale)) {
             Some((action, command)) => {

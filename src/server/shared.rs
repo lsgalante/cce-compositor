@@ -212,6 +212,18 @@ impl Shared {
         self.display.get()
     }
 
+    /// Stop the display's event loop (`wl_display_terminate`): the
+    /// compositor exits once the current dispatch returns. Does nothing
+    /// before `set_server` or after `Pending::shutdown`.
+    pub fn terminate_display(&self) {
+        let display = self.display.get();
+        if !display.is_null() && self.pending.live.get() {
+            // SAFETY: `set_server`'s contract keeps `display` valid until
+            // `Pending::shutdown`, which clears `live`.
+            unsafe { ffi::wl_display_terminate(display) };
+        }
+    }
+
     /// Record the display and the server, so the idle callback can find the
     /// window manager.
     ///

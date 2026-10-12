@@ -434,6 +434,13 @@ impl Wlr<ffi::wlr_xwayland_surface> {
         }
     }
 
+    /// Ask the client to close the window (WM_DELETE_WINDOW, or a kill).
+    pub fn close(&self) {
+        if let Some(x) = self.live() {
+            unsafe { ffi::wlr_xwayland_surface_close(x) }
+        }
+    }
+
     /// The X11 scale this surface is drawn at (`xwayland_hidpi`, less the
     /// exempt apps).
     pub fn x11_scale(&self) -> f32 {
@@ -460,7 +467,26 @@ impl Wlr<ffi::wlr_xwayland_surface> {
     }
 }
 
+impl Wlr<ffi::wlr_xwayland> {
+    /// The X display Xwayland serves (`:1`), owned; empty when unset.
+    pub fn display_name(&self) -> String {
+        // SAFETY: the field holds a live xwayland, whose layout
+        // `server::WlrXwayland` mirrors (checked by layout_probe); the name
+        // is a C string it owns, or null.
+        self.live().map_or_else(String::new, |x| unsafe {
+            owned_str((*(x as *mut crate::server::WlrXwayland)).display_name)
+        })
+    }
+}
+
 impl Wlr<ffi::wlr_xdg_toplevel> {
+    /// Ask the client to close the toplevel.
+    pub fn send_close(&self) {
+        if let Some(t) = self.live() {
+            unsafe { ffi::wlr_xdg_toplevel_send_close(t) }
+        }
+    }
+
     /// The toplevel's xdg surface; null when unset.
     pub fn base(&self) -> *mut ffi::wlr_xdg_surface {
         self.live().map_or(std::ptr::null_mut(), |t| unsafe { ffi::river_wlr_xdg_toplevel_get_base(t) })

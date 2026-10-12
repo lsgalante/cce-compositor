@@ -8,7 +8,7 @@ use super::*;
 impl WindowManager {
     /// `ccectl screenshot …` — also the screenshot action, which goes
     /// straight here rather than through the whole dispatcher.
-    pub unsafe fn screenshot_command(&mut self, parts: &[&str]) -> String {
+    pub fn screenshot_command(&mut self, parts: &[&str]) -> String {
         crate::wm_scope!(mut);
         // screenshot                        → the enabled output's next frame
         // screenshot region <x> <y> <w> <h> → on-screen region (logical px)
@@ -43,21 +43,14 @@ impl WindowManager {
                 };
 
                 // First enabled output (same walk as center-window).
-                let mut target_out: *mut crate::output::Output = std::ptr::null_mut();
-                for output in self.outputs.ptrs() {
-                    if (*output).sent.state == crate::output::OutputStateValue::Enabled {
-                        target_out = output;
-                        break;
-                    }
-                }
-                if target_out.is_null() {
+                let Some(target_out) = self.outputs.first_enabled() else {
                     return "error: no enabled output\n".to_string();
-                }
+                };
 
                 let region = region_logical.map(|(x, y, w, h)| {
                     // logical → buffer px via the output's effective scale.
-                    let buf_w = (*target_out).wlr_output.width() as f64;
-                    let layout_w = (*target_out).sent.box_layout().width.max(1) as f64;
+                    let buf_w = target_out.wlr_output.width() as f64;
+                    let layout_w = target_out.sent.box_layout().width.max(1) as f64;
                     let scale = buf_w / layout_w;
                     ffi::wlr_box {
                         x: (x * scale).round() as i32,
@@ -76,12 +69,12 @@ impl WindowManager {
                 // channel is what tells `handle_ipc_event` not to
                 // answer, so the returned string goes nowhere.
                 self.pending_screenshot = Some(crate::screenshot::PendingScreenshot::new(
-                    (*target_out).id,
+                    target_out.id,
                     region,
                     path,
                     self.pending_ipc_reply.take(),
                 ));
-                (*target_out).wlr_output.schedule_frame();
+                target_out.wlr_output.schedule_frame();
                 String::new()
             }
             Some(other) => format!("error: unknown screenshot target: {}\n", other),
@@ -971,7 +964,7 @@ impl WindowManager {
                     log::info!("Forced exit requested; terminating without waiting for windows to close.");
                     self.save_state();
                     self.shutting_down = true;
-                    ffi::wl_display_terminate(crate::shared::shared().display());
+                    crate::shared::shared().terminate_display();
                     return "ok\n".to_string();
                 }
                 self.execute_action(&crate::config::Action::Exit, None);

@@ -160,24 +160,32 @@ impl Scene {
 
     pub fn deinit(&mut self) {}
 
-    pub unsafe fn at(&self, wm: &crate::window_manager::WindowManager, lx: f64, ly: f64) -> Option<AtResult> {
+    pub fn at(&self, wm: &crate::window_manager::WindowManager, lx: f64, ly: f64) -> Option<AtResult> {
         self.at_impl(wm, lx, ly, true)
     }
 
-    unsafe fn at_impl(&self, wm: &crate::window_manager::WindowManager, lx: f64, ly: f64, include_grid: bool) -> Option<AtResult> {
-        let mut disabled_nodes = Vec::new();
+    fn at_impl(&self, wm: &crate::window_manager::WindowManager, lx: f64, ly: f64, include_grid: bool) -> Option<AtResult> {
+        let root = self.interactive_tree.node();
+        if root.is_null() {
+            return None;
+        }
+        // Windows whose trees are switched off for the retry below; `wm` is
+        // borrowed throughout, so each is still there to switch back on.
+        let mut disabled = Vec::new();
         let mut result = None;
 
-        loop {
+        // SAFETY: `root` is a live tree (a non-null handle's), and every
+        // `node` below is one `wlr_scene_node_at` just found in it, live
+        // until the scene changes — which nothing here does but enable and
+        // disable. Its scene data (`from_node`) lives exactly as long. An
+        // X11 window's implementation is live by `set_impl`'s contract (see
+        // `Window::get_title`); an override-redirect window's scene data
+        // is destroyed with its tree, so a node found in the scene names a
+        // live one.
+        unsafe { loop {
             let mut sx: f64 = 0.0;
             let mut sy: f64 = 0.0;
-            let node = ffi::wlr_scene_node_at(
-                self.interactive_tree.node(),
-                lx,
-                ly,
-                &mut sx,
-                &mut sy,
-            );
+            let node = ffi::wlr_scene_node_at(root, lx, ly, &mut sx, &mut sy);
 
             if node.is_null() {
                 break;
@@ -197,9 +205,8 @@ impl Scene {
                     // that owns it. The parameter stays for the callers that
                     // must never see the grid at all.
                     if !include_grid && window.is_grid() {
-                        let tree_node = window.tree.node();
-                        ffi::wlr_scene_node_set_enabled(tree_node, false);
-                        disabled_nodes.push(tree_node);
+                        window.tree.set_enabled(false);
+                        disabled.push(window.id());
                         continue;
                     }
                     if window.rendering_requested.circular {
@@ -213,9 +220,8 @@ impl Scene {
                         let dy = ly - cy;
                         if dx * dx + dy * dy > r * r {
                             // Outside the circle! Disable the window tree node temporarily and try again.
-                            let tree_node = window.tree.node();
-                            ffi::wlr_scene_node_set_enabled(tree_node, false);
-                            disabled_nodes.push(tree_node);
+                            window.tree.set_enabled(false);
+                            disabled.push(window.id());
                             continue;
                         }
                     }
@@ -274,11 +280,13 @@ impl Scene {
             } else {
                 break;
             }
-        }
+        } }
 
         // Re-enable all disabled nodes
-        for node in disabled_nodes {
-            ffi::wlr_scene_node_set_enabled(node, true);
+        for id in disabled {
+            if let Some(window) = wm.windows.get(id) {
+                window.tree.set_enabled(true);
+            }
         }
 
         result

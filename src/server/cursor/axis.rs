@@ -747,7 +747,7 @@ pub(crate) const HSCROLL_SHIFT_IDLE_MS: i32 = 300;
 impl Cursor {
     /// The surface under the pointer, if it belongs to a window of an app
     /// in `touchpad_hscroll_shift_apps`.
-    unsafe fn hscroll_shift_target(wm: &crate::window_manager::WindowManager, x: f64, y: f64) -> Option<*mut ffi::wlr_surface> {
+    fn hscroll_shift_target(wm: &crate::window_manager::WindowManager, x: f64, y: f64) -> Option<*mut ffi::wlr_surface> {
         if crate::shared::layout().touchpad_hscroll_shift_apps.is_empty() {
             return None;
         }

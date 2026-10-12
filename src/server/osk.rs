@@ -65,7 +65,7 @@ impl Osk {
 
     /// The seat's text input was enabled, or committed new state while
     /// enabled.
-    pub unsafe fn field_active(&mut self) {
+    pub fn field_active(&mut self) {
         // Whatever raised the field, a hide queued by the last one is moot.
         self.cancel_hide();
         if !self.enabled() {
@@ -81,7 +81,7 @@ impl Osk {
 
     /// The seat's text input went away (disabled, destroyed, or focus left).
     /// `sid` is the seat this OSK belongs to: the hide timer carries it.
-    pub unsafe fn field_gone(&mut self, sid: crate::seat::SeatId) {
+    pub fn field_gone(&mut self, sid: crate::seat::SeatId) {
         let display = crate::shared::shared().display();
         if !self.shown_by_us || display.is_null() {
             return;
@@ -101,7 +101,7 @@ impl Osk {
         self.hide_timer.arm(0);
     }
 
-    unsafe fn hide_now(&mut self) {
+    fn hide_now(&mut self) {
         if !self.shown_by_us {
             return;
         }

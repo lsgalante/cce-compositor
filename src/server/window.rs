@@ -1670,20 +1670,16 @@ impl Window {
 
     }
 
-    pub unsafe fn close(&mut self) {
+    pub fn close(&mut self) {
         self.close_requested = true;
-        match self.impl_type {
-            WindowImpl::Toplevel(toplevel) => {
-                if !toplevel.is_null() {
-                    ffi::wlr_xdg_toplevel_send_close((*toplevel).wlr_toplevel.ptr());
-                }
+        // SAFETY: as `Window::get_title`: `impl_type` names this window's
+        // live implementation (`set_impl`'s contract).
+        unsafe {
+            match self.impl_type {
+                WindowImpl::Toplevel(toplevel) if !toplevel.is_null() => (*toplevel).wlr_toplevel.send_close(),
+                WindowImpl::Xwayland(xwindow) if !xwindow.is_null() => (*xwindow).xsurface.close(),
+                _ => {}
             }
-            WindowImpl::Xwayland(xwindow) => {
-                if !xwindow.is_null() {
-                    ffi::wlr_xwayland_surface_close((*xwindow).xsurface.ptr());
-                }
-            }
-            WindowImpl::Destroying => {}
         }
     }
 
@@ -1703,15 +1699,14 @@ impl Window {
             _ => unreachable!(),
         }
 
-        for seat in stores!(wm).seats.ptrs() {
-            if (*seat).focused == crate::seat::Focus::Window(id) {
-                crate::seat::Seat::focus(wm, (*seat).id, crate::seat::Focus::None);
-                wm.focus_next_visible_window(seat);
+        for sid in wm.seats.ids() {
+            if wm.seats.get(sid).is_some_and(|seat| seat.focused == crate::seat::Focus::Window(id)) {
+                crate::seat::Seat::focus(wm, sid, crate::seat::Focus::None);
+                wm.focus_next_visible_window(sid);
             }
-            if let Some(ref op) = (*seat).op {
-                if op.window == Some(id) {
-                    (*seat).op = None;
-                }
+            let Some(seat) = wm.seats.get_mut(sid) else { continue };
+            if seat.op.as_ref().is_some_and(|op| op.window == Some(id)) {
+                seat.op = None;
             }
         }
 

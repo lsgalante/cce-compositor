@@ -408,7 +408,7 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn start_clean_exit(&mut self) {
+    pub fn start_clean_exit(&mut self) {
         crate::wm_scope!(mut);
         if self.clean_exit_in_progress {
             return;
@@ -435,7 +435,7 @@ impl WindowManager {
 
         if normal_windows.is_empty() {
             log::info!("No active windows to close. Exiting immediately.");
-            ffi::wl_display_terminate(crate::shared::shared().display());
+            crate::shared::shared().terminate_display();
             return;
         }
 
@@ -526,7 +526,7 @@ impl WindowManager {
         crate::shared::pending().dirty_windowing();
     }
 
-    pub unsafe fn check_clean_exit_progress(&mut self) {
+    pub fn check_clean_exit_progress(&mut self) {
         crate::wm_scope!(mut);
         if !self.clean_exit_in_progress {
             return;
@@ -546,7 +546,7 @@ impl WindowManager {
         if normal_windows_count == 0 {
             log::info!("All windows closed cleanly. Exiting display server.");
             self.clean_exit_timer.remove();
-            ffi::wl_display_terminate(crate::shared::shared().display());
+            crate::shared::shared().terminate_display();
         } else {
             log::info!("Clean exit: waiting for {} remaining windows to close...", normal_windows_count);
         }
@@ -759,24 +759,8 @@ impl WindowManager {
         }
         *spawned_any = true;
         log::info!("Deferred spawning restored window command: {}", cmd);
-        match unsafe { nix::unistd::fork() } {
-            Ok(nix::unistd::ForkResult::Child) => {
-                crate::process::cleanup_child();
-                let env: Vec<std::ffi::CString> = std::env::vars()
-                    .map(|(k, v)| std::ffi::CString::new(format!("{}={}", k, v)).unwrap())
-                    .collect();
-                let env_ptrs: Vec<&std::ffi::CStr> = env.iter().map(|s| s.as_c_str()).collect();
-                let sh_c = std::ffi::CString::new("/bin/sh").unwrap();
-                let c_c = std::ffi::CString::new("-c").unwrap();
-                let cmd_c = std::ffi::CString::new(cmd).unwrap();
-                let args = [sh_c.as_c_str(), c_c.as_c_str(), cmd_c.as_c_str()];
-                let _ = nix::unistd::execve(&sh_c, &args, &env_ptrs);
-                std::process::exit(1);
-            }
-            Ok(_) => {}
-            Err(e) => {
-                log::error!("failed to fork child process: {}", e);
-            }
+        if let Err(e) = crate::process::spawn_sh(&cmd, &[]) {
+            log::error!("failed to fork child process: {}", e);
         }
     }
 }

@@ -459,7 +459,7 @@ pub(crate) fn pinch_hits(direction: &str, scale: f64) -> bool {
 /// Run a gesture's bound action. The overview toggle lands on the hovered
 /// window, else on the FOCUSED one — never on the empty desktop under the
 /// pointer.
-pub(crate) unsafe fn run_gesture_action(
+pub(crate) fn run_gesture_action(
     wm: &mut crate::window_manager::WindowManager,
     action: crate::config::Action,
     command: Option<&str>,

@@ -210,9 +210,7 @@ pub fn run_server() {
     // Spawn configured startup programs
     let current_startup = server.wm.startup.clone();
     for prog in current_startup {
-        unsafe {
-            server.wm.spawn_startup_program(prog);
-        }
+        server.wm.spawn_startup_program(prog);
     }
 
     server.wm.spawn_restored_windows();
