@@ -19,10 +19,12 @@
 //!   timer behind to fire into freed memory.
 //! - A zeroed field (`std::mem::zeroed()`, `Server::default`'s zero-fill)
 //!   is a valid unset timer: a null source and `shared: false`.
-//! - `on_shared_loop` is the safe way to make one: the callback gets an
+//! - `on_shared_loop` is the usual way to make one: the callback gets an
 //!   integer `token`, never a pointer, and finds what it acts on itself (the
 //!   window manager through `reentry::wm`, a seat by id), so nothing has to
-//!   outlive the timer. Such a timer is on the compositor's own loop, and
+//!   outlive the timer. Its one `unsafe` promise is that: the callback is an
+//!   event-loop entry point that reads its data as that integer, never as a
+//!   pointer. Such a timer is on the compositor's own loop, and
 //!   once that loop is shutting down (`Pending::loop_live` false) arming it
 //!   does nothing and removing it only forgets the source, so a field
 //!   dropped after the display goes cannot touch a freed loop.
@@ -49,7 +51,12 @@ impl Timer {
     /// when it fires; it starts disarmed. `token` is an integer the callback
     /// interprets (`0` when it needs none) — never a pointer, so nothing
     /// has to outlive the timer. Unset if the loop is not running.
-    pub fn on_shared_loop(callback: TimerFn, token: usize) -> Self {
+    ///
+    /// # Safety
+    /// `callback` must be sound to run from the event loop as an entry point
+    /// (it may take the window manager with `reentry::wm`) with `token` as
+    /// its data: it reads that data as an integer, never as a pointer.
+    pub unsafe fn on_shared_loop(callback: TimerFn, token: usize) -> Self {
         let event_loop = crate::shared::event_loop();
         if event_loop.is_null() || !crate::shared::pending().loop_live() {
             return Self::new();

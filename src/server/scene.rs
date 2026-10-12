@@ -31,7 +31,9 @@ pub struct SceneLayers {
 }
 
 pub struct Scene {
-    pub wlr_scene: *mut ffi::wlr_scene,
+    /// Null until `init` creates it; private, because the safe
+    /// `create_root_child` trusts it (read it with `wlr_scene()`).
+    wlr_scene: *mut ffi::wlr_scene,
     pub interactive_tree: SceneTree,
     pub drag_icons: SceneTree,
     pub hidden_tree: SceneTree,
@@ -42,6 +44,11 @@ pub struct Scene {
 
 impl Scene {
     /// A new tree directly under the scene's root; empty before `init`.
+    /// The wlroots scene; null before `init`.
+    pub fn wlr_scene(&self) -> *mut ffi::wlr_scene {
+        self.wlr_scene
+    }
+
     pub fn create_root_child(&self) -> crate::scene_handle::SceneTree {
         if self.wlr_scene.is_null() {
             return crate::scene_handle::SceneTree::none();

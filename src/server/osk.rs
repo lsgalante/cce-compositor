@@ -87,7 +87,8 @@ impl Osk {
             return;
         }
         if !self.hide_timer.is_set() {
-            self.hide_timer = crate::event_source::Timer::on_shared_loop(handle_hide_timer, sid.0 as usize);
+            // SAFETY: `handle_hide_timer` is an event-loop entry point that reads its data as the seat id.
+            self.hide_timer = unsafe { crate::event_source::Timer::on_shared_loop(handle_hide_timer, sid.0 as usize) };
             if !self.hide_timer.is_set() {
                 log::error!("osk: failed to create the hide timer; hiding now");
                 self.hide_now();

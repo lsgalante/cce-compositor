@@ -166,7 +166,7 @@ pub struct RenderingState {
 
 pub struct Output {
     pub wlr_output: crate::wlr::Wlr<ffi::wlr_output>,
-    pub scene_output: *mut ffi::wlr_scene_output,
+    pub scene_output: crate::wlr::Wlr<ffi::wlr_scene_output>,
     pub background_rect: SceneRect,
     pub grid_tree: SceneTree,
     /// The grid's backdrop (gap colour, or the Solid spec's colour), kept in
@@ -313,7 +313,7 @@ impl Output {
             return Err("Failed to initialize renderer for output");
         }
 
-        let scene_output = ffi::wlr_scene_output_create(crate::shared::scene().wlr_scene, wlr_output);
+        let scene_output = ffi::wlr_scene_output_create(crate::shared::scene().wlr_scene(), wlr_output);
         if scene_output.is_null() {
             return Err("Failed to create wlr_scene_output");
         }
@@ -364,7 +364,9 @@ impl Output {
             // SAFETY: the output's destroy handler takes it back out before
             // wlroots frees it (`handle_destroy`).
             wlr_output: crate::wlr::Wlr::from_raw(wlr_output),
-            scene_output,
+            // SAFETY: made for this output above; its destroy path takes it
+            // out of the field and destroys it.
+            scene_output: crate::wlr::Wlr::from_raw(scene_output),
             background_rect: SceneRect::none(),
             grid_tree: SceneTree::none(),
             grid_backdrop_tree: SceneTree::none(),
@@ -482,12 +484,12 @@ impl Output {
                 self.last_rendered_pan_y = cam.1;
                 self.last_rendered_zoom = cam.2;
                 if !self.scene_output.is_null() {
-                    ffi::river_scene_output_damage_whole(self.scene_output);
+                    self.scene_output.damage_whole();
                 }
             }
         }
 
-        if pending_shot.is_none() && !ffi::wlr_scene_output_needs_frame(self.scene_output) {
+        if pending_shot.is_none() && !ffi::wlr_scene_output_needs_frame(self.scene_output.ptr()) {
             return Ok(false);
         }
 
@@ -557,7 +559,7 @@ impl Output {
         
         self.current.apply_no_modeset(&mut state);
 
-        if !ffi::wlr_scene_output_build_state(self.scene_output, &mut state, std::ptr::null()) {
+        if !ffi::wlr_scene_output_build_state(self.scene_output.ptr(), &mut state, std::ptr::null()) {
             ffi::wlr_output_state_finish(&mut state);
             return Err("Failed to build scene state");
         }
@@ -816,7 +818,7 @@ impl Output {
             // holds the bakes frozen: the zoom restructures the grid every
             // frame, and the settle re-bakes once at the end.
             if !wm.viewport_is_active {
-                ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene);
+                ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene());
             }
         }
         let force = self.grid_force_redraw_frames > 0;
@@ -1191,8 +1193,7 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     (*output).present.disconnect();
 
     if !(*output).scene_output.is_null() {
-        ffi::wlr_scene_output_destroy((*output).scene_output);
-        (*output).scene_output = std::ptr::null_mut();
+        ffi::wlr_scene_output_destroy((*output).scene_output.take());
     }
 
     (*output).destroy_scene_nodes();
@@ -1357,7 +1358,7 @@ unsafe extern "C" fn handle_frame(listener: *mut ffi::wl_listener, _data: *mut s
         tv_sec: now.tv_sec,
         tv_nsec: now.tv_nsec,
     };
-    ffi::wlr_scene_output_send_frame_done(output.scene_output, &mut ffi_now);
+    ffi::wlr_scene_output_send_frame_done(output.scene_output.ptr(), &mut ffi_now);
     // The scene's frame-done pass is gated on a node being visible, and the
     // desktop grid spends most of its life behind opaque windows — so the
     // one client that MUST repaint on demand is the one whose callbacks dry

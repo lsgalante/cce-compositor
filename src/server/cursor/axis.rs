@@ -56,14 +56,10 @@ pub(crate) unsafe fn on_axis(wm: &mut crate::window_manager::WindowManager, sid:
                     let cursor = cursor_mut!(wm, sid, ());
                     let cx = cursor.x();
                     let cy = cursor.y();
-                    let wlr_output = crate::output_manager::output_at(cx, cy);
-                    let (phys_x, phys_y) = if !wlr_output.is_null() {
-                        let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-                        ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut output_box);
-                        (output_box.x as f64, output_box.y as f64)
-                    } else {
-                        (0.0, 0.0)
-                    };
+                    let (phys_x, phys_y) = crate::shared::handles()
+                        .output_layout
+                        .closest_box(cx, cy)
+                        .map_or((0.0, 0.0), |b| (b.x as f64, b.y as f64));
                     wm.stop_panning_animation();
                     wm.target_desk_zoom = Some(new_zoom);
                     wm.zoom_anchor = Some((cx - phys_x, cy - phys_y));

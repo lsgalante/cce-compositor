@@ -892,7 +892,12 @@ impl Server {
         Ok(())
     }
 
-    pub fn deinit(&mut self) {
+    /// Tear the compositor down: clients, subsystems, wlroots, the display.
+    ///
+    /// # Safety
+    /// Once, on a server `init` brought up; nothing may use the server, or
+    /// anything it made, afterwards.
+    pub unsafe fn deinit(&mut self) {
         unsafe {
             log::info!("[deinit] Server::deinit started");
             // 1. Terminate all client connections first
@@ -946,12 +951,17 @@ impl Server {
             if !self.xwayland.is_null() {
                 self.new_xsurface.disconnect();
                 self.xwayland_ready.disconnect();
+                crate::shared::handles().xwayland.take();
                 ffi::wlr_xwayland_destroy(self.xwayland);
             }
             log::info!("[deinit] server listeners removed");
 
             // 5. Destroy wlroots core hardware interfaces
             log::info!("[deinit] destroying backend");
+            // The shared handles let go of each object before it goes
+            // (`Wlr::set`'s promise).
+            crate::shared::handles().backend.take();
+            crate::shared::handles().session.take();
             ffi::wlr_backend_destroy(self.backend);
             if !self.session.is_null() {
                 log::info!("[deinit] destroying session");
@@ -965,7 +975,17 @@ impl Server {
             // Nothing may arm an idle on the event loop once it is gone.
             crate::shared::pending().shutdown();
 
-            // 6. Finally, destroy the display
+            // 6. Finally, destroy the display, and with it the globals the
+            // shared handles hold.
+            let handles = crate::shared::handles();
+            handles.idle_notifier.take();
+            handles.pointer_gestures.take();
+            handles.tablet_manager.take();
+            handles.pointer_constraints.take();
+            handles.relative_pointer.take();
+            handles.foreign_toplevel_list.take();
+            handles.foreign_toplevel_manager.take();
+            handles.tearing_control.take();
             log::info!("[deinit] destroying display");
             ffi::wl_display_destroy(self.wl_server);
             log::info!("[deinit] Server::deinit finished successfully");

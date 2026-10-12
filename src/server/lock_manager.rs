@@ -33,7 +33,10 @@ pub struct LockManager {
     /// Read freely; write through [`LockManager::set_state`], which keeps
     /// `crate::shared::lock_state()` in step.
     pub state: LockState,
-    pub lock: *mut ffi::wlr_session_lock_v1,
+    /// The live lock, or null: `handle_new_lock` sets it and the lock's
+    /// destroy handler clears it. Private, because the safe
+    /// `lock_surface_from_output` trusts it.
+    lock: *mut ffi::wlr_session_lock_v1,
     pub lock_surfaces_timer: crate::event_source::Timer,
     /// Fires to bring a locker back after one died mid-lock; see
     /// [`LockManager::schedule_locker_respawn`].
@@ -307,7 +310,9 @@ impl LockManager {
 pub struct LockSurface {
     /// Watched: wlroots destroys it with the lock surface.
     pub tree: crate::scene_handle::SceneTree,
-    pub wlr_lock_surface: *mut ffi::wlr_session_lock_surface_v1,
+    /// Set once, by `create`; private because the safe `get_output` trusts
+    /// it.
+    wlr_lock_surface: *mut ffi::wlr_session_lock_surface_v1,
     pub lock: *mut ffi::wlr_session_lock_v1,
     pub manager: *mut LockManager,
 
@@ -394,6 +399,12 @@ impl LockSurface {
         ffi::river_wlr_surface_set_data((*(*lock_surface).wlr_lock_surface).surface, std::ptr::null_mut());
 
         let _ = Box::from_raw(lock_surface);
+    }
+
+    /// The lock surface's wl_surface.
+    pub fn surface(&self) -> *mut ffi::wlr_surface {
+        // SAFETY: as `get_output`.
+        unsafe { (*self.wlr_lock_surface).surface }
     }
 
     pub fn get_output(&self) -> *mut crate::output::Output {

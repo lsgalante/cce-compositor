@@ -28,12 +28,20 @@ impl<T> Registry<T> {
 
     /// Register `object` (at the back: walks run oldest first, as the
     /// lists' tail inserts did).
-    pub fn push(&mut self, object: *mut T) {
+    ///
+    /// # Safety
+    /// `object` is live, and stays live until it is [`remove`](Self::remove)d
+    /// — which its destroy path does before freeing it. Owners walking the
+    /// registry rely on this.
+    pub unsafe fn push(&mut self, object: *mut T) {
         self.0.push(object);
     }
 
     /// Register `object` at the front (the lists' head inserts).
-    pub fn push_front(&mut self, object: *mut T) {
+    ///
+    /// # Safety
+    /// As [`push`](Self::push).
+    pub unsafe fn push_front(&mut self, object: *mut T) {
         self.0.insert(0, object);
     }
 

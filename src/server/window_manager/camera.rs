@@ -96,7 +96,8 @@ impl WindowManager {
             return;
         }
         if !self.edge_pan_timer.is_set() {
-            self.edge_pan_timer = crate::event_source::Timer::on_shared_loop(handle_edge_pan_tick, 0);
+            // SAFETY: `handle_edge_pan_tick` is an event-loop entry point that ignores its data.
+            self.edge_pan_timer = unsafe { crate::event_source::Timer::on_shared_loop(handle_edge_pan_tick, 0) };
         }
         self.edge_pan_timer.arm(16);
     }
@@ -113,7 +114,8 @@ impl WindowManager {
         }
         self.schedule_frame_all_outputs();
         if !self.animation_timer.is_set() {
-            self.animation_timer = crate::event_source::Timer::on_shared_loop(handle_panning_animation_tick, 0);
+            // SAFETY: `handle_panning_animation_tick` is an event-loop entry point that ignores its data.
+            self.animation_timer = unsafe { crate::event_source::Timer::on_shared_loop(handle_panning_animation_tick, 0) };
         }
         self.animation_timer.arm(CAMERA_WATCHDOG_MS);
     }

@@ -975,7 +975,8 @@ impl WindowManager {
     fn arm_settle_timer(&mut self) {
         crate::wm_scope!(mut);
         if !self.settle_timer.is_set() {
-            self.settle_timer = crate::event_source::Timer::on_shared_loop(handle_settle_tick, 0);
+            // SAFETY: `handle_settle_tick` is an event-loop entry point that ignores its data.
+            self.settle_timer = unsafe { crate::event_source::Timer::on_shared_loop(handle_settle_tick, 0) };
         }
         if !self.settle_timer.is_set() {
             // No timer: answer now rather than never.
@@ -1029,7 +1030,8 @@ impl WindowManager {
             return;
         }
         if !self.save_state_timer.is_set() {
-            self.save_state_timer = crate::event_source::Timer::on_shared_loop(handle_save_state_timer, 0);
+            // SAFETY: `handle_save_state_timer` is an event-loop entry point that ignores its data.
+            self.save_state_timer = unsafe { crate::event_source::Timer::on_shared_loop(handle_save_state_timer, 0) };
             if !self.save_state_timer.is_set() {
                 log::error!("failed to create the save-state timer; saving synchronously");
                 self.save_state();
@@ -1342,7 +1344,7 @@ impl WindowManager {
         // Placement sees the pan floored to a layout pixel; the remainder
         // shifts the desk trees at render time (`layout_camera`).
         let (layout_cam, sub_x, sub_y) = self.layout_camera();
-        ffi::river_scene_set_desk_subpixel(crate::shared::scene().wlr_scene, sub_x, sub_y);
+        ffi::river_scene_set_desk_subpixel(crate::shared::scene().wlr_scene(), sub_x, sub_y);
         let params = crate::policy::arrange::ArrangeParams {
             bar_height: crate::shared::layout().bar_height,
             status_hide_mode: self.status_hide_mode,
@@ -1446,7 +1448,7 @@ impl WindowManager {
             // The swap changes backdrop content under the optimized-blur
             // capture set without any blur-node resize — re-bake or
             // translucent windows keep blurring the pre-swap grid.
-            ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene);
+            ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene());
         }
 
         for (&id, wp) in win_ids.iter().zip(plan.windows.iter()) {
@@ -1705,7 +1707,7 @@ impl WindowManager {
             // mismatch is a low-frequency blur under a window in flight for
             // a few hundred ms. So the bakes stay frozen through zooms too,
             // and `finish_viewport_settle` re-bakes once if the zoom moved.
-            let scene = crate::shared::scene().wlr_scene;
+            let scene = crate::shared::scene().wlr_scene();
             ffi::river_scene_set_blur_frozen(scene, true);
             for window in self.windows.values_mut() {
                 {
@@ -1743,7 +1745,7 @@ impl WindowManager {
         for output in self.outputs.values() {
             if output.sent.state == crate::output::OutputStateValue::Enabled {
                 if moved && !output.scene_output.is_null() {
-                    ffi::river_scene_output_damage_whole(output.scene_output);
+                    output.scene_output.damage_whole();
                 } else {
                     output.wlr_output.schedule_frame();
                 }
@@ -1762,7 +1764,8 @@ impl WindowManager {
     fn arm_viewport_settle_timer(&mut self) {
         crate::wm_scope!(mut);
         if !self.viewport_settle_timer.is_set() {
-            self.viewport_settle_timer = crate::event_source::Timer::on_shared_loop(handle_viewport_settle_tick, 0);
+            // SAFETY: `handle_viewport_settle_tick` is an event-loop entry point that ignores its data.
+            self.viewport_settle_timer = unsafe { crate::event_source::Timer::on_shared_loop(handle_viewport_settle_tick, 0) };
         }
         self.viewport_settle_timer.arm(VIEWPORT_SETTLE_MS);
     }
@@ -1782,7 +1785,7 @@ impl WindowManager {
         // final backdrop — every bake, if the gesture changed the zoom
         // (they were sampled at the old scale in flight); otherwise only
         // the ones the thaw itself distrusts.
-        let scene = crate::shared::scene().wlr_scene;
+        let scene = crate::shared::scene().wlr_scene();
         ffi::river_scene_set_blur_frozen(scene, false);
         if self.desk_zoom != self.viewport_freeze_zoom {
             ffi::river_scene_mark_optimized_blur_dirty(scene);
@@ -1797,7 +1800,7 @@ impl WindowManager {
         for output in self.outputs.values() {
             if output.sent.state == crate::output::OutputStateValue::Enabled {
                 if !output.scene_output.is_null() {
-                    ffi::river_scene_output_damage_whole(output.scene_output);
+                    output.scene_output.damage_whole();
                 } else {
                     output.wlr_output.schedule_frame();
                 }

@@ -322,7 +322,7 @@ impl Sent {
     /// # Safety
     /// `config` is null or a live configuration the compositor owns: whoever
     /// takes it answers it and destroys it.
-    pub fn set_output_config(&self, config: *mut ffi::wlr_output_configuration_v1) {
+    pub unsafe fn set_output_config(&self, config: *mut ffi::wlr_output_configuration_v1) {
         self.output_config.set(config);
     }
 }

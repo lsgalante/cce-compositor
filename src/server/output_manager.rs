@@ -40,7 +40,6 @@ pub struct WlrOutputPowerManagerV1 {
 pub struct OutputManager {
     pub first_modeset: bool,
     pub new_output: crate::listener::Listener,
-    pub output_layout: *mut ffi::wlr_output_layout,
     pub presentation: *mut ffi::wlr_presentation,
     pub xdg_output_manager: *mut ffi::wlr_xdg_output_manager_v1,
     pub wlr_output_manager: *mut ffi::wlr_output_manager_v1,
@@ -55,18 +54,7 @@ pub struct OutputManager {
 /// output layout: for code with no output manager in hand. Null before the
 /// layout exists or while it holds no output.
 pub fn output_at(lx: f64, ly: f64) -> *mut ffi::wlr_output {
-    let layout = crate::shared::handles().output_layout.ptr();
-    if layout.is_null() {
-        return std::ptr::null_mut();
-    }
-    let mut output_lx: f64 = 0.0;
-    let mut output_ly: f64 = 0.0;
-    // SAFETY: the shared handle holds the live output layout (`Wlr::set`'s
-    // contract); a null reference output means any output.
-    unsafe {
-        ffi::wlr_output_layout_closest_point(layout, std::ptr::null_mut(), lx, ly, &mut output_lx, &mut output_ly);
-        ffi::wlr_output_layout_output_at(layout, output_lx, output_ly)
-    }
+    crate::shared::handles().output_layout.closest_output(lx, ly)
 }
 
 impl OutputManager {
@@ -77,16 +65,15 @@ impl OutputManager {
         if output_layout.is_null() {
             return Err("Failed to create wlr_output_layout");
         }
-        self.output_layout = output_layout;
         crate::shared::handles().output_layout.set(output_layout);
 
         let gamma_control_manager = ffi::wlr_gamma_control_manager_v1_create((*server).wl_server);
         if gamma_control_manager.is_null() {
-            ffi::wlr_output_layout_destroy(output_layout);
+            ffi::wlr_output_layout_destroy(crate::shared::handles().output_layout.take());
             return Err("Failed to create wlr_gamma_control_manager_v1");
         }
         self.gamma_control_manager = gamma_control_manager;
-        ffi::wlr_scene_set_gamma_control_manager_v1(crate::shared::scene().wlr_scene, gamma_control_manager);
+        ffi::wlr_scene_set_gamma_control_manager_v1(crate::shared::scene().wlr_scene(), gamma_control_manager);
 
         let presentation = ffi::wlr_presentation_create((*server).wl_server, crate::shared::handles().backend.ptr(), 2);
         if presentation.is_null() {
@@ -136,8 +123,11 @@ impl OutputManager {
         self.power_manager_set_mode.disconnect();
         self.new_output.disconnect();
 
-        if !self.output_layout.is_null() {
-            ffi::wlr_output_layout_destroy(self.output_layout);
+        // Let go of the shared handle first: `Wlr::set`'s promise is that
+        // the layout outlives the field's hold on it.
+        let layout = crate::shared::handles().output_layout.take();
+        if !layout.is_null() {
+            ffi::wlr_output_layout_destroy(layout);
         }
     }
 
@@ -156,16 +146,12 @@ impl OutputManager {
             if !wlr_output.is_null() {
                 match output.sent.state {
                     OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
-                        // SAFETY: an output in the store has its live scene
-                        // output (destroyed only on its way out); the layout
-                        // lives from `init` to `deinit`, and a lock surface
-                        // `lock_surface_from_output` finds is live.
-                        unsafe {
-                            ffi::wlr_scene_output_set_position(output.scene_output, output.sent.x, output.sent.y);
-                            ffi::wlr_output_layout_add(self.output_layout, wlr_output, output.sent.x, output.sent.y);
-                            if let Some(lock_surface) = lock.lock_surface_from_output(output) {
-                                (*lock_surface).tree.set_position(output.sent.x, output.sent.y);
-                            }
+                        output.scene_output.set_position(output.sent.x, output.sent.y);
+                        crate::shared::handles().output_layout.add(&output.wlr_output, output.sent.x, output.sent.y);
+                        if let Some(lock_surface) = lock.lock_surface_from_output(output) {
+                            // SAFETY: a lock surface `lock_surface_from_output`
+                            // finds is live.
+                            unsafe { (*lock_surface).tree.set_position(output.sent.x, output.sent.y) };
                         }
 
                         let (width, height) = output.sent.dimensions();
@@ -199,8 +185,7 @@ impl OutputManager {
                         output.adjust_tree.set_position(output.sent.x, output.sent.y);
                     }
                     OutputStateValue::DisabledHard => {
-                        // SAFETY: as above.
-                        unsafe { ffi::wlr_output_layout_remove(self.output_layout, wlr_output) };
+                        crate::shared::handles().output_layout.remove(&output.wlr_output);
                         // All of them, rims and labels included: until
                         // 2026-10-10 this path left grid_bevel_tree and
                         // cell_label_tree naming children that died with
@@ -381,7 +366,7 @@ impl OutputManager {
                 swapchain: sc,
                 ..std::mem::zeroed()
             };
-            if !ffi::wlr_scene_output_build_state(output.scene_output, &mut state.base, &options) {
+            if !ffi::wlr_scene_output_build_state(output.scene_output.ptr(), &mut state.base, &options) {
                 log::error!("failed to render scene for {:?}", output.wlr_output.name());
             }
         }

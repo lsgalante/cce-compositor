@@ -81,7 +81,7 @@ impl Focus {
             Focus::None => std::ptr::null_mut(),
             Focus::LayerSurface(surface) => surface,
             Focus::Window(id) => wm.windows.get(id).map_or(std::ptr::null_mut(), |w| w.root_surface()),
-            Focus::LockSurface(lock_surface) => if lock_surface.is_null() { std::ptr::null_mut() } else { (*(*lock_surface).wlr_lock_surface).surface },
+            Focus::LockSurface(lock_surface) => if lock_surface.is_null() { std::ptr::null_mut() } else { (*lock_surface).surface() },
             Focus::OverrideRedirect(or) => if or.is_null() { std::ptr::null_mut() } else { (*or).xsurface.surface() },
         }
     }
@@ -233,7 +233,7 @@ impl Seat {
         (*seat).relay.init();
 
         // Initialize Cursor
-        let output_layout = (*server).om.output_layout;
+        let output_layout = crate::shared::handles().output_layout.ptr();
         (*seat).cursor.init(seat, output_layout)?;
 
         // Setup listeners
@@ -654,7 +654,7 @@ impl Seat {
                 }
             }
             Focus::LockSurface(lock_surface) => {
-                let surface = (*(*lock_surface).wlr_lock_surface).surface;
+                let surface = (*lock_surface).surface();
                 if !surface.is_null() {
                     let this = seat_mut!(wm, sid, ());
                     let kbd = this.wlr_seat.keyboard();
@@ -1048,7 +1048,7 @@ impl Seat {
         crate::shared::layout().snap_params().for_zoom(wm.desk_zoom)
     }
 
-    pub unsafe fn op_update(wm: &mut crate::window_manager::WindowManager, sid: SeatId, x: i32, y: i32) {
+    pub fn op_update(wm: &mut crate::window_manager::WindowManager, sid: SeatId, x: i32, y: i32) {
         let sp = Self::snap_params(wm);
         let this = seat_mut!(wm, sid, ());
         if let Some(op) = this.op.as_mut() {
@@ -1292,7 +1292,7 @@ impl Seat {
     /// rim to full speed at the screen edge. Called on every op motion AND
     /// from the edge-pan tick's op_update, which is what re-arms the timer —
     /// so the scroll continues while the cursor rests pinned at the edge.
-    unsafe fn update_edge_pan(wm: &mut crate::window_manager::WindowManager, sid: SeatId, lx: f64, ly: f64) {
+    fn update_edge_pan(wm: &mut crate::window_manager::WindowManager, sid: SeatId, lx: f64, ly: f64) {
         let this = seat_mut!(wm, sid, ());
         let mut vx = 0.0;
         let mut vy = 0.0;
@@ -1313,10 +1313,7 @@ impl Seat {
                 None => false,
             };
         if eligible {
-            let wlr_output = crate::output_manager::output_at(lx, ly);
-            if !wlr_output.is_null() {
-                let mut ob = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-                ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut ob);
+            if let Some(ob) = crate::shared::handles().output_layout.closest_box(lx, ly) {
                 let band = crate::shared::layout().desktop_edge_pan_band.max(1.0);
                 let speed = crate::shared::layout().desktop_edge_pan_speed.max(0.0);
                 // 0 outside the band, 1 at (or past) the screen edge.

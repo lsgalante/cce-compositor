@@ -717,20 +717,15 @@ impl Cursor {
     /// The edge whose zone `lx, ly` is in, if an `edge_<side>` bind exists
     /// for it under the current modifiers. An edge is a screen edge only
     /// where no other output continues past it.
-    unsafe fn bound_edge_at(&self, lx: f64, ly: f64) -> Option<Edge> {
+    fn bound_edge_at(&self, lx: f64, ly: f64) -> Option<Edge> {
         if !crate::shared::layout().gesture_binds.iter().any(|b| b.gesture_type == "edge") {
             return None;
         }
-        let layout = crate::shared::handles().output_layout.ptr();
-        let output = ffi::wlr_output_layout_output_at(layout, lx, ly);
-        if output.is_null() {
-            return None;
-        }
-        let mut b = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-        ffi::wlr_output_layout_get_box(layout, output, &mut b);
+        let layout = &crate::shared::handles().output_layout;
+        let b = layout.box_at(lx, ly)?;
         let (x0, y0) = (b.x as f64, b.y as f64);
         let (x1, y1) = (x0 + b.width as f64, y0 + b.height as f64);
-        let beyond_is_empty = |x: f64, y: f64| ffi::wlr_output_layout_output_at(layout, x, y).is_null();
+        let beyond_is_empty = |x: f64, y: f64| !layout.has_output_at(x, y);
         let candidates = [
             (Edge::Left, lx - x0 < EDGE_ZONE && beyond_is_empty(x0 - 1.0, ly)),
             (Edge::Right, x1 - lx <= EDGE_ZONE && beyond_is_empty(x1 + 1.0, ly)),
@@ -784,14 +779,11 @@ impl Cursor {
 
 /// A layout point in its output's own coordinates, the anchor a pinch zoom
 /// takes (`WindowManager::queue_pinch`).
-unsafe fn output_local((x, y): (f64, f64)) -> (f64, f64) {
-    let wlr_output = crate::output_manager::output_at(x, y);
-    if wlr_output.is_null() {
-        return (x, y);
+fn output_local((x, y): (f64, f64)) -> (f64, f64) {
+    match crate::shared::handles().output_layout.closest_box(x, y) {
+        Some(b) => (x - b.x as f64, y - b.y as f64),
+        None => (x, y),
     }
-    let mut b = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-    ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut b);
-    (x - b.x as f64, y - b.y as f64)
 }
 
 pub(crate) unsafe extern "C" fn handle_touch_down(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {

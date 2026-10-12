@@ -177,7 +177,8 @@ pub fn run_server() {
     };
     if socket_ptr.is_null() {
         log::error!("failed to add wayland socket");
-        server.deinit();
+        // SAFETY: once, on the initialised server, and the process exits.
+        unsafe { server.deinit() };
         std::process::exit(1);
     }
     let socket_str = unsafe { CStr::from_ptr(socket_ptr).to_string_lossy().into_owned() };
@@ -197,7 +198,8 @@ pub fn run_server() {
     let started = unsafe { ffi::wlr_backend_start(server.backend) };
     if !started {
         log::error!("failed to start wlr_backend");
-        server.deinit();
+        // SAFETY: once, on the initialised server, and the process exits.
+        unsafe { server.deinit() };
         std::process::exit(1);
     }
 
@@ -299,7 +301,9 @@ pub fn run_server() {
     server.wm.save_state();
     server.wm.shutting_down = true;
     std::mem::drop(_guard);
-    server.deinit();
+    // SAFETY: once, after the event loop has returned; the server is
+    // leaked below, never used again.
+    unsafe { server.deinit() };
     // `deinit` destroyed the display and every wlroots object, so a
     // listener still linked to one of their signals now points into freed
     // memory, and dropping it (`Listener` unlinks on drop) would write there.

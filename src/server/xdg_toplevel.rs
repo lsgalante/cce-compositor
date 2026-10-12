@@ -22,7 +22,10 @@ pub struct XdgToplevel {
     /// This surface's wlroots toplevel; the `XdgToplevel` is freed in its
     /// destroy handler, before the toplevel goes.
     pub wlr_toplevel: crate::wlr::Wlr<ffi::wlr_xdg_toplevel>,
-    pub decoration: *mut XdgDecoration,
+    /// The live decoration object, or null: `XdgDecoration::init` sets it
+    /// and `deinit` clears it. Private, because the safe `configure` trusts
+    /// it.
+    decoration: *mut XdgDecoration,
     pub geometry: ffi::wlr_box,
     /// Surface extent as of the last commit — with `geometry`, the mapping
     /// change detector for the deferred pointer refresh (see `handle_commit`).
@@ -638,7 +641,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         // which nothing else re-bakes when the latch lands after the
         // viewport has settled — translucent windows keep showing a blur of
         // the pre-latch desktop.
-        ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene);
+        ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene());
         crate::shared::pending().dirty_windowing();
     }
     let base = (*toplevel).wlr_toplevel.base();

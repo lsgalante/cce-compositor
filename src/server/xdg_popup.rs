@@ -229,7 +229,7 @@ unsafe extern "C" fn handle_reposition(listener: *mut ffi::wl_listener, _data: *
     ffi::wlr_scene_node_coords((*popup).root_tree.node(), &mut root_lx, &mut root_ly);
 
     let mut constraint = std::mem::zeroed();
-    ffi::wlr_output_layout_get_box((*server).om.output_layout, wlr_output, &mut constraint);
+    ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut constraint);
     constraint.x -= root_lx;
     constraint.y -= root_ly;
 

@@ -580,14 +580,10 @@ pub(crate) unsafe fn on_pinch_update(wm: &mut crate::window_manager::WindowManag
         let new_zoom = crate::policy::camera::pinch_zoom(cursor.pinch_start_zoom, (*event).scale);
         let cx = cursor.x();
         let cy = cursor.y();
-        let wlr_output = crate::output_manager::output_at(cx, cy);
-        let (phys_x, phys_y) = if !wlr_output.is_null() {
-            let mut output_box = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
-            ffi::wlr_output_layout_get_box(crate::shared::handles().output_layout.ptr(), wlr_output, &mut output_box);
-            (output_box.x as f64, output_box.y as f64)
-        } else {
-            (0.0, 0.0)
-        };
+        let (phys_x, phys_y) = crate::shared::handles()
+            .output_layout
+            .closest_box(cx, cy)
+            .map_or((0.0, 0.0), |b| (b.x as f64, b.y as f64));
         // Applied on the next output frame, like finger pans: libinput
         // delivers pinch updates faster than the refresh rate, and stepping
         // the camera per event relaid out the desktop for frames nobody

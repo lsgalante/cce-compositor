@@ -481,6 +481,85 @@ impl Wlr<ffi::wlr_xwayland_surface> {
     }
 }
 
+impl Wlr<ffi::wlr_output_layout> {
+    /// Put `output` in the layout at (`x`, `y`), or move it there.
+    pub fn add(&self, output: &Wlr<ffi::wlr_output>, x: i32, y: i32) {
+        if let (Some(l), Some(o)) = (self.live(), output.live()) {
+            unsafe { ffi::wlr_output_layout_add(l, o, x, y) };
+        }
+    }
+
+    /// Take `output` out of the layout (nothing if it is not in it).
+    pub fn remove(&self, output: &Wlr<ffi::wlr_output>) {
+        if let (Some(l), Some(o)) = (self.live(), output.live()) {
+            unsafe { ffi::wlr_output_layout_remove(l, o) };
+        }
+    }
+
+    /// The output at the layout point closest to (`lx`, `ly`) — the point
+    /// itself when it is on an output. Null when there is none (or unset).
+    /// The pointer is for comparing, or for a call made before anything can
+    /// destroy an output.
+    pub fn closest_output(&self, lx: f64, ly: f64) -> *mut ffi::wlr_output {
+        let Some(l) = self.live() else { return std::ptr::null_mut() };
+        let (mut cx, mut cy) = (0.0, 0.0);
+        // A null reference output means any output.
+        unsafe {
+            ffi::wlr_output_layout_closest_point(l, std::ptr::null_mut(), lx, ly, &mut cx, &mut cy);
+            ffi::wlr_output_layout_output_at(l, cx, cy)
+        }
+    }
+
+    /// The layout box of the output under (`lx`, `ly`), if one is.
+    pub fn box_at(&self, lx: f64, ly: f64) -> Option<ffi::wlr_box> {
+        let l = self.live()?;
+        let mut b = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+        // The output comes from the layout, so it is live and in it.
+        unsafe {
+            let o = ffi::wlr_output_layout_output_at(l, lx, ly);
+            if o.is_null() {
+                return None;
+            }
+            ffi::wlr_output_layout_get_box(l, o, &mut b);
+        }
+        Some(b)
+    }
+
+    /// The layout box of the output closest to (`lx`, `ly`) (`closest_output`).
+    pub fn closest_box(&self, lx: f64, ly: f64) -> Option<ffi::wlr_box> {
+        let l = self.live()?;
+        let o = self.closest_output(lx, ly);
+        if o.is_null() {
+            return None;
+        }
+        let mut b = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+        // As `box_at`.
+        unsafe { ffi::wlr_output_layout_get_box(l, o, &mut b) };
+        Some(b)
+    }
+
+    /// Whether an output covers (`lx`, `ly`).
+    pub fn has_output_at(&self, lx: f64, ly: f64) -> bool {
+        self.live().is_some_and(|l| unsafe { !ffi::wlr_output_layout_output_at(l, lx, ly).is_null() })
+    }
+}
+
+impl Wlr<ffi::wlr_scene_output> {
+    /// Damage the whole output, so its next frame repaints everything.
+    pub fn damage_whole(&self) {
+        if let Some(s) = self.live() {
+            unsafe { ffi::river_scene_output_damage_whole(s) };
+        }
+    }
+
+    /// Place the scene output at (`x`, `y`) in the scene.
+    pub fn set_position(&self, x: i32, y: i32) {
+        if let Some(s) = self.live() {
+            unsafe { ffi::wlr_scene_output_set_position(s, x, y) };
+        }
+    }
+}
+
 impl Wlr<ffi::wlr_scene> {
     /// The scene's root tree; null when unset.
     pub fn tree(&self) -> *mut ffi::wlr_scene_tree {
