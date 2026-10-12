@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::{Server};
 use crate::xwayland_window::XwaylandWindow;
 
 #[repr(C)]
@@ -35,9 +34,8 @@ impl XwaylandOverrideRedirect {
     }
 
     pub unsafe fn create(
-    wm: &mut crate::window_manager::WindowManager,
+        wm: &mut crate::window_manager::WindowManager,
         xsurface: *mut ffi::wlr_xwayland_surface,
-        server: *mut Server,
     ) -> Result<(), &'static str> {
         let title_ptr = (*xsurface).title;
         let class_ptr = (*xsurface).class;
@@ -76,7 +74,7 @@ impl XwaylandOverrideRedirect {
         if !(*xsurface).surface.is_null() {
             handle_associate_impl(raw);
             if ffi::river_wlr_surface_is_mapped((*xsurface).surface) {
-                handle_map_impl(wm, server, raw);
+                handle_map_impl(wm, raw);
             }
         }
 
@@ -96,7 +94,7 @@ impl XwaylandOverrideRedirect {
     /// Draw the physical-pixel X11 buffer at 1/scale. Runs from the
     /// per-frame pass (output.rs) because the scene's commit listener
     /// resets a committed buffer's dest size; every setter is change-checked.
-    pub unsafe fn apply_x11_scale(&mut self) {
+    pub fn apply_x11_scale(&mut self) {
         if self.surface_tree.is_null() {
             return;
         }
@@ -104,33 +102,28 @@ impl XwaylandOverrideRedirect {
         if s == 1.0 {
             return;
         }
-        unsafe extern "C" fn iter(
-            buffer: *mut ffi::wlr_scene_buffer,
-            _sx: i32,
-            _sy: i32,
-            user_data: *mut std::ffi::c_void,
-        ) {
-            let inv = *(user_data as *const f64);
-            let node = buffer as *mut ffi::wlr_scene_node;
-            let surface = ffi::river_scene_node_get_surface(node);
-            if surface.is_null() {
-                return;
-            }
-            let w = ffi::river_wlr_surface_get_width(surface);
-            let h = ffi::river_wlr_surface_get_height(surface);
-            ffi::river_scene_buffer_set_dest_size_if_changed(
-                buffer,
-                (w as f64 * inv).round() as i32,
-                (h as f64 * inv).round() as i32,
-            );
-            ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, inv);
-        }
         let inv = 1.0 / s;
-        ffi::wlr_scene_node_for_each_buffer(
-            self.surface_tree.node(),
-            Some(iter),
-            &inv as *const f64 as *mut std::ffi::c_void,
-        );
+        let scale_one = |buffer: *mut ffi::wlr_scene_buffer, _sx: i32, _sy: i32| {
+            // SAFETY: `buffer` is live for this call (`for_each_buffer`),
+            // and so is the surface it shows.
+            unsafe {
+                let surface = ffi::river_scene_node_get_surface(buffer as *mut ffi::wlr_scene_node);
+                if surface.is_null() {
+                    return;
+                }
+                let w = ffi::river_wlr_surface_get_width(surface);
+                let h = ffi::river_wlr_surface_get_height(surface);
+                ffi::river_scene_buffer_set_dest_size_if_changed(
+                    buffer,
+                    (w as f64 * inv).round() as i32,
+                    (h as f64 * inv).round() as i32,
+                );
+                ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, inv);
+            }
+        };
+        // SAFETY: `scale_one` only sets each buffer's dest size and opaque
+        // region; it destroys, reparents and restacks nothing.
+        unsafe { self.surface_tree.for_each_buffer(scale_one) };
     }
 
     /// Give the keyboard to this popup when it asks for it, but never take
@@ -150,7 +143,7 @@ impl XwaylandOverrideRedirect {
     /// still drives.
     ///
     /// `unlocked` is the lock manager's state; `seat` the default seat.
-    pub unsafe fn focus_if_desired(
+    pub fn focus_if_desired(
         &self,
         wm: &mut crate::window_manager::WindowManager,
         unlocked: bool,
@@ -159,9 +152,8 @@ impl XwaylandOverrideRedirect {
         if !unlocked {
             return;
         }
-        if !ffi::wlr_xwayland_surface_override_redirect_wants_focus(self.xsurface().ptr())
-            || ffi::wlr_xwayland_surface_icccm_input_model(self.xsurface().ptr())
-                == ffi::wlr_xwayland_icccm_input_model_WLR_ICCCM_INPUT_MODEL_NONE
+        if !self.xsurface().override_redirect_wants_focus()
+            || self.xsurface().icccm_input_model() == ffi::wlr_xwayland_icccm_input_model_WLR_ICCCM_INPUT_MODEL_NONE
         {
             return;
         }
@@ -171,26 +163,37 @@ impl XwaylandOverrideRedirect {
         match focused {
             crate::seat::Focus::Window(id) if wm.windows.contains(id) => {
                 let same_client = match wm.windows.get(id).map(|w| w.impl_type()) {
+                    // SAFETY: as `Window::get_title`: `impl_type` names the
+                    // window's live implementation (`set_impl`'s contract).
                     Some(crate::window::WindowImpl::Xwayland(xwindow)) => {
-                        !xwindow.is_null() && (*xwindow).xsurface().pid() == pid
+                        !xwindow.is_null() && unsafe { (*xwindow).xsurface().pid() } == pid
                     }
                     _ => false,
                 };
                 if same_client {
-                    crate::seat::Seat::keyboard_enter_or_leave(wm, sid, self.xsurface().surface());
+                    // SAFETY: a live X surface's `surface` is null or the
+                    // wl_surface it is associated with, live until the
+                    // dissociate clears it.
+                    unsafe { crate::seat::Seat::keyboard_enter_or_leave(wm, sid, self.xsurface().surface()) };
                     return;
                 }
                 log::debug!("override redirect (pid {pid}) mapped unfocused: another client holds the keyboard");
                 return;
             }
             crate::seat::Focus::None => {}
-            crate::seat::Focus::OverrideRedirect(or) if !or.is_null() && (*or).xsurface().pid() == pid => {}
+            // SAFETY: a seat's override-redirect focus is live: it was live
+            // when focused (`Seat::focus`'s contract), and `drop_seat_focus`
+            // clears it before the window goes.
+            crate::seat::Focus::OverrideRedirect(or) if !or.is_null() && unsafe { (*or).xsurface().pid() } == pid => {}
             _ => {
                 log::debug!("override redirect (pid {pid}) mapped unfocused: another client holds the keyboard");
                 return;
             }
         }
-        crate::seat::Seat::focus(wm, sid, crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
+        // SAFETY: `self` is live, and `drop_seat_focus` takes the focus
+        // back before it goes (unmap, the override-redirect flag cleared,
+        // destroy).
+        unsafe { crate::seat::Seat::focus(wm, sid, crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _)) };
     }
 }
 
@@ -262,8 +265,7 @@ unsafe extern "C" fn handle_dissociate(listener: *mut ffi::wl_listener, _data: *
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let or = crate::container_of!(listener, XwaylandOverrideRedirect, map);
-    let server = crate::shared::server_ptr();
-    handle_map_impl(&mut *crate::reentry::wm(server), server, or);
+    handle_map_impl(&mut *crate::reentry::wm(crate::shared::server_ptr()), or);
 }
 
 /// WM_CLASS of the XEmbed tray bridge's container windows
@@ -276,17 +278,14 @@ const XEMBED_TRAY_CLASS: &str = "cce-xembed-tray";
 /// draw at all, but the icon is shown in the status bar, so the window
 /// itself must never be. The bridge also gives it an empty input region,
 /// so X never routes the pointer into it either.
-unsafe fn is_xembed_tray_container(xsurface: *mut ffi::wlr_xwayland_surface) -> bool {
-    let class = (*xsurface).class;
-    !class.is_null() && std::ffi::CStr::from_ptr(class).to_bytes() == XEMBED_TRAY_CLASS.as_bytes()
+fn is_xembed_tray_container(xsurface: &crate::wlr::Wlr<ffi::wlr_xwayland_surface>) -> bool {
+    xsurface.with_names(|class, _, _| class == XEMBED_TRAY_CLASS)
 }
 
-/// `server` for the two values the focus decision reads: whether the session
-/// is unlocked, and the default seat.
-unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, server: *mut Server, or: *mut XwaylandOverrideRedirect) {
+unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, or: *mut XwaylandOverrideRedirect) {
     // No scene node at all: nothing to draw, hit-test or focus. Unmap
     // copes with the missing tree and the unconnected listeners.
-    if is_xembed_tray_container((*or).xsurface().ptr()) {
+    if is_xembed_tray_container((*or).xsurface()) {
         log::debug!("xembed tray container mapped; not shown");
         return;
     }
@@ -320,7 +319,7 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, server:
     (*or).focus_if_desired(
         wm,
         crate::shared::lock_state() == crate::lock_manager::LockState::Unlocked,
-        (*server).input_manager.default_seat,
+        crate::shared::handles().default_seat.get(),
     );
 }
 
@@ -340,7 +339,7 @@ unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut s
     let server = crate::shared::server_ptr();
     let wm = &mut *crate::reentry::wm(server);
     drop_seat_focus(wm, or);
-    if let Some((sid, focused, keyboard_surface)) = (*server).input_manager.default_seat
+    if let Some((sid, focused, keyboard_surface)) = crate::shared::handles().default_seat.get()
         .and_then(|sid| wm.seats.get(sid).map(|seat| (sid, seat.focused, seat.wlr_seat().keyboard_focused_surface())))
     {
         let parent = match focused {

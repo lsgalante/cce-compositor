@@ -293,11 +293,10 @@ impl Scene {
                             if wm.windows.get(id).is_some_and(|w| matches!(w.impl_type(), crate::window::WindowImpl::Xwayland(_))) =>
                         {
                             let window = wm.windows.get(id).expect("checked by the guard");
-                            let xsurface = match window.impl_type() {
-                                crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*xw).xsurface().ptr() as *const _,
-                                _ => std::ptr::null(),
-                            };
-                            let s = crate::xwayland_window::x11_scale_for(xsurface) as f64;
+                            let s = match window.impl_type() {
+                                crate::window::WindowImpl::Xwayland(xw) if !xw.is_null() => (*xw).xsurface().x11_scale(),
+                                _ => crate::xwayland_window::x11_scale(),
+                            } as f64;
                             let zoom = if window.scale > 0.0 { window.scale } else { 1.0 };
                             (s != 1.0).then_some(s / zoom)
                         }

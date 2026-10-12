@@ -526,11 +526,90 @@ impl Wlr<ffi::wlr_xwayland_surface> {
         }
     }
 
-    /// The X11 scale this surface is drawn at (`xwayland_hidpi`, less the
-    /// exempt apps).
+    /// `f` handed the WM_CLASS class, the WM_CLASS instance and the title,
+    /// borrowed (copied only when not valid UTF-8); empty when unset.
+    pub fn with_names<R>(&self, f: impl FnOnce(&str, &str, &str) -> R) -> R {
+        let text = |p: *const std::ffi::c_char| -> std::borrow::Cow<'_, str> {
+            // SAFETY: a string the live surface holds, which the XWM
+            // replaces only from its event handlers — never inside `f`.
+            if p.is_null() { std::borrow::Cow::Borrowed("") } else { unsafe { CStr::from_ptr(p) }.to_string_lossy() }
+        };
+        match self.live() {
+            // SAFETY: the field holds a live surface (`set`'s contract).
+            Some(x) => unsafe { f(&text((*x).class), &text((*x).instance), &text((*x).title)) },
+            None => f("", "", ""),
+        }
+    }
+
+    /// Whether `window_manager { xwayland_hidpi_except }` names this
+    /// window (`xwayland_window::hidpi_exempt`). Never while unset, or
+    /// while `xwayland_hidpi` is off.
+    pub fn hidpi_exempt(&self) -> bool {
+        let layout = crate::shared::layout();
+        if self.is_null() || !layout.xwayland_hidpi || layout.xwayland_hidpi_except.is_empty() {
+            return false;
+        }
+        self.with_names(|class, instance, title| {
+            crate::xwayland_window::hidpi_exempt(&layout.xwayland_hidpi_except, class, instance, title)
+        })
+    }
+
+    /// The X11 scale this surface is drawn at: 1 when the window is named
+    /// in `window_manager { xwayland_hidpi_except }`, else the screen's
+    /// factor (`xwayland_window::x11_scale`).
+    ///
+    /// The screen Xwayland shows is one thing for every client, so an
+    /// exempt window still SEES a physical-pixel root; what changes is what
+    /// the compositor does with it. Its configures go out in logical pixels
+    /// and its buffer is drawn at 1 (`Window::x11_buffer_scale`), the
+    /// pre-`xwayland_hidpi` arrangement — so a borderless-fullscreen game
+    /// that asks for the whole root is answered with the logical size and
+    /// renders that many pixels, not scale² as many. Re-evaluated on every
+    /// use, so a title that arrives after the first configure still takes
+    /// effect; it runs every frame for every X11 window, hence the borrowed
+    /// names.
     pub fn x11_scale(&self) -> f32 {
-        // SAFETY: the pointer is null or the live surface the field holds.
-        unsafe { crate::xwayland_window::x11_scale_for(self.ptr()) }
+        if self.hidpi_exempt() {
+            return 1.0;
+        }
+        crate::xwayland_window::x11_scale()
+    }
+
+    /// The WM_NORMAL_HINTS flags (`USPosition`, `PMinSize`, …); `None`
+    /// when unset or the client set no hints.
+    pub fn size_hints_flags(&self) -> Option<u32> {
+        let x = self.live()?;
+        // SAFETY: a live surface's `size_hints` is null or the XWM's own
+        // copy, replaced only from its event handlers.
+        unsafe {
+            let hints = (*x).size_hints;
+            (!hints.is_null()).then(|| (*hints).flags)
+        }
+    }
+
+    /// Whether an override-redirect window is of a type that wants the
+    /// keyboard (`wlr_xwayland_surface_override_redirect_wants_focus`).
+    pub fn override_redirect_wants_focus(&self) -> bool {
+        self.live().is_some_and(|x| unsafe { ffi::wlr_xwayland_surface_override_redirect_wants_focus(x) })
+    }
+
+    /// The ICCCM input model (WM_HINTS input and WM_TAKE_FOCUS); `NONE`
+    /// when unset.
+    pub fn icccm_input_model(&self) -> ffi::wlr_xwayland_icccm_input_model {
+        self.live().map_or(ffi::wlr_xwayland_icccm_input_model_WLR_ICCCM_INPUT_MODEL_NONE, |x| unsafe {
+            ffi::wlr_xwayland_surface_icccm_input_model(x)
+        })
+    }
+
+    /// Forget the associated `wlr_surface`'s data pointer (nothing while
+    /// unassociated).
+    pub fn clear_surface_data(&self) {
+        let surface = self.surface();
+        if !surface.is_null() {
+            // SAFETY: a live surface's `surface` is null or the wlr_surface
+            // it is associated with, live until the dissociate clears it.
+            unsafe { ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut()) }
+        }
     }
 
     /// WM_CLASS class, owned; empty when unset.
@@ -822,6 +901,49 @@ impl Wlr<ffi::wlr_idle_notifier_v1> {
 }
 
 impl Wlr<ffi::wlr_xwayland> {
+    /// A CARDINAL-array property of X window `window` (format 32), at most
+    /// `max_words` long, read synchronously over the XWM's own connection;
+    /// `None` when unset, before the XWM is up, or when the window, atom or
+    /// property is missing (an X error is a null reply, not a crash).
+    pub fn cardinal_property(&self, window: ffi::xcb_window_t, name: &[u8], max_words: u32) -> Option<Vec<u32>> {
+        let xwayland = self.live()?;
+        // SAFETY: the field holds a live xwayland, so its XWM connection is
+        // null or open; every request passes values and a name of the
+        // stated length; each reply is checked for null, read within its
+        // own value length, and freed once.
+        unsafe {
+            let conn = ffi::wlr_xwayland_get_xwm_connection(xwayland);
+            if conn.is_null() {
+                return None;
+            }
+            let cookie = ffi::xcb_intern_atom(conn, 1, name.len() as u16, name.as_ptr() as *const libc::c_char);
+            let atom_reply = ffi::xcb_intern_atom_reply(conn, cookie, std::ptr::null_mut());
+            if atom_reply.is_null() {
+                return None;
+            }
+            let atom = (*atom_reply).atom;
+            libc::free(atom_reply as *mut libc::c_void);
+            if atom == 0 {
+                return None;
+            }
+            // AnyPropertyType.
+            let cookie = ffi::xcb_get_property(conn, 0, window, atom, 0, 0, max_words);
+            let reply = ffi::xcb_get_property_reply(conn, cookie, std::ptr::null_mut());
+            if reply.is_null() {
+                return None;
+            }
+            let words = if (*reply).format == 32 {
+                let len = ffi::xcb_get_property_value_length(reply) as usize / 4;
+                let data = ffi::xcb_get_property_value(reply) as *const u32;
+                Some(std::slice::from_raw_parts(data, len).to_vec())
+            } else {
+                None
+            };
+            libc::free(reply as *mut libc::c_void);
+            words
+        }
+    }
+
     /// The X display Xwayland serves (`:1`), owned; empty when unset.
     pub fn display_name(&self) -> String {
         // SAFETY: the field holds a live xwayland, whose layout

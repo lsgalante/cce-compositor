@@ -1201,8 +1201,7 @@ impl Window {
                 // objects outlive it.
                 1.0 / unsafe { (*xwindow).xsurface().x11_scale() } as f64
             }
-            // SAFETY: `x11_scale_for` takes a null surface (no exemption).
-            WindowImpl::Xwayland(_) => 1.0 / unsafe { crate::xwayland_window::x11_scale_for(std::ptr::null()) } as f64,
+            WindowImpl::Xwayland(_) => 1.0 / crate::xwayland_window::x11_scale() as f64,
             _ => 1.0,
         }
     }

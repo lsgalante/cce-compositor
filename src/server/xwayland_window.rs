@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::window::{Window, WindowImpl, WindowState};
+use crate::window::{Window, WindowId, WindowImpl, WindowState};
 use crate::xwayland_override_redirect::XwaylandOverrideRedirect;
 
 #[repr(C)]
@@ -187,42 +187,10 @@ pub fn in_output_change_grace() -> bool {
         .is_some_and(|deadline| std::time::Instant::now() < deadline)
 }
 
-/// `x11_scale` for one X11 surface: 1 when the window is named in
-/// `window_manager { xwayland_hidpi_except }`, else the screen's factor.
-///
-/// The screen Xwayland shows is one thing for every client, so an exempt
-/// window still SEES a physical-pixel root; what changes is what the
-/// compositor does with it. Its configures go out in logical pixels and its
-/// buffer is drawn at 1 (`Window::x11_buffer_scale`), the pre-`xwayland_hidpi`
-/// arrangement — so a borderless-fullscreen game that asks for the whole
-/// root is answered with the logical size and renders that many pixels,
-/// not scale² as many. Matched by WM_CLASS class, WM_CLASS instance or
-/// title (`hidpi_exempt`), re-evaluated on every use so a title that
-/// arrives after the first configure still takes effect.
-pub unsafe fn x11_scale_for(xsurface: *const ffi::wlr_xwayland_surface) -> f32 {
-    if !crate::shared::layout().xwayland_hidpi {
-        return 1.0;
-    }
-    if !xsurface.is_null() && !crate::shared::layout().xwayland_hidpi_except.is_empty() {
-        // Borrowed (no copy for valid UTF-8): this runs every frame for
-        // every X11 window, and allocated all three fields each time.
-        let text = |p: *const libc::c_char| -> std::borrow::Cow<'_, str> {
-            if p.is_null() { std::borrow::Cow::Borrowed("") } else { std::ffi::CStr::from_ptr(p).to_string_lossy() }
-        };
-        let class = text((*xsurface).class);
-        let instance = text((*xsurface).instance);
-        let title = text((*xsurface).title);
-        if hidpi_exempt(&crate::shared::layout().xwayland_hidpi_except, &class, &instance, &title) {
-            return 1.0;
-        }
-    }
-    x11_scale()
-}
-
 /// The factor an X11 client's CURSOR is drawn at: the screen's X11 factor
 /// for any X11 surface, 1 for anything that is not X11.
 ///
-/// What a cursor request needs. Deliberately NOT `x11_scale_for`: the
+/// What a cursor request needs. Deliberately NOT `Wlr::x11_scale`: the
 /// `xwayland_hidpi_except` exemption is about a game's window pixels — it
 /// sizes itself to the root ignoring DPI, so its buffer is drawn at 1 —
 /// but its cursor comes from the toolkit or Wine underneath, which follow
@@ -260,30 +228,12 @@ pub unsafe fn x11_scale_for_surface(surface: *mut ffi::wlr_surface) -> f32 {
 /// state (`handle_request_fullscreen`). Its cursor is NOT exempt — see
 /// `x11_scale_for_surface`.
 pub fn window_is_hidpi_exempt(window: &crate::window::Window) -> bool {
+    let crate::window::WindowImpl::Xwayland(xwindow) = window.impl_type() else {
+        return false;
+    };
     // SAFETY: as `Window::get_title`: `impl_type` names the window's live
-    // implementation (`set_impl`'s contract), and an impl's wlroots
-    // objects outlive it.
-    unsafe {
-        let crate::window::WindowImpl::Xwayland(xwindow) = window.impl_type() else {
-            return false;
-        };
-        if xwindow.is_null() || (*xwindow).xsurface().is_null() {
-            return false;
-        }
-        if !crate::shared::layout().xwayland_hidpi || crate::shared::layout().xwayland_hidpi_except.is_empty() {
-            return false;
-        }
-        let xsurface = (*xwindow).xsurface().ptr();
-        let text = |p: *const libc::c_char| -> String {
-            if p.is_null() { String::new() } else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() }
-        };
-        hidpi_exempt(
-            &crate::shared::layout().xwayland_hidpi_except,
-            &text((*xsurface).class),
-            &text((*xsurface).instance),
-            &text((*xsurface).title),
-        )
-    }
+    // implementation (`set_impl`'s contract).
+    !xwindow.is_null() && unsafe { (*xwindow).xsurface().hidpi_exempt() }
 }
 
 /// Whether `exe` (a `/proc/<pid>/exe` target) is Wine's loader, which every
@@ -658,7 +608,7 @@ impl XwaylandWindow {
     /// without WS_THICKFRAME — but it loosens them for a fullscreen window
     /// before the request arrives. A window named in
     /// `xwayland_hidpi_except` is a fullscreen game by definition.
-    pub unsafe fn is_wine_maximize(&mut self, window: &crate::window::Window) -> bool {
+    pub fn is_wine_maximize(&mut self, window: &crate::window::Window) -> bool {
         if !self.xsurface().parent().is_null() || window_is_hidpi_exempt(window) {
             return false;
         }
@@ -672,41 +622,9 @@ impl XwaylandWindow {
     /// wlroots parses only the decorations out of it, and this is asked
     /// rarely (a Wine window's fullscreen request), so a synchronous
     /// round-trip here costs nothing that matters.
-    unsafe fn motif_hints(&self) -> Option<Vec<u32>> {
-        let xwayland = (*crate::shared::server_ptr()).xwayland;
-        if xwayland.is_null() {
-            return None;
-        }
-        let conn = ffi::wlr_xwayland_get_xwm_connection(xwayland);
-        if conn.is_null() {
-            return None;
-        }
-        let name = b"_MOTIF_WM_HINTS";
-        let cookie = ffi::xcb_intern_atom(conn, 1, name.len() as u16, name.as_ptr() as *const libc::c_char);
-        let atom_reply = ffi::xcb_intern_atom_reply(conn, cookie, std::ptr::null_mut());
-        if atom_reply.is_null() {
-            return None;
-        }
-        let atom = (*atom_reply).atom;
-        libc::free(atom_reply as *mut libc::c_void);
-        if atom == 0 {
-            return None;
-        }
-        // AnyPropertyType; the hints are five CARD32s.
-        let cookie = ffi::xcb_get_property(conn, 0, self.xsurface().window_id(), atom, 0, 0, 5);
-        let reply = ffi::xcb_get_property_reply(conn, cookie, std::ptr::null_mut());
-        if reply.is_null() {
-            return None;
-        }
-        let hints = if (*reply).format == 32 {
-            let len = ffi::xcb_get_property_value_length(reply) as usize / 4;
-            let data = ffi::xcb_get_property_value(reply) as *const u32;
-            Some(std::slice::from_raw_parts(data, len).to_vec())
-        } else {
-            None
-        };
-        libc::free(reply as *mut libc::c_void);
-        hints
+    fn motif_hints(&self) -> Option<Vec<u32>> {
+        // The hints are five CARD32s.
+        crate::shared::handles().xwayland.cardinal_property(self.xsurface().window_id(), b"_MOTIF_WM_HINTS", 5)
     }
 
     pub fn absorbs_wine_echo(&self, window: &crate::window::Window) -> bool {
@@ -788,12 +706,12 @@ unsafe fn handle_associate_impl(xwindow: *mut XwaylandWindow) {
 
 unsafe extern "C" fn handle_dissociate(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, dissociate);
-    handle_dissociate_impl(xwindow);
+    handle_dissociate_impl(&mut *xwindow);
 }
 
-unsafe fn handle_dissociate_impl(xwindow: *mut XwaylandWindow) {
-    (*xwindow).map.disconnect();
-    (*xwindow).unmap.disconnect();
+fn handle_dissociate_impl(xwindow: &mut XwaylandWindow) {
+    xwindow.map.disconnect();
+    xwindow.unmap.disconnect();
 }
 
 unsafe extern "C" fn handle_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
@@ -838,8 +756,8 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow
         return;
     }
 
-    place_transient_where_it_asked(wm, xwindow);
-    place_shy_where_it_is(wm, xwindow);
+    place_transient_where_it_asked(wm, id, &*xwindow);
+    place_shy_where_it_is(wm, id, &*xwindow);
     (*xwindow).apply_stored_min_size(wm);
 
     let this = window_mut!(wm, id);
@@ -872,25 +790,23 @@ unsafe fn handle_map_impl(wm: &mut crate::window_manager::WindowManager, xwindow
 /// compositor's placement. Top-level windows keep theirs too: restore and
 /// the placement hints own those, and a transient is the one kind of window
 /// `try_restore` refuses to touch.
-unsafe fn place_transient_where_it_asked(wm: &mut crate::window_manager::WindowManager, xwindow: *mut XwaylandWindow) {
-    let xsurface = (*xwindow).xsurface().ptr();
-    if (*xsurface).parent.is_null() {
+fn place_transient_where_it_asked(wm: &mut crate::window_manager::WindowManager, id: WindowId, xwindow: &XwaylandWindow) {
+    let xsurface = xwindow.xsurface();
+    if xsurface.parent().is_null() {
         return;
     }
-    let Some(asked) = (*xwindow).sent_geom else {
+    let Some(asked) = xwindow.sent_geom else {
         return;
     };
-    let hints = (*xsurface).size_hints;
-    if hints.is_null() {
+    let Some(flags) = xsurface.size_hints_flags() else {
         return;
-    }
+    };
     let position_flags = ffi::xcb_icccm_size_hints_flags_t_XCB_ICCCM_SIZE_HINT_US_POSITION
         | ffi::xcb_icccm_size_hints_flags_t_XCB_ICCCM_SIZE_HINT_P_POSITION;
-    if (*hints).flags & position_flags == 0 {
+    if flags & position_flags == 0 {
         return;
     }
-    let id = (*xwindow).window;
-    let s = x11_scale_for(xsurface);
+    let s = xsurface.x11_scale();
     let log_x = from_x11(asked.x as i32, s);
     let log_y = from_x11(asked.y as i32, s);
     let (vx, vy) = window_ref!(wm, id, ()).screen_to_virtual(wm, log_x, log_y);
@@ -912,16 +828,16 @@ unsafe fn place_transient_where_it_asked(wm: &mut crate::window_manager::WindowM
 /// position — for Ubisoft Connect's shadow window, exactly its main
 /// window's rect. The compositor's spawn placement would put it at the
 /// default origin, in front of everything, as a blank white window.
-unsafe fn place_shy_where_it_is(wm: &mut crate::window_manager::WindowManager, xwindow: *mut XwaylandWindow) {
-    let id = (*xwindow).window;
+fn place_shy_where_it_is(wm: &mut crate::window_manager::WindowManager, id: WindowId, xwindow: &XwaylandWindow) {
     let this = window_mut!(wm, id);
     if !this.is_shy() {
         return;
     }
-    let xsurface = (*xwindow).xsurface().ptr();
-    let s = x11_scale_for(xsurface);
-    let log_x = from_x11((*xsurface).x as i32, s);
-    let log_y = from_x11((*xsurface).y as i32, s);
+    let xsurface = xwindow.xsurface();
+    let s = xsurface.x11_scale();
+    let (x11_x, x11_y) = (xsurface.x(), xsurface.y());
+    let log_x = from_x11(x11_x as i32, s);
+    let log_y = from_x11(x11_y as i32, s);
     let (vx, vy) = window_ref!(wm, id, ()).screen_to_virtual(wm, log_x, log_y);
     let this = window_mut!(wm, id);
     this.virtual_x = vx;
@@ -936,24 +852,32 @@ unsafe fn place_shy_where_it_is(wm: &mut crate::window_manager::WindowManager, x
         "XWayland no-activate helper window mapped where it is: title='{}' class='{}' x11=({}, {}) logical=({}, {}) virtual=({:.1}, {:.1})",
         this.get_title_string().unwrap_or_default(),
         this.get_app_id_string().unwrap_or_default(),
-        (*xsurface).x, (*xsurface).y, log_x, log_y, vx, vy,
+        x11_x, x11_y, log_x, log_y, vx, vy,
     );
 }
 
 unsafe extern "C" fn handle_unmap(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let xwindow = crate::container_of!(listener, XwaylandWindow, unmap);
     let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
-    handle_unmap_impl(wm, xwindow);
+    handle_unmap_impl(wm, (*xwindow).window);
 }
 
-unsafe fn handle_unmap_impl(wm: &mut crate::window_manager::WindowManager, xwindow: *mut XwaylandWindow) {
-    let id = (*xwindow).window;
-    let surface = (*xwindow).xsurface().surface();
-    if !surface.is_null() {
-        ffi::river_wlr_surface_set_data(surface, std::ptr::null_mut());
-    }
+/// Unmap X11 window `id`: its surface's data goes first and its scene
+/// subtree last, around `Window::unmap`. The window is in the store for
+/// as long as its X11 implementation lives (`Window::destroy` asserts the
+/// implementation has gone).
+fn handle_unmap_impl(wm: &mut crate::window_manager::WindowManager, id: WindowId) {
+    let xwindow = match wm.windows.get(id).map(|w| w.impl_type()) {
+        Some(WindowImpl::Xwayland(xwindow)) if !xwindow.is_null() => xwindow,
+        _ => return,
+    };
+    // SAFETY (both blocks): as `Window::get_title`: `impl_type` names the
+    // window's live implementation (`set_impl`'s contract); no reference
+    // to it is held across `Window::unmap`, and unmapping does not free it
+    // (only its destroy signal does).
+    unsafe { (*xwindow).xsurface().clear_surface_data() };
     crate::window::Window::unmap(wm, id);
-    (*xwindow).surface_tree.destroy();
+    unsafe { (*xwindow).surface_tree.destroy() };
 }
 
 /// Where a toplevel's X window sits in X11 root coordinates (logical; the
@@ -1241,14 +1165,13 @@ unsafe extern "C" fn handle_set_override_redirect(listener: *mut ffi::wl_listene
     let surface = (*xsurface).surface;
     if !surface.is_null() {
         if ffi::river_wlr_surface_is_mapped(surface) {
-            handle_unmap_impl(wm, xwindow);
+            handle_unmap_impl(wm, id);
         }
-        handle_dissociate_impl(xwindow);
+        handle_dissociate_impl(&mut *xwindow);
     }
-    let server = crate::shared::server_ptr();
     handle_destroy_impl(wm, xwindow);
 
-    if let Err(e) = XwaylandOverrideRedirect::create(wm, xsurface, server) {
+    if let Err(e) = XwaylandOverrideRedirect::create(wm, xsurface) {
         log::error!("Failed to create XwaylandOverrideRedirect: {}", e);
     }
 }

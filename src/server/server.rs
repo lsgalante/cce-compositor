@@ -487,7 +487,7 @@ unsafe extern "C" fn handle_new_xwayland_surface(listener: *mut ffi::wl_listener
     log::info!("new xwayland surface");
 
     if (*xsurface).override_redirect {
-        if let Err(e) = crate::xwayland_override_redirect::XwaylandOverrideRedirect::create(wm, xsurface, server) {
+        if let Err(e) = crate::xwayland_override_redirect::XwaylandOverrideRedirect::create(wm, xsurface) {
             log::error!("Failed to create xwayland override redirect surface: {}", e);
         }
     } else {
