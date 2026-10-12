@@ -1596,6 +1596,27 @@ closed, used to overwrite its entry. In a shadow, an X11 client named in
 windowstate --remove/--add FULLSCREEN`, since a fullscreen set before map
 sends no request).
 
+### Tearing (wp_tearing_control_v1)
+
+A fullscreen window that asks to tear page-flips its output without waiting
+for vblank (since 2026-10-11; before, `Window::presentation_hint` was a stub
+that always said vsync, so a game with vsync off was still held to 60 Hz).
+`presentation_hint` reads the root surface's hint from wlroots; Xwayland sets
+the same hint for an X client's async Present flips, so a Proton game with
+DXVK's `IMMEDIATE` present mode qualifies. `render_finish` sets
+`Output::rendering_requested.tearing` for the output of each window that is
+`fullscreen_on_top` with an async hint — never one that stepped aside, sits
+on the desk in overview, or is behind the lock screen — and the existing
+commit path (`render_and_commit`) tries a tearing page flip, falling back to
+vsync for the rest of the episode when the test commit says no. A hint
+change alone runs no transaction, so `tearing.rs` listens to each hint
+object and asks for a render pass. `window_manager { allow_tearing
+(bool)false }` turns it off. Each change logs `output …: tearing on|off` at
+info. A shadow proves the selection (`vkcube --wsi wayland|xcb
+--present_mode 0`, then `set-mode fullscreen`; `--present_mode 2` never
+tears) but not the flip: headless has no KMS, so whether the panel accepts
+an async flip of the composited buffer is live-only.
+
 ### xdg-activation
 
 `handle_request_activate` (`server.rs`) runs for every activation wlroots

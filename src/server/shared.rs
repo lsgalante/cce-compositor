@@ -65,6 +65,7 @@ pub struct Handles {
     pub default_keymap: crate::wlr::Wlr<ffi::xkb_keymap>,
     pub foreign_toplevel_list: crate::wlr::Wlr<ffi::wlr_ext_foreign_toplevel_list_v1>,
     pub foreign_toplevel_manager: crate::wlr::Wlr<ffi::wlr_foreign_toplevel_manager_v1>,
+    pub tearing_control: crate::wlr::Wlr<ffi::wlr_tearing_control_manager_v1>,
     /// The "default" seat, once `InputManager::init` has created it (null
     /// while it is being created, and after the deinit).
     pub default_seat: Cell<*mut crate::seat::Seat>,
@@ -92,6 +93,7 @@ thread_local! {
             default_keymap: crate::wlr::Wlr::null(),
             foreign_toplevel_list: crate::wlr::Wlr::null(),
             foreign_toplevel_manager: crate::wlr::Wlr::null(),
+            tearing_control: crate::wlr::Wlr::null(),
             default_seat: Cell::new(std::ptr::null_mut()),
         },
     });

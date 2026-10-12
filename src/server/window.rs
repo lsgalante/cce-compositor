@@ -2212,17 +2212,19 @@ impl Window {
 
     pub unsafe fn presentation_hint(&self) -> ffi::zcce_output_v1_presentation_mode {
         let root = self.root_surface();
-        if root.is_null() {
+        let manager = crate::shared::handles().tearing_control.ptr();
+        if root.is_null() || manager.is_null() {
             return ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_VSYNC;
         }
-        
-        // tearing control check stub:
-        // switch (server.tearing_control_manager.hintFromSurface(root)) {
-        //     .async => .async,
-        //     .vsync => .vsync,
-        // }
-        // For now, return VSYNC by default.
-        ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_VSYNC
+        // The client's wp_tearing_control_v1 hint on its root surface
+        // (Xwayland sets it for an X client's async Present flips).
+        if ffi::wlr_tearing_control_manager_v1_surface_hint_from_surface(manager, root)
+            == ffi::wp_tearing_control_v1_presentation_hint_WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC
+        {
+            ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_ASYNC
+        } else {
+            ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_VSYNC
+        }
     }
 
     pub unsafe fn notify_title(wm: &mut crate::window_manager::WindowManager, id: WindowId) {

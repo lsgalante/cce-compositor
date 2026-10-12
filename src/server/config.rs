@@ -199,6 +199,9 @@ pub struct Layout {
     /// X11 windows kept in the logical world while `xwayland_hidpi` is on
     /// (see `xwayland_window::x11_scale_for`).
     pub xwayland_hidpi_except: Vec<String>,
+    /// A fullscreen window's tearing hint is honoured (see
+    /// `WindowManagerConfig::allow_tearing`).
+    pub allow_tearing: bool,
     /// Trackpad-to-view-drag emulation (see `cursor::ViewDrag`).
     pub touchpad_view_apps: Vec<String>,
     pub touchpad_view_swipe_tumble: bool,
@@ -382,6 +385,7 @@ impl Default for Layout {
             gesture_binds: Vec::new(),
             xwayland_hidpi: true,
             xwayland_hidpi_except: Vec::new(),
+            allow_tearing: true,
             touchpad_view_apps: Vec::new(),
             touchpad_view_swipe_tumble: false,
             touchpad_view_sensitivity: 1.0,
@@ -560,6 +564,12 @@ pub struct WindowManagerConfig {
     /// ~170/s configure loop), and only a compositor fullscreen or tiling
     /// overrides its size.
     pub xwayland_hidpi_except: Option<Vec<String>>,
+    /// Let a window that asks to tear (wp_tearing_control_v1 `async`: a game
+    /// with vsync off, or an X11 one Xwayland forwards the same way) page-flip
+    /// its output without waiting for vblank, while it is the fullscreen
+    /// window on top of that output. Default on; a window that never asks is
+    /// never torn. KDL: `allow_tearing (bool)false` to always wait for vblank.
+    pub allow_tearing: Option<bool>,
     /// Apps whose windows turn trackpad input into a view drag (Space +
     /// button) — see `cursor::ViewDrag`. A scroll over one of their popups
     /// becomes a wheel under a held Ctrl instead — see `cursor::PopupWheel`.
@@ -1746,6 +1756,15 @@ style {
         assert_eq!(off.window_manager.unwrap().osk_on_touch, Some(false));
         let unset = parse_kdl_config("window_manager {\n}").unwrap();
         assert_eq!(unset.window_manager.unwrap().osk_on_touch, None);
+    }
+
+    #[test]
+    fn test_kdl_allow_tearing() {
+        let off = parse_kdl_config("window_manager {\n allow_tearing (bool)false\n}").unwrap();
+        assert_eq!(off.window_manager.unwrap().allow_tearing, Some(false));
+        // Unset is None, which `parse_config` reads as on.
+        let unset = parse_kdl_config("window_manager {\n}").unwrap();
+        assert_eq!(unset.window_manager.unwrap().allow_tearing, None);
     }
 
     #[test]

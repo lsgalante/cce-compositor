@@ -82,6 +82,8 @@ pub mod xkb_config;
 pub mod idle_inhibit_manager;
 #[path = "server/idle.rs"]
 pub mod idle;
+#[path = "server/tearing.rs"]
+pub mod tearing;
 #[path = "server/lock_manager.rs"]
 pub mod lock_manager;
 #[path = "server/sleep_lock.rs"]

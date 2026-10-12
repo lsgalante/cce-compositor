@@ -461,6 +461,33 @@ impl WindowManager {
             }
         }
 
+        // Tearing (wp_tearing_control_v1): an output page-flips without
+        // waiting for vblank only while the window on top of it is a
+        // fullscreen one asking to (`presentation_hint`). Not for a window
+        // that stepped aside or sits on the desk in overview, and not behind
+        // the lock screen. A hint change alone runs no transaction, so
+        // `tearing.rs` asks for a render pass to land here.
+        let mut tearing: Vec<*mut crate::output::Output> = Vec::new();
+        if crate::shared::layout().allow_tearing && crate::shared::unlocked() {
+            for window in self.windows.values() {
+                if !window.closed
+                    && matches!(window.state, crate::window::WindowState::Mapped)
+                    && fullscreen_on_top(self, window)
+                    && window.presentation_hint()
+                        == ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_ASYNC
+                {
+                    tearing.push(window.fullscreen_output(stores));
+                }
+            }
+        }
+        for output in self.outputs.values_mut() {
+            let wanted = tearing.contains(&(output as *mut crate::output::Output));
+            if output.rendering_requested.tearing != wanted {
+                log::info!("output {:?}: tearing {}", output.id, if wanted { "on" } else { "off" });
+            }
+            output.rendering_requested.tearing = wanted;
+        }
+
         sys.om.commit_output_state(sys.lock, &self.outputs);
 
         for seat in self.seats.values_mut() {

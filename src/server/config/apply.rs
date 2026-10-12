@@ -58,6 +58,11 @@ pub fn parse_config(
         .as_ref()
         .and_then(|wm| wm.xwayland_hidpi_except.clone())
         .unwrap_or_default();
+    next_layout.allow_tearing = config
+        .window_manager
+        .as_ref()
+        .and_then(|wm| wm.allow_tearing)
+        .unwrap_or(true);
     {
         let tv = config.window_manager.as_ref();
         next_layout.touchpad_view_apps = tv.and_then(|w| w.touchpad_view_apps.clone()).unwrap_or_default();

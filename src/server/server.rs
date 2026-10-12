@@ -295,7 +295,6 @@ pub struct Server {
     pub wlr_foreign_toplevel_manager: *mut ffi::wlr_foreign_toplevel_manager_v1,
     pub foreign_toplevel_list: *mut ffi::wlr_ext_foreign_toplevel_list_v1,
     // pub toplevel_capture_source_manager: *mut ffi::wlr_ext_foreign_toplevel_image_capture_source_manager_v1,
-    pub tearing_control_manager: *mut ffi::wlr_tearing_control_manager_v1,
 
     pub xwayland: *mut ffi::wlr_xwayland,
 
@@ -316,6 +315,7 @@ pub struct Server {
     pub new_xdg_toplevel: crate::listener::Listener,
     pub new_toplevel_decoration: crate::listener::Listener,
     pub request_activate: crate::listener::Listener,
+    pub new_tearing_hint: crate::listener::Listener,
     pub request_set_cursor_shape: crate::listener::Listener,
     // pub toplevel_capture_request: crate::listener::Listener,
     pub new_xsurface: crate::listener::Listener,
@@ -803,7 +803,7 @@ impl Server {
             if tearing_control_manager.is_null() {
                 return Err("Failed to create tearing control manager");
             }
-            self.tearing_control_manager = tearing_control_manager;
+            crate::shared::handles().tearing_control.set(tearing_control_manager);
 
             // Setup Xwayland if runtime requested
             if runtime_xwayland {
@@ -880,6 +880,7 @@ impl Server {
             self.new_xdg_toplevel.connect(&mut (*xdg_shell_cast).events.new_toplevel, handle_new_xdg_toplevel);
             self.new_toplevel_decoration.connect(&mut (*xdg_decoration_manager_cast).events.new_toplevel_decoration, handle_new_toplevel_decoration);
             self.request_activate.connect(&mut (*xdg_activation_cast).events.request_activate, handle_request_activate);
+            self.new_tearing_hint.connect(&mut (*tearing_control_manager).events.new_object, crate::tearing::handle_new_tearing_hint);
             self.request_set_cursor_shape.connect(&mut (*cursor_shape_manager_cast).events.request_set_shape, handle_request_set_cursor_shape);
             // self.toplevel_capture_request.connect(&mut (*toplevel_capture_source_manager_cast).events.new_request, handle_toplevel_capture_request);
 
@@ -942,6 +943,7 @@ impl Server {
             self.new_xdg_toplevel.disconnect();
             self.new_toplevel_decoration.disconnect();
             self.request_activate.disconnect();
+            self.new_tearing_hint.disconnect();
             self.request_set_cursor_shape.disconnect();
 
             // 4. Destroy Xwayland if active
