@@ -39,6 +39,11 @@ pub struct XdgPopup {
     pub reposition: crate::listener::Listener,
 }
 
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for XdgPopup {}
+
 impl XdgPopup {
     /// `root` is the tree the popup's root surface's popups live in: for a
     /// top-level menu the same tree as `parent`, for a submenu the one its

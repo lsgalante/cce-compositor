@@ -1441,7 +1441,8 @@ mod tests {
     #[test]
     fn test_my_config() {
         if let Some(path) = default_config_path() {
-            let mut server = crate::server::Server::default();
+            // SAFETY: the test's own server, which meets no other.
+            let mut server = unsafe { crate::server::Server::zeroed() };
             parse_config(&path, &mut server.wm, None).unwrap();
             assert!(!crate::shared::layout().desktop_gap_color.is_empty());
             assert!(crate::shared::layout().desktop_gap_width >= 0);

@@ -387,20 +387,22 @@ pointers into wlroots C structs, and `wl_listener` callbacks throughout.
 ### Key FFI idiom — `container_of!`
 
 `src/server/server.rs` defines the `container_of!` macro (the Rust equivalent of
-Zig's `@fieldParentPtr` / the C `wl_container_of`). wlroots delivers events through
-embedded listener fields; callbacks use `container_of!(listener, Struct, field)`
-to recover the owning Rust struct from a listener pointer. Many wlroots structs are
-also redefined as hand-written `#[repr(C)]` mirrors in `server.rs` because bindgen
-treats them as opaque.
+Zig's `@fieldParentPtr` / the C `wl_container_of`): the struct around a field,
+from the field's address. It still walks intrusive `wl_list`s (a `link` field
+back to its struct) — but a LISTENER callback no longer uses it: since
+2026-10-12 the listener lives on the heap, and the callback finds its struct
+through it (`listener_owner!` / `listener_id!`, next section). Many wlroots
+structs are also redefined as hand-written `#[repr(C)]` mirrors in `server.rs`
+because bindgen treats them as opaque.
 
 ### Listeners are `crate::listener::Listener` (since 2026-10-10)
 
-Every listener field is a `Listener` (`listener.rs`), `repr(transparent)` over
-`ffi::wl_listener`, so `container_of!` finds it as before. Register with
-`field.connect(signal, handler)`; unregister with `field.disconnect()`. A
-registration call that takes a raw listener (`wl_display_add_destroy_listener`
-and kin) gets one from `field.prepare(handler)`, and a handler called directly
-takes `field.as_ptr()`. What the type adds:
+Every listener field is a `Listener` (`listener.rs`). Register with
+`field.connect(signal, handler)` (or `connect_keyed`, below); unregister with
+`field.disconnect()`. A registration call that takes a raw listener
+(`wl_display_add_destroy_listener` and kin) gets one from
+`field.prepare(handler)`, and a handler called directly takes
+`field.as_ptr()`. What the type adds:
 
 - `connect` unlinks first, so connecting twice moves the listener instead of
   linking it into a second list. A pointer constraint re-activated without a
@@ -412,6 +414,47 @@ takes `field.as_ptr()`. What the type adds:
   comes after that writes into freed memory.
 - A zeroed `Listener` is a valid unconnected one, so `std::mem::zeroed()`
   initialisers need nothing.
+
+**The `wl_listener` lives on the heap, and the owner is found through it**
+(since 2026-10-12). A `Listener` owns a heap cell holding the `wl_listener`
+and a record of its owner, so moving a listener — or the struct around it —
+never touches a signal list. Until then a `Listener` WAS its `wl_listener`
+and callbacks used `container_of!` on its address, which made every
+listener-bearing struct unmovable by convention only: two `&mut Seat` from
+`wm.seats.values_mut()` and a safe `mem::swap` cross-linked their signal
+lists. A callback finds its owner one of two ways:
+
+- **By key**, for an owner SAFE code can move — one a store hands out as
+  `&mut` or `Box`: `Window` (its commit listener), `Output`, `Seat`, and the
+  `Cursor` and `InputRelay` inside a seat (40 listeners).
+  `field.connect_keyed(signal, handler, id)` records the store id; the
+  callback calls `listener_id!(listener, wm.seats, SeatId,
+  cursor.motion_listener)` (seat-side handlers use `listener_seat!` /
+  `listener_seat_ptr!` from `window_macros.rs`, outputs `output_of!`), which
+  looks the id up and checks the owner found there holds this very
+  listener. No address that a move could have left stale is dereferenced.
+  The owner must stay in its store while its keyed listeners are
+  connected, which is why `Seat::destroy(wm, sid)` tears the seat down IN
+  the store and takes it out last (`wlr_seat_destroy` can still run relay
+  listeners).
+- **By field**, for every other owner: `connect` records the field it was
+  called on, and `listener_owner!(listener, Type, field)` checks that field
+  still holds the listener and returns the struct around it (what
+  `container_of!` did). `Type` must implement `crate::listener::Anchored`,
+  an `unsafe trait` whose impl, beside each struct, says why safe code
+  cannot move one: reached only through raw pointers (the `Box::into_raw`
+  shell objects, devices, popups, constraints, …), or a field of the one
+  `Server`. `Server::zeroed` (formerly `Default`) is `unsafe` and
+  `InputManager` / `LockManager` lost their `Default`s for that claim: a
+  safe second value is what a `mem::swap` needs. A store-held type cannot
+  be `Anchored`, so `listener_owner!` on one does not compile.
+
+Either check failing means an owner moved after connecting: the callback
+logs `listener …: its owner moved or is gone` and aborts
+(`listener::misrouted`) rather than run on the wrong object. A linked
+`wl_list` HEAD in a movable owner is boxed for the same reason
+(`Seat::keyboard_groups`, `InputRelay::input_popups`); `InputPopup` names
+its seat by id rather than pointing into the relay.
 
 The `Server` is `std::mem::forget`ten after `deinit` (`run_server.rs`): by
 then the display and every wlroots object are gone, and its subsystems'
@@ -526,16 +569,18 @@ private, with an `unsafe` setter if other modules must write it. Every shared
 stay public. Anything that changes the shape of a scene subtree is off
 limits inside `Handle::for_each_buffer` (an `unsafe fn` for that reason).
 
-KNOWN GAP (2026-10-12, second review): structs that embed a LINKED
-`wl_listener` (`Listener` fields) or a `wl_list` head — `Seat`, `Cursor`,
-`Window`, `Output`, the shell objects — must never move once linked, and
-nothing enforces it: safe code holding two `&mut` of the same type can
-`mem::swap` them and corrupt the signal lists. Every listener-bearing
-struct lives in a `Box` at a fixed address by convention only. The fix is
-structural (box or pin each `Listener`, and re-derive the owner through
-listener data instead of `container_of!`), not a per-field privacy pass;
-until then, do not add SAFETY claims that would also need "and it never
-moved". `Seat::keyboard_groups` is boxed for that reason.
+The listener half of the second review's KNOWN GAP (listener-bearing
+structs movable by a safe `mem::swap`) is CLOSED since 2026-10-12: see
+"Listeners are `crate::listener::Listener`". KNOWN GAP still open: wlroots
+user data that names a movable owner by ADDRESS — `wlr_seat.data` (read by
+`Seat::id_of` and the pointer constraint's destroy / node-destroy
+teardown) and `wlr_output.data` (the output configuration apply, the power
+manager, layer-surface arrange, `LockSurface::get_output`). After a safe
+swap of two seats or outputs those read the other one, or freed memory once
+its slot is freed. The fix is to store the id there; the constraint
+teardown deliberately avoids the window manager (it runs inside its calls),
+so it needs a store lookup that touches no window-manager memory first. Do
+not add SAFETY claims that need "and the seat/output never moved".
 
 Only calls whose other arguments are values (or another `Wlr`) are wrapped:
 a call that also passes a raw surface, device or keyboard pointer stays an
@@ -614,9 +659,8 @@ code reaches a window only by borrowing it from the store: `get` /
 `get_mut` by id, `values` / `values_mut` to walk them, `ids()` a copy for
 a loop that needs the window manager mutably. Since 2026-10-11 nothing
 outside the store holds or dereferences a `*mut Window`; `ptr` exists for
-handing the address to C (a wlroots handle's `data`), and the one
-remaining dereference is `handle_window_commit` reading its own id from
-the listener it was recovered through. The store holds the allocations
+handing the address to C (a wlroots handle's `data`); `handle_window_commit`
+gets its id from its keyed listener (`listener_id!`). The store holds the allocations
 as raw pointers, not `Box`es, because a `Box` asserts uniqueness that
 the addresses wlroots hands back (`container_of!` on a window's
 listener) would violate.
@@ -650,7 +694,8 @@ for the walks not yet converted to borrows; `values()`, `get` and
 `crate::seat::Seats`, `seat/store.rs`, by `SeatId`, an index into slots
 that are never reused): a seat a client asked to destroy is taken out by
 the manage pass (`Seat::manage_start` returns true) and handed to
-`Seat::destroy`, which takes the box; the deinit takes each in turn. Test two outputs with a copy of `cce-shadow` whose
+`Seat::destroy(wm, sid)`, which tears it down in the store and takes the
+box out last; the deinit does the same for each in turn. Test two outputs with a copy of `cce-shadow` whose
 `WLR_HEADLESS_OUTPUTS=1` reads 2. Both stores live on the WINDOW MANAGER, beside `windows`
 (since 2026-10-11; they were `om.outputs` and `input_manager.seats`), for
 the reason the window store does: each holds raw pointers, so a `&mut
@@ -765,7 +810,8 @@ cursor method needs of the seat is its `wlr_seat`, which the cursor holds
 itself (`Cursor::wlr_seat`), and anything more makes it a `(wm, sid)`
 function (`hscroll_shift_axis` for `ensure_synthetic_keyboard`). The relay
 has none either. The wlroots entry points read only the cursor's `sid`
-(and `wlr_seat`) from the listener (`(*container_of!(..)).sid`). Lookups that only need the pointer position
+(and `wlr_seat`), through the seat their keyed listener names
+(`listener_seat!`). Lookups that only need the pointer position
 take it as arguments (`view_drag_target`, `hscroll_shift_target`), and
 `ccectl`'s `for_each_cursor` / `for_each_seat_touch` hand closures a
 `SeatId`. The input-method relay is the same: `InputRelay::focus`,
@@ -777,7 +823,7 @@ A `KeyboardGroup` (its own allocation, on the seat's `keyboard_groups`
 `wl_list`) finds its seat by `sid` in the key and modifier handlers and
 `get_input_method_grab(wm)`; it keeps no seat pointer: `unref(seat, ..)`
 is handed the seat by its caller (`Seat::destroy` passes the seat it is
-tearing down, out of the store by then; `Keyboard::destroy` passes null,
+tearing down, still in the store; `Keyboard::destroy` passes null,
 the device having been detached first). A wlroots callback handed a
 `wlr_seat` turns it into an id with `Seat::id_of(wlr_seat)` and borrows the
 seat from `wm.seats` (text inputs, the new-input-method handler, the xdg
@@ -2048,8 +2094,9 @@ straight to the focused client and never meets the chord matcher.
 
 - This is systems FFI code: raw pointers and `unsafe` are the norm. When adding a
   wlroots event handler, follow the existing pattern — embed a `Listener`,
-  `connect` it, recover `self` with `container_of!`, and `disconnect` it in the
-  struct's destroy path.
+  `connect` it and recover the struct with `listener_owner!` (an `Anchored`
+  struct) or `connect_keyed` it and recover the id with `listener_id!` (a
+  store-held one), and `disconnect` it in the struct's destroy path.
 - Keep river's SPDX/copyright headers on files that carry them.
 - `scratch/` and `scratch/*` (and the many `.png`/`.log`/`patch*.py` files in the
   parent dir) are ad-hoc debugging artifacts, not part of the build.

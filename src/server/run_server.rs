@@ -139,7 +139,8 @@ pub fn run_server() {
         detect_classic(cmd);
     }
 
-    let mut server = Box::new(server::Server::default());
+    // SAFETY: the one server of the process.
+    let mut server = Box::new(unsafe { server::Server::zeroed() });
     if let Err(e) = server.init(!args.no_xwayland) {
         log::error!("failed to initialize server: {}", e);
         std::process::exit(1);

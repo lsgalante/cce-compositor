@@ -13,6 +13,11 @@ pub struct DragIcon {
     pub destroy: crate::listener::Listener,
 }
 
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for DragIcon {}
+
 impl DragIcon {
     pub unsafe fn create(
         wlr_drag_icon: *mut ffi::wlr_drag_icon,

@@ -55,6 +55,11 @@ pub struct XwaylandWindow {
     pub refusals: [Option<(u32, u32)>; 2],
 }
 
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for XwaylandWindow {}
+
 /// A window geometry in X11 root coordinates — physical pixels under
 /// `xwayland_hidpi` (see `x11_scale`), the same units as the
 /// `wlr_xwayland_surface` fields it is compared against.

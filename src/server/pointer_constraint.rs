@@ -33,6 +33,11 @@ pub struct PointerConstraint {
     node_destroy_listener: crate::listener::Listener,
 }
 
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for PointerConstraint {}
+
 /// Whether a pointer constraint may hold the pointer now: in normal mode
 /// with no Super-held window adjust. Overview and adjust mode drive the
 /// pointer themselves, and a game keeping keyboard focus must not freeze

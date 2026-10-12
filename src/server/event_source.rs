@@ -17,7 +17,7 @@
 //! - `remove` is idempotent and leaves the timer unset, and dropping a
 //!   `Timer` removes it, so a struct freed with `Box::from_raw` leaves no
 //!   timer behind to fire into freed memory.
-//! - A zeroed field (`std::mem::zeroed()`, `Server::default`'s zero-fill)
+//! - A zeroed field (`std::mem::zeroed()`, `Server::zeroed`'s zero-fill)
 //!   is a valid unset timer: a null source and `shared: false`.
 //! - `on_shared_loop` is the usual way to make one: the callback gets an
 //!   integer `token`, never a pointer, and finds what it acts on itself (the

@@ -317,6 +317,11 @@ pub struct Server {
     pub xwayland_ready: crate::listener::Listener,
 }
 
+// SAFETY: there is one, which only the unsafe `Server::zeroed` makes and
+// `run_server` never frees; with no safe constructor, safe code has no second
+// one to swap it with or replace it by.
+unsafe impl crate::listener::Anchored for Server {}
+
 unsafe extern "C" fn terminate(_signum: std::os::raw::c_int, data: *mut std::ffi::c_void) -> std::os::raw::c_int {
     let wl_server = data as *mut ffi::wl_display;
     ffi::wl_display_terminate(wl_server);
@@ -999,8 +1004,15 @@ impl Server {
     }
 }
 
-impl Default for Server {
-    fn default() -> Self {
+impl Server {
+    /// A zero-filled server for `init` to bring up (collections written
+    /// valid). Not `Default`: the `Anchored` claims of the server and its
+    /// subsystems rest on safe code having no second one to swap with.
+    ///
+    /// # Safety
+    /// The one per process (`run_server`), or a test's own that never meets
+    /// it: no value may be moved between two servers.
+    pub unsafe fn zeroed() -> Self {
         let mut server = std::mem::MaybeUninit::<Server>::uninit();
         unsafe {
             // Zero-initialize the memory (C structures and primitive fields)

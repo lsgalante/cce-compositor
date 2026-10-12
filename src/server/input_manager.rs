@@ -33,6 +33,11 @@ pub struct InputManager {
 
 }
 
+// SAFETY: a field of the one `Server`, which only the unsafe `Server::zeroed`
+// makes and `run_server` never frees. It has no safe constructor, so safe code
+// holding the one `&mut` to it has nothing to swap it with or replace it by.
+unsafe impl crate::listener::Anchored for InputManager {}
+
 thread_local! {
     /// The pending deferred pointer-focus re-evaluation (see
     /// [`InputManager::schedule_pointer_refresh`]): one idle source
@@ -51,22 +56,9 @@ pub struct InputManagerObject {
     pub link: ffi::wl_list,
 }
 
-impl Default for InputManager {
-    fn default() -> Self {
-        let mut im = std::mem::MaybeUninit::<InputManager>::zeroed();
-        // SAFETY: every field but the device registry is a raw pointer, a C
-        // struct or a `Listener`, all valid zeroed; the registry is written
-        // before the value is assumed initialised.
-        unsafe {
-            std::ptr::write(std::ptr::addr_of_mut!((*im.as_mut_ptr()).devices), crate::registry::Registry::new());
-            im.assume_init()
-        }
-    }
-}
-
 impl InputManager {
     /// Write an empty device registry into a zero-filled manager
-    /// (`Server::default`), whose registry bytes are not yet a valid `Vec`.
+    /// (`Server::zeroed`), whose registry bytes are not yet a valid `Vec`.
     ///
     /// # Safety
     /// `this` points at an `InputManager` whose `devices` field has not been

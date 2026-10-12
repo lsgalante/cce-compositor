@@ -168,6 +168,11 @@ pub struct IdleManager {
     session_listening: bool,
 }
 
+// SAFETY: a field of the one `Server`, which only the unsafe `Server::zeroed`
+// makes and `run_server` never frees. It has no safe constructor, so safe code
+// holding the one `&mut` to it has nothing to swap it with or replace it by.
+unsafe impl crate::listener::Anchored for IdleManager {}
+
 /// One `idle inhibit` lease.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalLease {

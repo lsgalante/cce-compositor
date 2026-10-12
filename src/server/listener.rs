@@ -40,7 +40,7 @@
 //!   listener behind in a signal it outlived. A callback may drop its own
 //!   listener: every libwayland emit is done with a listener once its
 //!   `notify` returns.
-//! - A zeroed `Listener` (what `std::mem::zeroed()` and `Server::default`'s
+//! - A zeroed `Listener` (what `std::mem::zeroed()` and `Server::zeroed`'s
 //!   zero-fill produce) is a valid unconnected one with no cell yet.
 
 use crate::ffi;
@@ -237,8 +237,11 @@ impl Drop for Listener {
 /// alongside another (a `mem::swap`), a value of the type (a
 /// `mem::replace` / `take`), or a `Box` of one (moved out of with `*`).
 /// Implement it for a type that is reached only through raw pointers, or
-/// that lives in the leaked `Server`; an owner a store hands out as `&mut`
-/// keys its listeners instead (`connect_keyed`, `listener_id!`).
+/// that lives in the one `Server` (whose constructor, `Server::zeroed`, is
+/// unsafe for this reason); an owner a store hands out as `&mut` keys its
+/// listeners instead (`connect_keyed`, `listener_id!`). A linked `wl_list`
+/// head or link needs the same of whatever holds it; in a movable owner it
+/// is boxed (`Seat::keyboard_groups`, `InputRelay::input_popups`).
 pub unsafe trait Anchored {}
 
 /// A store id a keyed listener records (`connect_keyed`, `listener_id!`).
@@ -297,10 +300,13 @@ pub fn misrouted(what: &str) -> ! {
 
 /// The `$owner` whose `$field` (a `Listener`) a signal called back through,
 /// as `*mut $owner`; aborts (`misrouted`) if that field no longer holds the
-/// listener. Unsafe: see `listener::field_of`.
+/// listener. `$owner` must be `Anchored`: a type safe code can move keys its
+/// listeners instead. Unsafe: see `listener::field_of`.
 #[macro_export]
 macro_rules! listener_owner {
     ($listener:expr, $owner:path, $field:ident) => {{
+        fn _anchored<T: $crate::listener::Anchored>() {}
+        _anchored::<$owner>();
         let _: fn(&$owner) -> &$crate::listener::Listener = |o| &o.$field;
         match $crate::listener::field_of($listener) {
             Some(field) => $crate::container_of!(field, $owner, $field),

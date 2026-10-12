@@ -208,7 +208,7 @@ pub struct LayerSurfaces(crate::slotmap::SlotMap<*mut LayerSurface>);
 
 impl LayerSurfaces {
     /// Write an empty store into a zero-filled window manager
-    /// (`Server::default`). The only way to make one: with no public
+    /// (`Server::zeroed`). The only way to make one: with no public
     /// constructor, safe code has no second store to swap in for the live
     /// one, so `create`/destroy stay its only writers.
     ///
@@ -270,6 +270,11 @@ pub struct LayerSurface {
     pub new_popup: crate::listener::Listener,
     pub parent_offset_applied: bool,
 }
+
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for LayerSurface {}
 
 impl LayerSurface {
     /// `surfaces` is the window manager's layer-surface store.

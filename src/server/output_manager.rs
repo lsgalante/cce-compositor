@@ -53,6 +53,11 @@ pub struct OutputManager {
     pub gamma_control_manager: *mut ffi::wlr_gamma_control_manager_v1,
 }
 
+// SAFETY: a field of the one `Server`, which only the unsafe `Server::zeroed`
+// makes and `run_server` never frees. It has no safe constructor, so safe code
+// holding the one `&mut` to it has nothing to swap it with or replace it by.
+unsafe impl crate::listener::Anchored for OutputManager {}
+
 /// The output at (or nearest to) a layout point, through the shared
 /// output layout: for code with no output manager in hand. Null before the
 /// layout exists or while it holds no output.

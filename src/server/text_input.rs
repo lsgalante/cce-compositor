@@ -14,6 +14,11 @@ pub struct TextInput {
     pub destroy: crate::listener::Listener,
 }
 
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for TextInput {}
+
 impl TextInput {
     pub unsafe fn create(wm: &mut crate::window_manager::WindowManager, wlr_text_input: *mut ffi::wlr_text_input_v3) -> Result<(), &'static str> {
         let Some(sid) = Seat::id_of((*wlr_text_input).seat) else { return Err("Seat is null") };

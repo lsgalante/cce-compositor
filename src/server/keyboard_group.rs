@@ -44,6 +44,11 @@ pub struct KeyboardGroup {
     pub keyboards: ffi::wl_list, // list of keyboards in this group
 }
 
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for KeyboardGroup {}
+
 impl KeyboardGroup {
     /// The group keyboard's current modifier state.
     pub fn modifiers(&self) -> ffi::wlr_keyboard_modifiers {

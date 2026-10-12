@@ -401,6 +401,11 @@ pub struct WindowManager {
     pub border_fade_running: bool,
 }
 
+// SAFETY: a field of the one `Server`, which only the unsafe `Server::zeroed`
+// makes and `run_server` never frees. It has no safe constructor, so safe code
+// holding the one `&mut` to it has nothing to swap it with or replace it by.
+unsafe impl crate::listener::Anchored for WindowManager {}
+
 /// `CCE_DIRTY_BACKTRACE=1` — who called `dirty_windowing`. Separate from the
 /// log level because the capture is expensive enough to distort what it measures.
 pub(crate) fn dirty_backtrace_debug() -> bool {

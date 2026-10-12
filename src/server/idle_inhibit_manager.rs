@@ -13,8 +13,13 @@ pub struct IdleInhibitManager {
     inhibitors: crate::registry::Registry<IdleInhibitor>,
 }
 
+// SAFETY: a field of the one `Server`, which only the unsafe `Server::zeroed`
+// makes and `run_server` never frees. It has no safe constructor, so safe code
+// holding the one `&mut` to it has nothing to swap it with or replace it by.
+unsafe impl crate::listener::Anchored for IdleInhibitManager {}
+
 impl IdleInhibitManager {
-    /// Write an empty registry into a zero-filled manager (`Server::default`).
+    /// Write an empty registry into a zero-filled manager (`Server::zeroed`).
     ///
     /// # Safety
     /// As `InputManager::init_registry_in_place`.
@@ -137,6 +142,11 @@ pub struct IdleInhibitor {
     pub wlr_inhibitor: *mut ffi::wlr_idle_inhibitor_v1,
     pub listen_destroy: crate::listener::Listener,
 }
+
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for IdleInhibitor {}
 
 impl IdleInhibitor {
     pub unsafe fn create(

@@ -30,6 +30,11 @@ pub struct InputDevice {
     pub xkb_keyboard: Option<Box<crate::xkb_keyboard::XkbKeyboard>>,
 }
 
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for InputDevice {}
+
 pub struct InputDeviceObject {
     pub device: *mut InputDevice,
     pub resource: *mut ffi::wl_resource,

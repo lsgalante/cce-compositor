@@ -53,11 +53,21 @@ pub struct XdgToplevel {
     pub set_app_id: crate::listener::Listener,
 }
 
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for XdgToplevel {}
+
 pub struct XdgDecoration {
     pub wlr_decoration: *mut ffi::wlr_xdg_toplevel_decoration_v1,
     pub destroy: crate::listener::Listener,
     pub request_mode: crate::listener::Listener,
 }
+
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for XdgDecoration {}
 
 impl XdgToplevel {
     /// The `wlr_toplevel` hold; private, because a `Wlr` moved or swapped into

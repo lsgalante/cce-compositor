@@ -93,6 +93,10 @@ struct Slot {
     owned: bool,
 }
 
+// SAFETY: private to this module, where a `Handle` keeps it in a `Box` that is
+// dropped in place and never moved out of.
+unsafe impl crate::listener::Anchored for Slot {}
+
 unsafe extern "C" fn handle_node_destroy(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let slot = crate::listener_owner!(listener, Slot, destroy);
     (*slot).node = std::ptr::null_mut();

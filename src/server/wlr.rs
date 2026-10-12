@@ -24,7 +24,7 @@
 //!   zero value (null, `false`, `0`), so a field set after construction
 //!   (the cursor's, in `Cursor::init`) needs no null check at each use.
 //! - It is `repr(transparent)` over a `Cell<*mut T>`, so a zero-filled
-//!   field (`std::mem::zeroed()`, `Server::default`) is a valid unset one,
+//!   field (`std::mem::zeroed()`, `Server::zeroed`) is a valid unset one,
 //!   and setting through `&self` lets the shared, init-once handles
 //!   ([`crate::shared::Handles`]) be `Wlr`s too.
 //!

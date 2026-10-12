@@ -21,6 +21,11 @@ pub struct InputPopup {
     pub commit: crate::listener::Listener,
 }
 
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for InputPopup {}
+
 impl InputPopup {
     pub unsafe fn create(
         wm: &mut crate::window_manager::WindowManager,

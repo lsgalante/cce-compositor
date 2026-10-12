@@ -37,6 +37,11 @@ pub struct Keyboard {
     pub config: KeyboardConfig,
 }
 
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for Keyboard {}
+
 impl Keyboard {
     pub unsafe fn create(device: *mut InputDevice) -> *mut Self {
         let wlr_keyboard = ffi::wlr_keyboard_from_input_device((*device).wlr_device);

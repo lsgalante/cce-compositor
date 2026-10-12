@@ -21,6 +21,11 @@ struct TearingHint {
     destroy: crate::listener::Listener,
 }
 
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for TearingHint {}
+
 pub unsafe extern "C" fn handle_new_tearing_hint(_listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let control = data as *mut ffi::wlr_tearing_control_v1;
     if control.is_null() {

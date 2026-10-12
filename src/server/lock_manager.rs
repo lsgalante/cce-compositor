@@ -56,18 +56,17 @@ pub struct LockManager {
     pub new_surface: crate::listener::Listener,
 }
 
+// SAFETY: a field of the one `Server`, which only the unsafe `Server::zeroed`
+// makes and `run_server` never frees. It has no safe constructor, so safe code
+// holding the one `&mut` to it has nothing to swap it with or replace it by.
+unsafe impl crate::listener::Anchored for LockManager {}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockState {
     Unlocked,
     Locked,
     WaitingForBlank,
     WaitingForLockSurfaces,
-}
-
-impl Default for LockManager {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
 }
 
 impl LockManager {
@@ -323,6 +322,11 @@ pub struct LockSurface {
     pub map: crate::listener::Listener,
     pub surface_destroy: crate::listener::Listener,
 }
+
+// SAFETY: made by `Box::into_raw` and freed only by its own destroy path,
+// after its listeners are gone, and reached only through raw pointers: no safe
+// API returns a `&mut`, a `Box` or a value of it, so nothing safe can move it.
+unsafe impl crate::listener::Anchored for LockSurface {}
 
 thread_local! {
     /// Every live `LockSurface`: `create` adds it and `destroy` removes it
