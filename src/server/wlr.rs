@@ -506,6 +506,62 @@ impl Wlr<ffi::wlr_xwayland_surface> {
     }
 }
 
+impl Wlr<ffi::wlr_pointer_constraint_v1> {
+    /// The constrained surface, for comparing (or handing to wlroots while
+    /// the constraint lives); null when unset.
+    pub fn surface(&self) -> *mut ffi::wlr_surface {
+        self.live().map_or(std::ptr::null_mut(), |c| unsafe { (*c).surface })
+    }
+
+    /// The seat the constraint is for, if it is still in the store's hands:
+    /// wlroots destroys a seat's constraints inside `wlr_seat_destroy`, while
+    /// the seat's data is still its `Seat`.
+    pub fn seat_id(&self) -> Option<crate::seat::SeatId> {
+        let c = self.live()?;
+        // SAFETY: a live constraint's seat is live; its data is the `Seat`
+        // box or null (`Seat::id_of`).
+        unsafe { crate::seat::Seat::id_of((*c).seat) }
+    }
+
+    /// Whether it locks the pointer (rather than confining it).
+    pub fn is_lock(&self) -> bool {
+        self.live().is_some_and(|c| unsafe { (*c).type_ == ffi::wlr_pointer_constraint_v1_type_WLR_POINTER_CONSTRAINT_V1_LOCKED })
+    }
+
+    /// Whether surface point (`sx`, `sy`) is inside the constraint's region.
+    pub fn region_contains(&self, sx: f64, sy: f64) -> bool {
+        self.live().is_some_and(|c| unsafe {
+            ffi::pixman_region32_contains_point(&mut (*c).region, sx as i32, sy as i32, std::ptr::null_mut()) != 0
+        })
+    }
+
+    /// Where a motion from surface (`sx`, `sy`) to (`tx`, `ty`) stops when
+    /// confined to the region (`wlr_region_confine`); `None` when it cannot.
+    pub fn region_confine(&self, sx: f64, sy: f64, tx: f64, ty: f64) -> Option<(f64, f64)> {
+        let c = self.live()?;
+        let (mut nx, mut ny) = (0.0, 0.0);
+        unsafe { ffi::wlr_region_confine(&mut (*c).region, sx, sy, tx, ty, &mut nx, &mut ny) }.then_some((nx, ny))
+    }
+
+    /// The client's cursor hint (surface coordinates), when it set one.
+    pub fn cursor_hint(&self) -> Option<(f64, f64)> {
+        let c = self.live()?;
+        unsafe { (*c).current.cursor_hint.enabled.then(|| ((*c).current.cursor_hint.x, (*c).current.cursor_hint.y)) }
+    }
+
+    pub fn send_activated(&self) {
+        if let Some(c) = self.live() {
+            unsafe { ffi::wlr_pointer_constraint_v1_send_activated(c) }
+        }
+    }
+
+    pub fn send_deactivated(&self) {
+        if let Some(c) = self.live() {
+            unsafe { ffi::wlr_pointer_constraint_v1_send_deactivated(c) }
+        }
+    }
+}
+
 impl Wlr<ffi::wlr_output_layout> {
     /// Put `output` in the layout at (`x`, `y`), or move it there.
     pub fn add(&self, output: &Wlr<ffi::wlr_output>, x: i32, y: i32) {

@@ -470,11 +470,7 @@ impl Cursor {
     }
 
     pub unsafe fn update_state(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
-        let this = cursor_mut!(wm, sid, ());
-        let constraint = this.constraint;
-        if !constraint.is_null() {
-            (*constraint).update_state(wm);
-        }
+        crate::pointer_constraint::with_held(wm, sid, |c, wm| c.update_state(wm));
         let this = cursor_mut!(wm, sid, ());
         this.update_hovered();
         Cursor::passthrough(wm, sid, crate::util::msec_timestamp());
@@ -637,12 +633,8 @@ impl Cursor {
         self.arm_next_frame(idx);
     }
 
-    pub unsafe fn op_start_pointer(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
-        let this = cursor_mut!(wm, sid, ());
-        let constraint = this.constraint;
-        if !constraint.is_null() {
-            (*constraint).deactivate(wm);
-        }
+    pub fn op_start_pointer(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) {
+        crate::pointer_constraint::with_held(wm, sid, |c, wm| c.deactivate(wm));
         let this = cursor_mut!(wm, sid, ());
 
         log::debug!("entering cursor mode op");
@@ -713,16 +705,12 @@ impl Cursor {
     pub unsafe fn passthrough(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId, time_msec: u32) {
         // A pointer constraint takes hold once the pointer is over its
         // region (river does this here too).
-        let constraint = cursor_mut!(wm, sid, ()).constraint;
-        if !constraint.is_null() {
-            (*constraint).maybe_activate(wm);
-        }
+        crate::pointer_constraint::with_held(wm, sid, |c, wm| c.maybe_activate(wm));
         // While a constraint holds the pointer it is the client's: the
         // compositor's border band (resize/move handles inside the window
         // edge) must not take it, or a confined pointer pressed against the
         // edge loses the client.
-        let constrained = !constraint.is_null()
-            && matches!((*constraint).state, crate::pointer_constraint::PointerConstraintState::Active { .. });
+        let constrained = crate::pointer_constraint::with_held(wm, sid, |c, _| c.is_active()).unwrap_or(false);
         let this = cursor_mut!(wm, sid, ());
         let lx = this.x();
         let ly = this.y();
@@ -1326,17 +1314,12 @@ pub(crate) unsafe fn on_motion(wm: &mut crate::window_manager::WindowManager, si
             (*event).unaccel_dy,
         );
     }
-    let constraint = cursor.constraint;
-    if !constraint.is_null() && matches!((*constraint).state, crate::pointer_constraint::PointerConstraintState::Active { .. }) {
-        if !crate::pointer_constraint::applies_now() {
-            (*constraint).deactivate(wm);
-        } else if (*constraint).locks() {
-            // Locked: the pointer stays where it is.
-            return;
-        } else {
-            let cursor = cursor_mut!(wm, sid, ());
-            (*constraint).confine(cursor.x(), cursor.y(), &mut dx, &mut dy);
-        }
+    let (cx, cy) = (cursor.x(), cursor.y());
+    if let crate::pointer_constraint::MotionUnder::Locked =
+        crate::pointer_constraint::constrain_motion(wm, sid, cx, cy, &mut dx, &mut dy)
+    {
+        // Locked: the pointer stays where it is.
+        return;
     }
     let cursor = cursor_mut!(wm, sid, ());
 
@@ -1425,15 +1408,10 @@ pub(crate) unsafe fn on_motion_absolute(wm: &mut crate::window_manager::WindowMa
             dy,
         );
     }
-    let constraint = cursor.constraint;
-    if !constraint.is_null() && matches!((*constraint).state, crate::pointer_constraint::PointerConstraintState::Active { .. }) {
-        if !crate::pointer_constraint::applies_now() {
-            (*constraint).deactivate(wm);
-        } else if (*constraint).locks() {
-            return;
-        } else {
-            (*constraint).confine(cx, cy, &mut dx, &mut dy);
-        }
+    if let crate::pointer_constraint::MotionUnder::Locked =
+        crate::pointer_constraint::constrain_motion(wm, sid, cx, cy, &mut dx, &mut dy)
+    {
+        return;
     }
     let cursor = cursor_mut!(wm, sid, ());
     if dx != lx - cx || dy != ly - cy {

@@ -855,11 +855,18 @@ impl Seat {
     /// surface's client asked for becomes the cursor's, to take hold once
     /// the pointer is over its region (`PointerConstraint::maybe_activate`).
     unsafe fn sync_pointer_constraint(wm: &mut crate::window_manager::WindowManager, sid: SeatId, target_surface: *mut ffi::wlr_surface) {
-        let Some(seat) = wm.seats.get_mut(sid) else { return };
-        let current = seat.cursor.constraint();
-        if !current.is_null() && (*(*current).wlr_constraint).surface != target_surface {
-            log::info!("deactivating pointer constraint for surface, keyboard focus lost");
-            (*current).deactivate(wm);
+        if wm.seats.get(sid).is_none() {
+            return;
+        }
+        let lost = crate::pointer_constraint::with_held(wm, sid, |c, wm| {
+            let lost = c.wlr_constraint().surface() != target_surface;
+            if lost {
+                log::info!("deactivating pointer constraint for surface, keyboard focus lost");
+                c.deactivate(wm);
+            }
+            lost
+        });
+        if lost == Some(true) {
             seat_mut!(wm, sid).cursor.set_constraint(std::ptr::null_mut());
         }
         let seat = seat_mut!(wm, sid);

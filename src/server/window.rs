@@ -2737,9 +2737,7 @@ impl Window {
 /// briefly at the old zoom, which restore corrects.
 fn scale_surface_buffers(tree: &SceneTree, scale_x: f64, scale_y: f64, pin: bool) {
     let ancestor = tree.node();
-    // SAFETY: the closure only sets each buffer's dest size, position and
-    // opaque region; it destroys, reparents and restacks nothing.
-    unsafe { tree.for_each_buffer(|buffer, _sx, _sy| {
+    let scale_one = |buffer: *mut ffi::wlr_scene_buffer, _sx: i32, _sy: i32| {
         // SAFETY: `buffer` is live for this call (`for_each_buffer`), and so
         // are its surface and the scene nodes between it and `ancestor`,
         // the tree being walked.
@@ -2776,7 +2774,10 @@ fn scale_surface_buffers(tree: &SceneTree, scale_x: f64, scale_y: f64, pin: bool
             // axis.
             ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, scale_x.min(scale_y));
         }
-    }) };
+    };
+    // SAFETY: `scale_one` only sets each buffer's dest size, position and
+    // opaque region; it destroys, reparents and restacks nothing.
+    unsafe { tree.for_each_buffer(scale_one) };
 }
 
 /// A surface buffer's visible extent for the scaling passes: `(width,

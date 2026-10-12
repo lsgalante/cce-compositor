@@ -291,27 +291,14 @@ impl Window {
         } else {
             Some(layout_box)
         };
-        let Some(mut surface_clip) = clipped else {
+        // Only whether the clip leaves anything matters here: the box itself
+        // was computed (offset by the xdg geometry) and never applied; the
+        // clip that is applied is the geometry crop below.
+        if clipped.is_none() {
             self.surfaces.set_enabled(false);
             return;
-        };
-
-        self.surfaces.set_enabled(true);
-        let margin = 0;
-        surface_clip.x -= margin;
-        surface_clip.y -= margin;
-        surface_clip.width += 2 * margin;
-        surface_clip.height += 2 * margin;
-
-        if let WindowImpl::Toplevel(toplevel) = self.impl_type {
-            if !toplevel.is_null() && !self.wm_requested.ssd {
-                // SAFETY: as `Window::get_title`: `impl_type` names this window's
-                // live implementation (`set_impl`'s contract).
-                let geometry = unsafe { (*toplevel).geometry };
-                surface_clip.x += geometry.x;
-                surface_clip.y += geometry.y;
-            }
         }
+        self.surfaces.set_enabled(true);
 
         // Crop a CSD toplevel to its xdg geometry. Chromium-family clients
         // paint a translucent shadow band outside the geometry whenever they

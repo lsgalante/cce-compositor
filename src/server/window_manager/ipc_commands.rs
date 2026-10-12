@@ -993,7 +993,7 @@ impl WindowManager {
                 "ok restarting\n".to_string()
             }
             "reload" => {
-                unsafe {
+                {
                     match self.reload_config(sys, input) {
                         Ok(()) => "ok\n".to_string(),
                         Err(e) => format!("error: failed to reload config: {}\n", e),
