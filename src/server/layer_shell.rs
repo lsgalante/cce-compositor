@@ -5,7 +5,6 @@ use std::ffi::CStr;
 use crate::ffi;
 use crate::server::WlList;
 use crate::slotmap::Key;
-use crate::output::Output;
 use crate::scene_node_data::{SceneNodeData, SceneNodeDataVal};
 use crate::xdg_popup::XdgPopup;
 
@@ -119,6 +118,7 @@ thread_local! {
     /// visit, and the outer one then read the freed node. Three top bars
     /// and an output scale change (any client can make one) took the
     /// compositor down that way (2026-10-12).
+    /// Also those whose output went away (`output_gone`).
     static OVERSIZED: std::cell::RefCell<Vec<Key>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -159,7 +159,7 @@ unsafe extern "C" fn close_oversized(_data: *mut std::ffi::c_void) {
         let Some(layer_surface) = (*crate::reentry::wm(server)).layer_surfaces.get(key) else { continue };
         let wlr = (*layer_surface).wlr_layer_surface.ptr();
         if !wlr.is_null() {
-            log::info!("closing a layer surface whose exclusive zone leaves less than half the output");
+            log::info!("closing a queued layer surface (too large for its output, or its output went away)");
             ffi::wlr_layer_surface_v1_destroy(wlr);
         }
     }
@@ -182,11 +182,13 @@ unsafe extern "C" fn handle_new_surface(_listener: *mut ffi::wl_listener, data: 
         (*wlr_layer_surface).current.exclusive_zone,
     );
 
-    // A layer surface that names no output goes on the first one.
+    // A layer surface that names no output goes on the first one still
+    // there (one being destroyed has let go of its `wlr_output`).
     if (*wlr_layer_surface).output.is_null() {
-        if let Some(&output) = (*crate::reentry::wm(crate::shared::server_ptr())).outputs.ptrs().first() {
+        let first = (*crate::reentry::wm(crate::shared::server_ptr())).outputs.values().map(|o| o.wlr_output().ptr()).find(|p| !p.is_null());
+        if let Some(wlr_output) = first {
             log::info!("layer surface named no output, choosing the first");
-            (*wlr_layer_surface).output = (*output).wlr_output().ptr();
+            (*wlr_layer_surface).output = wlr_output;
         } else {
             log::error!("no output available for layer surface {:?}", CStr::from_ptr((*wlr_layer_surface).namespace));
             ffi::wlr_layer_surface_v1_destroy(wlr_layer_surface);
@@ -496,18 +498,32 @@ fn update_scheduled_focus_and_dirty_windowing(
 }
 
 
-/// Arrange the layer surfaces of the output `wlr_output` is; nothing when
-/// it has no `Output`.
-///
-/// # Safety
-/// `wlr_output` must be null or live.
-unsafe fn arrange_output_of(wlr_output: *mut ffi::wlr_output) {
+/// Arrange the layer surfaces of the output that holds `wlr_output`;
+/// nothing when none does.
+fn arrange_output_of(outputs: &mut crate::output::Outputs, wlr_output: *mut ffi::wlr_output) {
+    if let Some(output) = outputs.find(wlr_output).and_then(|id| outputs.get_mut(id)) {
+        output.arrange_layers();
+    }
+}
+
+/// `wlr_output` is being destroyed: forget it as the output of every layer
+/// surface on it, and close them once this dispatch is over. wlroots does
+/// not follow a layer surface's output, so each would keep the freed
+/// pointer and read it on its next commit; a later output at the same
+/// address would adopt it.
+pub(crate) fn output_gone(surfaces: &LayerSurfaces, wlr_output: *mut ffi::wlr_output) {
     if wlr_output.is_null() {
         return;
     }
-    let output = ffi::river_wlr_output_get_data(wlr_output) as *mut Output;
-    if !output.is_null() {
-        (*output).arrange_layers();
+    for layer_surface in surfaces.iter() {
+        // SAFETY: an entry is live (see `LayerSurfaces`).
+        let (on_it, key) = unsafe { ((*layer_surface).wlr_layer_surface.output() == wlr_output, (*layer_surface).ref_key) };
+        if on_it {
+            log::info!("closing a layer surface whose output went away");
+            // SAFETY: as above.
+            unsafe { (*layer_surface).wlr_layer_surface.forget_output() };
+            close_later(key);
+        }
     }
 }
 
@@ -542,7 +558,7 @@ unsafe extern "C" fn handle_layer_surface_map(listener: *mut ffi::wl_listener, _
                 }
             }
         }
-        arrange_output_of(wlr_output);
+        arrange_output_of(&mut wm.outputs, wlr_output);
         LayerShell::check_exclusive_focus(&mut wm.seats);
     });
 }
@@ -604,7 +620,7 @@ unsafe extern "C" fn handle_layer_surface_unmap(listener: *mut ffi::wl_listener,
                 }
             }
         }
-        arrange_output_of(wlr_output);
+        arrange_output_of(&mut wm.outputs, wlr_output);
         LayerShell::check_exclusive_focus(&mut wm.seats);
     });
 }
@@ -650,15 +666,8 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
     }
 
     let wlr_output = wlr.output();
-    if wlr_output.is_null() {
-        return;
-    }
-    let output = ffi::river_wlr_output_get_data(wlr_output) as *mut Output;
-    if output.is_null() {
-        return;
-    }
-
     let server = crate::shared::server_ptr();
+    let Some(output_id) = (*crate::reentry::wm(server)).outputs.find(wlr_output) else { return };
 
     // Position offset for cce-cloud sub-modules
     if !(*layer_surface).parent_offset_applied {
@@ -706,7 +715,9 @@ unsafe extern "C" fn handle_layer_surface_commit(listener: *mut ffi::wl_listener
     if wlr.initial_commit() || wlr.committed() != 0 {
         let wm = &mut *crate::reentry::wm(server);
         update_scheduled_focus_and_dirty_windowing(wm, |wm| {
-            (*output).arrange_layers();
+            if let Some(output) = wm.outputs.get_mut(output_id) {
+                output.arrange_layers();
+            }
             LayerShell::check_exclusive_focus(&mut wm.seats);
         });
     }

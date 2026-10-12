@@ -108,10 +108,14 @@ impl LockManager {
         self.new_lock.disconnect();
     }
 
+    /// The lock surface on `wlr_output` (null: none).
     pub fn lock_surface_from_output(
         &self,
-        output: *const crate::output::Output,
+        wlr_output: *mut ffi::wlr_output,
     ) -> Option<*mut LockSurface> {
+        if wlr_output.is_null() {
+            return None;
+        }
         if self.lock.is_null() {
             return None;
         }
@@ -129,7 +133,7 @@ impl LockManager {
                 let next = (*curr).next;
                 let wlr_lock_surface = crate::container_of!(curr, ffi::wlr_session_lock_surface_v1, link);
                 let lock_surface = (*wlr_lock_surface).data as *mut LockSurface;
-                if !lock_surface.is_null() && (*lock_surface).get_output() as *const _ == output {
+                if !lock_surface.is_null() && (*lock_surface).wlr_output() == wlr_output {
                     return Some(lock_surface);
                 }
                 curr = next;
@@ -429,10 +433,12 @@ impl LockSurface {
         unsafe { (*self.wlr_lock_surface).surface }
     }
 
-    pub fn get_output(&self) -> *mut crate::output::Output {
+    /// The `wlr_output` it is on; wlroots destroys a lock surface with its
+    /// output, so this is live while the lock surface is.
+    pub fn wlr_output(&self) -> *mut ffi::wlr_output {
         // SAFETY: the wlroots lock surface outlives this LockSurface (freed
-        // in its destroy handler), and so does the output it is on.
-        unsafe { ffi::river_wlr_output_get_data((*self.wlr_lock_surface).output) as *mut crate::output::Output }
+        // in its destroy handler).
+        unsafe { (*self.wlr_lock_surface).output }
     }
 
     pub fn configure(&self) {
@@ -645,10 +651,10 @@ unsafe extern "C" fn update_focus(data: *mut std::ffi::c_void) {
 unsafe extern "C" fn handle_lock_surface_map(listener: *mut ffi::wl_listener, _data: *mut std::ffi::c_void) {
     let lock_surface = crate::listener_owner!(listener, LockSurface, map);
 
-    let output = (*lock_surface).get_output();
-    let x = (*output).sent.x;
-    let y = (*output).sent.y;
-    (*lock_surface).tree.set_position(x, y);
+    let wm = &*crate::reentry::wm(crate::shared::server_ptr());
+    if let Some(output) = wm.outputs.find((*lock_surface).wlr_output()).and_then(|id| wm.outputs.get(id)) {
+        (*lock_surface).tree.set_position(output.sent.x, output.sent.y);
+    }
 
     let event_loop = crate::shared::event_loop();
     assert!((*lock_surface).idle_update_focus.is_null());

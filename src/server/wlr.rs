@@ -1126,9 +1126,20 @@ impl Wlr<ffi::wlr_layer_surface_v1> {
         self.live().map_or(std::ptr::null_mut(), |l| unsafe { (*l).surface })
     }
 
-    /// The output it is on (it never moves); null when unset.
+    /// The output it is on (it never moves); null when unset, or once that
+    /// output went away (`forget_output`).
     pub fn output(&self) -> *mut ffi::wlr_output {
         self.live().map_or(std::ptr::null_mut(), |l| unsafe { (*l).output })
+    }
+
+    /// Forget the output it is on, which is being destroyed: wlroots does
+    /// not, and every reader of `output` treats null as "none".
+    pub fn forget_output(&self) {
+        if let Some(l) = self.live() {
+            // SAFETY: a live layer surface; `output` is ours to set (wlroots
+            // reads it only when the surface is created).
+            unsafe { (*l).output = std::ptr::null_mut() };
+        }
     }
 
     /// Whether this commit is the client's first (wlroots' `initial_commit`).

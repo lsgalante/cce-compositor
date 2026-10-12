@@ -120,8 +120,6 @@ struct wl_signal *river_wlr_output_get_destroy_signal(struct wlr_output *output)
 struct wl_signal *river_wlr_output_get_request_state_signal(struct wlr_output *output);
 struct wl_signal *river_wlr_output_get_frame_signal(struct wlr_output *output);
 struct wl_signal *river_wlr_output_get_present_signal(struct wlr_output *output);
-void *river_wlr_output_get_data(struct wlr_output *output);
-void river_wlr_output_set_data(struct wlr_output *output, void *data);
 const char *river_wlr_output_get_name(struct wlr_output *output);
 struct wl_signal *river_wlr_session_get_active_signal(struct wlr_session *session);
 bool river_wlr_session_get_active(struct wlr_session *session);

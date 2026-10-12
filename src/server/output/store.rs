@@ -52,8 +52,24 @@ impl Outputs {
         self.map.remove(id.0).map(|p| unsafe { Box::from_raw(p.as_ptr()) })
     }
 
-    /// The output's address, for handing to C as user data and for code
-    /// that still works through raw pointers.
+    /// The id of the output that holds `wlr_output`, for a wlroots
+    /// callback handed one; `None` for null, for a `wlr_output` no output
+    /// holds, and for one whose output is being destroyed (its destroy
+    /// handler takes the hold). The output holds its `wlr_output`
+    /// privately and the hold moves with it, so a safe swap of two
+    /// outputs cannot make this name the wrong one.
+    pub fn find(&self, wlr_output: *mut crate::ffi::wlr_output) -> Option<OutputId> {
+        if wlr_output.is_null() {
+            return None;
+        }
+        self.order.iter().copied().find(|&k| {
+            // SAFETY: live while in the map, which this borrows.
+            self.map.get(k).is_some_and(|p| unsafe { p.as_ref() }.wlr_output.ptr() == wlr_output)
+        }).map(OutputId)
+    }
+
+    /// The output's address, for code that still works through raw
+    /// pointers.
     pub fn ptr(&self, id: OutputId) -> Option<*mut Output> {
         self.map.get(id.0).map(|p| p.as_ptr())
     }

@@ -157,14 +157,6 @@ struct wl_signal *river_wlr_output_get_present_signal(struct wlr_output *output)
 	return &output->events.present;
 }
 
-void *river_wlr_output_get_data(struct wlr_output *output) {
-	return output->data;
-}
-
-void river_wlr_output_set_data(struct wlr_output *output, void *data) {
-	output->data = data;
-}
-
 const char *river_wlr_output_get_name(struct wlr_output *output) {
 	return output->name;
 }

@@ -452,8 +452,10 @@ impl Output {
 
         let id = wm.outputs.insert(output);
         crate::xwayland_window::note_output_scale(&wm.outputs);
+        // No user data on the `wlr_output`: a callback handed one finds its
+        // output as the one that holds it (`Outputs::find`), which a safe
+        // swap of two outputs cannot make name the wrong one or a freed one.
         let raw = wm.outputs.ptr(id).ok_or("output gone at creation")?;
-        ffi::river_wlr_output_set_data(wlr_output, raw as *mut std::ffi::c_void);
 
 
         // Add event listeners
@@ -681,7 +683,7 @@ impl Output {
                 }
             }
             LockState::WaitingForLockSurfaces => {
-                if let Some(_lock_surf) = lock.lock_surface_from_output(self) {
+                if let Some(_lock_surf) = lock.lock_surface_from_output(self.wlr_output.ptr()) {
                     if self.lock_render_state != LockRenderState::LockSurface {
                         self.lock_render_state = LockRenderState::PendingLockSurface;
                     }
@@ -1242,10 +1244,12 @@ unsafe extern "C" fn handle_destroy(listener: *mut ffi::wl_listener, _data: *mut
     (*output).destroy_scene_nodes();
 
     if !(*output).wlr_output.is_null() {
-        ffi::river_wlr_output_set_data((*output).wlr_output.ptr(), std::ptr::null_mut());
         // Input devices mapped onto it would keep its address.
         let wm = &*crate::reentry::wm(server);
         (*server).input_manager.forget_output(wm, (*output).wlr_output.ptr());
+        // So would the layer surfaces on it: wlroots does not follow a
+        // layer surface's output, and they read it on every commit.
+        crate::layer_shell::output_gone(&wm.layer_surfaces, (*output).wlr_output.ptr());
     }
 
     (*output).wlr_output.take();

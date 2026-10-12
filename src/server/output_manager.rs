@@ -156,7 +156,7 @@ impl OutputManager {
                     OutputStateValue::Enabled | OutputStateValue::DisabledSoft => {
                         output.scene_output().set_position(output.sent.x, output.sent.y);
                         crate::shared::handles().output_layout.add(&output.wlr_output(), output.sent.x, output.sent.y);
-                        if let Some(lock_surface) = lock.lock_surface_from_output(output) {
+                        if let Some(lock_surface) = lock.lock_surface_from_output(wlr_output) {
                             // SAFETY: a lock surface `lock_surface_from_output`
                             // finds is live.
                             unsafe { (*lock_surface).tree.set_position(output.sent.x, output.sent.y) };
@@ -621,11 +621,24 @@ unsafe extern "C" fn handle_manager_apply(listener: *mut ffi::wl_listener, data:
         return;
     }
 
+    let wm = &mut *crate::reentry::wm(server);
+    // Every head's output first, before any is touched: one that no output
+    // holds (it is being destroyed) fails the whole configuration.
+    let mut heads = Vec::new();
     let mut head_link = (*config).heads.next;
     while head_link != &mut (*config).heads {
         let head = crate::container_of!(head_link, ffi::wlr_output_configuration_head_v1, link);
-        let output = &mut *(ffi::river_wlr_output_get_data((*head).state.output) as *mut Output);
-        
+        let Some(id) = wm.outputs.find((*head).state.output) else {
+            ffi::wlr_output_configuration_v1_send_failed(config);
+            ffi::wlr_output_configuration_v1_destroy(config);
+            return;
+        };
+        heads.push((head, id));
+        head_link = (*head_link).next;
+    }
+
+    for (head, id) in heads {
+        let Some(output) = wm.outputs.get_mut(id) else { continue };
         if (*head).state.enabled {
             let previous = output.scheduled.state;
             output.scheduled = crate::output::OutputState::from_head_state(&((*head).state));
@@ -637,11 +650,8 @@ unsafe extern "C" fn handle_manager_apply(listener: *mut ffi::wl_listener, data:
         } else {
             output.scheduled.state = crate::output::OutputStateValue::DisabledHard;
         }
-
-        head_link = (*head_link).next;
     }
 
-    let wm = &mut *crate::reentry::wm(server);
     let older = wm.scheduled.take_output_config();
     if !older.is_null() {
         ffi::wlr_output_configuration_v1_send_failed(older);
@@ -655,11 +665,8 @@ unsafe extern "C" fn handle_manager_apply(listener: *mut ffi::wl_listener, data:
 unsafe extern "C" fn handle_power_manager_set_mode(_listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let event = data as *mut ffi::wlr_output_power_v1_set_mode_event;
 
-    let output_data = ffi::river_wlr_output_get_data((*event).output);
-    if output_data.is_null() {
-        return;
-    }
-    let output = &mut *(output_data as *mut Output);
+    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+    let Some(output) = wm.outputs.find((*event).output).and_then(|id| wm.outputs.get_mut(id)) else { return };
 
     log::debug!("client requested dpms mode {:?} for output {:?}", (*event).mode, std::ffi::CStr::from_ptr(ffi::river_wlr_output_get_name((*event).output)));
 
