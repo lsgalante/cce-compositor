@@ -2023,6 +2023,11 @@ impl WindowManager {
         self.override_redirects.remove(or);
     }
 
+    /// Whether `or` is a live override-redirect window (registered).
+    pub fn override_redirect_live(&self, or: *mut XwaylandOverrideRedirect) -> bool {
+        self.override_redirects.contains(or)
+    }
+
     /// Every registered override-redirect window, copied out.
     pub fn override_redirects(&self) -> Vec<*mut XwaylandOverrideRedirect> {
         self.override_redirects.ptrs()

@@ -324,7 +324,19 @@ pub struct LockSurface {
     pub surface_destroy: crate::listener::Listener,
 }
 
+thread_local! {
+    /// Every live `LockSurface`: `create` adds it and `destroy` removes it
+    /// before freeing it. A seat's lock-surface focus is checked against
+    /// this (`LockSurface::is_live`), so naming one needs no caller promise.
+    static LIVE_LOCK_SURFACES: std::cell::RefCell<Vec<*mut LockSurface>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl LockSurface {
+    /// Whether `lock_surface` is a live lock surface.
+    pub fn is_live(lock_surface: *mut LockSurface) -> bool {
+        !lock_surface.is_null() && LIVE_LOCK_SURFACES.with(|l| l.borrow().contains(&lock_surface))
+    }
+
     pub unsafe fn create(
         wlr_lock_surface: *mut ffi::wlr_session_lock_surface_v1,
         lock: *mut ffi::wlr_session_lock_v1,
@@ -349,6 +361,7 @@ impl LockSurface {
         }));
 
         (*wlr_lock_surface).data = lock_surface as *mut _;
+        LIVE_LOCK_SURFACES.with(|l| l.borrow_mut().push(lock_surface));
 
         SceneNodeData::attach(tree as *mut ffi::wlr_scene_node, SceneNodeDataVal::LockSurface(lock_surface));
         ffi::river_wlr_surface_set_data((*wlr_lock_surface).surface, tree as *mut ffi::wlr_scene_node as *mut _);
@@ -402,6 +415,7 @@ impl LockSurface {
         // own destroy, `lock_surface_from_output`) must not find this box.
         (*(*lock_surface).wlr_lock_surface).data = std::ptr::null_mut();
 
+        LIVE_LOCK_SURFACES.with(|l| l.borrow_mut().retain(|&p| p != lock_surface));
         let _ = Box::from_raw(lock_surface);
     }
 

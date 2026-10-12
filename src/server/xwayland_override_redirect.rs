@@ -183,19 +183,16 @@ impl XwaylandOverrideRedirect {
                 return;
             }
             crate::seat::Focus::None => {}
-            // SAFETY: a seat's override-redirect focus is live: it was live
-            // when focused (`Seat::focus`'s contract), and `drop_seat_focus`
-            // clears it before the window goes.
-            crate::seat::Focus::OverrideRedirect(or) if !or.is_null() && unsafe { (*or).xsurface().pid() } == pid => {}
+            // SAFETY: a registered override-redirect window is live.
+            crate::seat::Focus::OverrideRedirect(or) if wm.override_redirect_live(or) && unsafe { (*or).xsurface().pid() } == pid => {}
             _ => {
                 log::debug!("override redirect (pid {pid}) mapped unfocused: another client holds the keyboard");
                 return;
             }
         }
-        // SAFETY: `self` is live, and `drop_seat_focus` takes the focus
-        // back before it goes (unmap, the override-redirect flag cleared,
-        // destroy).
-        unsafe { crate::seat::Seat::focus(wm, sid, crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _)) };
+        // `drop_seat_focus` takes the focus back before this window goes
+        // (unmap, the override-redirect flag cleared, destroy).
+        crate::seat::Seat::focus(wm, sid, crate::seat::Focus::OverrideRedirect(self as *const _ as *mut _));
     }
 }
 

@@ -54,6 +54,11 @@ impl<T> Registry<T> {
         self.0.is_empty()
     }
 
+    /// Whether `object` is registered — and so live.
+    pub fn contains(&self, object: *mut T) -> bool {
+        !object.is_null() && self.0.contains(&object)
+    }
+
     /// The registered addresses, in order, copied out: a walk may destroy
     /// the object it is visiting (which unregisters it) or create others.
     pub fn ptrs(&self) -> Vec<*mut T> {

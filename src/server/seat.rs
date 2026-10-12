@@ -78,15 +78,43 @@ pub enum Focus {
 }
 
 impl Focus {
-    pub unsafe fn surface(&self, wm: &crate::window_manager::WindowManager) -> *mut ffi::wlr_surface {
+    /// Whether what this focus names is alive. Each pointer is checked
+    /// against what tracks its kind — a layer root against the layer
+    /// store, a lock surface against `LockSurface::is_live`, an
+    /// override-redirect window against its registry — so a focus that
+    /// outlived its object reads as dead, never as a dangling pointer.
+    pub fn is_live(&self, wm: &crate::window_manager::WindowManager) -> bool {
+        match *self {
+            Focus::None => true,
+            Focus::Window(id) => wm.windows.contains(id),
+            Focus::LayerSurface(surface) => layer_root_live(wm, surface),
+            Focus::LockSurface(lock_surface) => crate::lock_manager::LockSurface::is_live(lock_surface),
+            Focus::OverrideRedirect(or) => wm.override_redirect_live(or),
+        }
+    }
+
+    /// The wl_surface this focus names; null for none, or for an object
+    /// that is gone (`is_live`).
+    pub fn surface(&self, wm: &crate::window_manager::WindowManager) -> *mut ffi::wlr_surface {
+        if !self.is_live(wm) {
+            return std::ptr::null_mut();
+        }
         match *self {
             Focus::None => std::ptr::null_mut(),
             Focus::LayerSurface(surface) => surface,
             Focus::Window(id) => wm.windows.get(id).map_or(std::ptr::null_mut(), |w| w.root_surface()),
-            Focus::LockSurface(lock_surface) => if lock_surface.is_null() { std::ptr::null_mut() } else { (*lock_surface).surface() },
-            Focus::OverrideRedirect(or) => if or.is_null() { std::ptr::null_mut() } else { (*or).xsurface().surface() },
+            // SAFETY: live (`is_live`, just checked).
+            Focus::LockSurface(lock_surface) => unsafe { (*lock_surface).surface() },
+            // SAFETY: live (`is_live`, just checked).
+            Focus::OverrideRedirect(or) => unsafe { (*or).xsurface().surface() },
         }
     }
+}
+
+/// Whether `surface` is the root wl_surface of a live layer surface.
+fn layer_root_live(wm: &crate::window_manager::WindowManager, surface: *mut ffi::wlr_surface) -> bool {
+    // SAFETY: an entry of the layer-surface store is live (`LayerSurfaces`).
+    !surface.is_null() && wm.layer_surfaces.iter().any(|l| unsafe { (*l).wlr_layer_surface().surface() } == surface)
 }
 
 
@@ -435,33 +463,27 @@ impl Seat {
         self.wlr_seat().set_capabilities(caps);
     }
 
-    /// Give seat `sid`'s keyboard focus to window `id`, or to nothing:
-    /// [`Seat::focus`] for the targets that carry no pointer.
+    /// Give seat `sid`'s keyboard focus to window `id`, or to nothing.
     pub fn focus_window(wm: &mut crate::window_manager::WindowManager, sid: SeatId, id: Option<crate::window::WindowId>) {
-        let focus = id.map_or(Focus::None, Focus::Window);
-        // SAFETY: neither `Focus::Window` nor `Focus::None` carries a
-        // pointer, so `focus`'s contract holds. What its body dereferences
-        // besides the argument is guarded where it is stored: the cursor's
-        // constraint and the relay's text input (private, unsafe setters),
-        // the layer-surface store (`LayerSurfaces`, put only by `create`).
-        unsafe { Seat::focus(wm, sid, focus) }
+        Seat::focus(wm, sid, id.map_or(Focus::None, Focus::Window));
     }
 
     /// Move seat `sid`'s keyboard focus to `new_focus`.
     ///
-    /// # Safety
-    /// A `LayerSurface`, `LockSurface` or `OverrideRedirect` focus must name
-    /// a live surface or object, and a `LayerSurface` one must be the layer
-    /// surface's ROOT wl_surface: its unmap clears the focus by comparing
-    /// the root, so a popup's or subsurface's would outlive it. (`Window`
-    /// and `None` carry nothing to vouch for: use [`Seat::focus_window`].)
-    pub unsafe fn focus(wm: &mut crate::window_manager::WindowManager, sid: SeatId, new_focus: Focus) {
-        if let Focus::LayerSurface(s) = new_focus {
-            debug_assert!(
-                s.is_null() || !ffi::wlr_layer_surface_v1_try_from_wlr_surface(s).is_null(),
-                "Seat::focus: a LayerSurface focus must be the layer's root surface"
-            );
+    /// A focus naming an object that is not alive (`Focus::is_live`) is
+    /// refused: so is a `LayerSurface` focus on anything but a layer
+    /// surface's ROOT wl_surface, which the layer's unmap compares to clear
+    /// it (a popup's or subsurface's would outlive it). Until 2026-10-12
+    /// both were the caller's promise (an `unsafe fn`).
+    pub fn focus(wm: &mut crate::window_manager::WindowManager, sid: SeatId, new_focus: Focus) {
+        if !matches!(new_focus, Focus::Window(_)) && !new_focus.is_live(wm) {
+            log::warn!("[FocusDebug] Seat::focus refusing {:?}: it names nothing alive", new_focus);
+            return;
         }
+        let new_layer_namespace = match new_focus {
+            Focus::LayerSurface(s) => layer_namespace(wm, s),
+            _ => None,
+        };
         // A window that has closed is nothing to focus.
         let wid = match new_focus {
             Focus::Window(id) => wm.windows.get(id).map(|_| id),
@@ -522,7 +544,8 @@ impl Seat {
         if this.focus_requested {
             if let crate::layer_shell::LayerShellSeatFocus::Exclusive(key) = this.layer_shell.scheduled_focus {
                 if let Some(layer_surface) = wm.layer_surfaces.get(key) {
-                    let wlr_surf = (*layer_surface).wlr_layer_surface().surface();
+                    // SAFETY: an entry of the layer-surface store is live.
+                    let wlr_surf = unsafe { (*layer_surface).wlr_layer_surface().surface() };
                     if new_focus != Focus::LayerSurface(wlr_surf) {
                         if let Focus::Window(_) | Focus::OverrideRedirect(_) | Focus::None = new_focus {
                             log::info!("[FocusDebug] Blocking window manager focus request because Exclusive layer surface {:?} is active", key);
@@ -564,11 +587,7 @@ impl Seat {
         }
 
         this.focused = new_focus;
-        this.focused_layer_namespace = match new_focus {
-            // Live: `focus`'s contract.
-            Focus::LayerSurface(s) if !s.is_null() => layer_namespace(s),
-            _ => None,
-        };
+        this.focused_layer_namespace = new_layer_namespace;
         // The overview resize ring is drawn on the focused window only and
         // eases in and out through the border fade — a focus change has to
         // arm that timer or the old ring lingers and the new one waits for an
@@ -587,43 +606,7 @@ impl Seat {
         }
         wm.update_status();
 
-        match new_focus {
-            Focus::None => {}
-            Focus::LayerSurface(surface) => {
-                if !surface.is_null() {
-                    let this = seat_mut!(wm, sid, ());
-                    let kbd = this.wlr_seat().keyboard();
-                    if !kbd.is_null() {
-                        let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
-                        ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat().ptr(),
-                            surface,
-                            std::ptr::null_mut(),
-                            0,
-                            modifiers,
-                        );
-                    } else {
-                        ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat().ptr(),
-                            surface,
-                            std::ptr::null_mut(),
-                            0,
-                            std::ptr::null_mut(),
-                        );
-                    }
-                }
-
-                let this = seat_mut!(wm, sid, ());
-                let lx = this.cursor.x();
-                let ly = this.cursor.y();
-                if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
-                    if result.surface == surface {
-                        let this = seat_mut!(wm, sid, ());
-                        ffi::wlr_seat_pointer_notify_enter(this.wlr_seat().ptr(), surface, result.sx, result.sy);
-                    }
-                }
-            }
-            Focus::Window(_) => {
+        if let Focus::Window(_) = new_focus {
                 let is_new = match wid.and_then(|id| wm.windows.get_mut(id)) {
                     Some(w) => std::mem::replace(&mut w.is_new, false),
                     None => false,
@@ -653,107 +636,36 @@ impl Seat {
                         Seat::focus_follow_pan(wm, sid, id);
                     }
                 }
+        }
 
-
-                // Focus root surface of window
-                let surface = wid
-                    .and_then(|id| wm.windows.get(id))
-                    .map_or(std::ptr::null_mut(), |w| w.root_surface());
-                if !surface.is_null() {
-                    let this = seat_mut!(wm, sid, ());
-                    let kbd = this.wlr_seat().keyboard();
-                    if !kbd.is_null() {
-                        let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
-                        ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat().ptr(),
-                            surface,
-                            std::ptr::null_mut(),
-                            0,
-                            modifiers,
-                        );
-                    } else {
-                        ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat().ptr(),
-                            surface,
-                            std::ptr::null_mut(),
-                            0,
-                            std::ptr::null_mut(),
-                        );
-                    }
-
-                    let lx = this.cursor.x();
-                    let ly = this.cursor.y();
-                    if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
-                        if result.surface == surface {
-                            let this = seat_mut!(wm, sid, ());
-                            ffi::wlr_seat_pointer_notify_enter(this.wlr_seat().ptr(), surface, result.sx, result.sy);
-                        }
-                    }
-                }
-            }
-            Focus::LockSurface(lock_surface) => {
-                let surface = (*lock_surface).surface();
-                if !surface.is_null() {
-                    let this = seat_mut!(wm, sid, ());
-                    let kbd = this.wlr_seat().keyboard();
-                    if !kbd.is_null() {
-                        let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
-                        ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat().ptr(),
-                            surface,
-                            std::ptr::null_mut(),
-                            0,
-                            modifiers,
-                        );
-                    } else {
-                        ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat().ptr(),
-                            surface,
-                            std::ptr::null_mut(),
-                            0,
-                            std::ptr::null_mut(),
-                        );
-                    }
-
-                    let lx = this.cursor.x();
-                    let ly = this.cursor.y();
-                    if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
-                        if result.surface == surface {
-                            let this = seat_mut!(wm, sid, ());
-                            ffi::wlr_seat_pointer_notify_enter(this.wlr_seat().ptr(), surface, result.sx, result.sy);
-                        }
-                    }
-                }
-            }
-            Focus::OverrideRedirect(or) => {
-                let surface = (*or).xsurface().surface();
-                if !surface.is_null() {
-                    let this = seat_mut!(wm, sid, ());
-                    let kbd = this.wlr_seat().keyboard();
-                    if !kbd.is_null() {
-                        let modifiers = ffi::river_wlr_keyboard_get_modifiers(kbd);
-                        ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat().ptr(),
-                            surface,
-                            std::ptr::null_mut(),
-                            0,
-                            modifiers,
-                        );
-                    } else {
-                        ffi::wlr_seat_keyboard_notify_enter(
-                            this.wlr_seat().ptr(),
-                            surface,
-                            std::ptr::null_mut(),
-                            0,
-                            std::ptr::null_mut(),
-                        );
+        // What the new focus names, resolved through its store or registry
+        // (alive: `is_live` held at the top, and nothing since destroys a
+        // surface — a focus change only tells clients).
+        let surface = new_focus.surface(wm);
+        if !surface.is_null() {
+            let this = seat_mut!(wm, sid, ());
+            // SAFETY: `surface` is the live root surface the focus names.
+            unsafe { this.focus_keyboard_enter(surface) };
+            // An override-redirect window takes the keyboard only: it
+            // never had the pointer handed to it here.
+            if !matches!(new_focus, Focus::OverrideRedirect(_)) {
+                let (lx, ly) = (this.cursor.x(), this.cursor.y());
+                if let Some(result) = crate::shared::scene().at(wm, lx, ly) {
+                    if result.surface == surface {
+                        let this = seat_mut!(wm, sid, ());
+                        // SAFETY: as above.
+                        unsafe { this.wlr_seat().pointer_notify_enter(surface, result.sx, result.sy) };
                     }
                 }
             }
         }
         let target_surface = new_focus.surface(wm);
-        crate::input_relay::InputRelay::focus(wm, sid, target_surface);
-        Seat::sync_pointer_constraint(wm, sid, target_surface);
+        // SAFETY: null, or the live surface the focus names (`surface`
+        // resolves it through `is_live`).
+        unsafe {
+            crate::input_relay::InputRelay::focus(wm, sid, target_surface);
+            Seat::sync_pointer_constraint(wm, sid, target_surface);
+        }
     }
 
     /// Give this seat a keyboard if the backend never supplied one, so that
@@ -829,6 +741,17 @@ impl Seat {
                 false
             }
         }
+    }
+
+    /// `wl_keyboard.enter` on `surface` with no keys listed, as `focus`
+    /// sends it (`keyboard_notify_enter` lists the held ones).
+    ///
+    /// # Safety
+    /// `surface` is a live wl_surface.
+    unsafe fn focus_keyboard_enter(&self, surface: *mut ffi::wlr_surface) {
+        let kbd = self.wlr_seat().keyboard();
+        let modifiers = if kbd.is_null() { std::ptr::null_mut() } else { ffi::river_wlr_keyboard_get_modifiers(kbd) };
+        ffi::wlr_seat_keyboard_notify_enter(self.wlr_seat().ptr(), surface, std::ptr::null_mut(), 0, modifiers);
     }
 
     pub unsafe fn keyboard_notify_enter(&mut self, wlr_surface: *mut ffi::wlr_surface) {
@@ -1913,10 +1836,9 @@ unsafe extern "C" fn handle_request_set_primary_selection(
 ///
 /// # Safety
 /// `surface` is live.
-unsafe fn layer_namespace(surface: *mut ffi::wlr_surface) -> Option<String> {
-    let layer = ffi::wlr_layer_surface_v1_try_from_wlr_surface(surface);
-    if layer.is_null() || (*layer).namespace.is_null() {
-        return None;
-    }
-    Some(std::ffi::CStr::from_ptr((*layer).namespace).to_string_lossy().into_owned())
+fn layer_namespace(wm: &crate::window_manager::WindowManager, surface: *mut ffi::wlr_surface) -> Option<String> {
+    // SAFETY: an entry of the layer-surface store is live (`LayerSurfaces`).
+    let layer = wm.layer_surfaces.iter().find(|&l| !surface.is_null() && unsafe { (*l).wlr_layer_surface().surface() } == surface)?;
+    // SAFETY: as above.
+    Some(unsafe { (*layer).wlr_layer_surface().with_namespace(str::to_string) })
 }
