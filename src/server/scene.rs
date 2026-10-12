@@ -31,8 +31,9 @@ pub struct SceneLayers {
 }
 
 pub struct Scene {
-    /// Null until `init` creates it; private, because the safe
-    /// `create_root_child` trusts it (read it with `wlr_scene()`).
+    /// Null until `init` creates it, and never destroyed after: the scene
+    /// lives as long as the process. Private, because the safe methods
+    /// below trust it (read it with `wlr_scene()`).
     wlr_scene: *mut ffi::wlr_scene,
     pub interactive_tree: SceneTree,
     pub drag_icons: SceneTree,
@@ -43,21 +44,48 @@ pub struct Scene {
 }
 
 impl Scene {
-    /// A new tree directly under the scene's root; empty before `init`.
     /// The wlroots scene; null before `init`.
     pub fn wlr_scene(&self) -> *mut ffi::wlr_scene {
         self.wlr_scene
     }
 
+    /// A new tree directly under the scene's root; empty before `init`.
     pub fn create_root_child(&self) -> crate::scene_handle::SceneTree {
         if self.wlr_scene.is_null() {
             return crate::scene_handle::SceneTree::none();
         }
-        // SAFETY: the shared `Scene` is set once (`Shared::set_scene`) with
-        // the live `wlr_scene` it keeps until the server tears down, and
-        // only `&Scene` is handed out after that, so the pointer cannot be
-        // swapped underneath.
+        // SAFETY: a non-null `wlr_scene` was created by `init` and is never
+        // destroyed (the scene lives as long as the process; see the field),
+        // and nothing but `init` writes the private field.
         unsafe { crate::scene_handle::SceneTree::create_in(&mut (*self.wlr_scene).tree) }
+    }
+
+    /// Mark every optimized blur for a re-bake against the current
+    /// backdrop. Nothing before `init`.
+    pub fn mark_optimized_blur_dirty(&self) {
+        if !self.wlr_scene.is_null() {
+            // SAFETY: as `create_root_child`.
+            unsafe { ffi::river_scene_mark_optimized_blur_dirty(self.wlr_scene) };
+        }
+    }
+
+    /// Hold the optimized blurs' bakes through a camera move (scenefx's
+    /// `wlr_scene.blur_frozen`). Nothing before `init`.
+    pub fn set_blur_frozen(&self, frozen: bool) {
+        if !self.wlr_scene.is_null() {
+            // SAFETY: as `create_root_child`.
+            unsafe { ffi::river_scene_set_blur_frozen(self.wlr_scene, frozen) };
+        }
+    }
+
+    /// The camera pan's remainder below one layout pixel, which the desk
+    /// trees render with (scenefx's `wlr_scene.desk_sub_x/y`). Nothing
+    /// before `init`.
+    pub fn set_desk_subpixel(&self, sub_x: f64, sub_y: f64) {
+        if !self.wlr_scene.is_null() {
+            // SAFETY: as `create_root_child`.
+            unsafe { ffi::river_scene_set_desk_subpixel(self.wlr_scene, sub_x, sub_y) };
+        }
     }
 
     pub fn new() -> Self {

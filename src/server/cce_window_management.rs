@@ -3,7 +3,11 @@ use crate::server::Server;
 use crate::slotmap::Key as SlotMapKey;
 
 pub struct CceWindowManagement {
-    pub toplevels: Vec<*mut ffi::wl_resource>,
+    /// Every live `zcce_toplevel_v1` resource: pushed when it is created,
+    /// removed by its destroy handler before it goes, and each one's user
+    /// data is its `CceToplevelData` until then. Private, because
+    /// `send_grid_patch` trusts it.
+    toplevels: Vec<*mut ffi::wl_resource>,
 }
 
 impl CceWindowManagement {
@@ -33,7 +37,7 @@ fn to_fixed(v: f64) -> i32 {
 impl CceWindowManagement {
     /// Post a grid_patch event to the toplevel resource of `window_key`, if
     /// the client bound a new-enough version. Returns whether it was sent.
-    pub unsafe fn send_grid_patch(
+    pub fn send_grid_patch(
         &self,
         window_key: SlotMapKey,
         serial: u32,
@@ -43,23 +47,28 @@ impl CceWindowManagement {
             if res.is_null() {
                 continue;
             }
-            let data = ffi::wl_resource_get_user_data(res) as *mut CceToplevelData;
-            if data.is_null() || (*data).window_key != window_key {
-                continue;
+            // SAFETY: every entry is a live resource whose user data is its
+            // `CceToplevelData` (the field's invariant), and grid_patch is
+            // `uint serial, fixed x, y, w, h, scale`, as posted.
+            unsafe {
+                let data = ffi::wl_resource_get_user_data(res) as *mut CceToplevelData;
+                if data.is_null() || (*data).window_key != window_key {
+                    continue;
+                }
+                if ffi::wl_resource_get_version(res) < GRID_SINCE {
+                    return false;
+                }
+                ffi::wl_resource_post_event(
+                    res,
+                    ZCCE_TOPLEVEL_V1_GRID_PATCH,
+                    serial,
+                    to_fixed(patch.x),
+                    to_fixed(patch.y),
+                    to_fixed(patch.w),
+                    to_fixed(patch.h),
+                    to_fixed(patch.scale),
+                );
             }
-            if ffi::wl_resource_get_version(res) < GRID_SINCE {
-                return false;
-            }
-            ffi::wl_resource_post_event(
-                res,
-                ZCCE_TOPLEVEL_V1_GRID_PATCH,
-                serial,
-                to_fixed(patch.x),
-                to_fixed(patch.y),
-                to_fixed(patch.w),
-                to_fixed(patch.h),
-                to_fixed(patch.scale),
-            );
             return true;
         }
         false
@@ -168,10 +177,9 @@ unsafe extern "C" fn toplevel_set_floating(
     let window = window_mut!(wm, id);
     window.tiling_mode = crate::tiling::TilingMode::Floating;
     window.mode_locked = true;
-    if let Some(seat) = wm.first_seat() {
-        if (*seat).focused == crate::seat::Focus::Window(id) {
-            wm.raise_window(id);
-        }
+    let focused = wm.first_seat().and_then(|sid| wm.seats.get(sid)).is_some_and(|s| s.focused == crate::seat::Focus::Window(id));
+    if focused {
+        wm.raise_window(id);
     }
     crate::shared::pending().dirty_windowing();
 

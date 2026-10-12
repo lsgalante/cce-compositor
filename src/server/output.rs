@@ -761,7 +761,7 @@ impl Output {
     /// — tree shift, backdrop extent, cell lattice, density fade. This side
     /// keeps the scene nodes, the rect reuse pool, and scenefx's fade-inset
     /// wire encoding.
-    pub unsafe fn draw_grid(&mut self, wm: &crate::window_manager::WindowManager) {
+    pub fn draw_grid(&mut self, wm: &crate::window_manager::WindowManager) {
         if self.grid_tree.is_null() {
             return;
         }
@@ -792,7 +792,6 @@ impl Output {
             }
         }
         self.grid_backdrop_tree.set_enabled(true);
-        let backdrop_tree = self.grid_backdrop_tree.raw();
         let backdrop_rect = &mut self.grid_backdrop_rect;
         let mut set_backdrop = |w: i32, h: i32, color: &[f32; 4]| {
             if backdrop_rect.is_null() {
@@ -831,7 +830,7 @@ impl Output {
             // holds the bakes frozen: the zoom restructures the grid every
             // frame, and the settle re-bakes once at the end.
             if !wm.viewport_is_active {
-                ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene());
+                crate::shared::scene().mark_optimized_blur_dirty();
             }
         }
         let force = self.grid_force_redraw_frames > 0;
@@ -851,11 +850,8 @@ impl Output {
         }
         self.grid_bevel_tree.raise_to_top();
 
-        let grid_tree = self.grid_tree.raw();
-        if !grid_tree.is_null() {
-            // Desk content: rendered with the camera's sub-pixel offset.
-            ffi::river_scene_tree_set_desk_offset(grid_tree, true);
-        }
+        // Desk content: rendered with the camera's sub-pixel offset.
+        self.grid_tree.set_desk_offset(true);
         let pool = &mut self.grid_rect_pool;
         let mut pool_idx = 0;
 
@@ -942,9 +938,9 @@ impl Output {
         // region it touched; under a disabled ancestor it returns at once
         // (scene_node_update). So the tree is off while the pools are
         // redrawn and on again after: two walks for the whole rebuild.
-        let suspended = force && !grid_tree.is_null();
+        let suspended = force && !self.grid_tree.is_null();
         if suspended {
-            ffi::wlr_scene_node_set_enabled(grid_tree as *mut ffi::wlr_scene_node, false);
+            self.grid_tree.set_enabled(false);
         }
 
         match &spec {
@@ -959,16 +955,8 @@ impl Output {
                 );
 
                 if let Some((x, y)) = frame.tree_pos {
-                    ffi::river_scene_node_set_position_if_changed(
-                        grid_tree as *mut ffi::wlr_scene_node,
-                        x,
-                        y,
-                    );
-                    ffi::river_scene_node_set_position_if_changed(
-                        backdrop_tree as *mut ffi::wlr_scene_node,
-                        x,
-                        y,
-                    );
+                    self.grid_tree.set_position_if_changed(x, y);
+                    self.grid_backdrop_tree.set_position_if_changed(x, y);
                 }
 
                 if force {
@@ -1042,16 +1030,8 @@ impl Output {
                 }
             }
             crate::policy::api::BackgroundSpec::Solid(color) => {
-                ffi::river_scene_node_set_position_if_changed(
-                    grid_tree as *mut ffi::wlr_scene_node,
-                    self.sent.x,
-                    self.sent.y,
-                );
-                ffi::river_scene_node_set_position_if_changed(
-                    backdrop_tree as *mut ffi::wlr_scene_node,
-                    self.sent.x,
-                    self.sent.y,
-                );
+                self.grid_tree.set_position_if_changed(self.sent.x, self.sent.y);
+                self.grid_backdrop_tree.set_position_if_changed(self.sent.x, self.sent.y);
                 if force {
                     set_backdrop(viewport_w, viewport_h, &color.0);
                 }
@@ -1070,7 +1050,7 @@ impl Output {
 
         self.draw_cell_labels(wm);
         if suspended {
-            ffi::wlr_scene_node_set_enabled(grid_tree as *mut ffi::wlr_scene_node, true);
+            self.grid_tree.set_enabled(true);
         }
     }
 
@@ -1081,7 +1061,7 @@ impl Output {
     /// cell (`GridFrame::first_col/row`, computed in policy) is needed to know
     /// what to write. Outside overview every node is disabled — this is a
     /// navigation aid, not desktop furniture.
-    unsafe fn draw_cell_labels(&mut self, wm: &crate::window_manager::WindowManager) {
+    fn draw_cell_labels(&mut self, wm: &crate::window_manager::WindowManager) {
         let overview = crate::shared::mode() == crate::window_manager::WindowManagerMode::Overview
             && crate::shared::layout().desktop_cell_labels;
 
@@ -1151,18 +1131,17 @@ impl Output {
                 let Some(label) = self.cell_labels.get_square(frame.first_col + col, frame.first_row + row, px) else {
                     continue;
                 };
-                let (buf, lw, lh) = (label.buffer, label.width, label.height);
+                let (buf, lw, lh) = (label.buffer(), label.width, label.height);
 
                 if idx < self.cell_label_pool.len() && !self.cell_label_pool[idx].0.is_null() {
                     let entry = &mut self.cell_label_pool[idx];
                     if entry.1 != buf {
-                        // `buf` is the label cache's live buffer.
-                        entry.0.set_buffer(buf);
+                        entry.0.show_label(label);
                         entry.1 = buf;
                     }
                     entry.0.set_enabled(true);
                 } else {
-                    let handle = SceneBuffer::adopt(ffi::wlr_scene_buffer_create(self.cell_label_tree.raw(), buf));
+                    let handle = SceneBuffer::create_label(&self.cell_label_tree, label);
                     if handle.is_null() {
                         continue;
                     }

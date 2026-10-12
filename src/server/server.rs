@@ -411,11 +411,11 @@ unsafe extern "C" fn handle_request_activate(listener: *mut ffi::wl_listener, da
     // often lands between app_id and map) is left to the map path,
     // which focuses new windows under its own settle rules.
     if matches!(win.state, crate::window::WindowState::Mapped) && !win.is_shy() {
-        if let Some(seat) = wm.first_seat() {
+        if let Some(sid) = wm.first_seat() {
             if let Some(win) = wm.windows.get_mut(id) {
                 win.minimized = false;
             }
-            crate::seat::Seat::focus_window(wm, (*seat).id, Some(id));
+            crate::seat::Seat::focus_window(wm, sid, Some(id));
             wm.raise_window(id);
             crate::shared::pending().dirty_windowing();
             log::info!("xdg activation focused and raised '{}' ({})", title, app_id);

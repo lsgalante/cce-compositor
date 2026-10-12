@@ -511,8 +511,8 @@ impl WindowManager {
             "set-coords" => {
                 if parts.len() < 3 { return "error: missing x or y\n".to_string(); }
                 if let (Ok(x), Ok(y)) = (parse_finite(parts[1]), parse_finite(parts[2])) {
-                    if let Some(seat) = self.first_seat() {
-                        let focused = match (*seat).focused {
+                    if let Some(seat) = self.first_seat().and_then(|sid| self.seats.get(sid)) {
+                        let focused = match seat.focused {
                             crate::seat::Focus::Window(id) => self.windows.get_mut(id),
                             _ => None,
                         };
@@ -689,12 +689,12 @@ impl WindowManager {
                 let Some(cce_core::ipc::ctl::Request::FocusWindow { query, wait }) = cce_core::ipc::ctl::Request::parse(cmd) else {
                     return "error: missing app_id/id\n".to_string();
                 };
-                if let Some(seat) = self.first_seat() {
+                if let Some(sid) = self.first_seat() {
                     if let Some(id) = self.find_window_id(&query) {
                         if let Some(w) = self.windows.get_mut(id) {
                             w.minimized = false;
                         }
-                        crate::seat::Seat::focus_window(self, (*seat).id, Some(id));
+                        crate::seat::Seat::focus_window(self, sid, Some(id));
                         self.raise_window(id);
                         crate::shared::pending().dirty_windowing();
                         if wait {
@@ -937,8 +937,8 @@ impl WindowManager {
                 self.desk_pan_x = center_x - (vp_w / 2.0) / self.desk_zoom;
                 self.desk_pan_y = center_y - (vp_h / 2.0) / self.desk_zoom;
 
-                if let Some(seat) = self.first_seat() {
-                    crate::seat::Seat::focus_window(self, (*seat).id, Some(target_id));
+                if let Some(sid) = self.first_seat() {
+                    crate::seat::Seat::focus_window(self, sid, Some(target_id));
                 }
                 self.raise_window(target_id);
                 crate::shared::pending().dirty_windowing();

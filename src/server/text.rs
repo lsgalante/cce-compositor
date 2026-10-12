@@ -125,9 +125,19 @@ fn font() -> Option<&'static fontdue::Font> {
 
 /// One rasterized label, owning the scene-side buffer.
 pub struct Label {
-    pub buffer: *mut ffi::wlr_buffer,
+    /// Private: a `&Label` vouches for it (see `buffer`).
+    buffer: *mut ffi::wlr_buffer,
     pub width: i32,
     pub height: i32,
+}
+
+impl Label {
+    /// The label's buffer, live for as long as the label is borrowed: only
+    /// `rasterize` makes a `Label`, and the cache drops its buffer only
+    /// through `&mut` (`clear`).
+    pub fn buffer(&self) -> *mut ffi::wlr_buffer {
+        self.buffer
+    }
 }
 
 /// Rasterize `text` at `px` and wrap it in a wlr_buffer. White glyphs with a

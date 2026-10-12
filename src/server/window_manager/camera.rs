@@ -192,7 +192,7 @@ impl WindowManager {
     /// `frame_target_ns` is when the frame about to render is predicted to
     /// be presented (`Output::predicted_present_ns`); the animation
     /// advances to that instant.
-    pub unsafe fn step_camera_frame(&mut self, frame_target_ns: u64) {
+    pub fn step_camera_frame(&mut self, frame_target_ns: u64) {
         crate::wm_scope!(mut);
         let has_pending = self.pan_pending != [0.0, 0.0] || self.pinch_pending.is_some();
         if !self.camera_anim_active && !has_pending {

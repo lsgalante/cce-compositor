@@ -634,7 +634,7 @@ unsafe extern "C" fn handle_commit(listener: *mut ffi::wl_listener, _data: *mut 
         // which nothing else re-bakes when the latch lands after the
         // viewport has settled — translucent windows keep showing a blur of
         // the pre-latch desktop.
-        ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene());
+        crate::shared::scene().mark_optimized_blur_dirty();
         crate::shared::pending().dirty_windowing();
     }
     let base = (*toplevel).wlr_toplevel().base();

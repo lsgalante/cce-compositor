@@ -543,6 +543,25 @@ impl SceneBuffer {
             ffi::wlr_scene_buffer_set_buffer(r, buffer);
         }
     }
+
+    /// A new buffer node under `parent` showing `label`; empty if `parent`
+    /// is gone or the allocation fails. The node takes its own lock on the
+    /// buffer, so it outlives the label cache dropping it.
+    pub fn create_label(parent: &SceneTree, label: &crate::text::Label) -> Self {
+        let p = parent.raw();
+        if p.is_null() {
+            return Self::none();
+        }
+        // SAFETY: a non-null `raw()` is a live tree, a borrowed label's
+        // buffer is live (`Label::buffer`), and the new node is ours.
+        unsafe { Self::adopt(ffi::wlr_scene_buffer_create(p, label.buffer())) }
+    }
+
+    /// Show `label` in place of whatever the node showed.
+    pub fn show_label(&self, label: &crate::text::Label) {
+        // SAFETY: a borrowed label's buffer is live (`Label::buffer`).
+        unsafe { self.set_buffer(label.buffer()) }
+    }
 }
 
 #[cfg(test)]

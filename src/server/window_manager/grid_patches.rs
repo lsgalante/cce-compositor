@@ -10,7 +10,7 @@ impl WindowManager {
     /// has drifted more than 2x from the zoom). One patch in flight per
     /// window; a failed send (no toplevel resource yet, old client) simply
     /// retries on a later pass.
-    pub unsafe fn update_grid_patches(&mut self) {
+    pub fn update_grid_patches(&mut self) {
         crate::wm_scope!(mut);
         let mut out_box: Option<(ffi::wlr_box, f64)> = None;
         for output in self.outputs.values() {
@@ -361,7 +361,7 @@ impl WindowManager {
     /// `flight` marks a patch sized for a camera flight's destination, which
     /// `update_grid_patches` upgrades to the roomy resting rect once the
     /// camera has landed and the client has latched it.
-    pub(crate) unsafe fn send_grid_patch_to(
+    pub(crate) fn send_grid_patch_to(
         &mut self,
         id: crate::policy::api::WindowId,
         patch: crate::policy::api::GridPatch,

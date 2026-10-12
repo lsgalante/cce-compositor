@@ -1210,7 +1210,7 @@ impl WindowManager {
         self.pan_to_virtual_rect(vx, vy, win_w, win_h);
     }
 
-    pub unsafe fn arrange_views(&mut self) {
+    pub fn arrange_views(&mut self) {
         crate::wm_scope!(mut);
         self.update_grid_patches();
         self.update_restore_placeholders();
@@ -1223,11 +1223,11 @@ impl WindowManager {
             }
         }
 
-        let active_outputs: Vec<*mut crate::output::Output> = self
+        let active_outputs: Vec<crate::output::OutputId> = self
             .outputs
-            .ptrs()
-            .into_iter()
-            .filter(|&o| (*o).sent.state == crate::output::OutputStateValue::Enabled)
+            .values()
+            .filter(|o| o.sent.state == crate::output::OutputStateValue::Enabled)
+            .map(|o| o.id)
             .collect();
 
         if active_outputs.is_empty() {
@@ -1247,9 +1247,9 @@ impl WindowManager {
         // Snapshot outputs and windows into plain data, compute the whole
         // frame's plan in policy code, then apply it to the scene graph.
         let mut output_snaps: Vec<crate::policy::arrange::OutputSnapshot> = Vec::new();
-        for &output in &active_outputs {
-            let wlr_box = (*output).sent.box_layout();
-            let non_ex = (*output).layer_shell.scheduled.non_exclusive_area;
+        for output in active_outputs.iter().filter_map(|&id| self.outputs.get(id)) {
+            let wlr_box = output.sent.box_layout();
+            let non_ex = output.layer_shell.scheduled.non_exclusive_area;
             output_snaps.push(crate::policy::arrange::OutputSnapshot {
                 layout_box: crate::policy::api::Rect {
                     x: wlr_box.x,
@@ -1340,7 +1340,7 @@ impl WindowManager {
         // Placement sees the pan floored to a layout pixel; the remainder
         // shifts the desk trees at render time (`layout_camera`).
         let (layout_cam, sub_x, sub_y) = self.layout_camera();
-        ffi::river_scene_set_desk_subpixel(crate::shared::scene().wlr_scene(), sub_x, sub_y);
+        crate::shared::scene().set_desk_subpixel(sub_x, sub_y);
         let params = crate::policy::arrange::ArrangeParams {
             bar_height: crate::shared::layout().bar_height,
             status_hide_mode: self.status_hide_mode,
@@ -1378,8 +1378,8 @@ impl WindowManager {
 
         let plan = crate::policy::arrange::arrange(&window_snaps, &output_snaps, &params);
 
-        for &output in &active_outputs {
-            (*output).background_rect.set_enabled(plan.background_rect_enabled);
+        for output in active_outputs.iter().filter_map(|&id| self.outputs.get(id)) {
+            output.background_rect.set_enabled(plan.background_rect_enabled);
         }
         // During a camera flight the native cell lattice draws even while a
         // client patch is latched: the fallback renders BELOW the grid
@@ -1438,13 +1438,15 @@ impl WindowManager {
             self.grid_cells_enabled = cells_wanted;
             // The cell pools redraw only on structure changes; force one so
             // the swap (client grid <-> compositor cells) is immediate.
-            for &output in &active_outputs {
-                (*output).grid_force_redraw_frames = 3;
+            for &id in &active_outputs {
+                if let Some(output) = self.outputs.get_mut(id) {
+                    output.grid_force_redraw_frames = 3;
+                }
             }
             // The swap changes backdrop content under the optimized-blur
             // capture set without any blur-node resize — re-bake or
             // translucent windows keep blurring the pre-swap grid.
-            ffi::river_scene_mark_optimized_blur_dirty(crate::shared::scene().wlr_scene());
+            crate::shared::scene().mark_optimized_blur_dirty();
         }
 
         for (&id, wp) in win_ids.iter().zip(plan.windows.iter()) {
@@ -1650,7 +1652,7 @@ impl WindowManager {
         }
     }
 
-    pub unsafe fn update_viewport_local(&mut self) {
+    pub fn update_viewport_local(&mut self) {
         crate::wm_scope!(mut);
         let zoom_changed = self.desk_zoom != self.last_viewport_zoom;
         // A pan counts as motion only once it moves a DEVICE pixel: the
@@ -1703,8 +1705,7 @@ impl WindowManager {
             // mismatch is a low-frequency blur under a window in flight for
             // a few hundred ms. So the bakes stay frozen through zooms too,
             // and `finish_viewport_settle` re-bakes once if the zoom moved.
-            let scene = crate::shared::scene().wlr_scene();
-            ffi::river_scene_set_blur_frozen(scene, true);
+            crate::shared::scene().set_blur_frozen(true);
             for window in self.windows.values_mut() {
                 {
                     let stores = stores!(self);
@@ -1770,7 +1771,7 @@ impl WindowManager {
     /// Runs once the settle debounce confirms the gesture has ended. Window
     /// positions are already final from the last motion frame's arrange pass, so
     /// this only flips each window back to its finished (blur-on) render.
-    unsafe fn finish_viewport_settle(&mut self) {
+    fn finish_viewport_settle(&mut self) {
         let stores = stores!(self);
         crate::wm_scope!(mut);
         if !self.viewport_is_active {
@@ -1781,10 +1782,9 @@ impl WindowManager {
         // final backdrop — every bake, if the gesture changed the zoom
         // (they were sampled at the old scale in flight); otherwise only
         // the ones the thaw itself distrusts.
-        let scene = crate::shared::scene().wlr_scene();
-        ffi::river_scene_set_blur_frozen(scene, false);
+        crate::shared::scene().set_blur_frozen(false);
         if self.desk_zoom != self.viewport_freeze_zoom {
-            ffi::river_scene_mark_optimized_blur_dirty(scene);
+            crate::shared::scene().mark_optimized_blur_dirty();
         }
         for window in self.windows.values_mut() {
             {
@@ -1893,9 +1893,11 @@ impl WindowManager {
         }
     }
 
-    pub fn first_seat(&self) -> Option<*mut crate::seat::Seat> {
+    /// The oldest live seat, which the commands that act "as the user"
+    /// (focus a window, read the focus) act on.
+    pub fn first_seat(&self) -> Option<crate::seat::SeatId> {
         crate::wm_scope!();
-        self.seats.ptrs().first().copied()
+        self.seats.values().next().map(|s| s.id)
     }
 
     pub fn record_focus(&mut self, id: crate::window::WindowId) {
@@ -2696,142 +2698,139 @@ impl crate::policy::api::Compositor for WindowManager {
     fn apply(&mut self, cmd: &crate::policy::api::Command) {
         crate::wm_scope!(mut);
         use crate::policy::api::Command;
-        unsafe {
-            match *cmd {
-                Command::Spawn(ref cmdline) => {
-                    self.execute_action(&crate::config::Action::Spawn, Some(cmdline));
+        match *cmd {
+            Command::Spawn(ref cmdline) => {
+                self.execute_action(&crate::config::Action::Spawn, Some(cmdline));
+            }
+            Command::SetCamera { camera, overview, animate } => {
+                // The mode flips immediately either way, so a re-toggle
+                // mid-flight exits/enters rather than re-entering.
+                if let Some(overview) = overview {
+                    self.set_mode(if overview { WindowManagerMode::Overview } else { WindowManagerMode::Normal });
                 }
-                Command::SetCamera { camera, overview, animate } => {
-                    // The mode flips immediately either way, so a re-toggle
-                    // mid-flight exits/enters rather than re-entering.
-                    if let Some(overview) = overview {
-                        self.set_mode(if overview { WindowManagerMode::Overview } else { WindowManagerMode::Normal });
-                    }
-                    if animate {
-                        if let Some((_, duration_ms)) = crate::shared::layout().overview_anim {
-                            // Ramp-driven: a fixed-duration transition from
-                            // the camera as it stands (a re-toggle mid-flight
-                            // restarts the ramp from here). The exponential
-                            // targets stay clear — the ramp owns the camera.
-                            self.camera_ramp_anim = Some(CameraRampAnim {
-                                start: self.camera(),
-                                target: camera,
-                                started_ns: crate::util::timestamp_ns(),
-                                duration_ms,
-                            });
-                            self.target_desk_pan_x = None;
-                            self.target_desk_pan_y = None;
-                            self.target_desk_zoom = None;
-                        } else {
-                            self.camera_ramp_anim = None;
-                            self.target_desk_pan_x = Some(camera.pan_x);
-                            self.target_desk_pan_y = Some(camera.pan_y);
-                            self.target_desk_zoom = Some(camera.zoom);
-                        }
-                        self.start_panning_animation();
-                    } else {
-                        self.desk_pan_x = camera.pan_x;
-                        self.desk_pan_y = camera.pan_y;
-                        self.desk_zoom = camera.zoom;
-                        // An instant write cancels any easing in flight — the
-                        // stale targets would otherwise drag the camera back.
+                if animate {
+                    if let Some((_, duration_ms)) = crate::shared::layout().overview_anim {
+                        // Ramp-driven: a fixed-duration transition from
+                        // the camera as it stands (a re-toggle mid-flight
+                        // restarts the ramp from here). The exponential
+                        // targets stay clear — the ramp owns the camera.
+                        self.camera_ramp_anim = Some(CameraRampAnim {
+                            start: self.camera(),
+                            target: camera,
+                            started_ns: crate::util::timestamp_ns(),
+                            duration_ms,
+                        });
                         self.target_desk_pan_x = None;
                         self.target_desk_pan_y = None;
                         self.target_desk_zoom = None;
+                    } else {
                         self.camera_ramp_anim = None;
-                    }
-                }
-                Command::PanTo { x, y } => {
-                    if let Some(x) = x {
-                        self.target_desk_pan_x = Some(x);
-                    }
-                    if let Some(y) = y {
-                        self.target_desk_pan_y = Some(y);
+                        self.target_desk_pan_x = Some(camera.pan_x);
+                        self.target_desk_pan_y = Some(camera.pan_y);
+                        self.target_desk_zoom = Some(camera.zoom);
                     }
                     self.start_panning_animation();
+                } else {
+                    self.desk_pan_x = camera.pan_x;
+                    self.desk_pan_y = camera.pan_y;
+                    self.desk_zoom = camera.zoom;
+                    // An instant write cancels any easing in flight — the
+                    // stale targets would otherwise drag the camera back.
+                    self.target_desk_pan_x = None;
+                    self.target_desk_pan_y = None;
+                    self.target_desk_zoom = None;
+                    self.camera_ramp_anim = None;
                 }
-                Command::StopPanAnimation => self.stop_panning_animation(),
-                Command::FocusNextVisible => {
-                    let first = self.seats.values().next().map(|s| s.id);
-                    if let Some(sid) = first {
-                        self.focus_next_visible_window(sid);
-                    }
+            }
+            Command::PanTo { x, y } => {
+                if let Some(x) = x {
+                    self.target_desk_pan_x = Some(x);
                 }
-                Command::Raise(id) => {
-                    if self.windows.get(id).is_some_and(|w| !w.closed) {
-                        self.raise_window(id);
-                    }
+                if let Some(y) = y {
+                    self.target_desk_pan_y = Some(y);
                 }
-                Command::CloseWindow(id) => {
-                    if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
-                        win.close();
-                    }
+                self.start_panning_animation();
+            }
+            Command::StopPanAnimation => self.stop_panning_animation(),
+            Command::FocusNextVisible => {
+                if let Some(sid) = self.first_seat() {
+                    self.focus_next_visible_window(sid);
                 }
-                Command::SetMinimized { id, minimized } => {
-                    if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
-                        win.minimized = minimized;
-                    }
+            }
+            Command::Raise(id) => {
+                if self.windows.get(id).is_some_and(|w| !w.closed) {
+                    self.raise_window(id);
                 }
-                Command::SetWindowMode { id, mode, locked } => {
-                    if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
-                        // Remember what Fullscreen replaced, so the
-                        // toggle's exit can put it back (policy
-                        // `actions::fullscreen`). A re-lock while
-                        // already Fullscreen keeps the first record.
-                        if mode == crate::tiling::TilingMode::Fullscreen {
-                            if win.tiling_mode != crate::tiling::TilingMode::Fullscreen {
-                                win.pre_fullscreen = Some((win.tiling_mode, win.mode_locked));
-                            }
-                        } else {
-                            // Coming back Tiled from Fullscreen is a
-                            // RETURN, not a fresh entry: the arrange
-                            // pass's Enter transition would snapshot
-                            // the current box — still the output-sized
-                            // fullscreen box at this point — as the
-                            // window's floating geometry, and a later
-                            // un-tile would pop it to screen size.
-                            // Restoring `was_tiled` with the mode keeps
-                            // the floating geometry saved before the
-                            // window was tiled in the first place.
-                            if win.tiling_mode == crate::tiling::TilingMode::Fullscreen
-                                && mode == crate::tiling::TilingMode::Tiled
-                                && matches!(win.pre_fullscreen, Some((crate::tiling::TilingMode::Tiled, _)))
-                            {
-                                win.was_tiled = true;
-                            }
-                            win.pre_fullscreen = None;
+            }
+            Command::CloseWindow(id) => {
+                if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
+                    win.close();
+                }
+            }
+            Command::SetMinimized { id, minimized } => {
+                if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
+                    win.minimized = minimized;
+                }
+            }
+            Command::SetWindowMode { id, mode, locked } => {
+                if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
+                    // Remember what Fullscreen replaced, so the
+                    // toggle's exit can put it back (policy
+                    // `actions::fullscreen`). A re-lock while
+                    // already Fullscreen keeps the first record.
+                    if mode == crate::tiling::TilingMode::Fullscreen {
+                        if win.tiling_mode != crate::tiling::TilingMode::Fullscreen {
+                            win.pre_fullscreen = Some((win.tiling_mode, win.mode_locked));
                         }
-                        win.tiling_mode = mode;
-                        win.mode_locked = locked;
-                    }
-                }
-                Command::Focus(id) => {
-                    if self.windows.get(id).is_some_and(|w| !w.closed) {
-                        if let Some(seat) = self.first_seat() {
-                            crate::seat::Seat::focus_window(self, (*seat).id, Some(id));
-                        }
-                    }
-                }
-                Command::MoveWindow { id, x, y } => {
-                    if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
-                        win.virtual_x = x;
-                        win.virtual_y = y;
-                    }
-                }
-                Command::SetOverlayPosition(side) => {
-                    let side = match side {
-                        crate::policy::api::OverlaySide::Left => "left",
-                        crate::policy::api::OverlaySide::Right => "right",
-                    };
-                    crate::shared::update_layout(|l| l.overlay_position = side.to_string());
-                }
-                Command::Relayout => crate::shared::pending().dirty_windowing(),
-                Command::RefreshCamera => {
-                    if matches!(self.state, WindowManagerState::Idle) {
-                        self.update_viewport_local();
                     } else {
-                        crate::shared::pending().dirty_windowing();
+                        // Coming back Tiled from Fullscreen is a
+                        // RETURN, not a fresh entry: the arrange
+                        // pass's Enter transition would snapshot
+                        // the current box — still the output-sized
+                        // fullscreen box at this point — as the
+                        // window's floating geometry, and a later
+                        // un-tile would pop it to screen size.
+                        // Restoring `was_tiled` with the mode keeps
+                        // the floating geometry saved before the
+                        // window was tiled in the first place.
+                        if win.tiling_mode == crate::tiling::TilingMode::Fullscreen
+                            && mode == crate::tiling::TilingMode::Tiled
+                            && matches!(win.pre_fullscreen, Some((crate::tiling::TilingMode::Tiled, _)))
+                        {
+                            win.was_tiled = true;
+                        }
+                        win.pre_fullscreen = None;
                     }
+                    win.tiling_mode = mode;
+                    win.mode_locked = locked;
+                }
+            }
+            Command::Focus(id) => {
+                if self.windows.get(id).is_some_and(|w| !w.closed) {
+                    if let Some(sid) = self.first_seat() {
+                        crate::seat::Seat::focus_window(self, sid, Some(id));
+                    }
+                }
+            }
+            Command::MoveWindow { id, x, y } => {
+                if let Some(win) = self.windows.get_mut(id).filter(|w| !w.closed) {
+                    win.virtual_x = x;
+                    win.virtual_y = y;
+                }
+            }
+            Command::SetOverlayPosition(side) => {
+                let side = match side {
+                    crate::policy::api::OverlaySide::Left => "left",
+                    crate::policy::api::OverlaySide::Right => "right",
+                };
+                crate::shared::update_layout(|l| l.overlay_position = side.to_string());
+            }
+            Command::Relayout => crate::shared::pending().dirty_windowing(),
+            Command::RefreshCamera => {
+                if matches!(self.state, WindowManagerState::Idle) {
+                    self.update_viewport_local();
+                } else {
+                    crate::shared::pending().dirty_windowing();
                 }
             }
         }
@@ -2879,23 +2878,17 @@ pub(crate) unsafe extern "C" fn handle_edge_pan_tick(_data: *mut std::ffi::c_voi
     if vx == 0.0 && vy == 0.0 {
         return 0;
     }
-    let seat = match (*wm).first_seat() {
-        Some(seat) if (*seat).op.is_some() => seat,
-        _ => {
-            (*wm).edge_pan_vx = 0.0;
-            (*wm).edge_pan_vy = 0.0;
-            return 0;
-        }
-    };
-    let (ox, oy) = {
-        let op = (*seat).op.as_ref().unwrap();
-        (op.x, op.y)
+    let held = (*wm).first_seat().and_then(|sid| Some((sid, (*wm).seats.get(sid)?.op.as_ref()?)));
+    let Some((sid, (ox, oy))) = held.map(|(sid, op)| (sid, (op.x, op.y))) else {
+        (*wm).edge_pan_vx = 0.0;
+        (*wm).edge_pan_vy = 0.0;
+        return 0;
     };
     let dt = 0.016;
     let zoom = (*wm).desk_zoom.max(0.01);
     (*wm).desk_pan_x += vx * dt / zoom;
     (*wm).desk_pan_y += vy * dt / zoom;
-    crate::seat::Seat::op_update(&mut *wm, (*seat).id, ox, oy);
+    crate::seat::Seat::op_update(&mut *wm, sid, ox, oy);
     0
 }
 
