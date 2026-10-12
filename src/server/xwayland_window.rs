@@ -446,13 +446,13 @@ impl XwaylandWindow {
 
     /// `window` is this surface's window, passed in rather than reached
     /// through `self.window`: the caller already holds it.
-    pub unsafe fn configure(&mut self, window: &mut Window) -> bool {
+    pub fn configure(&mut self, window: &mut Window) -> bool {
         let has_parent = !self.xsurface.parent().is_null();
         // A captionless Wine window is drawn inside a margin (WINE_MARGIN).
         let wine_unframed = window.is_wine() && !has_parent && !window.is_fullscreen();
         let scheduled = &mut window.configure_scheduled;
         let sent = &mut window.configure_sent;
-        let s = x11_scale_for(self.xsurface.ptr());
+        let s = self.xsurface.x11_scale();
 
         if scheduled.width == Some(0) {
             scheduled.width = Some(from_x11(self.xsurface.width() as i32, s) as u32);
@@ -598,7 +598,7 @@ impl XwaylandWindow {
 
     /// Hand the window the minimum a previous run learned, before its first
     /// arrange, so the first drag past it already stops there.
-    unsafe fn apply_stored_min_size(&self, wm: &mut crate::window_manager::WindowManager) {
+    fn apply_stored_min_size(&self, wm: &mut crate::window_manager::WindowManager) {
         let Some((app_id, program, title)) = wm.windows.get(self.window).and_then(|w| self.min_size_key(w)) else { return };
         let Some((stored_w, stored_h)) = wm.min_sizes.get(&app_id, &program, &title) else { return };
         // Mapping at a size below the stored minimum proves the app takes
@@ -613,7 +613,7 @@ impl XwaylandWindow {
             wm.min_sizes.set(&app_id, &program, &title, w, h);
         }
         let Some(window) = wm.windows.get_mut(self.window) else { return };
-        let s = x11_scale_for(self.xsurface.ptr());
+        let s = self.xsurface.x11_scale();
         let hint = crate::window::DimensionsHint {
             min_width: if w > 0 { from_x11(w as i32, s) as u32 } else { 0 },
             min_height: if h > 0 { from_x11(h as i32, s) as u32 } else { 0 },
@@ -976,7 +976,7 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     let is_wine = this.is_wine();
 
     let has_parent = !(*xwindow).xsurface.parent().is_null();
-    let s = x11_scale_for((*xwindow).xsurface.ptr());
+    let s = (*xwindow).xsurface.x11_scale();
     log::info!(
         "XWayland configure request: title='{}' class='{}' has_parent={} is_wine={} event=({}, {}, {}, {}) xsurface=({}, {}, {}, {})",
         title,

@@ -78,11 +78,11 @@ impl XwaylandOverrideRedirect {
 
     /// Put the surface tree where X11 says the window is, in logical
     /// pixels (`xwayland_window::x11_scale`).
-    pub unsafe fn place(&mut self) {
+    pub fn place(&mut self) {
         if self.surface_tree.is_null() {
             return;
         }
-        let s = crate::xwayland_window::x11_scale_for(self.xsurface.ptr());
+        let s = self.xsurface.x11_scale();
         self.surface_tree.set_position(crate::xwayland_window::from_x11(self.xsurface.x() as i32, s), crate::xwayland_window::from_x11(self.xsurface.y() as i32, s));
     }
 
@@ -93,7 +93,7 @@ impl XwaylandOverrideRedirect {
         if self.surface_tree.is_null() {
             return;
         }
-        let s = crate::xwayland_window::x11_scale_for(self.xsurface.ptr()) as f64;
+        let s = self.xsurface.x11_scale() as f64;
         if s == 1.0 {
             return;
         }

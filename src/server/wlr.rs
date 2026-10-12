@@ -434,6 +434,13 @@ impl Wlr<ffi::wlr_xwayland_surface> {
         }
     }
 
+    /// The X11 scale this surface is drawn at (`xwayland_hidpi`, less the
+    /// exempt apps).
+    pub fn x11_scale(&self) -> f32 {
+        // SAFETY: the pointer is null or the live surface the field holds.
+        unsafe { crate::xwayland_window::x11_scale_for(self.ptr()) }
+    }
+
     /// WM_CLASS class, owned; empty when unset.
     pub fn class(&self) -> String {
         // SAFETY: the string is the surface's, valid while it lives.
@@ -451,5 +458,35 @@ impl Wlr<ffi::wlr_xwayland_surface> {
         // SAFETY: as `class`.
         self.live().map_or_else(String::new, |x| unsafe { owned_str((*x).title) })
     }
+}
+
+impl Wlr<ffi::wlr_xdg_toplevel> {
+    /// The toplevel's xdg surface; null when unset.
+    pub fn base(&self) -> *mut ffi::wlr_xdg_surface {
+        self.live().map_or(std::ptr::null_mut(), |t| unsafe { ffi::river_wlr_xdg_toplevel_get_base(t) })
+    }
+}
+
+/// The xdg toplevel's configure setters: each takes values only and returns
+/// the configure serial (0 when unset).
+macro_rules! toplevel_setters {
+    ($($name:ident($($arg:ident: $ty:ty),*) => $ffi:ident;)*) => {
+        impl Wlr<ffi::wlr_xdg_toplevel> {$(
+            pub fn $name(&self, $($arg: $ty),*) -> u32 {
+                self.live().map_or(0, |t| unsafe { ffi::$ffi(t, $($arg),*) })
+            }
+        )*}
+    };
+}
+
+toplevel_setters! {
+    set_activated(activated: bool) => wlr_xdg_toplevel_set_activated;
+    set_tiled(edges: u32) => wlr_xdg_toplevel_set_tiled;
+    set_wm_capabilities(caps: u32) => wlr_xdg_toplevel_set_wm_capabilities;
+    set_maximized(maximized: bool) => wlr_xdg_toplevel_set_maximized;
+    set_fullscreen(fullscreen: bool) => wlr_xdg_toplevel_set_fullscreen;
+    set_resizing(resizing: bool) => wlr_xdg_toplevel_set_resizing;
+    set_bounds(width: i32, height: i32) => wlr_xdg_toplevel_set_bounds;
+    set_size(width: i32, height: i32) => wlr_xdg_toplevel_set_size;
 }
 

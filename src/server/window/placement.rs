@@ -198,7 +198,7 @@ impl Window {
                         // `xwayland_window::needs_configure`, which also checks
                         // the geometry the compositor has actually sent.
                         if !xwindow.is_null() && !(*xwindow).xsurface.is_null() {
-                            let s = crate::xwayland_window::x11_scale_for((*xwindow).xsurface.ptr());
+                            let s = (*xwindow).xsurface.x11_scale();
                             (*(*xwindow).xsurface.ptr()).width = crate::xwayland_window::to_x11(saved.width as i32, s) as u16;
                             (*(*xwindow).xsurface.ptr()).height = crate::xwayland_window::to_x11(saved.height as i32, s) as u16;
                         }

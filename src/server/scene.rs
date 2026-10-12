@@ -250,7 +250,7 @@ impl Scene {
                             (s != 1.0).then_some(s / zoom)
                         }
                         SceneNodeDataVal::OverrideRedirect(or) if !or.is_null() => {
-                            let s = crate::xwayland_window::x11_scale_for((*or).xsurface.ptr()) as f64;
+                            let s = (*or).xsurface.x11_scale() as f64;
                             (s != 1.0).then_some(s)
                         }
                         _ => None,

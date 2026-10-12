@@ -1121,7 +1121,7 @@ impl Window {
                 if toplevel.is_null() {
                     std::ptr::null()
                 } else {
-                    ffi::river_wlr_xdg_toplevel_get_title((*toplevel).wlr_toplevel)
+                    ffi::river_wlr_xdg_toplevel_get_title((*toplevel).wlr_toplevel.ptr())
                 }
             }
             WindowImpl::Xwayland(xwindow) => {
@@ -1143,7 +1143,7 @@ impl Window {
                 if toplevel.is_null() {
                     std::ptr::null()
                 } else {
-                    ffi::river_wlr_xdg_toplevel_get_app_id((*toplevel).wlr_toplevel)
+                    ffi::river_wlr_xdg_toplevel_get_app_id((*toplevel).wlr_toplevel.ptr())
                 }
             }
             WindowImpl::Xwayland(xwindow) => {
@@ -1211,7 +1211,7 @@ impl Window {
                     if toplevel.is_null() {
                         None
                     } else {
-                        let wlr_parent = ffi::river_wlr_xdg_toplevel_get_parent((*toplevel).wlr_toplevel);
+                        let wlr_parent = ffi::river_wlr_xdg_toplevel_get_parent((*toplevel).wlr_toplevel.ptr());
                         if wlr_parent.is_null() {
                             None
                         } else {
@@ -1258,7 +1258,7 @@ impl Window {
                     if toplevel.is_null() {
                         0
                     } else {
-                        let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
+                        let base = (*toplevel).wlr_toplevel.base();
                         let surface = ffi::river_wlr_xdg_surface_get_surface(base);
                         if surface.is_null() {
                             0
@@ -1660,7 +1660,7 @@ impl Window {
         match self.impl_type {
             WindowImpl::Toplevel(toplevel) => {
                 if !toplevel.is_null() {
-                    ffi::wlr_xdg_toplevel_send_close((*toplevel).wlr_toplevel);
+                    ffi::wlr_xdg_toplevel_send_close((*toplevel).wlr_toplevel.ptr());
                 }
             }
             WindowImpl::Xwayland(xwindow) => {
@@ -1819,7 +1819,7 @@ impl Window {
                 if toplevel.is_null() {
                     std::ptr::null_mut()
                 } else {
-                    let base = ffi::river_wlr_xdg_toplevel_get_base((*toplevel).wlr_toplevel);
+                    let base = (*toplevel).wlr_toplevel.base();
                     ffi::river_wlr_xdg_surface_get_surface(base)
                 }
             }
@@ -2191,7 +2191,7 @@ impl Window {
             }
             WindowImpl::Xwayland(xwindow) => {
                 if !xwindow.is_null() {
-                    let s = crate::xwayland_window::x11_scale_for((*xwindow).xsurface.ptr());
+                    let s = (*xwindow).xsurface.x11_scale();
                     let mut w = crate::xwayland_window::from_x11((*xwindow).xsurface.width() as i32, s) as u32;
                     let mut h = crate::xwayland_window::from_x11((*xwindow).xsurface.height() as i32, s) as u32;
                     let has_parent = !(*xwindow).xsurface.parent().is_null();
@@ -2933,7 +2933,7 @@ unsafe extern "C" fn handle_window_commit(listener: *mut ffi::wl_listener, _data
         if !xwindow.is_null() && !(*xwindow).xsurface.is_null() && this.resize_edges.is_some() {
             let surface = (*xwindow).xsurface.surface();
             if !surface.is_null() {
-                let s = crate::xwayland_window::x11_scale_for((*xwindow).xsurface.ptr());
+                let s = (*xwindow).xsurface.x11_scale();
                 let mut w = crate::xwayland_window::from_x11(
                     ffi::river_wlr_surface_get_width(surface), s);
                 let mut h = crate::xwayland_window::from_x11(
