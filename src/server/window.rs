@@ -1190,12 +1190,17 @@ impl Window {
     /// `xwayland_hidpi`, whose buffer is physical pixels (see
     /// `xwayland_window::x11_scale_for`); 1 for everything else, including
     /// an X11 window named in `xwayland_hidpi_except`.
-    pub unsafe fn x11_buffer_scale(&self) -> f64 {
-        if let WindowImpl::Xwayland(xwindow) = self.impl_type {
-            let xsurface = if xwindow.is_null() { std::ptr::null() } else { (*xwindow).xsurface.ptr() as *const _ };
-            1.0 / crate::xwayland_window::x11_scale_for(xsurface) as f64
-        } else {
-            1.0
+    pub fn x11_buffer_scale(&self) -> f64 {
+        match self.impl_type {
+            WindowImpl::Xwayland(xwindow) if !xwindow.is_null() => {
+                // SAFETY: as `Window::get_title`: `impl_type` names this window's
+                // live implementation (`set_impl`'s contract), and an impl's wlroots
+                // objects outlive it.
+                1.0 / unsafe { (*xwindow).xsurface.x11_scale() } as f64
+            }
+            // SAFETY: `x11_scale_for` takes a null surface (no exemption).
+            WindowImpl::Xwayland(_) => 1.0 / unsafe { crate::xwayland_window::x11_scale_for(std::ptr::null()) } as f64,
+            _ => 1.0,
         }
     }
 
@@ -1813,8 +1818,11 @@ impl Window {
         }
     }
 
-    pub unsafe fn root_surface(&self) -> *mut ffi::wlr_surface {
-        match self.impl_type {
+    pub fn root_surface(&self) -> *mut ffi::wlr_surface {
+        // SAFETY: as `Window::get_title`: `impl_type` names this window's
+        // live implementation (`set_impl`'s contract), and an impl's wlroots
+        // objects outlive it.
+        unsafe { match self.impl_type {
             WindowImpl::Toplevel(toplevel) => {
                 if toplevel.is_null() {
                     std::ptr::null_mut()
@@ -1831,7 +1839,7 @@ impl Window {
                 }
             }
             _ => std::ptr::null_mut(),
-        }
+        } }
     }
 
     pub unsafe fn get_decorations_size(&self) -> (i32, i32) {
@@ -2150,8 +2158,11 @@ impl Window {
         track_configure
     }
 
-    pub unsafe fn render_start(&mut self) {
-        match self.impl_type {
+    pub fn render_start(&mut self) {
+        // SAFETY: as `Window::get_title`: `impl_type` names this window's
+        // live implementation (`set_impl`'s contract), and an impl's wlroots
+        // objects outlive it.
+        unsafe { match self.impl_type {
             WindowImpl::Toplevel(toplevel) => {
                 if !toplevel.is_null() {
                     match (*toplevel).configure_state {
@@ -2205,7 +2216,7 @@ impl Window {
                 }
             }
             WindowImpl::Destroying => {}
-        }
+        } }
 
         let presentation_hint = self.presentation_hint();
         let sent = &mut self.rendering_sent;
@@ -2216,7 +2227,7 @@ impl Window {
         sent.presentation_hint = presentation_hint;
     }
 
-    pub unsafe fn presentation_hint(&self) -> ffi::zcce_output_v1_presentation_mode {
+    pub fn presentation_hint(&self) -> ffi::zcce_output_v1_presentation_mode {
         let root = self.root_surface();
         let manager = crate::shared::handles().tearing_control.ptr();
         if root.is_null() || manager.is_null() {
@@ -2224,7 +2235,9 @@ impl Window {
         }
         // The client's wp_tearing_control_v1 hint on its root surface
         // (Xwayland sets it for an X client's async Present flips).
-        if ffi::wlr_tearing_control_manager_v1_surface_hint_from_surface(manager, root)
+        // SAFETY: `manager` is the server's live tearing-control manager and
+        // `root` this window's live root surface (`root_surface`).
+        if unsafe { ffi::wlr_tearing_control_manager_v1_surface_hint_from_surface(manager, root) }
             == ffi::wp_tearing_control_v1_presentation_hint_WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC
         {
             ffi::zcce_output_v1_presentation_mode_ZCCE_OUTPUT_V1_PRESENTATION_MODE_ASYNC
