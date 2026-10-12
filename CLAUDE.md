@@ -1659,6 +1659,13 @@ closed, used to overwrite its entry. In a shadow, an X11 client named in
 windowstate --remove/--add FULLSCREEN`, since a fullscreen set before map
 sends no request).
 
+**An X11 fullscreen window stays at its output's origin in X** (since
+2026-10-11, `xwayland_window::x11_origin`), however far from the output the
+scene draws it — stepped aside, in overview, mid-animation. Configured to
+follow the drawn spot, a Wine game read every camera move as being pushed
+off its screen and asked back for (0, 0) ~140 times a second. Unfullscreened,
+X follows the drawn spot again.
+
 ### Tearing (wp_tearing_control_v1)
 
 A fullscreen window that asks to tear page-flips its output without waiting

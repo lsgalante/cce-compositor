@@ -2123,6 +2123,7 @@ impl Window {
             resizing: this.wm_requested.resizing,
         };
 
+        let stores = stores!(wm);
         let track_configure = match this.impl_type {
             WindowImpl::Toplevel(toplevel) => {
                 if toplevel.is_null() {
@@ -2135,7 +2136,7 @@ impl Window {
                 if xwindow.is_null() {
                     false
                 } else {
-                    (*xwindow).configure(this)
+                    (*xwindow).configure(this, stores)
                 }
             }
             WindowImpl::Destroying => unreachable!(),
@@ -2636,7 +2637,7 @@ impl Window {
                             (*xwindow).surface_tree.set_position(0, 0);
                         }
                     }
-                    (*xwindow).configure(self);
+                    (*xwindow).configure(self, stores);
                 }
             }
             _ => {}

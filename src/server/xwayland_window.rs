@@ -446,10 +446,11 @@ impl XwaylandWindow {
 
     /// `window` is this surface's window, passed in rather than reached
     /// through `self.window`: the caller already holds it.
-    pub fn configure(&mut self, window: &mut Window) -> bool {
+    pub fn configure(&mut self, window: &mut Window, stores: crate::ctx::Stores) -> bool {
         let has_parent = !self.xsurface.parent().is_null();
         // A captionless Wine window is drawn inside a margin (WINE_MARGIN).
         let wine_unframed = window.is_wine() && !has_parent && !window.is_fullscreen();
+        let (log_x, log_y) = x11_origin(window, has_parent, stores);
         let scheduled = &mut window.configure_scheduled;
         let sent = &mut window.configure_sent;
         let s = self.xsurface.x11_scale();
@@ -476,9 +477,8 @@ impl XwaylandWindow {
         // X11 root coordinates: see `x11_scale`. Everything sent to X goes
         // through `to_x11`, everything read back through `from_x11`; the
         // window's own geometry stays logical.
-        let mut phys_x = to_x11(window.box_geom.x, s) as i16;
-        let mut phys_y = to_x11(window.box_geom.y, s) as i16;
-
+        let mut phys_x = to_x11(log_x, s) as i16;
+        let mut phys_y = to_x11(log_y, s) as i16;
 
         if wine_unframed {
             if scheduled.width.is_some() {
@@ -950,6 +950,29 @@ unsafe fn handle_unmap_impl(wm: &mut crate::window_manager::WindowManager, xwind
     (*xwindow).surface_tree.destroy();
 }
 
+/// Where a toplevel's X window sits in X11 root coordinates (logical; the
+/// caller applies `to_x11`): where the compositor draws it, except that a
+/// FULLSCREEN toplevel stays at its output's origin wherever it is drawn.
+///
+/// A fullscreen window is drawn away from that origin while it has stepped
+/// aside for another window (`fullscreen_yields`), on the desk in overview,
+/// and through the fullscreen animation, and the drawn spot moves with the
+/// camera. Sent to X, each move told the game it had been moved off its
+/// screen: a Wine fullscreen game (Trackmania) asks straight back for (0, 0),
+/// is answered with the drawn spot, and asks again, ~140 times a second for
+/// as long as the window was off the output (2026-10-11). Its pixels are
+/// placed by the scene, not by X, and Xwayland routes pointer input by the
+/// focused surface, so the X position of a fullscreen window has nothing to
+/// follow.
+fn x11_origin(window: &Window, has_parent: bool, stores: crate::ctx::Stores) -> (i32, i32) {
+    if !has_parent && window.is_fullscreen() {
+        // The output `Window::fullscreen_output` names: the first enabled.
+        let (x, y, _, _) = stores.outputs.first_enabled_box();
+        return (x as i32, y as i32);
+    }
+    (window.box_geom.x, window.box_geom.y)
+}
+
 unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, data: *mut std::ffi::c_void) {
     let stores = crate::ctx::Stores::of(crate::shared::server_ptr());
     let xwindow = crate::container_of!(listener, XwaylandWindow, request_configure);
@@ -1183,8 +1206,9 @@ unsafe extern "C" fn handle_request_configure(listener: *mut ffi::wl_listener, d
     };
 
     let this = window_mut!(wm, id);
-    let mut phys_x = to_x11(this.box_geom.x, s) as i16;
-    let mut phys_y = to_x11(this.box_geom.y, s) as i16;
+    let (log_x, log_y) = x11_origin(this, has_parent, stores);
+    let mut phys_x = to_x11(log_x, s) as i16;
+    let mut phys_y = to_x11(log_y, s) as i16;
 
     if is_wine && !has_parent && !is_fullscreen {
         phys_x -= to_x11(WINE_MARGIN, s) as i16;
