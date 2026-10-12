@@ -32,9 +32,10 @@ pub struct InputManager {
     pub new_pointer_constraint: crate::listener::Listener,
 
     /// Pending deferred pointer-focus re-evaluation (see
-    /// [`InputManager::schedule_pointer_refresh`]); null when none. One idle
-    /// source coalesces every scene-mapping change of a dispatch.
-    pub pointer_refresh_idle: *mut ffi::wl_event_source,
+    /// [`InputManager::schedule_pointer_refresh`]). One idle source
+    /// coalesces every scene-mapping change of a dispatch. Private: its
+    /// callback must be the one that calls `ran()` on it.
+    pointer_refresh: crate::event_source::IdleOnce,
 }
 
 pub struct InputManagerObject {
@@ -182,33 +183,17 @@ impl InputManager {
     /// listeners re-anchor the surface tree AFTER the compositor's toplevel
     /// commit handler runs, so an inline refresh would query the stale
     /// mapping.
-    pub unsafe fn schedule_pointer_refresh(&mut self) {
-        if !self.pointer_refresh_idle.is_null() {
-            return;
-        }
-        let display = crate::shared::shared().display();
-        if display.is_null() {
-            return;
-        }
-        let event_loop = ffi::wl_display_get_event_loop(display);
-        let idle = ffi::wl_event_loop_add_idle(
-            event_loop,
-            Some(handle_pointer_refresh_idle),
-            self as *mut InputManager as *mut _,
-        );
-        if idle.is_null() {
+    pub fn schedule_pointer_refresh(&self) {
+        // SAFETY: `handle_pointer_refresh_idle` is an entry point that needs
+        // no data, and calls `ran()` on this field first.
+        if !unsafe { self.pointer_refresh.schedule(handle_pointer_refresh_idle, 0) } {
             log::error!("Failed to schedule pointer-refresh idle source");
-            return;
         }
-        self.pointer_refresh_idle = idle;
     }
 
     pub unsafe fn deinit(&mut self, wm: &mut crate::window_manager::WindowManager, sys: &mut crate::ctx::Sys) {
         log::info!("[deinit] InputManager::deinit started");
-        if !self.pointer_refresh_idle.is_null() {
-            ffi::wl_event_source_remove(self.pointer_refresh_idle);
-            self.pointer_refresh_idle = std::ptr::null_mut();
-        }
+        self.pointer_refresh.cancel();
         if !self.global.is_null() {
             log::info!("[deinit] destroying input manager global");
             ffi::wl_global_destroy(self.global);
@@ -522,10 +507,13 @@ unsafe extern "C" fn handle_new_virtual_keyboard(listener: *mut ffi::wl_listener
     (*seat).attach_device(device);
 }
 
-unsafe extern "C" fn handle_pointer_refresh_idle(data: *mut std::ffi::c_void) {
-    let manager = data as *mut InputManager;
-    (*manager).pointer_refresh_idle = std::ptr::null_mut();
-    let wm = &mut *crate::reentry::wm(crate::shared::server_ptr());
+unsafe extern "C" fn handle_pointer_refresh_idle(_data: *mut std::ffi::c_void) {
+    let server = crate::shared::server_ptr();
+    if server.is_null() {
+        return;
+    }
+    (*server).input_manager.pointer_refresh.ran();
+    let wm = &mut *crate::reentry::wm(server);
     for sid in wm.seats.ids() {
         crate::cursor::Cursor::refresh_after_scene_change(wm, sid);
     }

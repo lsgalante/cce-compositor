@@ -186,13 +186,13 @@ pub fn run_server() {
 
     std::env::set_var("WAYLAND_DISPLAY", &socket_str);
 
-    unsafe { server.wm.start_ipc(Some(socket_str.clone())) };
+    server.wm.start_ipc(Some(socket_str.clone()));
 
     let status_sender = crate::status_server::spawn_status_server(Some(socket_str.clone()));
     server.wm.status_sender = Some(status_sender);
 
     let stream_hub = crate::stream_server::spawn_stream_server(Some(socket_str.clone()));
-    unsafe { server.wm.start_stream(stream_hub) };
+    server.wm.start_stream(stream_hub);
 
 
     let started = unsafe { ffi::wlr_backend_start(server.backend) };

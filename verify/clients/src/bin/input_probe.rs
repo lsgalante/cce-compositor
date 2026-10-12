@@ -12,15 +12,22 @@
 // Args: --app-id ID  --size WxH  --exit-unmapped SECS (ack the first
 // configure but never attach a buffer, then quit after SECS: a toplevel the
 // compositor manages but that never maps).
+//
+// --popup-after SECS --popup-for SECS: open an xdg_popup (200x150 at 50,50
+// in the window) that long after mapping and destroy it after the second
+// span. The pointer's enter and leave on it print as popup-enter and
+// popup-leave: with the pointer parked where the popup appears, only the
+// compositor's deferred pointer refresh (`schedule_pointer_refresh`) moves
+// focus, since no motion arrives.
 
 use std::io::Write;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use wayland_client::{
     delegate_noop,
     protocol::{wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface, wl_touch},
-    Connection, Dispatch, QueueHandle, WEnum,
+    Connection, Dispatch, Proxy, QueueHandle, WEnum,
 };
-use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+use wayland_protocols::xdg::shell::client::{xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base};
 
 #[derive(Default)]
 struct State {
@@ -32,6 +39,8 @@ struct State {
     touch: Option<wl_touch::WlTouch>,
     needs_buffer: bool,
     closed: bool,
+    popup_surface: Option<wayland_client::backend::ObjectId>,
+    popup_needs_buffer: bool,
 }
 
 fn say(line: &str) {
@@ -63,11 +72,16 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
     }
 }
 
-impl Dispatch<xdg_surface::XdgSurface, ()> for State {
-    fn event(state: &mut Self, xdg_surface: &xdg_surface::XdgSurface, event: xdg_surface::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+/// The xdg_surface's role: false for the toplevel, true for the popup.
+impl Dispatch<xdg_surface::XdgSurface, bool> for State {
+    fn event(state: &mut Self, xdg_surface: &xdg_surface::XdgSurface, event: xdg_surface::Event, popup: &bool, _: &Connection, _: &QueueHandle<Self>) {
         if let xdg_surface::Event::Configure { serial } = event {
             xdg_surface.ack_configure(serial);
-            state.needs_buffer = true;
+            if *popup {
+                state.popup_needs_buffer = true;
+            } else {
+                state.needs_buffer = true;
+            }
         }
     }
 }
@@ -92,10 +106,14 @@ fn pressed(s: bool) -> &'static str {
 }
 
 impl Dispatch<wl_pointer::WlPointer, ()> for State {
-    fn event(_: &mut Self, _: &wl_pointer::WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(state: &mut Self, _: &wl_pointer::WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match event {
-            wl_pointer::Event::Enter { .. } => say("enter"),
-            wl_pointer::Event::Leave { .. } => say("leave"),
+            wl_pointer::Event::Enter { surface, .. } => {
+                say(if Some(surface.id()) == state.popup_surface { "popup-enter" } else { "enter" })
+            }
+            wl_pointer::Event::Leave { surface, .. } => {
+                say(if Some(surface.id()) == state.popup_surface { "popup-leave" } else { "leave" })
+            }
             wl_pointer::Event::Motion { surface_x, surface_y, .. } => say(&format!("motion {surface_x:.0} {surface_y:.0}")),
             wl_pointer::Event::Button { button, state, .. } => {
                 say(&format!("button {button} {}", pressed(matches!(state, WEnum::Value(wl_pointer::ButtonState::Pressed)))))
@@ -158,6 +176,8 @@ delegate_noop!(State: ignore wl_shm::WlShm);
 delegate_noop!(State: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(State: ignore wl_buffer::WlBuffer);
 delegate_noop!(State: ignore wl_surface::WlSurface);
+delegate_noop!(State: ignore xdg_positioner::XdgPositioner);
+delegate_noop!(State: ignore xdg_popup::XdgPopup);
 
 fn make_buffer(shm: &wl_shm::WlShm, w: i32, h: i32, qh: &QueueHandle<State>) -> wl_buffer::WlBuffer {
     let size = (w * 4 * h) as usize;
@@ -183,11 +203,15 @@ fn main() {
     let mut app_id = "test.inputprobe".to_string();
     let mut size = (600, 400);
     let mut exit_unmapped: Option<f64> = None;
+    let mut popup_after: Option<f64> = None;
+    let mut popup_for = 2.0f64;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--app-id" => app_id = args.next().unwrap(),
             "--exit-unmapped" => exit_unmapped = Some(args.next().unwrap().parse().unwrap()),
+            "--popup-after" => popup_after = Some(args.next().unwrap().parse().unwrap()),
+            "--popup-for" => popup_for = args.next().unwrap().parse().unwrap(),
             "--size" => {
                 let s = args.next().unwrap();
                 let (w, h) = s.split_once('x').expect("size is WxH");
@@ -207,7 +231,7 @@ fn main() {
     let compositor = state.compositor.clone().expect("wl_compositor");
     let wm_base = state.wm_base.clone().expect("xdg_wm_base");
     let surface = compositor.create_surface(&qh, ());
-    let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
+    let xdg = wm_base.get_xdg_surface(&surface, &qh, false);
     let toplevel = xdg.get_toplevel(&qh, ());
     toplevel.set_app_id(app_id);
     toplevel.set_title("input-probe".into());
@@ -233,9 +257,53 @@ fn main() {
     }
 
     let mut mapped = false;
+    let mut mapped_at: Option<std::time::Instant> = None;
+    let mut popup: Option<(wl_surface::WlSurface, xdg_surface::XdgSurface, xdg_popup::XdgPopup, std::time::Instant)> = None;
     while !state.closed {
-        if queue.blocking_dispatch(&mut state).is_err() {
+        let _ = queue.flush();
+        if let Some(guard) = queue.prepare_read() {
+            let mut fds = [libc::pollfd { fd: guard.connection_fd().as_raw_fd(), events: libc::POLLIN, revents: 0 }];
+            unsafe { libc::poll(fds.as_mut_ptr(), 1, if popup_after.is_some() || popup.is_some() { 50 } else { -1 }) };
+            if fds[0].revents & libc::POLLIN != 0 && guard.read().is_err() {
+                break;
+            }
+        }
+        if queue.dispatch_pending(&mut state).is_err() {
             break;
+        }
+        if let (Some(after), Some(at)) = (popup_after, mapped_at) {
+            if at.elapsed().as_secs_f64() >= after {
+                popup_after = None;
+                let positioner = wm_base.create_positioner(&qh, ());
+                positioner.set_size(200, 150);
+                positioner.set_anchor_rect(50, 50, 1, 1);
+                positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
+                positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+                let psurface = compositor.create_surface(&qh, ());
+                let pxdg = wm_base.get_xdg_surface(&psurface, &qh, true);
+                let pp = pxdg.get_popup(Some(&xdg), &positioner, &qh, ());
+                state.popup_surface = Some(psurface.id());
+                psurface.commit();
+                popup = Some((psurface, pxdg, pp, std::time::Instant::now()));
+            }
+        }
+        if state.popup_needs_buffer {
+            state.popup_needs_buffer = false;
+            if let Some((psurface, ..)) = &popup {
+                let buffer = make_buffer(state.shm.as_ref().expect("wl_shm"), 200, 150, &qh);
+                psurface.attach(Some(&buffer), 0, 0);
+                psurface.damage_buffer(0, 0, 200, 150);
+                psurface.commit();
+                say("popup mapped");
+            }
+        }
+        if popup.as_ref().is_some_and(|p| p.3.elapsed().as_secs_f64() >= popup_for) {
+            let (psurface, pxdg, pp, _) = popup.take().unwrap();
+            pp.destroy();
+            pxdg.destroy();
+            psurface.destroy();
+            let _ = queue.flush();
+            say("popup destroyed");
         }
         if state.needs_buffer {
             state.needs_buffer = false;
@@ -245,6 +313,7 @@ fn main() {
             surface.commit();
             if !mapped {
                 mapped = true;
+                mapped_at = Some(std::time::Instant::now());
                 say("mapped");
             }
         }

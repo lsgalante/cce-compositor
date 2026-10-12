@@ -131,7 +131,7 @@ pub struct IdleManager {
     /// 2026-10-05 the timer above stat'ed both files every second, forever —
     /// the one thing that still ticked in an idle compositor.
     plan_inotify: i32,
-    plan_inotify_source: *mut ffi::wl_event_source,
+    plan_inotify_source: crate::event_source::FdSource,
     /// `plan_stamp` of each file at the last poll: the files are only
     /// re-read when one changes.
     plan_stamps: [u128; 2],
@@ -215,7 +215,6 @@ fn now_ms() -> u64 {
 
 impl IdleManager {
     pub unsafe fn init(&mut self, server: *mut Server) -> Result<(), &'static str> {
-        let event_loop = ffi::wl_display_get_event_loop((*server).wl_server);
         self.display_timer = crate::event_source::Timer::on_shared_loop(handle_display_timeout, 0);
         if !self.display_timer.is_set() {
             return Err("Failed to create idle display timer");
@@ -253,8 +252,8 @@ impl IdleManager {
         self.plan_stamps = [0, 0];
         // Zeroed by `Server::new`: 0 is a real fd (stdin), so say "none".
         self.plan_inotify = -1;
-        self.plan_inotify_source = std::ptr::null_mut();
-        if !self.watch_plan_dir(event_loop) {
+        self.plan_inotify_source = crate::event_source::FdSource::new();
+        if !self.watch_plan_dir() {
             self.plan_timer.arm(PLAN_POLL_MS);
         }
         self.sleep_command = None;
@@ -277,7 +276,7 @@ impl IdleManager {
         Ok(())
     }
 
-    pub unsafe fn deinit(&mut self) {
+    pub fn deinit(&mut self) {
         if self.session_listening {
             self.session_active.disconnect();
             self.session_listening = false;
@@ -336,9 +335,11 @@ impl IdleManager {
     /// Watch the plan directory for any file appearing, changing or going
     /// away. False — and the caller polls — when the directory does not
     /// exist or cannot be watched.
-    unsafe fn watch_plan_dir(&mut self, event_loop: *mut ffi::wl_event_loop) -> bool {
+    fn watch_plan_dir(&mut self) -> bool {
         let Ok(dir) = std::ffi::CString::new(plan_dir()) else { return false };
-        let fd = libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC);
+        // SAFETY: plain syscalls on an fd this function owns until it is
+        // stored below or closed.
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
         if fd < 0 {
             return false;
         }
@@ -349,19 +350,19 @@ impl IdleManager {
             | libc::IN_DELETE
             | libc::IN_DELETE_SELF
             | libc::IN_MOVE_SELF;
-        if libc::inotify_add_watch(fd, dir.as_ptr(), mask) < 0 {
-            libc::close(fd);
+        // SAFETY: as above; `dir` is a NUL-terminated path.
+        if unsafe { libc::inotify_add_watch(fd, dir.as_ptr(), mask) } < 0 {
+            unsafe { libc::close(fd) };
             return false;
         }
-        let source = ffi::wl_event_loop_add_fd(
-            event_loop,
-            fd,
-            ffi::WL_EVENT_READABLE as u32,
-            Some(handle_plan_inotify),
-            self as *mut IdleManager as *mut _,
-        );
-        if source.is_null() {
-            libc::close(fd);
+        // SAFETY: `handle_plan_inotify` is an entry point that finds the
+        // idle manager by place; `plan_inotify` keeps the fd open until
+        // `unwatch_plan_dir`, which removes this source first.
+        let source = unsafe {
+            crate::event_source::FdSource::on_shared_loop(fd, ffi::WL_EVENT_READABLE as u32, handle_plan_inotify, 0)
+        };
+        if !source.is_set() {
+            unsafe { libc::close(fd) };
             return false;
         }
         self.plan_inotify = fd;
@@ -369,13 +370,12 @@ impl IdleManager {
         true
     }
 
-    unsafe fn unwatch_plan_dir(&mut self) {
-        if !self.plan_inotify_source.is_null() {
-            ffi::wl_event_source_remove(self.plan_inotify_source);
-            self.plan_inotify_source = std::ptr::null_mut();
-        }
+    fn unwatch_plan_dir(&mut self) {
+        self.plan_inotify_source.remove();
         if self.plan_inotify >= 0 {
-            libc::close(self.plan_inotify);
+            // SAFETY: the inotify fd `watch_plan_dir` opened and this
+            // manager owns; it is forgotten here.
+            unsafe { libc::close(self.plan_inotify) };
             self.plan_inotify = -1;
         }
     }
@@ -696,8 +696,9 @@ fn plan_field(ms: Option<i64>) -> String {
 
 /// The plan directory changed: drain the events, then re-read. The
 /// directory itself going away ends the watch, and polling takes over.
-unsafe extern "C" fn handle_plan_inotify(_fd: i32, _mask: u32, data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let idle = &mut *(data as *mut IdleManager);
+unsafe extern "C" fn handle_plan_inotify(_fd: i32, _mask: u32, _data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    // The server field this source belongs to; the source carries no pointer.
+    let idle = &mut *std::ptr::addr_of_mut!((*crate::shared::server_ptr()).idle);
     let mut buf = [0u8; 4096];
     let mut dir_gone = false;
     loop {
@@ -728,8 +729,7 @@ unsafe extern "C" fn handle_plan_poll(_data: *mut std::ffi::c_void) -> std::os::
     let idle = &mut *std::ptr::addr_of_mut!((*crate::shared::server_ptr()).idle);
     idle.poll_plan();
     // The directory may exist now: watch it, and stop polling.
-    let event_loop = crate::shared::event_loop();
-    if idle.watch_plan_dir(event_loop) {
+    if idle.watch_plan_dir() {
         log::info!("idle: watching the power-plan directory");
         idle.poll_plan();
         return 0;

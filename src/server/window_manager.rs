@@ -187,7 +187,7 @@ pub struct WindowManager {
     /// The IPC thread's wake eventfd as a wl_event_loop fd source: fires once
     /// per queued request, so the drain runs only when there is something to
     /// drain (it was a 10 ms polling timer before).
-    pub ipc_source: *mut ffi::wl_event_source,
+    pub ipc_source: crate::event_source::FdSource,
     pub ipc_wake: Option<std::sync::Arc<std::os::fd::OwnedFd>>,
     /// One-shot timer behind `schedule_save_state`: the state file is written
     /// at most once per `SAVE_STATE_DELAY_MS`, not once per transaction.
@@ -195,7 +195,7 @@ pub struct WindowManager {
     pub save_state_pending: bool,
     /// The stream hub's wake eventfd as an event source: a new subscriber
     /// arms `stream_timer`, which otherwise does not tick at all.
-    pub stream_source: *mut ffi::wl_event_source,
+    pub stream_source: crate::event_source::FdSource,
     /// Minute tick for the traveling light_source segment: re-arranges so
     /// its perimeter position follows the time of day.
     pub sun_timer: crate::event_source::Timer,
@@ -588,11 +588,11 @@ impl WindowManager {
         self.keybinds = Vec::new();
         self.portal_shortcuts = Vec::new();
         self.ipc_rx = None;
-        self.ipc_source = std::ptr::null_mut();
+        self.ipc_source = crate::event_source::FdSource::new();
         self.ipc_wake = None;
         self.save_state_timer = crate::event_source::Timer::new();
         self.save_state_pending = false;
-        self.stream_source = std::ptr::null_mut();
+        self.stream_source = crate::event_source::FdSource::new();
         self.sun_timer = crate::event_source::Timer::new();
         self.stream_hub = None;
         self.stream_timer = crate::event_source::Timer::new();
@@ -760,23 +760,27 @@ impl WindowManager {
         Some((x, y, cell))
     }
 
-    pub unsafe fn start_ipc(&mut self, display_socket: Option<String>) {
+    pub fn start_ipc(&mut self, display_socket: Option<String>) {
         crate::wm_scope!(mut);
         if self.ipc_rx.is_none() {
             // Lock before logind's sleeps (lid, power key) — a real seat only.
-            if !crate::shared::handles().session.ptr().is_null() {
+            if !crate::shared::handles().session.is_null() {
                 crate::sleep_lock::spawn(display_socket.clone());
             }
             let (rx, wake) = crate::ipc_server::spawn_ipc_server(display_socket);
-            let event_loop = crate::shared::event_loop();
-            self.ipc_source = ffi::wl_event_loop_add_fd(
-                event_loop,
-                std::os::fd::AsRawFd::as_raw_fd(&*wake),
-                ffi::WL_EVENT_READABLE as u32,
-                Some(handle_ipc_event),
-                self as *mut WindowManager as *mut _,
-            );
-            if self.ipc_source.is_null() {
+            // SAFETY: `handle_ipc_event` is an entry point that takes the
+            // window manager by place, not from its data; `ipc_wake` keeps
+            // the eventfd open until `deinit`, which removes this source
+            // first.
+            self.ipc_source = unsafe {
+                crate::event_source::FdSource::on_shared_loop(
+                    std::os::fd::AsRawFd::as_raw_fd(&*wake),
+                    ffi::WL_EVENT_READABLE as u32,
+                    handle_ipc_event,
+                    0,
+                )
+            };
+            if !self.ipc_source.is_set() {
                 log::error!("failed to add the IPC wake fd to the event loop; ccectl will not work");
             }
             self.ipc_rx = Some(rx);
@@ -785,17 +789,21 @@ impl WindowManager {
     }
 
     /// Own the window-stream hub and wake on its subscriber eventfd.
-    pub unsafe fn start_stream(&mut self, hub: crate::stream_server::StreamHub) {
+    pub fn start_stream(&mut self, hub: crate::stream_server::StreamHub) {
         crate::wm_scope!(mut);
-        let event_loop = crate::shared::event_loop();
-        self.stream_source = ffi::wl_event_loop_add_fd(
-            event_loop,
-            std::os::fd::AsRawFd::as_raw_fd(&*hub.wake),
-            ffi::WL_EVENT_READABLE as u32,
-            Some(handle_stream_wake),
-            self as *mut WindowManager as *mut _,
-        );
-        if self.stream_source.is_null() {
+        // SAFETY: `handle_stream_wake` is an entry point that takes the
+        // window manager by place; the hub, stored below, keeps the eventfd
+        // open until `deinit`, which removes this source first (and a
+        // second call drops the old source before the old hub).
+        self.stream_source = unsafe {
+            crate::event_source::FdSource::on_shared_loop(
+                std::os::fd::AsRawFd::as_raw_fd(&*hub.wake),
+                ffi::WL_EVENT_READABLE as u32,
+                handle_stream_wake,
+                0,
+            )
+        };
+        if !self.stream_source.is_set() {
             log::error!("failed to add the stream wake fd to the event loop; window streams will not run");
         }
         self.stream_hub = Some(hub);
@@ -807,15 +815,10 @@ impl WindowManager {
             ffi::wl_global_destroy(self.global);
             self.global = std::ptr::null_mut();
         }
-        if !self.ipc_source.is_null() {
-            ffi::wl_event_source_remove(self.ipc_source);
-            self.ipc_source = std::ptr::null_mut();
-        }
+        // Each source before the fd it watches.
+        self.ipc_source.remove();
         self.ipc_wake = None;
-        if !self.stream_source.is_null() {
-            ffi::wl_event_source_remove(self.stream_source);
-            self.stream_source = std::ptr::null_mut();
-        }
+        self.stream_source.remove();
         self.stream_timer.remove();
         self.save_state_timer.remove();
         self.timeout.remove();
@@ -2430,13 +2433,14 @@ unsafe extern "C" fn handle_save_state_timer(_data: *mut std::ffi::c_void) -> st
 }
 
 /// The IPC wake fd fired: clear it and dispatch every queued request.
-unsafe extern "C" fn handle_ipc_event(fd: std::os::raw::c_int, _mask: u32, data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let sys = &mut crate::ctx::Sys::of(crate::shared::server_ptr());
-    let input = &mut *std::ptr::addr_of_mut!((*crate::shared::server_ptr()).input_manager);
-    let wm = data as *mut WindowManager;
-    if wm.is_null() {
+unsafe extern "C" fn handle_ipc_event(fd: std::os::raw::c_int, _mask: u32, _data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let server = crate::shared::server_ptr();
+    if server.is_null() {
         return 0;
     }
+    let sys = &mut crate::ctx::Sys::of(server);
+    let input = &mut *std::ptr::addr_of_mut!((*server).input_manager);
+    let wm = crate::reentry::wm(server);
     crate::ipc_server::drain_wake_fd(fd);
 
     if let Some(ref rx) = (*wm).ipc_rx {
@@ -2477,11 +2481,12 @@ unsafe extern "C" fn handle_ipc_event(fd: std::os::raw::c_int, _mask: u32, data:
 /// the client is slow and simply skips the frame). Fast cadence only while
 /// subscribers exist.
 /// A subscriber joined the stream hub: start (or keep) the frame tick.
-unsafe extern "C" fn handle_stream_wake(fd: std::os::raw::c_int, _mask: u32, data: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    let wm = data as *mut WindowManager;
-    if wm.is_null() {
+unsafe extern "C" fn handle_stream_wake(fd: std::os::raw::c_int, _mask: u32, _data: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    let server = crate::shared::server_ptr();
+    if server.is_null() {
         return 0;
     }
+    let wm = crate::reentry::wm(server);
     crate::ipc_server::drain_wake_fd(fd);
     (*wm).stream_timer.arm(1);
     0
