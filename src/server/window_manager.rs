@@ -2045,7 +2045,7 @@ impl WindowManager {
     /// pass (a restack would otherwise drop the popup back to its window),
     /// and popup creation (opening a menu changes nothing the order hash can
     /// see, so it schedules no transaction at all).
-    pub unsafe fn raise_focused_popups(&mut self, id: crate::window::WindowId) {
+    pub fn raise_focused_popups(&mut self, id: crate::window::WindowId) {
         let stores = stores!(self);
         crate::wm_scope!(mut);
         let Some(window) = self.windows.get(id) else { return };
@@ -2053,9 +2053,7 @@ impl WindowManager {
             return;
         }
         let wm_layer = crate::shared::scene().layers.wm.raw();
-        if wm_layer.is_null()
-            || ffi::river_scene_node_get_parent(window.popup_tree.node()) != wm_layer
-        {
+        if wm_layer.is_null() || window.popup_tree.parent() != wm_layer {
             return;
         }
         window.popup_tree.raise_to_top();

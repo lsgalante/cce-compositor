@@ -321,7 +321,7 @@ impl WindowManager {
                     let layer = if window.get_app_id_string().as_deref() == Some("cce-wallpaper") {
                         // Between the native backdrop and the fallback
                         // cells, like a layer-shell Background surface.
-                        crate::shared::scene().layers.background_clients.raw()
+                        &crate::shared::scene().layers.background_clients
                     } else if window.is_grid() {
                         // The grid client is a desktop fixture: above
                         // the native backdrop and fallback cells
@@ -329,9 +329,9 @@ impl WindowManager {
                         // Left to the generic wm arm it stacks by
                         // render-list order, burying whichever windows
                         // happened to map before it.
-                        crate::shared::scene().layers.bottom.raw()
+                        &crate::shared::scene().layers.bottom
                     } else if fullscreen_on_top(self, window) {
-                        crate::shared::scene().layers.fullscreen.raw()
+                        &crate::shared::scene().layers.fullscreen
                     } else if rendered_fullscreen(window) {
                         // Stepped aside for a focused window (alt-tab
                         // out), or in overview: behind every window
@@ -340,9 +340,9 @@ impl WindowManager {
                         // sits on the desk there
                         // (`place_fullscreen_windows`), like the grid
                         // beneath it.
-                        crate::shared::scene().layers.bottom.raw()
+                        &crate::shared::scene().layers.bottom
                     } else if window.tiling_mode == crate::tiling::TilingMode::Popup {
-                        crate::shared::scene().layers.popups.raw()
+                        &crate::shared::scene().layers.popups
                     } else if window.tiling_mode == crate::tiling::TilingMode::Status {
                         // An EXPANDED segment (in-surface menu open;
                         // thicker than the bar) stacks like a popup:
@@ -360,25 +360,25 @@ impl WindowManager {
                             _ => bg.height,
                         };
                         if thickness > crate::shared::layout().bar_height {
-                            crate::shared::scene().layers.popups.raw()
+                            &crate::shared::scene().layers.popups
                         } else {
-                            crate::shared::scene().layers.top.raw()
+                            &crate::shared::scene().layers.top
                         }
                     } else if window.rendering_requested.circular {
-                        crate::shared::scene().layers.top.raw()
+                        &crate::shared::scene().layers.top
                     } else if window.tiling_mode == crate::tiling::TilingMode::Overlay && crate::shared::layout().overlay_behavior == "above" {
-                        crate::shared::scene().layers.top.raw()
+                        &crate::shared::scene().layers.top
                     } else {
-                        crate::shared::scene().layers.wm.raw()
+                        &crate::shared::scene().layers.wm
                     };
 
-                    ffi::wlr_scene_node_reparent(window.tree.node(), layer);
+                    window.tree.reparent(layer);
                     if window.get_app_id_string().as_deref() == Some("cce-wallpaper") {
                         window.tree.lower_to_bottom();
                     } else {
                         window.tree.raise_to_top();
                     }
-                    ffi::wlr_scene_node_reparent(window.popup_tree.node(), layer);
+                    window.popup_tree.reparent(layer);
                     window.popup_tree.place_above(&window.tree);
                 }
             }
@@ -414,7 +414,7 @@ impl WindowManager {
                 );
                 let in_wm_layer = !window.tree.is_null()
                     && !wm_layer.is_null()
-                    && ffi::river_scene_node_get_parent(window.tree.node()) == wm_layer;
+                    && window.tree.parent() == wm_layer;
                 if floats && in_wm_layer {
                     window.tree.raise_to_top();
                     window.popup_tree.place_above(&window.tree);

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::ffi;
-use crate::server::WlList;
 use crate::scene_handle::{SceneBevel, SceneDroplet, SceneFrame, SceneRect, SceneShadow, SceneTree};
 use crate::xdg_toplevel::ConfigureState;
 
@@ -1204,6 +1203,17 @@ impl Window {
         }
     }
 
+    /// An xdg toplevel's committed window geometry (`set_window_geometry`,
+    /// or the surface extent); `None` for any other kind of window.
+    pub fn toplevel_geometry(&self) -> Option<ffi::wlr_box> {
+        match self.impl_type {
+            // SAFETY: as `Window::get_title`: `impl_type` names this
+            // window's live implementation (`set_impl`'s contract).
+            WindowImpl::Toplevel(toplevel) if !toplevel.is_null() => Some(unsafe { (*toplevel).geometry }),
+            _ => None,
+        }
+    }
+
     /// The window this one is a transient of (an xdg parent, or X11
     /// WM_TRANSIENT_FOR), if it has one.
     pub fn get_parent(&self) -> Option<WindowId> {
@@ -2312,7 +2322,7 @@ impl Window {
         }
     }
 
-    pub unsafe fn render_finish(&mut self, stores: crate::ctx::Stores) {
+    pub fn render_finish(&mut self, stores: crate::ctx::Stores) {
         let requested = &self.rendering_requested;
         let enabled = !requested.hidden && (matches!(self.state, WindowState::Mapped) || matches!(self.state, WindowState::Closing));
 
@@ -2354,18 +2364,7 @@ impl Window {
             } else {
                 crate::shared::layout().scenefx_optimized_blur
             };
-            let toplevel_w = match self.impl_type {
-                WindowImpl::Toplevel(toplevel) => {
-                    if toplevel.is_null() { 0 } else { (*toplevel).geometry.width }
-                }
-                _ => 0,
-            };
-            let toplevel_h = match self.impl_type {
-                WindowImpl::Toplevel(toplevel) => {
-                    if toplevel.is_null() { 0 } else { (*toplevel).geometry.height }
-                }
-                _ => 0,
-            };
+            let (toplevel_w, toplevel_h) = self.toplevel_geometry().map_or((0, 0), |g| (g.width, g.height));
             // Status segments are self-sizing: their committed geometry is
             // fresher than the render-start snapshot (`rendering_sent`),
             // which lags an expand/contract commit by a render pass — same
@@ -2424,95 +2423,15 @@ impl Window {
             // scaled to its dest size, so an unscaled clip radius would keep
             // cutting zoom-1-sized corners into a zoomed-down window (the
             // clients' own drawn corners shrink with the buffer).
-            ffi::river_scene_node_set_corner_radius(
-                self.surfaces.tree.node(),
-                (radius as f64 * self.scale) as i32,
-            );
+            self.surfaces.tree.set_node_corner_radius((radius as f64 * self.scale) as i32);
             self.window_background.set_corner_radius((radius as f64 * self.scale) as i32);
 
-            struct ScaleData {
-                scale_x: f64,
-                scale_y: f64,
-                ancestor: *mut ffi::wlr_scene_node,
-                /// The grid's buffers are pinned (see
-                /// `wlr_scene_buffer_set_geometry_pinned`). Its surface is
-                /// always shown scaled and covers the screen, so the scene
-                /// helper resetting its dest size and opaque region on each
-                /// commit, and this pass putting them back, repainted the
-                /// whole output for every frame of an image being dragged.
-                pin: bool,
-            }
-
-            unsafe extern "C" fn set_overview_scale_iterator(
-                buffer: *mut ffi::wlr_scene_buffer,
-                sx: i32,
-                sy: i32,
-                user_data: *mut std::ffi::c_void,
-            ) {
-                let data = &*(user_data as *const ScaleData);
-                let node = buffer as *mut ffi::wlr_scene_node;
-
-                let surface = ffi::river_scene_node_get_surface(node);
-                if !surface.is_null() {
-                    if data.pin {
-                        ffi::river_scene_buffer_set_geometry_pinned(buffer, true);
-                    }
-                    let (w, h, ox, oy) = surface_buffer_extent(buffer, surface);
-                    if data.scale_x == 1.0 && data.scale_y == 1.0 {
-                        ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
-                        ffi::river_scene_node_set_position_if_changed(node, ox, oy);
-                    } else {
-                        let dest_w = (w as f64 * data.scale_x).round() as i32;
-                        let dest_h = (h as f64 * data.scale_y).round() as i32;
-                        ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
-
-                        // The parent offset scales like the content; the
-                        // clip origin rides on top of it, scaled the same.
-                        let (px, py) = get_parent_position_relative_to(node, data.ancestor);
-                        let dest_x = (px as f64 * (data.scale_x - 1.0) + ox as f64 * data.scale_x).round() as i32;
-                        let dest_y = (py as f64 * (data.scale_y - 1.0) + oy as f64 * data.scale_y).round() as i32;
-                        ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
-                    }
-                    // Keep the opaque region in step with the dest scale —
-                    // unscaled it covers the shrunken node's translucent CSD
-                    // margins and occlusion culling stops repainting behind
-                    // the client shadow (stale pixels show through it). The
-                    // region must never overclaim, so a briefly non-uniform
-                    // stretch takes the smaller axis.
-                    ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, data.scale_x.min(data.scale_y));
-                }
-                // Non-surface buffers are frozen SAVED copies (see
-                // save_surface_tree_iter): their natural buffer size is
-                // meaningless for geometry — HiDPI clients commit scale-N
-                // buffers and Chromium pads buffers beyond the surface,
-                // cropping via viewport src — so rescaling from it ballooned
-                // ghosts around the window at any zoom change. A frozen copy
-                // keeps its save-time dest/position; a zoom mid-transaction
-                // leaves it briefly at the old zoom, which restore corrects.
-            }
-
-            let scale_data_surfaces = ScaleData { scale_x, scale_y, ancestor: self.surfaces.tree.node(), pin: self.is_grid() };
-            ffi::wlr_scene_node_for_each_buffer(
-                self.surfaces.tree.node(),
-                Some(set_overview_scale_iterator),
-                &scale_data_surfaces as *const ScaleData as *mut std::ffi::c_void,
-            );
-
+            let pin = self.is_grid();
+            scale_surface_buffers(&self.surfaces.tree, scale_x, scale_y, pin);
             if self.surfaces.saved {
-                let scale_data_saved = ScaleData { scale_x, scale_y, ancestor: self.surfaces.saved_tree.node(), pin: self.is_grid() };
-                ffi::wlr_scene_node_for_each_buffer(
-                    self.surfaces.saved_tree.node(),
-                    Some(set_overview_scale_iterator),
-                    &scale_data_saved as *const ScaleData as *mut std::ffi::c_void,
-                );
+                scale_surface_buffers(&self.surfaces.saved_tree, scale_x, scale_y, pin);
             }
-            
-            let scale_data_popup = ScaleData { scale_x, scale_y, ancestor: self.popup_tree.node(), pin: self.is_grid() };
-            ffi::wlr_scene_node_for_each_buffer(
-                self.popup_tree.node(),
-                Some(set_overview_scale_iterator),
-                &scale_data_popup as *const ScaleData as *mut std::ffi::c_void,
-            );
+            scale_surface_buffers(&self.popup_tree, scale_x, scale_y, pin);
             self.last_applied_scale = self.scale;
             self.buffers_scaled = scale_x != 1.0 || scale_y != 1.0;
         }
@@ -2529,12 +2448,10 @@ impl Window {
         // behind and would drag the border back to the previous size.
         let mut resize_synced = false;
         if self.resize_edges.is_some() || self.self_resized {
-            if let WindowImpl::Toplevel(toplevel) = self.impl_type {
-                if !toplevel.is_null() {
-                    self.box_geom.width = (*toplevel).geometry.width;
-                    self.box_geom.height = (*toplevel).geometry.height;
-                    resize_synced = true;
-                }
+            if let Some(geometry) = self.toplevel_geometry() {
+                self.box_geom.width = geometry.width;
+                self.box_geom.height = geometry.height;
+                resize_synced = true;
             }
         }
         if !resize_synced {
@@ -2550,33 +2467,24 @@ impl Window {
         let mut clip = requested.clip;
         let mut content_clip = requested.content_clip;
 
-        let output = if self.is_fullscreen() {
-            stores.outputs.first_enabled_ptr()
-        } else {
-            std::ptr::null_mut()
-        };
+        let output = if self.is_fullscreen() { stores.outputs.first_enabled() } else { None };
 
-        if !output.is_null() {
+        if let Some(output) = output {
             if self.fs_on_desk {
                 // Stepped aside: at its desk spot, which the arrange pass
                 // put in rendering_requested (`place_fullscreen_windows`).
                 self.box_geom.x = requested.x;
                 self.box_geom.y = requested.y;
             } else {
-                self.box_geom.x = (*output).sent.x;
-                self.box_geom.y = (*output).sent.y;
+                self.box_geom.x = output.sent.x;
+                self.box_geom.y = output.sent.y;
             }
 
-            let app_id_ptr = self.get_app_id();
-            let (is_status_bar, is_wallpaper) = if !app_id_ptr.is_null() {
-                let app_id = std::ffi::CStr::from_ptr(app_id_ptr).to_string_lossy();
-                (app_id.starts_with("cce-status"), app_id.as_ref() == "cce-wallpaper")
-            } else {
-                (false, false)
-            };
+            let app_id = self.get_app_id_string().unwrap_or_default();
+            let (is_status_bar, is_wallpaper) = (app_id.starts_with("cce-status"), app_id == "cce-wallpaper");
 
             self.fullscreen_background.set_enabled(!is_status_bar && !is_wallpaper);
-            let (width, height) = (*output).sent.dimensions();
+            let (width, height) = output.sent.dimensions();
             self.size_fullscreen_background(width as i32, height as i32);
             clip = ffi::wlr_box { x: 0, y: 0, width: width as i32, height: height as i32 };
             content_clip = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
@@ -2639,25 +2547,26 @@ impl Window {
 
         self.apply_surface_clip(&clip, &content_clip);
 
-        match self.impl_type {
-            WindowImpl::Xwayland(xwindow) => {
-                if !xwindow.is_null() {
-                    if !(*xwindow).surface_tree.is_null() {
-                        let has_parent = !(*xwindow).xsurface.parent().is_null();
-                        if self.is_wine() && !has_parent && !self.is_fullscreen() {
-                            (*xwindow).surface_tree.set_position(-16, -16);
-                        } else {
-                            (*xwindow).surface_tree.set_position(0, 0);
-                        }
+        if let WindowImpl::Xwayland(xwindow) = self.impl_type {
+            if !xwindow.is_null() {
+                // SAFETY: as `Window::get_title`: `impl_type` names this
+                // window's live implementation (`set_impl`'s contract). The
+                // X11 window is its own allocation, apart from `self`.
+                let xwindow = unsafe { &mut *xwindow };
+                if !xwindow.surface_tree.is_null() {
+                    let has_parent = !xwindow.xsurface.parent().is_null();
+                    if self.is_wine() && !has_parent && !self.is_fullscreen() {
+                        xwindow.surface_tree.set_position(-16, -16);
+                    } else {
+                        xwindow.surface_tree.set_position(0, 0);
                     }
-                    (*xwindow).configure(self, stores);
                 }
+                xwindow.configure(self, stores);
             }
-            _ => {}
         }
     }
 
-    pub unsafe fn scale_only_render_finish(&mut self) {
+    pub fn scale_only_render_finish(&mut self) {
         // Mid fullscreen-toggle the animation tick owns the buffer dest
         // sizes; a uniform-scale pass here would stomp the stretch.
         if self.fs_anim.is_some() {
@@ -2693,74 +2602,11 @@ impl Window {
         }
         self.buffers_scaled = eff_scale != 1.0;
 
-        struct ScaleData {
-            scale: f64,
-            ancestor: *mut ffi::wlr_scene_node,
-        }
-
-        unsafe extern "C" fn set_overview_scale_iterator(
-            buffer: *mut ffi::wlr_scene_buffer,
-            sx: i32,
-            sy: i32,
-            user_data: *mut std::ffi::c_void,
-        ) {
-            let data = &*(user_data as *const ScaleData);
-            let node = buffer as *mut ffi::wlr_scene_node;
-
-            let surface = ffi::river_scene_node_get_surface(node);
-            if !surface.is_null() {
-                let (w, h, ox, oy) = surface_buffer_extent(buffer, surface);
-                if data.scale == 1.0 {
-                    ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
-                    ffi::river_scene_node_set_position_if_changed(node, ox, oy);
-                } else {
-                    let dest_w = (w as f64 * data.scale).round() as i32;
-                    let dest_h = (h as f64 * data.scale).round() as i32;
-                    ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
-
-                    let (px, py) = get_parent_position_relative_to(node, data.ancestor);
-                    let dest_x = (px as f64 * (data.scale - 1.0) + ox as f64 * data.scale).round() as i32;
-                    let dest_y = (py as f64 * (data.scale - 1.0) + oy as f64 * data.scale).round() as i32;
-                    ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
-                }
-                // Keep the opaque region in step with the dest scale —
-                // unscaled it covers the shrunken node's translucent CSD
-                // margins and occlusion culling stops repainting behind
-                // the client shadow (stale pixels show through it).
-                ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, data.scale);
-            }
-            // Non-surface buffers are frozen SAVED copies (see
-            // save_surface_tree_iter): their natural buffer size is
-            // meaningless for geometry — HiDPI clients commit scale-N
-            // buffers and Chromium pads buffers beyond the surface,
-            // cropping via viewport src — so rescaling from it ballooned
-            // ghosts around the window at any zoom change. A frozen copy
-            // keeps its save-time dest/position; a zoom mid-transaction
-            // leaves it briefly at the old zoom, which restore corrects.
-        }
-
-        let scale_data_surfaces = ScaleData { scale: eff_scale, ancestor: self.surfaces.tree.node() };
-        ffi::wlr_scene_node_for_each_buffer(
-            self.surfaces.tree.node(),
-            Some(set_overview_scale_iterator),
-            &scale_data_surfaces as *const ScaleData as *mut std::ffi::c_void,
-        );
-
+        scale_surface_buffers(&self.surfaces.tree, eff_scale, eff_scale, false);
         if self.surfaces.saved {
-            let scale_data_saved = ScaleData { scale: eff_scale, ancestor: self.surfaces.saved_tree.node() };
-            ffi::wlr_scene_node_for_each_buffer(
-                self.surfaces.saved_tree.node(),
-                Some(set_overview_scale_iterator),
-                &scale_data_saved as *const ScaleData as *mut std::ffi::c_void,
-            );
+            scale_surface_buffers(&self.surfaces.saved_tree, eff_scale, eff_scale, false);
         }
-
-        let scale_data_popup = ScaleData { scale: eff_scale, ancestor: self.popup_tree.node() };
-        ffi::wlr_scene_node_for_each_buffer(
-            self.popup_tree.node(),
-            Some(set_overview_scale_iterator),
-            &scale_data_popup as *const ScaleData as *mut std::ffi::c_void,
-        );
+        scale_surface_buffers(&self.popup_tree, eff_scale, eff_scale, false);
     }
 
     pub unsafe fn render_viewport_update(&mut self, stores: crate::ctx::Stores) {
@@ -2820,18 +2666,7 @@ impl Window {
                 } else {
                     crate::shared::layout().scenefx_optimized_blur
                 };
-                let toplevel_w = match self.impl_type {
-                    WindowImpl::Toplevel(toplevel) => {
-                        if toplevel.is_null() { 0 } else { (*toplevel).geometry.width }
-                    }
-                    _ => 0,
-                };
-                let toplevel_h = match self.impl_type {
-                    WindowImpl::Toplevel(toplevel) => {
-                        if toplevel.is_null() { 0 } else { (*toplevel).geometry.height }
-                    }
-                    _ => 0,
-                };
+                let (toplevel_w, toplevel_h) = self.toplevel_geometry().map_or((0, 0), |g| (g.width, g.height));
                 // Same self-sizing rule as set_rendering_state above.
                 let (actual_w, actual_h) = if is_status && toplevel_w > 0 && toplevel_h > 0 {
                     (toplevel_w as u32, toplevel_h as u32)
@@ -2881,6 +2716,64 @@ impl Window {
             self.draw_borders(stores);
         }
     }
+}
+
+/// Scale every surface buffer under `tree` by `scale_x` x `scale_y` about
+/// the tree's origin: the dest size, the position (the parent offsets scale
+/// with the content) and the opaque region; 1 x 1 puts each back at its
+/// natural extent. `pin` pins the buffers' geometry first (the grid; see
+/// `wlr_scene_buffer_set_geometry_pinned`): its surface is always shown
+/// scaled and covers the screen, so the scene helper resetting its dest
+/// size and opaque region on each commit, and this pass putting them back,
+/// repainted the whole output for every frame of an image being dragged.
+///
+/// Non-surface buffers are frozen SAVED copies (see save_surface_tree_iter)
+/// and are left alone: their natural buffer size is meaningless for
+/// geometry — HiDPI clients commit scale-N buffers and Chromium pads buffers
+/// beyond the surface, cropping via viewport src — so rescaling from it
+/// ballooned ghosts around the window at any zoom change. A frozen copy
+/// keeps its save-time dest/position; a zoom mid-transaction leaves it
+/// briefly at the old zoom, which restore corrects.
+fn scale_surface_buffers(tree: &SceneTree, scale_x: f64, scale_y: f64, pin: bool) {
+    let ancestor = tree.node();
+    tree.for_each_buffer(|buffer, _sx, _sy| {
+        // SAFETY: `buffer` is live for this call (`for_each_buffer`), and so
+        // are its surface and the scene nodes between it and `ancestor`,
+        // the tree being walked.
+        unsafe {
+            let node = buffer as *mut ffi::wlr_scene_node;
+            let surface = ffi::river_scene_node_get_surface(node);
+            if surface.is_null() {
+                return;
+            }
+            if pin {
+                ffi::river_scene_buffer_set_geometry_pinned(buffer, true);
+            }
+            let (w, h, ox, oy) = surface_buffer_extent(buffer, surface);
+            if scale_x == 1.0 && scale_y == 1.0 {
+                ffi::river_scene_buffer_set_dest_size_if_changed(buffer, w, h);
+                ffi::river_scene_node_set_position_if_changed(node, ox, oy);
+            } else {
+                let dest_w = (w as f64 * scale_x).round() as i32;
+                let dest_h = (h as f64 * scale_y).round() as i32;
+                ffi::river_scene_buffer_set_dest_size_if_changed(buffer, dest_w, dest_h);
+
+                // The parent offset scales like the content; the clip
+                // origin rides on top of it, scaled the same.
+                let (px, py) = get_parent_position_relative_to(node, ancestor);
+                let dest_x = (px as f64 * (scale_x - 1.0) + ox as f64 * scale_x).round() as i32;
+                let dest_y = (py as f64 * (scale_y - 1.0) + oy as f64 * scale_y).round() as i32;
+                ffi::river_scene_node_set_position_if_changed(node, dest_x, dest_y);
+            }
+            // Keep the opaque region in step with the dest scale — unscaled
+            // it covers the shrunken node's translucent CSD margins and
+            // occlusion culling stops repainting behind the client shadow
+            // (stale pixels show through it). The region must never
+            // overclaim, so a briefly non-uniform stretch takes the smaller
+            // axis.
+            ffi::river_scene_buffer_set_scaled_opaque_region(buffer, surface, scale_x.min(scale_y));
+        }
+    });
 }
 
 /// A surface buffer's visible extent for the scaling passes: `(width,

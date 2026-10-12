@@ -358,7 +358,7 @@ impl Window {
     /// Advance the hover fade one tick. Every zone eases toward 1.0 if it is
     /// the one under the pointer and 0.0 otherwise. Returns true while any
     /// zone is still in motion, so the caller knows to schedule another tick.
-    pub unsafe fn step_border_fade(&mut self, stores: crate::ctx::Stores) -> bool {
+    pub fn step_border_fade(&mut self, stores: crate::ctx::Stores) -> bool {
         let mut moving = false;
         let mut changed = false;
         // The adjust TARGET — the window under the pointer — shows its whole

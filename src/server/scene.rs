@@ -341,24 +341,26 @@ impl SaveableSurfaces {
         self.sync_enabled();
     }
 
-    pub unsafe fn save(&mut self) {
+    pub fn save(&mut self) {
         if self.saved {
             return;
         }
         if self.tree.is_null() || self.saved_tree.is_null() {
             return;
         }
-        ffi::river_scene_tree_save_buffers(self.tree.raw(), self.saved_tree.raw());
+        // SAFETY: both handles are non-null, so both trees are live.
+        unsafe { ffi::river_scene_tree_save_buffers(self.tree.raw(), self.saved_tree.raw()) };
         self.saved = true;
         self.sync_enabled();
     }
 
-    pub unsafe fn drop_saved(&mut self) {
+    pub fn drop_saved(&mut self) {
         if !self.saved {
             return;
         }
         if !self.saved_tree.is_null() {
-            ffi::river_scene_tree_clear_children(self.saved_tree.raw());
+            // SAFETY: a non-null handle's tree is live.
+            unsafe { ffi::river_scene_tree_clear_children(self.saved_tree.raw()) };
         }
         self.saved = false;
         self.sync_enabled();

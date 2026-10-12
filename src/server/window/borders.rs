@@ -4,7 +4,7 @@
 use super::*;
 
 impl Window {
-    pub unsafe fn draw_borders(&mut self, stores: crate::ctx::Stores) {
+    pub fn draw_borders(&mut self, stores: crate::ctx::Stores) {
         let requested = &self.rendering_requested;
 
         let border = &requested.border;
@@ -63,9 +63,8 @@ impl Window {
             height: self.box_geom.height,
         };
 
-        let mut intersect = std::mem::zeroed();
         let clip_empty = requested.content_clip.width == 0 && requested.content_clip.height == 0;
-        if clip_empty || ffi::wlr_box_intersection(&mut intersect, &content, &requested.content_clip) {
+        if clip_empty || crate::wlr::box_intersection(&content, &requested.content_clip).is_some() {
             let border = &requested.border;
             // The interactive band (doubled configured width, floored). The
             // per-side foam clipping this used to carry is gone with the
@@ -78,31 +77,31 @@ impl Window {
             // The rounded-frame path used to leave radius/clip state on the
             // top band rect; keep it reset.
             self.border.top.set_corner_radius(0);
-            self.border.top.set_clipped_region(ffi::clipped_region_get_default());
+            // SAFETY: scenefx's default clipped region, by value; it takes
+            // no arguments.
+            self.border.top.set_clipped_region(unsafe { ffi::clipped_region_get_default() });
 
-            let apply = |rect: *mut ffi::wlr_scene_rect, bx: ffi::wlr_box, color: &[f32; 4], enabled: bool| {
+            let apply = |rect: &crate::scene_handle::SceneRect, bx: ffi::wlr_box, color: &[f32; 4], enabled: bool| {
                 let mut bx = bx;
                 if enabled && (requested.clip.width != 0 || requested.clip.height != 0) {
-                    let mut clip_intersect = std::mem::zeroed();
-                    ffi::wlr_box_intersection(&mut clip_intersect, &bx, &requested.clip);
-                    bx = clip_intersect;
+                    // An empty intersection disables the rect just below.
+                    bx = crate::wlr::box_intersection(&bx, &requested.clip)
+                        .unwrap_or(ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 });
                 }
                 let enabled = enabled && bx.width > 0 && bx.height > 0;
-                ffi::wlr_scene_node_set_enabled(rect as *mut ffi::wlr_scene_node, enabled);
+                rect.set_enabled(enabled);
                 if !enabled {
                     return;
                 }
-                ffi::river_scene_node_set_position_if_changed(
-                    rect as *mut ffi::wlr_scene_node,
+                rect.set_position_if_changed(
                     (bx.x as f64 * self.scale) as i32,
                     (bx.y as f64 * self.scale) as i32,
                 );
-                ffi::river_scene_rect_set_size_if_changed(
-                    rect,
+                rect.set_size_if_changed(
                     (bx.width as f64 * self.scale) as i32,
                     (bx.height as f64 * self.scale) as i32,
                 );
-                ffi::wlr_scene_rect_set_color(rect, color.as_ptr());
+                rect.set_color(color);
             };
 
             // Handles live INSIDE the content rect, and only in overview
@@ -206,7 +205,7 @@ impl Window {
                     width: (2.0 * disc_r / sc).ceil() as i32,
                     height: (2.0 * disc_r / sc).ceil() as i32,
                 };
-                apply(self.border.segments[i].raw(), b, &transparent, handles_live);
+                apply(&self.border.segments[i], b, &transparent, handles_live);
             }
             // corner_len and gap are retired by the wave profile (the
             // valleys place the seams now, a quarter along each side) and
@@ -272,11 +271,9 @@ impl Window {
         }
     }
 
-    #[allow(unused_assignments)]
-    pub unsafe fn apply_surface_clip(&mut self, a: *const ffi::wlr_box, b: *const ffi::wlr_box) {
-        let mut surface_clip = std::mem::zeroed::<ffi::wlr_box>();
-        let a_empty = (*a).width == 0 && (*a).height == 0;
-        let b_empty = (*b).width == 0 && (*b).height == 0;
+    pub fn apply_surface_clip(&mut self, a: &ffi::wlr_box, b: &ffi::wlr_box) {
+        let a_empty = a.width == 0 && a.height == 0;
+        let b_empty = b.width == 0 && b.height == 0;
 
         let layout_box = ffi::wlr_box {
             x: 0,
@@ -285,29 +282,19 @@ impl Window {
             height: self.box_geom.height,
         };
 
-        if !a_empty && !b_empty {
-            let mut temp_clip = std::mem::zeroed::<ffi::wlr_box>();
-            if !ffi::wlr_box_intersection(&mut temp_clip, a, b) {
-                self.surfaces.set_enabled(false);
-                return;
-            }
-            if !ffi::wlr_box_intersection(&mut surface_clip, &temp_clip, &layout_box) {
-                self.surfaces.set_enabled(false);
-                return;
-            }
+        let clipped = if !a_empty && !b_empty {
+            crate::wlr::box_intersection(a, b).and_then(|ab| crate::wlr::box_intersection(&ab, &layout_box))
         } else if !a_empty {
-            if !ffi::wlr_box_intersection(&mut surface_clip, a, &layout_box) {
-                self.surfaces.set_enabled(false);
-                return;
-            }
+            crate::wlr::box_intersection(a, &layout_box)
         } else if !b_empty {
-            if !ffi::wlr_box_intersection(&mut surface_clip, b, &layout_box) {
-                self.surfaces.set_enabled(false);
-                return;
-            }
+            crate::wlr::box_intersection(b, &layout_box)
         } else {
-            surface_clip = layout_box;
-        }
+            Some(layout_box)
+        };
+        let Some(mut surface_clip) = clipped else {
+            self.surfaces.set_enabled(false);
+            return;
+        };
 
         self.surfaces.set_enabled(true);
         let margin = 0;
@@ -316,16 +303,14 @@ impl Window {
         surface_clip.width += 2 * margin;
         surface_clip.height += 2 * margin;
 
-        match self.impl_type {
-            WindowImpl::Toplevel(toplevel) => {
-                if !toplevel.is_null() {
-                    let x = if self.wm_requested.ssd { 0 } else { (*toplevel).geometry.x };
-                    let y = if self.wm_requested.ssd { 0 } else { (*toplevel).geometry.y };
-                    surface_clip.x += x;
-                    surface_clip.y += y;
-                }
+        if let WindowImpl::Toplevel(toplevel) = self.impl_type {
+            if !toplevel.is_null() && !self.wm_requested.ssd {
+                // SAFETY: as `Window::get_title`: `impl_type` names this window's
+                // live implementation (`set_impl`'s contract).
+                let geometry = unsafe { (*toplevel).geometry };
+                surface_clip.x += geometry.x;
+                surface_clip.y += geometry.y;
             }
-            _ => {}
         }
 
         // Crop a CSD toplevel to its xdg geometry. Chromium-family clients
@@ -348,12 +333,13 @@ impl Window {
                 && self.popover_region.is_none()
                 && self.fs_anim.is_none()
             {
-                crop = (*toplevel).geometry;
+                // SAFETY: as `Window::get_title`: `impl_type` names this window's
+                // live implementation (`set_impl`'s contract).
+                crop = unsafe { (*toplevel).geometry };
             }
         }
         let clip = (crop.width > 0 && crop.height > 0).then_some(&crop);
-        let children_head = ffi::river_scene_tree_get_children(self.surfaces.tree.raw()) as *mut WlList;
-        if (*children_head).next != children_head {
+        if self.surfaces.tree.has_children() {
             self.surfaces.tree.set_subsurface_clip(clip);
         }
     }

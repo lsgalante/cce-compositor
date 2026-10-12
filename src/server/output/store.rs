@@ -90,6 +90,11 @@ impl Outputs {
         self.order.iter().filter_map(|&k| self.map.get(k)).map(|p| p.as_ptr()).collect()
     }
 
+    /// The oldest output whose applied state is Enabled.
+    pub fn first_enabled(&self) -> Option<&Output> {
+        self.values().find(|o| o.sent.state == super::OutputStateValue::Enabled)
+    }
+
     /// The oldest output whose applied state is Enabled, or null.
     pub fn first_enabled_ptr(&self) -> *mut Output {
         self.values()

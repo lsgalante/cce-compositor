@@ -490,3 +490,12 @@ toplevel_setters! {
     set_size(width: i32, height: i32) => wlr_xdg_toplevel_set_size;
 }
 
+
+/// The intersection of two boxes, or `None` when it is empty (as is any
+/// intersection with an empty box): `wlr_box_intersection`, by value.
+pub fn box_intersection(a: &ffi::wlr_box, b: &ffi::wlr_box) -> Option<ffi::wlr_box> {
+    let mut dest = ffi::wlr_box { x: 0, y: 0, width: 0, height: 0 };
+    // SAFETY: all three pointers come from references; wlroots only reads
+    // `a` and `b` and writes `dest`.
+    unsafe { ffi::wlr_box_intersection(&mut dest, a, b) }.then_some(dest)
+}

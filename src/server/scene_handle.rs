@@ -247,6 +247,9 @@ impl<K: Kind> Handle<K> {
     }
 
     setters! { node;
+        /// Round the node's clip corners (scenefx's per-node corner radius;
+        /// rects, bevels, shadows and frames have their own).
+        fn set_node_corner_radius(radius: i32) => river_scene_node_set_corner_radius;
         /// Move the node only if it is not already there (no damage otherwise).
         fn set_position_if_changed(x: i32, y: i32) => river_scene_node_set_position_if_changed;
         fn set_opacity(opacity: f32) => river_scene_node_set_opacity;
@@ -270,6 +273,40 @@ impl<K: Kind> Handle<K> {
         if !n.is_null() {
             let c = clip.map_or(std::ptr::null(), |c| c as *const ffi::wlr_box);
             unsafe { ffi::wlr_scene_subsurface_tree_set_clip(n, c) };
+        }
+    }
+
+    /// The tree this node hangs under, or null when it is gone (or is the
+    /// scene root). For comparing with a layer's `raw()`.
+    pub fn parent(&self) -> *mut ffi::wlr_scene_tree {
+        let n = self.node();
+        if n.is_null() {
+            return std::ptr::null_mut();
+        }
+        // SAFETY: a non-null `node()` is a live node; see `destroy`.
+        unsafe { ffi::river_scene_node_get_parent(n) }
+    }
+
+    /// Call `f` on every buffer node under this one (itself included), with
+    /// its position relative to this node, in wlroots' order. Does nothing
+    /// if the node is gone. Each buffer `f` gets is live for that call.
+    pub fn for_each_buffer<F: FnMut(*mut ffi::wlr_scene_buffer, i32, i32)>(&self, mut f: F) {
+        unsafe extern "C" fn trampoline<F: FnMut(*mut ffi::wlr_scene_buffer, i32, i32)>(
+            buffer: *mut ffi::wlr_scene_buffer,
+            sx: i32,
+            sy: i32,
+            data: *mut std::ffi::c_void,
+        ) {
+            // SAFETY: `data` is the `&mut F` passed below, live for the
+            // whole iteration.
+            let f = unsafe { &mut *(data as *mut F) };
+            f(buffer, sx, sy);
+        }
+        let n = self.node();
+        if !n.is_null() {
+            // SAFETY: a non-null `node()` is a live node; the iterator only
+            // runs during this call, while `f` is borrowed.
+            unsafe { ffi::wlr_scene_node_for_each_buffer(n, Some(trampoline::<F>), &mut f as *mut F as *mut std::ffi::c_void) };
         }
     }
 
@@ -324,6 +361,20 @@ impl SceneTree {
     pub fn create(parent: &SceneTree) -> Self {
         // SAFETY: a non-null `raw()` is a live tree.
         unsafe { Self::create_in(parent.raw()) }
+    }
+
+    /// Whether the tree has any child node; false when it is gone.
+    pub fn has_children(&self) -> bool {
+        let t = self.raw();
+        if t.is_null() {
+            return false;
+        }
+        // SAFETY: a non-null `raw()` is a live tree, whose children list
+        // head is a valid `wl_list`.
+        unsafe {
+            let head = ffi::river_scene_tree_get_children(t) as *mut crate::server::WlList;
+            (*head).next != head
+        }
     }
 }
 
