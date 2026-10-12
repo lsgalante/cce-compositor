@@ -23,7 +23,7 @@ pub use crate::window::HOVER_BAND_MIN;
 /// named, so the surface is resolved directly and the point is mapped through
 /// the surface node's own layout origin and the window's display scale, which
 /// is the same pair the renderer draws with.
-pub unsafe fn grid_surface_at(
+pub fn grid_surface_at(
     wm: &crate::window_manager::WindowManager,
     lx: f64,
     ly: f64,
@@ -43,7 +43,7 @@ pub unsafe fn grid_surface_at(
 /// the node state a caller may need to FREEZE (the implicit-grab path
 /// captures it at press time), which is why it is exposed separately from
 /// the point mapping above.
-pub unsafe fn grid_node_info(
+pub fn grid_node_info(
     wm: &crate::window_manager::WindowManager,
 ) -> Option<(*mut ffi::wlr_surface, f64, f64, f64, f64, f64)> {
     for w in wm.windows.values() {
@@ -57,11 +57,7 @@ pub unsafe fn grid_node_info(
         if surface.is_null() {
             continue;
         }
-        let node = w.surfaces.tree.node();
-        let (mut nx, mut ny) = (0, 0);
-        if !ffi::wlr_scene_node_coords(node, &mut nx, &mut ny) {
-            continue;
-        }
+        let Some((nx, ny, true)) = w.surfaces.tree.coords() else { continue };
         let scale = if w.scale > 0.0 { w.scale } else { 1.0 };
         return Some((
             surface,

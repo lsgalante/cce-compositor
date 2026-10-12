@@ -1215,6 +1215,15 @@ impl Window {
         }
     }
 
+    /// An X11 window's client pid; `None` for any other kind of window.
+    pub fn x11_pid(&self) -> Option<i32> {
+        match self.impl_type {
+            // SAFETY: as `x11_window_id`.
+            WindowImpl::Xwayland(xwindow) if !xwindow.is_null() => Some(unsafe { (*xwindow).xsurface().pid() }),
+            _ => None,
+        }
+    }
+
     /// An X11 window's X window id; `None` for any other kind of window.
     pub fn x11_window_id(&self) -> Option<u32> {
         match self.impl_type {

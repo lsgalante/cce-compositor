@@ -255,7 +255,7 @@ impl Cursor {
     /// — the handles, a window body's drag, the rubber band — and those live
     /// on the pointer path, so the finger becomes the pointer even over a
     /// touch-capable window.
-    unsafe fn touch_route_at(wm: &crate::window_manager::WindowManager, sid: crate::seat::SeatId, lx: f64, ly: f64) -> TouchRoute {
+    fn touch_route_at(wm: &crate::window_manager::WindowManager, sid: crate::seat::SeatId, lx: f64, ly: f64) -> TouchRoute {
         let Some(seat) = wm.seats.get(sid) else { return TouchRoute::Ignored };
         let this = &seat.cursor;
         let result = crate::shared::scene().at(wm, lx, ly);
@@ -267,19 +267,15 @@ impl Cursor {
             if lock_ok
                 && !result.surface.is_null()
                 && !crate::shared::window_adjust_active()
-                && ffi::wlr_surface_accepts_touch(result.surface, seat.wlr_seat().ptr())
+                // SAFETY: the surface the hit test just found is live, and a
+                // seat in the store holds its live wlr_seat (set at create,
+                // taken only in `Seat::destroy`).
+                && unsafe { ffi::wlr_surface_accepts_touch(result.surface, seat.wlr_seat().ptr()) }
             {
                 // The implicit grab's frame (see the button path): the
                 // surface's scene buffer may be drawn scaled, so map through
                 // its destination size rather than assume 1:1.
-                let mut scale = 1.0;
-                if !result.node.is_null() {
-                    let dest_w = ffi::river_scene_buffer_get_dest_width(result.node as *mut ffi::wlr_scene_buffer);
-                    let surf_w = ffi::river_wlr_surface_get_width(result.surface);
-                    if dest_w > 0 && surf_w > 0 {
-                        scale = surf_w as f64 / dest_w as f64;
-                    }
-                }
+                let scale = result.surface_scale;
                 let origin = (lx - result.sx / scale, ly - result.sy / scale);
                 return TouchRoute::Client { origin, scale };
             }

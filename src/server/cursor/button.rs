@@ -828,15 +828,7 @@ pub(crate) unsafe fn on_button(wm: &mut crate::window_manager::WindowManager, si
                 let glx = cursor.x();
                 let gly = cursor.y();
                 if let Some(result) = crate::shared::scene().at(wm, glx, gly) {
-                    // A surface node's scene buffer begins with its node.
-                    let mut ratio = 1.0;
-                    if !result.surface.is_null() && !result.node.is_null() {
-                        let dest_w = ffi::river_scene_buffer_get_dest_width(result.node as *mut ffi::wlr_scene_buffer);
-                        let surf_w = ffi::river_wlr_surface_get_width(result.surface);
-                        if dest_w > 0 && surf_w > 0 {
-                            ratio = surf_w as f64 / dest_w as f64;
-                        }
-                    }
+                    let ratio = result.surface_scale;
                     let cursor = cursor_mut!(wm, sid, ());
                     cursor.grab_scale = ratio;
                     cursor.grab_origin = (glx - result.sx / ratio, gly - result.sy / ratio);

@@ -579,23 +579,32 @@ impl Cursor {
 
         self.anim_xcursor = xcursor;
         self.anim_started_msec = crate::util::msec_timestamp();
-        // SAFETY: `anim_xcursor` is the held manager's, set just above.
-        unsafe { self.arm_next_frame(0) };
+        self.arm_next_frame(0);
     }
 
     /// Arm the timer for the delay of frame `idx`, clamped to >= 1ms: a zero
     /// delay on a single frame would re-arm instantly and spin the event loop.
-    unsafe fn arm_next_frame(&mut self, idx: u32) {
+    fn arm_next_frame(&mut self, idx: u32) {
         let xcursor = self.anim_xcursor;
-        if xcursor.is_null() || idx >= (*xcursor).image_count {
+        if xcursor.is_null() {
             return;
         }
-        let image = *(*xcursor).images.offset(idx as isize);
-        if image.is_null() {
-            return;
-        }
-        let delay = (*image).delay.max(1).min(i32::MAX as u32) as i32;
-        self.anim_timer.arm(delay);
+        // SAFETY: a non-null `anim_xcursor` is an xcursor of the theme the
+        // held manager owns (`start_xcursor_animation` sets it only from
+        // `xcursor_manager().xcursor()`), and `deinit` stops the animation
+        // before destroying the manager; `idx` is checked against its
+        // image count.
+        let delay = unsafe {
+            if idx >= (*xcursor).image_count {
+                return;
+            }
+            let image = *(*xcursor).images.offset(idx as isize);
+            if image.is_null() {
+                return;
+            }
+            (*image).delay
+        };
+        self.anim_timer.arm(delay.max(1).min(i32::MAX as u32) as i32);
     }
 
     /// Timer body: pick the frame for the elapsed time and paint it.
@@ -603,33 +612,39 @@ impl Cursor {
     /// The frame is derived from elapsed wall-clock rather than a running
     /// counter, so a late or coalesced timer resyncs to where the animation
     /// should be instead of drifting further behind.
-    unsafe fn advance_xcursor_frame(&mut self) {
+    fn advance_xcursor_frame(&mut self) {
         let xcursor = self.anim_xcursor;
-        if xcursor.is_null() || self.wlr_cursor().is_null() {
+        if xcursor.is_null() || self.wlr_cursor.is_null() {
             return;
         }
 
         let elapsed = crate::util::msec_timestamp().wrapping_sub(self.anim_started_msec);
-        let idx = ffi::wlr_xcursor_frame(xcursor, elapsed);
-        if idx < 0 || idx as u32 >= (*xcursor).image_count {
-            return;
-        }
-        let idx = idx as u32;
-
-        let image = *(*xcursor).images.offset(idx as isize);
-        if image.is_null() {
-            return;
-        }
-        let buffer = ffi::wlr_xcursor_image_get_buffer(image);
-        if !buffer.is_null() {
-            ffi::wlr_cursor_set_buffer(
-                self.wlr_cursor().ptr(),
-                buffer,
-                (*image).hotspot_x as i32,
-                (*image).hotspot_y as i32,
-                1.0,
-            );
-        }
+        // SAFETY: as `arm_next_frame` for the xcursor and its images
+        // (`total_delay != 0` was checked when the animation started, so
+        // `wlr_xcursor_frame` cannot divide by zero); the cursor is the live
+        // one the field holds, and the image's buffer belongs to the theme.
+        let idx = unsafe {
+            let idx = ffi::wlr_xcursor_frame(xcursor, elapsed);
+            if idx < 0 || idx as u32 >= (*xcursor).image_count {
+                return;
+            }
+            let idx = idx as u32;
+            let image = *(*xcursor).images.offset(idx as isize);
+            if image.is_null() {
+                return;
+            }
+            let buffer = ffi::wlr_xcursor_image_get_buffer(image);
+            if !buffer.is_null() {
+                ffi::wlr_cursor_set_buffer(
+                    self.wlr_cursor.ptr(),
+                    buffer,
+                    (*image).hotspot_x as i32,
+                    (*image).hotspot_y as i32,
+                    1.0,
+                );
+            }
+            idx
+        };
         self.arm_next_frame(idx);
     }
 

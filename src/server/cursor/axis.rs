@@ -289,7 +289,7 @@ pub(crate) const VIEW_DRAG_PINCH_PX: f64 = 150.0;
 
 impl Cursor {
     /// The window under the pointer, if `touchpad_view_apps` names its app.
-    unsafe fn view_drag_target(wm: &crate::window_manager::WindowManager, x: f64, y: f64) -> Option<(crate::window::WindowId, *mut ffi::wlr_surface, f64, f64, f64)> {
+    fn view_drag_target(wm: &crate::window_manager::WindowManager, x: f64, y: f64) -> Option<(crate::window::WindowId, *mut ffi::wlr_surface, f64, f64, f64)> {
         if crate::shared::layout().touchpad_view_apps.is_empty() {
             return None;
         }
@@ -312,12 +312,7 @@ impl Cursor {
                 return None;
             }
         }
-        let mut ratio = 1.0;
-        let dest_w = ffi::river_scene_buffer_get_dest_width(result.node as *mut ffi::wlr_scene_buffer);
-        let surf_w = ffi::river_wlr_surface_get_width(result.surface);
-        if dest_w > 0 && surf_w > 0 {
-            ratio = surf_w as f64 / dest_w as f64;
-        }
+        let ratio = result.surface_scale;
         Some((window_id, result.surface, result.sx, result.sy, ratio))
     }
 
@@ -539,7 +534,7 @@ impl Cursor {
     /// check is what keeps a synthetic Ctrl from landing in some other
     /// client: the popup takes focus itself when it wants it, otherwise
     /// focus stays on the window it belongs to.
-    unsafe fn popup_wheel_target(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) -> Option<*mut ffi::wlr_surface> {
+    fn popup_wheel_target(wm: &mut crate::window_manager::WindowManager, sid: crate::seat::SeatId) -> Option<*mut ffi::wlr_surface> {
         if crate::shared::layout().touchpad_view_apps.is_empty() {
             return None;
         }
@@ -547,18 +542,23 @@ impl Cursor {
         let (x, y) = (this.x(), this.y());
         let result = crate::shared::scene().at(wm, x, y)?;
         let SceneNodeDataVal::OverrideRedirect(or) = result.data else { return None };
-        if or.is_null() || result.surface.is_null() || (*or).xsurface().is_null() {
+        if or.is_null() || result.surface.is_null() {
             return None;
         }
-        let pid = (*or).xsurface().pid();
+        // SAFETY: an override-redirect window's scene data dies with its
+        // surface tree, so one the hit test just found is live (`Scene::at`).
+        let xsurface = unsafe { (*or).xsurface() };
+        if xsurface.is_null() {
+            return None;
+        }
+        let pid = xsurface.pid();
         let this = cursor_mut!(wm, sid, None);
         let focused = this.wlr_seat().keyboard_focused_surface();
         if focused.is_null() {
             return None;
         }
         for window in wm.windows.values() {
-            let crate::window::WindowImpl::Xwayland(xwindow) = window.impl_type() else { continue };
-            if xwindow.is_null() || (*xwindow).xsurface().pid() != pid {
+            if window.x11_pid() != Some(pid) {
                 continue;
             }
             let app_id = window.get_app_id_string().unwrap_or_default();
@@ -577,12 +577,12 @@ impl Cursor {
     /// never into `injected_key_mods`, so every modifier read the compositor
     /// makes for itself — the Ctrl branch in `view_drag_axis` among them —
     /// keeps seeing the user's real keys and not this one.
-    unsafe fn hold_popup_ctrl(&mut self, down: bool) {
+    fn hold_popup_ctrl(&mut self, down: bool) {
         match self.popup_wheel.as_mut() {
             Some(p) if p.ctrl_down != down => p.ctrl_down = down,
             _ => return,
         }
-        self.hold_synthetic_modifier(KEY_LEFTCTRL, b"Control\0", down);
+        self.hold_synthetic_modifier(KEY_LEFTCTRL, c"Control", down);
     }
 
     /// Press or release `key` on the client's behalf and OR its xkb
@@ -590,7 +590,7 @@ impl Cursor {
     /// Never touches `injected_key_mods`, so the compositor's own modifier
     /// reads keep seeing the user's real keys. Shared by `PopupWheel`
     /// (Ctrl) and `HScrollShift` (Shift).
-    unsafe fn hold_synthetic_modifier(&mut self, key: u32, xkb_name: &[u8], down: bool) {
+    fn hold_synthetic_modifier(&mut self, key: u32, xkb_name: &std::ffi::CStr, down: bool) {
         let time = crate::util::msec_timestamp();
         let state = if down {
             ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_PRESSED
@@ -598,18 +598,13 @@ impl Cursor {
             ffi::wl_keyboard_key_state_WL_KEYBOARD_KEY_STATE_RELEASED
         };
         self.wlr_seat().keyboard_notify_key(time, key, state);
-        let kb = self.wlr_seat().keyboard();
-        if !kb.is_null() && !(*kb).keymap.is_null() {
-            let idx = ffi::xkb_keymap_mod_get_index((*kb).keymap, xkb_name.as_ptr() as *const _);
-            if idx != ffi::XKB_MOD_INVALID {
-                // Released sends the device's own state back, which is the
-                // user's keys minus this bit.
-                let mut mods = (*kb).modifiers;
-                if down {
-                    mods.depressed |= 1u32 << idx;
-                }
-                self.wlr_seat().keyboard_notify_modifiers(&mut mods);
+        if let (Some(idx), Some(mut mods)) = (self.wlr_seat().keyboard_mod_index(xkb_name), self.wlr_seat().keyboard_modifier_state()) {
+            // Released sends the device's own state back, which is the
+            // user's keys minus this bit.
+            if down {
+                mods.depressed |= 1u32 << idx;
             }
+            self.wlr_seat().keyboard_notify_modifiers(&mut mods);
         }
     }
 
@@ -618,7 +613,7 @@ impl Cursor {
     }
 
     /// `reason` names what ended it, as `end_view_drag`'s does.
-    pub unsafe fn end_popup_wheel(&mut self, reason: &str) {
+    pub fn end_popup_wheel(&mut self, reason: &str) {
         if self.popup_wheel.is_none() {
             return;
         }
@@ -760,16 +755,16 @@ impl Cursor {
         Some(result.surface)
     }
 
-    unsafe fn hold_hscroll_shift(&mut self, down: bool) {
+    fn hold_hscroll_shift(&mut self, down: bool) {
         match self.hscroll_shift.as_mut() {
             Some(h) if h.shift_down != down => h.shift_down = down,
             _ => return,
         }
-        self.hold_synthetic_modifier(KEY_LEFTSHIFT, b"Shift\0", down);
+        self.hold_synthetic_modifier(KEY_LEFTSHIFT, c"Shift", down);
     }
 
     /// `reason` names what ended it, as `end_view_drag`'s does.
-    pub unsafe fn end_hscroll_shift(&mut self, reason: &str) {
+    pub fn end_hscroll_shift(&mut self, reason: &str) {
         if self.hscroll_shift.is_none() {
             return;
         }

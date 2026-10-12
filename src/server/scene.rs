@@ -287,11 +287,22 @@ impl Scene {
                         }
                     }
                 }
+                // Surface px per layout px where the buffer is drawn scaled
+                // (a zoomed window): a hit with a surface is a buffer node.
+                let mut surface_scale = 1.0;
+                if !surface.is_null() {
+                    let dest_w = ffi::river_scene_buffer_get_dest_width(node as *mut ffi::wlr_scene_buffer);
+                    let surf_w = ffi::river_wlr_surface_get_width(surface);
+                    if dest_w > 0 && surf_w > 0 {
+                        surface_scale = surf_w as f64 / dest_w as f64;
+                    }
+                }
                 result = Some(AtResult {
                     node,
                     surface,
                     sx,
                     sy,
+                    surface_scale,
                     data: scene_node_data.data,
                 });
                 break;
@@ -327,6 +338,9 @@ pub struct AtResult {
     pub surface: *mut ffi::wlr_surface,
     pub sx: f64,
     pub sy: f64,
+    /// Surface px per layout px at the hit (1 without a surface): the
+    /// surface's width over its buffer's drawn width.
+    pub surface_scale: f64,
     pub data: SceneNodeDataVal,
 }
 

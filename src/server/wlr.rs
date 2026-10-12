@@ -135,6 +135,31 @@ impl Wlr<ffi::wlr_seat> {
         self.live().map_or(std::ptr::null_mut(), |s| unsafe { ffi::river_wlr_seat_get_keyboard(s) })
     }
 
+    /// The xkb index of modifier `name` (`c"Control"`) in the seat's
+    /// keyboard's keymap; `None` without a keyboard, a keymap or the name.
+    pub fn keyboard_mod_index(&self, name: &CStr) -> Option<u32> {
+        let kbd = self.keyboard();
+        if kbd.is_null() {
+            return None;
+        }
+        // SAFETY: as `keyboard_modifiers`; the keymap is the keyboard's own.
+        let idx = unsafe {
+            let keymap = (*kbd).keymap;
+            if keymap.is_null() {
+                return None;
+            }
+            ffi::xkb_keymap_mod_get_index(keymap, name.as_ptr())
+        };
+        (idx != ffi::XKB_MOD_INVALID).then_some(idx)
+    }
+
+    /// The seat's keyboard's full modifier state; `None` without one.
+    pub fn keyboard_modifier_state(&self) -> Option<ffi::wlr_keyboard_modifiers> {
+        let kbd = self.keyboard();
+        // SAFETY: as `keyboard_modifiers`.
+        (!kbd.is_null()).then(|| unsafe { (*kbd).modifiers })
+    }
+
     /// The modifiers held on the seat's keyboard; none without one.
     pub fn keyboard_modifiers(&self) -> u32 {
         let kbd = self.keyboard();
