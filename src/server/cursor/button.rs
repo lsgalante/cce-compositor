@@ -475,7 +475,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                         let app_id = w.get_app_id_string().unwrap_or_else(|| "unknown".to_string());
                         cmd.push_str(&format!(
                             " -i {} -a '{}'",
-                            w.ref_key.index,
+                            w.id().ipc(),
                             app_id.replace('\'', "'\\''")
                         ));
                     }
@@ -648,7 +648,7 @@ pub(crate) fn on_button(wm: &mut crate::window_manager::WindowManager, sid: crat
                 let x = cursor.x() as i32;
                 let y = cursor.y() as i32;
                 let this = window_mut!(wm, id);
-                let index = this.ref_key.index;
+                let index = this.id().ipc();
                 let app_id = this.get_app_id_string().unwrap_or_else(|| "unknown".to_string());
                 // The command runs under `sh -c`: quote the app_id, which
                 // is client-chosen text.

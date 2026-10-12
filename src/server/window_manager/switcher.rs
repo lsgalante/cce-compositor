@@ -88,7 +88,7 @@ impl WindowManager {
         let mut items: Vec<(String, String)> = Vec::new();
         let mut input = String::new();
         for &w in &ordered {
-            let id = w.ref_key.index.to_string();
+            let id = w.id().ipc().to_string();
             let app_id = w.get_app_id_string().unwrap_or_default();
             let title = w.get_title_string().unwrap_or_default();
             let display = if title.is_empty() {

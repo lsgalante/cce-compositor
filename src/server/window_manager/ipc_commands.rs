@@ -326,7 +326,7 @@ impl WindowManager {
                     };
                     out.push_str(&format!(
                         "window id={} app_id={:?} state={:?} closed={} linked={} mode={:?} edge={:?} moved={} req_pos=({},{}) box=({},{},{}x{}) collapsed_len={} cfg={}\n",
-                        w.ref_key.index,
+                        w.id().ipc(),
                         w.get_app_id_string().unwrap_or_default(),
                         w.state,
                         w.closed,
@@ -398,7 +398,7 @@ impl WindowManager {
                     .selection
                     .windows
                     .iter()
-                    .map(|w| w.0.index.to_string())
+                    .map(|w| w.ipc().to_string())
                     .collect();
                 let items: Vec<String> =
                     self.selection.items.iter().map(|id| id.to_string()).collect();
@@ -755,7 +755,7 @@ impl WindowManager {
                             continue;
                         }
                     }
-                    let id_match = query.parse::<u32>().map_or(false, |id| w.ref_key.index == id);
+                    let id_match = query.parse::<u64>().map_or(false, |id| w.id().ipc() == id);
                     let aid = w.get_app_id_string().unwrap_or_default().to_lowercase();
                     let score = if id_match || aid == query {
                         100
@@ -1160,7 +1160,7 @@ impl WindowManager {
                             // The line is cce-core's `ctl::WindowInfo`, which
                             // the status bar, its OSD and cce-remote parse.
                             let info = cce_core::ipc::ctl::WindowInfo {
-                                id: w.ref_key.index as u64,
+                                id: w.id().ipc(),
                                 app_id: app_id.clone(),
                                 title: title.clone(),
                                 mode: w.tiling_mode.as_str().to_string(),
@@ -1195,7 +1195,7 @@ impl WindowManager {
                         } else {
                             out.push_str(&format!(
                                 "window id={} app_id={} title=\"{}\" mode={} x={} y={} w={} h={} vx={:.1} vy={:.1} cell={} minimized={} has_parent={} focused={} stack={} ssd={} decorated={} beveled={}\n",
-                                w.ref_key.index,
+                                w.id().ipc(),
                                 app_id,
                                 title,
                                 w.tiling_mode.as_str(),

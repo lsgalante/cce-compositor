@@ -488,7 +488,7 @@ pub fn point_in_view_regions(regions: &[[f64; 4]], x: f64, y: f64) -> bool {
 /// use it.
 pub fn window_by_query<'a>(windows: impl Iterator<Item = &'a Window>, query: &str) -> Option<crate::window::WindowId> {
     let x11 = query.strip_prefix("x11:").and_then(|v| v.parse::<u32>().ok());
-    let id = query.parse::<u32>().ok();
+    let id = query.parse::<u64>().ok();
     windows.into_iter().find(|w| {
         if w.closed || !matches!(w.state, crate::window::WindowState::Mapped) {
             return false;
@@ -497,7 +497,7 @@ pub fn window_by_query<'a>(windows: impl Iterator<Item = &'a Window>, query: &st
             return w.x11_window_id() == Some(x11);
         }
         if let Some(id) = id {
-            return w.ref_key.index == id;
+            return w.id().ipc() == id;
         }
         w.get_app_id_string().map_or(false, |a| app_id_matches(query, &a))
     }).map(|w| w.id())
@@ -2408,7 +2408,7 @@ impl WindowManager {
         for w in self.windows.values() {
             if !w.closed && matches!(w.state, crate::window::WindowState::Mapped) {
                 candidates.push(crate::policy::query::QueryCandidate {
-                    index: w.ref_key.index,
+                    id: w.id().ipc(),
                     app_id: w.get_app_id_string(),
                 });
                 ids.push(w.id());
